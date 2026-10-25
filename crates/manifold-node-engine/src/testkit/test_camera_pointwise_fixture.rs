@@ -16,18 +16,13 @@
 //! **Hand-rolled `PrimitiveSpec`/`Primitive` impl, deliberately NOT the
 //! `crate::primitive!` macro.** The macro auto-`inventory::submit!`s to TWO
 //! global channels — `PrimitiveFactory` (so `PrimitiveRegistry::with_builtin()`
-//! discovers it) AND `NodeDescriptor` (so `catalog_gen` includes it in
-//! `docs/node_catalog.json`) — with no opt-out (`docs/ADDING_PRIMITIVES.md`:
-//! "auto-register... nothing else has to be edited"). Even with `picker`
-//! omitted, `catalog_gen`'s completeness tests
-//! (`palette_visible_nodes_have_complete_descriptors`,
-//! `regenerates_in_sync`) walk `NodeDescriptor` for EVERY registered node,
-//! not just palette-visible ones, so a macro-declared fixture registered in
-//! any test build goes red against the checked-in catalog JSON the moment
-//! `cargo test --features gpu-proofs` compiles this file. Implementing the
-//! traits directly (the blanket `impl<P: Primitive> EffectNode for P` in
-//! `node_graph::primitive` still applies automatically — no `EffectNode` impl
-//! needed either) keeps this fixture out of BOTH inventory channels; the I6
+//! discovers it) AND `NodeDescriptor` (so `catalog_gen`'s node index lists
+//! it) — with no opt-out (`docs/ADDING_PRIMITIVES.md`:
+//! "auto-register... nothing else has to be edited"). A fixture must not
+//! appear in the shipped registry, so it stays out of both channels.
+//! Implementing the traits directly (the blanket `impl<P: Primitive> EffectNode
+//! for P` in `node_graph::primitive` still applies automatically — no
+//! `EffectNode` impl needed either) keeps it out; the I6
 //! test in `freeze/proof.rs` makes it constructible by building a registry
 //! with `PrimitiveRegistry::with_builtin().register("test.camera_pointwise",
 //! ...)` rather than relying on global auto-discovery.
@@ -198,9 +193,8 @@ mod tests {
     fn fixture_is_not_globally_registered() {
         // The whole point of hand-rolling instead of using `crate::primitive!`:
         // this type_id must NOT resolve through the global builtin registry
-        // (that would mean it leaked into PrimitiveFactory/NodeDescriptor —
-        // catalog_gen would then see it and go red against the checked-in
-        // docs/node_catalog.json).
+        // (that would mean it leaked into PrimitiveFactory/NodeDescriptor, and
+        // the node index would list it).
         let registry = crate::persistence::PrimitiveRegistry::with_builtin();
         assert!(
             !registry.contains("test.camera_pointwise"),

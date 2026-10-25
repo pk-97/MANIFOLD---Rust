@@ -29,7 +29,7 @@ Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `son
 
 ## Workflow
 - Work in the main checkout. No worktrees unless Peter asks.
-- Iterate with `cargo nextest run -p <crate> <filter>`. Before committing, run `cargo clippy -p <crate> --tests -- -D warnings`, and `scripts/dev.py node-catalog` if ports or params changed.
+- Iterate with `cargo nextest run -p <crate> <filter>`. Before committing, run `cargo clippy -p <crate> --tests -- -D warnings`.
 - Commit with explicit paths (`git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`.
 - Never launch the `manifold` GUI. Use the headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`. Peter runs the live app.
 - Use `rg`, `fd` and `ast-grep`. Never start `rust-analyzer`. Repo tools are listed in `scripts/TOOLS.md`.

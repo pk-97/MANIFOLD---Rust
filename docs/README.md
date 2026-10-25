@@ -7,7 +7,7 @@
 - `MEDIA_EXPORT_MAP.md`: decode, encode and export
 - `PROJECT_IO_MAP.md`: project files, loading and saving
 - `NODE_GRAPH_SYSTEM.md`: how the node graph fits together
-- `NODE_CATALOG.md`: every node, generated (`scripts/dev.py node-catalog`)
+- `NODE_CATALOG.md`: how nodes are grouped and used; `scripts/dev.py node-catalog` prints every registered node
 - `AUDIO_INFRASTRUCTURE.md`: audio input, analysis and routing
 - `VSYNC_AND_FRAME_PACING.md`: display links and frame pacing
 - `EFFECT_CHAIN_LIFECYCLE.md`: effect chain state across rebuilds

@@ -24,9 +24,8 @@
 //!
 //! [`catalog_gen`](super::catalog_gen) joins this channel with the
 //! `PrimitiveFactory` registry (for `type_id` + picker label) and a
-//! freshly-`create()`d instance (for live port/param shapes) to
-//! generate `docs/NODE_CATALOG.md`'s node index and the machine-readable
-//! `docs/node_catalog.json` the AI composition surface consumes.
+//! freshly-`create()`d instance (for live port/param shapes) to print the
+//! node index (`scripts/dev.py node-catalog`).
 //!
 //! Fields are all `&'static` / `Copy`, so a `NodeDescriptor` is a const
 //! literal — submittable straight into the `inventory` static channel.
@@ -265,10 +264,8 @@ macro_rules! hand_descriptor {
 // `summary`/`category`/`role`/`aliases` fields. The hand descriptors that
 // used to live here are gone — a macro-authored primitive AND a
 // `hand_descriptor!` entry for the same type_id double-register the
-// descriptor inventory channel, and `catalog_gen`'s row-collection
-// non-deterministically picks whichever one iteration order returns
-// (caught by `catalog_gen::tests::regenerates_in_sync` flaking between
-// runs).
+// descriptor inventory channel, and `catalog_gen` would pick one of them
+// by iteration order. Declare each type_id in exactly one place.
 
 // Filter (filter.rs)
 hand_descriptor!(

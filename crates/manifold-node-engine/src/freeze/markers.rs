@@ -11,7 +11,7 @@
 //! that grammar; every producer and consumer goes through it.
 //!
 //! Precedent: [`crate::node_graph::freeze::classify::fusion_kind_str`] — one
-//! rendering shared by `catalog_gen` and `graph_tool` for the same reason
+//! rendering shared by the runtime and `graph_tool` for the same reason
 //! (two ends of one string contract must never disagree).
 //!
 //! Full inventory + semantics: `docs/FREEZE_COMPILER_MAP.md` section 5. Two markers

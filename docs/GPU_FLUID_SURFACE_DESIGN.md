@@ -205,8 +205,7 @@ three refinement scales and the expanded Fill Pits band.
 Derived artifacts: the source Liquid Surface group has **33 nodes**; all other
 four water surface groups copy it. The builder regenerates the rest of
 `WaterDamBreakGpuFlip.json` through `UPDATE_GPU_FLIP_PRESET=1` and its equality
-test. `gen_node_catalog` regenerates both `docs/node_catalog.json` and
-`docs/NODE_CATALOG.md`. The dispatch-tail census remains 228: the new barriered
+test. `scripts/dev.py node-catalog` prints the node index from the registry. The dispatch-tail census remains 228: the new barriered
 reduction is not a codegen per-element atom. Conformance references now use the
 native radius/support/border; the manifest test's 0.5 expectation changes to
 0.35 only because that is the engine node value. No tolerance was loosened.

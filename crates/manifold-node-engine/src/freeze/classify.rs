@@ -525,11 +525,9 @@ pub fn input_access_of(
     None
 }
 
-/// Render a node's fusion classification as the single stable string both
-/// `catalog_gen` (the `fusion` catalog field, design D3) and `graph_tool
-/// fusion` (design D2/D10) print — one implementation, so the catalog and
-/// the CLI can never disagree about what a `FusionKind`/`BoundaryReason`
-/// pair means: `"pointwise"` | `"source"` | `"multi_input_coincident"` |
+/// Render a node's fusion classification as one stable string, shared by
+/// the runtime and `graph_tool fusion` so they never disagree about what a
+/// `FusionKind`/`BoundaryReason` pair means: `"pointwise"` | `"source"` | `"multi_input_coincident"` |
 /// `"boundary:<reason_snake_case>"`.
 pub fn fusion_kind_str(node: &dyn crate::exec::effect_node::EffectNode) -> String {
     match node.fusion_kind() {

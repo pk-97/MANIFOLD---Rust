@@ -34,8 +34,8 @@ use {crate::freeze::region, crate::freeze::region::NodeClass, crate::freeze::reg
 pub struct NodeFusionInfo {
     pub node_id: u32,
     pub type_id: String,
-    /// This node's own declared classification, rendered the same way
-    /// `catalog_gen`'s `fusion` field is: `"pointwise"` | `"source"` |
+    /// This node's own declared classification, rendered by
+    /// [`fusion_kind_str`]: `"pointwise"` | `"source"` |
     /// `"multi_input_coincident"` | `"boundary:<reason_snake_case>"`.
     pub kind: String,
     /// `true` iff this node is a member of one of [`FusionReport::regions`].

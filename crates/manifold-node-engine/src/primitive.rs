@@ -1328,7 +1328,7 @@ macro_rules! primitive {
         // channel (see `node_graph::descriptor`). `purpose` is the
         // existing `PURPOSE`; `summary` / `category` / `role` come from
         // the optional macro fields, defaulting to "unset" so existing
-        // nodes need no edit. `catalog_gen` joins this with the registry.
+        // nodes need no edit.
         ::inventory::submit! {
             $crate::descriptor::NodeDescriptor {
                 type_id: $type_id,
@@ -1416,7 +1416,7 @@ macro_rules! __primitive_picker {
 }
 
 /// Internal helper: optional `summary:` macro field → `&'static str`.
-/// Missing → `""` (the "unset" sentinel `catalog_gen` treats as blank).
+/// Missing → `""`, the "unset" sentinel.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __primitive_desc_summary {

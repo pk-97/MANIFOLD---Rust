@@ -6,7 +6,7 @@
 //! as [`NodeDescriptor`](crate::node_graph::descriptor::NodeDescriptor): adding
 //! a `tooltip` field to `ParamDef` would mean editing every param literal in
 //! ~200 files, so the doc text lives off to the side and
-//! [`catalog_gen`](crate::node_graph::catalog_gen) joins it back in by key.
+//! [`tooltip_for`] looks it up by key.
 //!
 //! Register a node's tooltips in one block with [`param_tooltips!`]:
 //!

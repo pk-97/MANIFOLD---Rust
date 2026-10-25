@@ -21,7 +21,7 @@ Render and measure:
   render-import           render an imported glTF/GLB headless; --dump-def writes the importer's def JSON  [cargo run -p manifold-app --bin render-import --]
   graph-tool              validate <file.json> --kind effect|generator, fusion report; pre-flight for graph JSON  [cargo run -p manifold-app --bin graph-tool --]
   check-presets           validate every bundled preset  [cargo run -p manifold-nodes --bin check-presets --]
-  node-catalog            regenerate docs/NODE_CATALOG.md from the primitive registry  [cargo run -p manifold-nodes --bin gen_node_catalog --]
+  node-catalog            print the registered node index  [cargo run -p manifold-nodes --bin gen_node_catalog]
   thumbnails              regenerate preset picker thumbnails  [scripts/gpu_queue.py -- cargo run -p manifold-app --bin generate-preset-thumbnails --]
   freeze-profile          profile the freeze compiler's fused kernels  [scripts/gpu_queue.py -- cargo run -p manifold-nodes --bin freeze-profile --]
   project-tool            .manifold files: info, json, project new|upgrade, layer add, tempo show|set|at, clip add-audio|add-bulk|list, marker add-bulk|list, scene set-model (never hand-edit the ZIP)  [cargo run -p manifold-app --bin project_tool --]
