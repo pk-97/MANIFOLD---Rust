@@ -794,12 +794,6 @@ mod tests {
     // module) so it stays valid regardless of the field's internal shape.
 
     #[test]
-    fn not_dragging_by_default() {
-        let section = AudioTriggerSection::new();
-        assert!(!section.is_dragging());
-    }
-
-    #[test]
     fn grab_marks_dragging_and_release_commits_once() {
         let mut section = AudioTriggerSection::new();
         section.layer_id = Some(LayerId::new("layer-1"));

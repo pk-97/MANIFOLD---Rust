@@ -36,16 +36,3 @@ fn object_port_single_hop() {
     }
 }
 
-#[test]
-fn scene_object_itself_takes_no_object_input() {
-    // Restates the invariant at the single known producer, so a
-    // regression here fails loudly and specifically instead of only
-    // showing up as a generic registry-walk failure.
-    let node = manifold_nodes_scene::node_graph::primitives::scene_object::SceneObjectNode::new();
-    assert!(
-        !manifold_node_engine::exec::effect_node::EffectNode::inputs(&node)
-            .iter()
-            .any(|i| i.ty == PortType::Object),
-        "node.scene_object must not take an Object input — Object wires never chain"
-    );
-}

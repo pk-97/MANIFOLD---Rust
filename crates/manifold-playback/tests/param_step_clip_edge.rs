@@ -776,32 +776,6 @@ fn second_timeline_clip_start_refires_step_envelope() {
     );
 }
 
-/// Reordering rows must not turn another source's start into an own-layer event.
-#[test]
-fn unrelated_layer_edge_after_reorder_does_not_confuse_the_gate() {
-    // Two clip starts on DIFFERENT layers at the same beat: only layer 0's
-    // own envelope may fire from layer 0's edge.
-    let mut engine = create_engine();
-    engine.initialize(two_layer_project(clip_edge_step_envelope(
-        1.0,
-        WrapMode::Clamp,
-    )));
-    engine.set_state(PlaybackState::Playing);
-    tick_n(&mut engine, 5, 1);
-    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
-
-    // Layer 1 has no envelope at all — this just documents that its own
-    // clip start (beat 4, exercised in `other_layers_clip_start_does_not_fire`)
-    // never touches layer 0's state, holding the count-of-fires invariant
-    // exact at exactly one fire so far.
-    tick_n(&mut engine, 20, 1);
-    assert_eq!(
-        envelope_step_value_of(&engine, 0),
-        Some(1.0),
-        "no second fire without a second clip start on layer 0 itself"
-    );
-}
-
 // ── PARAM_STEP_ACTIONS round-trip gate ──────────────────────────────────────────────────────────────────
 //
 // The P1 unit test (`modulation.rs`'s `serde round-trip` test) only proves

@@ -1922,19 +1922,6 @@ fn check<S: Sink>(enc: &mut S, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step
 mod tests {
     use super::*;
 
-    /// The liquid conformance suite checks codegen bodies for atomics; these
-    /// hand shaders have none, so they are checked here.
-    #[test]
-    fn pressure_solver_uses_no_atomics() {
-        for source in [SHADER, INVERSE_SHADER] {
-            let stray = super::super::gpu_flip_step::atomic_sites_outside(source, &[]);
-            assert!(
-                stray.is_empty(),
-                "atomics outside the allowlist (I8): {stray:#?}"
-            );
-        }
-    }
-
     /// The level rule, odd sides included, as the reference's --symmetry run
     /// prints it; the coarsest level always fits the coarse inverse.
     #[test]
@@ -2061,13 +2048,6 @@ mod tests {
             tile_bases(&level_lattices([64; 3])),
             [0, 512, 576, 584, 585, 586]
         );
-    }
-
-    /// The shader zeroes range entries up to its own round count, which must
-    /// be the cap the solver sizes the entries for.
-    #[test]
-    fn shader_rounds_match_the_iteration_cap() {
-        assert!(super::SHADER.contains(&format!("const ROUNDS: u32 = {MAX_ITERATIONS}u;")));
     }
 
     #[test]

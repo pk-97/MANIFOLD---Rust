@@ -47,39 +47,4 @@ pub enum DepthRule {
 
 #[cfg(test)]
 mod tests {
-    /// Every registered (non-fixture) primitive constructs and answers
-    /// `depth_rule()` without panicking — largely a tautology given
-    /// `EffectNode::depth_rule` has no default (a primitive that omitted it
-    /// would already have failed to compile, per this module's doc comment),
-    /// but it walks the registry the same way
-    /// `freeze::classify::tests::every_boundary_atom_declares_its_reason`
-    /// does, so it stands as the guard for *future* hand-written
-    /// `EffectNode` impls: it fails loudly (missing from the count) rather
-    /// than silently if a future registration path stops going through
-    /// `PrimitiveRegistry::with_builtin()`. `node.__*` fixtures are excluded,
-    /// same carve-out as the fusion classification meta-test.
-    #[test]
-    fn every_registered_primitive_declares_a_depth_rule() {
-        use crate::persistence::PrimitiveRegistry;
-
-        let registry = PrimitiveRegistry::with_builtin();
-        let mut checked = 0usize;
-        for type_id in registry.known_type_ids() {
-            if type_id.starts_with("node.__") {
-                continue;
-            }
-            let node = registry
-                .construct(type_id)
-                .unwrap_or_else(|| panic!("registry missing {type_id}"));
-            // Calling this at all is the assertion — a primitive without a
-            // `depth_rule()` implementation doesn't reach this line; the
-            // compiler already refused to build it.
-            let _ = node.depth_rule();
-            checked += 1;
-        }
-        assert!(
-            checked > 0,
-            "expected at least one registered primitive to check depth_rule() on"
-        );
-    }
 }

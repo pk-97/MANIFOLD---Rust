@@ -2,7 +2,6 @@
 // All data types for the percussion analysis pipeline.
 
 use serde::de::Deserializer;
-use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 use crate::id::LayerId;
@@ -15,7 +14,7 @@ use crate::units::{Beats, Bpm, Seconds};
 
 /// Port of Unity PercussionTriggerType enum.
 /// Normalized trigger classes used by percussion detection and clip mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(i32)]
 pub enum PercussionTriggerType {
     #[default]
@@ -30,35 +29,6 @@ pub enum PercussionTriggerType {
     Pad = 8,
     Vocal = 9,
     BassSustained = 10,
-}
-
-impl Serialize for PercussionTriggerType {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for PercussionTriggerType {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => Self::Unknown,
-                1 => Self::Kick,
-                2 => Self::Snare,
-                3 => Self::Clap,
-                4 => Self::Hat,
-                5 => Self::Perc,
-                6 => Self::Bass,
-                7 => Self::Synth,
-                8 => Self::Pad,
-                9 => Self::Vocal,
-                10 => Self::BassSustained,
-                _ => Self::Unknown,
-            },
-            _ => Self::Unknown,
-        })
-    }
 }
 
 // ─── PercussionEvent ───
@@ -755,21 +725,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_trigger_type_discriminants() {
-        assert_eq!(PercussionTriggerType::Unknown as i32, 0);
-        assert_eq!(PercussionTriggerType::Kick as i32, 1);
-        assert_eq!(PercussionTriggerType::Snare as i32, 2);
-        assert_eq!(PercussionTriggerType::Clap as i32, 3);
-        assert_eq!(PercussionTriggerType::Hat as i32, 4);
-        assert_eq!(PercussionTriggerType::Perc as i32, 5);
-        assert_eq!(PercussionTriggerType::Bass as i32, 6);
-        assert_eq!(PercussionTriggerType::Synth as i32, 7);
-        assert_eq!(PercussionTriggerType::Pad as i32, 8);
-        assert_eq!(PercussionTriggerType::Vocal as i32, 9);
-        assert_eq!(PercussionTriggerType::BassSustained as i32, 10);
-    }
-
-    #[test]
     fn test_percussion_event_clamping() {
         let e = PercussionEvent::new(PercussionTriggerType::Kick, -1.0, 2.0, -0.5);
         assert_eq!(e.time_seconds, 0.0);
@@ -896,7 +851,7 @@ mod tests {
 
     #[test]
     fn old_binding_json_with_video_clip_id_still_loads() {
-        let json = r#"{"triggerType":0,"layerIndex":2,"videoClipId":"clip_123","generatorType":"","durationBeats":0.5,"minimumConfidence":0.3}"#;
+        let json = r#"{"triggerType":"Unknown","layerIndex":2,"videoClipId":"clip_123","generatorType":"","durationBeats":0.5,"minimumConfidence":0.3}"#;
         let binding: PercussionClipBinding = serde_json::from_str(json).expect("old file loads");
         assert_eq!(binding.layer_index, 2);
     }

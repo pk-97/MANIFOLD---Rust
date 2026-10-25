@@ -103,14 +103,14 @@ const TEXT_DIM: Color32 = Color32::new(120, 120, 124, 255);
 // died with the registry buckets they colored. Palette literals, not one-off
 // paints: tokenizing into color.rs is the landing follow-up (lane ownership
 // stops at this file).
-const CAT_SPATIAL: Color32 = Color32::new(102, 191, 191, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
-const CAT_COLOR: Color32 = Color32::new(219, 94, 124, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
-const CAT_STYLIZE: Color32 = Color32::new(150, 130, 220, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
-const CAT_FILMIC: Color32 = Color32::new(200, 180, 120, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
-const CAT_GEOMETRY: Color32 = Color32::new(110, 155, 235, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
-const CAT_PATTERN: Color32 = Color32::new(95, 190, 140, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
-const CAT_SIM: Color32 = Color32::new(230, 145, 85, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
-const CAT_TEXT_MEDIA: Color32 = Color32::new(150, 165, 190, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
+const CAT_SPATIAL: Color32 = Color32::new(102, 191, 191, 255);
+const CAT_COLOR: Color32 = Color32::new(219, 94, 124, 255);
+const CAT_STYLIZE: Color32 = Color32::new(150, 130, 220, 255);
+const CAT_FILMIC: Color32 = Color32::new(200, 180, 120, 255);
+const CAT_GEOMETRY: Color32 = Color32::new(110, 155, 235, 255);
+const CAT_PATTERN: Color32 = Color32::new(95, 190, 140, 255);
+const CAT_SIM: Color32 = Color32::new(230, 145, 85, 255);
+const CAT_TEXT_MEDIA: Color32 = Color32::new(150, 165, 190, 255);
 
 /// Fixed source-chip order: "All" is chip 0
 /// (handled like the category row's "All"), then these three, always in this

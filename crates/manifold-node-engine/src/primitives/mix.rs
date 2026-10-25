@@ -191,45 +191,6 @@ mod gpu_tests {
         panic!("no output `{port}` on node {node:?}");
     }
 
-    /// End-to-end smoke test: build `Source × 2 → Mix → FinalOutput`,
-    /// dispatch through `Executor::execute_frame_with_gpu`, commit, wait.
-    /// Verifies the whole stack — pipeline compile, binding layout,
-    /// MetalBackend slot allocation, encoder dispatch — works on a real
-    /// `GpuDevice`. No pixel check; that's `mix_pixel_correct_at_half`.
-    #[test]
-    fn mix_dispatches_through_metal_backend() {
-        let device = manifold_gpu::testkit::test_device();
-        let (w, h) = (4u32, 4u32);
-        let format = GpuTextureFormat::Rgba16Float;
-
-        // Build graph.
-        let mut g = Graph::new();
-        let src_a = g.add_node(Box::new(Source::new()));
-        let src_b = g.add_node(Box::new(Source::new()));
-        let mix = g.add_node(Box::new(Mix::new()));
-        let out = g.add_node(Box::new(FinalOutput::new()));
-        g.set_param(mix, "amount", ParamValue::Float(0.5)).unwrap();
-        g.connect((src_a, "out"), (mix, "a")).unwrap();
-        g.connect((src_b, "out"), (mix, "b")).unwrap();
-        g.connect((mix, "out"), (out, "in")).unwrap();
-        let plan = compile(&g).unwrap();
-
-        // Wire backend + encoder.
-        let backend = MetalBackend::new(device.arc(), w, h, format);
-        let mut native_enc = device.create_encoder("mix-smoke");
-        let mut exec = Executor::new(Box::new(backend));
-
-        {
-            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
-            exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
-        }
-
-        // Synchronously commit + wait so any Metal validation error or
-        // shader compile failure surfaces inside the test instead of
-        // dangling on the GPU.
-        native_enc.commit_and_wait_completed();
-    }
-
     /// Pixel-accurate proof of correctness. Pre-binds host-supplied
     /// red and blue input textures to the two `Source` nodes via
     /// `MetalBackend::pre_bind_texture_2d`, runs Mix at amount=0.5, and

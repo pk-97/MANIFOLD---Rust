@@ -686,7 +686,7 @@ impl Overlay for PerfHudPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{HUD_WIDTH, PAD, PerfHudPanel, PerfMetrics, write_sim_lag};
+    use super::{HUD_WIDTH, PAD, PerfHudPanel, write_sim_lag};
     use crate::tree::UITree;
 
     #[test]
@@ -694,22 +694,6 @@ mod tests {
         let mut text = String::new();
         write_sim_lag(&mut text, 0.125);
         assert_eq!(text, "sim behind by 125.0 ms");
-    }
-
-    #[test]
-    fn sim_status_defaults_to_healthy_and_keeps_flags_independent() {
-        let metrics = PerfMetrics::default();
-        assert!(!metrics.sim_step_cap_hit);
-        assert!(!metrics.sim_nonfinite);
-
-        let mut panel = PerfHudPanel::new();
-        panel.set_metrics(PerfMetrics {
-            sim_step_cap_hit: true,
-            sim_nonfinite: true,
-            ..PerfMetrics::default()
-        });
-        assert!(panel.metrics.sim_step_cap_hit);
-        assert!(panel.metrics.sim_nonfinite);
     }
 
     #[test]

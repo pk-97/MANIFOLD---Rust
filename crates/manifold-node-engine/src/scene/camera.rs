@@ -776,13 +776,6 @@ mod tests {
     }
 
     #[test]
-    fn default_perspective_populates_all_fields() {
-        let cam = Camera::default_perspective();
-        assert_eq!(cam.pos, [0.0, 0.0, -3.0]);
-        assert!(matches!(cam.mode, CameraMode::Perspective { .. }));
-    }
-
-    #[test]
     fn from_pos_euler_zero_angles_looks_down_negative_z() {
         let cam = Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0);
         assert!((cam.fwd[0] - 0.0).abs() < 1e-6);
@@ -1158,24 +1151,6 @@ mod tests {
     }
 
     // ===== LensParams =====
-
-    #[test]
-    fn pinhole_lens_is_neutral_per_committed_field_semantics() {
-        let p = LensParams::PINHOLE;
-        assert!(
-            p.focus_distance <= 0.0,
-            "focus_distance should be <= 0 (neutral)"
-        );
-        assert!(
-            p.f_stop.is_infinite() && p.f_stop > 0.0,
-            "f_stop should be +infinity (pinhole)"
-        );
-        assert_eq!(
-            p.shutter_angle, 0.0,
-            "shutter_angle should be 0 (no motion blur)"
-        );
-        assert_eq!(p.exposure_ev, 0.0, "exposure_ev should be 0 (neutral)");
-    }
 
     #[test]
     fn every_constructor_lens_defaults_to_pinhole() {

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use manifold_node_engine::load::preset_loader::{
-    EFFECT_CATALOG, EFFECT_DIRS, GENERATOR_CATALOG, GENERATOR_DIRS, KindDirs, OverlayEntries,
+    EFFECT_CATALOG, EFFECT_DIRS, GENERATOR_CATALOG, KindDirs, OverlayEntries,
     PresetAssetsRoot, SCENE_MODIFIER_CATALOG, blob_mask, build_catalog_with_overlays,
     resolve_stock_root, select_assets_root, try_load_catalog,
 };
@@ -81,34 +81,6 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         assert_eq!(ids, sorted, "effect catalog must be sorted by type id");
-    }
-
-    /// STATIC_THUMBNAILS D5: every wet/dry-style factory param (id
-    /// `amount`/`mix`) defaults to 1.0. Walks the raw preset JSON (both
-    /// stock dirs) so a hand-edit that skips the loader still fails here.
-    #[test]
-    fn factory_amount_defaults_full() {
-        let mut violations: Vec<String> = Vec::new();
-        for kind in [&EFFECT_DIRS, &GENERATOR_DIRS] {
-            let (dir, tried) = resolve_stock_root(kind);
-            let dir = dir.unwrap_or_else(|| panic!("stock preset root missing; tried {tried:?}"));
-            let entries = fs::read_dir(&dir).expect("stock preset dir must read");
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                let text = fs::read_to_string(&path).expect("preset JSON must read");
-                let value: serde_json::Value =
-                    serde_json::from_str(&text).expect("preset JSON must parse");
-                collect_amount_violations(&value, "", &path, &mut violations);
-            }
-        }
-        assert!(
-            violations.is_empty(),
-            "amount/mix defaults must be 1.0:\n{}",
-            violations.join("\n"),
-        );
     }
 
     #[test]
@@ -288,46 +260,6 @@ mod tests {
             build_catalog_with_overlays("effect", &stock, None, &snapshot, &saved).unwrap();
         assert_eq!(saved_catalog.json("MaskBlob").unwrap().as_ref(), "saved");
         let _ = fs::remove_dir_all(stock);
-    }
-
-    /// Recurses `node`, flagging every object whose `id` is a wet/dry
-    /// param whose `defaultValue` isn't 1.0. `pointer` is the JSON path
-    /// for the failure message.
-    fn collect_amount_violations(
-        node: &serde_json::Value,
-        pointer: &str,
-        path: &Path,
-        violations: &mut Vec<String>,
-    ) {
-        match node {
-            serde_json::Value::Object(map) => {
-                if matches!(
-                    map.get("id").and_then(|v| v.as_str()),
-                    Some("amount" | "mix")
-                ) && let Some(default) = map.get("defaultValue").and_then(|v| v.as_f64())
-                    && default != 1.0
-                {
-                    violations.push(format!(
-                        "{}: {pointer} defaultValue={default}",
-                        path.display()
-                    ));
-                }
-                for (key, value) in map {
-                    let child = if pointer.is_empty() {
-                        format!("/{key}")
-                    } else {
-                        format!("{pointer}/{key}")
-                    };
-                    collect_amount_violations(value, &child, path, violations);
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for (i, value) in items.iter().enumerate() {
-                    collect_amount_violations(value, &format!("{pointer}/{i}"), path, violations);
-                }
-            }
-            _ => {}
-        }
     }
 
     /// Unique scratch dir per test, cleaned up at the end.

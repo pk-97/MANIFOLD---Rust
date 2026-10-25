@@ -363,19 +363,6 @@ mod srgb_shader_parity_tests {
         }
     }
 
-    #[test]
-    fn shader_encode_diverges_from_old_pow_2_2_approximation_in_shadows() {
-        let old_approx = |x: f32| x.max(0.0).powf(1.0 / 2.2);
-        let x = 0.02_f32; // well below the shadow knee
-        let true_srgb = shader_srgb_encode(x);
-        let approx = old_approx(x);
-        assert!(
-            (true_srgb - approx).abs() > 0.01,
-            "expected old pow(1/2.2) to visibly diverge from true sRGB at x={x}: \
-             true={true_srgb}, approx={approx}"
-        );
-    }
-
     /// Literal transliteration of `manifold_highlight_rolloff` in
     /// `native/ColorTransferFunctions.h` (scalar form).
     fn shader_highlight_rolloff(x: f32) -> f32 {

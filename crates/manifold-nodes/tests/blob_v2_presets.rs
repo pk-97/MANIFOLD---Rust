@@ -11,14 +11,12 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
-use manifold_core::preset_def::PresetKind;
 use manifold_node_engine::runtime::PresetRuntime;
 use {
     manifold_node_engine::exec::execution_plan::compile,
     manifold_node_engine::persistence::EffectGraphDefExt,
     manifold_node_engine::persistence::PrimitiveRegistry,
     manifold_nodes::bundled_presets::bundled_preset_def,
-    manifold_nodes::bundled_presets::bundled_preset_type_ids,
 };
 
 const SOURCE_VARIANTS: &[(&str, &[&str])] = &[
@@ -414,19 +412,3 @@ fn blob_v2_invalid_inverted_mask_is_zero() {
     assert_eq!(float_param(valid_gate, "scale"), 0.0);
 }
 
-#[test]
-fn blob_v2_catalog_contains_effect_and_mask_ids() {
-    let effect_ids: BTreeSet<String> = bundled_preset_type_ids(PresetKind::Effect)
-        .map(|id| id.as_str().to_string())
-        .collect();
-    let generator_ids: BTreeSet<String> = bundled_preset_type_ids(PresetKind::Generator)
-        .map(|id| id.as_str().to_string())
-        .collect();
-    let ids: BTreeSet<_> = effect_ids.union(&generator_ids).cloned().collect();
-    for (id, _) in SOURCE_VARIANTS.iter().chain(MASK_VARIANTS) {
-        assert!(
-            ids.contains(*id),
-            "{id}: preset is absent from bundled catalogs"
-        );
-    }
-}

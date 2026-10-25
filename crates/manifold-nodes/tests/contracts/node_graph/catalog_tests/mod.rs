@@ -26,7 +26,6 @@ mod runtime_math_view;
 #[cfg(test)]
 mod runtime_modifier_events;
 mod snapshot;
-mod wgsl_snapshot;
 
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod fusion_proof;

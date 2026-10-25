@@ -474,8 +474,8 @@ mod tests {
         // later — this test only covers the Deserialize step.
         let json = r#"{
             "paramIndex": 2,
-            "beatDivision": 4,
-            "waveform": 0,
+            "beatDivision": "Half",
+            "waveform": "Sine",
             "enabled": true,
             "phase": 0.0,
             "baseValue": 0.0,
@@ -499,8 +499,8 @@ mod tests {
         // `legacy_param_index` stays None.
         let json = r#"{
             "paramId": "amount",
-            "beatDivision": 5,
-            "waveform": 1,
+            "beatDivision": "Whole",
+            "waveform": "Triangle",
             "enabled": true,
             "phase": 0.5,
             "baseValue": 0.0,
@@ -523,8 +523,8 @@ mod tests {
         let json = r#"{
             "paramId": "threshold",
             "paramIndex": 99,
-            "beatDivision": 3,
-            "waveform": 0
+            "beatDivision": "Quarter",
+            "waveform": "Sine"
         }"#;
         let d: ParameterDriver = serde_json::from_str(json).unwrap();
         assert_eq!(d.param_id, "threshold");
@@ -538,7 +538,7 @@ mod tests {
         // project. Real recovery path is the post-load resolver, but
         // there's nothing for it to do here.
         let json = r#"{
-            "beatDivision": 4
+            "beatDivision": "Half"
         }"#;
         let d: ParameterDriver = serde_json::from_str(json).unwrap();
         assert_eq!(d.param_id, "");
@@ -605,8 +605,8 @@ mod tests {
         // A project saved before free mode existed has no freePeriodBeats key.
         let json = r#"{
             "paramId": "amount",
-            "beatDivision": 3,
-            "waveform": 0,
+            "beatDivision": "Quarter",
+            "waveform": "Sine",
             "enabled": true,
             "phase": 0.0,
             "baseValue": 0.0,

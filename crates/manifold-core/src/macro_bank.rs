@@ -614,17 +614,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_bank_has_8_slots() {
-        let bank = MacroBank::default();
-        assert_eq!(bank.slots.len(), MACRO_COUNT);
-    }
-
-    #[test]
-    fn curve_linear() {
-        assert!((MacroCurve::Linear.apply(0.5) - 0.5).abs() < f32::EPSILON);
-    }
-
-    #[test]
     fn curve_exponential() {
         assert!((MacroCurve::Exponential.apply(0.5) - 0.25).abs() < f32::EPSILON);
     }

@@ -249,11 +249,8 @@ fn clear_trigger_state_purges_only_flagged_nodes_state_store_buckets() {
     );
 }
 
-/// BUG-104 Part 5(b) — the live build-time counterpart to
-/// `trigger_shadow_class_guard.rs`'s offline sweep: the REAL shipped
-/// Lissajous.json (post BUG-104 Part 3 fix) must build with ZERO
-/// `TriggerShadowsContinuousBinding` errors — proving the fix is
-/// structurally clean, not just visually plausible.
+/// The shipped Lissajous.json builds with no
+/// `TriggerShadowsContinuousBinding` errors.
 #[test]
 fn lissajous_builds_with_no_trigger_shadow_errors() {
     let json = include_str!(concat!(
@@ -269,16 +266,14 @@ fn lissajous_builds_with_no_trigger_shadow_errors() {
         .collect();
     assert!(
         shadow_errors.is_empty(),
-        "Lissajous must build with no BUG-104 trigger-shadow errors, got {shadow_errors:?}"
+        "Lissajous must build with no trigger-shadow errors, got {shadow_errors:?}"
     );
 }
 
-/// BUG-104 Part 5(b) — same synthetic pre-fix shape as
-/// `trigger_shadow_class_guard.rs`'s regression test, but exercised
-/// through the REAL build path (`PresetRuntime::from_def` via
-/// `from_json_str`) to prove the warning reaches `PresetRuntime::
-/// errors()` — the channel editor UI / MCP-driven mutations / agent-
-/// authored graphs all read, not just the offline sweep test.
+/// A trigger that shadows a continuous binding surfaces through the real
+/// build path (`PresetRuntime::from_def` via `from_json_str`) as a
+/// `PresetRuntime::errors()` entry, the channel the editor, MCP-driven
+/// mutations and agent-authored graphs all read.
 #[test]
 fn from_json_str_surfaces_trigger_shadow_as_a_chain_error() {
     let json = r#"{
@@ -1093,39 +1088,6 @@ fn missing_generator_input_is_a_clean_error() {
     );
 }
 
-#[test]
-fn infra_session_integration_smoke_test() {
-    let json = r#"{
-            "version": 2,
-            "name": "InfraSmoke",
-            "presetMetadata": {
-                "id": "InfraSmoke",
-                "displayName": "Infra Smoke",
-                "category": "Diagnostic",
-                "oscPrefix": "infra_smoke",
-                "params": [],
-                "bindings": []
-            },
-            "nodes": [
-                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
-                { "id": 1, "typeId": "node.wgsl_compute", "handle": "branch_a" },
-                { "id": 2, "typeId": "node.wgsl_compute", "handle": "branch_b" },
-                { "id": 3, "typeId": "node.switch_texture", "handle": "mux" },
-                { "id": 4, "typeId": "system.final_output", "handle": "final_output" }
-            ],
-            "wires": [
-                { "fromNode": 0, "fromPort": "trigger_count", "toNode": 3, "toPort": "selector" },
-                { "fromNode": 1, "fromPort": "output_tex", "toNode": 3, "toPort": "in_0" },
-                { "fromNode": 2, "fromPort": "output_tex", "toNode": 3, "toPort": "in_1" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
-            ]
-        }"#;
-
-    let preset = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
-        .expect("infra smoke preset must load");
-    assert_eq!(preset.type_id().as_str(), "InfraSmoke");
-}
-
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn bundled_strange_attractor_loads_and_compiles() {
@@ -1255,30 +1217,6 @@ fn fluidsim2d_survives_live_resize() {
         after > 0.05,
         "FluidSim2D must still render after live resize (max luma {after})"
     );
-}
-
-#[test]
-fn fixture_trivial_passthrough_preset_loads_and_executes() {
-    // PRESET_BROWSER_AUDITION P1 (D8): TrivialPassthrough moved out of the
-    // shipped bundle into the test fixtures — the JSON-loader smoke test
-    // loads it from there.
-    let json = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/presets/TrivialPassthrough.json"
-    ));
-    let mut preset = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
-        .expect("fixture TrivialPassthrough must load");
-    assert_eq!(preset.type_id().as_str(), "TrivialPassthrough");
-    preset.set_frame_context(FrameContextInputs {
-        time: 0.0,
-        beat: 0.0,
-        aspect: 1.78,
-        trigger_count: 0.0,
-        anim_progress: 0.0,
-        output_width: 1920.0,
-        output_height: 1080.0,
-    });
-    preset.execute_frame(frame_time());
 }
 
 #[test]

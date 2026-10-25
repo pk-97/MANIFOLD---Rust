@@ -355,11 +355,4 @@ mod tests {
         assert_eq!(classify_wheel(pixels(0.0), false), None);
         assert_eq!(classify_wheel(line(f32::NAN), false), None);
     }
-
-    #[test]
-    fn sensitivity_defaults_are_all_positive() {
-        let s = ViewportInputSensitivity::default();
-        assert!(s.orbit > 0.0 && s.pan > 0.0 && s.dolly > 0.0);
-        assert!(s.trackpad_pan > 0.0);
-    }
 }

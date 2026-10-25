@@ -219,14 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn vector_field_port_type_is_distinct_from_other_cpu_wires() {
-        assert_ne!(PortType::VectorField, PortType::FluidRole);
-        assert_ne!(PortType::VectorField, PortType::MeshSource);
-        assert_ne!(PortType::VectorField, PortType::RigidBody);
-        assert_ne!(PortType::VectorField, PortType::Object);
-    }
-
-    #[test]
     fn vector_field_release_and_clear_drop_values() {
         let mut backends: [Box<dyn Backend>; 2] = [
             Box::new(MockBackend::new()),

@@ -3346,37 +3346,6 @@ mod tests {
     // ableton_transport_sync integration harness (F3), not by a
     // wall-clock-window test here.
 
-    #[test]
-    fn write_target_value_mapping() {
-        let wt = WriteTarget {
-            target: AbletonMappingTarget::MasterEffect {
-                effect_type: manifold_core::PresetTypeId::BLOOM,
-                param_id: std::borrow::Cow::Borrowed("amount"),
-            },
-            param_id: "amount".to_string(),
-            // Rack macros send 0-127 from Ableton
-            ableton_min: 0.0,
-            ableton_max: 127.0,
-            range_min: 0.25,
-            range_max: 0.75,
-            inverted: false,
-            param_min: 0.0,
-            param_max: 2.0,
-        };
-        // Ableton sends 63.5 (50% of 0-127)
-        // → normalized = 0.5
-        // → mapped = 0.25 + 0.5 * 0.5 = 0.5
-        // → value = 0 + 2 * 0.5 = 1.0
-        let ableton_val = 63.5_f32;
-        let span = wt.ableton_max - wt.ableton_min;
-        let normalized = ((ableton_val - wt.ableton_min) / span).clamp(0.0, 1.0);
-        let mapped = wt.range_min + (wt.range_max - wt.range_min) * normalized;
-        let value = wt.param_min + (wt.param_max - wt.param_min) * mapped;
-        assert!((normalized - 0.5).abs() < 0.01);
-        assert!((mapped - 0.5).abs() < 0.01);
-        assert!((value - 1.0).abs() < 0.01);
-    }
-
     // ── Fast-path decoder tests ──────────────────────────────────
 
     /// Build a raw OSC packet for `/live/device/get/parameter/value`

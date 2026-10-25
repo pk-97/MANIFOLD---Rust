@@ -114,24 +114,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tap_supported_is_queryable() {
-        // Just must not panic; the value is OS-dependent.
-        let _ = tap_supported();
-    }
-
-    #[test]
     fn opening_an_empty_app_tap_is_an_error_not_a_panic() {
         // No process handles → never a valid tap, on every platform / OS version
         // (the macOS backend guards empty before touching the HAL).
         assert!(open(CaptureSource::Apps { handles: vec![] }).is_err());
-    }
-
-    #[test]
-    fn capture_source_is_comparable() {
-        assert_eq!(CaptureSource::SystemAudio, CaptureSource::SystemAudio);
-        assert_ne!(
-            CaptureSource::DefaultInput,
-            CaptureSource::Device { name: "x".into() }
-        );
     }
 }

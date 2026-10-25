@@ -486,19 +486,6 @@ mod tests {
     // `sensitivity_to_threshold`).
 
     #[test]
-    fn layer_clip_trigger_new_is_disabled_default_shape_one_beat() {
-        let source = AudioModSource {
-            send_id: crate::id::AudioSendId::new("send-1"),
-            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
-        };
-        let cfg = LayerClipTrigger::new(source.clone());
-        assert!(!cfg.enabled);
-        assert_eq!(cfg.source, source);
-        assert_eq!(cfg.shape, AudioModShape::default());
-        assert_eq!(cfg.one_shot_beats, Beats(DEFAULT_ONE_SHOT_BEATS));
-    }
-
-    #[test]
     fn layer_clip_trigger_round_trips_through_json() {
         let mut cfg = LayerClipTrigger::new(AudioModSource {
             send_id: crate::id::AudioSendId::new("send-2"),

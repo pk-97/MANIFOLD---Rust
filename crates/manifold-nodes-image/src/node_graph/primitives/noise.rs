@@ -237,39 +237,3 @@ inventory::submit! {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn canonical_defaults_are_perlin_single_octave() {
-        let n = Noise::new();
-        assert_eq!(n.default_type, 0);
-        assert_eq!(n.default_octaves, 1);
-    }
-
-    #[test]
-    fn legacy_aliases_bake_the_right_defaults() {
-        // The hidden factories construct Noise pre-set to the right branch so
-        // saved projects (which never stored a `type`) render unchanged.
-        let simplex = {
-            let mut n = Noise::new();
-            n.default_type = 1;
-            n
-        };
-        assert_eq!(simplex.default_type, 1);
-        let fbm = {
-            let mut n = Noise::new();
-            n.default_octaves = 4;
-            n
-        };
-        assert_eq!(fbm.default_type, 0);
-        assert_eq!(fbm.default_octaves, 4);
-        let hash = {
-            let mut n = Noise::new();
-            n.default_type = 2;
-            n
-        };
-        assert_eq!(hash.default_type, 2);
-    }
-}

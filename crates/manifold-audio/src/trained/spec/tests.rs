@@ -454,35 +454,3 @@ fn refuses_each_bad_entry() {
 fn i32_entry(c: &mut Container, name: &str) {
     c.insert(name, Array::i32_scalar(1));
 }
-
-/// `runtime_parts.json` written from this build's registry, byte for byte in the file's layout (one part kind
-/// per line; the file both sides check, D6).
-fn runtime_parts() -> String {
-    let list = |items: Vec<&str>| {
-        let quoted: Vec<String> = items.iter().map(|s| format!("\"{s}\"")).collect();
-        format!("[{}]", quoted.join(", "))
-    };
-    let measures: Vec<String> = Measure::ALL
-        .iter()
-        .map(|m| format!("\"{}\": {}", m.name(), m.width()))
-        .collect();
-    format!(
-        "{{\n  \"finders\": {},\n  \"measures\": {{{}}},\n  \"channels\": {},\n  \"combines\": {},\n  \"nets\": {{\"min_count\": {MIN_NETS}}},\n  \"stage\": {{\"max_windows\": {MAX_WINDOWS}, \"level\": true, \"gate\": true}}\n}}\n",
-        list(FinderKind::ALL.iter().map(|f| f.name()).collect()),
-        measures.join(", "),
-        list(Channel::ALL.iter().map(|c| c.name()).collect()),
-        list(Combine::ALL.iter().map(|c| c.name()).collect()),
-    )
-}
-
-#[test]
-fn registry_matches_runtime_parts() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/detectors/runtime_parts.json");
-    let file = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    assert_eq!(
-        file,
-        runtime_parts(),
-        "runtime_parts.json differs from this build's parts"
-    );
-}

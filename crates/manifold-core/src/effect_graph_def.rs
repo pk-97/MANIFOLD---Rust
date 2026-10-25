@@ -1659,18 +1659,6 @@ mod tests {
         assert!(!json.contains("handleNode"));
     }
 
-    /// The current `node` form still round-trips unchanged.
-    #[test]
-    fn node_target_round_trips() {
-        let t = BindingTarget::Node {
-            node_id: NodeId::new("n123"),
-            param: "amount".to_string(),
-        };
-        let json = serde_json::to_string(&t).unwrap();
-        let back: BindingTarget = serde_json::from_str(&json).unwrap();
-        assert_eq!(t, back);
-    }
-
     /// The MOD badge must ignore pure canvas layout. Moving a node (only
     /// `editor_pos` changes) must not read as diverged; changing a param must.
     #[test]

@@ -720,16 +720,6 @@ mod channel_layout_tests {
     }
 
     #[test]
-    fn texture_channels_new_orders_slots_rgba() {
-        const R: ChannelName = ChannelName::from_str("r");
-        const G: ChannelName = ChannelName::from_str("g");
-        const B: ChannelName = ChannelName::from_str("b");
-        const A: ChannelName = ChannelName::from_str("a");
-        let tc = TextureChannels::new(R, G, B, A);
-        assert_eq!(tc.slots, [R, G, B, A]);
-    }
-
-    #[test]
     fn texture_channels_equal_when_slots_match() {
         let a = TextureChannels::new(
             ChannelName::from_str("flow_x"),

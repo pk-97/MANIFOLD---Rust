@@ -942,26 +942,6 @@ mod tests {
     // ---- Conversion tests ----
 
     #[test]
-    fn float_passes_through_unchanged() {
-        assert_eq!(
-            convert_param_value(ParamConvert::Float, 0.0),
-            ParamValue::Float(0.0)
-        );
-        assert_eq!(
-            convert_param_value(ParamConvert::Float, 0.5),
-            ParamValue::Float(0.5)
-        );
-        assert_eq!(
-            convert_param_value(ParamConvert::Float, -1.5),
-            ParamValue::Float(-1.5)
-        );
-        assert_eq!(
-            convert_param_value(ParamConvert::Float, 42.0),
-            ParamValue::Float(42.0)
-        );
-    }
-
-    #[test]
     fn int_round_uses_half_away_from_zero() {
         // f32::round is half-away-from-zero, NOT banker's rounding.
         // Document the actual behavior so it's expected.
@@ -1248,15 +1228,6 @@ mod tests {
              through the write boundary unclamped — hints are display spans, \
              never restrictions"
         );
-    }
-
-    #[test]
-    fn apply_node_target_doesnt_need_handle() {
-        let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(GraphFixture::binding()));
-        let binding = resolved_feedback_amount(feedback);
-        // None handle should be fine for Node target.
-        assert!(binding.apply(&mut g, None, 0.5).is_ok());
     }
 
     #[test]

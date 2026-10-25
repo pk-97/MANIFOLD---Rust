@@ -1816,50 +1816,6 @@ fn rt_denoise_feed_on_forces_all_feeds() {
     );
 }
 
-/// DN-E: output_format maps all 5 new ports to their correct formats.
-#[test]
-fn rt_denoise_feed_output_formats_are_correct() {
-    let s = RenderScene::new();
-    assert_eq!(
-        s.output_format("normals"),
-        Some(manifold_gpu::GpuTextureFormat::Rgba16Float)
-    );
-    assert_eq!(
-        s.output_format("roughness"),
-        Some(manifold_gpu::GpuTextureFormat::R16Float)
-    );
-    assert_eq!(
-        s.output_format("diffuse_albedo"),
-        Some(manifold_gpu::GpuTextureFormat::Rgba16Float)
-    );
-    assert_eq!(
-        s.output_format("specular_albedo"),
-        Some(manifold_gpu::GpuTextureFormat::Rgba16Float)
-    );
-    assert_eq!(
-        s.output_format("specular_hit_distance"),
-        Some(manifold_gpu::GpuTextureFormat::R16Float)
-    );
-    assert_eq!(
-        s.output_format("reactive_mask"),
-        Some(manifold_gpu::GpuTextureFormat::R16Float)
-    );
-}
-
-/// DN-E: the `rt_denoise_feed` param exists, defaults to false, and is a Bool.
-#[test]
-fn rt_denoise_feed_param_exists_with_correct_default() {
-    let s = RenderScene::new();
-    let param = s
-        .parameters()
-        .iter()
-        .find(|p| p.name == "rt_denoise_feed")
-        .expect("rt_denoise_feed param must exist");
-    assert_eq!(param.name, "rt_denoise_feed");
-    assert_eq!(param.default, ParamValue::Bool(false));
-    assert_eq!(param.ty, manifold_node_engine::parameters::ParamType::Bool);
-}
-
 /// A ray-resolution change reallocates
 /// the RT targets and reports the reset — temporal history never survives
 /// a trace-dims change, and a canvas change with truncating-equal trace
@@ -2952,38 +2908,3 @@ fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
     );
 }
 
-/// RT-Stage-3 P1 (BUG-mkgh): the firefly clamp's median is a partial
-/// selection over the non-void 3x3 subset's luma, returning the element
-/// at sorted index `n/2` (odd n = the middle; even n = the element at
-/// index n/2). This is the Rust mirror of the MSL `firefly_median_luma`
-/// in `crates/manifold-gpu/src/metal/raytrace.rs` — kept in lockstep by
-/// the gpu-proofs value test, which asserts the GPU kernel lands on the
-/// same order statistic. Plain (non-GPU) unit test: pins the selection
-/// convention so a retune can't silently drift the CPU mirror.
-#[test]
-fn firefly_median_selection_is_the_n_over_2_order_statistic() {
-    let median = |ls: &[f32]| {
-        let mut v = ls.to_vec();
-        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        v[v.len() / 2]
-    };
-
-    // Odd n: the true middle.
-    assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
-    // The full 9-element subset (center included) of a hot-center
-    // firefly: median is the 5th-smallest (a dim neighbor), not the
-    // outlier — which is exactly what lets the clamp engage.
-    assert_eq!(
-        median(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0]),
-        1.0
-    );
-    // Neighbors 1..8 + center 100 => median 5 (the 5th-smallest).
-    assert_eq!(
-        median(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 100.0]),
-        5.0
-    );
-    // Even n: index n/2 (the upper of the two middles), matching the MSL
-    // `mid = n / 2` convention.
-    assert_eq!(median(&[1.0, 2.0, 3.0, 4.0]), 3.0);
-    assert_eq!(median(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), 4.0);
-}

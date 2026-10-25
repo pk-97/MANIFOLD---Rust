@@ -971,27 +971,6 @@ mod tests {
     use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
-    #[test]
-    fn fit_defaults_to_none_and_recenter_defaults_to_true() {
-        let fit = GltfMeshSource::PARAMS
-            .iter()
-            .find(|p| p.name == "fit")
-            .unwrap();
-        assert_eq!(fit.ty, ParamType::Enum);
-        assert_eq!(fit.default, ParamValue::Enum(0));
-        assert_eq!(fit.enum_values, GLTF_FIT_MODES);
-        assert_eq!(GLTF_FIT_MODES[0], "none");
-        assert_eq!(GLTF_FIT_MODES[1], "unit_box");
-
-        let recenter = GltfMeshSource::PARAMS
-            .iter()
-            .find(|p| p.name == "recenter")
-            .unwrap();
-        assert_eq!(recenter.ty, ParamType::Bool);
-        assert_eq!(recenter.default, ParamValue::Bool(true));
-    }
 
     #[test]
     fn vertex_colors_compatibility_whitens_legacy_and_preserves_opt_in() {

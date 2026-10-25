@@ -154,21 +154,6 @@ mod tests {
     }
 
     #[test]
-    fn ntsc_rationals_reconstruct_within_broadcast_tolerance() {
-        for &(target, num, den) in &[
-            (23.976_f32, 24000, 1001),
-            (29.97, 30000, 1001),
-            (59.94, 60000, 1001),
-        ] {
-            let reconstructed = num as f64 / den as f64;
-            assert!(
-                (reconstructed - target as f64).abs() < 0.001,
-                "rational {num}/{den} = {reconstructed} too far from NTSC target {target}"
-            );
-        }
-    }
-
-    #[test]
     fn zero_or_negative_falls_back_safely() {
         let (num, den) = fps_to_rational(0.0);
         assert!(num >= 1 && den >= 1);

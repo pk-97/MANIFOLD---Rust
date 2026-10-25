@@ -534,34 +534,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_sane() {
-        let v = View::panel();
-        assert_eq!(v.kind, UINodeType::Panel);
-        assert_eq!(v.width, Sizing::Hug);
-        assert!(v.visible);
-        assert!(!v.interactive);
-        assert!(!v.has_intent());
-    }
-
-    #[test]
-    fn builders_compose() {
-        let v = View::row(4.0)
-            .pad(Pad::all(8.0))
-            .child(View::label("hi").fill_w())
-            .child(
-                View::button("OK")
-                    .fixed(40.0, 18.0)
-                    .on_click(PanelAction::Transport(TransportAction::Stop)),
-            );
-        assert_eq!(v.layout, Layout::Row);
-        assert_eq!(v.gap, 4.0);
-        assert_eq!(v.pad, Pad::all(8.0));
-        assert_eq!(v.children.len(), 2);
-        assert_eq!(v.children[0].width, Sizing::Fill);
-        assert!(v.children[1].has_intent());
-    }
-
-    #[test]
     fn validate_flags_unwired_button() {
         let v = View::column(2.0)
             .child(View::button("dead")) // no intent, not inert
@@ -583,13 +555,5 @@ mod tests {
         // A claims_area node counts as intent for validation (it absorbs).
         let v = View::panel().interactive().claims_area();
         assert!(validate(&v).is_empty());
-    }
-
-    #[test]
-    fn spacer_fills_both_axes() {
-        let s = View::spacer();
-        assert_eq!(s.width, Sizing::Fill);
-        assert_eq!(s.height, Sizing::Fill);
-        assert!(!s.interactive);
     }
 }

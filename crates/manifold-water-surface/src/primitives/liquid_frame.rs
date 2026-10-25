@@ -517,18 +517,6 @@ impl Primitive for LiquidFrame {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn liquid_frame_params_match_the_shader() {
-        let frame = LiquidFrame::new();
-        assert!(frame.provides_array_output("interior_a"));
-        assert!(frame.provides_array_output("interior_b"));
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::{LIQUID_STATS_WORDS, ParticlePublication, Publication};

@@ -133,16 +133,6 @@ mod tests {
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::{PortType, ScalarType};
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_single_enable_param_defaulting_true() {
-        let params = TriggerGate::PARAMS;
-        assert_eq!(params.len(), 1);
-        assert_eq!(params[0].name, "enable");
-        assert_eq!(params[0].ty, ParamType::Bool);
-        assert!(matches!(params[0].default, ParamValue::Bool(true)));
-    }
 
     fn evaluate_actual(node: &mut TriggerGate, trigger_count: f32, enable: bool) -> (f32, f32) {
         let mut backend = MockBackend::new();

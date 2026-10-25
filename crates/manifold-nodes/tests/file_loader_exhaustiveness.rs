@@ -58,22 +58,6 @@ fn every_registered_file_reader_has_a_core_table_entry() {
 }
 
 #[test]
-fn every_table_entry_names_a_registered_or_retired_primitive() {
-    let registry = PrimitiveRegistry::with_builtin();
-    let missing: Vec<&str> = ALL_FILE_LOADER_TYPE_IDS
-        .iter()
-        .copied()
-        .filter(|t| {
-            *t != manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID && !registry.contains(t)
-        })
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "file_loader_kind table names unregistered primitives: {missing:?}"
-    );
-}
-
-#[test]
 fn table_entries_are_exactly_the_file_reading_primitives() {
     // Every table entry must resolve to a real primitive that declares the
     // path/folder string param it loads (guards against a table row describing

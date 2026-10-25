@@ -542,13 +542,13 @@ mod tests {
         assert_eq!(
             m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)),
             Color32::BLACK
-        ); // design-token-exempt: test fixture (chip-motion tween highlight)
+        );
 
         assert!(
             m.tick(45.0, true, false),
             "halfway through MOTION_FAST, still animating"
         );
-        let mid = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)); // design-token-exempt: test fixture (chip-motion tween highlight)
+        let mid = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255));
         assert!(
             mid.r > 0 && mid.r < 255,
             "partway blended toward hover: r={}",
@@ -562,11 +562,11 @@ mod tests {
         assert_eq!(
             m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)),
             Color32::WHITE
-        ); // design-token-exempt: test fixture (chip-motion tween highlight)
+        );
 
         // Pointer leaves: eases back down, not an instant snap.
         assert!(m.tick(45.0, false, false));
-        let leaving = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)); // design-token-exempt: test fixture (chip-motion tween highlight)
+        let leaving = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255));
         assert!(leaving.r > 0 && leaving.r < 255);
     }
 
@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(
             m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)),
             Color32::new(255, 0, 0, 255)
-        ); // design-token-exempt: test fixture (chip-motion tween highlight)
+        );
     }
 
     #[test]

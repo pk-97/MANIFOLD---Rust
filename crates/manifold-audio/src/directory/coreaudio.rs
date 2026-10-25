@@ -626,29 +626,4 @@ mod tests {
         let sub = dir.subscribe_processes(Box::new(|| {}));
         drop(sub);
     }
-
-    #[test]
-    #[ignore = "hardware-dependent; run with --ignored --nocapture to eyeball real devices"]
-    fn dump_devices() {
-        let dir = CoreAudioDirectory::new();
-        for d in dir.list_input_devices() {
-            eprintln!(
-                "DEVICE uid={} name={:?} default={} alive={} ch={}",
-                d.uid,
-                d.name,
-                d.is_default,
-                d.is_alive,
-                d.channels.len()
-            );
-            for c in &d.channels {
-                eprintln!("    ch{} -> {}", c.index, c.display_name());
-            }
-            for g in &d.subdevices {
-                eprintln!(
-                    "    SUB {:?} start={} count={}",
-                    g.name, g.channel_start, g.channel_count
-                );
-            }
-        }
-    }
 }

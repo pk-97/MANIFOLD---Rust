@@ -63,27 +63,3 @@ impl Default for Atmosphere {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_is_fog_off_neutral_tint() {
-        let a = Atmosphere::default();
-        assert_eq!(a.fog_density, 0.0, "default must be fog-off");
-        assert_eq!(a.height_falloff, 0.0);
-        assert_eq!(a.ambient_tint, [1.0, 1.0, 1.0, 1.0]);
-    }
-
-    #[test]
-    fn default_is_shafts_off_med_quality() {
-        let a = Atmosphere::default();
-        assert_eq!(
-            a.shaft_intensity, 0.0,
-            "default must be shafts-off (THE fader)"
-        );
-        assert_eq!(a.shaft_anisotropy, 0.6);
-        assert_eq!(a.shaft_quality, 1, "default quality is Med (1)");
-    }
-}

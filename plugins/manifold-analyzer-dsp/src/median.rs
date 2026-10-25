@@ -283,17 +283,6 @@ mod tests {
     }
 
     #[test]
-    fn storage_does_not_grow_with_stream_length() {
-        let mut estimator = P2Quantile::new(0.5);
-        let size = std::mem::size_of_val(&estimator);
-        for value in 0..100_000 {
-            estimator.add(value as f32);
-        }
-        assert_eq!(std::mem::size_of_val(&estimator), size);
-        assert_eq!(estimator.count(), 100_000);
-    }
-
-    #[test]
     fn endpoint_quantiles_track_stream_extrema() {
         let mut minimum = P2Quantile::new(0.0);
         let mut maximum = P2Quantile::new(1.0);

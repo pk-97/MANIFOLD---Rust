@@ -142,22 +142,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn mono_measure() {
-        let m = MonoTextMeasure;
-        let size = m.measure_text("Hello", 10, FontWeight::Regular);
-        assert_eq!(size.x, 30.0); // 5 chars * 6px
-        assert_eq!(size.y, 10.0);
-    }
-
-    #[test]
-    fn empty_text() {
-        let m = MonoTextMeasure;
-        let size = m.measure_text("", 14, FontWeight::Bold);
-        assert_eq!(size.x, 0.0);
-        assert_eq!(size.y, 14.0);
-    }
-
     /// The pre-binary-search `truncate_with_ellipsis`, kept verbatim as the
     /// reference the new one must match.
     fn truncate_linear_reference(

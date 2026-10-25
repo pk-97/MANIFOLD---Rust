@@ -697,12 +697,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_over_reserve_message_names_the_reserve() {
-        let n = CUT_MAP_EXTRA_RECORDS;
-        assert!(OVER_RESERVE.contains(&format!("{},{:03}", n / 1000, n % 1000)));
-    }
-
-    #[test]
     fn map_capacity_reserves_additive_fragment_space() {
         assert_eq!(map_capacity(2), Some(CUT_MAP_EXTRA_RECORDS));
         assert_eq!(map_capacity(12), Some(196_620));

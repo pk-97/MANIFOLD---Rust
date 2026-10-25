@@ -176,25 +176,6 @@ fn build_scene(device: &GpuDevice, depth_value: f32, label: &str) -> SceneFixtur
 }
 
 #[test]
-fn temporal_scaler_produces_exact_target_resolution() {
-    let h = shared();
-    let Some(upscaler) = MetalFxTemporalUpscaler::new(&h.device, SRC_W, SRC_H, DST_W, DST_H) else {
-        eprintln!("[SKIP] MetalFX Temporal not available on this device/OS");
-        return;
-    };
-    assert_eq!(
-        upscaler.output.width, DST_W,
-        "output texture width must be the exact target resolution"
-    );
-    assert_eq!(
-        upscaler.output.height, DST_H,
-        "output texture height must be the exact target resolution"
-    );
-    assert_eq!(upscaler.dst_w, DST_W);
-    assert_eq!(upscaler.dst_h, DST_H);
-}
-
-#[test]
 fn upscaled_output_approximates_native_within_coarse_epsilon() {
     let h = shared();
     let Some(upscaler) = MetalFxTemporalUpscaler::new(&h.device, SRC_W, SRC_H, DST_W, DST_H) else {

@@ -61,7 +61,7 @@ class TempoPoint:
     beat: float
     bpm: float
     recorded_at_seconds: Optional[float]
-    source: int
+    source: str
 
 
 def extract_tempo_map(project: dict) -> List[TempoPoint]:
@@ -73,7 +73,7 @@ def extract_tempo_map(project: dict) -> List[TempoPoint]:
         recorded = p.get("recordedAtSeconds")
         if recorded is not None and recorded < 0:
             continue
-        out.append(TempoPoint(beat=p["beat"], bpm=p["bpm"], recorded_at_seconds=recorded, source=p.get("source", -1)))
+        out.append(TempoPoint(beat=p["beat"], bpm=p["bpm"], recorded_at_seconds=recorded, source=p.get("source", "Unknown")))
     return out
 
 
@@ -120,7 +120,7 @@ def extract_layer_edges(project: dict) -> List[LayerEdges]:
 def beats_to_seconds(beat: float, tempo_map: List[TempoPoint]) -> Optional[float]:
     """Only meaningful for points >= the first recorded point (audio starts
     there) — integrates the piecewise-linear-bpm tempo map. Points carry
-    recorded_at_seconds directly for source==4 (recorded/live tempo) entries,
+    recorded_at_seconds directly for source "Recorded" (live tempo) entries,
     which is what this project uses throughout, so we interpolate between
     the two bracketing points' own recorded_at_seconds rather than
     re-deriving from bpm (avoids compounding rounding across 98 points)."""

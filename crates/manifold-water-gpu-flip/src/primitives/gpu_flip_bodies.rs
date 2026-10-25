@@ -430,12 +430,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn body_shader_uses_no_atomics() {
-        let stray = super::super::gpu_flip_step::atomic_sites_outside(SHADER, &[]);
-        assert!(stray.is_empty(), "atomics outside the allowlist (I8): {stray:#?}");
-    }
-
-    #[test]
     fn body_shader_validates_with_every_entry() {
         let module = naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())

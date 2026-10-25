@@ -217,18 +217,3 @@ fn whitewater_upwind_matches_vendored_engine() {
         }
     }
 }
-
-#[test]
-fn whitewater_outflow_strict_surface_rule_and_proof_extents() {
-    // fluidsimulation.cpp:9065: non-inverted mesh outflow removes d < 0.
-    let flags = [3.5f32, 4.0, 4.5].map(|x| u32::from(x - 4.0 >= 0.0));
-    assert_eq!(flags, [0, 1, 1]);
-    // Value proofs: 8³ cells, 9³ solid nodes, 3 accepted schedule slots,
-    // four particle types, one 2³ atlas. Every shader guards rounded tails.
-    let faces = 9 * 8 * 8;
-    assert_eq!(faces, 576);
-    assert_eq!(3 * faces, 1728);
-    assert_eq!(3 * 4, 12);
-    assert_eq!(9usize.pow(3), 729);
-    assert_eq!(2usize.pow(3) / 2, 4);
-}

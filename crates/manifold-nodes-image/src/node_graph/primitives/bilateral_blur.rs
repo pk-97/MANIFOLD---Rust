@@ -190,17 +190,6 @@ impl Primitive for BilateralBlur {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn derive_depth_scalars_reads_near_far_only() {
-        let mut cam = Camera::default_perspective();
-        cam.near = 0.2;
-        cam.far = 250.0;
-        let [near, far] = derive_depth_scalars(&cam);
-        assert_eq!(near, 0.2);
-        assert_eq!(far, 250.0);
-    }
 
     /// Ground 20 to 26 m out, receding 0.15 to 0.3 m per row, as far ground
     /// does at a grazing angle. The vertical pass must blur it like the plain

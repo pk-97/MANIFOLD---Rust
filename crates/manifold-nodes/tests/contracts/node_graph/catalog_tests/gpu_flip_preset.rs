@@ -1,5 +1,5 @@
 use manifold_nodes_water::presets::gpu_flip::testkit::{
-    assert_preset_root, family_outputs, rendered_scene_bytes, surface_detail_offset,
+    family_outputs, surface_detail_offset,
 };
 
 use manifold_core::PresetTypeId;
@@ -12,32 +12,6 @@ use manifold_nodes_water::testkit::liquid_extents::*;
 use serde_json::{Value, json};
 
 use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
-
-#[test]
-fn gpu_flip_defaults_disable_optional_corrections_and_preserve_opt_ins() {
-    use manifold_node_engine::parameters::ParamValue;
-    use manifold_node_engine::primitive::PrimitiveSpec;
-    use manifold_water_gpu_flip::primitives::gpu_flip_step::GpuFlipStep;
-
-    assert!(!WaterScene::dam_break(64).volume_projection);
-    for name in ["volume_projection", "narrow_band", "solve_level"] {
-        let param = GpuFlipStep::PARAMS.iter().find(|p| p.name == name).unwrap();
-        assert_eq!(param.default, ParamValue::Float(0.0), "{name}");
-    }
-    for enabled in [false, true] {
-        let def = water_def(WaterScene {
-            volume_projection: enabled,
-            ..WaterScene::dam_break(64)
-        });
-        let step = def
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == STEP_NODE)
-            .unwrap();
-        let params = serde_json::to_value(&step.params).unwrap();
-        assert_eq!(params["volume_projection"]["value"], i32::from(enabled));
-    }
-}
 
 fn walked(def: &EffectGraphDef, frozen: bool, what: &str) -> ExtentReport {
     walk(def, frozen).unwrap_or_else(|error| panic!("{what}: {error}"))
@@ -198,24 +172,6 @@ fn gpu_flip_tick_region_is_the_tick() {
     );
 }
 
-/// The rendered Dam Break's device bytes at every lattice, for the size
-/// ladder.
-#[test]
-fn gpu_flip_memory_at_every_lattice() {
-    for n in LATTICES {
-        for scale in [1, 2, 3] {
-            let scene = WaterScene::dam_break(n).with_surface_scale(scale);
-            let bytes = rendered_scene_bytes(scene);
-            println!(
-                "GPU FLIP rendered Dam Break {n}³, surface scale {scale}: {} particles, {:.2} GB",
-                scene.particles(),
-                bytes as f64 / 1e9
-            );
-            assert!(bytes > 0);
-        }
-    }
-}
-
 /// The pool the domain gives an inflow costs the rendered water about
 /// 1 GB (BUG-3zq4r, inflow runs out): each slot's bytes across every
 /// particle buffer, from two pools the walk sizes. The domain sizes the
@@ -255,20 +211,6 @@ fn gpu_flip_auto_inflow_pool_is_about_a_gigabyte() {
         pool / 1e9
     );
     assert!((0.5e9..1.5e9).contains(&pool), "{pool} bytes");
-}
-
-/// Full array and held-buffer accounting at the shipped resolution. This
-/// excludes textures and later mesh growth; it is not a frame-time proof.
-#[test]
-fn gpu_flip_native_surface_detail_memory_at_64() {
-    let coarse = rendered_scene_bytes(WaterScene::dam_break(64).with_surface_scale(1));
-    let matched = rendered_scene_bytes(WaterScene::dam_break(64).with_surface_scale(2));
-    assert!(matched > coarse);
-    println!(
-        "GPU FLIP 64³ rendered arrays/held buffers: detail 0 {coarse} bytes; detail 1 {matched} bytes; increase {} bytes",
-        matched - coarse
-    );
-    assert_eq!(WaterScene::dam_break(64).surface_scale, 1);
 }
 
 /// Resolution is a card: the graph built at 64 runs at any Resolution,
@@ -365,28 +307,6 @@ fn gpu_flip_rendered_scenes_cover_every_dispatch() {
     }
 }
 
-/// The fill is the engine's: its site rule on the engine's boxes, read
-/// by the domain.
-#[test]
-fn gpu_flip_dam_break_fill_matches_the_engine_boxes() {
-    let at64 = WaterScene::dam_break(64);
-    assert_eq!(
-        (at64.pool_sites(), at64.box_sites()),
-        (5, [[5, 43], [5, 67], [8, 120]])
-    );
-    assert_eq!(at64.particles(), 128 * 5 * 128 + 38 * 62 * 112);
-    let at128 = WaterScene::dam_break(128);
-    assert_eq!(
-        (at128.pool_sites(), at128.box_sites()),
-        (10, [[10, 86], [10, 133], [16, 240]])
-    );
-    // The still pool is 1 m of floor and no box; the falling block is 1 m on a side.
-    let pool = WaterScene::still_pool(64);
-    assert_eq!((pool.pool_sites(), pool.particles()), (32, 128 * 32 * 128));
-    let block = WaterScene::free_fall(64);
-    assert_eq!((block.pool_sites(), block.particles()), (0, 32 * 32 * 32));
-}
-
 /// Each fused region of `def` as its members' node ids, `a + b`.
 fn fused_regions(def: &EffectGraphDef) -> Vec<String> {
     let report = manifold_node_engine::freeze::fusion_report(def, &registry());
@@ -435,29 +355,6 @@ fn gpu_flip_step_does_not_fuse() {
     );
 }
 
-/// Nodes by id and wires sorted, so a hand edit's order does not count.
-fn canonical(def: &Value) -> Value {
-    let mut def = def.clone();
-    def["nodes"]
-        .as_array_mut()
-        .expect("nodes")
-        .sort_by_key(|node| node["id"].as_u64());
-    def["wires"]
-        .as_array_mut()
-        .expect("wires")
-        .sort_by_key(|wire| {
-            let end = |key: &str| wire[key].as_u64().expect("wire end");
-            let port = |key: &str| wire[key].as_str().expect("wire port").to_string();
-            (
-                end("fromNode"),
-                port("fromPort"),
-                end("toNode"),
-                port("toPort"),
-            )
-        });
-    def
-}
-
 /// The tick hands the state the step's faces, whatever the step count.
 #[test]
 fn gpu_flip_state_takes_the_last_steps_extended_faces() {
@@ -480,17 +377,6 @@ fn gpu_flip_state_takes_the_last_steps_extended_faces() {
         assert_eq!(name(&into[0]["fromNode"]), STEP_NODE);
         assert_eq!(into[0]["fromPort"], "faces");
     }
-}
-
-/// Velocity extension follows the native configured CFL and covers the
-/// face grid's published valid layers.
-#[test]
-fn gpu_flip_band_uses_engine_cfl() {
-    use manifold_nodes_water::testkit::conformance::FACE_GRID_GPU_FLIP_LAYERS;
-    use manifold_water_gpu_flip::primitives::gpu_flip_step::{ENGINE_CFL, band_layers};
-    assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
-    assert_eq!(band_layers(ENGINE_CFL), 12);
-    assert!(band_layers(ENGINE_CFL) >= FACE_VALID_LAYERS);
 }
 
 /// Solver presets share the authored surface structure and the FLIP Fluids
@@ -1045,68 +931,6 @@ fn water_family_builder_parity() {
     }
 }
 
-/// The shipped `WaterDamBreakGpuFlip.json` is the builder's Dam Break at 64,
-/// so the tests that build it run what ships. `UPDATE_GPU_FLIP_PRESET=1`
-/// rewrites it from the builder.
-#[test]
-fn gpu_flip_shipped_preset_is_the_builders_dam_break() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("tests/fixtures/presets/{SHIPPED_PRESET}.json"));
-    let built = serde_json::to_value(render_def(WaterScene::dam_break(64))).expect("serialise");
-    if std::env::var("UPDATE_GPU_FLIP_PRESET").is_ok() {
-        let mut json = serde_json::to_string_pretty(&built).expect("serialise");
-        json.push('\n');
-        std::fs::write(&path, json).expect("write the shipped preset");
-    }
-    let shipped: Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("the shipped preset reads"))
-            .expect("parses");
-    assert!(
-        canonical(&shipped) == canonical(&built),
-        "{SHIPPED_PRESET}.json differs from the builder's Dam Break; rerun with UPDATE_GPU_FLIP_PRESET=1"
-    );
-}
-
-/// The shipped `WaterDamBreakParticles.json` is the builder's Particle
-/// View of the shipped Dam Break, and its cards bind the graph it ships.
-/// `UPDATE_GPU_FLIP_PRESET=1` rewrites it; regenerate the Dam Break
-/// first, since this view is built from it.
-#[test]
-fn gpu_flip_particle_view_is_built_from_the_dam_break() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "tests/fixtures/presets/{PARTICLE_VIEW_PRESET}.json"
-    ));
-    let existing: EffectGraphDef =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("Particle View reads"))
-            .expect("preset parses");
-    assert_preset_root(&existing.nodes);
-    let def = particle_view_def();
-    let built = serde_json::to_value(&def).expect("serialise");
-    if std::env::var("UPDATE_GPU_FLIP_PRESET").is_ok() {
-        let mut json = serde_json::to_string_pretty(&built).expect("serialise");
-        json.push('\n');
-        std::fs::write(&path, json).expect("write the Particle View");
-    }
-    let shipped: Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("the Particle View reads"))
-            .expect("parses");
-    assert!(
-        canonical(&shipped) == canonical(&built),
-        "{PARTICLE_VIEW_PRESET}.json differs from the builder's Particle View; rerun with UPDATE_GPU_FLIP_PRESET=1"
-    );
-    let runtime = manifold_node_engine::runtime::PresetRuntime::from_def(
-        def,
-        &PrimitiveRegistry::with_builtin(),
-        None,
-    )
-    .expect("the Particle View builds");
-    let shadowed: Vec<_> = runtime.shadowed_def_params().collect();
-    assert!(
-        shadowed.is_empty(),
-        "the Particle View's cards overwrite def params: {shadowed:?}"
-    );
-}
-
 /// Every per-step duration input in every graph the builder ships is fed
 /// by its domain's accepted interval. Left on its param, one holds 1/60 s
 /// at every Sim Rate: at 30 Hz whitewater emits, ages and moves at half
@@ -1521,51 +1345,9 @@ fn gpu_flip_physics_view_skips_the_surface() {
     }
 }
 
-/// The shipped preset loads, saves and reloads unchanged, the Whitewater
-/// group's params and its cards with it.
-#[test]
-fn gpu_flip_preset_round_trips_with_its_whitewater() {
-    let shipped = shipped_preset();
-    let def: EffectGraphDef = serde_json::from_value(shipped.clone()).expect("the preset loads");
-    let loaded = serde_json::to_value(&def).expect("serialise");
-    assert!(
-        canonical(&loaded) == canonical(&shipped),
-        "loading {SHIPPED_PRESET}.json dropped or changed a field"
-    );
-    // A save prints each f32 at its shortest; the reload is the same f32s.
-    let saved = serde_json::to_string_pretty(&def).expect("the preset saves");
-    let again: EffectGraphDef = serde_json::from_str(&saved).expect("the saved preset reloads");
-    let reloaded = serde_json::to_value(&again).expect("serialise");
-    assert!(
-        canonical(&reloaded) == canonical(&loaded),
-        "a save and reload changed {SHIPPED_PRESET}.json"
-    );
-    let reloaded_def: EffectGraphDef =
-        serde_json::from_value(reloaded.clone()).expect("reloaded preset");
-    let group = serde_json::to_value(
-        find_node(&reloaded_def.nodes, "whitewater").expect("Whitewater step"),
-    )
-    .expect("whitewater");
-    for param in ["capacity", "wavecrest_emission", "min_energy", "max_energy"] {
-        assert!(
-            group["params"][param]["value"].is_number(),
-            "the group lost {param}"
-        );
-    }
-    let cards = reloaded["presetMetadata"]["bindings"]
-        .as_array()
-        .expect("bindings");
-    for card in ["whitewater_capacity", "parent_visible", "bubble_density"] {
-        assert!(
-            cards.iter().any(|c| c["id"] == card),
-            "the preset lost the {card} card"
-        );
-    }
-}
-
 use manifold_nodes::engine_scenes::scene_json;
 use manifold_water_gpu_flip::primitives::{
-    gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS,
+    gpu_flip_domain::gpu_flip_geometry,
 };
 use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
 

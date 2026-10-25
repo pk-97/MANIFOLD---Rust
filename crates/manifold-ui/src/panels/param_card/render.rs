@@ -1397,7 +1397,7 @@ impl ParamCardPanel {
             for strip in 0..strips {
                 let o = (led * strips + strip) * 4;
                 dst[(leds - 1 - led) * strips + strip] = if o + 2 < src.len() {
-                    Color32::new(src[o], src[o + 1], src[o + 2], 255) // design-token-exempt: readback RGBA bytes → bitmap pixel, data conversion not UI chrome
+                    Color32::new(src[o], src[o + 1], src[o + 2], 255)
                 } else {
                     Color32::TRANSPARENT
                 };
@@ -1466,7 +1466,7 @@ impl ParamCardPanel {
         let (w, h) = (self.led_band_tex_w, self.led_band_tex_h);
         let (iw, ih) = (self.led_band_interior_w, self.led_band_interior_h);
         for p in self.led_band_bitmap.iter_mut() {
-            *p = Color32::new(0, 0, 0, 255); // design-token-exempt: LED pixel data (a black frame), not UI chrome
+            *p = Color32::new(0, 0, 0, 255);
         }
         Self::round_led_band_corners(&mut self.led_band_bitmap, w, h, iw, ih);
         self.led_band_dirty = true;
@@ -2264,7 +2264,7 @@ mod led_band_tests {
 
     /// Opaque test-sentinel pixel — readback data, not UI chrome.
     fn rgb(r: u8, g: u8, b: u8) -> Color32 {
-        Color32::new(r, g, b, 255) // design-token-exempt: test pixel data, not UI chrome
+        Color32::new(r, g, b, 255)
     }
 
     /// Write one RGBA pixel into an 8×120 readback buffer at (strip, led).

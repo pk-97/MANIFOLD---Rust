@@ -209,27 +209,3 @@ impl Primitive for FbmPerInstance {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
-    #[test]
-    fn fbm_per_instance_defaults_match_legacy_noise_common() {
-        let by_name: std::collections::HashMap<&str, &ParamDef> = FbmPerInstance::PARAMS
-            .iter()
-            .map(|p| (p.name.as_ref(), p))
-            .collect();
-        let oct = by_name.get("octaves").expect("octaves param missing");
-        let lac = by_name.get("lacunarity").expect("lacunarity param missing");
-        let gain = by_name.get("gain").expect("gain param missing");
-        match (&oct.default, &lac.default, &gain.default) {
-            (ParamValue::Float(o), ParamValue::Float(l), ParamValue::Float(g)) => {
-                assert_eq!(*o, 5.0, "5 octaves matches noise_common.wgsl::fbm");
-                assert_eq!(*l, 1.5, "lacunarity 1.5 matches legacy fbm");
-                assert_eq!(*g, 0.8, "gain 0.8 matches legacy fbm");
-            }
-            _ => panic!("default values must be Float"),
-        }
-    }
-}

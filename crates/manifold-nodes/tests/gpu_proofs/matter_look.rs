@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::scene::transform::Transform;
-use manifold_water_gpu_mpm::matter::look::{ALIGNMENT_TICKS, Cells, LookRecorder};
+use manifold_water_gpu_mpm::matter::look::{Cells, LookRecorder};
 
 use crate::matter_scene::{MatterScene, SceneSettings};
 

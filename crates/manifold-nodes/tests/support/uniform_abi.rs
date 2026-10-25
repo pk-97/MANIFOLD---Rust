@@ -524,25 +524,6 @@ pub fn assert_wgsl_layout(
     )
 }
 
-/// The census includes every production repr struct, even if its name does not
-/// contain Uniform. A changed or newly added mirror must acquire a proof.
-pub fn host_structs(path: &Path) -> Result<Vec<(String, bool)>, String> {
-    let src = source(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)?;
-    Ok(src
-        .defs
-        .into_iter()
-        .filter(|(_, d)| d.attrs.iter().any(|a| a.path().is_ident("repr")))
-        .map(|(n, d)| {
-            (
-                n,
-                d.fields
-                    .iter()
-                    .any(|f| f.ident.as_ref().is_some_and(|i| i == "dispatch_count")),
-            )
-        })
-        .collect())
-}
-
 /// Extract the actual declaration from custom shaders. Their function bodies
 /// have runtime template substitutions and shared includes, which do not affect
 /// these uniform declarations. Naga still reflects every declared field.

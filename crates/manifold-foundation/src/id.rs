@@ -255,21 +255,4 @@ mod tests {
         let back: Wrapper = serde_json::from_str(&json).unwrap();
         assert_eq!(w, back);
     }
-
-    #[test]
-    fn all_five_types_work() {
-        // Smoke test that the macro works for all 5 types.
-        let c = ClipId::new("c");
-        let l = LayerId::new("l");
-        let eg = EffectGroupId::new("eg");
-        let e = EffectId::new("e");
-        let m = MarkerId::new("m");
-        assert_eq!(c.as_str(), "c");
-        assert_eq!(l.as_str(), "l");
-        assert_eq!(eg.as_str(), "eg");
-        assert_eq!(e.as_str(), "e");
-        assert_eq!(m.as_str(), "m");
-        // Clone all
-        let _ = (c.clone(), l.clone(), eg.clone(), e.clone(), m.clone());
-    }
 }

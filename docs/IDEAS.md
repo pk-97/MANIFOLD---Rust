@@ -166,6 +166,9 @@ A set of ready-to-build visual pieces, each with its graph and a performer card,
 ### Effect masks for partial wet and dry
 Paint a mask so an effect only hits part of the picture, with the mask coming from shapes, the incoming image or another layer, for sidechain style control on stage. Already built: masks, modifier groups and two new generators. Contour masks and audio-driven masks are still open.
 
+### One value per parameter in the project
+Every parameter stores two numbers in the project: the value you set (`base`) and the value playing right now after LFOs, audio and automation (`value`), with a per-effect `base_tracked` flag saying whether `base` is used at all. That split is why `get_param` and `get_base_param` both exist and get mixed up. The project should keep only your value, with the playing value living in the engine's output. It touches the core data model, playback, modulation and the save format, and old shows must still load. Do it after the single-truth project state work lands.
+
 ## Product
 
 ### Commercial release, trial watermark, updates and crash reports

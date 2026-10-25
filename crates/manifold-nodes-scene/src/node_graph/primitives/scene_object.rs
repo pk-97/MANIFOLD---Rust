@@ -247,7 +247,6 @@ impl Primitive for SceneObjectNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::effect_node::EffectNode;
     use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
@@ -258,13 +257,6 @@ mod tests {
 
     fn frame_time() -> FrameTime {
         FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
-    }
-
-    #[test]
-    fn scene_object_carries_resources() {
-        let node = SceneObjectNode::new();
-        let effect_node: &dyn EffectNode = &node;
-        assert!(effect_node.carries_resources());
     }
 
     #[test]

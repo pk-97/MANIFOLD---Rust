@@ -941,39 +941,6 @@ fn traced_occlusion_darkens_the_shaded_region_relative_to_the_open_plane() {
     );
 }
 
-/// DIAGNOSTIC, not a gate — no assertion on which reading is "correct".
-/// ED-A made this observationally inert (the corner darkens through the
-/// traced env+GI substitution regardless of the Ambient knob — the 0.0
-/// leg reads 0.844, the 1.0 leg ~0.99 as the recomposed flat ambient adds
-/// 0.15*ao on top). It records the two readings for the lead's eye, no
-/// position taken.
-#[test]
-fn diagnostic_shaded_region_luma_with_ambient_zero_vs_ambient_one() {
-    let zero_json = furnace_wall_corner_scene_json(0.0);
-    let one_json = furnace_wall_corner_scene_json(1.0);
-    let (zero_bytes, w, h) = render_readback_confirmed(
-        &zero_json,
-        "furnace wall-corner scene, ambient=0.0, RT enabled",
-    );
-    let (one_bytes, _, _) = render_readback_confirmed(
-        &one_json,
-        "furnace wall-corner scene, ambient=1.0, RT enabled",
-    );
-
-    let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
-    let corner_px = cam
-        .project_to_pixel(CORNER_WORLD, w, h)
-        .expect("corner probe must project in front of the camera");
-
-    const RADIUS: i32 = 5;
-    let ambient_zero = region_luma(&zero_bytes, w, h, corner_px.px, corner_px.py, RADIUS);
-    let ambient_one = region_luma(&one_bytes, w, h, corner_px.px, corner_px.py, RADIUS);
-    eprintln!(
-        "RT furnace occlusion diagnostic: corner region luma at ambient=0.0 -> {ambient_zero:.5}, \
-         at ambient=1.0 -> {ambient_one:.5}"
-    );
-}
-
 /// Same Reinhard+gamma tonemap `render_scene_shadows.rs`'s `write_png` uses.
 fn write_png(bytes: &[u8], w: u32, h: u32, path: &str) {
     let mut out = Vec::with_capacity((w * h * 4) as usize);

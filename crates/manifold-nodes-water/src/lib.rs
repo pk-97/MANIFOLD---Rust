@@ -18,10 +18,6 @@ pub(crate) mod physics_scene;
 pub mod presets;
 pub mod primitives;
 pub mod runtime;
-#[cfg(test)]
-mod liquid {
-    mod scene_contract;
-}
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]

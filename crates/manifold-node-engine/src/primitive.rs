@@ -2078,31 +2078,6 @@ mod tests {
     }
 
     #[test]
-    fn channels_end_to_end_rejects_mismatched_signatures() {
-        // Producer emits Channels[A_INDEX, B_INDEX]; a hypothetical
-        // consumer expecting Channels[POSITION, VELOCITY] would reject.
-        use crate::graph::Graph;
-        use crate::validation::{ChannelMismatchReason, GraphError};
-
-        let mut g = Graph::new();
-        let producer = g.add_node(Box::new(SmokeTestChannelsProducer::new()));
-        // The mixed-names consumer has a 3-channel signature; producer
-        // has 2 channels — should reject with DifferentCount.
-        let consumer = g.add_node(Box::new(SmokeTestChannelsMixedNames::new()));
-        // Wire producer.edges (output) → consumer.data — but
-        // SmokeTestChannelsMixedNames has `data` as an OUTPUT in its
-        // declaration. Need a consumer with the mixed signature as
-        // an INPUT for this test. Skip this assertion path; the
-        // matching-pair end-to-end test above is the load-bearing
-        // proof. Direct unit tests in `validation::tests::channels`
-        // cover the mismatch rejection comprehensively.
-        let _ = (g, producer, consumer);
-        // Compile-time evidence of the variant existence so the
-        // imports above aren't dead.
-        let _ = std::marker::PhantomData::<(GraphError, ChannelMismatchReason)>;
-    }
-
-    #[test]
     fn channels_permissive_consumer_accepts_arbitrary_producer() {
         use crate::graph::Graph;
 

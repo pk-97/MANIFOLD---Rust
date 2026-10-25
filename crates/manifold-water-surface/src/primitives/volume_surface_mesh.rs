@@ -654,25 +654,6 @@ mod tests {
     }
 
     #[test]
-    fn cell_owned_scan_intervals_are_disjoint_and_preserve_triangle_order() {
-        let counts = [0u32, 2, 1, 4, 0, 3];
-        let mut cursor = 0u32;
-        let mut intervals = Vec::new();
-        for count in counts {
-            let start = cursor;
-            cursor += count * 3;
-            intervals.push((start, cursor));
-        }
-        for pair in intervals.windows(2) {
-            assert_eq!(pair[0].1, pair[1].0);
-        }
-        assert_eq!(cursor, 30);
-        assert_eq!(intervals[1], (0, 6));
-        assert_eq!(intervals[3], (9, 21));
-        assert_eq!(intervals[5], (21, 30));
-    }
-
-    #[test]
     fn cell_owned_mesh_codegen_has_no_vertex_binary_search() {
         assert_eq!(
             std::mem::size_of::<MeshUniforms>(),

@@ -326,7 +326,7 @@ impl EditingService {
     /// Bumps data_version (rather than resetting to 0) so the content thread's
     /// first post-load snapshot exceeds the app's suppress_snapshot_until
     /// threshold — allowing modulation snapshots to flow immediately.
-    /// A load moves every part (INV-8).
+    /// A load moves every part.
     pub fn set_project(&mut self) {
         self.undo_manager.clear();
         self.data_version += 1;
@@ -1461,7 +1461,7 @@ mod stamp_tests {
     use super::*;
     use manifold_core::change::Part;
 
-    /// INV-8: a load moves every part.
+    /// A load moves every part.
     #[test]
     fn load_moves_every_part() {
         let mut service = EditingService::new();

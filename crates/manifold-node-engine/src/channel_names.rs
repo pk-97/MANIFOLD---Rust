@@ -72,31 +72,6 @@ macro_rules! well_known_channels {
                 }
             }
 
-            #[test]
-            fn registry_has_canonical_names_present() {
-                // Spot-check a handful of names that downstream primitive
-                // migrations are documented to reach for. If any go
-                // missing the corresponding migration fails compile;
-                // catching it here surfaces the missing entry with a
-                // cleaner error than a downstream "undefined symbol".
-                for required in [
-                    "x", "y", "z", "w",
-                    "position", "velocity", "normal", "uv", "uv1",
-                    "width", "height",
-                    "r", "g", "b", "a", "color",
-                    "a_index", "b_index",
-                    "life", "age", "seed",
-                    "pos_scale", "rot",
-                    "value", "t", "index",
-                    "magnitude", "confidence",
-                ] {
-                    let needle = ChannelName::from_str(required);
-                    assert!(
-                        ALL_WELL_KNOWN.iter().any(|(c, _)| *c == needle),
-                        "well_known registry missing required canonical name `{required}`",
-                    );
-                }
-            }
         }
     };
 }

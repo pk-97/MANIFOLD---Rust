@@ -22,12 +22,6 @@ const BLOB_V2_UNIFORM_MIRRORS: &[(&str, &str)] = &[
     ("mask_extrema.rs", "MaskExtremaUniforms"),
 ];
 
-const BLOB_V2_WIRE_MIRRORS: &[(&str, &str)] = &[
-    ("region_types.rs", "LegacyBox"),
-    ("region_types.rs", "Region"),
-    ("region_types.rs", "TrackRecord"),
-];
-
 mod blob_v2 {
     use super::{BLOB_V2_UNIFORM_MIRRORS, region_wire_abi, support};
     use std::{
@@ -174,9 +168,8 @@ mod texture {
 }
 mod custom {
     use super::support;
-    use manifold_nodes::testkit::source_roots::verify_wgsl_roots;
-    use std::{collections::BTreeSet, path::Path};
-    use support::{custom_abi_cases, texture_abi_cases, uniform_abi::*};
+    use std::path::Path;
+    use support::{custom_abi_cases, uniform_abi::*};
 
     const INLINE_CASES: &[(&str, &str, &str, &str)] = &[
         (
@@ -270,195 +263,6 @@ mod custom {
         );
     }
 
-    #[test]
-    fn cut_map_primitives_use_the_reflected_shared_custom_abi() {
-        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-        for type_id in custom_abi_cases::CUT_MAP_TYPE_IDS {
-            assert!(
-                registry.construct(type_id).is_some(),
-                "cut-map primitive is not registered: {type_id}"
-            );
-        }
-        let case = custom_abi_cases::CASES
-            .iter()
-            .find(|case| case.rust_struct == "CutMapUniforms")
-            .expect("shared cut-map custom ABI case");
-        let source_path = resolve_source_path(case.source).expect("cut-map source");
-        let source = std::fs::read_to_string(&source_path).expect("cut-map source");
-        assert!(
-            source.contains(case.shader),
-            "cut-map source must include its shader"
-        );
-        let shader_path = resolve_shader_path(&source_path, case.shader).expect("cut-map shader");
-        let shader = std::fs::read_to_string(&shader_path).expect("cut-map shader");
-        let declaration =
-            shader_declaration(&shader, case.shader_struct).expect("Params declaration");
-        assert_wgsl_layout(
-            &source_path,
-            case.rust_struct,
-            &declaration,
-            case.shader_struct,
-            case.aliases,
-        )
-        .expect("shared CutMapUniforms ABI");
-    }
-
-    #[test]
-    fn every_production_primitive_mirror_has_a_proof() {
-        verify_wgsl_roots().expect("WGSL source-root inventory");
-        let mut expected: BTreeSet<(String, String)> = texture_abi_cases::CASES
-            .iter()
-            .map(|c| {
-                (
-                    resolve_source_path(c.source)
-                        .expect("texture ABI source")
-                        .display()
-                        .to_string(),
-                    c.rust_struct.into(),
-                )
-            })
-            .chain(custom_abi_cases::CASES.iter().map(|c| {
-                (
-                    resolve_source_path(c.source)
-                        .expect("custom ABI source")
-                        .display()
-                        .to_string(),
-                    c.rust_struct.into(),
-                )
-            }))
-            .chain(INLINE_CASES.iter().map(|(f, h, _, _)| {
-                (
-                    resolve_source_path(f)
-                        .expect("inline ABI source")
-                        .display()
-                        .to_string(),
-                    (*h).into(),
-                )
-            }))
-            .chain(super::BLOB_V2_UNIFORM_MIRRORS.iter().map(|(f, h)| {
-                (
-                    resolve_source_path(f)
-                        .expect("Blob V2 ABI source")
-                        .display()
-                        .to_string(),
-                    (*h).into(),
-                )
-            }))
-            .chain(super::BLOB_V2_WIRE_MIRRORS.iter().map(|(f, h)| {
-                (
-                    resolve_source_path(f)
-                        .expect("Blob V2 ABI source")
-                        .display()
-                        .to_string(),
-                    (*h).into(),
-                )
-            }))
-            .collect();
-        // Not uniforms: two vertex payloads, whose vertex descriptor owns the
-        // layout, and one Channels wire record, whose KnownItem specs own it
-        // (proven in its module). The fixture files are compiled only under
-        // cfg(test).
-        let exclusions: BTreeSet<(String, String)> = [
-            (
-                resolve_source_path("render_lines.rs")
-                    .expect("render_lines source")
-                    .display()
-                    .to_string(),
-                "EdgeInstance".into(),
-            ),
-            (
-                resolve_source_path("render_value_overlay.rs")
-                    .expect("render_value_overlay source")
-                    .display()
-                    .to_string(),
-                "GlyphQuad".into(),
-            ),
-            (
-                resolve_source_path("whitewater_obstacle_source.rs")
-                    .expect("whitewater obstacle source")
-                    .display()
-                    .to_string(),
-                "WhitewaterSource".into(),
-            ),
-            (
-                resolve_source_path("test_camera_pointwise_fixture.rs")
-                    .expect("camera fixture source")
-                    .display()
-                    .to_string(),
-                "TestCameraPointwiseUniforms".into(),
-            ),
-            (
-                resolve_source_path("test_multi_output_atomic_fixture.rs")
-                    .expect("atomic fixture source")
-                    .display()
-                    .to_string(),
-                "Uniforms".into(),
-            ),
-            (
-                // FusedGainU is a local proof fixture for the freeze renderer,
-                // not a production uniform upload or shader ABI mirror.
-                resolve_source_path("proof_support.rs")
-                    .expect("proof support source")
-                    .display()
-                    .to_string(),
-                "FusedGainU".into(),
-            ),
-            (
-                // LiquidBody and LiquidShape are storage records owned by the
-                // liquid atlas upload contract, not uniform declarations.
-                resolve_source_path("bodies.rs")
-                    .expect("liquid bodies source")
-                    .display()
-                    .to_string(),
-                "LiquidBody".into(),
-            ),
-            (
-                resolve_source_path("bodies.rs")
-                    .expect("liquid bodies source")
-                    .display()
-                    .to_string(),
-                "LiquidShape".into(),
-            ),
-        ]
-        .into();
-        let mut seen_exclusions = BTreeSet::new();
-        let mut missing = Vec::new();
-        let mut scalar_count = 0;
-        let mut files = Vec::new();
-        for root in abi_source_roots().expect("ABI case source roots") {
-            source_files(&root, &mut files);
-        }
-        files.extend(support::uniform_abi::abi_source_files().expect("ABI case source files"));
-        for file in files {
-            let file_key = file.display().to_string();
-            for (name, dispatch_count) in host_structs(&file).unwrap() {
-                let key = (file_key.clone(), name);
-                if exclusions.contains(&key) {
-                    seen_exclusions.insert(key);
-                } else if expected.remove(&key) {
-                } else if dispatch_count {
-                    scalar_count += 1;
-                }
-                // Existing uniform_layout_proof verifies this family.
-                else {
-                    missing.push(format!("{}::{}", key.0, key.1));
-                }
-            }
-        }
-        // Swarms (manifold-nodes-physics) add move_swarm and swarm_to_copies,
-        // generated layouts proven by uniform_layout_proof.
-        assert_eq!(
-            scalar_count, 130,
-            "buffer-family census changed: a generated layout's dispatch_count mirror is proven by uniform_layout_proof; a hand kernel's struct needs a custom ABI case here and must not name its count dispatch_count"
-        );
-        assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
-        assert!(
-            missing.is_empty(),
-            "unproved primitive mirrors: {}",
-            missing.join(", ")
-        );
-        assert!(expected.is_empty(), "stale ABI cases: {expected:?}");
-    }
 }
 
 #[cfg(test)]

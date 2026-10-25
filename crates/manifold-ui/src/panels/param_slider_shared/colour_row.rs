@@ -25,7 +25,7 @@ const FOLD_TRIANGLE_W: f32 = 16.0;
 /// The swatch's fill for an `[r, g, b]` in 0–1.
 pub(crate) fn swatch_colour(rgb: [f32; 3]) -> Color32 {
     let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-    Color32::new(r, g, b, 255) // design-token-exempt: shows the authored colour, not a theme colour
+    Color32::new(r, g, b, 255)
 }
 
 /// `#RRGGBB` for a 0–1 colour, written into `buf`, so a per-frame repaint

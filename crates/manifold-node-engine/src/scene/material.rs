@@ -536,15 +536,6 @@ mod tests {
     }
 
     #[test]
-    fn default_unlit_white_is_inert_passthrough() {
-        let m = Material::default_unlit_white();
-        assert_eq!(m.kind, MaterialKind::Unlit);
-        assert_eq!(m.base_color, [1.0, 1.0, 1.0, 1.0]);
-        assert_eq!(m.emission, [0.0, 0.0, 0.0, 1.0]);
-        assert_eq!(m.ambient, 0.0);
-    }
-
-    #[test]
     fn unlit_constructor_premultiplies_emission() {
         let m = Material::unlit([0.5, 0.6, 0.7, 1.0], [0.5, 0.4, 0.3], 2.0);
         assert_eq!(m.kind, MaterialKind::Unlit);

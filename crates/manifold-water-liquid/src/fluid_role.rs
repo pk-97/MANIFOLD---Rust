@@ -516,13 +516,6 @@ mod tests {
     }
 
     #[test]
-    fn scene_physics_fluid_role_port_type_is_distinct_from_other_cpu_wires() {
-        assert_ne!(PortType::FluidRole, PortType::RigidBody);
-        assert_ne!(PortType::FluidRole, PortType::Object);
-        assert_ne!(PortType::FluidRole, PortType::Transform);
-    }
-
-    #[test]
     fn scene_physics_fluid_role_release_and_clear_drop_geometry() {
         let mut backends: [Box<dyn Backend>; 2] = [
             Box::new(MockBackend::new()),

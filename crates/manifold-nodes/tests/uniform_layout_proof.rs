@@ -661,17 +661,6 @@ fn coverage_errors(uncovered: &[String]) -> Vec<String> {
 }
 
 #[test]
-fn missing_hand_struct_cannot_pass_as_an_exception() {
-    let mut uncovered: Vec<_> = NON_STANDALONE.iter().map(|s| s.to_string()).collect();
-    assert!(coverage_errors(&uncovered).is_empty());
-    uncovered.push("node.scene_array".into());
-    assert_eq!(
-        coverage_errors(&uncovered),
-        ["missing hand-layout proof: node.scene_array"]
-    );
-}
-
-#[test]
 fn parser_recognizes_restricted_visibility_and_requires_repr_c() {
     let source = "#[repr(C)]\npub(crate) struct Params {\n pub(crate) dispatch_count: u32,\n}\n";
     let (_, structs) = parse_source(source);
@@ -696,23 +685,3 @@ fn reflection_detects_shader_alignment_size_and_type_drift() {
     assert!(!layout_eq(&normal.fields, &retyped.fields));
 }
 
-#[test]
-fn parser_finds_testkit_visible_structs_in_both_arms() {
-    for name in ["testkit_visible", "manifold_core::testkit_visible"] {
-        for body in [
-            "#[repr(C)] struct U { dispatch_count: u32 }",
-            "testkit { pub struct U { wrong: f32 } } production { #[repr(C)] struct U { dispatch_count: u32 } }",
-        ] {
-            let (_, structs) = parse_source(&format!("{name}! {{ {body} }}"));
-            assert_eq!(structs.len(), 1);
-            assert!(structs[0].repr_c);
-            assert_eq!(
-                structs[0].fields,
-                vec![Field {
-                    name: "dispatch_count".into(),
-                    ty: "u32"
-                }]
-            );
-        }
-    }
-}

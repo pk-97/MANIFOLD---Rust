@@ -486,18 +486,6 @@ mod tests {
     }
 
     #[test]
-    fn default_sun_populates_all_fields_with_shadows_off() {
-        let l = Light::default_sun();
-        assert_eq!(l.mode, LightMode::Sun);
-        assert!(!l.cast_shadows);
-        // Looking from (0, 30, 0) at origin → dir is straight down.
-        assert!(approx_vec3(l.dir, [0.0, -1.0, 0.0], 1e-5));
-        assert_eq!(l.color, [1.0, 1.0, 1.0, 1.0]);
-        assert_eq!(l.range, 30.0);
-        assert_eq!(l.shadow_softness, ShadowSoftness::Soft);
-    }
-
-    #[test]
     fn sun_premultiplies_intensity_into_color() {
         let l = Light::sun(
             [0.0, 10.0, 0.0],

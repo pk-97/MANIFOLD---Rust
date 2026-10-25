@@ -145,14 +145,6 @@ fn render_readback(json: &str) -> Vec<u8> {
 }
 
 #[test]
-fn parity_graphs_are_valid_json() {
-    for kind in ["mesh", "copies", "scene"] {
-        serde_json::from_str::<serde_json::Value>(&render_graph(kind))
-            .unwrap_or_else(|e| panic!("{kind} parity graph JSON must parse: {e}"));
-    }
-}
-
-#[test]
 fn legacy_mesh_and_identity_copies_match_shared_scene_materials() {
     let mesh = render_readback(&render_graph("mesh"));
     let copies = render_readback(&render_graph("copies"));

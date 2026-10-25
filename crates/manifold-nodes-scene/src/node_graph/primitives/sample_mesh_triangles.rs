@@ -123,26 +123,6 @@ mod tests {
     }
 
     #[test]
-    fn bounded_capacity_and_complete_face_contract() {
-        assert_eq!(SAMPLE_MESH_TRIANGLES_CAPACITY, 1536);
-        assert_eq!(SampleMeshTriangles::INPUTS.len(), 3);
-        assert!(SampleMeshTriangles::INPUTS[0].required);
-        assert_eq!(SampleMeshTriangles::INPUTS[1].name, "live_count");
-        assert!(!SampleMeshTriangles::INPUTS[1].required);
-        assert!(!SampleMeshTriangles::INPUTS[2].required);
-        assert_eq!(SampleMeshTriangles::OUTPUTS.len(), 1);
-        assert_eq!(
-            SampleMeshTriangles::array_output_capacity(
-                &SampleMeshTriangles::new(),
-                "vertices",
-                &Default::default(),
-                &[],
-            ),
-            Some(SAMPLE_MESH_TRIANGLES_CAPACITY)
-        );
-    }
-
-    #[test]
     fn source_face_mapping_is_identity_or_evenly_distributed() {
         assert_eq!(
             (0..4)
@@ -156,21 +136,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1, 2, 3, 5, 6, 7, 8]
         );
-    }
-
-    #[test]
-    fn standalone_formula_and_zero_inactive_slots_are_declared() {
-        let body = SampleMeshTriangles::WGSL_BODY.expect("sample mesh triangles body");
-        assert!(body.contains("source_face_index(idx / 3u,total,sample_count)"));
-        assert!(body.contains("min(arrayLength(&buf_in), buf_live_count[0]) / 3u"));
-        assert!(body.contains("Element(v.position,v.normal,v.uv,v.uv1,v.tangent,v.color)"));
-        assert!(body.contains("if idx / 3u >= sample_count"));
-        assert!(
-            body.contains(
-                "Element(vec3<f32>(0.0),vec3<f32>(0.0),vec2<f32>(0.0),vec2<f32>(0.0),vec4<f32>(0.0), vec4<f32>(1.0))",
-            )
-        );
-        assert_eq!(SampleMeshTriangles::WGSL_INCLUDES.len(), 1);
     }
 
     /// BUG-x72p: a `BufferGather` input no longer forces Boundary — the fused

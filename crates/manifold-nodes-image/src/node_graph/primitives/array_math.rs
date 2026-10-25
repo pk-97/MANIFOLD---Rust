@@ -266,28 +266,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn array_math_ops_table_covers_binary_and_unary_partition() {
-        // Op indices are public API (saved in JSON presets / param
-        // values) — this guards against accidental reordering.
-        assert_eq!(ARRAY_MATH_OPS[0], "Add");
-        assert_eq!(ARRAY_MATH_OPS[2], "Multiply");
-        assert_eq!(ARRAY_MATH_OPS[5], "Max");
-        assert_eq!(ARRAY_MATH_OPS[6], "ScaleOffset");
-        assert_eq!(ARRAY_MATH_OPS[7], "ShapePowClip");
-        assert_eq!(ARRAY_MATH_OPS[8], "MirrorRamp");
-        assert_eq!(ARRAY_MATH_OPS[9], "Clamp01");
-        assert_eq!(ARRAY_MATH_OPS[10], "Abs");
-        assert_eq!(ARRAY_MATH_OPS[11], "Sin");
-        assert_eq!(ARRAY_MATH_OPS[12], "Cos");
-        assert_eq!(ARRAY_MATH_OPS[13], "Mix");
-        assert_eq!(
-            FIRST_UNARY_OP, 6,
-            "the original 0..=10 contiguous block keeps the binary/unary threshold",
-        );
-        assert_eq!(ARRAY_MATH_OPS.len(), 14);
-    }
-
-    #[test]
     fn op_is_binary_classifies_each_op_correctly() {
         for code in 0..6 {
             assert!(

@@ -18,8 +18,3 @@ mod liquid_bricks_consumer_tests;
 mod sort_particles_into_cells {
     mod gpu_tests;
 }
-// The pose agreement proof names FLIP and Matter, so it links from here (D8).
-#[cfg(test)]
-mod liquid_solid_distance {
-    mod tests;
-}

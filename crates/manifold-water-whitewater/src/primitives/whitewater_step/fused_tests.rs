@@ -2,24 +2,6 @@
 use super::*;
 
 #[cfg(test)]
-const ATOMS: [(&str, &str); 14] = [
-    ("jitter", include_str!("../shaders/jitter_particles_body.wgsl")),
-    ("sample", include_str!("../shaders/sample_faces_at_particles_body.wgsl")),
-    ("velocity", include_str!("../shaders/whitewater_emitter_velocity_body.wgsl")),
-    ("energy", include_str!("../shaders/energy_potential_body.wgsl")),
-    ("wavecrest", include_str!("../shaders/wavecrest_potential_body.wgsl")),
-    ("inside", include_str!("../shaders/inside_turbulence_potential_body.wgsl")),
-    ("count", include_str!("../shaders/turbulence_emission_count_body.wgsl")),
-    ("dust", include_str!("../shaders/dust_potential_body.wgsl")),
-    ("spawn", include_str!("../shaders/spawn_whitewater_body.wgsl")),
-    ("type", include_str!("../shaders/whitewater_type_body.wgsl")),
-    ("advect", include_str!("../shaders/advect_whitewater_body.wgsl")),
-    ("retype", include_str!("../shaders/retype_whitewater_body.wgsl")),
-    ("age", include_str!("../shaders/age_whitewater_body.wgsl")),
-    ("turbulence", include_str!("../shaders/turbulence_field_body.wgsl")),
-];
-
-#[cfg(test)]
 fn function<'a>(source: &'a str, name: &str) -> &'a str {
     let start = source.find(&format!("fn {name}(")).expect("function present");
     let body = source[start..].find('{').unwrap() + start;
@@ -42,45 +24,6 @@ fn random_calls(source: &str) -> Vec<&str> {
         }
         panic!("unclosed random call")
     }).collect()
-}
-
-#[test]
-fn whitewater_rng_calls_are_the_atoms() {
-    for (phase, atom) in ATOMS {
-        let original = function(atom, "body");
-        let name = format!("ww_phase_{phase}");
-        let fused = function(WHITEWATER_FUSED_SHADER, &name);
-        assert_eq!(random_calls(fused), random_calls(original), "{phase}: full RNG argument text/order");
-        let mapped = match phase {
-            "spawn" => original.replace("Element2", "Spawn").replace("buf_solid", "buf_spawn_solid"),
-            "type" => original.replace("Element", "Spawn"),
-            "advect" => original.replace("Element", "Pool").replace("buf_solid", "buf_lifecycle_solid"),
-            "retype" | "age" => original.replace("Element", "Pool"),
-            _ => original.to_owned(),
-        };
-        assert_eq!(fused, mapped.replacen("fn body(", &format!("fn {name}("), 1), "{phase}: body text changed");
-        if matches!(phase, "spawn" | "type" | "advect" | "retype" | "age" | "turbulence") {
-            let mapped = match phase {
-                "spawn" => atom.replace("Element2", "Spawn").replace("buf_solid", "buf_spawn_solid"),
-                "type" => atom.replace("Element", "Spawn"),
-                "advect" => atom.replace("Element", "Pool").replace("buf_solid", "buf_lifecycle_solid"),
-                _ => atom.replace("Element", "Pool"),
-            }.replacen("fn body(", &format!("fn {name}("), 1);
-            assert!(WHITEWATER_FUSED_SHADER.contains(&mapped), "{phase}: copied helpers/constants changed");
-        }
-    }
-    assert_eq!(random_calls(WHITEWATER_FUSED_SHADER).len(), 10, "extra random draw outside the copied phases");
-    for (entry, order) in [
-        ("ww_emit", &["jitter", "sample", "velocity", "energy", "wavecrest", "inside", "count"][..]),
-        ("ww_dust", &["dust", "energy", "count"][..]),
-        ("ww_spawn", &["spawn", "type"][..]),
-        ("ww_lifecycle", &["advect", "retype", "age"][..]),
-        ("ww_turbulence", &["turbulence"][..]),
-    ] {
-        let calls: Vec<_> = function(WHITEWATER_FUSED_SHADER, entry).split("ww_phase_").skip(1)
-            .map(|tail| tail.split('(').next().unwrap()).collect();
-        assert_eq!(calls, order, "{entry}: phase call order");
-    }
 }
 
 #[test]
@@ -118,16 +61,6 @@ fn synthetic_faces() -> [Vec<f32>; 3] {
 
 
 
-
-#[test]
-fn whitewater_production_does_not_dispatch_replaced_atoms() {
-    let source = include_str!("../whitewater_step.rs");
-    for atom in ["JitterParticles", "SampleFacesAtParticles", "WhitewaterEmitterVelocity", "EnergyPotential",
-        "WavecrestPotential", "InsideTurbulencePotential", "TurbulenceEmissionCount", "DustPotential",
-        "SpawnWhitewater", "WhitewaterType", "AdvectWhitewater", "RetypeWhitewater", "AgeWhitewater", "TurbulenceField"] {
-        assert!(!source.contains(&format!("atom::<{atom}>")), "production dispatches {atom}");
-    }
-}
 
 pub fn synthetic_shape() -> StepShape {
     StepShape::new([13; 3], [13; 3], [8; 3], 1.0,

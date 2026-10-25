@@ -248,12 +248,6 @@ mod tests {
         assert_eq!(node.skip_passthrough(&params, &[]), Some(("in", "out")));
     }
 
-    #[test]
-    fn skip_passthrough_ports_declare_in_to_out() {
-        let prim = MotionBlur::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.skip_passthrough_ports(), Some(("in", "out")));
-    }
 }
 
 /// **CPU reference** on a synthetic velocity ramp (I1) — a plain-Rust

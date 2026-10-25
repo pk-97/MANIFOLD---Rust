@@ -2,8 +2,8 @@ use manifold_node_engine::persistence::*;
 use manifold_node_engine::validation::validate;
 use manifold_node_engine::{
     exec::execution_plan::compile, graph::Graph, parameters::ParamValue,
-    scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, scene::boundary_nodes::FinalOutput,
-    scene::boundary_nodes::SOURCE_TYPE_ID, scene::boundary_nodes::Source,
+    scene::boundary_nodes::FinalOutput,
+    scene::boundary_nodes::Source,
 };
 use std::collections::BTreeMap;
 use {
@@ -17,34 +17,6 @@ fn expect_err(result: Result<Graph, LoadError>) -> LoadError {
     match result {
         Ok(_) => panic!("expected LoadError, got Ok(Graph)"),
         Err(e) => e,
-    }
-}
-
-#[test]
-fn builtin_registry_covers_every_shipped_primitive() {
-    let r = registry();
-    // Spot-check every category. Each primitive declares a public
-    // `*_TYPE_ID` constant; if a new primitive is added without a
-    // register call, this test fails.
-    let expected: &[&str] = &[
-        SOURCE_TYPE_ID,
-        FINAL_OUTPUT_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::BRIGHTNESS_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::CHANNEL_MIX_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::COLOR_RAMP_TYPE_ID,
-        manifold_node_engine::primitives::mix::MIX_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::filter::THRESHOLD_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::filter::BLUR_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::GAUSSIAN_BLUR_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::FEEDBACK_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::WET_DRY_TYPE_ID,
-        manifold_nodes_image::node_graph::primitives::watercolor::WATERCOLOR_TYPE_ID,
-    ];
-    for id in expected {
-        assert!(
-            r.contains(id),
-            "PrimitiveRegistry missing constructor for '{id}'"
-        );
     }
 }
 

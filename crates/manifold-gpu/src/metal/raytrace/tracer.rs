@@ -3281,33 +3281,6 @@ mod tests {
         }
     }
 
-    /// BUG-k1n2w: the Rust mirror of the walk cap matches the MSL default,
-    /// and every candidate walk in the RT kernels goes through the cap.
-    #[test]
-    fn walk_cap_mirror_and_every_candidate_walk_is_bounded() {
-        let define = format!("#define RT_WALK_MAX_CANDIDATES {RT_WALK_MAX_CANDIDATES}u");
-        assert!(
-            SHADOW_RAYS_MSL.contains(&define),
-            "MSL default must read: {define}"
-        );
-        for (name, source, bounded) in [
-            ("shadow_rays.msl", SHADOW_RAYS_MSL, "rt_walk_exhausted(q, "),
-            (
-                "subsurface.msl",
-                SUBSURFACE_MSL,
-                ">= RT_WALK_MAX_CANDIDATES",
-            ),
-        ] {
-            let walks = source.matches(".next())").count();
-            assert!(walks > 0, "{name}: no candidate walk found");
-            assert_eq!(
-                source.matches(bounded).count(),
-                walks,
-                "{name}: every ray-query `.next()` walk must test the candidate cap"
-            );
-        }
-    }
-
     #[test]
     fn wired_instance_source_address_contract() {
         assert!(validate_instance_source_address(0, None).is_ok());

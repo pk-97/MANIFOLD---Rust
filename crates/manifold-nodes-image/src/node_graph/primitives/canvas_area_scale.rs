@@ -148,25 +148,4 @@ mod tests {
         exec.execute_frame(&mut g, &plan, time);
     }
 
-    /// Mathematical correctness — 3840×2160 against 1920×1080 reference
-    /// yields exactly 4.0 (4x the pixel count).
-    #[test]
-    fn four_k_against_full_hd_reference_is_four() {
-        let w = 3840.0_f32;
-        let h = 2160.0_f32;
-        let ref_a = 1920.0_f32 * 1080.0_f32;
-        assert_eq!((w * h) / ref_a, 4.0);
-    }
-
-    /// `reference_area = 0` is treated as the unity passthrough fallback
-    /// (not a division by zero). This protects misconfigured presets
-    /// from silently dimming everything to NaN/Inf.
-    #[test]
-    fn zero_reference_area_falls_back_to_one() {
-        let w = 1920.0_f32;
-        let h = 1080.0_f32;
-        let ref_a = 0.0_f32;
-        let out = if ref_a > 0.0 { (w * h) / ref_a } else { 1.0 };
-        assert_eq!(out, 1.0);
-    }
 }

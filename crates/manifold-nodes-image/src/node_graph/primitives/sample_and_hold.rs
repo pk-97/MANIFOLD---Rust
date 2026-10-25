@@ -171,54 +171,6 @@ inventory::submit! {
     }
 }
 
-#[cfg(test)]
-mod tests {
-
-    /// CPU mirror — confirms the trigger-edge capture semantics.
-    /// Matches the legacy FluidSimCore behaviour where
-    /// `active_clip_trigger_mode` is set ONCE at trigger time and
-    /// stays until the next trigger.
-    #[test]
-    fn captures_on_edge_holds_between() {
-        struct Mirror {
-            last_trigger: Option<i32>,
-            held: f32,
-        }
-        impl Mirror {
-            fn new() -> Self {
-                Self {
-                    last_trigger: None,
-                    held: 0.0,
-                }
-            }
-            fn tick(&mut self, value: f32, trigger: i32) -> f32 {
-                let edge = match self.last_trigger {
-                    Some(prev) => trigger != prev,
-                    None => true,
-                };
-                if edge {
-                    self.held = value;
-                }
-                self.last_trigger = Some(trigger);
-                self.held
-            }
-        }
-
-        let mut m = Mirror::new();
-        // First observation captures.
-        assert_eq!(m.tick(2.0, 0), 2.0);
-        // Same trigger, value changes — held value stays.
-        assert_eq!(m.tick(3.0, 0), 2.0);
-        assert_eq!(m.tick(4.0, 0), 2.0);
-        // Edge → recapture.
-        assert_eq!(m.tick(5.0, 1), 5.0);
-        // Same trigger, value changes again — stays.
-        assert_eq!(m.tick(0.0, 1), 5.0);
-        // Next edge → recapture.
-        assert_eq!(m.tick(1.0, 2), 1.0);
-    }
-}
-
 /// BUG-104 — proves the exact mechanism `PresetRuntime::clear_trigger_state`
 /// relies on for StateStore-backed trigger latches: since `held` lives only
 /// in the `StateStore` (never on `self`), a plain `clear_state()` call does

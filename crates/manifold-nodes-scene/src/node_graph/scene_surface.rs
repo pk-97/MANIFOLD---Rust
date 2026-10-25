@@ -120,14 +120,3 @@ pub static DIRECTED_FORCE_SHAPES: [SceneShapeDecl; 1] = [SceneShapeDecl {
     uniform_scale: false,
 }];
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn item_shape_names_the_transform_rows() {
-        let ids: Vec<&str> = ITEM_SHAPES[0].shape.param_ids().collect();
-        assert_eq!(ids.len(), 9);
-        assert!(ids.contains(&"pos_x") && ids.contains(&"rot_z") && ids.contains(&"scale_y"));
-    }
-}

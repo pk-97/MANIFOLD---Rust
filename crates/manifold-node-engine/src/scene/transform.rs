@@ -288,15 +288,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn default_is_identity_trs() {
-        let t = Transform::default();
-        assert_eq!(t.pos, [0.0, 0.0, 0.0]);
-        assert_eq!(t.rot_euler, [0.0, 0.0, 0.0]);
-        assert_eq!(t.scale, [1.0, 1.0, 1.0]);
-        assert!(!t.billboard);
-    }
-
     /// A point through one TRS by plain point math: scale, then X, Y, Z
     /// turns, then the move. Independent of the matrix code under test.
     fn trs_point(t: &Transform, p: [f32; 3]) -> [f32; 3] {

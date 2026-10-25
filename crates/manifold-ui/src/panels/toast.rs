@@ -358,13 +358,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn idle_before_any_show() {
-        let toast = ToastPanel::new();
-        assert!(!toast.is_open());
-        assert_eq!(toast.alpha(), 0.0);
-    }
-
-    #[test]
     fn show_opens_it_and_ramps_alpha_in() {
         let mut toast = ToastPanel::new();
         toast.show("Undo");

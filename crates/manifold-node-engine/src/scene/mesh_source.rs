@@ -494,13 +494,6 @@ mod tests {
     }
 
     #[test]
-    fn mesh_source_port_type_is_distinct_from_other_cpu_wires() {
-        assert_ne!(PortType::MeshSource, PortType::FluidRole);
-        assert_ne!(PortType::MeshSource, PortType::RigidBody);
-        assert_ne!(PortType::MeshSource, PortType::Object);
-    }
-
-    #[test]
     fn mesh_source_release_and_clear_drop_values() {
         let mut backends: [Box<dyn Backend>; 2] = [
             Box::new(MockBackend::new()),

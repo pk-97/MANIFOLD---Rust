@@ -95,28 +95,6 @@ mod tests {
     }
 
     #[test]
-    fn all_v1_composite_type_ids_are_unique_and_prefixed() {
-        let mut g = Graph::new();
-        let src = g.add_node(Box::new(Source::new()));
-        let source_endpoint = (src, "out");
-
-        // Build each composite into its own scratch graph (cheap) just to
-        // collect their type IDs and assert the invariants.
-        let ids: HashSet<&str> = [INFRARED_TYPE_ID, SOFT_FOCUS_TYPE_ID].into_iter().collect();
-        assert_eq!(ids.len(), 2, "composite type IDs must be unique");
-
-        for id in ids {
-            assert!(
-                id.starts_with("composite."),
-                "composite type IDs must start with `composite.` — got {id}"
-            );
-        }
-
-        // Sanity: each builder is callable.
-        let _ = build_infrared(&mut g, source_endpoint);
-    }
-
-    #[test]
     fn infrared_compiles_executes_and_routes_color_params() {
         let (mut g, handle) = run_composite_in_graph(build_infrared);
         assert_eq!(handle.type_id().as_str(), INFRARED_TYPE_ID);

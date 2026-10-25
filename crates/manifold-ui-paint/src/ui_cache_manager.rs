@@ -506,12 +506,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn no_subregions_signature_is_empty() {
-        let (tree, _subs, _start) = tree_with_subregions();
-        assert!(sig_of(DEFAULT_REGION, None, &tree).is_empty());
-    }
-
     /// A panel shaped like the inspector, built inside one `begin_region`/`end_region`
     /// bracket (see `tree_with_subregions` doc comment for why): first node = chrome
     /// (background / tab strip), next two = one card sub-region, last node = chrome

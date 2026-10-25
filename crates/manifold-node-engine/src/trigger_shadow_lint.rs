@@ -1,22 +1,9 @@
-//! BUG-104 Part 5 — the shared trigger-shadow class-guard logic.
-//!
-//! One implementation, two consumers (Part 5's explicit requirement: "so
-//! editor UI, MCP clients, and agent-authored graphs all see the same
-//! warning" — not an editor-only lint):
-//!
-//! 1. `tests/trigger_shadow_class_guard.rs` — the workspace sweep over
-//!    every bundled preset, gating CI.
-//! 2. [`PresetRuntime::from_def`](crate::preset_runtime::PresetRuntime::from_def)
-//!    — every generator (re)build, from ANY caller (editor rebuild-on-edit,
-//!    an MCP tool call routed through `EditingService`/`MutateProject`, an
-//!    agent-authored graph, `check-presets`, thumbnail render, freeze
-//!    proofs) surfaces the same finding through
-//!    [`crate::preset_runtime::ChainError`] / `PresetRuntime::errors()` —
-//!    the existing structured-diagnostic channel (see that type's doc
-//!    comment: "today this drives the consistent `[chain-error]` terminal
-//!    log; tomorrow it's the data the editor reads"). No new channel: this
-//!    is the smallest infra that already carries build-time warnings from
-//!    a preset graph out to a caller, per `dont-cascade-redesign`.
+//! The trigger-shadow class guard. [`PresetRuntime::from_def`](crate::preset_runtime::PresetRuntime::from_def)
+//! runs it on every generator build, from any caller (editor rebuild-on-edit,
+//! an MCP tool call through `EditingService`, an agent-authored graph,
+//! `check-presets`, thumbnail render, freeze proofs), and reports findings
+//! through [`crate::preset_runtime::ChainError`] / `PresetRuntime::errors()`,
+//! the same channel that carries every other build-time warning.
 //!
 //! Effect-chain per-instance graph overrides are NOT wired to this check
 //! yet — `PresetRuntime`'s effect-chain splice path builds from multiple

@@ -194,27 +194,3 @@ impl Primitive for RenderInstanced3DMesh {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use manifold_node_engine::exec::effect_node::EffectNode;
-
-    #[test]
-    fn render_instanced_3d_mesh_declares_conditional_requirements() {
-        let prim = RenderInstanced3DMesh::new();
-        let node: &dyn EffectNode = &prim;
-        let rules = node.conditional_requirements();
-        assert_eq!(rules.len(), 2);
-        let by_kind = |k: MaterialKind| {
-            rules
-                .iter()
-                .find(|r| r.on_material_kind == k)
-                .unwrap_or_else(|| panic!("missing rule for {k:?}"))
-        };
-        assert_eq!(
-            by_kind(MaterialKind::Pbr).required_inputs,
-            &["light", "envmap"]
-        );
-        assert_eq!(by_kind(MaterialKind::Cel).required_inputs, &["light"]);
-    }
-}

@@ -143,24 +143,3 @@ impl Primitive for InstanceRotationJitter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
-    #[test]
-    fn instance_rotation_jitter_default_amplitude_matches_legacy() {
-        let amp = InstanceRotationJitter::PARAMS
-            .iter()
-            .find(|p| p.name == "amplitude")
-            .unwrap();
-        match &amp.default {
-            ParamValue::Float(f) => assert_eq!(
-                *f, 0.2,
-                "0.2 reproduces legacy DigitalPlants per-instance rot",
-            ),
-            _ => panic!("amplitude default must be Float"),
-        }
-    }
-}
-

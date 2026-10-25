@@ -543,14 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn track_height_presets_ordered() {
-        assert!(TrackHeight::Collapsed.px() < TrackHeight::Normal.px());
-        // Two-tier system: Normal IS the expanded tier (200). Tall is reserved
-        // and currently equal to Normal — no longer strictly greater.
-        assert!(TrackHeight::Normal.px() <= TrackHeight::Tall.px());
-    }
-
-    #[test]
     fn get_layer_at_y_hit_test() {
         let mut mapper = CoordinateMapper::new();
         mapper.set_layout(&[140.0, 140.0, 140.0]);

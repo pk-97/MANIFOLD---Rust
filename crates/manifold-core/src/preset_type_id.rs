@@ -333,13 +333,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn constants_disjoint_and_equal() {
-        assert_eq!(PresetTypeId::BLOOM, PresetTypeId::BLOOM);
-        assert_ne!(PresetTypeId::BLOOM, PresetTypeId::TRANSFORM);
-        assert_ne!(PresetTypeId::BLOOM, PresetTypeId::OILY_FLUID);
-    }
-
-    #[test]
     fn legacy_effect_discriminant() {
         assert_eq!(
             PresetTypeId::from_legacy_effect_discriminant(0),

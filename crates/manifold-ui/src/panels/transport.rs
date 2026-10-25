@@ -81,7 +81,7 @@ fn button_style(bg: Color32) -> UIStyle {
 fn dot_style(c: Color32) -> UIStyle {
     UIStyle {
         bg_color: c,
-        corner_radius: 4.0, // design-token-exempt: circular 8px status dot (radius = half size)
+        corner_radius: 4.0,
         ..UIStyle::default()
     }
 }

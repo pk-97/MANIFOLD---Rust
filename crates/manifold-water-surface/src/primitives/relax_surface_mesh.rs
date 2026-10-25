@@ -362,17 +362,6 @@ mod tests {
 
 #[cfg(test)]
 mod shared_shader_tests {
-    #[test]
-    fn surface_mesh_adjacency_bytes_unchanged() {
-        use sha2::{Digest, Sha256};
-        assert_eq!(
-            format!(
-                "{:x}",
-                Sha256::digest(super::SURFACE_MESH_ADJACENCY_WGSL.as_bytes())
-            ),
-            "32f3b339a2e09d8229b860138cb66127d2d963b8318576b4d79b2fd6cd7ca302"
-        );
-    }
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]

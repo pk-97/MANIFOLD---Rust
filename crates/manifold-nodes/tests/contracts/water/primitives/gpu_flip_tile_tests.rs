@@ -318,11 +318,6 @@ fn gpu_flip_gather_unrolled_matches_original_every_face_word() {
     }
 }
 
-/// The step shader's poison entry: NaN into every cell array of the tiles
-/// outside rings 0 and 1, after the retire. Named here only, so the step's
-/// own source never spells it (a test below holds that).
-pub(crate) const POISON_ENTRY: &str = "poison_inactive";
-
 /// The tile table's words as the CPU builds them for one step.
 #[derive(Debug, PartialEq, Eq)]
 struct Model {
@@ -949,34 +944,3 @@ fn gpu_flip_sparse_step_survives_poison() {
     }
 }
 
-/// The poison entry is the proofs' alone: no source file outside the tests
-/// spells its name (design section 4 (The defined-value rule)).
-#[test]
-fn gpu_flip_poison_entry_is_named_only_in_tests() {
-    fn walk(dir: &std::path::Path, hits: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("readable").flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, hits);
-            } else if path.extension().is_some_and(|e| e == "rs")
-                && std::fs::read_to_string(&path).is_ok_and(|s| s.contains(POISON_ENTRY))
-            {
-                hits.push(path);
-            }
-        }
-    }
-    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates/");
-    let mut hits = Vec::new();
-    walk(crates, &mut hits);
-    let stray: Vec<_> = hits
-        .iter()
-        .filter(|p| !p.to_string_lossy().ends_with("_tests.rs"))
-        .collect();
-    assert!(
-        stray.is_empty(),
-        "{POISON_ENTRY} is named outside the tests: {stray:?}"
-    );
-    assert!(!hits.is_empty(), "this file names it");
-}

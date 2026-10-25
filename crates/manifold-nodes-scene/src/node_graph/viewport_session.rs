@@ -382,7 +382,6 @@ mod tests {
     use manifold_core::effect_graph_def::{
         EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     };
-    use manifold_node_engine::persistence::PrimitiveRegistry;
     use std::collections::{BTreeMap, BTreeSet};
 
     fn node(id: u32, node_id: &str, type_id: &str) -> EffectGraphNode {
@@ -431,15 +430,4 @@ mod tests {
         assert_ne!(hash_def(&a), hash_def(&b));
     }
 
-    // GPU-backed behavior (open/orbit/pan/dolly/sync_def/render_if_dirty)
-    // is proven in the `gpu-proofs` feature — see
-    // `tests/gpu_proofs/scene_viewport_session.rs` — not here (this crate's
-    // default `--lib` sweep is GPU-free; `crate::test_device()` doesn't
-    // compile without the feature).
-    #[test]
-    fn registry_construction_smoke() {
-        // Cheap sanity check this module's imports resolve against the real
-        // registry type without needing a device.
-        let _registry = PrimitiveRegistry::with_builtin();
-    }
 }

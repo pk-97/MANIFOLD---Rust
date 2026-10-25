@@ -420,28 +420,3 @@ impl Primitive for PersonSegment {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
-    #[test]
-    fn person_segment_smoothing_defaults_to_legacy_055() {
-        // Matches legacy WireframeDepth's hardcoded BLEND = 0.55 for
-        // the subject-mask temporal history mix. Value-level parity
-        // gate — if this drifts the WireframeDepth decomposition's
-        // mask convergence rate diverges from the original.
-        let smoothing_param = PersonSegment::PARAMS
-            .iter()
-            .find(|p| p.name == "smoothing")
-            .expect("smoothing param exists");
-        if let ParamValue::Float(f) = smoothing_param.default {
-            assert!(
-                (f - 0.55).abs() < 1e-6,
-                "smoothing default must be 0.55 to match legacy, got {f}",
-            );
-        } else {
-            panic!("smoothing default must be a Float");
-        }
-    }
-}

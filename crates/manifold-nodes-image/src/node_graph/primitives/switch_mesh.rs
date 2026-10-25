@@ -270,38 +270,10 @@ pub(super) mod tests {
     use manifold_node_engine::exec::execution_plan::compile;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::ports::{
-        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
     };
 
     use super::*;
-
-    #[test]
-    fn ports_are_a_param_shadowed_selector_and_two_mesh_inputs() {
-        let node = SwitchMesh::new();
-        let mesh = PortType::Array(ArrayType::of_known::<MeshVertex>());
-        let inputs: Vec<_> = EffectNode::inputs(&node)
-            .iter()
-            .map(|p| (p.name.as_ref(), p.ty, p.required))
-            .collect();
-        assert_eq!(
-            inputs,
-            [
-                ("selector", PortType::Scalar(ScalarType::F32), true),
-                ("in_0", mesh, false),
-                ("in_1", mesh, false)
-            ]
-        );
-        let outputs: Vec<_> = EffectNode::outputs(&node)
-            .iter()
-            .map(|p| (p.name.as_ref(), p.ty))
-            .collect();
-        assert_eq!(outputs, [("out", mesh)]);
-        assert!(
-            EffectNode::parameters(&node)
-                .iter()
-                .any(|p| p.name == "selector")
-        );
-    }
 
     #[test]
     fn param_selector_picks_a_rounded_clamped_input() {

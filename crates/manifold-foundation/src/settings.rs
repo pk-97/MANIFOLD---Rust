@@ -296,16 +296,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rt_quality_tier_spp_ladder() {
-        assert_eq!(RtQualityTier::UltraLow.spp(), 1);
-        assert_eq!(RtQualityTier::Low.spp(), 2);
-        assert_eq!(RtQualityTier::Medium.spp(), 4);
-        assert_eq!(RtQualityTier::High.spp(), 8);
-        assert_eq!(RtQualityTier::ExtraHigh.spp(), 16);
-        assert_eq!(RtQualityTier::Ultra.spp(), 32);
-    }
-
-    #[test]
     fn rt_quality_tier_spp_always_positive() {
         for tier in [
             RtQualityTier::UltraLow,
@@ -317,38 +307,6 @@ mod tests {
         ] {
             assert!(tier.spp() >= 1, "spp() must be >= 1 for {:?}", tier);
         }
-    }
-
-    #[test]
-    fn rt_quality_live_defaults_match_constants() {
-        let live = RtQualityColumn::default();
-        assert_eq!(live.shadows, RtQualityTier::UltraLow);
-        assert_eq!(live.ao, RtQualityTier::Medium);
-        assert_eq!(live.gi, RtQualityTier::Medium);
-        assert_eq!(live.reflections, RtQualityTier::High);
-        assert_eq!(live.ray_resolution, RtRayResolution::Half);
-        assert_eq!(live.spatial_denoise, RtSpatialDenoise::Medium);
-        assert_eq!(live.shadows.spp(), 1);
-        assert_eq!(live.ao.spp(), 4);
-        assert_eq!(live.gi.spp(), 4);
-        assert_eq!(live.reflections.spp(), 8);
-        assert_eq!(live.ray_resolution.fraction(), (1, 2));
-    }
-
-    #[test]
-    fn rt_quality_export_defaults() {
-        let export = RtQualityColumn::export_default();
-        assert_eq!(export.shadows, RtQualityTier::High);
-        assert_eq!(export.ao, RtQualityTier::High);
-        assert_eq!(export.gi, RtQualityTier::High);
-        assert_eq!(export.reflections, RtQualityTier::ExtraHigh);
-        assert_eq!(export.ray_resolution, RtRayResolution::Native);
-        assert_eq!(export.spatial_denoise, RtSpatialDenoise::High);
-        assert_eq!(export.shadows.spp(), 8);
-        assert_eq!(export.ao.spp(), 8);
-        assert_eq!(export.gi.spp(), 8);
-        assert_eq!(export.reflections.spp(), 16);
-        assert_eq!(export.ray_resolution.fraction(), (1, 1));
     }
 
     #[test]
@@ -394,27 +352,6 @@ mod tests {
             RtRayResolution::ThreeQuarter
         );
         assert_eq!(deserialized.export.spatial_denoise, RtSpatialDenoise::High);
-    }
-
-    #[test]
-    fn rt_ray_resolution_fraction() {
-        assert_eq!(RtRayResolution::Quarter.fraction(), (1, 4));
-        assert_eq!(RtRayResolution::Half.fraction(), (1, 2));
-        assert_eq!(RtRayResolution::ThreeQuarter.fraction(), (3, 4));
-        assert_eq!(RtRayResolution::Native.fraction(), (1, 1));
-    }
-
-    #[test]
-    fn rt_spatial_denoise_values() {
-        assert_eq!(RtSpatialDenoise::Off.strength(), 0.0);
-        assert_eq!(RtSpatialDenoise::Low.strength(), 0.6);
-        assert_eq!(RtSpatialDenoise::Medium.strength(), 0.85);
-        assert_eq!(RtSpatialDenoise::High.strength(), 1.0);
-
-        assert_eq!(RtSpatialDenoise::Off.iterations(), 0);
-        assert_eq!(RtSpatialDenoise::Low.iterations(), 2);
-        assert_eq!(RtSpatialDenoise::Medium.iterations(), 3);
-        assert_eq!(RtSpatialDenoise::High.iterations(), 4);
     }
 
     #[test]

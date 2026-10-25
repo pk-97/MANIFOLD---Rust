@@ -7,9 +7,6 @@ pub struct CustomAbiCase {
     pub aliases: &'static [(&'static str, &'static str)],
 }
 
-/// Both cut-map primitives dispatch the same custom `CutMapUniforms` ABI.
-pub const CUT_MAP_TYPE_IDS: &[&str] = &["node.cut_mesh_bands", "node.cut_mesh_cells"];
-
 pub const CASES: &[CustomAbiCase] = &[
     CustomAbiCase {
         source: "liquid_stats.rs",

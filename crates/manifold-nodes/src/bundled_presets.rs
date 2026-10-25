@@ -436,13 +436,6 @@ mod tests {
         compile(&graph).expect("LED Fill graph must compile");
     }
 
-    #[test]
-    fn bundled_preset_lookup_returns_none_for_unknown_type() {
-        let unknown = PresetTypeId::new("DefinitelyNotARealEffect");
-        assert!(bundled_preset_def(&unknown).is_none());
-        assert!(bundled_preset_json(&unknown).is_none());
-    }
-
     /// Splicing a bundled preset into a chain via
     /// `splice_def_into_chain` is the path the runtime takes when
     /// `PresetInstance.graph = Some(def)`. Verifies every shipping

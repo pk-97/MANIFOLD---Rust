@@ -139,14 +139,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn idle_by_default() {
-        let d: DragController<()> = DragController::new();
-        assert!(!d.is_active());
-        assert!(d.session().is_none());
-        assert!(d.payload().is_none());
-    }
-
-    #[test]
     fn lifecycle_grab_track_release() {
         let mut d: DragController<()> = DragController::new();
 

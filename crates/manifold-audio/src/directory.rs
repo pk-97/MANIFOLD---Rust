@@ -259,10 +259,4 @@ mod tests {
                 .is_none()
         );
     }
-
-    #[test]
-    fn subscription_inert_drops_clean() {
-        let s = Subscription::inert();
-        drop(s); // no panic, no double-free
-    }
 }

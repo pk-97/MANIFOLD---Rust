@@ -368,44 +368,4 @@ mod tests {
         assert_eq!(claimed, 1, "one track can only be claimed once");
     }
 
-    #[test]
-    fn grace_period_removes_stale_tracks() {
-        let mut tp = TrackPersist::new();
-        tp.tracked.resize(MAX_TRACKED, TrackedItem::default());
-        tp.tracked[0] = TrackedItem {
-            x: 0.5,
-            y: 0.5,
-            width: 0.1,
-            height: 0.1,
-            matched: false,
-            missed_count: 4,
-        };
-        tp.tracked[1] = TrackedItem {
-            x: 0.8,
-            y: 0.8,
-            width: 0.1,
-            height: 0.1,
-            matched: true,
-            missed_count: 0,
-        };
-        tp.tracked_count = 2;
-
-        let grace_frames = 3u32;
-        let mut write = 0usize;
-        for read in 0..tp.tracked_count {
-            if tp.tracked[read].missed_count <= grace_frames {
-                if write != read {
-                    tp.tracked[write] = tp.tracked[read];
-                }
-                write += 1;
-            }
-        }
-        tp.tracked_count = write;
-
-        assert_eq!(tp.tracked_count, 1, "stale track should be removed");
-        assert!(
-            (tp.tracked[0].x - 0.8).abs() < 1e-5,
-            "surviving track should be the matched one at 0.8",
-        );
-    }
 }

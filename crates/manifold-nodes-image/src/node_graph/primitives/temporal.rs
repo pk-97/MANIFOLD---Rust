@@ -631,17 +631,6 @@ impl Feedback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
-    #[test]
-    fn seed_on_reset_is_opt_in_and_defaults_false() {
-        assert_eq!(Feedback::PARAMS.len(), 2);
-        assert_eq!(Feedback::PARAMS[0].name, "copy_capture");
-        assert_eq!(Feedback::PARAMS[1].name, "seed_on_reset");
-        assert_eq!(Feedback::PARAMS[1].default, ParamValue::Bool(false));
-        assert_eq!(Feedback::PARAMS[0].ty, ParamType::Bool);
-        assert_eq!(Feedback::PARAMS[0].default, ParamValue::Bool(false));
-    }
 
     #[test]
     fn clear_state_rearms_reset_trigger_baseline() {

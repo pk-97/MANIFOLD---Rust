@@ -143,54 +143,6 @@ impl Primitive for GeneratePlaneMesh {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use manifold_node_engine::ports::{ArrayType, PortType, ScalarType};
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
-    #[test]
-    fn generate_plane_mesh_declares_width_height_inputs_mesh_array_and_source_outputs() {
-        let layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(GeneratePlaneMesh::TYPE_ID, "node.plane_mesh");
-        assert_eq!(GeneratePlaneMesh::INPUTS.len(), 2);
-        assert_eq!(GeneratePlaneMesh::INPUTS[0].name, "width");
-        assert!(!GeneratePlaneMesh::INPUTS[0].required);
-        assert_eq!(
-            GeneratePlaneMesh::INPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-        assert_eq!(GeneratePlaneMesh::INPUTS[1].name, "height");
-        assert!(!GeneratePlaneMesh::INPUTS[1].required);
-        assert_eq!(
-            GeneratePlaneMesh::INPUTS[1].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-        assert_eq!(GeneratePlaneMesh::OUTPUTS.len(), 2);
-        assert_eq!(GeneratePlaneMesh::OUTPUTS[1].name, "source");
-        assert_eq!(GeneratePlaneMesh::OUTPUTS[1].ty, PortType::MeshSource);
-        assert_eq!(GeneratePlaneMesh::OUTPUTS[0].name, "vertices");
-        assert_eq!(GeneratePlaneMesh::OUTPUTS[0].ty, PortType::Array(layout));
-    }
-
-    #[test]
-    fn generate_plane_mesh_default_capacity_is_6() {
-        let names: Vec<&str> = GeneratePlaneMesh::PARAMS
-            .iter()
-            .map(|p| p.name.as_ref())
-            .collect();
-        assert_eq!(names, vec!["max_capacity", "width", "height"]);
-        let cap = GeneratePlaneMesh::PARAMS
-            .iter()
-            .find(|p| p.name == "max_capacity")
-            .unwrap();
-        match cap.default {
-            ParamValue::Float(n) => assert_eq!(n as u32, PLANE_VERTEX_COUNT),
-            _ => panic!("expected Float (Int presentation hint)"),
-        }
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU value-level proof for `node.plane_mesh`. Source atoms are

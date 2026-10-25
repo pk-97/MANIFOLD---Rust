@@ -466,21 +466,6 @@ mod tests {
         assert_eq!(back.track_signatures[0].device_classes.len(), 2);
     }
 
-    #[test]
-    fn device_identity_equality() {
-        let a = AbletonDeviceIdentity {
-            device_class_name: "InstrumentGroupDevice".to_string(),
-        };
-        let b = AbletonDeviceIdentity {
-            device_class_name: "InstrumentGroupDevice".to_string(),
-        };
-        let c = AbletonDeviceIdentity {
-            device_class_name: "DrumGroupDevice".to_string(),
-        };
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-    }
-
     fn test_address() -> AbletonMacroAddress {
         AbletonMacroAddress {
             track_id: 0,

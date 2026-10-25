@@ -34,7 +34,7 @@ impl UiStamps {
     }
 
     /// The local project was replaced wholesale (open, new, snapshot restore,
-    /// the content's save snapshot): a load moves every part (D1, INV-8).
+    /// the content's save snapshot): a load moves every part.
     pub(crate) fn project_replaced(&mut self) {
         self.parts.bump(ChangeSet::ALL);
     }

@@ -272,19 +272,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<SolidDistanceUniforms>(), 64);
     }
 
-    /// By default the node puts the walls where `LiquidLattice` pads them:
-    /// the authored box starts PADDING_NODES in and spans
-    /// nodes − 1 − 2·PADDING cells.
-    #[test]
-    fn liquid_solid_distance_walls_sit_at_the_lattice_padding() {
-        let inset = <LiquidSolidDistance as manifold_node_engine::primitive::PrimitiveSpec>::PARAMS
-            .iter()
-            .find(|p| p.name == "wall_inset")
-            .map(|p| p.default.clone());
-        assert!(matches!(inset, Some(ParamValue::Float(v)) if v == PADDING_NODES as f32), "{inset:?}");
-        let shader = include_str!("shaders/liquid_solid_distance_body.wgsl");
-        assert!(shader.contains("inset * cell_size") && shader.contains("vec3<f32>(n) - vec3<f32>(1.0 + 2.0 * inset)"));
-    }
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]

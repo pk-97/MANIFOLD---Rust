@@ -48,7 +48,7 @@
 //! presets or a 3D scene need the app's own open passes and are refused.
 //!
 //! `tempo set` replaces the whole tempo map from a JSON array of points
-//! (`[{"beat": 0.0, "bpm": 132.0, "source": 4}, ...]` — `TempoPoint` serde,
+//! (`[{"beat": 0.0, "bpm": 132.0, "source": "Recorded"}, ...]` — `TempoPoint` serde,
 //! camelCase, `source`/`recordedAtSeconds` optional). MANIFOLD's map is
 //! piecewise-constant (step BPM between points); BPM outside the playable
 //! 20–300 range is rejected loudly rather than silently clamped. By default

@@ -846,11 +846,4 @@ mod tests {
         assert_eq!(setup.sends[0].channels, vec![0, 1]);
         assert!(setup.sends[2].channels.is_empty());
     }
-
-    #[test]
-    fn new_send_defaults_to_stereo() {
-        let send = AudioSend::new("Kick");
-        assert_eq!(send.channels, vec![0, 1]);
-        assert!(send.has_capture(), "a fresh send is capture-fed stereo");
-    }
 }

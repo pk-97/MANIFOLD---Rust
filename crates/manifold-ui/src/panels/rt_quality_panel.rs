@@ -125,8 +125,8 @@ impl RtQualityPanel {
         View::panel()
             .fill()
             .style(UIStyle {
-                bg_color: Color32::new(19, 19, 22, 250), // design-token-exempt: modal popup background matches settings_popup precedent
-                border_color: Color32::new(48, 48, 52, 255), // design-token-exempt: modal popup border matches settings_popup precedent
+                bg_color: Color32::new(19, 19, 22, 250),
+                border_color: Color32::new(48, 48, 52, 255),
                 border_width: 1.0,
                 corner_radius: color::POPUP_RADIUS,
                 ..UIStyle::default()
@@ -144,8 +144,7 @@ impl RtQualityPanel {
                             .fill_w()
                             .fill_h()
                             .font(color::FONT_BODY)
-                            // design-token-exempt: title text color matches settings_popup precedent
-                            .text_color(Color32::new(224, 224, 228, 255)) // design-token-exempt: title text color matches settings_popup precedent
+                            .text_color(Color32::new(224, 224, 228, 255))
                             .align_text(TextAlign::Left),
                     )
                     .child(
@@ -520,7 +519,7 @@ impl Overlay for RtQualityPanel {
 
 fn section_style() -> UIStyle {
     UIStyle {
-        text_color: Color32::new(140, 140, 150, 255), // design-token-exempt: section header color matches settings_popup precedent
+        text_color: Color32::new(140, 140, 150, 255),
         font_size: color::FONT_LABEL,
         text_align: TextAlign::Left,
         ..UIStyle::default()
@@ -529,7 +528,7 @@ fn section_style() -> UIStyle {
 
 fn label_style() -> UIStyle {
     UIStyle {
-        text_color: Color32::new(200, 200, 205, 255), // design-token-exempt: label color matches settings_popup precedent
+        text_color: Color32::new(200, 200, 205, 255),
         font_size: color::FONT_BODY,
         text_align: TextAlign::Left,
         ..UIStyle::default()
@@ -538,15 +537,15 @@ fn label_style() -> UIStyle {
 
 fn btn_style(active: bool) -> UIStyle {
     let text_color = if active {
-        Color32::new(224, 224, 228, 255) // design-token-exempt: active button text matches settings_popup precedent
+        Color32::new(224, 224, 228, 255)
     } else {
-        Color32::new(160, 160, 165, 255) // design-token-exempt: inactive button text matches settings_popup precedent
+        Color32::new(160, 160, 165, 255)
     };
 
     if active {
         UIStyle {
             text_color,
-            bg_color: Color32::new(60, 60, 70, 255), // design-token-exempt: active button bg matches settings_popup precedent
+            bg_color: Color32::new(60, 60, 70, 255),
             font_size: color::FONT_BODY,
             text_align: TextAlign::Center,
             ..UIStyle::default()

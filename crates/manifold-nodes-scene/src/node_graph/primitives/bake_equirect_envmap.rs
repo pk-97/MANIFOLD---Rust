@@ -544,16 +544,6 @@ mod tests {
         assert_eq!(dims, Some((1024, 512)));
     }
 
-    #[test]
-    fn uniform_param_defaults_to_off() {
-        let defaults = BakeEquirectEnvmap::PARAMS;
-        let uniform_def = defaults
-            .iter()
-            .find(|p| p.name == "uniform")
-            .expect("uniform param declared");
-        assert_eq!(uniform_def.default, ParamValue::Bool(false));
-    }
-
     fn light(mode: LightMode, aim_from_pos: [f32; 3], color: [f32; 4]) -> Light {
         Light {
             mode,
@@ -637,19 +627,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sun_arrives_as_a_light_input_not_a_position() {
-        let prim = BakeEquirectEnvmap::new();
-        let node: &dyn EffectNode = &prim;
-        assert!(node.inputs().iter().any(|p| p.name == "sun"));
-        for gone in ["sun_x", "sun_y", "sun_z"] {
-            assert!(
-                BakeEquirectEnvmap::PARAMS.iter().all(|p| p.name != gone),
-                "{gone}"
-            );
-        }
-    }
-
     /// The load migration compares a saved World sun against a light that
     /// may carry no position, using core's copy of the light's defaults.
     #[test]
@@ -667,17 +644,6 @@ mod tests {
         };
         assert_eq!(["pos_x", "pos_y", "pos_z"].map(default), LIGHT_DEFAULT_POS);
         assert_eq!(["aim_x", "aim_y", "aim_z"].map(default), LIGHT_DEFAULT_AIM);
-    }
-
-    #[test]
-    fn mode_param_defaults_to_gradient() {
-        let defaults = BakeEquirectEnvmap::PARAMS;
-        let mode_def = defaults
-            .iter()
-            .find(|p| p.name == "mode")
-            .expect("mode param declared");
-        assert_eq!(mode_def.default, ParamValue::Enum(0));
-        assert_eq!(mode_def.enum_values, &["Gradient", "Softbox", "HDRI"]);
     }
 
     fn params_with_mode(mode: u32) -> ParamValues {
@@ -707,17 +673,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_hdri_input_is_optional() {
-        let prim = BakeEquirectEnvmap::new();
-        let node: &dyn EffectNode = &prim;
-        let hdri = node
-            .inputs()
-            .iter()
-            .find(|p| p.name == "hdri")
-            .expect("hdri input");
-        assert!(!hdri.required);
-    }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]

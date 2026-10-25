@@ -340,15 +340,6 @@ mod tests {
     }
 
     #[test]
-    fn discover_blender_with_no_pref_and_no_bundle_falls_to_which() {
-        let prefs = UserPrefs::for_test();
-        // No assertion on the concrete value (host-dependent) — this proves
-        // the call doesn't panic and returns a well-formed Option, exercising
-        // the fallthrough path with an empty pref.
-        let _ = discover_blender(&prefs);
-    }
-
-    #[test]
     fn run_blender_conversion_reports_not_found_style_error_for_bad_binary() {
         let dir =
             std::env::temp_dir().join(format!("manifold_blender_test_{}", std::process::id()));

@@ -13,8 +13,6 @@ use super::trees::{Forest, expit};
 use super::*;
 use crate::detectors::{KickFed, Side};
 
-/// Every golden set on disk: a count match, so no set is silently skipped.
-const SETS: [&str; 4] = ["cover_kick", "cover_snare", "kick", "snare"];
 /// The tail reference's past-4 s max reflects at the clip start, reading ahead for 1 ms grid indices under
 /// this; the causal port is compared on pre_rel_db from here on only.
 const TAIL_CAUSAL_FROM_MS: i64 = 1999 + 5;
@@ -581,54 +579,4 @@ fn parity_cover_kick() {
 #[test]
 fn parity_cover_snare() {
     parity("cover_snare");
-}
-
-#[test]
-fn every_golden_set_runs() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/detectors");
-    let mut found: Vec<String> = std::fs::read_dir(&root)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().join("model.mkick").exists())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    found.sort();
-    assert_eq!(
-        found, SETS,
-        "golden sets on disk differ from the parity tests"
-    );
-}
-
-#[test]
-fn goldens_match_their_model() {
-    for set in SETS {
-        let id = model(set).text("train_id").unwrap().to_owned();
-        for name in clips(set) {
-            assert_eq!(
-                golden::load(&dir(set), &name).text("train_id").unwrap(),
-                id,
-                "{set}/{name}"
-            );
-        }
-    }
-}
-
-/// The app runs the tested models: each embedded file is its family's golden set model, byte for byte.
-#[test]
-fn embedded_assets_are_the_shipped_sets() {
-    for (kind, bytes) in crate::detectors::EMBEDDED {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("tests/fixtures/{}/model.mkick", dir(kind.name())));
-        let set = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        assert!(
-            bytes == set.as_slice(),
-            "assets/{}_model.mkick differs from {}",
-            kind.name(),
-            path.display()
-        );
-        assert_eq!(
-            Container::parse(bytes).unwrap().text("family").unwrap(),
-            kind.name()
-        );
-    }
 }

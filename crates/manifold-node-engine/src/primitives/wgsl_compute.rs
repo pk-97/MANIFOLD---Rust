@@ -2804,14 +2804,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     #[test]
-    fn full_kernel_stays_a_fusion_boundary() {
-        let node = WgslCompute::new();
-        assert_eq!(node.fusion_kind(), FusionKind::Boundary);
-        assert!(node.wgsl_body().is_none());
-        assert!(node.fragment_source.is_none());
-    }
-
-    #[test]
     fn default_source_introspects_to_one_uniform_one_texture_out() {
         let node = WgslCompute::new();
         assert!(!node.compile_failed, "default WGSL must parse");
@@ -3330,23 +3322,6 @@ struct X {
 ";
         let m = skip(src);
         assert!(m.is_empty());
-    }
-
-    #[test]
-    fn marker_skipped_field_can_have_pad_name() {
-        // Author named a non-padding field `padding`; the marker rescues
-        // it from the future where the heuristic would have eaten it.
-        // (Since the heuristic is gone, this just confirms the marker
-        // works on arbitrary names.)
-        let src = "
-struct X {
-    // @channel_skip
-    padding: f32,
-    real: f32,
-};
-";
-        let m = skip(src);
-        assert_eq!(fields(&m, "X"), vec!["padding"]);
     }
 
     // ─────────────────────────────────────────────────────────────────

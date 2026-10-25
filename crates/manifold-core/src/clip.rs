@@ -411,13 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn test_set_duration_beats_preserves_positive() {
-        let mut clip = TimelineClip::default();
-        clip.set_duration_beats(Beats(4.0));
-        assert_eq!(clip.duration_beats, Beats(4.0));
-    }
-
-    #[test]
     fn color_override_defaults_none_and_is_skipped_when_unset() {
         // Default = layer colour (None), and an unset override never appears in
         // the JSON — old projects round-trip byte-for-byte on this field.

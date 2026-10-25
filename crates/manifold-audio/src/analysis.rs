@@ -3243,12 +3243,6 @@ mod tests {
     }
 
     #[test]
-    fn streaming_analyzer_sample_rate_round_trips() {
-        let a = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
-        assert_eq!(a.sample_rate(), SR);
-    }
-
-    #[test]
     fn streaming_analyzer_scope_emits_columns_in_lockstep() {
         let mut a = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
         let nb = a.num_bins();

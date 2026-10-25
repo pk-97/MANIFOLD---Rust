@@ -63,16 +63,6 @@ fn gpu_flip_native_extend_then_moving_wall_reference() {
     assert_eq!(wrong[wall].velocity[0], 2.0);
 }
 
-#[test]
-fn gpu_flip_native_inflow_two_steps_reference() {
-    // _advanceMarkerParticles precedes _updateFluidObjects.
-    let dt = 0.125_f64;
-    let first = (0.25_f64, 2.0_f64);
-    let second = (first.0 + first.1 * dt, first.1);
-    assert_eq!(first.0, 0.25);
-    assert_eq!(second.0, 0.5);
-}
-
 fn index(p: [usize; 3], n: [usize; 3]) -> usize {
     p[0] + (n[0] + 1) * (p[1] + (n[1] + 1) * p[2])
 }

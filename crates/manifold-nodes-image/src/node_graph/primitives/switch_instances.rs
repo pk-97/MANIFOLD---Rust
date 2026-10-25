@@ -97,34 +97,10 @@ mod extent;
 
 #[cfg(test)]
 mod tests {
-    use manifold_node_engine::exec::effect_node::EffectNode;
-    use manifold_node_engine::ports::{ArrayType, PortType, ScalarType};
+    use manifold_node_engine::ports::{ArrayType, PortType};
 
     use super::super::switch_mesh::tests::producers_run;
     use super::*;
-
-    #[test]
-    fn ports_are_a_param_shadowed_selector_and_two_instance_inputs() {
-        let node = SwitchInstances::new();
-        let instances = PortType::Array(ArrayType::of_known::<InstanceTransform>());
-        let inputs: Vec<_> = EffectNode::inputs(&node)
-            .iter()
-            .map(|p| (p.name.as_ref(), p.ty, p.required))
-            .collect();
-        assert_eq!(
-            inputs,
-            [
-                ("selector", PortType::Scalar(ScalarType::F32), true),
-                ("in_0", instances, false),
-                ("in_1", instances, false)
-            ]
-        );
-        let outputs: Vec<_> = EffectNode::outputs(&node)
-            .iter()
-            .map(|p| (p.name.as_ref(), p.ty))
-            .collect();
-        assert_eq!(outputs, [("out", instances)]);
-    }
 
     #[test]
     fn wired_selector_keeps_every_branch_and_a_param_picks_one() {

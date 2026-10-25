@@ -89,19 +89,3 @@ impl Default for RenderMode {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_is_rendered() {
-        let m = RenderMode::default();
-        assert_eq!(
-            m.mode, RENDER_MODE_RENDERED,
-            "unwired default must be Rendered (INV-R1)"
-        );
-        assert_eq!(m.line_brightness, 1.0);
-        assert_eq!(m.point_size, 2.0);
-    }
-}

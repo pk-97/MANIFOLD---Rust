@@ -528,8 +528,7 @@ and edges #3/#7 below, which no lens engaged.
    as the sole wire-format implementation, both codegen/install (producer) and
    `wgsl_compute::introspect` (consumer) compile against it. Negative gate
    `marker_literals_live_in_one_module` proves no stray marker literal exists
-   outside `markers.rs`; `fused_wgsl_snapshot_unchanged` proves the refactor
-   changed zero emitted bytes.
+   outside `markers.rs`.
 2. The **suite-parallelism GPU flake** is an eroding safety net — worth a root
    cause before trusting any future red/green signal.
 3. FIXED: **Out-of-loop ≈ulp** now has one named constant pair,

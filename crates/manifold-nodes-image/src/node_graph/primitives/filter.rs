@@ -753,18 +753,6 @@ mod tests {
         assert!((measured_source_variance - DUAL_BLUR_FIRST_VARIANCE).abs() < 1e-6);
     }
 
-    #[test]
-    fn dual_kawase_weights_are_normalized() {
-        let down_weight_sum = 4.0 + 4.0;
-        let up_weight_sum = 8.0;
-        assert_eq!(down_weight_sum / 8.0, 1.0);
-        assert_eq!(up_weight_sum / 8.0, 1.0);
-        let shader = include_str!("shaders/blur_dual.wgsl");
-        assert!(shader.contains("value = value / 8.0"));
-        assert!(shader.contains("textureLoad(tex_source, vec2<i32>(px, py), 0)"));
-        assert!(shader.contains("mix(a, b"));
-        assert!(shader.contains("texture_storage_2d<rgba16float, write>"));
-    }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]

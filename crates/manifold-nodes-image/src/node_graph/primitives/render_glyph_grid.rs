@@ -133,23 +133,6 @@ impl Primitive for RenderGlyphGrid {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn output_is_canvas_sized() {
-        let node = RenderGlyphGrid::new();
-        assert_eq!(
-            node.output_canvas_scale(
-                "out",
-                &manifold_node_engine::exec::effect_node::ParamValues::default(),
-            ),
-            Some((1, 1))
-        );
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

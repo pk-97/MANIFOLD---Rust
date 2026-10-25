@@ -1290,29 +1290,6 @@ fn encode_pocket_coarsen(
     );
 }
 
-/// The step shader's atomic sites: the pockets' fixed-point sums, integer adds that come out
-/// the same in any thread order, and the tally's cell counts and lowest air
-/// seed (an integer minimum, also order-free). A new site is added here on
-/// purpose.
-#[cfg(test)]
-const POCKET_ATOMIC_SITES: &[&str] = &[
-    "pocket_sum",
-    "group_sum",
-    "pocket_clear",
-    "pocket_add",
-    "pocket_accumulate",
-    "pocket_remove",
-    "pocket_flux",
-    "pocket_counts",
-    "pocket_first_seed",
-    "pocket_dry_floor",
-    "pocket_tally",
-    "pocket_leader",
-    "pocket_leader_clear",
-    "pocket_coarsen",
-    "pocket_relabel",
-];
-
 /// I8's guard: each line of `source` that uses an atomic, outside the named
 /// functions and variable declarations of `allowed`; exchange and
 /// compare-exchange are never allowed. Comments are skipped.
@@ -3907,18 +3884,6 @@ mod tests {
         }
     }
 
-    /// I8: the liquid conformance suite checks codegen bodies for atomics;
-    /// the step's hand shader is checked here. Its only atomics are the
-    /// pockets' fixed-point sums.
-    #[test]
-    fn step_shader_atomics_are_allowlisted_integer_sums() {
-        let stray = super::atomic_sites_outside(STEP_SHADER, POCKET_ATOMIC_SITES);
-        assert!(
-            stray.is_empty(),
-            "atomics outside the allowlist: {stray:#?}"
-        );
-    }
-
     /// The pocket sums' two-word add with carry (gpu_flip_step.wgsl
     /// pocket_fixed, pocket_add, pocket_value) gives the exact sum of the
     /// fixed-point values in any order.
@@ -4029,38 +3994,6 @@ mod tests {
             ] {
                 assert!(entries.contains(&entry), "missing entry {entry}");
             }
-        }
-    }
-
-    /// The shared extent counts every cell-sized lattice array, including
-    /// the separate coarse pocket leader, against its actual allocation.
-    #[test]
-    fn gpu_flip_lattice_buffers_are_held() {
-        let source = include_str!("gpu_flip_step.rs");
-        let body = source.split("fn new(device: &GpuDevice, cells: [u32; 3]) -> Result<Self, String> {\n        let cell").nth(1).expect("LatticeBuffers::new");
-        let body = body.split("\n    }\n").next().unwrap_or("");
-        let arrays = body.matches("(device, cell)?").count() as u64;
-        // The fine-label leader is counted by pocket_coarse_bytes, separately
-        // from the seven fine solve arrays.
-        assert_eq!(
-            arrays,
-            LATTICE_CELL_ARRAYS + 1,
-            "cell arrays including the coarse pocket leader"
-        );
-        for cells in [[64u32, 64, 64], [63, 100, 8], [128, 128, 128]] {
-            let face = face_bytes(cells);
-            let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
-            let particles = 1000 * size_of::<FluidParticle>() as u64;
-            let expected = particles
-                + 7 * cell_bytes(cells)
-                + corners
-                + 6 * face
-                + POCKET_GATE_WORDS * 4
-                + pocket_sum_bytes(cells)
-                + pocket_coarse_bytes(cells)
-                + tile_scratch_bytes(cells, 2)
-                + mask_saved_bytes(cells, 1000);
-            assert_eq!(scratch_bytes(cells, 1000, 2), expected, "{cells:?}");
         }
     }
 

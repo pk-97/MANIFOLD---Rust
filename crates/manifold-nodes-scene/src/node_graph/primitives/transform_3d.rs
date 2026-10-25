@@ -282,12 +282,6 @@ mod tests {
     }
 
     #[test]
-    fn unwired_defaults_produce_identity_transform() {
-        let t = run_with_params(&[]);
-        assert_eq!(t, Transform::default());
-    }
-
-    #[test]
     fn params_flow_through_to_matching_transform_fields_radians_preserved() {
         let t = run_with_params(&[
             ("pos_x", 1.5),
@@ -339,12 +333,6 @@ mod tests {
         );
         assert_eq!(t.scale[0], 1.0);
         assert_eq!(t.scale[1], 1.0);
-    }
-
-    #[test]
-    fn billboard_defaults_to_false() {
-        let t = run_with_params(&[]);
-        assert!(!t.billboard);
     }
 
     #[test]

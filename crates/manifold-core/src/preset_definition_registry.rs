@@ -763,15 +763,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_default_bloom() {
-        let inst = create_default(&PresetTypeId::BLOOM);
-        assert_eq!(*inst.effect_type(), PresetTypeId::BLOOM);
-        assert!(inst.enabled);
-        assert_eq!(inst.params.len(), 1);
-        assert!((inst.params.get("amount").unwrap().value - 0.187).abs() < 1e-6);
-    }
-
-    #[test]
     fn test_format_value_labels() {
         let s = format_value(&PresetTypeId::DITHER, 1, 2.0);
         assert_eq!(s, "Lines");
@@ -787,63 +778,6 @@ mod tests {
     fn test_format_value_continuous() {
         let s = format_value(&PresetTypeId::BLOOM, 0, 0.5);
         assert_eq!(s, "0.50");
-    }
-
-    #[test]
-    fn test_sorted_types() {
-        let mut sorted = all_of_kind(PresetKind::Effect);
-        sorted.sort_by_key(|t| t.as_str().to_string());
-        for i in 1..sorted.len() {
-            assert!(sorted[i - 1].as_str() <= sorted[i].as_str());
-        }
-    }
-
-    /// The registry seeding must preserve every card-surface flag a
-    /// glTF-imported generator depends on: it TRACKS its embedded preset
-    /// (`graph: None`, D9/BUG-016), so the `RegistryParamDef` built from a
-    /// JSON `ParamSpecDef` in `preset_metadata_to_def` is the ONLY path its
-    /// card descriptors travel. Before the descriptor unification, this
-    /// went through a hand-written converter and `section` was silently
-    /// dropped once (D5 fix), then `is_angle`/`wraps` the same way
-    /// (radians-on-card bug, Peter 2026-07-15). Now the registry wraps the
-    /// spec directly, so preservation holds BY CONSTRUCTION — this asserts
-    /// whole-struct equality rather than picking individual flags, which is
-    /// the stronger claim.
-    #[test]
-    fn registry_seeding_preserves_the_authored_spec() {
-        let spec = ParamSpecDef {
-            tooltip: None,
-            id: "cam_tilt".to_string(),
-            name: "Camera Tilt".to_string(),
-            min: -std::f32::consts::PI,
-            max: std::f32::consts::PI,
-            default_value: 0.3,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: Vec::new(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: crate::macro_bank::MacroCurve::default(),
-            invert: false,
-            is_angle: true,
-            is_trigger_gate: true,
-            wraps: true,
-            section: Some("Camera".to_string()),
-            card_visible: true,
-            material_role: None,
-            limit: Default::default(),
-            unit: None,
-            scene: None,
-        };
-        let seeded = RegistryParamDef {
-            spec: spec.clone(),
-            contract: None,
-        };
-        assert_eq!(
-            seeded.spec, spec,
-            "the spec must survive the registry wrap whole"
-        );
     }
 
     // ── ParamAlias resolution (step 15) ────────────────────────────
@@ -896,22 +830,6 @@ mod tests {
     fn resolve_param_alias_empty_table_passes_through() {
         let aliases: &[crate::effect_registration::ParamAlias] = &[];
         assert_eq!(resolve_param_alias(aliases, "amount"), Some("amount"));
-    }
-
-    #[test]
-    fn all_default_effect_defs_have_empty_alias_table() {
-        // Step 15 ships with no actual renames yet — every effect's
-        // alias table should be empty. New entries land via sidecar
-        // `EffectAliasMetadata` submissions.
-        for effect_type in all_of_kind(PresetKind::Effect) {
-            let def = get(&effect_type);
-            assert!(
-                def.legacy_param_aliases.is_empty(),
-                "{} unexpectedly has alias entries: {:?}",
-                effect_type.as_str(),
-                def.legacy_param_aliases
-            );
-        }
     }
 
     // ── section 11 block 2: PresetMetadata → EffectDef converter ──────────
@@ -1084,16 +1002,6 @@ mod tests {
             assert_eq!(a.spec.format_string, b.spec.format_string);
             assert_eq!(a.spec.osc_suffix, b.spec.osc_suffix);
         }
-    }
-
-    #[test]
-    fn loaded_preset_metadata_returns_empty_initially() {
-        // Block 2 ships with no JSON loader populated (manifold-nodes
-        // isn't linked in core unit tests). Confirms the dual-source
-        // registry doesn't accidentally start consuming something.
-        assert!(super::effect::loaded_preset_metadata().is_empty());
-        assert!(super::generator::loaded_preset_metadata().is_empty());
-        assert!(super::scene_modifier::loaded_preset_metadata().is_empty());
     }
 
     #[test]

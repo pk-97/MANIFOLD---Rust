@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn marker_with_retired_flavor_key_still_loads() {
         let m: TimelineMarker = serde_json::from_str(
-            r#"{"id":"m1","beat":4.0,"name":"Verse","color":6,"isSectionBoundary":true}"#,
+            r#"{"id":"m1","beat":4.0,"name":"Verse","color":"Purple","isSectionBoundary":true}"#,
         )
         .expect("marker with retired flavor key must deserialize");
         assert_eq!(m.name, "Verse");

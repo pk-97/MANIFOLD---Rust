@@ -669,16 +669,4 @@ mod tests {
             PathBuf::from("/Users/pete/Shows/liveschool.manifold.breadcrumb")
         );
     }
-
-    #[test]
-    fn last_known_beat_is_none_before_first_publish() {
-        // Note: shares process-global state with other tests in this binary;
-        // this only asserts the sentinel decodes correctly, not ordering
-        // relative to other tests' publishes.
-        let bits = u64::MAX;
-        assert!(
-            f64::from_bits(bits).is_nan(),
-            "sentinel bit pattern is a NaN, never a real beat"
-        );
-    }
 }

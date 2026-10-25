@@ -1,10 +1,8 @@
-use serde::de::Deserializer;
-use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 // ─── Blend Modes ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum BlendMode {
     #[default]
@@ -63,56 +61,9 @@ impl BlendMode {
     }
 }
 
-impl Serialize for BlendMode {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for BlendMode {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => BlendMode::Normal,
-                1 => BlendMode::Additive,
-                2 => BlendMode::Multiply,
-                3 => BlendMode::Screen,
-                4 => BlendMode::Overlay,
-                5 => BlendMode::Stencil,
-                6 => BlendMode::Opaque,
-                7 => BlendMode::Difference,
-                8 => BlendMode::Exclusion,
-                9 => BlendMode::Subtract,
-                10 => BlendMode::ColorDodge,
-                11 => BlendMode::Lighten,
-                12 => BlendMode::Darken,
-                _ => BlendMode::Normal,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                "Normal" => BlendMode::Normal,
-                "Additive" => BlendMode::Additive,
-                "Multiply" => BlendMode::Multiply,
-                "Screen" => BlendMode::Screen,
-                "Overlay" => BlendMode::Overlay,
-                "Stencil" => BlendMode::Stencil,
-                "Opaque" => BlendMode::Opaque,
-                "Difference" => BlendMode::Difference,
-                "Exclusion" => BlendMode::Exclusion,
-                "Subtract" => BlendMode::Subtract,
-                "ColorDodge" => BlendMode::ColorDodge,
-                "Lighten" => BlendMode::Lighten,
-                "Darken" => BlendMode::Darken,
-                _ => BlendMode::Normal,
-            },
-            _ => BlendMode::Normal,
-        })
-    }
-}
-
 // ─── Layer Type ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum LayerType {
     #[default]
     Video = 0,
@@ -183,43 +134,9 @@ impl LayerType {
     }
 }
 
-impl Serialize for LayerType {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for LayerType {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => LayerType::Video,
-                1 => LayerType::Generator,
-                2 => LayerType::Group,
-                3 => LayerType::Audio,
-                4 => LayerType::Dmx,
-                5 => LayerType::Trigger,
-                _ => LayerType::Video,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                "Video" => LayerType::Video,
-                "Generator" => LayerType::Generator,
-                "Group" => LayerType::Group,
-                "Audio" => LayerType::Audio,
-                // "Led" is the pre-D15 name; hand-built JSON may carry it (D15).
-                "Dmx" | "Led" => LayerType::Dmx,
-                "Trigger" => LayerType::Trigger,
-                _ => LayerType::Video,
-            },
-            _ => LayerType::Video,
-        })
-    }
-}
-
 // ─── Clock Authority ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ClockAuthority {
     #[default]
     Internal = 0,
@@ -258,41 +175,12 @@ impl ClockAuthority {
     }
 }
 
-impl Serialize for ClockAuthority {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for ClockAuthority {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => ClockAuthority::Internal,
-                1 => ClockAuthority::Link,
-                2 => ClockAuthority::MidiClock,
-                3 => ClockAuthority::Osc,
-                _ => ClockAuthority::Internal,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                "Internal" => ClockAuthority::Internal,
-                "Link" => ClockAuthority::Link,
-                "MidiClock" => ClockAuthority::MidiClock,
-                "Osc" => ClockAuthority::Osc,
-                _ => ClockAuthority::Internal,
-            },
-            _ => ClockAuthority::Internal,
-        })
-    }
-}
-
 // ─── OSC Sync Mode ───
 
 /// Selects which OSC transport sync path to use when `ClockAuthority::Osc` is active.
 /// - `M4L`: Legacy Max4Live MANIFOLD Sync device (timecode on port 9000/9001)
 /// - `AbletonOsc`: AbletonOSC remote script (listener-based on port 11000/11001)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum OscSyncMode {
     #[default]
     M4L = 0,
@@ -315,34 +203,9 @@ impl OscSyncMode {
     }
 }
 
-impl Serialize for OscSyncMode {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for OscSyncMode {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => OscSyncMode::M4L,
-                1 => OscSyncMode::AbletonOsc,
-                _ => OscSyncMode::M4L,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                "M4L" => OscSyncMode::M4L,
-                "AbletonOsc" => OscSyncMode::AbletonOsc,
-                _ => OscSyncMode::M4L,
-            },
-            _ => OscSyncMode::M4L,
-        })
-    }
-}
-
 // ─── Quantize Mode ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum QuantizeMode {
     #[default]
     Off = 0,
@@ -371,38 +234,9 @@ impl QuantizeMode {
     }
 }
 
-impl Serialize for QuantizeMode {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for QuantizeMode {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => QuantizeMode::Off,
-                1 => QuantizeMode::QuarterBeat,
-                2 => QuantizeMode::Beat,
-                3 => QuantizeMode::Bar,
-                _ => QuantizeMode::Off,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                "Off" => QuantizeMode::Off,
-                "QuarterBeat" => QuantizeMode::QuarterBeat,
-                "Beat" => QuantizeMode::Beat,
-                "Bar" => QuantizeMode::Bar,
-                _ => QuantizeMode::Off,
-            },
-            _ => QuantizeMode::Off,
-        })
-    }
-}
-
 // ─── Resolution Preset ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ResolutionPreset {
     HD720p = 0,
     #[default]
@@ -415,59 +249,6 @@ pub enum ResolutionPreset {
     Portrait1440 = 7,
     Portrait4K = 8,
     Square4K = 9,
-}
-
-impl Serialize for ResolutionPreset {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for ResolutionPreset {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(1) as i32 {
-                0 => ResolutionPreset::HD720p,
-                1 => ResolutionPreset::FHD1080p,
-                2 => ResolutionPreset::QHD1440p,
-                3 => ResolutionPreset::UHD4K,
-                4 => ResolutionPreset::Square1080,
-                5 => ResolutionPreset::Portrait720,
-                6 => ResolutionPreset::Portrait1080,
-                7 => ResolutionPreset::Portrait1440,
-                8 => ResolutionPreset::Portrait4K,
-                9 => ResolutionPreset::Square4K,
-                _ => ResolutionPreset::FHD1080p,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                // Rust-style names
-                "HD720p" => ResolutionPreset::HD720p,
-                "FHD1080p" => ResolutionPreset::FHD1080p,
-                "QHD1440p" => ResolutionPreset::QHD1440p,
-                "UHD4K" => ResolutionPreset::UHD4K,
-                "Square1080" => ResolutionPreset::Square1080,
-                "Portrait720" => ResolutionPreset::Portrait720,
-                "Portrait1080" => ResolutionPreset::Portrait1080,
-                "Portrait1440" => ResolutionPreset::Portrait1440,
-                "Portrait4K" => ResolutionPreset::Portrait4K,
-                "Square4K" => ResolutionPreset::Square4K,
-                // Unity C# enum names
-                "HD_720p" => ResolutionPreset::HD720p,
-                "FHD_1080p" => ResolutionPreset::FHD1080p,
-                "QHD_1440p" => ResolutionPreset::QHD1440p,
-                "UHD_4K" => ResolutionPreset::UHD4K,
-                "Square_1080" => ResolutionPreset::Square1080,
-                "Portrait_720" => ResolutionPreset::Portrait720,
-                "Portrait_1080" => ResolutionPreset::Portrait1080,
-                "Portrait_1440" => ResolutionPreset::Portrait1440,
-                "Portrait_4K" => ResolutionPreset::Portrait4K,
-                "Square_4K" => ResolutionPreset::Square4K,
-                _ => ResolutionPreset::FHD1080p,
-            },
-            _ => ResolutionPreset::FHD1080p,
-        })
-    }
 }
 
 impl ResolutionPreset {
@@ -538,7 +319,7 @@ pub enum PlaybackState {
 
 // ─── Tempo Point Source ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum TempoPointSource {
     #[default]
     Unknown = 0,
@@ -549,42 +330,9 @@ pub enum TempoPointSource {
     AbletonOsc = 5,
 }
 
-impl Serialize for TempoPointSource {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for TempoPointSource {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => TempoPointSource::Unknown,
-                1 => TempoPointSource::Manual,
-                2 => TempoPointSource::Link,
-                3 => TempoPointSource::MidiClock,
-                4 => TempoPointSource::Recorded,
-                5 => TempoPointSource::AbletonOsc,
-                _ => TempoPointSource::Unknown,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                "Unknown" => TempoPointSource::Unknown,
-                "Manual" => TempoPointSource::Manual,
-                "Link" => TempoPointSource::Link,
-                "MidiClock" => TempoPointSource::MidiClock,
-                "Recorded" => TempoPointSource::Recorded,
-                "AbletonOsc" => TempoPointSource::AbletonOsc,
-                _ => TempoPointSource::Unknown,
-            },
-            _ => TempoPointSource::Unknown,
-        })
-    }
-}
-
 // ─── Beat Division (for parameter drivers / LFO) ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum BeatDivision {
     ThirtySecond = 0,
     Sixteenth = 1,
@@ -607,89 +355,6 @@ pub enum BeatDivision {
     QuarterTriplet = 17,
     HalfTriplet = 18,
     WholeTriplet = 19,
-}
-
-impl Serialize for BeatDivision {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for BeatDivision {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(3) as i32 {
-                0 => BeatDivision::ThirtySecond,
-                1 => BeatDivision::Sixteenth,
-                2 => BeatDivision::Eighth,
-                3 => BeatDivision::Quarter,
-                4 => BeatDivision::Half,
-                5 => BeatDivision::Whole,
-                6 => BeatDivision::TwoWhole,
-                7 => BeatDivision::FourWhole,
-                8 => BeatDivision::EightWhole,
-                9 => BeatDivision::SixteenWhole,
-                10 => BeatDivision::ThirtyTwoWhole,
-                11 => BeatDivision::EighthDotted,
-                12 => BeatDivision::QuarterDotted,
-                13 => BeatDivision::HalfDotted,
-                14 => BeatDivision::WholeDotted,
-                15 => BeatDivision::TwoWholeDotted,
-                16 => BeatDivision::EighthTriplet,
-                17 => BeatDivision::QuarterTriplet,
-                18 => BeatDivision::HalfTriplet,
-                19 => BeatDivision::WholeTriplet,
-                _ => BeatDivision::Quarter,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                // Rust-style names
-                "ThirtySecond" => BeatDivision::ThirtySecond,
-                "Sixteenth" => BeatDivision::Sixteenth,
-                "Eighth" => BeatDivision::Eighth,
-                "Quarter" => BeatDivision::Quarter,
-                "Half" => BeatDivision::Half,
-                "Whole" => BeatDivision::Whole,
-                "TwoWhole" => BeatDivision::TwoWhole,
-                "FourWhole" => BeatDivision::FourWhole,
-                "EightWhole" => BeatDivision::EightWhole,
-                "SixteenWhole" => BeatDivision::SixteenWhole,
-                "ThirtyTwoWhole" => BeatDivision::ThirtyTwoWhole,
-                "EighthDotted" => BeatDivision::EighthDotted,
-                "QuarterDotted" => BeatDivision::QuarterDotted,
-                "HalfDotted" => BeatDivision::HalfDotted,
-                "WholeDotted" => BeatDivision::WholeDotted,
-                "TwoWholeDotted" => BeatDivision::TwoWholeDotted,
-                "EighthTriplet" => BeatDivision::EighthTriplet,
-                "QuarterTriplet" => BeatDivision::QuarterTriplet,
-                "HalfTriplet" => BeatDivision::HalfTriplet,
-                "WholeTriplet" => BeatDivision::WholeTriplet,
-                // Unity C# enum names (e.g. BeatDivision._32_1)
-                "_1_32" => BeatDivision::ThirtySecond,
-                "_1_16" => BeatDivision::Sixteenth,
-                "_1_8" => BeatDivision::Eighth,
-                "_1_4" => BeatDivision::Quarter,
-                "_1_2" => BeatDivision::Half,
-                "_1_1" => BeatDivision::Whole,
-                "_2_1" => BeatDivision::TwoWhole,
-                "_4_1" => BeatDivision::FourWhole,
-                "_8_1" => BeatDivision::EightWhole,
-                "_16_1" => BeatDivision::SixteenWhole,
-                "_32_1" => BeatDivision::ThirtyTwoWhole,
-                "_1_8_dot" => BeatDivision::EighthDotted,
-                "_1_4_dot" => BeatDivision::QuarterDotted,
-                "_1_2_dot" => BeatDivision::HalfDotted,
-                "_1_1_dot" => BeatDivision::WholeDotted,
-                "_2_1_dot" => BeatDivision::TwoWholeDotted,
-                "_1_8T" => BeatDivision::EighthTriplet,
-                "_1_4T" => BeatDivision::QuarterTriplet,
-                "_1_2T" => BeatDivision::HalfTriplet,
-                "_1_1T" => BeatDivision::WholeTriplet,
-                _ => BeatDivision::Quarter,
-            },
-            _ => BeatDivision::Quarter,
-        })
-    }
 }
 
 impl BeatDivision {
@@ -802,7 +467,7 @@ impl BeatDivision {
 
 // ─── Driver Waveform ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum DriverWaveform {
     #[default]
     Sine = 0,
@@ -810,37 +475,6 @@ pub enum DriverWaveform {
     Sawtooth = 2,
     Square = 3,
     Random = 4,
-}
-
-impl Serialize for DriverWaveform {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for DriverWaveform {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => DriverWaveform::Sine,
-                1 => DriverWaveform::Triangle,
-                2 => DriverWaveform::Sawtooth,
-                3 => DriverWaveform::Square,
-                4 => DriverWaveform::Random,
-                _ => DriverWaveform::Sine,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                "Sine" => DriverWaveform::Sine,
-                "Triangle" => DriverWaveform::Triangle,
-                "Sawtooth" => DriverWaveform::Sawtooth,
-                "Square" => DriverWaveform::Square,
-                "Random" => DriverWaveform::Random,
-                _ => DriverWaveform::Sine,
-            },
-            _ => DriverWaveform::Sine,
-        })
-    }
 }
 
 impl DriverWaveform {
@@ -858,7 +492,7 @@ impl DriverWaveform {
 
 // ─── Clip Duration Mode ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ClipDurationMode {
     #[default]
     NoteOff = 2,
@@ -875,20 +509,6 @@ pub enum MidiTriggerMode {
     #[default]
     SingleNote,
     AllNotes,
-}
-
-impl Serialize for ClipDurationMode {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for ClipDurationMode {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // Only one variant exists; accept any integer or string representation.
-        let _value = serde_json::Value::deserialize(deserializer)?;
-        Ok(ClipDurationMode::NoteOff)
-    }
 }
 
 // ─── Display impls ───
@@ -936,7 +556,7 @@ impl TryFrom<i32> for BlendMode {
 
 // ─── Marker Color ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum MarkerColor {
     Red = 0,
     Orange = 1,
@@ -976,43 +596,6 @@ impl MarkerColor {
 
     pub fn from_index(i: usize) -> Self {
         Self::try_from(i as i32).unwrap_or(Self::Red)
-    }
-}
-
-impl Serialize for MarkerColor {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-impl<'de> Deserialize<'de> for MarkerColor {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(match &value {
-            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
-                0 => MarkerColor::Red,
-                1 => MarkerColor::Orange,
-                2 => MarkerColor::Yellow,
-                3 => MarkerColor::Green,
-                4 => MarkerColor::Cyan,
-                5 => MarkerColor::Blue,
-                6 => MarkerColor::Purple,
-                7 => MarkerColor::White,
-                _ => MarkerColor::Red,
-            },
-            serde_json::Value::String(s) => match s.as_str() {
-                "Red" => MarkerColor::Red,
-                "Orange" => MarkerColor::Orange,
-                "Yellow" => MarkerColor::Yellow,
-                "Green" => MarkerColor::Green,
-                "Cyan" => MarkerColor::Cyan,
-                "Blue" => MarkerColor::Blue,
-                "Purple" => MarkerColor::Purple,
-                "White" => MarkerColor::White,
-                _ => MarkerColor::Red,
-            },
-            _ => MarkerColor::Red,
-        })
     }
 }
 
@@ -1090,52 +673,36 @@ mod tests {
         }
     }
 
-    /// Wire-form pin: the int is
-    /// the only form ever written; "Led" stays accepted on load from hand-built
-    /// JSON; an unknown value must keep falling back to Video, never panic.
+    /// Saved as the variant name. A bare number, the retired "Led" alias or an
+    /// unknown name is a load error.
     #[test]
     fn layer_type_dmx_wire_form_round_trip() {
-        assert_eq!(serde_json::to_string(&LayerType::Dmx).unwrap(), "4");
-        assert_eq!(
-            serde_json::from_str::<LayerType>("4").unwrap(),
-            LayerType::Dmx
-        );
+        assert_eq!(serde_json::to_string(&LayerType::Dmx).unwrap(), "\"Dmx\"");
         assert_eq!(
             serde_json::from_str::<LayerType>("\"Dmx\"").unwrap(),
             LayerType::Dmx
         );
-        assert_eq!(
-            serde_json::from_str::<LayerType>("\"Led\"").unwrap(),
-            LayerType::Dmx,
-            "pre-D15 hand-built JSON keeps loading as Dmx"
-        );
-        assert_eq!(
-            serde_json::from_str::<LayerType>("99").unwrap(),
-            LayerType::Video
-        );
-        assert_eq!(
-            serde_json::from_str::<LayerType>("\"Nonsense\"").unwrap(),
-            LayerType::Video
-        );
+        assert!(serde_json::from_str::<LayerType>("4").is_err());
+        assert!(serde_json::from_str::<LayerType>("\"Led\"").is_err());
+        assert!(serde_json::from_str::<LayerType>("\"Nonsense\"").is_err());
     }
 
     #[test]
-    fn layer_type_wire_values_and_trigger_capabilities() {
+    fn layer_type_names_and_trigger_capabilities() {
         use LayerType::*;
 
-        for (wire, kind) in [(0, Video), (1, Generator), (2, Group), (3, Audio), (4, Dmx)] {
-            assert_eq!(serde_json::to_string(&kind).unwrap(), wire.to_string());
-            assert_eq!(
-                serde_json::from_str::<LayerType>(&wire.to_string()).unwrap(),
-                kind
-            );
+        for (name, kind) in [
+            ("Video", Video),
+            ("Generator", Generator),
+            ("Group", Group),
+            ("Audio", Audio),
+            ("Dmx", Dmx),
+            ("Trigger", Trigger),
+        ] {
+            let wire = format!("\"{name}\"");
+            assert_eq!(serde_json::to_string(&kind).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<LayerType>(&wire).unwrap(), kind);
         }
-        assert_eq!(serde_json::to_string(&Trigger).unwrap(), "5");
-        assert_eq!(serde_json::from_str::<LayerType>("5").unwrap(), Trigger);
-        assert_eq!(
-            serde_json::from_str::<LayerType>("\"Trigger\"").unwrap(),
-            Trigger
-        );
 
         assert!(Trigger.accepts_clips_from(Trigger));
         assert!(!Trigger.accepts_clips_from(Video));
