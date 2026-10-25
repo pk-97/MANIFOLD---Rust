@@ -11,7 +11,7 @@ use manifold_playback::transport_controller::TransportController;
 
 use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, StateTx};
-use crate::content_thread::ContentThread;
+use crate::content_thread::{ContentThread, PendingJob};
 use crossbeam_channel::Receiver;
 
 /// Measurements from the shared production project installation and preparation path.
@@ -191,7 +191,7 @@ impl ContentThread {
             .graph_edit_diagnostic
             .as_ref()
             .map(|event| event.sequence);
-        self.handle_command(ContentCommand::LoadProject(project));
+        self.install_project(project);
         let install_error = self
             .graph_edit_diagnostic
             .as_ref()
@@ -209,8 +209,8 @@ impl ContentThread {
         }
     }
 
-    /// Load-time warmup pass. Runs inside the
-    /// `LoadProject` handler after the project is initialized and resized.
+    /// Load-time warmup pass. Runs after `install_project` has initialized
+    /// and resized the project.
     /// Blocks the content thread, publishes per-layer progress, and aborts
     /// if a Shutdown command arrives.
     pub(crate) fn run_warmup(
@@ -782,8 +782,122 @@ impl ContentThread {
         commit_recording(&mut self.engine, &mut self.editing_service, finish_active);
     }
 
+    /// Installs the project without warmup. `LoadProject` notes a
+    /// `PendingJob::Load` that installs and then warms it.
+    pub(crate) fn install_project(&mut self, project: Box<manifold_core::project::Project>) {
+        self.commit_automation_recording(true);
+        self.edit_selection_update = None;
+        if let Some(ref mut alp) = self.audio_layer_playback {
+            alp.reset();
+        }
+        // Reset link beat offset and tempo recorder on project load.
+        // Port of C# PlaybackController.OnProjectLoading lines 550-551.
+        self.link_offset.clear();
+        self.tempo_recorder.reset();
+        self.engine.initialize(*project);
+        // Clear stale temporal effect state from the previous project
+        // (feedback textures, bloom state, etc.) to prevent bleed-through.
+        self.content_pipeline.clear_all_effect_state();
+        // BUG-104: same for generator-side trigger-edge latches —
+        // a freshly loaded project must never inherit a stuck
+        // sample_and_hold / clip_trigger_cycle capture from
+        // whatever was playing before.
+        self.clear_generator_trigger_state();
+        // Resize content pipeline to project dims and render scale.
+        if let Some(p) = self.engine.project() {
+            let w = p.settings.output_width.max(1) as u32;
+            let h = p.settings.output_height.max(1) as u32;
+            let rs = p.settings.render_scale;
+            if let Err(message) = self.content_pipeline.resize(&mut self.engine, w, h, rs) {
+                self.report_graph_edit_rejection(format!("Project resize rejected: {message}"));
+            }
+        }
+        // Prewarm chain-fusion segments for every chain in the project
+        // (background worker; enqueue-only) so the show's first scenes
+        // dispatch fused instead of per-card while compiles trickle in.
+        if let Some(p) = self.engine.project() {
+            manifold_node_engine::runtime::prewarm_project_chain_segments(p);
+        }
+        // Update MIDI mapping config from the newly loaded project.
+        // Port of C# PlaybackController.OnProjectLoaded → midiInputController.SetMidiConfig().
+        if let Some(p) = self.engine.project() {
+            self.midi_input.set_midi_config(p.midi_config.clone());
+        }
+        // Rebuild OSC parameter routes for the loaded project.
+        // Port of C# WorkspaceController: creates/registers OSC bridges on project load.
+        if let Some(p) = self.engine.project() {
+            self.osc_param_router.rebuild(p, &mut self.osc_receiver);
+        }
+        self.osc_receiver.start_listening();
+        // Auto-connect Ableton bridge — silently stays disconnected if
+        // Ableton isn't running. Heartbeat will detect connection later.
+        self.ableton_bridge.connect();
+        // Re-validate mappings against the current Ableton session so
+        // they don't sit at default Dormant after a project load.
+        // Discovery may already be complete from a prior connect, in
+        // which case `take_validation_dirty` won't fire on its own.
+        if self
+            .engine
+            .project()
+            .is_some_and(|p| self.ableton_bridge.validation_would_change(p))
+            && let Some(edit) = self.engine.project_edit()
+        {
+            let bridge = &self.ableton_bridge;
+            self.editing_service
+                .mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| {
+                    bridge.validate_mappings(p)
+                });
+            self.reactions.publish_pending = true;
+        }
+        if let Some(p) = self.engine.project() {
+            self.ableton_bridge.rebuild_listeners(p);
+        }
+        // Honor the persisted LED ON/OFF state. If the project saved
+        // with the LED pipeline enabled, stand it up automatically;
+        // otherwise tear down any previously active controller.
+        let want_led_enabled = self
+            .engine
+            .project()
+            .is_some_and(|p| p.settings.led_enabled);
+        if want_led_enabled {
+            if !self
+                .led_controller
+                .as_ref()
+                .is_some_and(|c| c.is_initialized())
+            {
+                let settings = manifold_led::LedSettings {
+                    enabled: true,
+                    ..Default::default()
+                };
+                let mut ctrl = manifold_led::LedOutputController::new();
+                let native_device = self
+                    .content_pipeline
+                    .native_device()
+                    .expect("native device required for LED init");
+                let strip_count = settings.strip_count;
+                let leds_per_strip = settings.leds_per_strip;
+                if ctrl.initialize(native_device, &settings) {
+                    self.led_controller = Some(ctrl);
+                    self.content_pipeline
+                        .set_led_grid_size(strip_count, leds_per_strip);
+                    log::info!("[ContentThread] LED output auto-initialised from project.");
+                }
+            }
+        } else if let Some(ref mut ctrl) = self.led_controller {
+            ctrl.shutdown();
+            self.led_controller = None;
+        }
+        // A load starts a new tempo history: nothing to reconcile against.
+        self.reactions.tempo_retained = None;
+    }
+
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
+        // A noted long job runs before anything sent after it.
+        if self.pending_job.is_some() {
+            self.hold_command(cmd);
+            return false;
+        }
         let settings_edit = match &cmd {
             ContentCommand::Execute(c)
             | ContentCommand::ExecuteOnContent(c)
@@ -1464,112 +1578,7 @@ impl ContentThread {
 
             // ── Project lifecycle ──────────────────────────────────
             ContentCommand::LoadProject(project) => {
-                self.commit_automation_recording(true);
-                self.edit_selection_update = None;
-                if let Some(ref mut alp) = self.audio_layer_playback {
-                    alp.reset();
-                }
-                // Reset link beat offset and tempo recorder on project load.
-                // Port of C# PlaybackController.OnProjectLoading lines 550-551.
-                self.link_offset.clear();
-                self.tempo_recorder.reset();
-                self.engine.initialize(*project);
-                // Clear stale temporal effect state from the previous project
-                // (feedback textures, bloom state, etc.) to prevent bleed-through.
-                self.content_pipeline.clear_all_effect_state();
-                // BUG-104: same for generator-side trigger-edge latches —
-                // a freshly loaded project must never inherit a stuck
-                // sample_and_hold / clip_trigger_cycle capture from
-                // whatever was playing before.
-                self.clear_generator_trigger_state();
-                // Resize content pipeline to project dims and render scale.
-                if let Some(p) = self.engine.project() {
-                    let w = p.settings.output_width.max(1) as u32;
-                    let h = p.settings.output_height.max(1) as u32;
-                    let rs = p.settings.render_scale;
-                    if let Err(message) = self.content_pipeline.resize(&mut self.engine, w, h, rs) {
-                        self.report_graph_edit_rejection(format!(
-                            "Project resize rejected: {message}"
-                        ));
-                    }
-                }
-                // Prewarm chain-fusion segments for every chain in the project
-                // (background worker; enqueue-only) so the show's first scenes
-                // dispatch fused instead of per-card while compiles trickle in.
-                if let Some(p) = self.engine.project() {
-                    manifold_node_engine::runtime::prewarm_project_chain_segments(p);
-                }
-                // Update MIDI mapping config from the newly loaded project.
-                // Port of C# PlaybackController.OnProjectLoaded → midiInputController.SetMidiConfig().
-                if let Some(p) = self.engine.project() {
-                    self.midi_input.set_midi_config(p.midi_config.clone());
-                }
-                // Rebuild OSC parameter routes for the loaded project.
-                // Port of C# WorkspaceController: creates/registers OSC bridges on project load.
-                if let Some(p) = self.engine.project() {
-                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
-                }
-                self.osc_receiver.start_listening();
-                // Auto-connect Ableton bridge — silently stays disconnected if
-                // Ableton isn't running. Heartbeat will detect connection later.
-                self.ableton_bridge.connect();
-                // Re-validate mappings against the current Ableton session so
-                // they don't sit at default Dormant after a project load.
-                // Discovery may already be complete from a prior connect, in
-                // which case `take_validation_dirty` won't fire on its own.
-                if self
-                    .engine
-                    .project()
-                    .is_some_and(|p| self.ableton_bridge.validation_would_change(p))
-                    && let Some(edit) = self.engine.project_edit()
-                {
-                    let bridge = &self.ableton_bridge;
-                    self.editing_service
-                        .mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| {
-                            bridge.validate_mappings(p)
-                        });
-                    self.reactions.publish_pending = true;
-                }
-                if let Some(p) = self.engine.project() {
-                    self.ableton_bridge.rebuild_listeners(p);
-                }
-                // Honor the persisted LED ON/OFF state. If the project saved
-                // with the LED pipeline enabled, stand it up automatically;
-                // otherwise tear down any previously active controller.
-                let want_led_enabled = self
-                    .engine
-                    .project()
-                    .is_some_and(|p| p.settings.led_enabled);
-                if want_led_enabled {
-                    if !self
-                        .led_controller
-                        .as_ref()
-                        .is_some_and(|c| c.is_initialized())
-                    {
-                        let settings = manifold_led::LedSettings {
-                            enabled: true,
-                            ..Default::default()
-                        };
-                        let mut ctrl = manifold_led::LedOutputController::new();
-                        let native_device = self
-                            .content_pipeline
-                            .native_device()
-                            .expect("native device required for LED init");
-                        let strip_count = settings.strip_count;
-                        let leds_per_strip = settings.leds_per_strip;
-                        if ctrl.initialize(native_device, &settings) {
-                            self.led_controller = Some(ctrl);
-                            self.content_pipeline
-                                .set_led_grid_size(strip_count, leds_per_strip);
-                            log::info!("[ContentThread] LED output auto-initialised from project.");
-                        }
-                    }
-                } else if let Some(ref mut ctrl) = self.led_controller {
-                    ctrl.shutdown();
-                    self.led_controller = None;
-                }
-                // A load starts a new tempo history: nothing to reconcile against.
-                self.reactions.tempo_retained = None;
+                self.pending_job = Some(PendingJob::Load(project))
             }
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetResolution(new_preset) => {
@@ -1983,8 +1992,8 @@ impl ContentThread {
                 log::info!("[ContentThread] LED output shut down.");
             }
             // ── Export ────────────────────────────────────────────────
-            ContentCommand::StartExport(_) => {
-                // Handled in run() loop directly (needs cmd_rx/state_tx access).
+            ContentCommand::StartExport(config) => {
+                self.pending_job = Some(PendingJob::Export(config))
             }
             ContentCommand::CancelExport => {
                 // No-op outside of export loop — cancel flag checked inside run_export.
@@ -2398,7 +2407,7 @@ mod warmup_tests {
         assert_eq!(report.total_layers, 1, "the generator layer warms");
         assert!(!report.interrupted);
 
-        assert!(!thread.drain_commands(&cmd_rx, &state_tx), "no shutdown");
+        assert!(!thread.drain_commands(&cmd_rx), "no shutdown");
         assert!(
             !thread.content_pipeline.sdr_preview(),
             "the later command must win"

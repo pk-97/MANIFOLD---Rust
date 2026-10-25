@@ -51,7 +51,7 @@ App periphery (`crates/manifold-app/src/`):
 |---|---|
 | `content_export.rs` | The whole export orchestration: `run_export` (replaces the normal frame loop), `export_one_frame`, still-export submit/poll, progress snapshots. |
 | `app_lifecycle.rs` | `start_export` (save dialog → `ExportConfig` from `ProjectSettings` + timeline export range → `ContentCommand::StartExport`), `export_frame` (still), `import_video_clip` (probe on a background thread). |
-| `content_thread.rs` | `StartExport` handled directly in the run loop (needs `cmd_rx`/`state_tx`); `set_device` re-pointing for both renderers after the pipeline moves; prewarm candidates → `pre_warm_from_candidates`. |
+| `content_thread.rs` | `StartExport` and `LoadProject` only note a `PendingJob`; `run_paced_frame` runs it at the top of the next frame, and commands sent after it are held until it ends; `set_device` re-pointing for both renderers after the pipeline moves; prewarm candidates → `pre_warm_from_candidates`. |
 | `content_pipeline.rs` | `export_output_texture()` (= compositor output), `pq_encode_for_export()` (HDR), still-readback submit/take, clip-texture downcast chase, poster/filmstrip capture into the clip atlas. |
 | `journey_proof.rs` | Headless harness that drives the real `run_export` (feature `journey-proofs`). |
 

@@ -71,6 +71,15 @@ impl IssuedPresents {
     }
 }
 
+/// Long work a command asked for. `handle_command` only notes it; the
+/// frame loop runs it at the top of the next frame (`run_pending_job`),
+/// and commands arriving meanwhile wait in `held_commands` until it ends.
+pub(crate) enum PendingJob {
+    /// Install the project, then warm it up.
+    Load(Box<manifold_core::project::Project>),
+    Export(Box<manifold_media::export_config::ExportConfig>),
+}
+
 /// An in-flight "export current frame" request. Captured across two content
 /// ticks so the live render never stalls: tick N submits the GPU readback (and
 /// fills `dims`), tick N+1 reads the pixels back and hands them to an off-thread
@@ -150,9 +159,12 @@ pub struct ContentThread {
     /// Stage presents waiting for their presented time.
     pub(crate) issued_presents: IssuedPresents,
     /// Commands taken off the channel while the thread was busy (warmup),
-    /// in arrival order. Every receive point serves these before the
-    /// channel, so nothing jumps ahead of them; see `next_command`.
+    /// or that arrived while a job is pending, in arrival order. Every
+    /// receive point serves these before the channel, so nothing jumps
+    /// ahead of them; see `next_command`.
     pub(crate) held_commands: std::collections::VecDeque<ContentCommand>,
+    /// The long job a command noted, run at the top of the next frame.
+    pub(crate) pending_job: Option<PendingJob>,
     /// A tempo source for tests that stand in for Link or MIDI clock: it
     /// delivers this tempo every tick, where a real source would (D21).
     #[cfg(test)]
@@ -255,23 +267,6 @@ pub struct ContentThread {
 }
 
 impl ContentThread {
-    #[cfg(target_os = "macos")]
-    fn handle_command_with_preparation(
-        &mut self,
-        cmd: ContentCommand,
-        cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &StateTx,
-    ) -> bool {
-        match cmd {
-            ContentCommand::LoadProject(project) => {
-                self.load_project_and_warmup(project, cmd_rx, state_tx)
-                    .warmup
-                    .interrupted
-            }
-            cmd => self.handle_command(cmd),
-        }
-    }
-
     /// Run the content loop. Blocks until Shutdown is received.
     pub fn run(
         mut self,
@@ -288,7 +283,7 @@ impl ContentThread {
         loop {
             work_trace.frame("content");
             // 1. Drain every pending command, coalescing consecutive seeks.
-            if self.drain_commands(&cmd_rx, &state_tx) {
+            if self.drain_commands(&cmd_rx) {
                 return;
             }
             self.publish_snapshot_if_dirty(&state_tx);
@@ -304,10 +299,41 @@ impl ContentThread {
         &mut self,
         cmd_rx: &Receiver<ContentCommand>,
     ) -> Result<ContentCommand, crossbeam_channel::TryRecvError> {
-        match self.held_commands.pop_front() {
+        match self.take_held() {
             Some(cmd) => Ok(cmd),
             None => cmd_rx.try_recv(),
         }
+    }
+
+    /// The oldest held command, or `None` while a job is pending: held
+    /// commands wait behind the job.
+    pub(crate) fn take_held(&mut self) -> Option<ContentCommand> {
+        if self.pending_job.is_some() {
+            return None;
+        }
+        self.held_commands.pop_front()
+    }
+
+    /// Run the job a command noted. Returns true on shutdown.
+    pub(crate) fn run_pending_job(
+        &mut self,
+        cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &StateTx,
+    ) -> bool {
+        match self.pending_job.take() {
+            None => return false,
+            Some(PendingJob::Load(project)) => {
+                if self
+                    .load_project_and_warmup(project, cmd_rx, state_tx)
+                    .warmup
+                    .interrupted
+                {
+                    return true;
+                }
+            }
+            Some(PendingJob::Export(config)) => self.run_export(*config, cmd_rx, state_tx),
+        }
+        self.drain_commands(cmd_rx)
     }
 
     /// Hold a command taken off the channel while warmup or an export owns
@@ -356,41 +382,10 @@ impl ContentThread {
     /// last seek of a burst matters, so it waits and is overwritten. GPU
     /// events (SurfaceReady, FramePresented) never flush it. Returns true on
     /// shutdown.
-    pub(crate) fn drain_commands(
-        &mut self,
-        cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &StateTx,
-    ) -> bool {
+    pub(crate) fn drain_commands(&mut self, cmd_rx: &Receiver<ContentCommand>) -> bool {
         let mut pending_seek: Option<ContentCommand> = None;
         loop {
             match self.next_command(cmd_rx) {
-                Ok(ContentCommand::StartExport(config)) => {
-                    self.engine.clear_automation_previews();
-                    // Stop any active live recording before entering export.
-                    #[cfg(target_os = "macos")]
-                    if let Some(session) = self.content_pipeline.recording_session.take() {
-                        log::warn!("[ContentThread] Stopping active recording before export");
-                        let _ = session.stop();
-                    }
-                    // Flush any pending seek before entering export.
-                    if let Some(seek) = pending_seek.take() {
-                        let _ = self.handle_command(seek);
-                    }
-                    self.run_export(*config, cmd_rx, state_tx);
-                }
-                Ok(ContentCommand::LoadProject(project)) => {
-                    // Flush any pending seek before the load.
-                    if let Some(seek) = pending_seek.take()
-                        && self.handle_command(seek)
-                    {
-                        log::info!("[ContentThread] shutdown received");
-                        return true;
-                    }
-                    let report = self.load_project_and_warmup(project, cmd_rx, state_tx);
-                    if report.warmup.interrupted {
-                        return true;
-                    }
-                }
                 Ok(cmd @ ContentCommand::SeekTo(_)) | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
                     pending_seek = Some(cmd);
                 }
@@ -439,6 +434,11 @@ impl ContentThread {
         cmd_rx: &Receiver<ContentCommand>,
         state_tx: &StateTx,
     ) -> bool {
+        // Long work a command noted (open a project, export) runs here, at the
+        // top of a frame, never inside a command or the GPU wait.
+        if self.run_pending_job(cmd_rx, state_tx) {
+            return true;
+        }
         // Wait for GPU surface, draining commands while waiting.
         // In the common case (99%+) this returns immediately — the GPU
         // finished the surface from 2 frames ago long before now.
@@ -529,7 +529,7 @@ impl ContentThread {
             // Block until either a command arrives (UI or SurfaceReady from
             // GPU notification) or the 5-second deadline expires.
             // Zero CPU — thread sleeps in the kernel until woken.
-            let received = match self.held_commands.pop_front() {
+            let received = match self.take_held() {
                 Some(cmd) => Ok(cmd),
                 None => cmd_rx.recv_timeout(remaining),
             };
@@ -550,7 +550,7 @@ impl ContentThread {
                     {
                         return true;
                     }
-                    if self.handle_command_with_preparation(cmd, cmd_rx, state_tx) {
+                    if self.handle_command(cmd) {
                         return true; // shutdown
                     }
                     // Drain any additional queued commands.
@@ -570,7 +570,7 @@ impl ContentThread {
                                 {
                                     return true;
                                 }
-                                if self.handle_command_with_preparation(cmd, cmd_rx, state_tx) {
+                                if self.handle_command(cmd) {
                                     return true;
                                 }
                             }

@@ -325,7 +325,7 @@ fn timer_and_clock_follow_project_fps() {
     };
     let mut project = Project::default();
     project.settings.frame_rate = 24.0;
-    assert!(!thread.handle_command(ContentCommand::LoadProject(Box::new(project))));
+    thread.install_project(Box::new(project));
     tick_and_check(&mut thread, 24.0, "load");
     let edit = ChangeFrameRateCommand::new(24.0, 30.0);
     assert!(!thread.handle_command(ContentCommand::Execute(Box::new(edit))));
@@ -343,7 +343,6 @@ fn timer_and_clock_follow_project_fps() {
 fn presents_inside_a_scrub_burst_leave_one_seek() {
     let mut thread = headless_content_thread(Project::default(), 64, 64);
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-    let (state_tx, _state_rx) = crate::content_state::state_channel();
     let epoch = thread.engine.transport_epoch();
     let now = std::time::Instant::now();
     for (id, seconds) in [(1u64, 1.0), (2, 2.0), (3, 3.0)] {
@@ -359,7 +358,7 @@ fn presents_inside_a_scrub_burst_leave_one_seek() {
             })
             .expect("send");
     }
-    assert!(!thread.drain_commands(&cmd_rx, &state_tx), "no shutdown");
+    assert!(!thread.drain_commands(&cmd_rx), "no shutdown");
     assert_eq!(
         thread.engine.transport_epoch(),
         epoch.wrapping_add(1),
@@ -373,4 +372,145 @@ fn presents_inside_a_scrub_burst_leave_one_seek() {
         thread.issued_presents.take(1).is_none(),
         "the presents reached the calibration"
     );
+}
+
+fn plasma_project(bpm: f32, frame_rate: f32) -> Project {
+    let mut project = Project::default();
+    project.settings.bpm = manifold_core::Bpm(bpm);
+    project.settings.frame_rate = frame_rate;
+    let mut layer = manifold_core::layer::Layer::new_generator(
+        "Plasma".into(),
+        manifold_core::PresetTypeId::PLASMA,
+        0,
+    );
+    layer
+        .clips
+        .push(manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats(0.0),
+            manifold_core::Beats(2.0),
+        ));
+    project.timeline.layers.push(layer);
+    project
+}
+
+fn two_beat_export(
+    name: &str,
+) -> (
+    manifold_media::export_config::ExportConfig,
+    std::path::PathBuf,
+) {
+    let path = std::env::temp_dir().join(format!("manifold-{name}-{}.mp4", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let config = manifold_media::export_config::ExportConfig {
+        output_path: path.to_string_lossy().into_owned(),
+        width: 64,
+        height: 64,
+        fps: 30.0,
+        hdr: false,
+        start_beat: 0.0,
+        end_beat: 2.0,
+        audio_path: None,
+        audio_start_beat: 0.0,
+        audio_encoder_delay: 0.0,
+        split_at_markers: false,
+        include_gizmos: false,
+        metadata: Vec::new(),
+    };
+    (config, path)
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_export_request_runs_at_the_next_frame_and_later_commands_wait() {
+    let mut thread = headless_content_thread(plasma_project(137.0, 60.0), 64, 64);
+    let (config, path) = two_beat_export("pending-export");
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
+
+    assert!(!thread.handle_command(ContentCommand::StartExport(Box::new(config))));
+    assert!(!thread.handle_command(ContentCommand::SetSdrPreview(true)));
+    assert!(
+        !thread.content_pipeline.sdr_preview(),
+        "held behind the export"
+    );
+    assert!(
+        thread
+            .held_commands
+            .iter()
+            .any(|c| matches!(c, ContentCommand::SetSdrPreview(true)))
+    );
+
+    assert!(!thread.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx));
+    let finished = state_rx
+        .try_iter()
+        .flat_map(|state| state.export_finished.clone())
+        .last();
+    let written = path.exists();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        finished.is_some_and(|event| event.success),
+        "export finished"
+    );
+    assert!(written, "the export wrote its file");
+    assert!(
+        thread.content_pipeline.sdr_preview(),
+        "ran after the export"
+    );
+    assert!(thread.held_commands.is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_quit_behind_a_pending_export_cancels_it_and_still_quits() {
+    let mut thread = headless_content_thread(plasma_project(137.0, 60.0), 64, 64);
+    let (config, path) = two_beat_export("pending-quit");
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
+
+    assert!(!thread.handle_command(ContentCommand::StartExport(Box::new(config))));
+    assert!(
+        !thread.handle_command(ContentCommand::Shutdown),
+        "the quit is held, not run"
+    );
+    assert!(thread.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx));
+    let finished = state_rx
+        .try_iter()
+        .flat_map(|state| state.export_finished.clone())
+        .last();
+    let written = path.exists();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        finished.is_some_and(|event| !event.success),
+        "export cancelled"
+    );
+    assert!(!written, "no output left");
+}
+
+#[test]
+fn an_open_project_request_installs_and_warms_at_the_next_frame() {
+    let mut thread = headless_content_thread(Project::default(), 64, 64);
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
+    cmd_tx
+        .send(ContentCommand::LoadProject(Box::new(plasma_project(
+            137.0, 24.0,
+        ))))
+        .expect("send");
+    cmd_tx
+        .send(ContentCommand::SetSdrPreview(true))
+        .expect("send");
+
+    assert!(!thread.drain_commands(&cmd_rx));
+    let before = thread.engine.project().unwrap();
+    assert!(
+        before.settings.frame_rate != 24.0,
+        "old project still loaded"
+    );
+    assert!(!thread.content_pipeline.sdr_preview());
+
+    assert!(!thread.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx));
+    let after = thread.engine.project().unwrap();
+    assert_eq!(after.settings.frame_rate, 24.0);
+    assert_eq!(after.timeline.layers.len(), 1);
+    assert!(thread.content_pipeline.sdr_preview());
 }

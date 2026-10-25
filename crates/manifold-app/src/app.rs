@@ -1724,6 +1724,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 frame_deadline: std::time::Instant::now(),
                 issued_presents: crate::content_thread::IssuedPresents::default(),
                 held_commands: std::collections::VecDeque::new(),
+                pending_job: None,
                 #[cfg(test)]
                 test_tempo_source: None,
                 rig_probe: crate::sync_rig_log::TickProbe::default(),

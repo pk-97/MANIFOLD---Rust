@@ -581,7 +581,7 @@ pub fn run(args: &[String]) -> ! {
         .spawn(move || while state_rx.recv().is_ok() {})
         .expect("spawn drain");
 
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+    let (_cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
     let load = ct.load_project_and_warmup(Box::new(real_project), &cmd_rx, &state_tx);
     eprintln!(
         "[rt-capture] warmup pass took {:.1}ms (completed={})",

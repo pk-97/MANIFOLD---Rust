@@ -682,6 +682,12 @@ impl ContentThread {
         cmd_rx: &Receiver<ContentCommand>,
         state_tx: &StateTx,
     ) {
+        self.engine.clear_automation_previews();
+        // Stop any active live recording before entering export.
+        if let Some(session) = self.content_pipeline.recording_session.take() {
+            log::warn!("[ContentThread] Stopping active recording before export");
+            let _ = session.stop();
+        }
         self.send_export_phase(state_tx, true, 0.0, "Preparing export...", false);
         // A scene viewport (the editor's or the preview's navigation) is a
         // second render of the scene the export does not need: it sits out
@@ -2216,7 +2222,6 @@ mod tests {
             64,
         );
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-        let (state_tx, _state_rx) = crate::content_state::state_channel();
         let edited = Arc::new(AtomicBool::new(false));
         let edited_in_command = Arc::clone(&edited);
 
@@ -2266,7 +2271,7 @@ mod tests {
         assert!(poll(&mut thread, &cmd_rx), "a quit cancels the export");
 
         assert!(
-            thread.drain_commands(&cmd_rx, &state_tx),
+            thread.drain_commands(&cmd_rx),
             "the quit proceeds after the export"
         );
         assert!(
@@ -2307,7 +2312,7 @@ mod tests {
                 Box::new(move |_| edited_after.store(true, Ordering::SeqCst)),
             ))
             .expect("send");
-        thread.drain_commands(&cmd_rx, &state_tx);
+        thread.drain_commands(&cmd_rx);
         assert!(
             thread.engine.is_playing(),
             "control: Play runs in the normal loop"

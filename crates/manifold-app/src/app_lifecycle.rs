@@ -397,10 +397,6 @@ impl Application {
             self.handle_text_input_commit(field, &text);
         }
         let project = &self.local_project;
-        let (w, h) = (
-            project.settings.output_width.max(1) as u32,
-            project.settings.output_height.max(1) as u32,
-        );
 
         let project_name = if project.project_name.is_empty() {
             "MANIFOLD_Export"
@@ -429,26 +425,12 @@ impl Application {
 
         let output_path = path.to_string_lossy().to_string();
 
-        let config = manifold_media::export_config::ExportConfig {
-            output_path,
-            width: w,
-            height: h,
-            fps: project.settings.frame_rate,
-            hdr: project.settings.export_hdr,
-            start_beat: project.timeline.export_in_beat.0,
-            end_beat: project.timeline.export_out_beat.0,
-            audio_path: None, // TODO: wire from audio sync controller
-            audio_start_beat: 0.0,
-            audio_encoder_delay: 0.0,
-            split_at_markers: project.settings.split_at_markers,
-            include_gizmos: project.settings.export_gizmos,
-            metadata: Vec::new(),
-        };
+        let config = export_config_for(project, output_path);
 
         log::info!(
             "[Application] Starting export: {}x{} -> {}",
-            w,
-            h,
+            config.width,
+            config.height,
             config.output_path
         );
         self.ws.ui_root.export_progress.begin(
@@ -1116,7 +1098,6 @@ impl Application {
             // thread when it applies LoadProject (evicts the old project's voices).
             // Apply saved layout before initializing
             self.ws.ui_root.apply_project_layout(&project.settings);
-            let saved_time = project.saved_playhead_time;
 
             // Update local_project BEFORE sending to content thread so UI
             // can rebuild the timeline in this same frame.
@@ -1134,19 +1115,11 @@ impl Application {
             self.suppress_snapshot_until = self.content_state.data_version + 1;
             self.suppress_snapshot_set_at = self.frame_count;
 
-            self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
-
-            // Restore playhead position
-            if saved_time > 0.0 {
-                self.send_content_cmd(ContentCommand::SeekTo(Seconds::from_f32(saved_time)));
-            }
-
-            // Resize compositor + generators to project resolution
+            send_open_project(project, |cmd| self.send_content_cmd(cmd));
             {
                 let w = self.local_project.settings.output_width.max(1) as u32;
                 let h = self.local_project.settings.output_height.max(1) as u32;
                 let rs = self.local_project.settings.render_scale;
-                self.send_content_cmd(ContentCommand::ResizeContent(w, h, rs));
                 log::info!(
                     "[ProjectIO] GPU resize sent: {}x{} @ {:.2}x render scale",
                     w,
@@ -1154,8 +1127,6 @@ impl Application {
                     rs
                 );
             }
-
-            self.send_content_cmd(ContentCommand::SetProject);
             self.selection.clear_selection();
             self.active_layer_id = self
                 .local_project
@@ -1745,6 +1716,47 @@ fn friendly_timestamp(iso: &str) -> String {
     } else {
         iso.to_string()
     }
+}
+
+/// The export a click on Export starts for this project: its own size, rate,
+/// beat range and flags.
+pub(crate) fn export_config_for(
+    project: &manifold_core::project::Project,
+    output_path: String,
+) -> manifold_media::export_config::ExportConfig {
+    manifold_media::export_config::ExportConfig {
+        output_path,
+        width: project.settings.output_width.max(1) as u32,
+        height: project.settings.output_height.max(1) as u32,
+        fps: project.settings.frame_rate,
+        hdr: project.settings.export_hdr,
+        start_beat: project.timeline.export_in_beat.0,
+        end_beat: project.timeline.export_out_beat.0,
+        audio_path: None, // TODO: wire from audio sync controller
+        audio_start_beat: 0.0,
+        audio_encoder_delay: 0.0,
+        split_at_markers: project.settings.split_at_markers,
+        include_gizmos: project.settings.export_gizmos,
+        metadata: Vec::new(),
+    }
+}
+
+/// The commands that open a project on the content thread, in the app's
+/// order. The headless export tool sends the same sequence.
+pub(crate) fn send_open_project(
+    project: manifold_core::project::Project,
+    mut send: impl FnMut(ContentCommand),
+) {
+    let saved_time = project.saved_playhead_time;
+    let w = project.settings.output_width.max(1) as u32;
+    let h = project.settings.output_height.max(1) as u32;
+    let rs = project.settings.render_scale;
+    send(ContentCommand::LoadProject(Box::new(project)));
+    if saved_time > 0.0 {
+        send(ContentCommand::SeekTo(Seconds::from_f32(saved_time)));
+    }
+    send(ContentCommand::ResizeContent(w, h, rs));
+    send(ContentCommand::SetProject);
 }
 
 #[cfg(test)]

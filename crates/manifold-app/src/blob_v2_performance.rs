@@ -380,7 +380,7 @@ fn measure_case(
     let cold_touch_start = manifold_core::cold_touch::cold_touch_count(
         manifold_core::cold_touch::ColdTouchKind::PipelineCompile,
     );
-    ct.handle_command(ContentCommand::LoadProject(Box::new(fixture_project(spec))));
+    ct.install_project(Box::new(fixture_project(spec)));
     ct.timer.set_frame_clocked(true);
     ct.handle_command(ContentCommand::Pause);
     ct.handle_command(ContentCommand::SeekToBeat(Beats::ZERO));

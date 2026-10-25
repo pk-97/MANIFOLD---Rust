@@ -108,6 +108,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         frame_deadline: std::time::Instant::now(),
         issued_presents: crate::content_thread::IssuedPresents::default(),
         held_commands: std::collections::VecDeque::new(),
+        pending_job: None,
         #[cfg(test)]
         test_tempo_source: None,
         rig_probe: crate::sync_rig_log::TickProbe::default(),
@@ -140,8 +141,8 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
     }
 }
 
-/// Follow LoadProject with the production loop's bounded warmup; calling
-/// `handle_command` alone skips the asynchronous GLB decode.
+/// Follow `install_project` with the production loop's bounded warmup;
+/// installing alone skips the asynchronous GLB decode.
 #[cfg(all(test, feature = "journey-proofs"))]
 pub(crate) fn warm_project(ct: &mut ContentThread, state_tx: &crate::content_state::StateTx) {
     let (_command_tx, command_rx) = crossbeam_channel::unbounded();
