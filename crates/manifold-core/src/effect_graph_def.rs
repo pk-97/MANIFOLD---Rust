@@ -27,7 +27,7 @@
 //!   picker/OSC/routing surface (display name, category, params,
 //!   bindings, skip mode, alias tables). The format used by user-saved
 //!   presets, AI-authored presets, and the migrated bundled-preset
-//!   library after section 11 of `docs/PRIMITIVE_LIBRARY_DESIGN.md` lands.
+//!   library.
 //!
 //! Constructors emit v1 by default; calling
 //! [`with_preset_metadata`](EffectGraphDef::with_preset_metadata)
@@ -615,8 +615,7 @@ pub struct ParamSpecDef {
     pub osc_suffix: String,
     /// Slider response curve for this outer-card param (Linear by default).
     /// Part of the preset-authored slider surface — the preset file is the
-    /// single home for ranges + curve + invert (Phase 2 of
-    /// `docs/PRESET_INSTANCE_COLLAPSE_PLAN.md`). Skipped on serialize when
+    /// single home for ranges + curve + invert. Skipped on serialize when
     /// Linear so existing presets stay byte-identical.
     #[serde(default, skip_serializing_if = "crate::effects::curve_is_linear")]
     pub curve: crate::macro_bank::MacroCurve,

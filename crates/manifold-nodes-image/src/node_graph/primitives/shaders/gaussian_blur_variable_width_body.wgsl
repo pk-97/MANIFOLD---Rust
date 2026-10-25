@@ -26,8 +26,7 @@
 // original single-sample-per-tap arithmetic (byte-identical), so the
 // documented "matches legacy DoF blur byte-for-byte" parity claim still
 // holds. `VBW_SUBTAP_CAP` bounds worst-case per-pixel cost (4x at most,
-// deliberately — see docs/BUG_BACKLOG.md BUG-138 for the perf/quality
-// tradeoff this cap represents).
+// deliberately: the cap is a perf/quality tradeoff).
 
 // 9-tap (sigma ~= 2.0)
 const VBW_K9: array<f32, 5> = array<f32, 5>(

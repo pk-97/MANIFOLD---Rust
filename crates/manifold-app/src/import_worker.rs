@@ -1,5 +1,4 @@
 //! Background model-import worker + its progress channel.
-//! `docs/IMPORT_RESPONSIVENESS_DESIGN.md` D3+D4.
 //!
 //! `Application::import_model_file` (`app_lifecycle.rs`) would run Blender
 //! conversion and the glTF parse on the UI thread — a multi-second stall on

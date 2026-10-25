@@ -2369,7 +2369,7 @@ impl AbletonBridge {
 
     /// Rewrite the cached trim range of every existing `WriteTarget` from the
     /// project, in place: no OSC, no allocation, no listener change. The
-    /// MappingRanges reaction (docs/UI_INVALIDATION_DESIGN.md D20); the
+    /// MappingRanges reaction; the
     /// listener set rebuilds only when the mapping set moved.
     pub fn refresh_ranges(&mut self, project: &Project) {
         manifold_core::work_count::record_work(

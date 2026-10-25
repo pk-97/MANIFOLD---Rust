@@ -102,7 +102,6 @@ impl DispatchResult {
 /// inspector's layer focus (`active_layer`) at it, but never touches what's
 /// selected — so the whole ownership chain stays available and the clip you
 /// were on stays selected. The pin auto-clears on the next selection change.
-/// See docs/UI_LAYOUT_DESIGN.md.
 fn inspector_select_tab(
     tab: InspectorTab,
     project: &Project,
@@ -458,7 +457,7 @@ pub(crate) fn select_region_to_with_project(
     }
 }
 
-/// D2 (`docs/TIMELINE_INTERACTION_P1_SPEC.md`): shift-click on a CLIP is a
+/// Shift-click on a CLIP is a
 /// contiguous whole-clip range selection, NOT a time-range region — the
 /// `select_region_to_with_project` call this arm used to make was S1/S3's
 /// root. This is the project-based twin of `interaction_overlay::
@@ -785,7 +784,7 @@ pub use state_sync::{
 
 #[cfg(test)]
 mod d2_d3_tests {
-    //! `docs/TIMELINE_INTERACTION_P1_SPEC.md` D2/D3 regression tests — the
+    //! Regression tests for the
     //! project-based twin of the clip-range gesture, and the Cmd+D mode
     //! dispatch it feeds. Mirrors the `ui_snapshot` harness's `selectionclips`
     //! fixture shape (4 clips on one layer) without depending on the

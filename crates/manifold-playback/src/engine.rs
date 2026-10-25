@@ -638,7 +638,7 @@ impl PlaybackEngine {
     }
     /// Clip-control bindings are stale: the next reconcile walks once. Called
     /// by the content reaction pass when Layers, Clips, Effects or Session
-    /// moved (docs/UI_INVALIDATION_DESIGN.md section 4); a borrow never sets it.
+    /// moved; a borrow never sets it.
     pub fn mark_clip_bindings_stale(&mut self) {
         self.clip_bindings_dirty = true;
     }

@@ -12,8 +12,7 @@
 //! which is what lets the UI compile without the engine.
 //!
 //! NOTHING with domain semantics belongs here — no registries, no project
-//! model, no GPU. Domain types the UI needs are adapted at the app boundary
-//! (`docs/UI_LAYERING_INVERSION.md`).
+//! model, no GPU. Domain types the UI needs are adapted at the app boundary.
 
 pub mod audio_shape;
 pub mod cold_touch;

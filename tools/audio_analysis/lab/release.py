@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detector releases (docs/DETECTOR_RUNTIME_DESIGN.md section 3): one tool for any lab-built detector.
+"""Detector releases: one tool for any lab-built detector.
 
 Usage:
   release.py train CONFIG [--seed S] [--nets N]      final models from a saved lab run (seeds S..S+N-1); a release record

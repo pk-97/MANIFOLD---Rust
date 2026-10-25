@@ -33,8 +33,8 @@ pub enum CameraMode {
     Orthographic { half_height: f32 },
 }
 
-/// Physical lens parameters rewritten by `node.camera_lens`
-/// (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D4) — the one writer of this block.
+/// Physical lens parameters rewritten by `node.camera_lens`,
+/// the one writer of this block.
 /// Rides the `Camera` struct so every consumer (DoF, motion blur, exposure)
 /// reads the same lens instead of duplicating four params each.
 ///
@@ -100,7 +100,7 @@ pub struct Camera {
     pub view: [[f32; 4]; 4],
     /// Physical lens (focus/aperture/shutter/exposure). Every builder below
     /// sets `LensParams::PINHOLE` — `node.camera_lens` is the only writer
-    /// that changes it (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D4).
+    /// that changes it.
     pub lens: LensParams,
     /// Translation identifying equivalent world-space copies for temporal
     /// correspondence. Ordinary cameras use None. Periodic-world sources
@@ -467,7 +467,7 @@ impl Camera {
     }
 
     /// THE reference oracle for every conformance gate in the camera/lens
-    /// cluster (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D2) — GPU projection
+    /// cluster — GPU projection
     /// paths are verified against this function, never against each other
     /// or a screenshot. Projects a world-space point to a pixel coordinate
     /// in a `width x height` render target using this camera's `view_proj`.
@@ -526,8 +526,8 @@ impl Camera {
     }
 }
 
-/// Result of [`Camera::project_to_pixel`] — the committed CPU oracle shape
-/// (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D2). Every field is derived from the
+/// Result of [`Camera::project_to_pixel`] — the committed CPU oracle shape.
+/// Every field is derived from the
 /// same `view_proj` every GPU consumer is expected to agree with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PixelProjection {

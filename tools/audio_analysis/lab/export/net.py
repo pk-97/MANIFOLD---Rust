@@ -1,5 +1,4 @@
-"""Model file part `net.*`: the nets' shared input and each net's weights (docs/DETECTOR_RUNTIME_DESIGN.md section 4,
-D17).
+"""Model file part `net.*`: the nets' shared input and each net's weights.
 
 The 64 band-pass SOS sections exactly as scipy's butter returns them, each band's moving-average length, the slice
 and baseline constants, the frame channels in order, then net k's conv and linear weights as f32 in PyTorch layout

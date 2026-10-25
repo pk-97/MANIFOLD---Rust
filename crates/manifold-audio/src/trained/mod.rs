@@ -1,4 +1,4 @@
-//! The generic detector runtime (docs/DETECTOR_RUNTIME_DESIGN.md): one [`TrainedDetector`] runs any
+//! The generic detector runtime: one [`TrainedDetector`] runs any
 //! lab-built detector from its contract-v2 model file. The file names its parts (finder, measures, net,
 //! trees, combine, history stage, cutoff); [`spec::Spec`] refuses anything this build cannot run, and only
 //! the named parts are built. `tools/audio_analysis/lab/release.py` writes the files and the parity goldens.

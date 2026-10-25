@@ -6,7 +6,7 @@ publish = false
 
 # Zero-dependency primitive vocabulary shared by the engine (`manifold-core`)
 # and the UI (`manifold-ui`): unit-typed numbers, typed string ids, and the
-# `ParamId` alias. Holds NO domain logic — see docs/UI_LAYERING_INVERSION.md.
+# `ParamId` alias. Holds NO domain logic.
 
 [dependencies]
 serde = { workspace = true }

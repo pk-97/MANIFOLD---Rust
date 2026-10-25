@@ -5,7 +5,7 @@
 //! screen — a saw LFO or an automation ramp crossing the rail jumps between
 //! two values that render the same, so the wrap reads as continuous motion,
 //! never a snap. Covers one effect param and one generator param from the
-//! BUG-039 tag sweep (see `docs/BUG_BACKLOG.md`).
+//! tag sweep.
 //!
 //! Run:
 //!   cargo test -p manifold-nodes --test main param_wrap_smoke:: --features gpu-proofs

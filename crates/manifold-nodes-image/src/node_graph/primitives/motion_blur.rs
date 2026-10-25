@@ -1,6 +1,6 @@
 //! `node.motion_blur` — velocity-directed gather motion blur from a scene's
-//! velocity buffer + a Camera's shutter angle (`docs/CINEMATIC_POST_DESIGN.md`
-//! D4). The tail of DoF v1's `CinematicScene` chain — this atom does ONLY
+//! velocity buffer + a Camera's shutter angle.
+//! The tail of DoF v1's `CinematicScene` chain — this atom does ONLY
 //! the per-pixel smear gather, no CoC/SSAO composition (the no-fused-
 //! monolith rule: motion blur is one dispatch, not folded into the DoF or
 //! SSAO chains it sits after).
@@ -37,7 +37,7 @@
 //!
 //! `camera` reads ONLY `lens.shutter_angle` (the Camera's lens block,
 //! written upstream by `node.camera_lens` — "one lens, every consumer
-//! reads it", `docs/CAMERA_AND_LENS_DESIGN.md` D4) entirely via the one
+//! reads it") entirely via the one
 //! `derived_uniforms` field below, never as a GPU binding (P0/D7). This
 //! atom declares NO port-shadowed scalar of its own for `shutter_angle` —
 //! `node.camera_lens` already exposes `shutter_angle` as a port-shadowed
@@ -89,7 +89,7 @@ struct MotionBlurUniforms {
 manifold_node_engine::primitive! {
     name: MotionBlur,
     type_id: "node.motion_blur",
-    purpose: "Velocity-directed gather motion blur (thin-shutter model, docs/CINEMATIC_POST_DESIGN.md D4): smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), clamped to +/- max_blur_px; output is the average of 8 equal-weight taps of `in`, evenly spaced from uv - smear_uv/2 to uv + smear_uv/2. shutter_angle = 0 (pinhole default) collapses every tap onto the same texel, an exact pass-through. `velocity` expects render_scene's Rg16Float NDC-delta `velocity` output (own-texel read, never filtered). `camera` reads only the wired Camera's lens.shutter_angle (written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding, and this atom declares no port-shadowed scalar of its own (wire an LFO/beat envelope into node.camera_lens's own shutter_angle port for live control). `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work); `shutter_angle = 0` short-circuits to a host-side texture copy (the kernel's taps already collapse at shutter 0, so the copy just skips the dispatch launch cost).",
+    purpose: "Velocity-directed gather motion blur (thin-shutter model): smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), clamped to +/- max_blur_px; output is the average of 8 equal-weight taps of `in`, evenly spaced from uv - smear_uv/2 to uv + smear_uv/2. shutter_angle = 0 (pinhole default) collapses every tap onto the same texel, an exact pass-through. `velocity` expects render_scene's Rg16Float NDC-delta `velocity` output (own-texel read, never filtered). `camera` reads only the wired Camera's lens.shutter_angle (written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding, and this atom declares no port-shadowed scalar of its own (wire an LFO/beat envelope into node.camera_lens's own shutter_angle port for live control). `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work); `shutter_angle = 0` short-circuits to a host-side texture copy (the kernel's taps already collapse at shutter 0, so the copy just skips the dispatch launch cost).",
     inputs: {
         in: Texture2D required,
         velocity: Texture2D required,
@@ -135,7 +135,7 @@ manifold_node_engine::primitive! {
     derived_uniforms: ["shutter_angle"],
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// Per-frame recompute for a FUSED
 // region's `shutter_angle` field — reads the region's routed Camera
 // external, matching `run()`'s own `cam.lens.shutter_angle` read below
 // exactly (both are the single source of truth; there is no shared helper
@@ -256,8 +256,7 @@ mod tests {
     }
 }
 
-/// **CPU reference** (`docs/CINEMATIC_POST_DESIGN.md` P3 deliverable: "CPU
-/// reference on a synthetic velocity ramp (I1)") — a plain-Rust
+/// **CPU reference** on a synthetic velocity ramp (I1) — a plain-Rust
 /// implementation of the D4 algorithm, independent of the WGSL body, used
 /// by the I1 GPU-vs-CPU synthetic-ramp parity gpu_test further down.
 #[cfg(test)]
@@ -390,8 +389,7 @@ mod analytic_sanity {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! **I1** (`docs/ADDING_PRIMITIVES.md` "The codegen path is mandatory" +
-    //! `docs/CINEMATIC_POST_DESIGN.md` P3 deliverable): the generated
+    //! **I1** (`docs/ADDING_PRIMITIVES.md` "The codegen path is mandatory"): the generated
     //! standalone kernel (built via `standalone_for_spec::<MotionBlur>()`,
     //! the one that ships) must reproduce BOTH `cpu_reference::motion_blur_texel`
     //! (the plain-Rust reference, I1) and the hand-authored `motion_blur.wgsl`

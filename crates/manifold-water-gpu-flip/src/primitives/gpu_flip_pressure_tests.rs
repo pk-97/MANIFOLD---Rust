@@ -2046,7 +2046,7 @@ fn pressure_module_replay_matches_direct() {
     }
 }
 
-// ── The main golden (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 9 (Phasing), C0) ──
+// ── The main golden ──
 
 const GOLDEN: &str = "gpu_flip_pressure_golden.txt";
 /// Bits every scalar and record float holds before a solve: a quiet NaN no
@@ -3209,8 +3209,7 @@ fn pressure_module_refuses_a_level_past_the_coarsest() {
 /// Rounds past the stop write nothing: with the stop leaving every later
 /// round's range entry live (as a chunk of rounds executes them), the
 /// replayed solves run every round to the cap with full groups, and every
-/// case still matches the main golden bit for bit (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md
-/// section 5 (Post-stop guards)).
+/// case still matches the main golden bit for bit.
 #[test]
 fn pressure_module_rounds_past_the_stop_write_nothing() {
     super::gpu_flip_pressure::set_keep_ranges(true);
@@ -3239,8 +3238,7 @@ fn pressure_module_rounds_past_the_stop_write_nothing() {
 /// frame replay is off there, the rounds still run as the template's
 /// executes, and every case matches main's unrolled encode bit for bit;
 /// the rounds show as tagged spans in submission order, one per execute at
-/// Dispatch granularity (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 3.2
-/// (The template on every path), T8 and T11).
+/// Dispatch granularity.
 #[test]
 fn pressure_module_golden_holds_profiled() {
     let golden = std::fs::read_to_string(format!(
@@ -3273,8 +3271,7 @@ fn pressure_module_golden_holds_profiled() {
 /// executes main runs), at 3 and 4 (boundaries inside every Fixed count and
 /// the Converged stops) and at the default, every golden case matches main,
 /// scalars and record tails included, so no round past a stop or past a
-/// Fixed count wrote anything (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section
-/// 3.1 (Chunks)).
+/// Fixed count wrote anything.
 #[test]
 fn pressure_module_chunk_sizes_match_main_golden() {
     let golden = std::fs::read_to_string(format!(

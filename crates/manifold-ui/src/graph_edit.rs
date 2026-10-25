@@ -15,7 +15,7 @@
 //! type. Part of Phase 5's layering inversion: a UI-local command the app maps
 //! to an engine command.
 //!
-//! Deliberately NOT here (see `docs/CANVAS_API_DESIGN.md` section 3): the
+//! Deliberately NOT here: the
 //! `EffectMapping*` binding-edit family (a different command family —
 //! `EditUserParamBindingCommand`) and the `Open*` window-open intents (emitted
 //! from the main-window card, not the canvas). Those stay on `PanelAction`.

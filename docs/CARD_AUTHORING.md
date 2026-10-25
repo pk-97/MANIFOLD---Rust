@@ -1,7 +1,7 @@
 # Card Authoring — semantic intent → idiom, for the outer effect/generator card
 
-**Status:** working guide (DESIGN_DOC_STANDARD section 1) · 2026-07-13 · Sonnet (GRAPH_TOOLING_DESIGN P4, D9)
-**Prerequisites:** `docs/GRAPH_TOOLING_DESIGN.md` D8–D9 decided every row and every lint below; this doc transcribes and formats — it adds none.
+**Status:** working guide (DESIGN_DOC_STANDARD section 1) · 2026-07-13
+**Prerequisites:** Every row and every lint below is already decided; this doc transcribes and formats them and adds none.
 
 The "card" is the outer-facing surface of an effect or generator preset: the
 sliders, toggles, and buttons a performer sees, built from
@@ -17,8 +17,8 @@ reference for the less-obvious `ParamSpecDef` fields.
 the card lies to the performer (fix before shipping); warnings mean an idiom
 row below was violated (fix in-session, per Peter's rule that agents don't
 habituate across sessions). `graph_tool fusion <file.json>` is the sibling
-tool for dispatch-cost questions, unrelated to card correctness. See
-`docs/GRAPH_TOOLING_DESIGN.md` for the full mechanism.
+tool for dispatch-cost questions, unrelated to card correctness.
+
 
 ## Intent → idiom table (D9, verbatim)
 
@@ -87,7 +87,7 @@ Anchors: `crates/manifold-core/src/effect_graph_def.rs`, struct `ParamSpecDef`
 
 ## Hints vs. contracts — what a node's `min`/`max` actually means
 
-`PARAM_RANGE_CONTRACT_DESIGN.md` (2026-07-13) splits a fact that used to be
+The range contract splits a fact that used to be
 conflated on every inner-node `ParamDef`: its declared `min`/`max` is a
 **display hint** — the default slider travel, nothing more. A card, text
 entry, modulation, or OSC value is always free to exceed it; a lerp/blend

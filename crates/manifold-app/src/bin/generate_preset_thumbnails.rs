@@ -1,6 +1,4 @@
 //! `generate-preset-thumbnails` — factory-thumbnail one-shot dev bin
-//! (`docs/PRESET_LIBRARY_DESIGN.md` P6, D7; `docs/STATIC_THUMBNAILS_DESIGN.md`
-//! P2, D2-D4, D7).
 //!
 //! Walks the bundled stock preset dirs (`assets/effect-presets/`,
 //! `assets/generator-presets/` — the SAME dev-stock roots `check_presets.rs`

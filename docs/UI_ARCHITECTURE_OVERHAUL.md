@@ -170,7 +170,7 @@ Do not chase it.
 ### Build layers
 - **Tree** (`tree.rs`/`node.rs`) — flat SoA per region arena, `NodeId` = region + slot,
   parent/child/sibling arrays, per-node dirty flags, a region rebuilt alone via
-  `clear_region` (UI_INVALIDATION_DESIGN.md D7),
+  `clear_region`,
   `structure_version` counter. The spine. Clean.
 - **Top-level layout** (`ScreenLayout`) — declarative computed rects for screen
   regions. Good.
@@ -776,7 +776,7 @@ pass (see section 0).
 > them to declarative Views is not the goal; the split *is* the architecture.
 
 ### Phase 3 — Timeline API — **COMPLETE (2026-06-22)**
-> Sub-design `docs/TIMELINE_API_DESIGN.md`. Behaviour-preserving throughout;
+> Behaviour-preserving throughout;
 > manifold-ui 333 + manifold-app 103 + manifold-editing 59 tests green, clippy
 > clean, one commit per task.
 - [x] **3.1** Sub-design-doc: lane/clip/marker model + one interaction owner +
@@ -798,14 +798,14 @@ pass (see section 0).
   `model` / `coordinate` / `render` / `interaction` submodules.
 
 ### Phase 4 — Canvas API — **COMPLETE (2026-06-23)**
-> Sub-design `docs/CANVAS_API_DESIGN.md`. Behaviour-preserving throughout;
+> Behaviour-preserving throughout;
 > manifold-ui 330 + manifold-app 91 tests green, clippy `-D warnings` clean, one
 > commit per task. Key constraint recorded in the design doc: the canvas stays
 > in `manifold-app` (it consumes `manifold_nodes` snapshots; `manifold-ui`
 > can't depend on `manifold-nodes`), so 4.2 is a split-in-place, and a crate
 > move waits for Phase 5.
 - [x] **4.1** Sub-design-doc: graph-view framework + own command type + sidebar
-  boundary. → [`CANVAS_API_DESIGN.md`](CANVAS_API_DESIGN.md).
+  boundary.
 - [x] **4.2** Extract nodes/ports/wires/pan/zoom/box-select into a named module.
   The 4,262-line `graph_canvas.rs` is now a `graph_canvas/` directory:
   `model`/`layout`/`camera`/`hit`/`render`/`interaction` + `tests`, one struct
@@ -835,7 +835,7 @@ pass (see section 0).
   is Phase-5 substrate work.
 
 ### Phase 5 — Layering inversion — **COMPLETE (2026-06-23)**
-> Sub-design `UI_LAYERING_INVERSION.md (deleted)`. `manifold-ui` now depends only on
+> `manifold-ui` now depends only on
 > the new zero-dep `manifold-foundation` crate (shared primitive vocabulary:
 > `Beats`/`Seconds`/`Bpm`, the typed string ids, `ParamId`), **not** on
 > `manifold-core`. `manifold-core` re-exports those primitives at their historic
@@ -993,7 +993,7 @@ pass (see section 0).
 > - **Not in scope (deferred follow-ons):** Phase 6 (generic `IntentRegistry`)
 >   and Phase 7 (one shared editor-window input owner) are independent and
 >   untouched here. The `u32`-vs-`NodeId` identity split and the render/hit
->   row-geometry duplication noted in `CANVAS_API_DESIGN.md` section 4 (Invariants this must not break) are likewise
+>   row-geometry duplication are likewise
 >   unchanged — Phase 8 is the *relocation*, not a canvas rewrite.
 
 ### Deferred (section 10.2) — intentionally NOT on this checklist

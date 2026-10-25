@@ -6,8 +6,7 @@
 //! the single shape both collapsed into, carrying the small set of real
 //! differences behind a [`PresetKind`] discriminator.
 //!
-//! Step 7 of the unification (see `docs/PRESET_UNIFICATION_PLAN.md`):
-//! both definition registries now STORE and RETURN `PresetDef`. The two
+//! Both definition registries now STORE and RETURN `PresetDef`. The two
 //! legacy structs and the `from_effect_def` / `from_generator_def`
 //! bridges are gone — the registries build `PresetDef` directly. The
 //! two registry modules and their `PresetTypeId` / `PresetTypeId`

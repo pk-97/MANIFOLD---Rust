@@ -1,4 +1,4 @@
-"""The pinned environment of every lab process (docs/DETECTOR_LAB_DESIGN.md D2).
+"""The pinned environment of every lab process.
 
 SONG_ENV decides which songs the kick goal set holds and how their truth is read (kick_goal_eval reads it at
 import). A lab run adds the net's input env from its config; the snare release adds its own. apply() must run before

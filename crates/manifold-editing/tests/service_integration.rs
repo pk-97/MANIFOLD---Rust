@@ -590,7 +590,7 @@ fn nudge_selected_clips() {
 }
 
 // ─── S5 regression: batch move onto an occupied lane must not silently
-// delete a protected member (docs/TIMELINE_INTERACTION_P1_SPEC.md P1.3) ───
+// delete a protected member ───
 
 /// Reproduces the real S5 gesture per the P1.0 evidence deck
 /// (`docs/evidence/timeline_interaction_p1/P1.0-notes.md`): a multi-clip
@@ -1205,8 +1205,7 @@ fn move_command_missing_target_preserves_source_and_valid_move_undoes_redoes() {
     );
 }
 
-// ─── Move clips across layers (B14 keyboard Up/Down —
-// docs/TIMELINE_INTERACTION_P1_SPEC.md section 5 P1.6) ───
+// ─── Move clips across layers (keyboard Up/Down) ───
 
 #[test]
 fn move_clips_across_layers_batches_as_one_undo_entry() {

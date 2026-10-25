@@ -28,7 +28,7 @@ pub struct ExportConfig {
     pub audio_encoder_delay: f32,
     /// Split the export into one file per marker inside the export range.
     /// Derived on the content thread from timeline markers; false means
-    /// today's single-export behavior (docs/SECTION_EXPORT_DESIGN.md D4/D5).
+    /// today's single-export behavior.
     pub split_at_markers: bool,
     /// Draw the Scene panel scene gizmos over every exported frame, in the
     /// draw mode the Scene panel has. Off by default.

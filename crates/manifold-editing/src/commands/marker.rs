@@ -152,8 +152,3 @@ impl Command for RenameMarkerCommand {
         "Rename Marker"
     }
 }
-
-// ── Toggle Section Marker ───────────────────────────────────────
-// Removed 2026-08-26: the per-marker section flavor was retired the day it
-// shipped — every marker inside the export range is a cut (Peter:
-// "Surely M and I and O are enough"). docs/SECTION_EXPORT_DESIGN.md D2.

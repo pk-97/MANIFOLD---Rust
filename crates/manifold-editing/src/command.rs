@@ -5,7 +5,7 @@ use std::fmt::Debug;
 
 /// An undoable edit. Implement `do_execute` and `do_undo`; everyone calls
 /// `execute` and `undo`, which under test and `change-audit` hold every write
-/// to `touches` (docs/UI_INVALIDATION_DESIGN.md D10). Never override them and
+/// to `touches`. Never override them and
 /// never call the `do_` methods directly: that is how a command escapes the
 /// audit (`command_runs_only_through_the_audit` enforces both).
 pub trait Command: Debug + Send {
@@ -57,8 +57,8 @@ pub trait Command: Debug + Send {
     fn scene_edit(&mut self) -> Option<&mut dyn crate::commands::scene_doc::SceneEdit> {
         None
     }
-    /// The project parts this command writes, on execute and on undo
-    /// (docs/UI_INVALIDATION_DESIGN.md D2, INV-1). Declare from what execute
+    /// The project parts this command writes, on execute and on undo.
+    /// Declare from what execute
     /// and undo write, never from the name. Over-declaring only costs work;
     /// under-declaring is a stale-UI bug the change audit catches. A set that
     /// depends on the data is read after execute, so execute may record it.

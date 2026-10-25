@@ -1,5 +1,4 @@
-//! `node.inverse_fft_2d` — a batch of 2D half spectra back to real fields
-//! (docs/OCEAN_SURFACE_DESIGN.md D8). One MPSGraph call through
+//! `node.inverse_fft_2d` — a batch of 2D half spectra back to real fields. One MPSGraph call through
 //! manifold-gpu's `GpuFft`; the plan is rebuilt only when the shape changes.
 
 use std::borrow::Cow;

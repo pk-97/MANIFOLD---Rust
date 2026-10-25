@@ -1175,8 +1175,7 @@ fn bundled_plasma_loads_and_compiles() {
 /// Verdict 2026-07-16: it IS the class bug (max luma 0 after resize
 /// with the state-clear disabled) — but the b11e6511 state-clear that
 /// rescues Cymatics does NOT rescue FluidSim2D; its re-seed path never
-/// re-arms. Tracked as BUG-175 (docs/BUG_BACKLOG.md); un-ignore when
-/// fixing it — this test is the acceptance gate.
+/// re-arms. This test is the acceptance gate for fixing it.
 #[cfg(feature = "gpu-proofs")]
 #[test]
 #[ignore = "BUG-175: FluidSim2D stays black after live resize; reproducer kept as the fix's acceptance gate"]

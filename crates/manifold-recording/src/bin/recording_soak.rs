@@ -1,16 +1,16 @@
 //! `recording-soak` — the pre-gig soundcheck for the live show recorder
-//! (Tier 2). See docs/LIVE_RECORDING_PROOFS_DESIGN.md section 5.
+//! (Tier 2).
 //!
 //! Drives the real `LiveRecordingSession` at the show configuration (4K60
 //! SDR ProRes + synthetic audio, 20 media-minutes by default), then verifies
 //! the output with the same ffprobe/ffmpeg oracle as the Tier-1 proof suite
-//! (`crate::proofs`) — reused, not reinvented (design section 6 P2).
+//! (`crate::proofs`) — reused, not reinvented.
 //!
 //! `cargo run --release -p manifold-recording --features recording-proofs --bin recording-soak`
 //!
 //! PASS decision (default/unpaced mode) is anchored to the DECODED file, not
 //! only Rust's `frames_recorded` counter — belt-and-suspenders against the
-//! class of bug fixed by BUG-085 (docs/BUG_BACKLOG.md): the async
+//! class of bug where a counter disagrees with the file: the async
 //! `appendPixelBuffer:` call now feeds `frames_recorded` its ground truth
 //! (read from `LiveRecorder_Finalize` after the append queue drains), but
 //! this binary still cross-checks the decoded frame-index sequence
@@ -64,7 +64,7 @@ fn run() -> i32 {
             "SOAK FAIL: --hdr blocked by BUG-053 (HDR live recording is structurally \
              broken today — the texture pool is unconditionally Bgra8Unorm while the \
              native HDR path wraps its CVPixelBuffer as RGBA16Float, a format-mismatched \
-             Metal blit; see docs/BUG_BACKLOG.md BUG-053)"
+             Metal blit)"
         );
         return 1;
     }
@@ -168,8 +168,7 @@ fn print_usage() {
          Defaults are the show config: 4K60 SDR ProRes, 20 media-minutes, synthetic\n\
          48kHz stereo audio, unpaced (encodes as fast as the hardware allows -- the\n\
          encoder-stress mode). --realtime paces submissions to wall clock for a true\n\
-         dress rehearsal. See docs/LIVE_RECORDING_PROOFS_DESIGN.md \u{00a7}5 and\n\
-         docs/DEVELOPMENT_REFERENCE.md's \"Recorder soundcheck\" section."
+         dress rehearsal. See docs/DEVELOPMENT_REFERENCE.md's \"Recorder soundcheck\" section."
     );
 }
 

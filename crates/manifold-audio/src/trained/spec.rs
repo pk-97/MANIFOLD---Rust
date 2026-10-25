@@ -1,4 +1,4 @@
-//! Contract v2 (docs/DETECTOR_RUNTIME_DESIGN.md section 4): what a model file says it is built from, checked
+//! Contract v2: what a model file says it is built from, checked
 //! before any part is built. Every unknown, missing or inconsistent entry is a named refusal (D8); nothing is
 //! skipped. The parts this runtime implements are declared in `tests/fixtures/detectors/runtime_parts.json`.
 

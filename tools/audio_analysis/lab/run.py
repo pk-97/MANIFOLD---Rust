@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runs an experiment (docs/DETECTOR_LAB_DESIGN.md D6, D7, D10, P6): each seed trains in its own process under the
+"""Runs an experiment: each seed trains in its own process under the
 config's net env, saves held-out probabilities per song and layer (each model, then the combined), and never scores.
 With song groups it also trains the pair models that choose each group's cutoff (lab/models.py plan). The run id hashes the config, the labels
 and every tools/audio_analysis module the process imported, so an edit to the code that ran is a new run. Seeds

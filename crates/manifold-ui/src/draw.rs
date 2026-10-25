@@ -11,8 +11,7 @@
 //! through `&mut dyn Painter`; `manifold-nodes` implements the trait for
 //! `UIRenderer` (it already depends on `manifold-ui`). So the canvas is now a
 //! pure UI component with no renderer dependency, and the renderer side is one
-//! adapter `impl`. See `docs/CANVAS_API_DESIGN.md` section 0 and Phase 8 of the
-//! overhaul.
+//! adapter `impl`.
 
 use crate::node::Color32;
 use crate::transform2d::Affine2;
@@ -106,8 +105,7 @@ pub trait Painter {
     fn pop_depth(&mut self);
 
     /// Compose a 2D affine (rotate/scale about a pivot) onto the current
-    /// transform for subsequent draws, until [`Painter::pop_transform`]. See
-    /// `docs/UI_TRANSFORM_STACK_DESIGN.md`.
+    /// transform for subsequent draws, until [`Painter::pop_transform`].
     fn push_transform(&mut self, transform: Affine2);
 
     /// Pop the innermost transform.

@@ -24,7 +24,7 @@
 //
 // Output: RGB = signed unit normal in [-1, 1]. Alpha = 1.
 //
-// D6(a) (docs/DEPTH_RELIGHT_DESIGN.md): reads via exact integer textureLoad
+// Reads via exact integer textureLoad
 // + manual ClampToEdge (no sampler) — every offset lands on an exact texel
 // center, so this agrees bit-for-bit with the prior filtering-sampler read.
 //

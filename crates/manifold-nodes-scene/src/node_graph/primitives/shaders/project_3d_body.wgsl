@@ -3,8 +3,7 @@
 // (out.xy = pos.xy * proj_scale) or perspective (s = proj_dist / (proj_dist +
 // z)). Origin-centered output (render_lines applies the aspect + screen-shift).
 // Matches project_3d.wgsl. LEGACY MODE MATH IS UNTOUCHED — bit-identical to
-// before this file grew a camera branch (docs/CAMERA_AND_LENS_DESIGN.md D3,
-// invariant I3).
+// before this file grew a camera branch.
 //
 // ABI (buffer standalone codegen): the input `in` (MeshVertex) is coincident, so
 // the wrapper pre-reads `e_in = buf_in[idx]` and passes it. The codegen
@@ -15,10 +14,9 @@
 // uniform (f32, cast to u32 — exact for these small vertex counts). Slots in
 // [active_count, capacity) collapse to origin. `mode` is the Enum param (u32).
 //
-// Camera branch (D3, optional `camera: Camera` port, port-shadows-param;
-// Amendment 2026-07-12 pins the exact derived-field set below after the
-// original clip-matrix-row proposal was found to break I3's byte-packed
-// parity test — see docs/CAMERA_AND_LENS_DESIGN.md). When `use_camera`
+// Camera branch (optional `camera: Camera` port, port-shadows-param;
+// the exact derived-field set is listed below, chosen so the byte-packed
+// parity test holds). When `use_camera`
 // (derived u32 flag, 1 = wired) is set, every point projects through the
 // camera's own orthonormal basis instead of the legacy mode math:
 //

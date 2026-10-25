@@ -406,8 +406,8 @@ impl SettingsPopup {
             .push((hdr_id, PanelAction::Project(ProjectAction::ToggleHdr)));
         cy += ROW_H + ROW_GAP;
 
-        // Split at markers — one export file per marker inside the export range
-        // (docs/SECTION_EXPORT_DESIGN.md D4). Wired to
+        // Split at markers — one export file per marker inside the export range.
+        // Wired to
         // `ExportConfig.split_at_markers` at export start.
         self.row_label(tree, inner_x, cy, "Split at Markers");
         let split_id = tree.add_button(

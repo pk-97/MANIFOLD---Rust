@@ -23,7 +23,7 @@ pub struct AutomationTimeSelection {
     pub lanes: Vec<AutomationLaneKey>,
 }
 
-/// D1 (`docs/TIMELINE_INTERACTION_P1_SPEC.md`): the single timeline-selection
+/// The single timeline-selection
 /// authority. Exactly one kind is active at any moment — the enum makes the
 /// old "clip-id set AND an `is_active` region flag simultaneously" state
 /// unrepresentable, which is the P0 bug class this replaces. The
@@ -127,8 +127,7 @@ pub struct UIState {
 
     // Transient drag/trim/scrub state is NOT here — it has a single owner,
     // `InteractionOverlay` (the timeline interaction component). UIState holds
-    // only the persistent selection/cursor/zoom the renderer reads. See
-    // `docs/TIMELINE_API_DESIGN.md` section 3.3.
+    // only the persistent selection/cursor/zoom the renderer reads.
 
     // ── Zoom ──
     pub current_zoom_index: usize,
@@ -147,7 +146,7 @@ pub struct UIState {
     /// changing what's selected, so the full ownership chain stays available
     /// and you keep your place. It clears only on a genuine identity change —
     /// see `pinned_scope()`. This is the one piece of inspector state that
-    /// isn't pure selection. See docs/UI_LAYOUT_DESIGN.md.
+    /// isn't pure selection.
     scope_pin: Option<(InspectorTab, SelectionIdentity)>,
 
     /// Automation-mode view toggle (Live's `A`, P4 `docs/AUTOMATION_LANES_DESIGN.md`

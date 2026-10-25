@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Defined in `manifold-foundation` (the shared primitive vocabulary) and
 /// re-exported here at its historical path so the UI can share the identical
-/// type without depending on the engine. See `docs/UI_LAYERING_INVERSION.md`.
+/// type without depending on the engine.
 pub use manifold_foundation::ParamId;
 
 mod automation;

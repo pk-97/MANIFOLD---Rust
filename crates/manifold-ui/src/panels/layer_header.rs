@@ -42,8 +42,7 @@ const LBL_W: f32 = 52.0;
 const ROUTING_ROW_GAP: f32 = 9.0;
 /// P0.5 collapsed-card generator label: a fixed-width dimmed zone carved out
 /// of the Name rect's right edge, so the row's total width never grows — the
-/// generator name ellipsizes inside this budget instead
-/// (`docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5).
+/// generator name ellipsizes inside this budget instead.
 const GEN_LABEL_COLLAPSED_W: f32 = 80.0;
 const ACCENT_W: f32 = color::GROUP_ACCENT_BAR_WIDTH;
 /// Width of the left-edge selection accent bar. The selected layer is marked by
@@ -313,7 +312,7 @@ enum LayerControl {
     Chevron,
     Name,
     DragHandle,
-    /// The generator's type name (P0.5, `docs/TIMELINE_LAYOUT_P0_SPEC.md`):
+    /// The generator's type name:
     /// display-only, never a picker. Expanded, it occupies the same row/height
     /// budget `PathLabel`+`Folder` would use for a video layer — one line
     /// under the name, not an extra row. Collapsed, it's a fixed-width dimmed
@@ -694,7 +693,7 @@ fn compute_layer_row(
 
 /// Audio-layer controls: Mute / Solo are already placed by `compute_layer_row`;
 /// this places Analysis on the same button row, then branches on collapse
-/// state (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D4):
+/// state:
 /// - Collapsed: the same collapsed chrome every other layer type gets — name
 ///   row + M|S|A row + separator, no Gain/Send. Audio's never-collapse
 ///   exception is gone; the mapper's state-only `TrackHeight::Collapsed` now
@@ -717,7 +716,7 @@ fn compute_audio_row(
     use LayerControl as C;
     let card_w = (w - card_x).max(1.0);
     // Analysis-only toggle on the button row after Mute/Solo (M | S | A): silent to
-    // master, still feeding the send. See `docs/LAYER_CONTROLS_DESIGN.md` section 5.3.
+    // master, still feeding the send.
     d.set(C::Analysis, Rect::new(btn_x, y_buttons, MS_BTN_W, BTN_H));
 
     if is_collapsed {
@@ -956,8 +955,7 @@ pub struct LayerHeaderPanel {
 
     // Scroll container used ONLY for the clip-region node (`begin()` /
     // `clip_node_id()`). It does NOT own the scroll offset — the viewport
-    // does (D2, `docs/TIMELINE_LAYOUT_P0_SPEC.md`); `build()`/
-    // `try_update_vertical_scroll()` take the viewport's `scroll_y_px` as a
+    // does; `build()`/`try_update_vertical_scroll()` take the viewport's `scroll_y_px` as a
     // parameter instead of storing a second copy here.
     scroll: ScrollContainer,
 
@@ -1536,7 +1534,7 @@ impl LayerHeaderPanel {
 
     /// Call when a drag begins on a layer header node.
     /// Returns PanelAction if the drag starts on a drag handle. `node_id` is
-    /// `Option` (D9, `docs/DRAG_CAPTURE_DESIGN.md`): a `None` means the
+    /// `Option`: a `None` means the
     /// pressed node died before the drag threshold crossed — the existing
     /// `pending_drag_layer` fallback below already covers exactly this case
     /// (it was built for a rebuild invalidating the id), so `None` just skips
@@ -1589,7 +1587,7 @@ impl LayerHeaderPanel {
     /// Call during an active drag with the current pointer position (screen space).
     /// `mapper` is the same `CoordinateMapper` the viewport draws lanes from — the
     /// drag target must land on the same row the lanes show, so it's queried live
-    /// here rather than read from a copy (see `docs/TIMELINE_LAYOUT_P0_SPEC.md` D1).
+    /// here rather than read from a copy.
     pub fn handle_drag(
         &mut self,
         tree: &mut UITree,
@@ -1942,7 +1940,7 @@ impl LayerHeaderPanel {
                     }
                     handle
                 }
-                // P0.5 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): display-only generator
+                // Display-only generator
                 // name, never a picker. Two mutually-exclusive placements share
                 // this one control (compute_layer_row never sets both in the
                 // same row): collapsed → a dimmed, ellipsized label to the right
@@ -2607,9 +2605,9 @@ impl LayerHeaderPanel {
     ///
     /// `mapper` is the same `CoordinateMapper` the viewport builds lanes
     /// from — Y offsets and heights are queried from it at draw time instead
-    /// of being copied into `LayerInfo`, so headers and lanes cannot disagree
-    /// (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D1). `scroll_y_px` is the viewport's
-    /// scroll position, the sole owner (D2) — the header no longer keeps its
+    /// of being copied into `LayerInfo`, so headers and lanes cannot disagree.
+    /// `scroll_y_px` is the viewport's
+    /// scroll position, the sole owner. The header no longer keeps its
     /// own copy.
     pub fn build(
         &mut self,
@@ -3446,7 +3444,7 @@ pub(super) mod tests {
 
     // ── P0.5 gate: generator label, both states ───────────────────────
     //
-    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5: a display-only generator-name
+    // A display-only generator-name
     // label renders iff `LayerInfo.generator_type.is_some()` — present for a
     // generator layer, absent for a video layer — in both the collapsed and
     // expanded row geometry.
@@ -3527,7 +3525,7 @@ pub(super) mod tests {
 
     // ── P0.2 gate: D4 audio fit ──────────────────────────────────────
     //
-    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D4: collapsed audio drops the
+    // Collapsed audio drops the
     // never-collapse exception and gets the same collapsed chrome as every
     // other layer type; expanded audio fits three rows inside
     // `TrackHeight::Normal` with no per-card height exception.
@@ -3645,7 +3643,7 @@ pub(super) mod tests {
 
     // ── P0.1 gate: header/lane Y agreement ───────────────────────────
     //
-    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D1: the header panel must query the
+    // The header panel must query the
     // same `CoordinateMapper` the viewport's lanes read
     // (`viewport/coordinate.rs` `track_y`) — never a copy. This asserts the
     // header's actual built row rects land at exactly the mapper's

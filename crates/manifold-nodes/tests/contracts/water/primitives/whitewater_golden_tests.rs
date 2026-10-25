@@ -1,5 +1,4 @@
-//! Per-tick whitewater fingerprints on the shipped GPU FLIP Dam Break
-//! (docs/WHITEWATER_STAGE_FUSION_DESIGN.md P0, invariant I1). Every
+//! Per-tick whitewater fingerprints on the shipped GPU FLIP Dam Break. Every
 //! simulation tick's `pool_out`, `state_out`, `counts_out` and four
 //! populations are hashed whole and held to a golden recorded before any
 //! stage change. This module performs a read-only comparison against the

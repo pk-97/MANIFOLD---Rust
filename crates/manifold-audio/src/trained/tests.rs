@@ -1,4 +1,4 @@
-//! Parity of the generic runtime against every golden set (docs/DETECTOR_RUNTIME_DESIGN.md section 6), written
+//! Parity of the generic runtime against every golden set, written
 //! by `tools/audio_analysis/lab/release.py export`. Part parity feeds each part the golden's own inputs; end to
 //! end feeds audio only, in seeded random chunks.
 

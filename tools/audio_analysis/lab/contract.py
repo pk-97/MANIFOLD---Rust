@@ -1,4 +1,4 @@
-"""The model file contract v2 (docs/DETECTOR_RUNTIME_DESIGN.md section 4): entries(record) writes a release record as
+"""The model file contract v2: entries(record) writes a release record as
 container entries, check(entries, parts) refuses exactly what the Rust runtime refuses, each case named. Rust never
 parses `config`; it reads only these entries."""
 from __future__ import annotations

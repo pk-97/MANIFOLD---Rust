@@ -35,8 +35,7 @@ pub struct BandFeatures {
     pub transients: f32,
     /// Kick trigger — 1.0 on the hop a kick fires, decaying after. Low band only
     /// (zero on Full/Mid/High), from the trained kick detector, independent of
-    /// `transients` so binding one never blocks the other. See
-    /// `docs/KICK_REALTIME_DESIGN.md`.
+    /// `transients` so binding one never blocks the other.
     pub kick: f32,
     /// Snare trigger — 1.0 on the hop a snare fires, decaying after. Mid band only, from the
     /// trained snare detector, stamped at the hit's emission.

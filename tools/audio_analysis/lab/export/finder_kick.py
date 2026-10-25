@@ -1,4 +1,4 @@
-"""Model file part `base.*`: the kick finder and its 15 features (docs/DETECTOR_RUNTIME_DESIGN.md section 4).
+"""Model file part `base.*`: the kick finder and its 15 features.
 
 Reference: eval/kick_fusion_bandwise.py over kick_fusion_features.py, kick_attack_rejection.causal_features and
 kick_upper_cue.upper_features. Every value is computed from the reference's own constants and calls.

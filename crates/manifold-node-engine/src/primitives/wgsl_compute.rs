@@ -279,8 +279,7 @@ enum UniformMemberType {
     Bool,
 }
 
-/// A resolved `// @derived_uniform_member:` marker (D7/P0,
-/// `docs/CINEMATIC_POST_DESIGN.md`): the contiguous uniform-field block
+/// A resolved `// @derived_uniform_member:` marker: the contiguous uniform-field block
 /// `[offset, offset + words*4)` a fused member's `derived_uniforms()` occupies,
 /// and how to refresh it every frame. `evaluate()` (a) SKIPS this byte range in
 /// the generic port-shadow pack loop (these fields are never wired/bound — the
@@ -1001,7 +1000,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         default_dispatch_port = first_array_out;
     }
 
-    // D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): resolve each raw
+    // Resolve each raw
     // `// @derived_uniform_member:` marker against the uniform layout's field
     // offsets (now known), then EXCLUDE that member's fields from the generic
     // port-shadow/param set built above — these fields are never wired/bound by
@@ -1582,8 +1581,7 @@ fn extract_bool_uniform_fields(source: &str) -> Vec<String> {
 /// distinct Camera external the region routes). Each names a DECLARED,
 /// non-introspected Camera-typed input port to synthesize: Camera has no WGSL
 /// representation, so unlike every other port kind this one can't be discovered
-/// from a binding — the marker is the only channel (D7/P0,
-/// `docs/CINEMATIC_POST_DESIGN.md`). Order preserved, deduped.
+/// from a binding — the marker is the only channel. Order preserved, deduped.
 fn extract_camera_externals(source: &str) -> Vec<String> {
     let stripped = strip_block_comments(source);
     let mut names = Vec::new();

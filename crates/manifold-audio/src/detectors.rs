@@ -1,6 +1,5 @@
 //! Trained event detectors (kick and snare now; clap, hats later) behind one interface, and the
-//! worker thread that runs one analysed send's detectors off the content thread
-//! (docs/KICK_REALTIME_DESIGN.md section 1b). Offline paths run the same detectors inline.
+//! worker thread that runs one analysed send's detectors off the content thread. Offline paths run the same detectors inline.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -51,7 +50,7 @@ pub trait EventDetector: Send {
     fn max_events(&self, samples: usize) -> usize;
 }
 
-/// The shipped models, one per family, built into the app (docs/DETECTOR_RUNTIME_DESIGN.md section 5.2). Each
+/// The shipped models, one per family, built into the app. Each
 /// file's `family` must equal its slot; `tests/fixtures/detectors/<family>/model.mkick` is the same bytes.
 pub(crate) const EMBEDDED: [(EventKind, &[u8]); 2] = [
     (

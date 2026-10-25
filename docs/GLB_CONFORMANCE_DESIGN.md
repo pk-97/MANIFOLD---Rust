@@ -279,7 +279,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
 - **Entry state:** G-P1 landed (`cargo test ... --test gpu_proofs glb_conformance::` runs);
   re-verify anchors: `rg -n "OBJECT_SLIDER_MAX" crates/manifold-nodes/src/` —
   if the constant moved since 2026-07-15, stop and re-derive.
-- **Read-back:** D4 verbatim; BUG-163 in `docs/BUG_BACKLOG.md`; `gltf_import.rs:338-380`
+- **Read-back:** D4 verbatim; `gltf_import.rs:338-380`
   (triage-and-drop being deleted); `render_scene.rs:97,546`. Restate the seam:
   clamp → 1024 loud-error bound; importer wires all; card curates 16.
 - **Deliverables:** renderer clamp change + import-time error path (>1024 objects →
@@ -429,7 +429,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   unclassified.** 49 of the 92 xfail are `deferred-3` (sheen / iridescence /
   volume / transmission-family / anisotropy-the-extension, per D5's grouping);
   the full-suite sweep surfaced 8 genuinely new gaps not covered by any section 7
-  deferred item, logged as `docs/BUG_BACKLOG.md` BUG-166 through BUG-173
+  deferred item, logged as BUG-166 through BUG-173
   (extensionsRequired veto in the `gltf` crate, unhandled spec-gloss and
   GPU-instancing extensions, a texture-less-material black-render bug, a
   crate-level JSON parse gap, a materialless-primitive-skipped gap, a

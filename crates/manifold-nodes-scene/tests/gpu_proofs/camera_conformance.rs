@@ -1,5 +1,5 @@
-//! `docs/CAMERA_AND_LENS_DESIGN.md` I1 — every GPU projection path agrees
-//! with `Camera::project_to_pixel` within 1.0 px (P1 gate).
+//! Every GPU projection path agrees
+//! with `Camera::project_to_pixel` within 1.0 px.
 //!
 //! Design note on the fixture (a deliberate substitution from the phase
 //! brief's literal "5 known world points, one camera" framing): there is no

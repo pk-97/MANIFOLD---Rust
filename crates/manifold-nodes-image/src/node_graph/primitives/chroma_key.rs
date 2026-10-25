@@ -4,8 +4,7 @@
 //! grayscale value in `[0, 1]` describing how close that pixel is to
 //! a target colour. The canonical "where is this colour" generator.
 //!
-//! Second Phase A primitive (per `docs/PRIMITIVE_LIBRARY_DESIGN.md`
-//! section 10). Pairs with `masked_mix` to make any effect operate selectively
+//! Second Phase A primitive. Pairs with `masked_mix` to make any effect operate selectively
 //! on a chosen colour range — the immediate demo for both primitives
 //! is the "Edge Stretch By Colour" preset, which stretches only the
 //! pixels matching a user-picked target colour.

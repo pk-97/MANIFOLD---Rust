@@ -11,8 +11,6 @@
 //! `ValidateKind::Generator`), so a validator pass is fidelity by
 //! construction: it can never approve a graph the loader rejects,
 //! because it *is* the loader up to the point checked.
-//!
-//! See `docs/GRAPH_TOOLING_DESIGN.md` section 2 D1–D2, section 3 "Committed shapes".
 
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::id::NodeId;

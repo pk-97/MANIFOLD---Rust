@@ -1371,7 +1371,7 @@ pub(crate) fn classify_node(
         .filter(|p| param_wgsl_type(p).is_ok())
         .map(|p| p.name.as_ref())
         .collect();
-    // D7/P0 exemption (`docs/CINEMATIC_POST_DESIGN.md`): a wire into a
+    // Exemption: a wire into a
     // CPU-struct (Camera) port no longer cuts, PROVIDED the atom consumes that
     // struct entirely via `derived_uniforms()` — never as a GPU binding (already
     // true by construction: `is_texture_port` excludes `PortType::Camera`, so a
@@ -1405,7 +1405,7 @@ pub(crate) fn classify_node(
             .map(|i| i.name.as_ref())
             .collect()
     };
-    // D3 exemption (`docs/FUSION_SOTA_DESIGN.md`, closes BUG-114): a wire into
+    // Exemption: a wire into
     // an Array-typed input the atom tags `BufferIndex` no longer cuts — the
     // narrowing cut rule 9, same shape as the Camera exemption above. The
     // array producer still never becomes a region MEMBER (`build_region`
@@ -1678,9 +1678,7 @@ fn classify_buffer_node(
     // frame_count, flatten_to_camera_plane's cam_fwd_x/_y/_z) FUSE: the fused
     // buffer codegen emits each derived uniform as an `n{i}_<name>` Params field
     // + body arg, and `node.wgsl_compute` recomputes its VALUE every frame via
-    // `derived_uniform_registry::recompute` (D7/P0 — the install-time
-    // `system.generator_input` control-wire whitelist this comment used to
-    // describe is deleted; see `docs/CINEMATIC_POST_DESIGN.md` D7). The
+    // `derived_uniform_registry::recompute`. The
     // in-place-loop hazard (fusing a region inside array_feedback's in==out
     // loop) is handled at the install/region level: `region_output_aliases_external`
     // + `external_is_inplace_loop` detect a feedback-loop region and the codegen

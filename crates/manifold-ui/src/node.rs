@@ -326,8 +326,7 @@ impl NodeId {
 /// The input system tracks interaction by `WidgetId` and resolves to the live
 /// `NodeId` only at the moment it emits an event. So it never depends on whether
 /// the tree it serves is dirty-tracked (the timeline) or rebuilt every frame (the
-/// editor) — both satisfy one neutral identity contract. See
-/// `docs/INPUT_IDENTITY_UNIFICATION.md`.
+/// editor) — both satisfy one neutral identity contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WidgetId(u64);
 
@@ -460,7 +459,7 @@ pub struct UIStyle {
     pub text_inset_x: f32,
     /// Optional 2D affine (rotate/scale/skew) applied to this node's own draws
     /// (background, text, dropdown caret) — NOT its subtree (node-local only in
-    /// v1, `docs/UI_TRANSFORM_STACK_DESIGN.md`). Expressed about the local
+    /// v1). Expressed about the local
     /// origin (e.g. `Affine2::rotate(theta)`); the renderer pivots it about the
     /// node's own rect center at draw time, since bounds aren't known until
     /// layout runs. `None` (the default) draws axis-aligned as before.

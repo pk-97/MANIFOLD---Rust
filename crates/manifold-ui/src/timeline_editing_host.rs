@@ -108,8 +108,8 @@ pub trait TimelineEditingHost {
     /// Find a clip by ID. Unity: FindClipById(string).
     fn find_clip_by_id(&self, clip_id: &str) -> Option<ClipRef>;
 
-    /// All clips on a given layer, for whole-clip range selection (D2's
-    /// shift-click-on-clip gesture, `docs/TIMELINE_INTERACTION_P1_SPEC.md`).
+    /// All clips on a given layer, for whole-clip range selection (the
+    /// shift-click-on-clip gesture).
     /// Empty if the layer index is out of range. Order is not guaranteed —
     /// callers that need contiguous-range semantics filter/sort by
     /// `start_beat` themselves.

@@ -180,8 +180,7 @@ impl CoordinateMapper {
     ///
     /// This is THE height rule — the viewport's bitmap sizing, the layer
     /// headers' row heights, and this mapper's Y-layout all flow from here, so
-    /// they cannot disagree. (Previously copied verbatim in three places; see
-    /// `docs/TIMELINE_API_DESIGN.md` section 3.4.)
+    /// they cannot disagree. (Previously copied verbatim in three places.)
     ///
     /// Two structural cases, then one preset (section 24 5d) — the height is chosen by
     /// the layer's display *state*, never by its *type* (type is shown by a badge

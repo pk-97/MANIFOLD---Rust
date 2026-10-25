@@ -126,7 +126,7 @@ manifold_node_engine::primitive! {
     derived_uniforms: ["time_val", "dt_scaled"],
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// Per-frame recompute for a FUSED
 // region's `time_val`/`dt_scaled` fields, IN DECLARATION ORDER (matches
 // `derived_uniforms` above) — `run()`'s own computation below.
 inventory::submit! {

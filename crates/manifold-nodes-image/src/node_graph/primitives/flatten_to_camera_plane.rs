@@ -86,7 +86,7 @@ manifold_node_engine::primitive! {
     derived_uniforms: ["cam_fwd_x", "cam_fwd_y", "cam_fwd_z"],
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// Per-frame recompute for a FUSED
 // region's `cam_fwd_x`/`_y`/`_z` fields, IN DECLARATION ORDER — reads the
 // region's routed Camera external (via install.rs's `camera_ext_N` wiring),
 // matching `run()`'s own `cam.fwd` read below. `None` when unwired (no

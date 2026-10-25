@@ -1239,7 +1239,7 @@ impl EditingService {
     }
 
     /// Move a whole clip selection across layers by a fixed layer-index delta
-    /// (keyboard Up/Down, B14 — `docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6).
+    /// (keyboard Up/Down).
     /// All-or-nothing: if ANY selected clip's destination would fall outside
     /// the layer range or reject its source layer kind, the whole press is a
     /// no-op — mirrors the drag cross-layer

@@ -19,7 +19,7 @@ and the send-fader missed intrinsic reset). This design moves gesture semantics 
 widget — one surface-agnostic contract per widget, translated by each host into its own
 action type — so a gesture added once exists everywhere **by construction**.
 
-Binding constraints (per DESIGN_AUTHORING section 1): hot path — the canvas calls widget
+Binding constraints: hot path — the canvas calls widget
 geometry per frame per visible row, so the contract functions are pure and allocation-free;
 thread — UI thread only, no new state crosses the content boundary; persistence — none;
 performance surface — the graph editor is authoring-not-perform, but gesture muscle
@@ -493,7 +493,7 @@ BUG-070 entry closed in the same landing.
 
 **P2 — as built.** The stepper and the overlay-drag send-fader are the SAME gain
 value with two input methods, already sharing one reset gesture (BUG-070 — stepper
-reset — was fixed separately; `docs/BUG_BACKLOG.md`). `StepperZone`/`StepperIntent`
+reset — was fixed separately). `StepperZone`/`StepperIntent`
 (`crates/manifold-ui/src/stepper.rs`) is the contract; `audio_setup_panel.rs`'s hand
 `UIEvent::RightClick` id match consults it. Open follow-up: `AudioSetupPanel` routes
 none of its gestures through `IntentRegistry` — full derivation is a panel-wide
@@ -651,7 +651,7 @@ the BUG-102 entry's shape); the module doc's stale "label is read-only" paragrap
 (mapping_popover.rs:24–29) rewritten. Commit semantics per D16 (Enter/blur commit —
 blur includes clicking another popover control; Esc cancels). Gate: `-p manifold-ui
 --lib` + clippy; negative: `rg -n 'edit_buffer' crates/manifold-ui/src` → zero (I7
-lands here by name). BUG-102 → FIXED in `docs/BUG_BACKLOG.md` in the same landing.
+lands here by name). BUG-102 → FIXED in the same landing.
 Demo: **L2** — `ui-snap` PNG pair of the popover label mid-edit (caret + partial
 selection visible) and post-commit; affordance check per DESIGN_DOC_STANDARD section 5 (the
 label/section rows must read as editable — hover/edit chrome, not bare text).

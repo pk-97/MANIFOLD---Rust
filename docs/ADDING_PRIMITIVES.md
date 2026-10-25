@@ -1,8 +1,8 @@
 # Adding a primitive
 
-Authoring guide for the `primitive!` macro. Companion to [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) (design rationale + decomposition recipes) and [NODE_CATALOG.md](NODE_CATALOG.md) (the catalog of what's shipping today).
+Authoring guide for the `primitive!` macro. Companion to [NODE_CATALOG.md](NODE_CATALOG.md) (the catalog of what's shipping today).
 
-Primitives auto-register via `inventory::submit!` from inside the macro — add the file and its module declaration in the owning primitive family (image, scene, or water). Water lives under `crates/manifold-water-*/src/primitives/`; engine built-ins stay under `crates/manifold-node-engine/src/primitives/` (the fixed list in RENDERER_CRATE_SPLIT_DESIGN.md D11). No central registry edit is needed; `cargo build` picks it up and the palette + bundled-preset loader see it on next startup.
+Primitives auto-register via `inventory::submit!` from inside the macro — add the file and its module declaration in the owning primitive family (image, scene, or water). Water lives under `crates/manifold-water-*/src/primitives/`; engine built-ins stay under `crates/manifold-node-engine/src/primitives/`. No central registry edit is needed; `cargo build` picks it up and the palette + bundled-preset loader see it on next startup.
 
 ## Audit precondition (mandatory)
 
@@ -147,8 +147,7 @@ name which one when you claim an exemption:
    cannot yet express is *blocked on a tracked codegen gap* — the mandate still
    applies, and the debt lives in the compiler, not the atom. Past case (closed): the
    `draw_*` family (per-pixel bodies that index a marks `Array` — texture-domain
-   codegen had no storage-array read-path). Fixed by `InputAccess::BufferIndex`
-   (FUSION_SOTA_DESIGN.md D3/P4a+P4b, BUG-114 (draw-family-blocked-on-array-into-texture-codege…)) — a texture-domain atom now tags such
+   codegen had no storage-array read-path). Fixed by `InputAccess::BufferIndex`. A texture-domain atom now tags such
    an input `BufferIndex` and the codegen binds it as `buf_<port>: array<Element>`,
    synthesized from the port's `Channels[…]` layout; see `draw_dots.rs`/
    `draw_connections.rs` (the latter proves two BufferIndex-tagged inputs on one atom).
@@ -159,8 +158,7 @@ the rule entirely.
 Machine-check the classification you just declared: `graph_tool fusion <preset.json>`
 prints every node's `fusion_kind`/`boundary_reason` and which region (if any) it
 actually joined, over the real `partition_regions` pass — faster than wiring the
-primitive into a preset and eyeballing the freeze debug output. See
-`docs/GRAPH_TOOLING_DESIGN.md`.
+primitive into a preset and eyeballing the freeze debug output.
 
 ## Install-time pipeline creation (COMPILE_CONTRACT)
 
@@ -420,7 +418,7 @@ Use `crates/manifold-nodes/tests/gpu_proofs/render_legacy_parity.rs` as a refere
 - **Don't skip the parity test when replacing an existing effect.** Strict bit-equality is the gate.
 - **Don't add a primitive for speculative future use.** The `≥2-use` filter is enforced at review time.
 - **Don't ship a fused single-effect / single-generator bundle.** This applies to effect and generator graphs (2D, TouchDesigner-style). Engine internals follow DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes), including its code-modularity rule. If your graph primitive internally orchestrates multiple distinct dispatches that each do a different operation, that's a graph, not a primitive. Build the atoms separately and wire them in JSON. The recurring failure mode in past decomposition passes was reaching for a fused kernel to pass parity quickly; the no-fused-monolith rule prohibits this regardless of parity-test pressure. If parity drift is the concern, spec intermediate texture formats up to `Rgba32Float` to eliminate the rounding gap — the bandwidth cost is negligible on M-series and the bundle-as-primitive cost is structural.
-- **Don't touch the kernel without re-reading the purpose.** `purpose` states the math (`NODE_VOCABULARY_AUDIT.md (deleted)` section 2 (Conventions (pinned))) and lives right next to the shader in the same file, on screen during the edit — there's no excuse for it drifting. Touch the kernel, re-read the purpose.
+- **Don't touch the kernel without re-reading the purpose.** `purpose` states the math and lives right next to the shader in the same file, on screen during the edit — there's no excuse for it drifting. Touch the kernel, re-read the purpose.
 - **Rasterizer with texture inputs → declare `output_canvas_scale` `(1, 1)`.** The plan compiler's default sizes a node's output as *max of its texture input dims* — right for image-processing nodes, wrong for a rasterizer whose texture inputs are scene resources (envmap, base-color/normal maps, LUT-like lookups): without the declaration your render target inherits the largest wired map's dims instead of the canvas. BUG-140 (glb-import-non-square-aspect-distortion) shipped exactly this — imported glb scenes rendered into the envmap's 1024×1024 and were stretched to canvas (aspect distortion + resolution loss). `render_scene` / `render_3d_mesh` / `render_instanced_3d_mesh` are the reference impls (`impl Primitive` override, one method). Explicit declarations beat the max-of-inputs heuristic since 2026-07-12.
 - **Async initialization (background parse, model load, GPU accel build) → override `warmup_pending()`.** The load-time pre-roll renders every layer until no node reports pending; an async primitive without the override first-touches on stage and trips the cold-touch detector. Contract: WARMUP_DESIGN.md D4 (quiescence query). Reference impls: `gltf_mesh_source`, `hdri_source` (the `io_pending` idiom), `render_scene` (rt_accel readiness).
 

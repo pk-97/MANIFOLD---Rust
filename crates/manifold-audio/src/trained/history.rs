@@ -1,4 +1,4 @@
-//! The song-history stage (DETECTOR_LAB_DESIGN.md P6, docs/DETECTOR_RUNTIME_DESIGN.md section 5.3 steps 4-5):
+//! The song-history stage:
 //! each candidate against the song's own recent confident hits over up to four memory windows, re-scored by
 //! the stage forest, then the gate. References: `lab/stage.py` (`inputs`, `gated`) over
 //! `eval/kick_goal_selfsim.py` (`self_features`, `descriptor`).

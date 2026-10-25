@@ -8,11 +8,10 @@ per-fixture ONSET-CONVENTION mismatch between raw ADTOF kick output and the
 
 WHY a per-fixture (not global) constant, and why it exists at all
 ------------------------------------------------------------------
-BUG-235 (docs/BUG_BACKLOG.md) found that ADTOF's raw kick onsets are
+Measurement found that ADTOF's raw kick onsets are
 systematically EARLY relative to these 5 fixtures' hand-labeled truth, by an
 amount that is tight and roughly track-dependent (-20ms .. -125ms), NOT
-scatter/noise. Root cause (confirmed, not a scorer bug — see BUG-235's own
-diagnostic): the two onset conventions disagree by construction.
+scatter/noise. Root cause (confirmed, not a scorer bug): the two onset conventions disagree by construction.
 `tests/fixtures/audio_labels/README.md` defines truth as "onset = walk-back
 to 25% of the sub-envelope peak" — a late, energy-anchored convention.
 ADTOF's own model+peak-picker convention sits earlier (closer to the
@@ -139,8 +138,8 @@ def write_calibration_file(rows: List[Dict[str, Any]], out_path: Path = DEFAULT_
             "energy-anchored convention than ADTOF's own, earlier, "
             "transient-anchored one). Applied ONLY at the scoring seam "
             "(eval/calibration.py:apply_calibration) -- never inside the "
-            "detector (manifold_audio.adtof_detection is untouched). See "
-            "docs/BUG_BACKLOG.md BUG-235 and docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md D14."
+            "detector (manifold_audio.adtof_detection is untouched). "
+            "tests/fixtures/audio_labels/README.md defines the truth convention."
         ),
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "method": (

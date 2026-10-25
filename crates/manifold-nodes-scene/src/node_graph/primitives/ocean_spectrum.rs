@@ -1,6 +1,6 @@
 //! `node.ocean_spectrum` — a wind-driven ocean spectrum at time t, as the six
 //! half spectra `node.inverse_fft_2d` turns into height, sideways displacement
-//! and its derivatives (docs/OCEAN_SURFACE_DESIGN.md section 3.1).
+//! and its derivatives.
 //! Tessendorf 2001 with a JONSWAP spectrum and Donelan-Banner spreading
 //! (Horvath 2015).
 
@@ -320,7 +320,7 @@ mod tests {
         }
     }
 
-    /// Invariant 2 (docs/OCEAN_SURFACE_DESIGN.md section 4): by Parseval the
+    /// By Parseval the
     /// field's variance is Σ|h(k)|², which must average to Σ S_k Δk². A
     /// 1 km tile spreads the peak over hundreds of modes, so 64 seeds pin the
     /// mean to about 1%.

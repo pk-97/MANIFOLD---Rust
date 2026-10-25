@@ -1,8 +1,7 @@
 //! CPU per second of audio for every golden detector set, on each set's first clip, in the production pairing
 //! (a model that reads kick verdicts runs fed by the kick set's model through `KickFed`).
 //!
-//! A measurement, not a gate: timing is not checked on shared machines (docs/DETECTOR_RUNTIME_DESIGN.md
-//! section 7, invariants and enforcement). Run it in release and record the numbers by hand:
+//! A measurement, not a gate: timing is not checked on shared machines. Run it in release and record the numbers by hand:
 //!
 //! ```text
 //! cargo run --release -p manifold-audio --example detector_cost

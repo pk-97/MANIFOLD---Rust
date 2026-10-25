@@ -43,7 +43,7 @@
 //!
 //! Each analyzed send also runs the trained kick and snare detectors inline on the same samples,
 //! just before its analyzer, so a fire lands on the hop that contains it (the live path
-//! runs it on a worker thread; docs/KICK_REALTIME_DESIGN.md section 1b).
+//! runs it on a worker thread).
 
 use manifold_audio::analysis::StreamingSendAnalyzer;
 use manifold_audio::detectors::{DetectorEvent, EventDetector, send_detectors};

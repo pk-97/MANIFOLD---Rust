@@ -1,4 +1,4 @@
-"""Model file part `flat.*`: the noisiness frame channel (docs/DETECTOR_RUNTIME_DESIGN.md section 4).
+"""Model file part `flat.*`: the noisiness frame channel.
 
 Reference: eval/detector_channels.py flatness, per net band (kick_goal_nn.CENTRES, +-HALF_BW) over the last N_FFT
 samples on the net's 2 ms grid, in dB clipped to [-20, 0].

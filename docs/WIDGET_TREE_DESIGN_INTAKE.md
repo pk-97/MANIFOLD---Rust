@@ -4,24 +4,21 @@
 
 ## Mission
 
-Design the queryable widget/param layer at the UI↔engine boundary — the structural fix that deletes the hand-written transcription code in the god files (`param_card.rs`, `inspector.rs`, `state_sync.rs`, `scene_setup_panel.rs`). This is the load-bearing piece of `docs/SYSTEM_UPGRADE_2026_07_PLAN.md` (section Ongoing, non-delegable). It is explicitly NOT laneable: a lane briefed with it recreates the scene panel at 10× scale. You design it yourself, whole.
+Design the queryable widget/param layer at the UI↔engine boundary — the structural fix that deletes the hand-written transcription code in the god files (`param_card.rs`, `inspector.rs`, `state_sync.rs`, `scene_setup_panel.rs`). This is a load-bearing, non-delegable piece. It is explicitly NOT laneable: a lane briefed with it recreates the scene panel at 10× scale. You design it yourself, whole.
 
 ## Ground rules for the design session
 
-- Method: `docs/DESIGN_AUTHORING.md` first, whole; deliverable conforms to `docs/DESIGN_DOC_STANDARD.md`.
+- Method: the deliverable conforms to `docs/DESIGN_DOC_STANDARD.md`.
 - Design only — no implementation, no lanes, until Peter approves the doc. Decomposition of the god files FOLLOWS this design; splitting before killing the duplication spreads the mess.
-- The testing doctrine (plan doc section Testing doctrine) is a hard constraint: the layer must make state-level testing (hit-test geometry as math, click→command dispatch, display-value resolution) the natural default. Pixels are for looking, not asserting.
+- The testing doctrine is a hard constraint: the layer must make state-level testing (hit-test geometry as math, click→command dispatch, display-value resolution) the natural default. Pixels are for looking, not asserting.
 - An Opus review agent is available at a genuine design fork, a Fable consult only if it is very complex (`docs/AGENT_ROUTING.md` section Reviews and the consult seat).
 
 ## Must-reads, in order
 
-1. `docs/SYSTEM_UPGRADE_2026_07_PLAN.md` — diagnosis + doctrine (short).
-2. `docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` — the autopsy of the failure class this layer kills.
-3. `docs/INSPECTOR_DRAG_TAB_FINDINGS.md` — BUG-265/266/267; the three-geometry-sources disease (BUG-265 (inspector-card-drag-indicator-stale-geometry) root fix may land via Wave 2 before you finish — check `git log` / backlog).
-4. `docs/UI_HARNESS_UNIFICATION_DESIGN.md` — the groundwork this rides on (read the Reframe block first, per its own header).
-5. Exemplar state-level tests in-tree: `ui_bridge/inspector.rs` (`undo_baseline`, `mapping_undo_baseline`, `bug_266_tab_pin` — the last landed 2026-07-20).
-6. `docs/UI_ARCHITECTURE_OVERHAUL.md` + `UI_ARCHITECTURE_AUDIT.md (deleted)` — prior architecture read (audit is archived, still the best crate map).
-7. Recent structural state: BUG-267 (inspector-duplicated-card-lists)'s unification landed 2026-07-20 (one card storage keyed by scope in `inspector.rs`); build on it, don't re-derive.
+1. `docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` — the autopsy of the failure class this layer kills.
+2. Exemplar state-level tests in-tree: `ui_bridge/inspector.rs` (`undo_baseline`, `mapping_undo_baseline`, `bug_266_tab_pin` — the last landed 2026-07-20).
+3. `docs/UI_ARCHITECTURE_OVERHAUL.md` + `UI_ARCHITECTURE_AUDIT.md (deleted)` — prior architecture read (audit is archived, still the best crate map).
+4. Recent structural state: BUG-267 (inspector-duplicated-card-lists)'s unification landed 2026-07-20 (one card storage keyed by scope in `inspector.rs`); build on it, don't re-derive.
 
 ## Coordination
 

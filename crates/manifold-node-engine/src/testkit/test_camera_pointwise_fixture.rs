@@ -1,4 +1,4 @@
-//! TEST-ONLY FIXTURE (D7/P0 I6 proof, `docs/CINEMATIC_POST_DESIGN.md`).
+//! TEST-ONLY FIXTURE.
 //!
 //! P0's fusion layer needs to prove its per-member camera-derived-uniform
 //! recompute mechanism works for a camera-derived POINTWISE **TEXTURE** atom —
@@ -99,7 +99,7 @@ const DERIVED_UNIFORMS: &[&str] = &["cam_x"];
 
 impl PrimitiveSpec for TestCameraPointwise {
     const TYPE_ID: &'static str = "test.camera_pointwise";
-    const PURPOSE: &'static str = "TEST FIXTURE ONLY (D7/P0 I6, docs/CINEMATIC_POST_DESIGN.md) — adds the wired Camera's pos.x to every texel's red channel, scaled by gain. Proves the freeze compiler's fusion-layer camera-derived-uniform recompute mechanism for a camera-derived Pointwise TEXTURE atom, standing in for P1's not-yet-built coc_from_depth.";
+    const PURPOSE: &'static str = "TEST FIXTURE ONLY — adds the wired Camera's pos.x to every texel's red channel, scaled by gain. Proves the freeze compiler's fusion-layer camera-derived-uniform recompute mechanism for a camera-derived Pointwise TEXTURE atom, standing in for P1's not-yet-built coc_from_depth.";
     const INPUTS: &'static [NodeInput] = INPUTS;
     const OUTPUTS: &'static [NodeOutput] = OUTPUTS;
     const PARAMS: &'static [ParamDef] = PARAMS;

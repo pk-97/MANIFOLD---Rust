@@ -368,7 +368,7 @@ pub struct RegionNode<'a> {
     /// run() and packs them; a fused region (buffer OR texture) emits them as
     /// `n{i}_<name>` Params fields + body args (see [`Self::type_id`] /
     /// [`Self::derived_camera_ext`] for how `node.wgsl_compute` recomputes their
-    /// VALUES every frame — D7/P0, `docs/CINEMATIC_POST_DESIGN.md`). Empty for
+    /// VALUES every frame). Empty for
     /// atoms with no frame-derived uniforms.
     pub derived_uniforms: &'a [&'a str],
     /// This member's own `type_id` (e.g. `"node.euler_step_particles"`) — the

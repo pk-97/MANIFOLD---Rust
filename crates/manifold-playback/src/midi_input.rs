@@ -5,7 +5,7 @@
 //! and a native CoreMIDI plugin (MidiClock.bundle) when CLK is the clock authority and
 //! the plugin supports note events. In Rust, `midir` replaces both. It is the native
 //! CoreMIDI backend on macOS (ALSA on Linux, WinMM on Windows). One unified input path
-//! with equivalent accuracy. See docs/KNOWN_DIVERGENCES.md.
+//! with equivalent accuracy.
 //!
 //! MidiNoteEventType and MidiNoteEvent are defined here, translated from
 //! MidiClock.cs (MidiClock.MidiNoteEventType / MidiClock.MidiNoteEvent).

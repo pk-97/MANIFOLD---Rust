@@ -1,5 +1,4 @@
-//! Gated round templates (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 3.2
-//! (The template on every path)): one round of gated dispatches, recorded
+//! Gated round templates: one round of gated dispatches, recorded
 //! once into an indirect command buffer that holds it `chunk` times back to
 //! back, and run by chunked executes whose lengths the GPU writes. The store
 //! is the caller's, apart from frame replay, so every encoder path (a

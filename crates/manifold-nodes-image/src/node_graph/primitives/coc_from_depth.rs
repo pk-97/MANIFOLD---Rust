@@ -1,5 +1,5 @@
 //! `node.coc_from_depth` — physically-based circle-of-confusion from scene
-//! depth + a Camera (`docs/CINEMATIC_POST_DESIGN.md` D1). The CoC-computation
+//! depth + a Camera. The CoC-computation
 //! half of DoF v1; pair with `node.variable_blur` (H then V, ping-ponged) for
 //! the gather — this atom does ONLY the per-pixel CoC math, no blur (the
 //! no-fused-monolith rule: CoC and gather are two dispatches, not one).
@@ -18,7 +18,7 @@
 //! out.r   = coc_radius_px / max_radius   (RADIUS MAGNITUDE —
 //!           node.variable_blur's and node.bokeh_gather's `width.r` read this unchanged)
 //! out.g   = signed < 0 ? 1.0 : 0.0   (sign flag: 1.0 = nearer than focus,
-//!           0.0 = far-or-in-focus; docs/BOKEH_LAYERED_DOF_DESIGN.md D1)
+//!           0.0 = far-or-in-focus)
 //! out.b   = out.r
 //! out.a   = 1.0
 //! ```
@@ -41,8 +41,7 @@
 //!
 //! `camera` reads `fov_y`/`near`/`far` (projection facts) and
 //! `lens.focus_distance`/`lens.f_stop` (the Camera's lens block, the ONE
-//! lens `node.camera_lens` writes and every consumer reads —
-//! `docs/CAMERA_AND_LENS_DESIGN.md` D4) — consumed ENTIRELY via the five
+//! lens `node.camera_lens` writes and every consumer reads) — consumed ENTIRELY via the five
 //! `derived_uniforms` below, never as a GPU binding, which is what lets this
 //! Pointwise atom fuse with a neighbour instead of being a permanent
 //! boundary (P0/D7).
@@ -82,7 +81,7 @@ struct CocFromDepthUniforms {
 manifold_node_engine::primitive! {
     name: CocFromDepth,
     type_id: "node.coc_from_depth",
-    purpose: "Physically-based circle-of-confusion radius from scene depth + a Camera (thin-lens model, docs/CINEMATIC_POST_DESIGN.md D1, signed CoC in docs/BOKEH_LAYERED_DOF_DESIGN.md D1): f_mm = 24mm / (2*tan(fov_y/2)); aperture_radius_mm = f_mm/(2*f_stop); D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_radius_mm = aperture_radius_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_radius_px = clamp(|coc_radius_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_radius_px / max_radius (the [0,1] radius magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the radius zero everywhere. `world_to_mm` (default 1000.0 = the old 1-unit-per-meter constant) calibrates the mm-per-world-unit reading for the scene at hand (BUG-bdwd): the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
+    purpose: "Physically-based circle-of-confusion radius from scene depth + a Camera (thin-lens model, signed CoC): f_mm = 24mm / (2*tan(fov_y/2)); aperture_radius_mm = f_mm/(2*f_stop); D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_radius_mm = aperture_radius_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_radius_px = clamp(|coc_radius_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_radius_px / max_radius (the [0,1] radius magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the radius zero everywhere. `world_to_mm` (default 1000.0 = the old 1-unit-per-meter constant) calibrates the mm-per-world-unit reading for the scene at hand (BUG-bdwd): the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -153,7 +152,7 @@ fn derive_lens_scalars(cam: &Camera) -> [f32; 5] {
     [fov_y, cam.near, cam.far, cam.lens.focus_distance, cam.lens.f_stop]
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// Per-frame recompute for a FUSED
 // region's fov_y/near/far/focus_distance/f_stop fields, IN DECLARATION
 // ORDER — reads the region's routed Camera external, matching `run()`'s own
 // `derive_lens_scalars` call below exactly. `None` when unwired (install.rs
@@ -246,7 +245,7 @@ mod tests {
     }
 }
 
-/// **I3** (`docs/CINEMATIC_POST_DESIGN.md`): CoC math agrees with 5
+/// **I3**: CoC math agrees with 5
 /// hand-computed values — CPU-only, no GPU device. Distinct from I1 (which
 /// proves the GPU kernel matches this same formula); this test proves the
 /// FORMULA itself matches D1's committed math, worked by hand.
@@ -461,7 +460,7 @@ mod gpu_tests {
     //! reproduce `coc_from_depth.wgsl` (the hand oracle) texel-for-texel on a
     //! synthetic non-uniform depth ramp.
     //!
-    //! **I2**: pinhole invariant (`docs/CINEMATIC_POST_DESIGN.md`) —
+    //! **I2**: pinhole invariant —
     //! `f_stop = INFINITY` must produce an all-zero CoC buffer (I2a), and the
     //! whole DoF chain (coc_from_depth -> variable_blur H -> variable_blur V)
     //! must be a bit-clean pass-through when chained on top of that all-zero

@@ -517,8 +517,7 @@ fn drag_toward_zero_clamps_every_frame_not_just_at_release() {
 }
 
 // ── P1.5 drag ergonomics tests ────────────────────────────────────
-// `docs/TIMELINE_INTERACTION_P1_SPEC.md` B11 (edge autoscroll),
-// B12 (clip-edge/marker snap targets + Cmd-bypass).
+// Edge autoscroll, and clip-edge/marker snap targets with Cmd-bypass.
 
 /// B11: a pointer parked at the viewport's right edge must keep
 /// advancing the (single) horizontal scroll offset frame over frame

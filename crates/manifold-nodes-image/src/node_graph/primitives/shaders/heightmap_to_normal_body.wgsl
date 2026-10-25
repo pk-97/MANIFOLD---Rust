@@ -1,7 +1,7 @@
 // node.heightmap_to_normal — fusable body (freeze section 12), GATHER_TEXEL. Central-difference
 // height (input.r) → unit normal. Reads the 4 axis neighbours via an EXACT
 // integer textureLoad (one texel index step, clamped to the texture bounds —
-// manual ClampToEdge). D6(a) (docs/DEPTH_RELIGHT_DESIGN.md): converted from a
+// manual ClampToEdge). Converted from a
 // filtering-sampler Gather read so `in` can carry `precision_critical` — every
 // offset here lands on an exact texel center (uv = (id+0.5)/dims, offset by
 // exactly ±1 texel), so textureLoad+clamp agrees with the old

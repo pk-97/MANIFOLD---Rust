@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The lab's song list (docs/DETECTOR_LAB_DESIGN.md D2): every song a family labels, the audio file the legacy
+"""The lab's song list: every song a family labels, the audio file the legacy
 loader reads for it, that file's sha256, its export offset and the offset's proof. Built from the family labels files
 under the pinned recipe (lab/recipe.py), so which songs exist never depends on the caller's environment. songs.json
 is rebuilt, never hand-edited, except audit_override, which only Peter sets and a rebuild keeps.

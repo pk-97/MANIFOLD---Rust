@@ -1,6 +1,6 @@
 // node.ocean_displace — fusable BUFFER body. Moves each vertex by three ocean
 // cascades sampled at its rest position (uv, metres) and paints foam where
-// the summed surface folds (docs/OCEAN_SURFACE_DESIGN.md D5, D6, D9).
+// the summed surface folds.
 //
 // ABI (buffer standalone codegen): `mesh` is coincident (e_mesh); field_0..2
 // are BUFFER GATHER inputs bound as globals buf_field_0..2: array<f32>, each

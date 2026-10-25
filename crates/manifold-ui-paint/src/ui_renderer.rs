@@ -485,7 +485,7 @@ pub struct UIRenderer {
     // anything — commands on either side of the boundary already carry the
     // right depth.
     depth_stack: Vec<Depth>,
-    // Transform stack for scale/rotate draws (`docs/UI_TRANSFORM_STACK_DESIGN.md`).
+    // Transform stack for scale/rotate draws.
     // Empty = identity. Entries are pre-composed at push time (like
     // `immediate_clip_stack`), so the top IS the effective transform. Each
     // draw command captures `current_transform()` at enqueue time, so
@@ -1235,7 +1235,7 @@ impl UIRenderer {
         // Node-local affine (pivot = this node's own rect center — bounds
         // aren't known until layout runs, so `UIStyle::transform` is expressed
         // about the local origin and pivoted here; no subtree inheritance in
-        // v1, `docs/UI_TRANSFORM_STACK_DESIGN.md`). Pushed once around ALL of
+        // v1). Pushed once around ALL of
         // this node's draws below — background, text, dropdown caret — and
         // popped at the end of the function.
         let has_transform = if let Some(t) = style.transform {
@@ -1662,8 +1662,8 @@ impl UIRenderer {
 
             let (x0, y0) = (cmd.x, cmd.y);
             let (x1, y1) = (cmd.x + cmd.w, cmd.y + cmd.h);
-            // Multiply each corner POSITION by the command's captured affine
-            // (`docs/UI_TRANSFORM_STACK_DESIGN.md`). `uv`/`rect_params` are
+            // Multiply each corner POSITION by the command's captured affine.
+            // `uv`/`rect_params` are
             // untouched — the fragment shader's rounded-rect SDF, border ring,
             // and gradient all run in local uv-space, so they
             // rotate/scale correctly with zero shader changes.

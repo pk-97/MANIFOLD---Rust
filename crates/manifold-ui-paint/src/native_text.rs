@@ -1421,7 +1421,7 @@ impl NativeTextRenderer {
                     }
 
                     // Multiply each glyph quad corner POSITION by the command's
-                    // captured affine (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — `uv`
+                    // captured affine — `uv`
                     // is untouched, so the atlas sampling is unaffected; only the
                     // screen placement rotates/scales.
                     let (p0x, p0y) = cmd.transform.apply((qx0, qy0));

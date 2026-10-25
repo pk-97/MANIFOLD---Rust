@@ -2240,7 +2240,7 @@ pub(crate) fn build_param_row(
     // salt — so arming a modulator on an earlier row (which inserts drawer nodes
     // and shifts every later sibling) can't renumber this row's controls. The
     // editor card (Author context) passes `Some(param_index << 8)`; the perform
-    // inspector passes `None` and is unchanged. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
+    // inspector passes `None` and is unchanged.
     row_key_base: Option<u64>,
     // The drawer's reveal height. `Some` builds the drawer at full size under
     // a clip of that height and reserves exactly that height; the param cards

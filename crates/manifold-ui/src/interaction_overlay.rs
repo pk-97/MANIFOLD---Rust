@@ -97,7 +97,7 @@ fn select_region_to(
 }
 
 // ── Shift+Click clip-range selection (D2) ──────────────────────────
-// `docs/TIMELINE_INTERACTION_P1_SPEC.md` D2: shift-click on a CLIP is a
+// Shift-click on a CLIP is a
 // contiguous whole-clip range selection, NOT a time-range region — the
 // `select_region_to` call this arm used to make (same as the empty-lane
 // shift path above) was S1/S3's root. This is the live-gesture twin of
@@ -4462,7 +4462,7 @@ impl InteractionOverlay {
 }
 
 // ── B4 regression tests ─────────────────────────────────────────────
-// `docs/TIMELINE_INTERACTION_P1_SPEC.md` D2 table, last row: a press on an
+// A press on an
 // already-selected clip must not collapse the selection until release
 // without a drag; a drag begun on ANY selected member grabs the whole
 // group. Reading `on_pointer_click`'s bare-click arm and
@@ -4485,9 +4485,8 @@ const TEST_SECONDS_PER_BEAT: f64 = 0.5;
 mod b4_group_move_tests;
 
 // ── P1.4 gesture integrity tests ─────────────────────────────────────
-// `docs/TIMELINE_INTERACTION_P1_SPEC.md` D5 (preview == committed result,
-// per-frame snap+clamp, Escape restores the pre-gesture snapshot) and D8
-// (4px drag threshold).
+// Preview == committed result, per-frame snap+clamp, Escape restores the
+// pre-gesture snapshot, and a 4px drag threshold.
 #[cfg(test)]
 mod p1_4_gesture_integrity_tests;
 

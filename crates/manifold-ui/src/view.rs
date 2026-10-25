@@ -4,8 +4,7 @@
 //! (`Layer`, `ParamSlot`, `TimelineMarker`), the UI consumes a narrow *view* of
 //! it — only the fields it renders. `manifold-app` builds these from the engine
 //! model when it pushes render data (`rebuild_mapper_layout`, `sync_values`,
-//! `set_markers`, the `TimelineEditingHost::layers()` cache). See
-//! `docs/UI_LAYERING_INVERSION.md`.
+//! `set_markers`, the `TimelineEditingHost::layers()` cache).
 
 use crate::types::{LayerType, MarkerColor};
 use manifold_foundation::{Beats, EffectId, LayerId, MarkerId, ParamId};
@@ -257,8 +256,8 @@ pub struct UiAutomationPoint {
 }
 
 /// UI-local mirror of `manifold_core::GraphTarget` — kept local because
-/// `manifold-ui` depends only on `manifold-foundation`, not `manifold-core`
-/// (see this file's header comment / `docs/UI_LAYERING_INVERSION.md`), so the
+/// `manifold-ui` depends only on `manifold-foundation`, not `manifold-core`,
+/// so the
 /// real `GraphTarget` isn't reachable here. Carries the addressing an
 /// automation edit needs to build `AddAutomationPointCommand` /
 /// `MoveAutomationPointCommand` / `RemoveAutomationPointCommand` on the

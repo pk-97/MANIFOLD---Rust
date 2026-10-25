@@ -13,7 +13,7 @@
 //! common rate) and pushes the mix into the send's single analyzer. So a send
 //! can be fed by the capture device, by audio layers, or by **both at once** —
 //! one analysis drives features, the spectrogram scope, and the per-band meters
-//! ("what you hear is what modulates"). See `docs/AUDIO_LAYER_DESIGN.md` section 3R.
+//! ("what you hear is what modulates").
 //!
 //! Lifecycle is **gated and self-healing**: the capture worker runs only while
 //! the project has at least one capture-fed send and either an active audio
@@ -45,8 +45,7 @@ use manifold_core::{AudioSend, LayerId, Seconds, SendFeatures};
 use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::engine::PlaybackEngine;
 
-/// Longest an update waits for the detector workers, across all sends (docs/KICK_REALTIME_DESIGN.md
-/// section 1b). A worker that misses it delivers its fires one update late.
+/// Longest an update waits for the detector workers, across all sends). A worker that misses it delivers its fires one update late.
 const DETECTOR_WAIT: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// The capture-relevant fingerprint of an [`AudioSetup`]. Changes here force a
@@ -300,7 +299,7 @@ pub struct AudioModRuntime {
     /// Detector events collected for one send.
     detector_events: Vec<DetectorEvent>,
     /// Cached at construction from `MANIFOLD_AUDIO_TRACE` — the P1 gate
-    /// instrument (`docs/AUDIO_SENDS_UX_DESIGN.md` section 4 Phase 1). Checked once,
+    /// instrument. Checked once,
     /// not per tick, so the trace stays zero-cost when unset.
     trace: bool,
 }

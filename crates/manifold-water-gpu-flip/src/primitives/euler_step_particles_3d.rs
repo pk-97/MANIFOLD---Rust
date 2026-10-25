@@ -75,7 +75,7 @@ manifold_node_engine::primitive! {
     derived_uniforms: ["dt_scaled"],
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// Per-frame recompute for a FUSED
 // region's `dt_scaled` field. Matches `run()`'s own computation below exactly.
 inventory::submit! {
     manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {

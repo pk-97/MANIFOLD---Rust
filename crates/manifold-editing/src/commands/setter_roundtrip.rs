@@ -2,7 +2,7 @@
 //!
 //! Compared on the serialized project, which is exactly what a save persists.
 //! Each step is also held to the command's declared parts by the change audit
-//! fingerprint (docs/UI_INVALIDATION_DESIGN.md D10), so every case doubles as
+//! fingerprint, so every case doubles as
 //! a `Command::touches` check.
 //! Shared by this crate's unit tests and `tests/command_roundtrips.rs` (pulled
 //! in with `#[path]`), so `Command` is named through the includer's `super`.

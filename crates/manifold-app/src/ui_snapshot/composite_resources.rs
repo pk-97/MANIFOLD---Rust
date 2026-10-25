@@ -2,7 +2,7 @@
 //! needs (offscreen target + atlas/blit pipelines) — the live app builds
 //! these once at GPU init (`Application::resumed`, app.rs:1840-1922).
 //!
-//! P2 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`, D3): every headless caller of
+//! Every headless caller of
 //! the seam needs the identical resources. Extracted here (was a private
 //! `CompositeResources` duplicated inside `mod.rs`'s `#[cfg(test)]`
 //! `cache_path_full_render` module) so `render.rs`'s `render_ui_to_png` —

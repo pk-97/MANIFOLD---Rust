@@ -78,7 +78,7 @@ manifold_node_engine::primitive! {
     derived_uniforms: ["dt_scaled"],
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): registers this atom's per-frame
+// Registers this atom's per-frame
 // recompute for the `dt_scaled` derived uniform, so a FUSED region containing
 // this atom can refresh the field every frame (`node.wgsl_compute::evaluate`)
 // instead of the deleted install-time `system.generator_input` control wire.

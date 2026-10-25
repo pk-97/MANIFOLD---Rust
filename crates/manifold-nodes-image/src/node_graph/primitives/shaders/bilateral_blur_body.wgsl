@@ -1,5 +1,5 @@
 // node.bilateral_blur — fusable body, MultiInputCoincident: Gather (stencil
-// fetch) on `in`, GatherTexel on `depth` (docs/CINEMATIC_POST_DESIGN.md D8).
+// fetch) on `in`, GatherTexel on `depth`.
 // Single-axis depth-guided blur; pair an H pass with a V pass.
 //
 // Fixed 9 taps at 1-texel spacing along `axis`. weight_j = K9_j *

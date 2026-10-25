@@ -54,7 +54,7 @@ What the cpal backend exposes for the device picker: `list_devices()` (name + de
 
 ### 3.2 Analysis — split across the downmix worker and the content thread
 
-Analysis splits at the mono handoff (`docs/AUDIO_SENDS_UX_DESIGN.md` D4):
+Analysis splits at the mono handoff:
 
 ```text
 capture ring (f32, interleaved) ─drain→ AudioFeatureWorker ─mono→ content thread
@@ -141,7 +141,7 @@ Fix: persist the **UID**, keep the name as display + fallback match. On load, re
 
 ## 7. The audio-settings UX
 
-The Audio Setup panel ([crates/manifold-ui/src/panels/audio_setup_panel.rs](../crates/manifold-ui/src/panels/audio_setup_panel.rs)) is a **non-dimming overlay anchored to the viewport's right edge** (~38% width, full height, `Modality::Modeless`, outside clicks pass through) — shipped 2026-07-06 by `AUDIO_SENDS_UX_DESIGN.md` D6/P3, superseding this section's original "stays modal" call. That call predated the trigger matrix and calibration drags growing in here: gain, floor, sensitivity, and crossovers are tuned against live output, which a show-dimming modal made impossible. The dropdown machinery is in [crates/manifold-app/src/ui_root/mod.rs](../crates/manifold-app/src/ui_root/mod.rs#L1236-L1268). **Superseded again (approved, not yet built): `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` (2026-07-09) moves the panel off the overlay driver entirely into a `ScreenLayout` workspace column — the overlay still occludes the inspector, which is the next thing this UX needs to stop doing (coherence audit F12, 2026-07-10).**
+The Audio Setup panel ([crates/manifold-ui/src/panels/audio_setup_panel.rs](../crates/manifold-ui/src/panels/audio_setup_panel.rs)) is a **non-dimming overlay anchored to the viewport's right edge** (~38% width, full height, `Modality::Modeless`, outside clicks pass through) — shipped 2026-07-06, superseding this section's original "stays modal" call. That call predated the trigger matrix and calibration drags growing in here: gain, floor, sensitivity, and crossovers are tuned against live output, which a show-dimming modal made impossible. The dropdown machinery is in [crates/manifold-app/src/ui_root/mod.rs](../crates/manifold-app/src/ui_root/mod.rs#L1236-L1268). **Superseded again (approved, not yet built): the panel moves off the overlay driver entirely into a `ScreenLayout` workspace column — the overlay still occludes the inspector, which is the next thing this UX needs to stop doing (coherence audit F12, 2026-07-10).**
 
 The organizing idea: **a send is the vocabulary the rest of the instrument speaks in.** Anything that makes a send legible pays off everywhere it's referenced (notably the modulation drawer).
 
@@ -169,7 +169,7 @@ Discipline to keep it there:
 
 - Never move analysis back to the worker thread to "save" content-thread time — that's the mix-before-analyze property gone, not a perf win (section 3.2, D4 rationale).
 - Never widen the gate to "analyze if any mod exists anywhere" — it must be keyed per-send (`analysis_consumed_sends`), or one bound param anywhere in the project pays for all 16 sends again, which is the exact regression D4 fixes.
-- `MAX_SENDS = 16` (`analysis.rs`) stands; the gate is the scaling answer, not a bigger cap (`AUDIO_SENDS_UX_DESIGN.md` section 5 (Decided — do not reopen)).
+- `MAX_SENDS = 16` (`analysis.rs`) stands; the gate is the scaling answer, not a bigger cap.
 - Don't run the downmix worker with zero sends / no device — it currently idle-wakes ~500×/sec regardless ([analysis.rs run loop](../crates/manifold-audio/src/analysis.rs)). Gate its existence on "device open AND ≥1 send" (capture-level gate, separate from and upstream of the per-send analysis gate).
 - Cap channel count sanely: the capture ring is `2s × SR × channels`; a 64-ch aggregate at 96kHz is ~49MB. One-time alloc, but an exotic device shouldn't surprise us.
 

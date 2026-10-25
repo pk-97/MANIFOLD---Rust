@@ -53,7 +53,7 @@ unsafe impl Send for LiveRecordingSession {}
 ///
 /// `AudioConsumer` is neither `Clone` nor `Debug` and `LiveRecordingConfig`
 /// crosses `ContentCommand`, so the feed cannot live in the config — it is a
-/// constructor-time choice instead (see docs/LIVE_RECORDING_PROOFS_DESIGN.md D2).
+/// constructor-time choice instead.
 pub enum AudioFeed {
     /// Open a capture device by name (the production path — today's
     /// `config.audio_device`).

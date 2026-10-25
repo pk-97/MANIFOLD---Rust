@@ -1,7 +1,5 @@
 //! Substep repeat regions — the plan compiler's side of a bounded simulation
-//! loop inside one frame. Contract: `docs/GPU_MPM_SOLVER_DESIGN.md` D7 (the
-//! historical seam of `docs/WATER_SIMULATION_DESIGN.md` section 4 (Fixed
-//! substeps and graph compiler seam), re-implemented on current main).
+//! loop inside one frame. Contract: `docs/GPU_MPM_SOLVER_DESIGN.md` D7.
 //!
 //! A *substep boundary* node declares its port names through
 //! [`SubstepBoundaryPorts`]. At compile time the nodes that are both

@@ -4,7 +4,7 @@ Status: AUTHORITATIVE current-state map, 2026-07-07, from a full read of
 `manifold-io` (all 11 source files) plus the app-side seams (`project_io.rs`,
 `autosave.rs`, `app_lifecycle.rs`). Sibling of CORE_ENGINE_MAP.md /
 FREEZE_COMPILER_MAP.md. section 9 (Executor contracts fusion leans on) honest edges is the payload — each is a latent-bug
-lens; the top ones are logged as BUG-062 (no-forward-version-guard)..065 in `docs/BUG_BACKLOG.md`.
+lens; the top ones are logged as BUG-062 (no-forward-version-guard)..065.
 
 The stakes here are singular: the `.manifold` file is the one unrecoverable
 asset. A renderer bug costs a frame; an IO bug costs the show file.

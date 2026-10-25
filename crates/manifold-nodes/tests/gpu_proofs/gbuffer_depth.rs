@@ -1,4 +1,4 @@
-//! `docs/GBUFFER_DESIGN.md` I2 — `node.render_scene`'s stored reversed-Z
+//! `node.render_scene`'s stored reversed-Z
 //! `depth` output equals the CPU oracle (`Camera::project_to_pixel().depth`;
 //! near = 1, far = 0).
 //!

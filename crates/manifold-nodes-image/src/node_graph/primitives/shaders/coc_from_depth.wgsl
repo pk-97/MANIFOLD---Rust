@@ -1,5 +1,5 @@
 // node.coc_from_depth — hand parity oracle for the generated standalone
-// kernel (docs/CINEMATIC_POST_DESIGN.md D1). Same thin-lens CoC-radius formula as
+// kernel. Same thin-lens CoC-radius formula as
 // coc_from_depth_body.wgsl — kept independent (not sharing Rust source) so
 // the gpu_tests parity check is a real cross-check, not a tautology.
 //

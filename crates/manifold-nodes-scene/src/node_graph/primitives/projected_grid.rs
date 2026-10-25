@@ -1,7 +1,7 @@
 //! `node.projected_grid` — a grid of points on a water plane that covers
 //! exactly what the camera sees, from its feet to the horizon, at a constant
 //! spacing on screen (Johanson 2004, "Real-time water rendering: introducing
-//! the projected grid concept"; docs/OCEAN_SURFACE_DESIGN.md D3, section 3.3).
+//! the projected grid concept").
 
 use std::borrow::Cow;
 
@@ -371,7 +371,7 @@ mod tests {
         ((p[0] - cam[0]).powi(2) + (p[2] - cam[2]).powi(2)).sqrt()
     }
 
-    /// Invariant 6 (docs/OCEAN_SURFACE_DESIGN.md section 4): level and
+    /// Level and
     /// rolled views put the top row's edge vertices on the far circle,
     /// looking down fills the frame with water, looking up collapses.
     #[test]

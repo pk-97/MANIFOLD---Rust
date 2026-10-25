@@ -65,7 +65,7 @@ pub(crate) struct RecordingFrame {
     /// Elapsed time since recording started, computed at submit time
     /// (`LiveRecordingSession::submit_frame_at`) — carries `Duration`, not
     /// `Instant`, so the harness can fabricate adversarial timing without
-    /// pacing tests by wall clock (docs/LIVE_RECORDING_PROOFS_DESIGN.md D1).
+    /// pacing tests by wall clock.
     pub elapsed: Duration,
     /// Fence: signaled by the GPU completion handler when the blit
     /// to this pool texture is finished. The recording thread waits

@@ -1,4 +1,4 @@
-//! Project parts and their change stamps (docs/UI_INVALIDATION_DESIGN.md D1).
+//! Project parts and their change stamps.
 //!
 //! A `Part` names a slice of `Project` with one set of consumers. Every edit
 //! declares the parts it touches as a `ChangeSet`; `EditingService` bumps the

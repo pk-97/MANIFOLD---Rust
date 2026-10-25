@@ -1,4 +1,4 @@
-"""The kick model container: named little-endian arrays (docs/KICK_REALTIME_DESIGN.md section 2).
+"""The kick model container: named little-endian arrays.
 
 Rust reader: crates/manifold-audio/src/trained/container.rs. Both sides must agree byte for byte.
 """

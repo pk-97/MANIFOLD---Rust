@@ -257,7 +257,7 @@ impl ParamCardPanel {
     /// NOT a second animation clock) onto the down-pointing chevron glyph's
     /// rotation: expanded (`frac == 1.0`) sits at 0° (▼), collapsed
     /// (`frac == 0.0`) rotates to -90° (▶, "closing"). Applied via
-    /// `UIStyle.transform` (`docs/UI_TRANSFORM_STACK_DESIGN.md`), which
+    /// `UIStyle.transform`, which
     /// pivots about the chevron node's own rect center — no manual pivot
     /// math here, no glyph swap.
     pub(crate) fn chevron_angle(&self) -> f32 {

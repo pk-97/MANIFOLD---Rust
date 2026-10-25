@@ -120,7 +120,6 @@ pub enum LayerType {
     Group = 2,
     /// An audio track: plays an imported audio file synced to the transport and
     /// can drive audio modulation. No visual output (the compositor skips it).
-    /// See `docs/AUDIO_LAYER_DESIGN.md`.
     Audio = 3,
     /// A direct-drive DMX/LED layer: renders its generator like any layer but
     /// routes ONLY to the LED composite — screen-invisible by construction.

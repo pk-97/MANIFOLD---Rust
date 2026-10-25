@@ -5,7 +5,6 @@
 //! the timeline addresses. A single source of each drives **both** the CPU
 //! paint and the hit-test, so they cannot disagree. Track *height* lives only on
 //! the `CoordinateMapper`; marker flag geometry lives only in `coordinate.rs`.
-//! See `docs/TIMELINE_API_DESIGN.md` section 3.2.
 
 use super::*;
 use crate::view::{UiAutomationLane, UiSegmentShape};
@@ -25,7 +24,7 @@ pub struct ViewportClip {
     pub is_locked: bool,
     pub is_generator: bool,
     /// An audio-layer clip. Renders distinctly (no video thumbnail); the hook
-    /// for in-clip waveform painting. See `docs/AUDIO_LAYER_DESIGN.md`.
+    /// for in-clip waveform painting.
     pub is_audio: bool,
     /// Zoom-aware waveform renderer (MIP chain + spectral color) for the source
     /// file, shared with the audio-import lanes. `None` until the file is decoded
@@ -90,9 +89,8 @@ pub struct ClipScreenRect {
 
 /// A clip's body/trim/label geometry, resolved once from [`ClipScreenRect`] so
 /// the painter and the hit-tester read the exact same rects instead of each
-/// computing trim width privately (`docs/TIMELINE_INTERACTION_P1_SPEC.md` D4 —
-/// this is what killed the S4 "narrow clip has no trim zone" bug and the
-/// cursor/hit-test disagreement it caused). `trim_left`/`trim_right` may
+/// computing trim width privately, which kept a narrow clip from having a trim zone and made the
+/// cursor and hit-test disagree. `trim_left`/`trim_right` may
 /// extend OUTSIDE `body` into neighboring empty lane space — that outward
 /// reach is what makes a hairline-narrow clip still grabbable.
 #[derive(Debug, Clone, Copy)]
@@ -231,7 +229,7 @@ pub fn clip_overlaps_region(
 /// Track *height* is intentionally NOT a field here — it is owned solely by the
 /// [`CoordinateMapper`] (`mapper.get_layer_height(i)`), the single Y-layout
 /// authority. `TrackInfo` carries only the per-track *style/state* the renderer
-/// needs. See `docs/TIMELINE_API_DESIGN.md` section 3.4.
+/// needs.
 #[derive(Debug, Clone, Default)]
 pub struct TrackInfo {
     pub is_muted: bool,

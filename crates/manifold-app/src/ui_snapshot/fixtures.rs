@@ -458,7 +458,7 @@ fn timeline_scene() -> SceneData {
     // `generator_type` to show the label; a bare `LayerType::Generator` layer
     // with no gen_params is the same "renders black" trap `Layer::new_generator`'s
     // own doc comment warns about, just surfacing here as a missing label
-    // instead (`docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5).
+    // instead.
     let mut plasma = Layer::new_generator("PLASMA".into(), PresetTypeId::PLASMA, 2);
     plasma.layer_id = lid("plasma");
     plasma
@@ -531,8 +531,7 @@ fn timeline_scene() -> SceneData {
     }
 }
 
-/// P0.0 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`'s RC1 (dual scroll
-/// state): 14 video layers at `TrackHeight::Normal` — well past the
+/// P0.0 evidence scene for dual scroll state: 14 video layers at `TrackHeight::Normal`, well past the
 /// `LOGICAL_H` viewport budget the `timeline` scene was sized to exactly fit
 /// (7 lanes), so a vertical scrollbar exists and a `--scroll` seed is
 /// meaningful. Used with `--scroll <px>` (seeds both `Viewport::scroll_y_px`
@@ -842,8 +841,7 @@ fn audio_sends_scene() -> SceneData {
     }
 }
 
-/// P0.3 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`: one lane of many
-/// short trigger clips — the MIDI-mockup workflow's bread and butter — spread
+/// P0.3 evidence scene: one lane of many short trigger clips — the MIDI-mockup workflow's bread and butter — spread
 /// across a wide beat range. Rendered at a far zoom
 /// (1px/beat, wired in by `ui_snapshot::mod`'s
 /// `zoom_ppb` override for this scene name) so each clip's on-screen width
@@ -880,8 +878,7 @@ fn hairline_clips_scene() -> SceneData {
     }
 }
 
-/// P1.0 evidence scene for `docs/TIMELINE_INTERACTION_P1_SPEC.md`'s S1/S3:
-/// one layer with exactly 4 contiguous video clips at normal zoom, so
+/// P1.0 evidence scene: one layer with exactly 4 contiguous video clips at normal zoom, so
 /// `--interact "click_clip:...;shift_click_clip:..."` / `cmd_click_clip` /
 /// `cmd_d` chains have clean geometry to act on (no gaps to obscure whether a
 /// chrome mismatch is the selection-authority bug or a fixture artifact). A
@@ -1132,7 +1129,7 @@ fn inspector_scene() -> SceneData {
 /// content instead of hitting an already-fully-visible stack (the failure
 /// mode `inspector_scene` itself has too little content for). The scene name
 /// mirrors the bug id so a reader doesn't have to open this function to know
-/// what it's for — see `docs/BUG_BACKLOG.md` BUG-060.
+/// what it's for.
 fn bug060_scene() -> SceneData {
     use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
     use manifold_core::audio_setup::AudioSend;
@@ -1219,8 +1216,8 @@ fn bug060_scene() -> SceneData {
 /// Glitch(5), Strobe(4). 9 cards total. Several carry an armed (open)
 /// audio-mod drawer — the heaviest per-frame modulation draw case, matching
 /// Peter's "heavy modulation while scrolling" repro — and Strobe carries an
-/// armed TRIGGER-GATE (`clip_trigger`) mod, the concrete BUG-060 escape
-/// named in `docs/BUG_BACKLOG.md`. WireframeDepth and one Color Compass
+/// armed TRIGGER-GATE (`clip_trigger`) mod, the concrete BUG-060 escape.
+/// WireframeDepth and one Color Compass
 /// instance are left plain (no mod) so the compact-toggle (section 6b) gesture the
 /// differential drives exercises a mix of armed/unarmed cards, not an
 /// all-or-nothing set.
@@ -1323,7 +1320,7 @@ fn bug060heavy_scene() -> SceneData {
 /// Inputs and Consumers sections of the Audio Setup modal (opened via
 /// `--interact "open:audio_setup"`) have real per-row content to overflow
 /// with — `audio_sends_scene`'s 2 sends are nowhere near enough to exercise
-/// this. See `docs/BUG_BACKLOG.md` BUG-047.
+/// this.
 fn bug047_scene() -> SceneData {
     use manifold_core::audio_setup::AudioSend;
     use manifold_core::audio_trigger::TriggerRoute;

@@ -973,7 +973,7 @@ impl Command for ToggleExportHdrCommand {
 }
 
 /// Toggle the "split export at markers" setting. Shaped like
-/// `ToggleExportHdrCommand` (docs/SECTION_EXPORT_DESIGN.md D4).
+/// `ToggleExportHdrCommand`.
 #[derive(Debug)]
 pub struct ToggleSplitSectionsCommand {
     old_split: bool,

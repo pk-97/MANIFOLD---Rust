@@ -1,8 +1,7 @@
 //! Audio Setup panel — the central place to route audio in and manage the
 //! named sends that the per-slider audio drawers reference.
 //!
-//! A non-dimming overlay docked to the viewport's right edge (D6 —
-//! `docs/AUDIO_SENDS_UX_DESIGN.md` section 2/section 3.3), full height, with an input-device
+//! A non-dimming overlay docked to the viewport's right edge, full height, with an input-device
 //! picker and one row per send: routing, gain, and delete, plus an "Add send"
 //! button. The show stays visible underneath and outside clicks pass through
 //! (it's a calibration surface used while performing — accidental dismissal
@@ -42,8 +41,7 @@ const KEY_CLOSE: u64 = 70_002;
 // every press. Any `add_button` call built WITHOUT a key re-mints its
 // `WidgetId` from its sibling index on that rebuild; `Click` only fires
 // when press and release resolve to the SAME `WidgetId`, so an unkeyed
-// button silently needed a second click (BUG — see
-// `docs/INPUT_IDENTITY_UNIFICATION.md`). Every interactive node below is
+// button silently needed a second click (a bug). Every interactive node below is
 // therefore keyed so its identity survives the rebuild. Non-interactive
 // `add_label` nodes (the gain/sensitivity value labels used only as D7
 // drag-arm targets) are exempt — they carry no `INTERACTIVE` flag and
@@ -133,7 +131,7 @@ pub struct AudioSendRow {
     /// Audio layers feeding this send (id + name), for the Inputs section's
     /// per-layer remove row. Built by `state_sync` from the send's
     /// `source.layers` — the single source of truth for the layer↔send
-    /// binding (`docs/AUDIO_SENDS_UX_DESIGN.md` D1/D2).
+    /// binding.
     pub feeding_layers: Vec<(LayerId, String)>,
     /// This send's consumers — one row per enabled audio mod reading it plus
     /// one per enabled trigger route on it — for the Consumers section.
@@ -145,7 +143,7 @@ pub struct AudioSendRow {
 /// One consumer row in the Audio Setup modal's Consumers section: a named
 /// audio mod ("Layer • Effect • Param") or an enabled clip trigger ("Clip
 /// trigger • Layer • Band", section 7.2 item 7, P8, 2026-07-11), each clickable to
-/// jump to the owning layer. See `docs/AUDIO_SENDS_UX_DESIGN.md` section 3.1.
+/// jump to the owning layer.
 #[derive(Clone, Debug)]
 pub struct SendConsumerRow {
     pub label: String,
@@ -246,8 +244,7 @@ impl Default for SendRowIds {
 /// A D7 calibration drag armed by pointer-down on a gain or trigger
 /// sensitivity value label. Carries the pre-drag pointer x + value so
 /// `on_event`'s `Drag` arm can compute the live absolute value from
-/// horizontal movement alone (1 px = 0.1 dB / 0.5%, see
-/// `docs/AUDIO_SENDS_UX_DESIGN.md` section 3.4) without re-deriving it from the
+/// horizontal movement alone (1 px = 0.1 dB / 0.5%) without re-deriving it from the
 /// project each frame. Exactly one drag (crossover OR calibration) is ever
 /// armed at a time.
 #[derive(Clone)]
@@ -1553,8 +1550,7 @@ impl AudioSetupPanel {
     }
 
     /// Whether a screen point lies inside the built panel — the ownership test
-    /// `claims_drag` uses (BUG-059, superseded by `docs/DRAG_CAPTURE_DESIGN.md`
-    /// P2). False before first build (zero rect contains nothing).
+    /// `claims_drag` uses (False before first build (zero rect contains nothing).
     fn point_in_panel(&self, pos: Vec2) -> bool {
         pos.x >= self.panel_rect.x
             && pos.x <= self.panel_rect.x + self.panel_rect.width
@@ -2136,8 +2132,7 @@ impl AudioSetupPanel {
                         .unwrap_or((true, Vec::new())),
                     None => (true, Vec::new()),
                 },
-                // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
-                // section 3.4); the host clamps the candidate to the real range.
+                // 1 px = 0.1 dB / 0.5%; the host clamps the candidate to the real range.
                 // P4, D8: Shift held at drag-start ("fine") multiplies the
                 // applied per-pixel delta by 0.1.
                 Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain {

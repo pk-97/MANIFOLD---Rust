@@ -1,6 +1,6 @@
 //! `node.coc_dilate` — fixed 3x3 neighborhood-max dilation of a CoC (circle-
-//! of-confusion) texture. Standalone atom fixing BUG-137
-//! (`docs/BUG_BACKLOG.md`): `node.variable_blur` picks its per-pixel gather
+//! of-confusion) texture. Standalone atom fixing a gap where
+//! `node.variable_blur` picks its per-pixel gather
 //! radius from *only the center pixel's own* CoC, so a heavily-blurred pixel
 //! never borrows a wider radius from a neighboring high-CoC pixel and a sharp
 //! pixel is never bled into by an adjacent blurred one — producing a hard
@@ -8,14 +8,14 @@
 //! max CoC found in a small neighborhood outward, before the gather
 //! consumes it, is the standard real-time-DoF fix for exactly this.
 //!
-//! **Scoping decision, committed 2026-07-13 (`docs/BUG_BACKLOG.md` BUG-137):
+//! **Scoping decision:
 //! a standalone atom, NOT folded into `node.coc_from_depth`** — folding a
 //! neighborhood read into that atom would change its Pointwise fusion
 //! classification (a `CoincidentTexel` producer) and cost its fusability.
 //! `coc_dilate` is its own dispatch: `coc_from_depth` → `coc_dilate` →
 //! `variable_blur` (H/V) — three dispatches, not a fused monolith, matching
 //! the no-fused-monolith rule the way `coc_from_depth` + `variable_blur`
-//! already do (`docs/CINEMATIC_POST_DESIGN.md` D1).
+//! already do.
 //!
 //! section 2.5 audit (`docs/DECOMPOSING_GENERATORS.md`): `rg 'purpose: "'` over
 //! `primitives/` found no existing dilation / neighborhood-max atom for a
@@ -29,7 +29,7 @@
 //! G channels. R holds the magnitude (coc_px / max_radius); G holds the sign
 //! flag from `node.coc_from_depth` (1.0 = nearer than focus, 0.0 =
 //! far-or-in-focus). G max == 1.0 means "at least one pixel in the neighborhood
-//! is nearer than focus" (docs/BOKEH_LAYERED_DOF_DESIGN.md D1). B copies R so
+//! is nearer than focus". B copies R so
 //! the output is self-describing, alpha == 1.0 (matching the center's own
 //! alpha, which is always 1.0 under the coc_from_depth convention, so this is
 //! simultaneously "pass-through" and "constant"). Dilating a uniform (flat)
@@ -51,7 +51,7 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 manifold_node_engine::primitive! {
     name: CocDilate,
     type_id: "node.coc_dilate",
-    purpose: "Fixed 3x3 neighborhood-max dilation of a CoC texture (docs/BOKEH_LAYERED_DOF_DESIGN.md D1): R and B hold the magnitude (coc_px / max_radius), G holds the sign flag from node.coc_from_depth (1.0 = nearer than focus, 0.0 = far-or-in-focus). For each output texel, out.r = max over the 3x3 neighborhood of in.r, out.g = max over the same neighborhood of in.g, out.b = out.r, alpha = 1.0. G max == 1.0 means at least one neighbor is nearer than focus. Fixes BUG-137 (docs/BUG_BACKLOG.md): node.variable_blur reads its per-pixel gather radius from only the center pixel's own CoC, so a heavily-blurred pixel never borrows a wider radius from a neighboring high-CoC pixel — this atom spreads the max CoC outward before the gather consumes it, softening the hard seam at depth discontinuities. Wire coc_from_depth.out -> coc_dilate.in -> variable_blur(H/V).width. Bokeh Gather consumes the original CoC and computes its own search bounds internally. No params: the 3x3 radius is fixed, not a performer knob. A flat (uniform) input passes through unchanged (max of identical values is that value).",
+    purpose: "Fixed 3x3 neighborhood-max dilation of a CoC texture: R and B hold the magnitude (coc_px / max_radius), G holds the sign flag from node.coc_from_depth (1.0 = nearer than focus, 0.0 = far-or-in-focus). For each output texel, out.r = max over the 3x3 neighborhood of in.r, out.g = max over the same neighborhood of in.g, out.b = out.r, alpha = 1.0. G max == 1.0 means at least one neighbor is nearer than focus. Fixes the gap where node.variable_blur reads its per-pixel gather radius from only the center pixel's own CoC, so a heavily-blurred pixel never borrows a wider radius from a neighboring high-CoC pixel — this atom spreads the max CoC outward before the gather consumes it, softening the hard seam at depth discontinuities. Wire coc_from_depth.out -> coc_dilate.in -> variable_blur(H/V).width. Bokeh Gather consumes the original CoC and computes its own search bounds internally. No params: the 3x3 radius is fixed, not a performer knob. A flat (uniform) input passes through unchanged (max of identical values is that value).",
     inputs: {
         in: Texture2D required,
     },
@@ -294,8 +294,7 @@ mod gpu_tests {
     /// (`standalone_for_spec::<CocDilate>()`), dispatched on a synthetic
     /// step+spike fixture, cross-checked against a plain-Rust CPU reference
     /// implementing the same 3x3-max spec independently (the CPU-reference
-    /// parity pattern this design doc's cluster uses everywhere,
-    /// `docs/CINEMATIC_POST_DESIGN.md` I1).
+    /// parity pattern used across the cinematic post atoms).
     #[test]
     fn generated_dilate_matches_cpu_reference() {
         let device = manifold_gpu::testkit::test_device();

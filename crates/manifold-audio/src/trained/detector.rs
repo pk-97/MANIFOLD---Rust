@@ -1,5 +1,4 @@
-//! [`TrainedDetector`]: any contract-v2 model as one streaming detector (docs/DETECTOR_RUNTIME_DESIGN.md
-//! section 5.3). The file names its parts; exactly those are built. Mono audio of any rate in, fires stamped
+//! [`TrainedDetector`]: any contract-v2 model as one streaming detector. The file names its parts; exactly those are built. Mono audio of any rate in, fires stamped
 //! at the input sample where each one is decided out (D14).
 
 use super::container::Container;

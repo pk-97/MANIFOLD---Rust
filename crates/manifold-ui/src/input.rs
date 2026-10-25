@@ -316,8 +316,7 @@ pub struct UIInputSystem {
     // rebuilds every frame); a WidgetId names the same logical widget across
     // rebuilds. Each is resolved to a live NodeId only when an event is emitted or
     // a flag is set. This is what lets one input system serve both the
-    // dirty-tracked timeline and the immediate-mode editor. See
-    // `docs/INPUT_IDENTITY_UNIFICATION.md`.
+    // dirty-tracked timeline and the immediate-mode editor.
     hovered_widget: Option<WidgetId>,
     /// Where the pointer last was, so hover can be resolved again when the
     /// tree moves under a still cursor.
@@ -328,7 +327,7 @@ pub struct UIInputSystem {
     last_drag_pos: Vec2,
     is_dragging: bool,
 
-    // D6 (`docs/DRAG_CAPTURE_DESIGN.md` section 3.4): armed by `request_immediate_drag`
+    // Armed by `request_immediate_drag`
     // while routing the CURRENT press's `PointerDown`; makes the Move arm treat
     // the drag threshold as 0 for this press only. Cleared on `Up` alongside the
     // other per-press state — never carries over to the next gesture.
@@ -526,8 +525,7 @@ impl UIInputSystem {
                             // threshold crossing (e.g. a panel's own consume
                             // dirtying the overlay) must not silently swallow the
                             // whole motion stream (Peter's "first band-line click
-                            // is always dead" trace, `docs/DRAG_CAPTURE_DESIGN.md`
-                            // D9). Ownership routing decides delivery downstream,
+                            // is always dead" trace). Ownership routing decides delivery downstream,
                             // not node identity.
                             self.pending_events.push(UIEvent::DragBegin {
                                 node_id: tree.node_for_widget(pw),
@@ -901,7 +899,7 @@ mod tests {
         assert_eq!(clicks.len(), 0);
     }
 
-    /// P3 (D6, `docs/DRAG_CAPTURE_DESIGN.md` section 3.4): a press that armed
+    /// A press that armed
     /// `request_immediate_drag` begins the drag on the very next Move, no
     /// matter how small — proving the effective per-press threshold really
     /// drops to 0, not just "lower". 1px is nowhere near the ordinary 4px
@@ -1145,7 +1143,7 @@ mod tests {
         // (hit_id at up may differ since pos changed slightly — both are on the button)
     }
 
-    /// D9 repro (`docs/DRAG_CAPTURE_DESIGN.md`): Peter's live "first band-line
+    /// Repro of Peter's live "first band-line
     /// click is always dead" trace, as a unit test. Press, then the pressed
     /// node dies (a rebuild dropped it) BEFORE the drag threshold crosses —
     /// pre-D9 this silently swallowed the entire motion stream (no DragBegin,

@@ -93,8 +93,7 @@ pub trait PrimitiveSpec: Send {
     const FUSION_KIND: crate::freeze::classify::FusionKind =
         crate::freeze::classify::FusionKind::Boundary;
 
-    /// Why this primitive stays a fusion Boundary (design doc D4,
-    /// `docs/GRAPH_TOOLING_DESIGN.md`). `None` by default — required to
+    /// Why this primitive stays a fusion Boundary. `None` by default — required to
     /// stay `None` for every fusable (`FUSION_KIND != Boundary`) primitive,
     /// and required (exactly one reason) for every Boundary primitive
     /// ([`freeze::classify`](crate::node_graph::freeze::classify) — enforced
@@ -103,8 +102,7 @@ pub trait PrimitiveSpec: Send {
     const BOUNDARY_REASON: Option<crate::freeze::classify::BoundaryReason> = None;
 
     /// `(param name, contract)` pairs — the real physical/mathematical
-    /// boundaries among this primitive's [`PARAMS`](Self::PARAMS), if any
-    /// (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`). Empty by default: the
+    /// boundaries among this primitive's [`PARAMS`](Self::PARAMS), if any. Empty by default: the
     /// overwhelming majority of params carry no contract, only a display
     /// hint (their declared `range`). Set via the macro's optional
     /// `param_contracts:` field; a curated meta-test

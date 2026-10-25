@@ -1,5 +1,4 @@
-//! GPU proofs for gated round templates (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md
-//! section 3.2 (The template on every path)). The reference is independent
+//! GPU proofs for gated round templates. The reference is independent
 //! of the template: each round encoded directly, one indirect dispatch per
 //! gated command, as the solver did before templates. The template runs on
 //! every encoder path (no span, a replaying span, a busy ring, profiled at

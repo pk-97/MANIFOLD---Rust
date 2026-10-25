@@ -1,5 +1,5 @@
 //! `node.bilateral_blur` — depth-guided (bilateral) separable blur pair
-//! between an AO atom and its mix (`docs/CINEMATIC_POST_DESIGN.md` D8): every
+//! between an AO atom and its mix: every
 //! production AO follows its sampler with an edge-aware blur. General-purpose
 //! (any texture with a depth guide); the section 2.5 audit of 2026-07-13
 //! found no edge-aware blur in the catalog.
@@ -119,7 +119,7 @@ fn derive_depth_scalars(cam: &Camera) -> [f32; 2] {
     [cam.near, cam.far]
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// Per-frame recompute for a FUSED
 // region's near/far fields, IN DECLARATION ORDER — reads the region's routed
 // Camera external, matching `run()`'s own `derive_depth_scalars` call below
 // exactly.
@@ -244,9 +244,8 @@ mod tests {
     }
 }
 
-/// **CPU reference** (I1-pattern, `docs/CINEMATIC_POST_DESIGN.md` I7's third
-/// named check: "the I1-pattern CPU-reference parity test") — a plain-Rust
-/// implementation of the committed D8 formula, independent of the WGSL body
+/// **CPU reference** (the I1 pattern) — a plain-Rust
+/// implementation of the committed formula, independent of the WGSL body
 /// (not sharing source). Used by the GPU-vs-CPU parity gpu_test below.
 #[cfg(test)]
 pub(crate) mod cpu_reference {
@@ -335,7 +334,7 @@ pub(crate) mod cpu_reference {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! **I7** (`docs/CINEMATIC_POST_DESIGN.md`): `bilateral_blur` on a
+    //! **I7**: `bilateral_blur` on a
     //! uniform-depth plane equals the plain 9-tap gaussian; across a depth
     //! step it does not bleed. Three named tests per the invariant table:
     //! `bilateral_uniform_depth_matches_gaussian`, `bilateral_depth_edge_

@@ -234,7 +234,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, selection: &Selecti
 
         // Layer data → LayerHeaderPanel. Y offset/height are NOT copied here —
         // `LayerInfo` no longer carries them; the header panel queries the
-        // mapper directly at draw time (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D1),
+        // mapper directly at draw time,
         // the exact same values the viewport uses for lanes.
         let layers: Vec<LayerInfo> = project
             .timeline

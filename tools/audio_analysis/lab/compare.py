@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The A/B of two experiments (docs/DETECTOR_LAB_DESIGN.md D6, D8): trains whatever seeds are missing, A and B
+"""The A/B of two experiments: trains whatever seeds are missing, A and B
 interleaved so a slow machine hour hurts both alike, scores both from their saves, refuses to compare runs whose exam
 songs or labels differ, and prints the exam A/B (detector_compare), then the generated songs on their own. The text
 is also written to the lab cache's compare/ folder. Configs with one net per song are refused: they cannot choose a

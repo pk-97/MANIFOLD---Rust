@@ -96,7 +96,7 @@ pub struct ContentThread {
     pub editing_service: EditingService,
     pub content_pipeline: ContentPipeline,
     /// Per-clip audio-layer playback (one kira voice per active audio clip).
-    /// `None` if the kira backend failed to open. See `docs/AUDIO_LAYER_DESIGN.md`.
+    /// `None` if the kira backend failed to open.
     pub audio_layer_playback: Option<AudioLayerPlayback>,
     pub percussion_orchestrator: PercussionImportOrchestrator,
     pub transport_controller: TransportController,
@@ -230,7 +230,7 @@ pub struct ContentThread {
     pub last_sent_ableton_session: Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
 
     /// Stamps the reaction pass last reacted to, and what it retains between
-    /// passes (docs/UI_INVALIDATION_DESIGN.md D4).
+    /// passes.
     pub reactions: crate::content_reactions::ReactionState,
 
     /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — set by
@@ -778,7 +778,7 @@ impl ContentThread {
         }
 
         // 5c. Audio-layer playback — one kira voice per active audio clip,
-        // following the transport. See docs/AUDIO_LAYER_DESIGN.md section 4.
+        // following the transport.
         if let Some(ref mut audio_layer_playback) = self.audio_layer_playback
             && let Some(project) = self.engine.project()
         {

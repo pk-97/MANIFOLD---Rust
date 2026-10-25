@@ -10,8 +10,7 @@ with this file about the present, this file wins.
 
 **Scope.** The `manifold-media` crate and the app-side export path (`content_export.rs`).
 **Live recording is out of scope** — it is a separate crate (`manifold-recording`, its own
-AVAssetWriter plugin, texture pool, and fence machinery) mapped and proof-tested by
-`LIVE_RECORDING_PROOFS_DESIGN.md`. The two never share code; recording is even skipped
+AVAssetWriter plugin, texture pool, and fence machinery). The two never share code; recording is even skipped
 per-frame while `export_mode` is set (`content_pipeline.rs` recording block is gated
 `!export_mode`).
 
@@ -172,9 +171,8 @@ and out applies its own transfer function — and they do not all agree:
 **FIXED 2026-07-13 (BUG-128, BUG-131):** decode and SDR-encode now share one true-sRGB
 transfer-function definition with the still exporter (`ColorTransferFunctions.h`) instead
 of each approximating `pow(2.2)`/`pow(1/2.2)` independently, and the decoder reads the
-buffer's actual colorimetry tag instead of hardcoding BT.709. See `docs/BUG_BACKLOG.md`
-for commits and verification detail (BUG-132's nearest-neighbor scaling in the same
-decode shader was also fixed — bilinear 4-tap — same wave).
+buffer's actual colorimetry tag instead of hardcoding BT.709. Nearest-neighbor scaling in the same
+decode shader was also fixed (bilinear 4-tap).
 
 ## 8. Config surface & validation
 
@@ -215,7 +213,7 @@ quality is hardcoded (JPEG 95).
 ## 11. Boundaries with neighbouring systems
 
 - **Recording:** `manifold-recording` crate; per-frame GPU capture inline with the live
-  loop; known-broken HDR (BUG-053 (hdr-live-recording-structural)); see LIVE_RECORDING_PROOFS_DESIGN.md.
+  loop; known-broken HDR (BUG-053 (hdr-live-recording-structural)).
 - **Audio for export:** rendered by `manifold_playback::audio_mixdown`, not this crate;
   this crate only muxes the resulting WAV.
 - **Future shape:** MEDIA_BACKEND_DESIGN.md (neutral traits, non-macOS encoders — the
@@ -226,7 +224,7 @@ quality is hardcoded (JPEG 95).
 ## 12. Honest edges (the bug-hunt starts here)
 
 Backlogged with ids (BUG-127..133 below are FIXED as of 2026-07-13, `feat/media-export-bugs` —
-full commits/verification in `docs/BUG_BACKLOG.md`; kept here as historical context, not
+kept here as historical context, not
 open items):
 
 1. **BUG-127 — FIXED — decode worker silently drops jobs for missing handles; export can hang.**

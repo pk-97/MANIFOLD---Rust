@@ -1691,8 +1691,7 @@ pub trait EffectNode: Send + AsAny {
         crate::freeze::classify::FusionKind::Boundary
     }
 
-    /// Why this node stays a fusion Boundary (design doc D4,
-    /// `docs/GRAPH_TOOLING_DESIGN.md`). `None` by default. `primitive!`-
+    /// Why this node stays a fusion Boundary. `None` by default. `primitive!`-
     /// authored primitives set it via the `boundary_reason:` field
     /// (forwarded from `P::BOUNDARY_REASON`); hand-`impl EffectNode`
     /// primitives override this method directly. Every registered
@@ -1717,8 +1716,8 @@ pub trait EffectNode: Send + AsAny {
 
     /// The [`RangeContract`](manifold_core::effects::RangeContract) on
     /// this node's `param_name` param, if any — the real physical/
-    /// mathematical boundary the value must not cross
-    /// (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`). `None` by default: the
+    /// mathematical boundary the value must not cross.
+    /// `None` by default: the
     /// overwhelming majority of params have no contract, only a display
     /// hint (their declared `range` on [`ParamDef`]). `primitive!`-authored
     /// primitives set this via the optional `param_contracts:` macro field
@@ -2038,7 +2037,7 @@ pub trait EffectNode: Send + AsAny {
     /// depth + motion vectors to real textures regardless of whether
     /// anything downstream happens to be wired to them yet (P1's shadow-
     /// ray/denoise consumers land later); a non-RT scene keeps the
-    /// ordinary lazy-by-wire rule (`docs/GBUFFER_DESIGN.md` D1) —
+    /// ordinary lazy-by-wire rule —
     /// `ExecutionPlan::compile` folds this into the same `consumed_outputs`
     /// set a real wire would populate, so the rest of the lazy-allocation
     /// machinery (resource creation, per-frame binding, primitive-side

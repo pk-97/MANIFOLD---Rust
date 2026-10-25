@@ -216,7 +216,7 @@ pub struct InspectorCompositePanel {
     // ── Tabs ──
     /// The single scope currently shown. Drives the section-visibility bools
     /// below (only the active scope renders). Mirrors the timeline selection;
-    /// set by the app via `configure_tabs`. See docs/UI_LAYOUT_DESIGN.md.
+    /// set by the app via `configure_tabs`.
     active_tab: InspectorTab,
     /// The tab rungs available for the current selection, in display order
     /// (local→global). Only the rungs that exist are shown.

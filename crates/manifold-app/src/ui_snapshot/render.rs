@@ -624,7 +624,7 @@ pub fn render_graph_editor_to_png(
 }
 
 /// Visual proof for the UI transform-stack capability
-/// (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — a bespoke `UITree` with no
+/// — a bespoke `UITree` with no
 /// `Project`/fixture behind it, built directly in this function since none of
 /// the existing scenes exercise a per-node `UIStyle::transform`. Three panels:
 /// (a) a rotated rounded rect keeps crisp AA'd corners (the SDF runs in local

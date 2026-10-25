@@ -1,6 +1,5 @@
 //! `node.cut_out_box` — hides the part of a mesh inside a world box by
-//! zeroing its vertex alpha, for a material in alpha Mask mode
-//! (docs/OCEAN_SURFACE_DESIGN.md D7).
+//! zeroing its vertex alpha, for a material in alpha Mask mode.
 
 use std::borrow::Cow;
 
@@ -261,7 +260,7 @@ mod gpu_tests {
     }
 
     /// Displace then cut, fused into one kernel, equals the two atoms run one
-    /// after the other (docs/OCEAN_SURFACE_DESIGN.md section 4, invariant 5).
+    /// after the other.
     #[test]
     fn ocean_displace_then_cut_fused_matches_unfused() {
         let device = manifold_gpu::testkit::test_device();

@@ -1,4 +1,4 @@
-"""The song-history stage (docs/DETECTOR_LAB_DESIGN.md P6): a plug-in on top of any detector. Each candidate is
+"""The song-history stage: a plug-in on top of any detector. Each candidate is
 judged against the song's own recent confident hits (kick_goal_selfsim: its score and sound against theirs, and how
 much evidence the recent past holds), then trees re-score it. Causal: only candidates decided earlier count. The
 config names the shape measures, an optional level column and the memory windows, so any family can use it.
@@ -132,7 +132,7 @@ def train(cfg, grps, trainings, final, parts, seed, generated=(), probes=None, l
         for t in g + [p for p, v in (probes or {}).items() if v['parent'] in g]:
             q = outer.predict_proba(stage_x(k, k, t))[:, 1]
             out[f'staged__{t}'] = gated(st, stage_x(k, k, t), q, cuts)
-            # Ungated, so a release chooses the stage's own cutoff on it (docs/DETECTOR_RUNTIME_DESIGN.md D5).
+            # Ungated, so a release chooses the stage's own cutoff on it.
             out[f'stageraw__{t}'] = q
     log(f'stage: {len(grps) ** 2} fits in {time.time() - t0:.1f} s')
     return out

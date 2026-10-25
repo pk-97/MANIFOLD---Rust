@@ -22,7 +22,7 @@ use crate::math::short_id;
 /// Layer membership is the single source of truth for the layer↔send binding; the
 /// layer header's send dropdown edits it (one layer feeds at most one send). The
 /// Audio Setup source chip is a **read-only** view of a send's routings (device +
-/// layers). See `docs/AUDIO_LAYER_DESIGN.md` section 3R.
+/// layers).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSendSource {
@@ -150,8 +150,7 @@ pub struct AudioSend {
     /// means a re-saved project never writes it back, so there is no
     /// "both homes work" window. Kept as a real field (not a shadow struct)
     /// only so the P3-doomed matrix UI (`inspector.rs`, `audio_setup_panel.rs`)
-    /// keeps compiling against it until it's deleted in P3. See
-    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.1/section 3.2/D2.
+    /// keeps compiling against it until it's deleted in P3.
     #[serde(default, skip_serializing)]
     pub triggers: Vec<TriggerRoute>,
     /// Where the send's signal comes from — the set of inputs (capture device

@@ -5,8 +5,7 @@
 // harness's oracle (crate::proofs::probe) can decode frame identity back out
 // of a file that has gone through the REAL sRGB conversion shader and the
 // REAL AVAssetWriter/ProRes encode — proving drops, duplicates, and
-// reordering exactly, which a "N frames encoded" counter cannot (D4 in
-// docs/LIVE_RECORDING_PROOFS_DESIGN.md).
+// reordering exactly, which a "N frames encoded" counter cannot.
 //
 // Pattern (frame width / NUM_BLOCKS per block, full-height solid stripe):
 //   block 0        = white  (polarity)

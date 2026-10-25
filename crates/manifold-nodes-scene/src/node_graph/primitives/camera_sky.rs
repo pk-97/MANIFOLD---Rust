@@ -10,7 +10,7 @@
 //! does, so a turned environment stays one with its reflections.
 //!
 //! The camera is read only through derived uniforms, never as a GPU binding,
-//! so the atom fuses with its neighbours (`docs/CINEMATIC_POST_DESIGN.md` D7).
+//! so the atom fuses with its neighbours.
 //! Aspect comes from the output's own dims inside the body.
 
 use std::borrow::Cow;

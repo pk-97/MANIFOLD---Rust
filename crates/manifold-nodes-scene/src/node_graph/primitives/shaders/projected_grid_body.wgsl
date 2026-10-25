@@ -1,6 +1,5 @@
 // node.projected_grid — fusable BUFFER body, SOURCE (no array inputs).
-// A screen-space grid cast onto the water plane y = level (Johanson 2004;
-// docs/OCEAN_SURFACE_DESIGN.md section 3.3). Row 0 is the horizon (y_top),
+// A screen-space grid cast onto the water plane y = level (Johanson 2004). Row 0 is the horizon (y_top),
 // the last row the bottom of the frame, so node.make_triangles' normals point
 // up. A ray that misses the plane, or meets it past max_distance, is clamped
 // to max_distance along its horizontal direction.

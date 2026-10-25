@@ -1,4 +1,4 @@
-"""Content-keyed artifact cache (docs/DETECTOR_LAB_DESIGN.md D3), on eval/bundles.py: the key is the song's audio
+"""Content-keyed artifact cache, on eval/bundles.py: the key is the song's audio
 content (registry.Song.content_id), the stamp names the artifact, its settings and its builder's source. A recycled
 song name never reuses another song's spectra; a builder or setting change is a miss. Artifacts keep today's dtypes
 (spectra and noisiness float16), so net inputs match the legacy path byte for byte."""

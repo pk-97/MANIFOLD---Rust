@@ -3,7 +3,7 @@
 //! Drives the real `LiveRecordingSession` API into the real native
 //! AVAssetWriter encoder, at realistic frame counts, with adversarial
 //! timing — then interrogates the output file with ffprobe/ffmpeg (an
-//! independent oracle, D3). See docs/LIVE_RECORDING_PROOFS_DESIGN.md.
+//! independent oracle).
 //!
 //! `cargo test -p manifold-recording --features recording-proofs`
 
@@ -296,8 +296,7 @@ fn nominal_with_audio() {
 // ---------------------------------------------------------------------
 
 /// Scripted adversarial elapsed-time sequence over a 600-frame 60fps grid.
-/// See docs/LIVE_RECORDING_PROOFS_DESIGN.md section 4 test 3 for the injection
-/// spec; each anomaly is applied relative to the plain grid so its effect
+/// Each anomaly is applied relative to the plain grid so its effect
 /// on PTS is legible in isolation.
 fn scripted_elapsed(n: u32) -> Duration {
     match n {

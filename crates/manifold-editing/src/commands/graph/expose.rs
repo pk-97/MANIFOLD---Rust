@@ -683,7 +683,7 @@ fn mirror_effect_side(
         } else {
             Vec::new()
         };
-        // D9 (`docs/PARAM_TWO_WAY_BINDING_DESIGN.md`): freeze the EFFECTIVE
+        // Freeze the EFFECTIVE
         // value into the def slot this binding stops governing, so unmapping
         // never visually snaps the render to whatever stale value the slot
         // held from a pre-binding write. Must run BEFORE the binding is

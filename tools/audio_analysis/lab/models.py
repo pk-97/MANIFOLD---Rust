@@ -1,4 +1,4 @@
-"""Model parts (docs/DETECTOR_LAB_DESIGN.md P6): the training plan, the trees and the combine. The net is
+"""Model parts: the training plan, the trees and the combine. The net is
 kick_goal_nn's; run.py trains it."""
 import numpy as np
 
@@ -141,7 +141,7 @@ def combine(how, layers):
 
 
 def mean_logit_of(ps, clip=1e-6):
-    """Several nets' probabilities as one (docs/DETECTOR_RUNTIME_DESIGN.md D17): expit of the mean clipped logit;
+    """Several nets' probabilities as one: expit of the mean clipped logit;
     one net's probabilities pass through untouched."""
     from scipy.special import expit, logit
     if len(ps) == 1:

@@ -1945,7 +1945,7 @@ pub(crate) fn fuse_canonical_def_masked(
         let node_index_of =
             |doc: u32| -> Option<usize> { all_members.iter().position(|m| m.doc_id == doc) };
         let mut region_nodes: Vec<RegionNode<'_>> = Vec::with_capacity(all_members.len());
-        // D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): distinct Camera-producing
+        // Distinct Camera-producing
         // externals this region's derived-uniform members need, deduped by
         // (producer doc id, producer output port). Assigned `camera_ext_{index}`
         // names below; wired onto the fused node once `fused_doc` is known, via
@@ -2321,7 +2321,6 @@ pub(crate) fn fuse_canonical_def_masked(
             // wrote into this member's slice of the fused kernel (registry lookup
             // by type_id — `derived_uniform_registry::recompute`, gated at
             // fuse-build time above by `has_recompute`). See
-            // `docs/CINEMATIC_POST_DESIGN.md` D7 and
             // `crates/manifold-node-engine/src/freeze/derived_uniform_registry.rs`.
         }
         // D7/P0: wire each distinct Camera external this region's derived-uniform

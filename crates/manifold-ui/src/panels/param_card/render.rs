@@ -1314,7 +1314,7 @@ impl ParamCardPanel {
                     let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
                     // Keyed by (row | chevron role): the chevron's identity must not
                     // shift when an earlier row arms a modulator and inserts drawer
-                    // nodes ahead of it. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
+                    // nodes ahead of it.
                     self.row_host.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
                         Some(parent),
                         ch_x,

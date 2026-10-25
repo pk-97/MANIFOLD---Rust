@@ -234,7 +234,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire `pos_x`..`scale_z` into a node.transform_3d's same-named input ports (its nine params are already port-shadowed — see docs/GLTF_ANIMATION_DESIGN.md A1). `path` comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source's `path`; `translation_node`/`rotation_node`/`scale_node` each independently select which scene node that ONE channel samples (gltf_import.rs stamps all four from GltfObjectAnimation) — `-1` means that channel is never animated for this object. Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop, or any 0..1 scrub source.",
+    composition_notes: "Wire `pos_x`..`scale_z` into a node.transform_3d's same-named input ports (its nine params are already port-shadowed). `path` comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source's `path`; `translation_node`/`rotation_node`/`scale_node` each independently select which scene node that ONE channel samples (gltf_import.rs stamps all four from GltfObjectAnimation) — `-1` means that channel is never animated for this object. Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop, or any 0..1 scrub source.",
     examples: [],
     picker: { label: "glTF Animation Source", category: Driver },
     summary: "Plays back an imported glTF animation clip. Wire its outputs into a Transform 3D node to animate an imported object, or leave the progress input unwired to loop it on the beat.",

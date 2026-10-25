@@ -1,5 +1,4 @@
-//! Registry for per-member DERIVED-UNIFORM recompute (design: D7 / P0 amendment,
-//! `docs/CINEMATIC_POST_DESIGN.md`).
+//! Registry for per-member DERIVED-UNIFORM recompute.
 //!
 //! A fused `node.wgsl_compute` kernel has no per-member `run()` any more — the
 //! member atoms were deleted and replaced by one merged dispatch. Any member that

@@ -1,8 +1,7 @@
 //! Generator parameter behavior tests.
 //!
 //! The former `GeneratorParamState` type was folded into the unified
-//! [`crate::effects::PresetInstance`] (Phase 3 of
-//! `docs/PRESET_INSTANCE_COLLAPSE_PLAN.md`): a generator is a
+//! [`crate::effects::PresetInstance`]: a generator is a
 //! `PresetInstance { kind: Generator }`. All the param/driver/envelope
 //! behavior, serde, and registry clamping live on `PresetInstance` now. This
 //! module retains the generator-specific regression tests, exercised against
@@ -69,7 +68,7 @@ mod tests {
         assert_eq!(back.get_base_param("speed"), 1.25);
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md section 3 test (b): a project fixture carrying
+    /// A project fixture carrying
     /// an old `generatorType` value loads through the real deserializer and
     /// comes back on the current id. Exercises
     /// `type_id_migration::TYPE_ID_MIGRATIONS`' fixture entry

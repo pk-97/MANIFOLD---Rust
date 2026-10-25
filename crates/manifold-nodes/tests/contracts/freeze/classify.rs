@@ -1,8 +1,8 @@
 mod tests {
     use manifold_node_engine::freeze::classify::FusionKind;
     /// Every registered (non-fixture) primitive is either fusable or names
-    /// its `BoundaryReason` — the enforcement half of D4/D5
-    /// (docs/GRAPH_TOOLING_DESIGN.md). `node.__*` fixtures only register
+    /// its `BoundaryReason` — the enforcement half of the boundary-reason rule.
+    /// `node.__*` fixtures only register
     /// under `cfg(test)` and are excluded the same way
     /// `catalog_gen::is_test_fixture` and
     /// `primitives::mod::every_conventional_array_port_declares_a_channels_signature`
@@ -161,8 +161,7 @@ mod tests {
         );
     }
 
-    /// The `RangeContract` declared-excuse pattern (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`
-    /// D5), transcribed verbatim from `every_boundary_atom_declares_its_reason`
+    /// The `RangeContract` declared-excuse pattern, transcribed verbatim from `every_boundary_atom_declares_its_reason`
     /// above: walks every registered primitive's params via
     /// `EffectNode::param_contract`, and asserts the set of
     /// `(type_id, param name, reason)` triples carrying a contract EXACTLY

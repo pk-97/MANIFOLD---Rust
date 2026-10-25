@@ -99,7 +99,7 @@ gpu-proofs = ["manifold-editing/gpu-proofs", "manifold-compositor/gpu-proofs", "
 ui-automation = []
 profiling = ["dep:manifold-profiler"]
 ui-snapshot = ["work-trace", "manifold-playback/project-lend", "manifold-nodes/engine-scenes"]
-# Count every allocation as `WorkKind::FrameAlloc` (docs/UI_INVALIDATION_DESIGN.md D10).
+# Count every allocation as `WorkKind::FrameAlloc`.
 work-trace = []
 # P3 release-journey harness (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md):
 # headless end-to-end export proofs (audio-reactive + LFO + round-trip),
@@ -107,7 +107,7 @@ work-trace = []
 # Deliberate-run only, like gpu-proofs — GPU + video encode, minutes-long.
 # `dep:image` for PNG luma decode, same optional dep `ui-snapshot` uses.
 journey-proofs = []
-# `cargo xtask perf-soak` (docs/PERF_BUDGET_GATE_DESIGN.md P1): headless
+# `cargo xtask perf-soak`: headless
 # frame-budget soak of a real project. Needs `profiling` for
 # `manifold-profiler`'s per-frame section-timing collector (min/p50/p95/max +
 # worst-frame breakdown come from its FrameRecord/SessionSummary, not a new

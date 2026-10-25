@@ -51,7 +51,7 @@ pub(super) fn dispatch_editing(
                 // (contiguous whole clips on the anchor's layer), not a
                 // region — the Unity `select_region_to_with_project` port
                 // firing here was S1/S3's root
-                // (`docs/TIMELINE_INTERACTION_P1_SPEC.md`). The empty-lane
+                // The empty-lane
                 // shift path (`TrackClicked` below) keeps calling
                 // `select_region_to_with_project`.
                 super::select_clip_range_to_with_project(&clip_id, selection, &*project);

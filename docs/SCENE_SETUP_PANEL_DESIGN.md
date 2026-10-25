@@ -1,6 +1,6 @@
 # Scene Setup Panel — compose, light, and dress a 3D scene without opening the graph
 
-> **SUPERSEDED for the dock, tree and card (2026-10-14) → [`docs/SCENE_SURFACES_DESIGN.md`](SCENE_SURFACES_DESIGN.md).** The dock is now the inspector's Scene tab (D16); the tree, item header and card follow that doc.
+> **SUPERSEDED for the dock, tree and card (2026-10-14).** The dock is now the inspector's Scene tab.
 
 > **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** This doc's curated projection + synthesized `scene.{doc}.{param}` id system + resolution funnels are gone: the panel now renders exposed-param manifest rows through the card path (P1/P2 LANDED), and `scene_vm.rs` is slimmed to item-discovery only (P3 LANDED `7ee0a887`). The outliner / selection / structural verbs described here still stand; the per-param addressing, hand metadata tables, and dual write path do not.
 
@@ -47,7 +47,7 @@ state and zero new mutation paths**: the panel is a fourth surface over the same
 dock), plus three genuinely new pieces: the dock column itself, a merge-import path
 ("drop a second GLB into this scene"), and the per-object **modifier stack** gesture.
 
-Binding constraints (DESIGN_AUTHORING section 1): **performance surface** (every panel control is a
+Binding constraints: **performance surface** (every panel control is a
 live, bindable graph param — MIDI/OSC/audio-mod reach them through the existing expose
 machinery, nothing new owed); **persistence** (all edits land in the graph def / params that
 already serialize — one round-trip gate per phase, no migration needed anywhere);
@@ -70,11 +70,8 @@ unchanged (`state_sync` view-models in, commands out).
 Companions: `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` (the substrate: Transform port, named
 groups, add-object/add-light commands, card sections), `REALTIME_3D_DESIGN.md` (render_scene,
 shadows, fog, instancing, PCSS; its P5 viewport / P6 gizmos are SIBLING work — not touched
-here), `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` (the dock column precedent this
-copies), `IMPORT_FIDELITY_DESIGN.md` + `GLB_CONFORMANCE_DESIGN.md` (the import look and the
-importer this extends), `MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md` (the modifier atoms),
-`GLTF_ANIMATION_DESIGN.md` (animation nodes appear in scenes; panel shows them as custom
-rows in v1 — section 9 Deferred).
+here), `IMPORT_FIDELITY_DESIGN.md` + `GLB_CONFORMANCE_DESIGN.md` (the import look and the
+importer this extends), `MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md` (the modifier atoms).
 
 ---
 

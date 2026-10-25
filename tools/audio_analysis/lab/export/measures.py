@@ -1,5 +1,4 @@
-"""Model file parts `extra.*` and `fit.*`: the event measures' constants and the fitted measures' params
-(docs/DETECTOR_RUNTIME_DESIGN.md section 4, D11).
+"""Model file parts `extra.*` and `fit.*`: the event measures' constants and the fitted measures' params.
 
 Every filter, window, bin mask and constant comes from the reference modules themselves: kick_goal_tail_features,
 kick_goal_templates, kick_goal_profile, kick_goal_lowbank. Window offsets (the -50..-5 ms fit, the 60 ms guards,

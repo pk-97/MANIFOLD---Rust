@@ -1,8 +1,7 @@
 //! The unified preset definition registry — one module for effects,
 //! generators, and scene modifiers.
 //!
-//! Step 9 of the preset unification (`docs/PRESET_UNIFICATION_PLAN.md`):
-//! the two parallel modules `effect_definition_registry` and
+//! The two parallel modules `effect_definition_registry` and
 //! `generator_definition_registry` collapsed into this one. The value
 //! type was already unified to [`crate::preset_def::PresetDef`] in step 7;
 //! this step merges the two modules, deduplicates the converter / leak
@@ -594,9 +593,7 @@ fn format_float_with_format_string(value: f32, fmt: &str) -> String {
 
 // ─── Shared converters ───
 //
-// section 11 of `docs/PRIMITIVE_LIBRARY_DESIGN.md` describes the migration from
-// inventory-submitted metadata to JSON-authoritative preset files. The
-// two `PresetSource` buckets (`effect::PresetSource` /
+// The two `PresetSource` buckets (`effect::PresetSource` /
 // `generator::PresetSource`) stay separate; everything below is shared.
 
 /// Convert a parsed [`PresetMetadata`] (JSON wire shape) into the unified

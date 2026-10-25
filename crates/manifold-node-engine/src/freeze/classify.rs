@@ -381,8 +381,7 @@ impl CapacityExpr {
 }
 
 /// Why a Boundary primitive is excused from the codegen-path mandate
-/// (`docs/ADDING_PRIMITIVES.md` section "The codegen path is mandatory",
-/// `docs/GRAPH_TOOLING_DESIGN.md` D4). A closed enum: every currently-Boundary
+/// (`docs/ADDING_PRIMITIVES.md` section "The codegen path is mandatory"). A closed enum: every currently-Boundary
 /// primitive declares exactly one of these reasons (via the `primitive!`
 /// macro's `boundary_reason:` field, or a direct
 /// [`EffectNode::boundary_reason`](crate::node_graph::effect_node::EffectNode::boundary_reason)
@@ -447,8 +446,7 @@ pub const CONVERSION_DEBT_LEDGER: &[&str] = &[
     // must survive into next frame, matching `BoundaryReason::CrossFrameState`'s
     // own `node.feedback` example) and multi-pass dependent composition
     // (matching `BoundaryReason::FusedBundle`'s "awaiting decomposition
-    // into atoms" — `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`
-    // already tracks the real fix: decompose into `flow_field_noise` +
+    // into atoms" — the real fix is to decompose into `flow_field_noise` +
     // `uv_displace_by_flow` (both registered, unused) + existing
     // blur/displace atoms, composed as a graph). Left in this ledger
     // rather than reclassified, pending that

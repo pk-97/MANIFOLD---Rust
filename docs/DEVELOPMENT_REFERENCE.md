@@ -25,7 +25,7 @@
 | `manifold-water-surface` | The liquid surface mesher: particle volume, lattice bricks, the welded mesh, its smoothing and normals, the liquid frame and blob bounds |
 | `manifold-compositor` | Layer composition, generator rendering and preset thumbnails |
 | `manifold-ui-paint` | GPU painting for the bitmap UI |
-| `manifold-nodes` | Bundled presets, registration and catalog contracts. See `docs/NODE_CATALOG.md`, `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` |
+| `manifold-nodes` | Bundled presets, registration and catalog contracts. See `docs/NODE_CATALOG.md` |
 | `manifold-media` | Audio/video decode, Metal-accelerated encode, export |
 | `manifold-ui` | Custom bitmap UI: tree, panels, input |
 | `manifold-io` | Project serialization (V1 JSON + V2 ZIP) |
@@ -72,7 +72,7 @@ Corollary (2026-07-10, sibling of BUG-060): a tree node's **text/icon clip is th
 - `manifold-app/src/` — `app.rs` + `app_render.rs` + `app_lifecycle.rs`
 - `crates/manifold-nodes/src/` — catalog registration (`registry.rs`), bundled effect/generator preset lookup, and catalog generation; preset assets live in `crates/manifold-nodes/assets/` and are loaded from disk.
 - `crates/manifold-node-engine/src/` — graph vocabulary and runtime; `load/`, `exec/`, `freeze/`, `runtime/`, and `gpu/` own loading, execution, compilation, playback state and GPU dispatch. Generic engine atoms live in `primitives/` and `atomic/`.
-- Water is seven crates, layered so Cargo refuses an upward reach (`docs/WATER_CRATES_DESIGN.md` is the contract; `crates/manifold-app/tests/crate_layering.rs` pins the edges):
+- Water is seven crates, layered so Cargo refuses an upward reach (`crates/manifold-app/tests/crate_layering.rs` pins the edges):
   - `crates/manifold-water-rigid/src/` — Box3D rigid bodies as graph nodes and the native pair contract (`node.rs`); the bottom, names no liquid.
   - `crates/manifold-water-liquid/src/` — the liquid seam every solver shares: clock, lattice, bodies, coupling, fields (impulses and per-tick force lattices), frame ring, whitewater grid vocabulary and the shared atoms in `primitives/`; on rigid.
   - `crates/manifold-water-gpu-flip/src/`, `manifold-water-gpu-mpm/src/`, `manifold-water-whitewater/src/`, `manifold-water-surface/src/` — the leaves: GPU FLIP, GPU MLS-MPM (Matter), the whitewater step and the surface mesher; each on liquid, none on another leaf.
@@ -148,7 +148,5 @@ Useful flags:
 - `--output <path>` — write somewhere other than a temp path.
 - `--hdr` — refuses immediately; HDR live recording is BUG-053 (structurally broken today).
 
-See `docs/LIVE_RECORDING_PROOFS_DESIGN.md` section 5 (The pre-gig soak (Tier 2)) for the full design and gate semantics, and
-`docs/BUG_BACKLOG.md` BUG-085 (same silent-drop class rule: no path may return…)/BUG-086 (recording-audio-track-under-covers-duration-on-l…) for two accounting caveats found building this suite
-(Rust's own frame/sample counters can be optimistic under real backpressure — the soak's PASS
-decision is anchored to what ffprobe actually decodes out of the file, not to those counters).
+Rust's own frame and sample counters can be optimistic under real backpressure, so the soak's PASS
+decision is anchored to what ffprobe actually decodes out of the file, not to those counters.

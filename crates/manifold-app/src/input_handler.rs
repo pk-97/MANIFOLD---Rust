@@ -147,8 +147,7 @@ impl InputHandler {
             return true;
         }
 
-        // ── Z — zoom to selection (B14 — `docs/TIMELINE_INTERACTION_P1_SPEC.md`
-        // section 5 P1.6). Bare/Shift only — Cmd+Z and Cmd+Shift+Z above are
+        // ── Z — zoom to selection (B14). Bare/Shift only — Cmd+Z and Cmd+Shift+Z above are
         // undo/redo and take priority since they're checked first. ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "z") && m.is_none() {
             host.zoom_to_selection();
@@ -366,9 +365,8 @@ impl InputHandler {
             return true;
         }
 
-        // ── Cmd+E — split at playhead, Ableton-style binding (B14 —
-        // `docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6). Same action as
-        // bare `S` above; both bindings ship side by side per the doc. ──
+        // ── Cmd+E — split at playhead, Ableton-style binding (B14). Same action as
+        // bare `S` above; both bindings ship side by side. ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "e") && m.is_command_only() {
             let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
@@ -416,8 +414,8 @@ impl InputHandler {
         }
 
         // ── Arrow keys: nudge/cross-layer-move clips when selected, navigate
-        // cursor otherwise (Unity lines 426-458, extended by B14 —
-        // `docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6: Shift+arrow = 1 beat,
+        // cursor otherwise (Unity lines 426-458, extended by B14:
+        // Shift+arrow = 1 beat,
         // Cmd+arrow = fine/1 tick, Up/Down cross layers instead of no-op). ──
         if matches!(
             logical_key,
@@ -550,8 +548,7 @@ fn should_paste_pasteboard_files(
 
 #[cfg(test)]
 mod b14_keyboard_layer_tests {
-    //! B14 dispatch tests (`docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6) —
-    //! exercise `InputHandler::handle_keyboard_input` end to end through a
+    //! B14 dispatch tests: exercise `InputHandler::handle_keyboard_input` end to end through a
     //! recording mock of `TimelineInputHost`, the same shape as
     //! `interaction_overlay.rs`'s `TimelineEditingHost` test mock: most
     //! methods are stubs, the ones this phase's bindings call are recorded.

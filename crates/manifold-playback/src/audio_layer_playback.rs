@@ -1,5 +1,4 @@
-//! Per-clip audio-layer playback (Phase 3 of the Audio Layer feature — see
-//! `docs/AUDIO_LAYER_DESIGN.md` section 4) plus the realtime modulation tap (section 3R).
+//! Per-clip audio-layer playback (the Audio Layer feature) plus the realtime modulation tap.
 //!
 //! One **kira voice per active audio clip**, keyed by `ClipId`. Each tick the
 //! content thread calls [`AudioLayerPlayback::update`]: every audio clip under

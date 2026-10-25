@@ -1,7 +1,7 @@
 // node.motion_blur — fusable body (freeze section 12), MultiInputCoincident:
 // `in` is Gather (stencil-fetch), `velocity` is CoincidentTexel.
 //
-// Velocity-directed gather motion blur (docs/CINEMATIC_POST_DESIGN.md D4).
+// Velocity-directed gather motion blur.
 // Exact formula, no substitution:
 //   smear_px = velocity_ndc * 0.5 * dims * (shutter_angle / 360.0), clamped
 //              component-wise to [-max_blur_px, max_blur_px]
@@ -39,7 +39,7 @@
 //
 // `camera` reads `lens.shutter_angle` ENTIRELY via the one DERIVED_UNIFORMS
 // field below (written upstream by node.camera_lens — "one lens, every
-// consumer reads it", docs/CAMERA_AND_LENS_DESIGN.md D4) — it never becomes
+// consumer reads it") — it never becomes
 // a GPU binding. `in`'s Gather access still makes this atom a permanent
 // fusion Boundary going forward (a gather can never fuse with its OWN
 // producer — D7's honest-scope note), so this doesn't buy fusion with a

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scores a run from its saves (docs/DETECTOR_LAB_DESIGN.md D7, D8): saved held-out probabilities, cached candidates
+"""Scores a run from its saves: saved held-out probabilities, cached candidates
 and the labels; no audio, no GPU. The rules are detector_eval.held_out's: each song at a cutoff chosen on other
 project songs, never on generated or recall-only songs; with song groups, on the pair models' predictions, which never
 saw the scored group. Outside a --release run the release holdout (registry.release_holdout) is neither scored nor in

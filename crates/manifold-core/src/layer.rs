@@ -84,14 +84,13 @@ pub struct Layer {
     // ── Audio layer (LayerType::Audio) ──
     /// Per-layer audio output gain in **decibels** (0 dB = unity), applied to
     /// this audio layer's playback. The track fader; meaningless on non-audio
-    /// layers. See `docs/AUDIO_LAYER_DESIGN.md`.
+    /// layers.
     #[serde(default, skip_serializing_if = "is_zero_audio_gain")]
     pub audio_gain_db: f32,
     /// Audio output state: when `true`, this layer is **silent to the master mix
     /// but still feeds its send** (the third state beside Live and Muted). Mute
     /// still wins — a muted layer is silent everywhere. Default `false` (Live).
-    /// Stem lanes from Detect-and-Group default this `true`. See
-    /// `docs/AUDIO_LAYER_DESIGN.md` section 5 / `LAYER_CONTROLS_DESIGN.md` section 5.3.
+    /// Stem lanes from Detect-and-Group default this `true`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub analysis_only: bool,
     /// Set ONLY on a Detect-and-Group **group** layer: the source audio lane this
@@ -162,8 +161,7 @@ pub struct Layer {
     /// home for "what launches clips here", beside the MIDI fields above.
     /// Empty (the default) means no audio trigger fires clips on this layer.
     /// The only authorable clip-trigger shape — see
-    /// `crate::audio_trigger::LayerClipTrigger` and
-    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.1/D2.
+    /// `crate::audio_trigger::LayerClipTrigger`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clip_triggers: Vec<crate::audio_trigger::LayerClipTrigger>,
 

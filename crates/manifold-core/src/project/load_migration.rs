@@ -55,15 +55,13 @@ impl Project {
         // `LegacyAudioTriggerMod` migration, which runs inline inside a
         // single struct's `Deserialize` impl — this can't be a per-struct
         // drain. This Project-level pass, which runs after the whole
-        // `Project` (sends AND layers) has deserialized, is the seam. See
-        // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.2.
+        // `Project` (sends AND layers) has deserialized, is the seam.
         self.migrate_legacy_clip_triggers();
 
         // section 7.2 item 2 (2026-07-11): "Delta" (rate-of-change) left the drawer
         // UI everywhere — no button can toggle or clear it anymore. A saved
         // `rate_of_change: true` would carry invisible behavior the UI can't
-        // show, so clear it on load across every carrier. See
-        // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2.
+        // show, so clear it on load across every carrier.
         self.clear_legacy_rate_on_flags();
 
         // PARAM_STEP_ACTIONS migration: per-instance `ParameterAudioMod`s whose
@@ -149,8 +147,7 @@ impl Project {
     /// (never re-populated — the field is `skip_serializing` so it can't come
     /// back). Idempotent: a project with no legacy routes (already migrated,
     /// or never had any) is a no-op. Unresolvable routes (no such layer) are
-    /// dropped — counted and named on stderr, never silent. See
-    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.2.
+    /// dropped — counted and named on stderr, never silent.
     fn migrate_legacy_clip_triggers(&mut self) {
         let mut dropped = 0usize;
         for send_idx in 0..self.audio_setup.sends.len() {

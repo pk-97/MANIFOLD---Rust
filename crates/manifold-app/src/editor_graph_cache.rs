@@ -1,5 +1,5 @@
 //! The graph editor's MODIFIED badge and a gizmo host's scene, keyed on their
-//! inputs (docs/UI_INVALIDATION_DESIGN.md section 4): the target, the
+//! inputs: the target, the
 //! catalog default the badge compares against, the preset catalog generation,
 //! and the project parts that can change the graph. Each gizmo host (the
 //! editor viewport, the main preview) holds one; nothing here is rebuilt on a

@@ -1,4 +1,4 @@
-"""Model file part `perc.*`: the percussive-share frame channel (docs/DETECTOR_RUNTIME_DESIGN.md section 4).
+"""Model file part `perc.*`: the percussive-share frame channel.
 
 Reference: eval/kick_goal_nn.py percussive, on the net's own 64-band spectrum: sustained = each band's median over
 the past SUSTAIN frames, percussive = the median across NEIGHBOURS bands of the frame.

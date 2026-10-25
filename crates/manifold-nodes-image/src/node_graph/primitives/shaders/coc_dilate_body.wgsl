@@ -1,6 +1,6 @@
 // node.coc_dilate — fusable body (freeze section 12), Pointwise + sampler-Gather
 // (STENCIL-FETCH ABI). Fixed 3x3 neighborhood max of the input texture's R
-// channel — BUG-137's committed fix shape (docs/BUG_BACKLOG.md): spread the
+// channel: spread the
 // maximum CoC found in a small neighborhood outward so `node.variable_blur`'s
 // per-pixel gather radius can borrow a wider radius from an adjacent
 // high-CoC pixel, softening the hard seam at depth discontinuities.
@@ -17,7 +17,7 @@
 // sign flag (1.0 = nearer than focus, 0.0 = far-or-in-focus), alpha == 1.0.
 // Output: the 3x3 neighborhood max is computed independently for R and G;
 // B copies the R max, alpha == 1.0. G max == 1.0 means "any pixel in the
-// neighborhood is nearer than focus" (docs/BOKEH_LAYERED_DOF_DESIGN.md D1).
+// neighborhood is nearer than focus".
 //
 // PARAMS: none. Matches coc_dilate.wgsl (the hand parity oracle).
 

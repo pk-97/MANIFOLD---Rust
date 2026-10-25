@@ -693,8 +693,7 @@ mod retired_cpu_flip_compat_tests {
 
 #[cfg(test)]
 mod legacy_clip_trigger_migration_tests {
-    //! Round-trip gate for the P2 clip-trigger migration
-    //! (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.2), run
+    //! Round-trip gate for the P2 clip-trigger migration, run
     //! through the REAL loader pipeline + REAL serde — not
     //! `Project::migrate_legacy_clip_triggers` called directly (that's
     //! manifold-core's own unit-level proof). Create-path green is half a

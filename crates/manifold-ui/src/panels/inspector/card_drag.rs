@@ -170,7 +170,7 @@ impl InspectorCompositePanel {
     /// Try to begin an effect card drag on a DragBegin event.
     /// Returns true if drag started.
     /// Called from ui_root.rs on DragBegin (needs &mut UITree). `node_id` is
-    /// `Option` (D9, `docs/DRAG_CAPTURE_DESIGN.md`) — a `None` means the
+    /// `Option` — a `None` means the
     /// pressed node died before the drag threshold crossed, so no card drag
     /// can be identified; that's a no-op here, same as a `Some` id matching
     /// no drag handle.

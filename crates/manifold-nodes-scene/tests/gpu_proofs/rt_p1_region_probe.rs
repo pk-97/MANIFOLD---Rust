@@ -265,7 +265,7 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
     sum / n as f64
 }
 
-// BUG-308 (docs/BUG_BACKLOG.md), RESOLVED by RT-D4: root cause was
+// Root cause of the old failure was
 // `raytrace.rs`'s `build_accel`/`refit_accel` racing this frame's own
 // (still-uncommitted) mesh-generation GPU writes via a synchronously
 // committed+waited SEPARATE command buffer on the same Metal queue — the
@@ -279,7 +279,7 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
 // 58.3% RT-on vs RT-off (was exactly 0.0% before RT-D4) — comfortably
 // past this test's own >=30% bar.
 //
-// BUG-309 (docs/BUG_BACKLOG.md), RESOLVED: RT-D4 was the first time this
+// RT-D4 was the first time this
 // path ever produced a REAL rendered shadow, and doing so revealed the
 // shadow wasn't confined to the small occluder's footprint — nearly the
 // ENTIRE ground darkened by 25-83% RT-on vs RT-off at points far from the

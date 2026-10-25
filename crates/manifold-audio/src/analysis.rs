@@ -1720,7 +1720,7 @@ fn relative_flux(flux: f32, energy: f32) -> f32 {
 // the SAME variable-Q transform + band reductions the live capture worker uses
 // ([`form_tilted_column`] + [`reduce_send`]), so a layer-fed send analyses
 // bit-for-bit like a captured one — warp, gain, and mute are already baked into
-// the tapped samples (docs/AUDIO_LAYER_DESIGN.md section 3R).
+// the tapped samples.
 
 /// A fresh per-send analysis state for an analyzer that feeds mono samples
 /// directly (no channel downmix) — the offline-free streaming + test paths.
@@ -1800,7 +1800,7 @@ pub struct StreamingSendAnalyzer {
     /// contrast), and is clamped to `db_min` so it can't black out content the
     /// detector still sees. `FLOOR_DB_OFF` resolves to `db_min` (no cut).
     floor_db: f32,
-    /// Kick fires from the trained detector (docs/KICK_REALTIME_DESIGN.md).
+    /// Kick fires from the trained detector.
     kick_fires: FireQueue,
     /// Snare fires from the trained snare detector, stamped at their emission.
     snare_fires: FireQueue,

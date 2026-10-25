@@ -1562,7 +1562,7 @@ fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
     }
 }
 
-// ── The body golden (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 9 (Phasing), C0) ──
+// ── The body golden ──
 
 const BODY_GOLDEN: &str = "gpu_flip_body_golden.txt";
 /// Bits the scalars and the stop record hold before a solve.

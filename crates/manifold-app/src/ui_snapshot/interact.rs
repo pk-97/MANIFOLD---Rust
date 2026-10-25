@@ -133,8 +133,7 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> InteractOutco
     }
 }
 
-/// P1.0 evidence-gathering verb (`docs/TIMELINE_INTERACTION_P1_SPEC.md` P1.0):
-/// `click_clip:<clip_id>:<layer_id>` — a plain click on a clip, driven through
+/// P1.0 evidence-gathering verb. `click_clip:<clip_id>:<layer_id>` — a plain click on a clip, driven through
 /// `UIState::select_clip` exactly as `ui_bridge/editing.rs`'s
 /// `PanelAction::ClipClicked` plain-click arm does (`editing.rs:60`). Selects
 /// one clip and clears any region — the anchor for a subsequent
@@ -150,8 +149,7 @@ fn click_clip(data: &mut SceneData, rest: &str) -> Result<String, String> {
     ))
 }
 
-/// `shift_click_clip:<clip_id>:<layer_id>` drives the clip-click shift path —
-/// P1.3b's D2 fix (`docs/TIMELINE_INTERACTION_P1_SPEC.md`):
+/// `shift_click_clip:<clip_id>:<layer_id>` drives the clip-click shift path,
 /// `crate::ui_bridge::select_clip_range_to_with_project`, the same function
 /// `ui_bridge/editing.rs`'s `PanelAction::ClipClicked` shift arm now calls.
 /// Before this phase this verb drove `select_region_to_with_project`
@@ -264,8 +262,7 @@ fn duplicate_selected_clips(data: &mut SceneData) -> Result<String, String> {
     ))
 }
 
-/// P1.4 evidence verb (D5/D7, `docs/TIMELINE_INTERACTION_P1_SPEC.md`, S2):
-/// `drag_clip_toward_zero:<clip_id>:<layer_id>` sets the clip's `start_beat`
+/// P1.4 evidence verb. `drag_clip_toward_zero:<clip_id>:<layer_id>` sets the clip's `start_beat`
 /// directly to `(deeply_negative_candidate).max(Beats::ZERO)` — the same
 /// clamp `InteractionOverlay::handle_move_drag`'s per-snapshot loop applies
 /// on EVERY frame of a real drag (proven per-frame, not just at release, by
@@ -305,8 +302,7 @@ fn drag_clip_toward_zero(data: &mut SceneData, rest: &str) -> Result<String, Str
     ))
 }
 
-/// P1.5 evidence verb (B13, `docs/TIMELINE_INTERACTION_P1_SPEC.md`, S5):
-/// `drag_readout:<layer_id>:<clip_index>:<position_beat>:<duration_beat>`
+/// P1.5 evidence verb. `drag_readout:<layer_id>:<clip_index>:<position_beat>:<duration_beat>`
 /// sets `TimelineViewportPanel::drag_readout` directly to the given
 /// (position, duration, layer_index) — the same "drive the data field
 /// directly, the level under test is render reaction not input dispatch"
@@ -664,7 +660,7 @@ fn lane_param_range(data: &SceneData, layer_id: &str, param_id: &str) -> Option<
 /// P0.0 evidence-gathering verb: flip `is_collapsed` directly on the target
 /// layer's `Project` data (same field `states_scene` sets directly — see
 /// `fixtures.rs`), NOT via a synthesized chevron click. The bug under
-/// investigation (`docs/TIMELINE_LAYOUT_P0_SPEC.md` RC1-RC3) lives in the
+/// investigation lives in the
 /// render/sync path's reaction to the resulting state, not in input dispatch,
 /// so driving the data field directly is the right level for this phase.
 /// `scroll_inspector:<delta>` — calls `UIRoot::try_inspector_scroll` directly,

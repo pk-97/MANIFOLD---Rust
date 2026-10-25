@@ -64,8 +64,7 @@ workflow setups"** (the workspaces layer, section 8).
   knob/fader/pad, XY pad, next-clip preview (S3), output viewport, audio meters, pages.
 - **D7 — Bindings address existing stable identities only** (`param_id` slots, macro index,
   `LayerId`, scene index). Widgets are a presentation layer over the same slots MIDI/OSC/
-  Ableton already write. Nothing new in the binding model; the B++ card unification
-  (`docs/CARD_TARGET_UNIFICATION.md`) is untouched and unblocked.
+  Ableton already write. Nothing new in the binding model; the B++ card unification is untouched and unblocked.
 - **D8 — R1 revised, precisely.** The steal-pass R1 rejection of the VDMX *DIY UI toolkit*
   stands. What changes: **configurable arrangements of purpose-built panels** (Ableton/
   Blender-style workspaces) are now in scope as a future layer. Fixed default editor stays the
@@ -127,8 +126,7 @@ drawer does today. Zero new styling infra.
 0. **Gig-resilience arming widgets** — GIG_RESILIENCE_DESIGN P3 adds the Cmd+Q
    hold-progress indicator and understudy status strip (later the thermal glyph) as
    widgets on this surface. Its state hooks ride the perform enter/exit lifecycle and
-   don't touch this design; the widgets land right after P1 (sequencing:
-   `docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges)).
+   don't touch this design; the widgets land right after P1.
 1. **Builder v1** — arrange/resize/add/remove widgets on the grid, per-project persistence,
    undoable commands, `WidgetTarget` for param/macro/layer widgets. Trigger: after session
    perform has proven the widget set.

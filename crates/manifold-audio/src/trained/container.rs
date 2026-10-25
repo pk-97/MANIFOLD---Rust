@@ -1,5 +1,4 @@
-//! The model container: named little-endian arrays (docs/KICK_REALTIME_DESIGN.md
-//! section 2). Python writer: `tools/audio_analysis/kick_container.py`; both sides
+//! The model container: named little-endian arrays. Python writer: `tools/audio_analysis/kick_container.py`; both sides
 //! must agree byte for byte.
 
 use std::collections::HashMap;

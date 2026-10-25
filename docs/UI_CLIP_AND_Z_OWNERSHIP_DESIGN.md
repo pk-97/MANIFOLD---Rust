@@ -22,8 +22,6 @@ bleed into the output preview, no matter what a future feature builds inside
 it. The bug class dies by construction instead of panel-by-panel.
 
 Companions: `UI_ARCHITECTURE_OVERHAUL.md` (the substrate this extends),
-`UI_ARCHITECTURE_AUDIT.md (deleted)` (as-built findings), `DRAG_CAPTURE_DESIGN.md` (the
-input-side sibling: same single-owner principle applied to pointer events),
 `FOUNDATIONAL_GAPS.md` A2 (the inventory entry this design discharges).
 
 ---
@@ -44,7 +42,7 @@ input-side sibling: same single-owner principle applied to pointer events),
 | Timeline lane scissor | `manifold-nodes/src/ui_renderer.rs:390,731–740` (`lane_content_scissor`, RAII) | Bespoke local containment for lane content — proof of need, deeper than region level; **stays** |
 | Headless verification | `ui-snapshot` feature, `scripts/ui-flows/` (L3 driver) | Both windows renderable headless; flows can click/drag/assert |
 
-Bug family this touches (from `docs/BUG_BACKLOG.md`): BUG-060 (inspector over
+Bug family this touches: BUG-060 (inspector over
 footer — dies here), BUG-047 (Audio Setup overflow — becomes visible clipping;
 the missing scroll stays its own bug), BUG-027 (editor z — fixed locally;
 pinned structurally here), BUG-025 (no-slug) (timeline row bleed — gains an enforced
@@ -93,8 +91,7 @@ ancestor stack, the scissor batching, the overlay registry. This design adds
   window: `ui_root.rs` wraps each `ScreenLayout` rect in `begin_region`.
   Editor window: the dock host does the same with `DockRects`. Rejected:
   *deriving scissors renderer-side from layout rects* — the renderer has no
-  layout knowledge by design since the Phase-5 layering inversion
-  (`UI_LAYERING_INVERSION.md (deleted)`); re-coupling it would undo that work.
+  layout knowledge by design since the Phase-5 layering inversion; re-coupling it would undo that work.
 - **D6 — The timeline's `lane_content_scissor` RAII stays.** It is
   *within-region* containment (lane rows inside the timeline region), one
   level deeper than this design governs. Folding it into regions would turn
@@ -156,8 +153,7 @@ is the hot path only in the weak sense above (no per-frame work added).
   pass, by a write the node-level scissor trace cannot see (tree-node draws
   were all clamped at the footer line; immediate-mode draws are untraced and
   were never ruled out). Exactly the class P1's binding region scissor kills
-  by construction. Full history: `docs/FOOTER_OVERPAINT_INVESTIGATION.md` on
-  that branch; the worktree binary doubles as the verification rig — rerun the
+  by construction. The worktree binary doubles as the verification rig — rerun the
   drawer-open + scroll repro after P1 and the footer must be unbreakable.
 - **BUG-047** — the spill becomes clean clipping at the panel edge (correct
   rendering of a layout problem). The panel still needs a scroll container for
@@ -232,7 +228,7 @@ is the hot path only in the weak sense above (no per-frame work added).
 - **Deliverables:** the debug assertion promoted to the permanent contract
   (documented on `begin_region`); `docs/UI_ARCHITECTURE_OVERHAUL.md` section status
   and `FOUNDATIONAL_GAPS.md` A2 updated to point here; BUG-060 moved to
-  Fixed / BUG-047 re-scoped in `BUG_BACKLOG.md`; subregion-scissor /
+  Fixed / BUG-047 re-scoped; subregion-scissor /
   compositor-ordering invariant memories updated to name the region contract.
 - **Gate:** full workspace sweep (`cargo test --workspace` +
   `cargo clippy --workspace -- -D warnings`); full ui-snap fixture set

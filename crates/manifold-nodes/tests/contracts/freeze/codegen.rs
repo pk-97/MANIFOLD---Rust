@@ -204,7 +204,7 @@ mod binding_contract_tests {
         // whitewater_emitter_velocity, whitewater_obstacle_source, whitewater_influence and dust_potential.
         // BUG-g75v.7 adds upwind_distance, a buffer stencil atom; particle blending
         // pass 1 adds interpolation, solid projection and array mix (buffer atoms).
-        // The ocean (docs/OCEAN_SURFACE_DESIGN.md) adds ocean_spectrum,
+        // The ocean adds ocean_spectrum,
         // projected_grid, ocean_displace and cut_out_box (buffer atoms), over
         // (texture, manual), and camera_sky and sea_horizon_env (texture,
         // canonical). Deleting UI soft shadows removes heightfield_shadow, a

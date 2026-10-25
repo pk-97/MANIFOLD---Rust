@@ -1,6 +1,5 @@
 //! `node.ocean_displace` — moves a mesh by three spectral ocean cascades and
-//! paints crest foam where the summed surface folds
-//! (docs/OCEAN_SURFACE_DESIGN.md D6, D9).
+//! paints crest foam where the summed surface folds.
 
 use std::borrow::Cow;
 

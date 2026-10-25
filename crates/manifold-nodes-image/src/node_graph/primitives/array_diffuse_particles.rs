@@ -80,7 +80,7 @@ manifold_node_engine::primitive! {
     derived_uniforms: ["frame_count:u32"],
 }
 
-// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// Per-frame recompute for a FUSED
 // region's `frame_count` field. Matches `run()`'s own computation below.
 inventory::submit! {
     manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {

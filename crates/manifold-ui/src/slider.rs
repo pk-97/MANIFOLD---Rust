@@ -788,7 +788,6 @@ impl BitmapSlider {
 //
 // Intentional divergence from Unity: Unity reimplements this pattern
 // per-panel. We consolidate it because we're actively debugging it.
-// See docs/KNOWN_DIVERGENCES.md.
 
 /// Owns the drag state machine, value cache, and visual sync for one slider.
 ///

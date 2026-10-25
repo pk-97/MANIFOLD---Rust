@@ -2,8 +2,7 @@
 //! and the engine vocabulary (`manifold-core`).
 //!
 //! Phase 5 layering inversion: `manifold-ui` owns UI-local mirrors of the
-//! engine's domain enums/structs and view-models of its domain entities (see
-//! `docs/UI_LAYERING_INVERSION.md`). The app is the *only* place the two meet —
+//! engine's domain enums/structs and view-models of its domain entities. The app is the *only* place the two meet —
 //! every core↔UI conversion lives here, as plain functions (the orphan rule
 //! forbids `From` impls between two foreign types).
 //!

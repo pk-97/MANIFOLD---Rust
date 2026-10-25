@@ -1,4 +1,4 @@
-"""Model file part `trees.*`: the event-measure forest (docs/DETECTOR_RUNTIME_DESIGN.md section 4).
+"""Model file part `trees.*`: the event-measure forest.
 
 A forest is flat node arrays: value, threshold (f64), feature, left, right (i32, node index inside its own tree),
 missing_left, is_leaf (i32 0/1), offsets (i64, n_trees + 1: tree t owns nodes offsets[t]..offsets[t+1]), baseline

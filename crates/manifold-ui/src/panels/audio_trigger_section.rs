@@ -1,6 +1,5 @@
 //! AUDIO TRIGGERS — the inspector's layer-owned clip-trigger authoring
-//! section (P3b, `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`;
-//! drawer redesigned 2026-07-19).
+//! section drawer.
 //!
 //! A single collapsible section pinned at the top of the selected layer's
 //! inspector content. Collapsed while the layer has no triggers, open when

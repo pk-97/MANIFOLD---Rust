@@ -1,4 +1,4 @@
-"""Experiment configs (docs/DETECTOR_LAB_DESIGN.md D6, D9, P6): one JSON file per experiment in lab/experiments/;
+"""Experiment configs: one JSON file per experiment in lab/experiments/;
 an A/B is two configs. A config builds a detector from parts (lab/components.py): a candidate finder, models (net,
 trees or both), how they combine, and optionally the song-history stage (lab/stage.py). Every key is required and
 no other key is allowed, so a typo is an error, not a silent default. Schema 1 configs (one net, a 'flat' switch) migrate on read,

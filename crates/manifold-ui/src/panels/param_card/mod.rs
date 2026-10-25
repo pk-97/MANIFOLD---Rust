@@ -623,7 +623,7 @@ impl ParamCardPanel {
     /// fire_meter_key_for_param` — the SAME constructor the content-thread
     /// capture uses — so `fire_level` (built at the app boundary from
     /// `ContentState::fire_meters`, a `manifold-core` type `manifold-ui`
-    /// cannot depend on — `docs/UI_LAYERING_INVERSION.md`) resolves it.
+    /// cannot depend on) resolves it.
     /// Amount is always the first `Slider` row `build_audio_mod_drawer`
     /// builds (`DrawerIds::meters[0]`), regardless of which trailing rows
     /// follow. `dt` (BUG-109 P5) is the UI frame delta seconds, threaded down

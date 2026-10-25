@@ -8,8 +8,7 @@
 //! [`LayerClipTrigger`](manifold_core::audio_trigger::LayerClipTrigger) uses
 //! the shared `AudioModShape::condition()` chassis and edge-detects the
 //! sensitivity-scaled raw signal at the fixed 0.5 threshold. See
-//! `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D2/D3/section 3.3
-//! (P2) and `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`.
+//! `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`.
 //!
 //! **Why this is just edge detection:** the upstream transient detector already
 //! emits one decaying impulse per onset and holds its own ~106 ms refractory

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export-offset proofs for project songs (docs/DETECTOR_LAB_DESIGN.md D5), by detector_wip's method on the song's
+"""Export-offset proofs for project songs, by detector_wip's method on the song's
 own mix: the project's kick notes against the mix's low onset strength, its snare notes against the 1-8 kHz
 rises, each fitted to a whole bar's time on the set's tempo map (als_extract's integration, so tempo automation fits
 too) plus a lag. Proven when both patterns pick the same bar, or when only one pattern

@@ -8,10 +8,7 @@ backend already exists and feeds the agent catalog; this design surfaces that
 same backend to humans, and adds the structural UI it implies.
 
 **Much of this has since shipped** (on-node controls, collapse, in-place edit,
-single-node preview, groups navigation, popup palette, window behaviour). For the
-*current state + the remaining work*, see `docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md`
-(2026-06-13), which is code-verified and authoritative. Read this doc for the
-*why*; read the brief for the *what's-left*.
+single-node preview, groups navigation, popup palette, window behaviour). This doc covers the *why*. Check the code for current state and what is left.
 
 ---
 

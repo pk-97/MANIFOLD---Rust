@@ -266,7 +266,7 @@ fn build(project: &Project, target: &GraphTarget) -> Option<GraphSnapshot> {
     })
 }
 
-/// D4 (`docs/PARAM_TWO_WAY_BINDING_DESIGN.md`): overlay the EFFECTIVE
+/// Overlay the EFFECTIVE
 /// (forward-reshaped) value onto every card-bound node-face row, instead of
 /// the raw `def.nodes[..].params` value `GraphSnapshot::from_def` reads —
 /// which may hold a stale node-face write `apply_bindings` stomps on the

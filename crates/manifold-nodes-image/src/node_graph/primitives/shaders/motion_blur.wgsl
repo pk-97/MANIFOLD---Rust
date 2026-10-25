@@ -1,5 +1,5 @@
 // node.motion_blur — hand parity oracle for the generated standalone
-// kernel (docs/CINEMATIC_POST_DESIGN.md D4). Same velocity-directed gather
+// kernel. Same velocity-directed gather
 // formula as motion_blur_body.wgsl — kept independent (not sharing Rust
 // source) so the gpu_tests parity check is a real cross-check, not a
 // tautology.

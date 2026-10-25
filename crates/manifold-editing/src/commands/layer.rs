@@ -906,7 +906,7 @@ impl Command for DuplicateLayersCommand {
 }
 
 /// Set an audio layer's output gain (decibels). The track fader for an audio
-/// layer; applied to its kira playback handle. See `docs/AUDIO_LAYER_DESIGN.md`.
+/// layer; applied to its kira playback handle.
 #[derive(Debug)]
 pub struct SetLayerAudioGainCommand {
     layer_id: LayerId,
@@ -958,7 +958,7 @@ impl Command for SetLayerAudioGainCommand {
 
 /// Toggle an audio layer's **analysis-only** output state: silent to the master
 /// mix but still feeding its send (the third state beside Live and Muted). Mute
-/// still wins. See `docs/AUDIO_LAYER_DESIGN.md` section 5 / `LAYER_CONTROLS_DESIGN.md` section 5.3.
+/// still wins.
 #[derive(Debug)]
 pub struct SetLayerAnalysisOnlyCommand {
     layer_id: LayerId,

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// A user-placed timeline marker at a specific beat position. In section
 /// export every marker inside the export range is a cut point
-/// (docs/SECTION_EXPORT_DESIGN.md D2) — there is no per-marker flavor.
+/// — there is no per-marker flavor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineMarker {

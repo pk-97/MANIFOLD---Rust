@@ -1,4 +1,4 @@
-//! `docs/GBUFFER_DESIGN.md` I5 — `node.render_scene`'s stored `velocity`
+//! `node.render_scene`'s stored `velocity`
 //! output: first-frame velocity is EXACTLY zero, and a translated object's
 //! second-frame velocity matches the CPU NDC-delta oracle within 1e-4.
 //!

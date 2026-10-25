@@ -1,12 +1,11 @@
 //! A deterministic, dependency-free byte hash — the shared identity-key
-//! utility behind the D6 fire meter
-//! (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c, BUG-082's
-//! fix). Two independent call sites must agree on a fire-mode config's
+//! utility behind the fire meter.
+//! Two independent call sites must agree on a fire-mode config's
 //! identity hash WITHOUT sharing a domain type: the content thread
 //! (`manifold_core::audio_trigger::FireMeterCapture::push`, in
 //! `manifold-playback`) and the UI thread (a drawer meter's lookup key, in
-//! `manifold-ui`). `manifold-ui` cannot depend on `manifold-core`
-//! (`docs/UI_LAYERING_INVERSION.md`), so the hash itself — pure bytes in,
+//! `manifold-ui`). `manifold-ui` cannot depend on `manifold-core`,
+//! so the hash itself — pure bytes in,
 //! `u64` out, no domain semantics — lives here in the shared zero-dependency
 //! vocabulary crate; the STATEFUL capture buffer it keys stays in
 //! `manifold-core` where the domain logic belongs.

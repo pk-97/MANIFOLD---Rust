@@ -1,4 +1,4 @@
-"""Model file part `stage.*`: the song-history stage (docs/DETECTOR_RUNTIME_DESIGN.md section 4, section 5.3).
+"""Model file part `stage.*`: the song-history stage.
 
 Reference: lab/stage.py (inputs, gated) over eval/kick_goal_selfsim.py self_features. Windows in file order, window 0
 feeds the gate; the forest reads 1 + W x (3 + has_level) inputs. The cuts are written only when the gate is on.

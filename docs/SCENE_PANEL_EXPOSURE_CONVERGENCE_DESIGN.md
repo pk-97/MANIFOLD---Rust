@@ -5,7 +5,7 @@
 **Superseded by [SCENE_DOCUMENT_DESIGN.md](SCENE_DOCUMENT_DESIGN.md)** for the scene, card and starter model (2026-10-22).
 
 
-**Companion docs:** `docs/SCENE_SETUP_PANEL_DESIGN.md` (v1, SHIPPED), `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (SHIPPED), `docs/SCENE_PANEL_UX_DESIGN.md` (SHIPPED, D2/D3 superseded), `docs/SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md` (SHIPPED 2026-07-18).
+**Companion docs:** `docs/SCENE_SETUP_PANEL_DESIGN.md` (v1, SHIPPED), `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (SHIPPED), `docs/SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md` (SHIPPED 2026-07-18).
 
 Peter, 2026-07-19: the scene setup panel "has been a huge mess … so many bugs, broken features, ugly UI, incorrect semantics, and intent. The goal was a 'Blender like' scene config panel that just routes 1:1 to the graph and nodes like the effect and generator cards — all one unified system. I think sometimes the scene panel hard-codes expected things in the graph." He asked for a full audit of the scene infra, UI, and UX, then discussion. This doc is that audit + the agreed direction.
 
@@ -21,7 +21,7 @@ The panel is not 1:1 with the graph. It is a curated projection that understands
 
 - **Proof:** conviction test `ui_bridge::state_sync::sync_scene_row_values_tests::bound_row_display_reads_the_binding_slot_not_the_def` — FAILED pre-fix, green post.
 - **Fix:** `resolve` checks the binding slot first (`binding_id_for_node_param` → `binding_id_for_node_param_in` for tracking instances → `get_base_param`), def walk as unbound fallback — mirroring `display_value`.
-- **Landed:** `078375bb` on main; workspace sweep 3,777/3,777, clippy clean, `bans ok`. Full entry: BUG-260 in `docs/BUG_BACKLOG.md`.
+- **Landed:** `078375bb` on main; workspace sweep 3,777/3,777, clippy clean, `bans ok`.
 
 ## 3. Audit findings (as-built, verified 2026-07-19)
 

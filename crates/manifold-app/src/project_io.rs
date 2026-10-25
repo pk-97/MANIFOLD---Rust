@@ -164,8 +164,7 @@ pub struct ProjectIOAction {
     /// Commands to record in the undo stack.
     pub record_commands: Vec<Box<dyn Command>>,
     /// Non-blocking notice for the UI toast (e.g. "Opened with repairs: …").
-    /// `None` means nothing to show — the common case. See BUG-063,
-    /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6.
+    /// `None` means nothing to show — the common case. See BUG-063.
     pub notice: Option<String>,
 }
 
@@ -634,7 +633,7 @@ impl ProjectIOService {
             }
         }
 
-        // Process audio files (Audio Layer feature, docs/AUDIO_LAYER_DESIGN.md section 6).
+        // Process audio files.
         // A file dropped ONTO an existing audio lane joins it (a new clip on that
         // lane at the drop beat); a file dropped on empty timeline space appends
         // its own new audio lane. `join_audio_layer` is the lane under the cursor,
@@ -843,8 +842,7 @@ pub fn is_supported_midi_extension(path: &Path) -> bool {
 }
 
 /// Audio files an audio layer takes, by drop or by the Replace Audio dialog.
-/// Mirrors what the decoder (symphonia) and kira can read. See
-/// `docs/AUDIO_LAYER_DESIGN.md`.
+/// Mirrors what the decoder (symphonia) and kira can read.
 pub(crate) const AUDIO_EXTENSIONS: &[&str] =
     &["wav", "mp3", "flac", "aif", "aiff", "ogg", "m4a", "aac"];
 

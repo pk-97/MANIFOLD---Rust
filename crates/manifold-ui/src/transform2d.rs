@@ -1,5 +1,5 @@
 //! General 2D affine transform — the capability behind scale-about-pivot and
-//! rotation on the bitmap UI's draw path (`docs/UI_TRANSFORM_STACK_DESIGN.md`).
+//! rotation on the bitmap UI's draw path.
 //!
 //! Do NOT confuse with [`crate::transform`]'s `Axis` — that's a 1D pan/zoom
 //! coordinate map (timeline beats↔px, graph canvas graph-space↔screen), used

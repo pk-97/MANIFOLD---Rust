@@ -1,5 +1,4 @@
-//! Pitch-preserving time-stretch (warp) for the Audio Layer feature — see
-//! `docs/AUDIO_LAYER_DESIGN.md` section 4.1.
+//! Pitch-preserving time-stretch (warp) for the Audio Layer feature.
 //!
 //! This is the `warp(samples, ratio)` seam. It stretches a decoded interleaved
 //! buffer **offline** (ahead of playback) via the vendored Signalsmith Stretch

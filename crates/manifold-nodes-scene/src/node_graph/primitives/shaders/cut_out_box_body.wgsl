@@ -1,7 +1,6 @@
 // node.cut_out_box — fusable BUFFER body. Multiplies vertex alpha by 0 inside
 // a world box, ramping back to 1 over `feather` metres outside it, so a
-// material in alpha Mask mode hides that part of the mesh
-// (docs/OCEAN_SURFACE_DESIGN.md D7).
+// material in alpha Mask mode hides that part of the mesh.
 //
 // ABI (buffer standalone codegen): `mesh` is coincident (e_mesh); params in
 // PARAMS order.

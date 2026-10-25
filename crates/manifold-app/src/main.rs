@@ -119,7 +119,7 @@ mod scene_import;
 // constraint as `run_export` itself — native Metal, no wgpu).
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod journey_proof;
-// BUG-219 P1 evidence harness (docs/IMPORT_RESPONSIVENESS_DESIGN.md P1):
+// BUG-219 P1 evidence harness:
 // drives the REAL `Application::import_model_file` (unmodified) against the
 // full 43MB ABeautifulGame.glb fixture, sequentially 3x, with a real
 // content-shaped GPU runtime alive concurrently — the interactive-app shape
@@ -191,7 +191,7 @@ mod gap_start_probe;
 // the test GPU device: one queued GPU run).
 #[cfg(all(test, target_os = "macos"))]
 mod frame_exact_app;
-// The count gate's content half (docs/UI_INVALIDATION_DESIGN.md D10).
+// The count gate's content half.
 #[cfg(all(test, target_os = "macos"))]
 mod content_reaction_budget;
 // D8.4 acceptance — deliberate native GPU journey with external reference projects.
@@ -244,7 +244,7 @@ fn main() {
 
     // Headless perf-soak subcommand (feature `perf-soak`): headless,
     // real-time-paced content-thread soak of a real project against the
-    // frame-budget gate (docs/PERF_BUDGET_GATE_DESIGN.md P1).
+    // frame-budget gate.
     #[cfg(all(feature = "perf-soak", target_os = "macos"))]
     {
         let args: Vec<String> = std::env::args().collect();

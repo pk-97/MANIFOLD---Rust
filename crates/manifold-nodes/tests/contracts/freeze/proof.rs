@@ -90,7 +90,7 @@ fn oracle_catches_wrong_fusion() {
     );
 }
 
-/// **I6** (D7/P0 amendment, `docs/CINEMATIC_POST_DESIGN.md`): a graph chaining
+/// **I6**: a graph chaining
 /// a camera-derived Pointwise TEXTURE atom (`test.camera_pointwise` — the I6
 /// test fixture; see its doc comment) with a Pointwise neighbour
 /// (`node.invert`) must render byte-identical fused vs unfused. This is the

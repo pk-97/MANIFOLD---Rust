@@ -30,7 +30,7 @@ inventory = "0.3"
 
 [features]
 # Test seams that inject inbound OSC and Ableton values headlessly; also turns
-# on the change audit (docs/UI_INVALIDATION_DESIGN.md D10) in every test build
+# on the change audit in every test build
 # that links the testkit.
 testkit = ["manifold-editing/change-audit"]
 # The UI snapshot harness lends its own project to an engine for one tick.

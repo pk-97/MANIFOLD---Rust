@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The lab's invariant tests (docs/DETECTOR_LAB_DESIGN.md section 4). Run directly: test_lab.py"""
+"""The lab's invariant tests. Run directly: test_lab.py"""
 import hashlib
 import json
 import os
@@ -1127,7 +1127,7 @@ def exact(test, got, want, what):
 
 
 class ReleaseTests(unittest.TestCase):
-    """lab/release.py and the model file contract v2 (docs/DETECTOR_RUNTIME_DESIGN.md P1)."""
+    """lab/release.py and the model file contract v2."""
 
     @classmethod
     def setUpClass(cls):

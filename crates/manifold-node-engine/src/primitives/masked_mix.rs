@@ -5,8 +5,7 @@
 //! takes a third texture whose red channel is read as a per-pixel
 //! weight and modulated by `amount` globally.
 //!
-//! This is the first of the Phase A texture primitives (per
-//! `docs/PRIMITIVE_LIBRARY_DESIGN.md` section 10) — the foundational
+//! This is the first of the Phase A texture primitives — the foundational
 //! mask-routing primitive that unlocks luma-keyed effects,
 //! chroma-keyed effects, edge-gated stylize, threshold-bloom-in-shadows,
 //! and every other "apply X only where Y" composition.

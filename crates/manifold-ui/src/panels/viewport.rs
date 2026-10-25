@@ -36,7 +36,6 @@ const MAX_RULER_TICKS: usize = 1500;
 
 // ── Submodules (the god-panel split: model / coordinate / render / interaction) ──
 // `panels/viewport.rs` stays as the parent module and owns these concern files.
-// See `docs/TIMELINE_API_DESIGN.md` section 3.6.
 mod coordinate;
 mod interaction;
 mod lane_screens;
@@ -237,9 +236,8 @@ pub struct TimelineViewportPanel {
     drag_readout_label_id: Option<NodeId>,
 
     /// View snapshot captured by `Z` (zoom-to-selection, B14) so `Shift+Z`
-    /// can restore it. One level, not a stack — matches the doc's "zoom-back"
-    /// wording, not a full zoom history. `docs/TIMELINE_INTERACTION_P1_SPEC.md`
-    /// section 5 P1.6.
+    /// can restore it. One level, not a stack — matches the "zoom-back"
+    /// wording, not a full zoom history.
     zoom_back: Option<(f32, Beats, f32)>,
 
     // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "timeline marquee
@@ -531,7 +529,7 @@ impl TimelineViewportPanel {
     /// Call this from app.rs when layers change (before build).
     ///
     /// Re-clamps the scroll position against the new `total_content_height`
-    /// immediately (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D3): a collapse/delete
+    /// immediately: a collapse/delete
     /// that shrinks content must move the scroll position in the same frame,
     /// not wait for the next explicit scroll event. Since the header panel
     /// reads this same `scroll_y_px` at draw time (D2), both columns move
@@ -907,8 +905,7 @@ impl TimelineViewportPanel {
     /// content draw (clip bodies, waveforms, thumbnails, this overlay, and any
     /// future drag chrome) must go through `UIRenderer::lane_content_scissor`,
     /// an RAII guard that pushes the tracks-rect clip on construction and pops
-    /// it on drop, so a draw call cannot opt out — see
-    /// `docs/TIMELINE_INTERACTION_P1_SPEC.md` D7. The two GPU content passes
+    /// it on drop, so a draw call cannot opt out. The two GPU content passes
     /// (clip waveforms, clip thumbnails) get the same non-opt-out property a
     /// different way: `tracks_rect` is a required parameter of their
     /// `render()`, not an optional one. `insert_cursor_layer` + `has_insert`
@@ -1624,7 +1621,7 @@ mod tests {
         ScreenLayout::new(1920.0, 1080.0)
     }
 
-    // ── B14 zoom-back (`docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6) ──
+    // ── B14 zoom-back ──
 
     // ── P7.6 viewport-drag-fold pinning ─────────────────────────────────
     // `docs/UI_WIDGET_UNIFICATION_DESIGN.md` P7.6: prove ruler-scrub,
@@ -2095,7 +2092,7 @@ mod tests {
 
     #[test]
     fn visible_clip_rects_clamps_subpixel_clips_to_hairline_but_culls_offscreen() {
-        // P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): at far zoom, a clip whose
+        // At far zoom, a clip whose
         // pixel width rounds below 1px must still draw as a 1px hairline, not
         // vanish. Only clips fully outside the tracks rect are skipped.
         let mut panel = TimelineViewportPanel::new();
@@ -2342,9 +2339,7 @@ mod tests {
 
     // P0.1 gate (D3): a collapse/delete that shrinks content must move the
     // scroll position in the same frame `rebuild_mapper_layout` runs, not
-    // wait for the next explicit scroll event — see
-    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D3 and RC1's before-evidence
-    // (`docs/evidence/timeline_p0/before/README.md`, scene 06).
+    // wait for the next explicit scroll event.
     #[test]
     fn rebuild_mapper_layout_reclamps_scroll_immediately() {
         use crate::types::LayerType;

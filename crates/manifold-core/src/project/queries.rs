@@ -265,9 +265,7 @@ impl Project {
     /// the section 3.4 walker arm; a send-owned `AudioSend::triggers` is drained
     /// legacy storage now and is never read here again).
     /// `AudioModRuntime` recomputes this only on a data-version change and
-    /// skips every send outside the set (unless it's the scope-tapped send) —
-    /// see `docs/AUDIO_SENDS_UX_DESIGN.md` D4/section 3.2,
-    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.4.
+    /// skips every send outside the set (unless it's the scope-tapped send).
     pub fn analysis_consumed_sends(&self) -> ahash::AHashSet<crate::AudioSendId> {
         // A plain fn (not a closure capturing `out`) so it can be called
         // alongside the direct `out.insert` the clip-trigger arm below needs —
@@ -342,8 +340,7 @@ impl Project {
 
     /// Every ENABLED audio mod reading `send_id`, resolved to a legible
     /// `(owning layer, "LayerName \u{2022} EffectName \u{2022} ParamName")` pair — the
-    /// Audio Setup panel's Consumers section (`docs/AUDIO_SENDS_UX_DESIGN.md`
-    /// D1/D3). `layer_id` is `None` for a master-effects mod (nothing to jump
+    /// Audio Setup panel's Consumers section. `layer_id` is `None` for a master-effects mod (nothing to jump
     /// to; the label reads "Master" instead). Walks the same instance set
     /// [`Self::audio_send_usage_count`] does.
     pub fn audio_mod_consumers(

@@ -1,6 +1,5 @@
 // node.ocean_spectrum — fusable BUFFER body, SOURCE (no array inputs).
-// One complex value of one of six ocean fields at one wavevector, at time t
-// (docs/OCEAN_SURFACE_DESIGN.md section 3.1): JONSWAP × Donelan-Banner,
+// One complex value of one of six ocean fields at one wavevector, at time t: JONSWAP × Donelan-Banner,
 // h(k,t) = h0(k) e^{-iωt} + conj(h0(-k)) e^{+iωt}, pre-scaled by N² so the
 // 1/N²-scaled inverse FFT returns Σ h(k) e^{ik·x}.
 //

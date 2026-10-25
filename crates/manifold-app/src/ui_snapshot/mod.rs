@@ -133,7 +133,7 @@ pub fn run(args: &[String]) {
     let want_open_perf_hud = args.iter().any(|a| a == "--open-perf-hud");
     let interact = arg_value(args, "--interact");
     let script_path = arg_value(args, "--script");
-    // P0.0 evidence flag (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): seed BOTH scroll
+    // Evidence flag: seed BOTH scroll
     // owners (`Viewport::scroll_y_px` + the header panel's `ScrollContainer`
     // offset) to the same non-zero pixel value right after the base render
     // and before any `--interact`, so a subsequent content-shrinking edit can
@@ -261,7 +261,7 @@ pub fn run(args: &[String]) {
     }
 
     // The `transform` scene is the UI transform-stack capability's visual
-    // proof (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — a bespoke `UITree` with no
+    // proof — a bespoke `UITree` with no
     // `Project`/fixture behind it, so it doesn't go through `fixtures::build`.
     if scene == "transform" {
         let dir = out_dir("transform");
@@ -285,8 +285,7 @@ pub fn run(args: &[String]) {
     );
 }
 
-/// P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs a far
-/// zoom (1px/beat) to make its clips
+/// `hairlineclips` needs a far zoom (1px/beat) to make its clips
 /// sub-pixel-wide; every other scene keeps the existing fixed 24px/beat so
 /// their PNGs stay byte-identical across phases. Shared by `render_ui_scene`
 /// and `script::run` so a script's resolved rects agree with a plain
@@ -1191,8 +1190,7 @@ mod bug068_clip_panel_overlap {
 
 #[cfg(test)]
 mod cache_path_full_render {
-    //! P0+P1 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md` — read the "Reframe
-    //! 2026-07-10" block before this comment) — a faithful FULL-APP headless
+    //! A faithful FULL-APP headless
     //! render of the main window. Unlike `footer_leak_probe` (CPU bounds
     //! walk, zero pixels) and the sibling `render` module's
     //! whole-tree-fresh-every-frame harness (structurally blind to a
@@ -1568,8 +1566,8 @@ mod cache_path_full_render {
 
 #[cfg(test)]
 mod editor_window_harness {
-    //! P3 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`) — the graph-editor
-    //! window's OWN structural invariant. Per D5 the editor is cacheless
+    //! The graph-editor
+    //! window's OWN structural invariant. The editor is cacheless
     //! immediate-mode (no `UICacheManager`, never the atlas differential);
     //! its invariant is geometric, not pixel-staleness: a node the fixture
     //! places must actually paint at the screen rect the canvas itself

@@ -1,6 +1,6 @@
 //! Viewport rendering: tree build, ruler / markers / track backgrounds, the
 //! overview minimap and collapsed-group bitmaps, and the scroll update-in-place
-//! paths. See `docs/TIMELINE_API_DESIGN.md` section 3.6.
+//! paths.
 
 use super::*;
 use std::fmt::Write as _;

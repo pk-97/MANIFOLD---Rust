@@ -175,7 +175,7 @@ fn ev_one_doubles_ev_zero_within_f16_tolerance() {
 
 #[test]
 fn ev_zero_camera_lens_is_byte_identical_to_no_camera_lens() {
-    // I5 (docs/CAMERA_AND_LENS_DESIGN.md section 3): a camera_lens at ev=0 must be
+    // A camera_lens at ev=0 must be
     // a pure no-op, indistinguishable from not wiring camera_lens at all —
     // proven at the pixel level on the exposure-carrying scene itself, not
     // just asserted from the uniform math.

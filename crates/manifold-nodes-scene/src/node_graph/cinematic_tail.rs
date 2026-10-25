@@ -35,7 +35,7 @@ pub(crate) struct CinematicTail {
 /// the CoC node gets `world_to_mm = 1000/radius` so the scene's model units
 /// read as real meter-scale distances in the lens physics (a unit-scale
 /// scene reads 1 unit = 1 meter, the old constant — a 0.01-unit scene reads
-/// 1 unit = 100m; see `docs/CINEMATIC_POST_DESIGN.md` D1's `WORLD_TO_MM`).
+/// 1 unit = 100m).
 pub(crate) fn build_cinematic_tail(
     fresh_id: &mut impl FnMut() -> u32,
     scene_radius: f32,

@@ -1036,8 +1036,7 @@ pub(crate) fn render_main_ui_passes(
     // list, so only on-screen clips cost anything.
     if !clip_bodies.is_empty() {
         {
-            // D7 lane-content choke point — see
-            // `docs/TIMELINE_INTERACTION_P1_SPEC.md` and
+            // Lane-content choke point, see
             // `UIRenderer::lane_content_scissor`'s doc comment.
             let mut scissor = ui_renderer.lane_content_scissor(tracks);
             manifold_ui_paint::clip_draw::emit_clips(&mut scissor, clip_bodies);

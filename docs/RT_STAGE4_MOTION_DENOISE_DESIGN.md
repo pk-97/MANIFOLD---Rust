@@ -1,7 +1,7 @@
 # RT Stage-4 Motion Denoise — history-aware filtering + temporal feedback
 
 **Status:** APPROVED design, not built · 2026-08-28 · with Peter
-**Prerequisites:** RT_STAGE3_DENOISE_DESIGN.md (shipped 2026-08-28) — this design extends its filter, never replaces it.
+**Prerequisites:** the stage 3 denoise filter (shipped 2026-08-28). This design extends it, never replaces it.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 The stage-3 post-accumulation à-trous filter is proven on converged temporal history and inert under continuous motion — measured on Peter's own project (helmetGlitches.manifold, 240-frame rt-capture A/B, denoise High vs Off: composite diff ~2% of pixels at mean 0.03/255, frame-to-frame boil identical at 2.036 vs 2.040; bead BUG-27bs (RT spatial denoise inert under continuous motion)). The mechanism: under motion the accumulator's validation keeps rejecting history, per-texel history length stays short, moments cold-start at zero variance on every rejected texel, and the filter's variance-guided sigma stands down exactly where the noise is. The static-scene win does not transfer, and Peter's show content moves. Peter's directive, verbatim: **"A denoiser that only works on static images isn't all that useful"** — and on the trade this design makes: **"blur for stability sounds better than boiling I think."** The MetalFX path is rejected for this slot, Peter verbatim 2026-08-28: **"MetalFX isn't great and actually quite expensive for the results it gives."**
@@ -10,7 +10,7 @@ The fix is the proven real-time recipe (SVGF's two load-bearing ideas) applied t
 
 This design does NOT touch the deadline-miss glitch (BUG-i7p1 (RT glitches when FPS target is missed)) — that is the temporal path versus dropped frames, a separate bug with its own bead.
 
-Companion docs: `docs/RT_STAGE3_DENOISE_DESIGN.md` (the filter this extends; its knob table and invariants carry over), `docs/RAYTRACING_DESIGN.md` section 13 (temporal denoiser rebuild — the accumulator), section 17 (ML denoising — the rejected alternative).
+Companion docs: `docs/RAYTRACING_DESIGN.md` section 13 (temporal denoiser rebuild — the accumulator), section 17 (ML denoising — the rejected alternative).
 
 ## 1. Audit — what exists (verified 2026-08-28, main tip 5c8d55d4b)
 

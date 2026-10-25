@@ -336,7 +336,7 @@ pub(super) fn generate_fused_buffer(
     // `node.wgsl_compute` recomputes their VALUES itself every frame via
     // `derived_uniform_registry::recompute(member.type_id, ...)`, keyed off the
     // `// @derived_uniform_member:` marker `emit_derived_uniform_markers` writes
-    // below (D7/P0, `docs/CINEMATIC_POST_DESIGN.md`; superseded the old
+    // below (replaces the old
     // install-time control-wire whitelist).
     for (i, node) in region.nodes.iter().enumerate() {
         for d in node.derived_uniforms {

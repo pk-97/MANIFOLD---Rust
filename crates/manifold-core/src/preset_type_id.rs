@@ -1,8 +1,7 @@
 //! String-keyed preset type identifier — the unified id for effects and
 //! generators.
 //!
-//! Replaces the two parallel newtypes (the former `EffectTypeId` / `GeneratorTypeId`)
-//! (Phase 1 of `docs/PRESET_INSTANCE_COLLAPSE_PLAN.md`). A preset is a preset;
+//! Replaces the two parallel newtypes (the former `EffectTypeId` / `GeneratorTypeId`). A preset is a preset;
 //! whether it transforms an input (effect) or produces from nothing (generator)
 //! is carried by [`crate::preset_def::PresetKind`], not by a separate id type.
 //!
@@ -229,8 +228,7 @@ impl PresetTypeId {
 /// layers continue to resolve. Folded in from the old generator decoder — the
 /// effect id space has no entries, so applying it globally is a no-op for them.
 ///
-/// One-off historical rename. General renames (`docs/NODE_VOCABULARY_AUDIT.md`
-/// section 6) go in [`crate::type_id_migration::TYPE_ID_MIGRATIONS`] instead — every
+/// One-off historical rename. General renames go in [`crate::type_id_migration::TYPE_ID_MIGRATIONS`] instead — every
 /// call site here chains through [`crate::type_id_migration::migrate_type_id`]
 /// after this, so a `PresetTypeId` string sees both maps regardless of which
 /// one an old id lands in.
@@ -423,7 +421,7 @@ mod tests {
         assert_eq!(back, PresetTypeId::BASIC_SHAPES);
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md section 3 test (b), supplementary: the general
+    /// Supplementary: the general
     /// `type_id_migration` table (not just the one-off `remap_legacy_string`
     /// rename) is chained in at all three deserialize entry points — the
     /// plain `Deserialize` impl (what `Clip::generator_type`'s legacy field

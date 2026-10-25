@@ -160,7 +160,7 @@ pub struct UIRoot {
     pub inspector: InspectorCompositePanel,
     pub viewport: TimelineViewportPanel,
     /// Background-decoded per-clip waveform peaks for audio-layer clips, attached
-    /// to each `ViewportClip` on sync. See `docs/AUDIO_LAYER_DESIGN.md`.
+    /// to each `ViewportClip` on sync.
     pub audio_waveforms: crate::audio_waveform_cache::AudioWaveformCache,
     pub dropdown: DropdownPanel,
     pub browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel,
@@ -341,8 +341,8 @@ pub struct UIRoot {
     /// `InspectorCompositePanel::update`'s `motion_last_tick`.
     layout_tick_last: std::time::Instant,
 
-    /// Single source of truth for who owns the in-flight pointer drag gesture
-    /// (`docs/DRAG_CAPTURE_DESIGN.md` D1). Resolved once at the gesture's
+    /// Single source of truth for who owns the in-flight pointer drag gesture,
+    /// resolved once at the gesture's
     /// first `DragBegin` (`resolve_drag_owner`), cleared by the terminal
     /// broadcast (`broadcast_gesture_end`) — replaces the old boolean
     /// drag-active latch + `is_event_in_tracks_area`'s positional gate for
@@ -368,7 +368,7 @@ pub struct UIRoot {
     pub overlay_draw: Vec<(usize, usize)>,
     /// On-screen rect of each OPEN overlay as of the last `build_overlays` —
     /// the same `rect` value passed to that overlay's `build_at`. Read by
-    /// `overlay_contains_point` (D5, `docs/DRAG_CAPTURE_DESIGN.md` section 2) so the
+    /// `overlay_contains_point` so the
     /// window-seam press interceptors in `window_input.rs` can yield to a
     /// floating overlay instead of punching straight through it. Limitation:
     /// `Anchor::SelfManaged` overlays (dropdown, browser popup, Ableton
@@ -1794,7 +1794,7 @@ impl UIRoot {
     /// drawers decide what's visible). `fire_meters` is
     /// `ContentState::fire_meters`; the closure adapts it to the plain
     /// `Fn(u64) -> Option<f32>` `manifold-ui` can call without depending on
-    /// `manifold-core` (`docs/UI_LAYERING_INVERSION.md`). `dt` (BUG-109 P5)
+    /// `manifold-core`. `dt`
     /// is the UI frame delta seconds, for each meter's peak-hold timing.
     pub fn update_fire_meters(
         &mut self,
@@ -1808,8 +1808,8 @@ impl UIRoot {
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// the send whichever fire-mode drawer is currently open in the inspector
     /// is reading, if any. `manifold_core::AudioSendId` is
-    /// `manifold_foundation::AudioSendId` re-exported at its historical path
-    /// (`docs/UI_LAYERING_INVERSION.md`), so this crosses the boundary for
+    /// `manifold_foundation::AudioSendId` re-exported at its historical path,
+    /// so this crosses the boundary for
     /// free.
     pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_core::AudioSendId> {
         self.inspector.open_fire_mode_drawer_send()

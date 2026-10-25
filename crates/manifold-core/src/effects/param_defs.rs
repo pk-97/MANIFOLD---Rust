@@ -33,7 +33,7 @@ pub struct RegistryParamDef {
 /// A named, real boundary on a param's inner value — the ONLY thing card
 /// range validation (`node_graph::validate` lint (h)) enforces as an error.
 /// Everything else (`RegistryParamDef::spec.min`/`max`) is a display hint that never
-/// restricts (Peter, `docs/PARAM_RANGE_CONTRACT_DESIGN.md`: *"Inner nodes
+/// restricts (Peter: *"Inner nodes
 /// that don't have a real physical range or boundary shouldn't have a
 /// boundary — that's what the card mappings and ranges are for."*).
 ///

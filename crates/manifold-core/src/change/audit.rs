@@ -1,7 +1,7 @@
 //! Change audit fingerprints (D10, feature `change-audit`).
 //!
 //! `fingerprint` hashes every field of a `Project` into the part that owns
-//! it (the Part table in docs/UI_INVALIDATION_DESIGN.md section 3). The audit
+//! it. The audit
 //! compares fingerprints around an edit and fails when a part changed that
 //! the edit did not declare. `Project`, `ProjectSettings`, `Timeline` and
 //! `Layer` are destructured without `..`, so a new field does not compile

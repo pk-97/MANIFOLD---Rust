@@ -1,6 +1,6 @@
 # Detector Lab
 
-One place to label, train and judge the trained audio detectors. Rules and reasons: `docs/DETECTOR_LAB_DESIGN.md`.
+One place to label, train and judge the trained audio detectors.
 Every script applies the pinned recipe itself; never set `KICK_GOAL_*` or `SNARE_*` env by hand.
 
 **Add a song.** A project song outside the goal set needs its set and bounce in `eval/detector_wip.py` (`PAIRS`, picked
@@ -51,8 +51,7 @@ grown and you need a number comparable with a detector scored on the old exam.
 **Overnight.** `lab/overnight.py PLAN.json [--dry-run]` (`scripts/dev.py lab-queue`) runs a JSON list of run and
 compare steps one at a time under the GPU lock, writes a log per step and a summary, and stops at the first failure.
 
-**Ship a detector.** `lab/release.py` (`scripts/dev.py detector-release`; rules in
-`docs/DETECTOR_RUNTIME_DESIGN.md`). Save the config's run seeds (`lab/run.py CONFIG --seeds S[,S+1..]`), then
+**Ship a detector.** `lab/release.py` (`scripts/dev.py detector-release`). Save the config's run seeds (`lab/run.py CONFIG --seeds S[,S+1..]`), then
 `release.py train CONFIG --seed S [--nets N]` (final models on every trained song, cutoffs from the run's outer
 predictions) and `release.py export TRAIN_ID --set FAMILY --ship` (the model file, contract v2, and the Rust parity
 goldens). A config using a part the app does not run (`runtime_parts.json`) is refused before anything trains.

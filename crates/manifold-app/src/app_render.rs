@@ -314,7 +314,7 @@ impl Application {
         // 1b2. Drive per-clip audio-layer waveform decode/cache: gather the live
         // audio clips and let the cache background-decode any new ones, drain
         // finished peaks, and evict departed clips. The peaks are attached to
-        // each ViewportClip on the next sync. See docs/AUDIO_LAYER_DESIGN.md.
+        // each ViewportClip on the next sync.
         // The clip list is walked only when Clips or Layers moved (P4c).
         let clips_key = self
             .ui_edits
@@ -1575,7 +1575,7 @@ impl Application {
                         self.watched_graph_target.clone(),
                         self.watched_catalog_default.as_ref(),
                     ) {
-                        // D1 (`docs/PARAM_TWO_WAY_BINDING_DESIGN.md`): a
+                        // A
                         // card-bound param's graph slot is `apply_bindings`'
                         // stomp target — it re-writes the slot from the card
                         // every rebuild — so a node-face edit on a bound

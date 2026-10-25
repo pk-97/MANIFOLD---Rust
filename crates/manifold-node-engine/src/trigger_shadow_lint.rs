@@ -26,8 +26,7 @@
 //! itself lives — Lissajous is a generator) are fully covered. Flagged as
 //! a scoped follow-up, not a silent gap.
 //!
-//! See `docs/BUG_BACKLOG.md` BUG-104 for the full investigation and the
-//! Part 4 audit that produced [`DISCRETE_REPLACE_ALLOWLIST`].
+//! See [`DISCRETE_REPLACE_ALLOWLIST`] for the audited sites.
 
 use std::collections::HashMap;
 

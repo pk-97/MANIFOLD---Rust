@@ -1902,7 +1902,7 @@ mod tests {
             .expect("full pre-allocate pipeline succeeds for seed-only graph");
     }
 
-    // ── docs/NODE_VOCABULARY_AUDIT.md section 3 test (a) ──
+    // ── Type id migration through the loader ──
     //
     // `type_id_migration::TYPE_ID_MIGRATIONS` is empty in every shipped
     // build except one fixture entry
@@ -1991,7 +1991,7 @@ mod tests {
         assert!(migrate_def_type_ids(&new_twin, &registry).is_none());
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md section 7.1: the retired `node.rotate_vec2_90`
+    /// The retired `node.rotate_vec2_90`
     /// folds into `node.rotate_vector` AND seeds `angle = PI/2` (radians —
     /// the stored representation, not the UI's degrees) via
     /// `PARAM_SEED_MIGRATIONS`, reproducing the retired node's fixed +90°
@@ -2069,7 +2069,7 @@ mod tests {
         );
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md section 7.2: the retired
+    /// The retired
     /// `node.fluid_project_scatter_2d` is a plain rename fold (port-identical
     /// to `node.draw_particles_camera`, no param seed) — proves the rename
     /// side of the same choke point still works with zero

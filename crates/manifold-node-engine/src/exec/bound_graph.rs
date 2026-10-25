@@ -33,7 +33,7 @@
 //! a user tail off `PresetInstance`; generators resolve everything from the def's
 //! `preset_metadata.bindings`), and the note-reshape / user-tail rebuild paths
 //! still live in each runtime for now — those fold in as the storage unification
-//! (`docs/PRESET_UNIFICATION_PLAN.md` Phases 1b/4-struct) progresses. This is the
+//! progresses. This is the
 //! first shared seam: the per-frame apply + override-and-clear.
 
 use ahash::AHashMap;

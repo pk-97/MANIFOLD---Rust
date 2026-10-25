@@ -452,7 +452,7 @@ impl Application {
                             } else if self.ws.ui_root.layout.is_near_split_handle(self.cursor_pos)
                                 && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
                             {
-                                // D5 (`docs/DRAG_CAPTURE_DESIGN.md`): the seam
+                                // The seam
                                 // is visually UNDER a floating overlay when
                                 // one occupies this point (e.g. the Audio
                                 // Setup panel docked over the timeline) — in

@@ -4,12 +4,11 @@
 //! ONLY its `lens` block (`focus_distance` / `f_stop` / `shutter_angle` /
 //! `exposure_ev`) from four port-shadowed scalar params, and passes every
 //! other field (position, basis, near/far, projection mode, cached view
-//! matrix) through unchanged. This is "the one lens" of
-//! `docs/CAMERA_AND_LENS_DESIGN.md` section 2 D4 — insert it once between a camera
+//! matrix) through unchanged. This is "the one lens": insert it once between a camera
 //! source (`node.orbit_camera` / `node.free_camera` / `node.look_at_camera`)
 //! and its consumers so depth-of-field (CINEMATIC_POST's `coc_from_depth`),
 //! motion blur (CINEMATIC_POST's `motion_blur`), and exposure
-//! (`node.render_scene`, D5) all read the same lens instead of duplicating
+//! (`node.render_scene`) all read the same lens instead of duplicating
 //! four params per consumer.
 //!
 //! Defaults are chosen to make an unwired, untouched `camera_lens` node a
@@ -103,7 +102,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "All four params are port-shadowed — wire an LFO into exposure_ev for a strobe, a fader into f_stop to rack focus (once CINEMATIC_POST's coc_from_depth reads it), a drop macro into shutter_angle for a motion-blur smear. Defaults are cinematic: shutter 180 smears motion by default (P4); set shutter to 0 for a static, blur-free look. node.render_scene multiplies its final straight rgb by exp2(exposure_ev) every frame (docs/CAMERA_AND_LENS_DESIGN.md D5) — that's live today. focus_distance/f_stop/shutter_angle are read by CINEMATIC_POST's DoF/motion-blur atoms once those ship; wiring this node ahead of time is harmless.",
+    composition_notes: "All four params are port-shadowed — wire an LFO into exposure_ev for a strobe, a fader into f_stop to rack focus (once CINEMATIC_POST's coc_from_depth reads it), a drop macro into shutter_angle for a motion-blur smear. Defaults are cinematic: shutter 180 smears motion by default (P4); set shutter to 0 for a static, blur-free look. node.render_scene multiplies its final straight rgb by exp2(exposure_ev) every frame — that's live today. focus_distance/f_stop/shutter_angle are read by CINEMATIC_POST's DoF/motion-blur atoms once those ship; wiring this node ahead of time is harmless.",
     examples: [],
     picker: { label: "Camera Lens", category: Atom },
     summary: "The physical camera: focus distance, aperture, shutter angle, and exposure — one lens any camera source can feed, and every 3D consumer reads.",

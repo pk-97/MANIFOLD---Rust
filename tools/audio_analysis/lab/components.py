@@ -1,4 +1,4 @@
-"""Detector parts (docs/DETECTOR_LAB_DESIGN.md P6): candidate finders and per-candidate measures, registered by name
+"""Detector parts: candidate finders and per-candidate measures, registered by name
 so a config builds a detector from them. Every part reads only a song's audio and its candidates. Caches key on the
 song's audio content, the finder and the part's code (lab/cache.py)."""
 import importlib
@@ -224,7 +224,7 @@ def _tmpl3_apply(params, x, sr, c):
     return templates.features(templates._build(x, sr, c), params['templates'])
 
 
-# Fitted event measures (docs/DETECTOR_RUNTIME_DESIGN.md D11): fit(train inputs) -> {key: array} at release, then
+# Fitted event measures: fit(train inputs) -> {key: array} at release, then
 # apply(params, audio, sr, Candidates) -> (n, k). Their params ship in the model file as fit.<measure>.<key>.
 FITTED = {'tmpl3': dict(fit=_tmpl3_fit, apply=_tmpl3_apply)}
 

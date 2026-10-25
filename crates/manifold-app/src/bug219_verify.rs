@@ -1,5 +1,5 @@
 //! BUG-219 (abeautifulgame-interactive-import-crashes-doubled-full-gpu-build)
-//! P1 evidence harness — `docs/IMPORT_RESPONSIVENESS_DESIGN.md` P1.
+//! P1 evidence harness.
 //!
 //! BUG-219's diagnosis (headless, via `render-import`) proved the production
 //! `assemble_import_graph` path itself renders `ABeautifulGame.glb`

@@ -1,9 +1,8 @@
-//! Save-time and factory preset thumbnail rendering (`docs/PRESET_LIBRARY_DESIGN.md`
-//! P6, D7; `docs/STATIC_THUMBNAILS_DESIGN.md` D2-D4). Renders a 256×144 preview
+//! Save-time and factory preset thumbnail rendering. Renders a 256×144 preview
 //! PNG for an already-parsed preset [`EffectGraphDef`] — generators render bare,
 //! effects render over the four-region synthetic test card
 //! ([`build_test_card_input`]). Both kinds run the same deterministic capture
-//! recipe (STATIC_THUMBNAILS_DESIGN D4): 60 warm-up frames at dt=1/60, 120bpm,
+//! recipe: 60 warm-up frames at dt=1/60, 120bpm,
 //! anim sweep 0→1, commit-and-wait each frame so stateful graphs (feedback,
 //! trails, sims) develop, then the IO/warmup settle wait.
 //!

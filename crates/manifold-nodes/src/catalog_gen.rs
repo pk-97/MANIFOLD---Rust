@@ -73,13 +73,13 @@ struct NodeRow {
     role: Role,
     aliases: &'static [&'static str],
     /// Bundled preset ids that use this node — auto-populated from a scan
-    /// of every shipping preset's graph (docs/NODE_VOCABULARY_AUDIT.md section 8b),
+    /// of every shipping preset's graph,
     /// never hand-written, so it cannot go stale.
     examples: Vec<String>,
     inputs: Vec<PortRow>,
     outputs: Vec<PortRow>,
     params: Vec<ParamRow>,
-    /// Fusion classification (design doc D3, `docs/GRAPH_TOOLING_DESIGN.md`):
+    /// Fusion classification:
     /// `"pointwise"` | `"source"` | `"multi_input_coincident"` |
     /// `"boundary:<reason_snake_case>"`. Computed from the live instance's
     /// `fusion_kind()`/`boundary_reason()` — never hand-maintained, so it
@@ -122,8 +122,7 @@ struct ParamRow {
     default: String,
     range: Option<(f32, f32)>,
     enum_values: &'static [&'static str],
-    /// The real physical/mathematical boundary on this param, if any
-    /// (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`) — distinct from `range`
+    /// The real physical/mathematical boundary on this param, if any — distinct from `range`
     /// above, which is a display hint. `None` for the overwhelming
     /// majority of params; rendered as its own `contract` key in the
     /// JSON catalog so agents/tools can tell "must not cross" from
@@ -146,7 +145,7 @@ fn is_test_fixture(type_id: &str) -> bool {
 /// inside a group still counts, and inverts node-usage into
 /// `type_id -> sorted, deduped preset ids`. Computed fresh at catalog-build
 /// time from the live registry, so — unlike a hand-maintained list — it
-/// cannot go stale (docs/NODE_VOCABULARY_AUDIT.md section 8b).
+/// cannot go stale.
 fn preset_examples() -> AHashMap<String, Vec<String>> {
     fn walk(nodes: &[EffectGraphNode], preset_id: &str, out: &mut AHashMap<String, Vec<String>>) {
         for n in nodes {
@@ -770,7 +769,7 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs")
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md section 8c completeness gate: every
+    /// Completeness gate: every
     /// palette-visible node (Atom or Driver stratum — hidden/legacy/
     /// `system.*` nodes are `Unlisted`, from having no `picker:`, and are
     /// exempt) must ship a non-empty label, summary, category, and alias

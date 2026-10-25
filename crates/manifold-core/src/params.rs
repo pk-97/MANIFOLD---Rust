@@ -1,7 +1,7 @@
 //! Per-instance parameter manifest — id-keyed storage that replaces the
 //! positional `Vec<ParamSlot>` + three-resolver design.
 //!
-//! `docs/PARAM_STORAGE_DESIGN.md` is the contract. The governing rule (D1):
+//! The governing rule:
 //! **one struct, one list.** [`Param`] fuses descriptor (`spec`) and live
 //! state (`value`/`base`/`exposed`/`touched`) in a single struct; identity is
 //! the id (`spec.id`); insertion order IS card display order. There is no

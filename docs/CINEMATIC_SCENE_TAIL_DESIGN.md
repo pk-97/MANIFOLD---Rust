@@ -21,7 +21,7 @@ Peter, verbatim: "we will need pre-existing 3D scenes to be upgraded so these no
 
 Binding constraints: **persistence** (every existing 3D project must load and gain the tail — a load-migration, not a manual rebuild) and **hot path** (the tail adds GPU dispatches per frame; Peter's bar is "not drop render times to 2 fps", so the budget is measured, not argued).
 
-**Companions:** [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (the atoms + the D6 reference preset; its I2 pinhole-passthrough invariant is what makes migration safe) · [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (`LensParams`, shutter semantics) · [RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) D5 (traced DoF/motion blur rejected; these stay post-process).
+[RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) D5 (traced DoF/motion blur rejected; these stay post-process).
 
 ## 1. Audit — what exists (verified 2026-08-26)
 
@@ -35,7 +35,7 @@ Binding constraints: **persistence** (every existing 3D project must load and ga
 | Reference wiring of the full chain | `assets/reference-presets/CinematicScene.json` (lens → coc → coc_dilate → bokeh → motion_blur → out) | Shipped, headless-renderable |
 | Import graph assembly | `manifold-nodes-scene/src/node_graph/gltf_import/scene.rs:634-690` (deleted) | **SSAO-only** (`ssao_gtao → bilateral_blur H/V → mix`); lens/DoF/motion absent since `72135693`; `scene.rs:720` notes the motion_blur removal under BUG-136 |
 | Scene Setup lens rows (the dead sliders) | `crates/manifold-ui/src/panels/scene_setup_panel.rs:3151-3153` (`RowAddr::root(71, …)` focus_distance/f_stop/shutter_angle) | Rows write lens params; in import graphs nothing consumes them |
-| BUG-136 probe state | `docs/BUG_BACKLOG.md:1240-1272` | Inputs proven correct headlessly (velocity nonzero, shutter at atom, 30/30 frames); **output pixels never diffed against input** — the unprobed gap; drag-propagation suspect killed by Peter 2026-08-26 (camera was moving) |
+| BUG-136 probe state | Earlier investigation | Inputs proven correct headlessly (velocity nonzero, shutter at atom, 30/30 frames); **output pixels never diffed against input** — the unprobed gap; drag-propagation suspect killed by Peter 2026-08-26 (camera was moving) |
 | Migration machinery | `crates/manifold-io/src/migrations/` (`scene_transform_v1120.rs`, `param_storage_v14.rs`) | Two precedents, versioned, load-time |
 
 Classification: every atom **exists**; the import-graph tail and the migration are **one wire away** (template + injector); **genuinely new**: nothing. This design is wiring plus one bug fix.
@@ -48,7 +48,7 @@ Section 2.5 audit (DECOMPOSING_GENERATORS.md section 2.5 (primitive audit)): no 
 
 **D1 — Fresh imports get the full polished tail, always, with neutral lens defaults.**
 Import assembly wires `camera_lens → coc_from_depth → bokeh_gather → motion_blur` after the existing SSAO mix, templated node-for-node on CinematicScene.json. Defaults are the neutral lens (`f_stop` = 1000, `shutter_angle` = 0), which CINEMATIC_POST I2 (pinhole pass-through) guarantees is a bit-clean pass-through — a fresh import renders byte-identical to today until Peter dials the lens.
-Rejected: a per-scene enable toggle — the neutral passthrough already *is* the off state; a toggle adds an identity/flag system for zero behavioral difference (zero-new-systems test, DESIGN_AUTHORING.md section 3 (shaping the architecture)).
+Rejected: a per-scene enable toggle — the neutral passthrough already *is* the off state; a toggle adds an identity/flag system for zero behavioral difference (zero-new-systems test).
 Rejected: reinstating the pre-polish `variable_blur` DoF chain — that is the exact build Peter remembers as "a blocky blur filter from 2001"; `coc_dilate` + `bokeh_gather` replaced it and he has never seen the replacement.
 
 **D2 — BUG-136 is fixed before the tail ships anywhere (P0).**
@@ -64,8 +64,7 @@ The Scene Setup rows already write the right lens params; once D1/D3 give those 
 Rejected: hiding the rows when consumers are absent — masks the bug class instead of killing it, and adds UI state for a condition that should not exist.
 
 **D5 — DoF keeps full-resolution graph ports; processing is half-resolution internally.**
-Amended 2026-09-26 by Peter's full upgrade request: the mechanism is now defined
-in [CINEMATIC_POST_DESIGN.md D10](CINEMATIC_POST_DESIGN.md). Existing graph wiring
+Existing graph wiring
 continues to use the shared bokeh atom; source classification, layered gathers
 and reconstruction live inside its established reduction boundary. Aperture and
 quality are exposed alongside the DoF toggle using the shared parameter surface.
@@ -102,7 +101,7 @@ This is CinematicScene.json's wiring transcribed; the import assembler and the m
 ## 5. Phasing
 
 ### P0 — BUG-136 (motion blur no visible effect) root cause + fix
-- **Entry state:** BUG-k57 (BUG-136 — motion blur no visible effect) open; `docs/BUG_BACKLOG.md:1206-1272` read, including both addenda.
+- **Entry state:** BUG-k57 (BUG-136 — motion blur no visible effect) open.
 - **Read-back:** restate the three killed suspects, the surviving suspect family (D2), and the fact that the 2026-07-13 probes verified inputs only.
 - **Deliverables:** the fix (wherever the semantic review convicts); gpu-proofs value test if a kernel or routing table changed; regression test `motion_blur_output_differs_under_orbit` — headless render, time→orbit wired, computed pixel-diff between `motion_blur.in` and `.out` above a stated threshold. **The test must fail on pre-fix code.**
 - **Gate:** `scripts/gpu_proofs_gate.py` green; regression test red-then-green.

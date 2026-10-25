@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Label audit (docs/DETECTOR_LAB_DESIGN.md D5): checks raw known times, never loudness. Writes
+"""Label audit: checks raw known times, never loudness. Writes
 <labels>.audit.json next to each labels file, keyed by the labels file's sha256 (the labels file is never touched),
 and prints the table and the failures.
 

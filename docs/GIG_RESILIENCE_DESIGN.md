@@ -1,7 +1,7 @@
 # Gig Resilience — Red-Teaming the Live Show
 
 **Status: IN PROGRESS — P1–P2 on main (2026-07-03); P3–P4 not implemented; phases in section 9 (Phasing). P4 priority (Peter, 2026-07-13): CRITICAL — but do NOT start yet; Peter calls the timing. P4 (peripheral resilience, GPU-fault surfacing, thermal glyph, quarantine, D7 hardening, and the `--resume` Ableton-position rejoin — Peter 2026-07-10: build it now; prerequisite landed, see section 5.2 (Boot fast path)) outranks the approved-not-built queue when scheduling resumes, and has no dependency on P3.**
-**Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges)).**
+**Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase.**
 
 MANIFOLD is a live instrument. This doc is the operational failure audit of the
@@ -15,8 +15,7 @@ pixels on the wall and rejoin the running show without human hands.
 Companion designs: `docs/ABLETON_SHOW_SYNC_DESIGN.md` (the score that makes
 rejoin exact), `docs/SESSION_MODE_DESIGN.md` (the second performance surface),
 `docs/PERFORM_SURFACE_DESIGN.md` (perform mode becomes chrome-hosted — P3's
-visible arming indicators are widgets on that surface; sequencing in
-`docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges)).
+visible arming indicators are widgets on that surface).
 
 ---
 
@@ -300,7 +299,7 @@ mode's enter/exit lifecycle (`perform_mode/mod.rs` `pending_enter` /
 `PERFORM_SURFACE_DESIGN` P1 unchanged. The *visible* pieces — hold-progress
 indicator, understudy status strip, thermal glyph (section 8) — are chrome widgets
 on the perform surface, not hand-drawn HUD. Build P3 after PERFORM_SURFACE
-P1 (`docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges)) so they're built once.
+P1 so they're built once.
 
 ## 8. Peripheral resilience (the degraders)
 
@@ -412,9 +411,9 @@ surface.
 three other docs each add a pre-show ritual with no shared home; this section is now
 where they're named so nobody re-derives a fourth list:** the `kill -9` drill below
 (this doc, section 9 P3) · **the perf soak** — `cargo xtask perf-soak` against the Liveschool
-fixture (`PERF_BUDGET_GATE_DESIGN.md` P1–P3 — frame-budget regression check before a
-show) · **the recorder soak** (`LIVE_RECORDING_PROOFS_DESIGN.md`
-Tier 2 — manual pre-gig recording rehearsal). Run all three at soundcheck, not just this
+fixture (frame-budget regression check before a
+show) · **the recorder soak** (Tier 2:
+manual pre-gig recording rehearsal). Run all three at soundcheck, not just this
 list's items.
 
 Pre-show, every show: black desktop wallpaper on all displays · Dock +

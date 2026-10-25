@@ -1,5 +1,4 @@
-//! `UserLibrary` — the file-ops service behind "My Library"
-//! (`docs/PRESET_LIBRARY_DESIGN.md` section 4/section 6 D4, phase P3).
+//! `UserLibrary` — the file-ops service behind "My Library".
 //!
 //! Writes/renames/duplicates/deletes standalone preset JSON files under the
 //! SAME user preset root `manifold_nodes::preset_loader` already resolves

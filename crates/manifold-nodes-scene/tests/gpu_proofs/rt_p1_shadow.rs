@@ -370,7 +370,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     );
 }
 
-/// BUG-309 follow-up (docs/BUG_BACKLOG.md) — the SAME fixture as
+/// The SAME fixture as
 /// `shadow_rays_2tri_occluder_matches_cpu_oracle` above, but with a SECOND
 /// BLAS added (a large ground quad at `z = 0`, instance index 0) ahead of
 /// the occluder (now instance index 1) — mirroring `render_scene.rs`'s

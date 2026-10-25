@@ -31,7 +31,7 @@ pub struct ProjectSettings {
     #[serde(default)]
     pub export_hdr: bool,
     /// Split the video export into one file per marker inside the export
-    /// range (docs/SECTION_EXPORT_DESIGN.md D4). A UI setting read into
+    /// range. A UI setting read into
     /// `ExportConfig.split_at_markers` at export start; the derived sections
     /// themselves never live on the project. Alias keeps projects saved
     /// during the one-day `splitAtSectionMarkers` naming loading.

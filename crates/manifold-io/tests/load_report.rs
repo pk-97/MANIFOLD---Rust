@@ -1,5 +1,4 @@
 //! BUG-063 — `Project::load_report` surfaces what a load silently repaired.
-//! `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6 / P3.
 
 use manifold_core::Beats;
 use manifold_core::clip::TimelineClip;

@@ -1,6 +1,6 @@
 //! Viewport-local interaction: clip/marker hit-testing, hover, and the ruler /
 //! overview / marker-drag event routing. (Clip move/trim/region lives in
-//! `interaction_overlay.rs`.) See `docs/TIMELINE_API_DESIGN.md` section 3.6.
+//! `interaction_overlay.rs`.)
 
 use super::*;
 use crate::clip_hit_tester::ClipHitTester;

@@ -384,7 +384,7 @@ mod gpu_completion_tests {
 /// A marker exactly on `range_end` is excluded (it sits outside the half-open
 /// range). Returns empty when there are no relevant markers (no marker on
 /// `range_start`, none strictly inside) → the caller takes the single-export
-/// path. See docs/SECTION_EXPORT_DESIGN.md D2.
+/// path.
 #[cfg(target_os = "macos")]
 fn derive_sections(
     timeline: &manifold_core::timeline::Timeline,
@@ -671,7 +671,7 @@ impl ContentThread {
     /// maximum GPU speed (no frame pacing / sleep).
     ///
     /// With `split_at_markers`, this runs one full export per derived
-    /// section, sequentially (docs/SECTION_EXPORT_DESIGN.md D1). A cancelled or
+    /// section, sequentially. A cancelled or
     /// failed section aborts the remaining sections.
     ///
     /// Port of Unity VideoExporter.ExportCoroutine() (offline / generator-only path).
@@ -1902,13 +1902,13 @@ mod tests {
         assert_eq!(result, Ok(Some("/opt/homebrew/bin/ffmpeg".to_string())));
     }
 
-    // ── Section export (docs/SECTION_EXPORT_DESIGN.md section 4) ──
+    // ── Section export ──
 
     /// P2 round-trip gate: a project saved with the split-export setting and
     /// plain markers reloads with both intact. Exercises the full `Project`
     /// serde shape (the `ProjectSettings` `split_at_markers` toggle and the
     /// marker list). The field's `split_at_section_markers` alias keeps the
-    /// one-day-old name loading too (docs/SECTION_EXPORT_DESIGN.md D3).
+    /// one-day-old name loading too.
     #[test]
     fn markers_and_split_setting_survive_project_roundtrip() {
         use manifold_core::project::Project;

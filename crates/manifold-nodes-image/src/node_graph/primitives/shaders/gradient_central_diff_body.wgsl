@@ -2,8 +2,7 @@
 // central-difference gradient of one channel of `in`: reads the 4 axis
 // neighbours via an EXACT integer textureLoad (one texel index step), with
 // the boundary policy resolved MANUALLY from `wrap_mode` (see
-// gcd_wrap_coord) instead of a sampler's address mode. D6(a)
-// (docs/DEPTH_RELIGHT_DESIGN.md): converted from a filtering-sampler Gather
+// gcd_wrap_coord) instead of a sampler's address mode. Converted from a filtering-sampler Gather
 // read so `in` can carry `precision_critical` — every offset lands on an
 // exact texel center (uv = (id+0.5)/dims, offset by exactly ±1 texel), so
 // textureLoad+clamp/modulo agrees with the old textureSampleLevel+sampler

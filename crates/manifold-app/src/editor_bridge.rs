@@ -141,8 +141,7 @@ fn descend_level_ref<'a>(
 }
 
 /// Resolve the card binding (if any) governing `(node_id, param_name)` at
-/// `scope_path` within `def` — BUG-158 write-back (D1/D2,
-/// `docs/PARAM_TWO_WAY_BINDING_DESIGN.md`). Descends to the node's level,
+/// `scope_path` within `def` — BUG-158 write-back. Descends to the node's level,
 /// reads its stable `NodeId`, then looks that up against
 /// `preset_metadata.bindings` (the single unified list post
 /// `PRESET_UNIFICATION_PLAN.md` — bundled and user-added bindings both live
@@ -2652,8 +2651,7 @@ mod preview_target_tests {
 /// itself. A full `Application`-level drive of the dispatch arm (mutating
 /// `local_project`, asserting the def slot stays byte-unchanged) is not
 /// exercised here — `Application` needs a winit/GPU context this test module
-/// has no harness for; see the phase notes in
-/// `docs/PARAM_TWO_WAY_BINDING_DESIGN.md` for the gap.
+/// has no harness for.
 #[cfg(test)]
 mod binding_reroute_tests {
     use super::{binding_for_node_param, node_param_is_wired};

@@ -1,4 +1,4 @@
-"""Model file part `cand.*`: the snare finder (docs/DETECTOR_RUNTIME_DESIGN.md section 4).
+"""Model file part `cand.*`: the snare finder.
 
 Reference: eval/snare_cands.py over detector_cands.band_hops and rise_candidates; every value comes from their own
 constants and defaults. The rise in dB is the finder rule's, 'snare:<dB>'.

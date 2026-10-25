@@ -1435,8 +1435,7 @@ fn synth_sub() -> Vec<f32> {
     out
 }
 
-/// Genuinely dense sustained bed (BUG-044's reproduction target,
-/// `docs/BUG_BACKLOG.md` BUG-044): three supersaw clusters (7 detuned voices
+/// Genuinely dense sustained bed: three supersaw clusters (7 detuned voices
 /// each, the same detune spread `synth_dive` uses) at low/mid/high anchors,
 /// every voice under its own amplitude LFO, plus bright noise (a first-
 /// difference high-pass tilt on white noise — "bright" the way hats/cymbals/

@@ -1,4 +1,4 @@
-"""Sound templates for trees (docs/DETECTOR_LAB_DESIGN.md P6): the shipped kick's tmpl3 (eval/kick_goal_templates.py)
+"""Sound templates for trees: the shipped kick's tmpl3 (eval/kick_goal_templates.py)
 as a fitted tree input for any family. A candidate's onset patch is the rise across 32 log bands from the candidate to
 its emission, from the song's mix; patches are cached per song by audio content, finder and code, and never fitted.
 Each training fits its own K templates (k-means of L2-normalised patches) on the positive training rows of the songs

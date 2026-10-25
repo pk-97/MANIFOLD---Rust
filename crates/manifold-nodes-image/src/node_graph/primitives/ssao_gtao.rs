@@ -1,7 +1,5 @@
 //! `node.ssao_gtao` — Ground Truth Ambient Occlusion (Jimenez et al. 2016)
-//! from scene depth and a Camera, sampled as Intel's XeGTAO does
-//! (`docs/CINEMATIC_POST_DESIGN.md` D9, amended by
-//! `docs/SCENE_REFINEMENT_DESIGN.md` ruling 8). Output is a grayscale AO map
+//! from scene depth and a Camera, sampled as Intel's XeGTAO does. Output is a grayscale AO map
 //! (R=G=B=occlusion, A=1) that the graph multiplies onto the colour with a
 //! `node.mix`; the atom never touches the colour itself.
 //!

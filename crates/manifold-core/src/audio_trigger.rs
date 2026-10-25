@@ -209,8 +209,7 @@ impl TriggerRoute {
 /// MIDI clip-launch fields (`layer.rs`), speaking the exact same audio-mod
 /// vocabulary (`AudioModSource` + `AudioModShape`) param triggers use.
 /// `TriggerRoute` (above) becomes deserialize-only legacy; this is its
-/// replacement as the only authorable shape. See
-/// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.1/D2/D3.
+/// replacement as the only authorable shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LayerClipTrigger {
@@ -263,8 +262,7 @@ pub const MAX_FIRE_METERS: usize = 512;
 /// Re-exported at their historical path so `manifold-playback` call sites
 /// written against `manifold_core::audio_trigger::fire_meter_key*` are
 /// unchanged. The hashes themselves live in `manifold-foundation`
-/// (`manifold-ui` cannot depend on `manifold-core` —
-/// `docs/UI_LAYERING_INVERSION.md` — so a pure, zero-domain-semantics byte
+/// (`manifold-ui` cannot depend on `manifold-core`, so a pure, zero-domain-semantics byte
 /// hash belongs in the shared zero-dependency vocabulary crate, mirroring
 /// how `id.rs`'s ID types moved there for the same reason). Production code
 /// should build keys via the two typed constructors, never the raw
@@ -274,9 +272,8 @@ pub use manifold_foundation::{
 };
 
 /// Live shaped-signal capture for every enabled audio mod evaluated this
-/// analysis block — the content-thread side of the D6 fire meter
-/// (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c, BUG-082's
-/// fix; widened 2026-07-11 from fire-mode-only to every enabled mod). Two
+/// analysis block — the content-thread side of the fire meter
+/// (covers every enabled mod, not only fire-mode ones). Two
 /// evaluators write into ONE shared instance each tick:
 /// `manifold_playback::modulation::evaluate_instance_audio_mods` (every
 /// enabled param audio mod, keyed via

@@ -450,8 +450,8 @@ hand_descriptor!(
     aliases: ["noise", "hash", "random", "white noise", "grain"],
 );
 
-// node.rotate_vec2_90 and node.fluid_project_scatter_2d: retired
-// docs/NODE_VOCABULARY_AUDIT.md section 7.1/section 7.2 — folded into node.rotate_vector /
+// node.rotate_vec2_90 and node.fluid_project_scatter_2d: retired,
+// folded into node.rotate_vector /
 // node.draw_particles_camera via the load-time migration table
 // (manifold_core::type_id_migration) rather than a live PrimitiveFactory
 // registration, so they carry no descriptor here (a descriptor documents a

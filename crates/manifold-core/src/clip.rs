@@ -15,7 +15,7 @@ pub struct TimelineClip {
     /// clips; non-empty marks this as an audio clip (discriminated the same way
     /// `video_clip_id` marks a video clip). The owning layer is `LayerType::Audio`.
     /// The derived per-send feature curve is runtime-only (cached by `ClipId`),
-    /// never serialized. See `docs/AUDIO_LAYER_DESIGN.md`.
+    /// never serialized.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub audio_file_path: String,
 

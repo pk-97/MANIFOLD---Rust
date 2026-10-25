@@ -1,4 +1,4 @@
-//! The content half of the count gate (docs/UI_INVALIDATION_DESIGN.md D10, P1).
+//! The content half of the count gate.
 //!
 //! Drives the real `ContentThread::handle_command` and the real
 //! `tick_frame` on a headless content thread, with commands the real

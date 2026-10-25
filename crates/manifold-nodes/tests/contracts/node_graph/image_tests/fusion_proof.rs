@@ -212,7 +212,7 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     );
 }
 
-/// The Ocean backdrop region (docs/OCEAN_SURFACE_DESIGN.md): `node.camera_sky`
+/// The Ocean backdrop region: `node.camera_sky`
 /// (camera-derived, Gather on the sky) feeding `node.over`'s bottom, with a
 /// varying-alpha top, fuses into one kernel and matches the unfused pair.
 #[test]
@@ -847,8 +847,7 @@ fn linear_blur_pair_matches_legacy_blur_node() {
 
 /// D4/P6 — MULTI-output texture atom fusion. `node.voronoi_2d` ("cells")
 /// declares TWO texture outputs (`out`, `cell_id`); this graph wires only
-/// `cell_id` into `node.hash_field_by_seed` (the real VoronoiPrism shape —
-/// `docs/FUSION_SOTA_DESIGN.md` D4 names this exact pair as the family's
+/// `cell_id` into `node.hash_field_by_seed` (the real VoronoiPrism shape; this exact pair is the family's
 /// palette example). Before this phase, cut rule 6 (`tex_out != 1`) forced
 /// voronoi to `Boundary` unconditionally, so this pair never fused. After the
 /// narrowing (`tex_out == 0` boundary only) plus the struct-return texture

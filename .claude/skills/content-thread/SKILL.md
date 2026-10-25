@@ -44,8 +44,7 @@ content stamps (`PartStamps`) say which parts moved.
 
 ## Mutation Flow
 
-Every project write goes through `EditingService`, on both threads
-(docs/UI_INVALIDATION_DESIGN.md D3, D5, D13, D24). Each write names the parts it
+Every project write goes through `EditingService`, on both threads. Each write names the parts it
 touches (`ChangeSet` of `Part`s); the stamps move, and the frame planner and the
 content reactions read the stamps. There is no other signal.
 

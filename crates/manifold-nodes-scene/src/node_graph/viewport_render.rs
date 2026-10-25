@@ -22,8 +22,8 @@
 //! generator's runtime in the first place, just called a second time with
 //! its own `Graph`/`ExecutionPlan`/`Executor`/`MetalBackend`. Two structurally
 //! separate runtimes on the same `GpuDevice` cannot share execution state —
-//! this is what makes the D9 guarantee mechanical rather than a hoped-for
-//! ordering. `docs/REALTIME_3D_DESIGN_P5_GATE.md` proof lives in
+//! this is what makes that guarantee mechanical rather than a hoped-for
+//! ordering. The proof lives in
 //! `crates/manifold-nodes/tests/gpu_proofs/scene_viewport_navigate.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};

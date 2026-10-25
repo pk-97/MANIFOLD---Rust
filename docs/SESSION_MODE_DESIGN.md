@@ -3,13 +3,12 @@
 Ableton-style scene/clip launching as a second performance surface. Users who never touch the timeline can drop content into a grid (layers × scenes) and launch slots/scenes quantized to the beat. Timeline users can slice arrangement sections into scenes and back.
 
 Status: IN PROGRESS — P1+P2+P3 on main; P4 (UI) + P5 (recording) not implemented. **P4 is a UI phase — hand it to Peter for feel review, not auto-gated.** Before delegating P4/P5 to an agent, expand their one-line rows to full section 5 (Phase briefs) briefs. P4 plumbing note: `ContentState` carries NO session play-state yet (P2 added command variants only) — the section 9 (snapshot fields) fields are greenfield P4 work; P4's PNG gate = L2, use the ui-flows library for launch-interaction coverage (L3). Written 2026-07-02.
-Prerequisites: none. Unblocks PERFORM_SURFACE_DESIGN P2 (`docs/DESIGN_BUILD_ORDER.md`).
+Prerequisites: none. Unblocks PERFORM_SURFACE_DESIGN P2.
 Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 Companion: `docs/PERFORM_SURFACE_DESIGN.md` — **session perform** (this grid at stage
 scale, launch gestures as `ContentCommand`s) ships as that design's P2 together with
-this build; one Perform button routes by context (its D1). Sequencing:
-`docs/DESIGN_BUILD_ORDER.md`.
+this build; one Perform button routes by context (its D1)..
 
 ## 1. The core insight
 

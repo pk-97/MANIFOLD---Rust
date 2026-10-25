@@ -5,7 +5,7 @@
 //! live in `manifold-foundation` and are shared verbatim. The types here are
 //! the *domain semantics* the UI needs to render and to name in its events —
 //! they are mirrored, and `manifold-app` translates them to/from the engine at
-//! the one boundary (`ui_translate.rs`). See `docs/UI_LAYERING_INVERSION.md`.
+//! the one boundary (`ui_translate.rs`).
 //!
 //! These mirrors are kept faithful to the core definitions (same variants, same
 //! `index()`/`label()` results) so the round-trip through the app translation

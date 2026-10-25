@@ -1,7 +1,7 @@
 // node.coc_from_depth — fusable body (freeze section 12), Pointwise + CoincidentTexel.
 //
 // Physically-based circle-of-confusion (thin-lens model) from scene depth +
-// a Camera's fov/near/far/lens (docs/CINEMATIC_POST_DESIGN.md D1). Exact
+// a Camera's fov/near/far/lens. Exact
 // formula, no substitution:
 //   f_mm    = SENSOR_H_MM / (2 * tan(fov_y / 2))
 //   aperture_radius_mm = f_mm / (2 * f_stop)
@@ -15,7 +15,7 @@
 //   out.r   = coc_radius_px / max_radius   (RADIUS MAGNITUDE — unchanged for every existing
 //             reader: node.variable_blur and node.bokeh_gather read `width.r`)
 //   out.g   = signed < 0 ? 1.0 : 0.0   (sign flag: 1.0 = nearer than focus,
-//             0.0 = far-or-in-focus; docs/BOKEH_LAYERED_DOF_DESIGN.md D1)
+//             0.0 = far-or-in-focus)
 //   out.b   = out.r   (copy of radius magnitude)
 //   out.a   = 1.0
 //
@@ -28,7 +28,7 @@
 // `camera` is a Camera-typed CPU-struct input consumed ENTIRELY via the five
 // DERIVED_UNIFORMS below (fov_y/near/far are projection facts; focus_distance/
 // f_stop are the Camera's lens block, written upstream by node.camera_lens —
-// "one lens, every consumer reads it", docs/CAMERA_AND_LENS_DESIGN.md D4) —
+// "one lens, every consumer reads it") —
 // it never becomes a GPU binding, which is what lets this atom fuse with a
 // pointwise neighbour instead of being a permanent boundary (P0/D7).
 //

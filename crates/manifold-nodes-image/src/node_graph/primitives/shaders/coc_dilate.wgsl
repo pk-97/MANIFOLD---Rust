@@ -1,5 +1,4 @@
-// node.coc_dilate — hand parity oracle for the generated standalone kernel
-// (docs/BUG_BACKLOG.md BUG-137). Same fixed 3x3 neighborhood-max as
+// node.coc_dilate — hand parity oracle for the generated standalone kernel. Same fixed 3x3 neighborhood-max as
 // coc_dilate_body.wgsl — kept independent (not sharing Rust source) so the
 // gpu_tests parity check is a real cross-check, not a tautology.
 //

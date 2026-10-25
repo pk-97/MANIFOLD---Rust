@@ -71,7 +71,7 @@ This is the construct that makes per-pixel loops graph-expressible. Plasma's Noi
 
 Plasma is the natural first case because:
 
-- **6 of 8 variants are already known to atomize cleanly into ~75 nodes** (see the deferred audit in `PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`). That graph is the perfect fusion-pass benchmark — measure pre-fusion vs. post-fusion frame time, validate the 75 dispatches collapse to ~8.
+- **6 of 8 variants are already known to atomize cleanly into ~75 nodes**. That graph is the perfect fusion-pass benchmark — measure pre-fusion vs. post-fusion frame time, validate the 75 dispatches collapse to ~8.
 - **Noise and Fractal are the forcing cases for the loop primitive.** They're the smallest interesting per-pixel loops in the inventory. Build `for_each_n`, express Noise as a 4-atom body + wrapper, validate parity against the legacy shader.
 - **Plasma's parity test already exists** and the legacy primitive is still in the tree, so visual regression is easy to verify at every step.
 
@@ -86,7 +86,7 @@ Order of operations when this work starts:
 
 ## 6. What this defers
 
-`docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` Tranche 3 (curated math kernels) had `plasma_pattern_2d` as one of four entries. The other three (`shape_2d`, `star_field_2d`, `generate_lissajous`) are already done or proceeding independently — they don't need loop primitives, only the fusion pass would benefit them (and that's purely a performance win, not a blocker). They can ship as atomized graphs now and pick up the fusion speedup later when the compiler lands.
+`plasma_pattern_2d` is one of four curated math kernels. The other three (`shape_2d`, `star_field_2d`, `generate_lissajous`) are already done or proceeding independently — they don't need loop primitives, only the fusion pass would benefit them (and that's purely a performance win, not a blocker). They can ship as atomized graphs now and pick up the fusion speedup later when the compiler lands.
 
 Plasma is the only one that hits the loop wall hard enough to be worth deferring. Other deferred candidates worth flagging when this work starts: any future Mandelbrot / Julia / raymarcher / iterated-function-system generator, the `integrate_particles_attractor` family (per-particle RK2 substeps are conceptually a loop — though it's already atom-decomposed at a coarser granularity that avoids the issue), and any DNN post-processing chains where a sequence of pointwise ops currently eats multiple full-canvas passes.
 

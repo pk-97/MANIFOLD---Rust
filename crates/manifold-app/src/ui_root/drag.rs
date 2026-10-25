@@ -10,7 +10,7 @@ impl UIRoot {
     /// gesture's first `DragBegin`. Fixed order, first claim wins (section 3.2):
     /// open overlays z-top-down → inspector → layer headers → ruler →
     /// timeline tracks → nobody. `node_id` is accepted for signature parity
-    /// with the design's committed call (`docs/DRAG_CAPTURE_DESIGN.md` section 3.2)
+    /// with the design's committed call
     /// — no resolution step needs it today; every claim is origin/state based.
     pub(crate) fn resolve_drag_owner(
         &mut self,
@@ -114,8 +114,7 @@ impl UIRoot {
     /// D2/section 3.3 — the terminal broadcast every gesture that began gets,
     /// exactly once, no matter who owned it or what ate the routed event.
     /// The fused form (hooks + `drag_owner` clear) is the self-heal on the
-    /// next `PointerDown` when a stale owner survived (a lost OS release —
-    /// `docs/DRAG_CAPTURE_DESIGN.md` section 3.3 failure story). The normal terminal
+    /// next `PointerDown` when a stale owner survived (a lost OS release). The normal terminal
     /// path does NOT use this — it calls `fire_gesture_end_hooks` and defers
     /// the clear past the stash read (see `process_events`); the two must not
     /// be re-fused (BUG-075).
@@ -126,7 +125,7 @@ impl UIRoot {
         self.tracks_press_active = false;
     }
 
-    /// D6/section 3.4 (`docs/DRAG_CAPTURE_DESIGN.md`) — after a `PointerDown` is
+    /// After a `PointerDown` is
     /// consumed by `route_overlay_event`, does any OPEN overlay want
     /// immediate-drag armed for this press? `route_overlay_event` returns
     /// only whether an overlay consumed the event, not which one — but only
@@ -147,7 +146,7 @@ impl UIRoot {
     }
 
     /// Whether `event` should stash into `viewport_events` for
-    /// `InteractionOverlay` (`docs/DRAG_CAPTURE_DESIGN.md` section 3.2). The drag
+    /// `InteractionOverlay`. The drag
     /// family (`DragBegin`/`Drag`/`DragEnd`) stashes by OWNERSHIP,
     /// unconditionally, no position check — `resolve_drag_owner` fixes
     /// `drag_owner` on `DragBegin` (see the `process_events` drag loop), and
@@ -189,7 +188,7 @@ impl UIRoot {
 
 #[cfg(test)]
 mod drag_capture_tests {
-    //! `docs/DRAG_CAPTURE_DESIGN.md` P1 unit tests. `UIRoot::new()` +
+    //! Drag capture unit tests. `UIRoot::new()` +
     //! `resize()` is enough scaffolding for these — `resize` runs `build()`
     //! (sets `built = true`, computes real `tracks_rect`/`ruler_rect` from
     //! the layout) without needing a live `Project` (the same sequencing

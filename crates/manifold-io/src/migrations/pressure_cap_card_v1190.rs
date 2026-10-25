@@ -1,5 +1,4 @@
-//! v1.18.0 → v1.19.0: GPU FLIP Domain grew the Max Iterations card
-//! (`docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md` section 7 (Control contract)). A
+//! v1.18.0 → v1.19.0: GPU FLIP Domain grew the Max Iterations card. A
 //! saved generator layer carries its own graph snapshot, and that snapshot is
 //! the manifest authority, so a project saved before the card has no
 //! `max_iterations` card, binding, or domain→step wire. This rung gives the

@@ -183,7 +183,7 @@ The walkthrough's six water entries are bundled generator presets: WaterDamBreak
 **Oracle:** `raw/traits.tsv` (implementors, `dyn` uses, bounds, name, file) and `raw/registries.tsv` (each `inventory::collect!` type with its `inventory::submit!` count, comment lines excluded). Per candidate: `rg -n -w TRAIT` over all files, and macro-generated impls (`impl $trait for` inside `macro_rules!`).
 
 **Traps:**
-- A one-registrant registry or one-implementor trait often inverts a dependency across a crate boundary: a lower crate declares a hook and a higher crate fills it. `docs/RENDERER_CRATE_SPLIT_DESIGN.md` D4 (no-facade rule) and D12 (layering test) decide whether that seam must stay. Check before calling it slop.
+- A one-registrant registry or one-implementor trait often inverts a dependency across a crate boundary: a lower crate declares a hook and a higher crate fills it. The no-facade rule and the layering test decide whether that seam must stay. Check before calling it slop.
 - A test mock as the second implementor does not make a trait earn its place in product code.
 
 2026-10-19 screen: no implementors at all for PlaybackNotifier, LayerLifecycleCallbacks, SelectionRegionTarget, EditingHost (one function takes `&dyn EditingHost`, so it can never be called) and PostProcessEffect. The compositor's `plugin_warmups` list is filled from the PluginPrewarm registry, which has no submissions, so it is always empty, and a test checks registrations over an empty list. Three more registries have no submissions: EffectAliasMetadata, EffectValueAliasMetadata, ParamDoc.
@@ -194,7 +194,7 @@ The walkthrough's six water entries are bundled generator presets: WaterDamBreak
 
 **Oracle:** `raw/free_fn_dupes.tsv` (free functions whose name is defined in three or more crates), then concept searches for each suspect across crates.
 
-**Traps:** test helpers repeated per test module (`fixture`, `run`, `settle`) are local and cheap. Solver crates may keep their own math on purpose so they can ship on their own (`docs/RENDERER_CRATE_SPLIT_DESIGN.md`).
+**Traps:** test helpers repeated per test module (`fixture`, `run`, `settle`) are local and cheap. Solver crates may keep their own math on purpose so they can ship on their own.
 
 2026-10-19 screen: `dot` is defined in seven crates, `cross` in six, `normalize`, `length` and `sub` in five, `scale` in four (physics, fluids, whitewater, nodes-image, nodes-scene, node-engine, ui, ui-paint). Some may be inside test modules; the screen does not separate inline test modules for this list.
 
@@ -310,7 +310,7 @@ The lead writes `docs/evidence/simplification_census_2026-10/REPORT.md`; Fable r
 
 ## 8. Relation to the god file decomposition
 
-The god file campaign's waves 1 to 3 are done and the crate split shipped (`docs/RENDERER_CRATE_SPLIT_DESIGN.md`). What remains sits under open epics whose titles already include a cleanup pass: BUG-bfktg (Rendering-side decomposition) and BUG-brw4f (App and UI decomposition), with children such as BUG-trh7 (render_scene.rs godfile, 9.7k lines), BUG-2rh (inspector.rs decomposition), BUG-tto (panels/inspector.rs decomposition) and BUG-9cy (scene_setup_panel.rs decomposition). The water side has its own audited cleanup under BUG-hkbdp (Renderer crate split epic), child 6, the post-split water cleanup: slop out, CPU FLIP out of the product or under one cfg, no production water file over 1.5k lines, a test cut.
+The god file campaign's waves 1 to 3 are done and the crate split shipped. What remains sits under open epics whose titles already include a cleanup pass: BUG-bfktg (Rendering-side decomposition) and BUG-brw4f (App and UI decomposition), with children such as BUG-trh7 (render_scene.rs godfile, 9.7k lines), BUG-2rh (inspector.rs decomposition), BUG-tto (panels/inspector.rs decomposition) and BUG-9cy (scene_setup_panel.rs decomposition). The water side has its own audited cleanup under BUG-hkbdp (Renderer crate split epic), child 6, the post-split water cleanup: slop out, CPU FLIP out of the product or under one cfg, no production water file over 1.5k lines, a test cut.
 
 - **Order: census and deletion first, splitting second.** Splitting dead code moves it into more files and costs a pure-move landing. Deleting first shrinks what is left to split, and some files may drop under their ceiling without a split.
 - **Overlap.** This census is the cleanup pass those epics name. A record inside a file one of those beads covers names the bead in its proof column, so the decomposition lane picks it up. The `water` sweep reads the post-split water cleanup bead first and does not re-find its audited items.
@@ -391,7 +391,7 @@ Standing rules, restated in every brief: read-only on code; write only your two 
 
 ### 11.3 water (Sonnet, medium effort)
 
-> As 11.1, with sweep name `water`, files `water.md` and `water.proof.md`, and scope physics, fluids, nodes-water, water-rigid, water-liquid, water-gpu-flip, water-gpu-mpm, water-whitewater, water-surface. First run `bd show BUG-hkbdp.6` and its children: that audited water cleanup already owns some findings; where a row matches one, name the bead in the proof column instead of re-arguing it. Extra traps: these crates are meant to ship on their own one day, so a `pub` item may be public API on purpose (`docs/RENDERER_CRATE_SPLIT_DESIGN.md`); record such rows as `ask` with that reason. CPU reference solvers and conformance testkits are test infrastructure.
+> As 11.1, with sweep name `water`, files `water.md` and `water.proof.md`, and scope physics, fluids, nodes-water, water-rigid, water-liquid, water-gpu-flip, water-gpu-mpm, water-whitewater, water-surface. First run `bd show BUG-hkbdp.6` and its children: that audited water cleanup already owns some findings; where a row matches one, name the bead in the proof column instead of re-arguing it. Extra traps: these crates are meant to ship on their own one day, so a `pub` item may be public API on purpose; record such rows as `ask` with that reason. CPU reference solvers and conformance testkits are test infrastructure.
 
 ### 11.4 app-ui (Sonnet, medium effort)
 
@@ -447,7 +447,7 @@ Standing rules, restated in every brief: read-only on code; write only your two 
 
 ### 11.9 patterns (Opus, high effort)
 
-> You are the `patterns` sweep of the simplification census (BUG-yn979, Simplification pass). Read `/Users/peterkiemann/MANIFOLD - Rust/docs/SIMPLIFICATION_CENSUS.md` sections 3.9 to 3.11 and 4, and `docs/RENDERER_CRATE_SPLIT_DESIGN.md` D4 and D12.
+> You are the `patterns` sweep of the simplification census (BUG-yn979, Simplification pass). Read `/Users/peterkiemann/MANIFOLD - Rust/docs/SIMPLIFICATION_CENSUS.md` sections 3.9 to 3.11 and 4.
 >
 > Standing rules as in 11.1. Inputs: `raw/traits.tsv`, `raw/registries.tsv`, `raw/free_fn_dupes.tsv`, `raw/free_fns_all.tsv`, `raw/const_bools.txt`, `raw/env_knobs.txt`, `raw/features.tsv`, and the "seen, not judged" lists and `ask` switch rows in `engine-model.md`, `engine-runtime.md`, `graph.md`, `water.md` and `app-ui.md`.
 >

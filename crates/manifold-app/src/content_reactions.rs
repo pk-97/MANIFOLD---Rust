@@ -1,4 +1,4 @@
-//! The content reaction pass (docs/UI_INVALIDATION_DESIGN.md D4, section 4).
+//! The content reaction pass.
 //!
 //! Commands only edit; the work an edit implies runs here, once per drain
 //! pass, keyed on the part stamps that moved since the last pass. Nothing

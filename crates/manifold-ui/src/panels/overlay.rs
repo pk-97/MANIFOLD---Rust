@@ -154,7 +154,7 @@ pub trait Overlay {
     fn on_event(&mut self, event: &UIEvent, tree: &mut UITree) -> OverlayResponse;
 
     /// Does a drag ORIGINATING at `origin` belong to this overlay? Read by
-    /// `UIRoot::resolve_drag_owner` (`docs/DRAG_CAPTURE_DESIGN.md` section 3.2) once,
+    /// `UIRoot::resolve_drag_owner` once,
     /// at the gesture's first `DragBegin` — never per-event. Default: no.
     /// Modeless overlays with a drag surface override (the audio panel's
     /// armed band/calibration drag OR origin inside its panel rect). A modal always owns
@@ -173,8 +173,7 @@ pub trait Overlay {
     /// `DragController<AudioSetupDrag>` session).
     fn gesture_ended(&mut self) {}
 
-    /// Did this overlay just arm an immediate-drag surface (D6,
-    /// `docs/DRAG_CAPTURE_DESIGN.md` section 3.4) while consuming the `PointerDown`
+    /// Did this overlay just arm an immediate-drag surface while consuming the `PointerDown`
     /// just routed to it? Read by `UIRoot` once, immediately after
     /// `route_overlay_event` consumes a `PointerDown` — never per-event.
     /// Default: no. Must reflect THIS press, not a stale flag from a
