@@ -12,7 +12,7 @@ Checks:
   glb-status              regenerate the glTF conformance status doc  [scripts/gen_glb_conformance_status.py]
 
 Machine:
-  gpu-queue               GPU lock: `-- <cmd>` (waits for the MANIFOLD app to quit, else NOT RUN), `status`; campaign `reserve --owner NAME --reason TEXT --seconds N`, `clear`  [scripts/gpu_queue.py]
+  gpu-queue               GPU lock: `-- <cmd>` (waits for the MANIFOLD app to quit, else NOT RUN), `status`  [scripts/gpu_queue.py]
   claude-pane             launch a Claude Code session in a new tmux pane without stealing focus  [scripts/claude-pane.sh]
 
 Render and measure:

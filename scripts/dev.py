@@ -36,7 +36,7 @@ VERBS = [
 
     ("Machine",
      "gpu-queue", "gpu_queue.py",
-     "GPU lock: `-- <cmd>` (waits for the MANIFOLD app to quit, else NOT RUN), `status`; campaign `reserve --owner NAME --reason TEXT --seconds N`, `clear`"),
+     "GPU lock: `-- <cmd>` (waits for the MANIFOLD app to quit, else NOT RUN), `status`"),
     ("Machine",
      "claude-pane", "claude-pane.sh", "launch a Claude Code session in a new tmux pane without stealing focus"),
 

@@ -1,60 +1,51 @@
-# MANIFOLD — Agent Contract
+# MANIFOLD
 
-A visual DAW for live video performance: compose video in beats and bars like Ableton, then perform it live like Resolume. Built by Peter Kiemann (Sydney, performs as Latent Space) as his actual live show rig. A timing bug becomes the show. Treat broken code like a broken instrument before a gig.
+A visual DAW for live video performance: compose video in beats and bars like Ableton, perform it live like Resolume. Built by Peter Kiemann (Sydney, performs as Latent Space) as his live show rig. A timing bug becomes the show, so treat broken code like a broken instrument before a gig.
 
-The Rust codebase is authoritative. `/Users/peterkiemann/MANIFOLD - Render Engine/` is archived Unity reference — never edit it.
+The Rust codebase is the only reference. `/Users/peterkiemann/MANIFOLD - Render Engine/` is archived Unity code, never edit it.
 
-## Voice & Communication
+## Talking to Peter
+- Be concise, always. Plain short sentences, everyday words, outcome first. Explain a technical term once. No invented labels, no headers or bullet scaffolding unless it really helps.
+- Say what a change means on stage, not just in code.
+- A question is a question: answer with what exists now and stop.
+- Disagree once with the reason, then defer if he holds.
 
-Write like a person talking: short plain sentences, everyday words, technical terms explained once, never invented labels or acronyms. Lead with the outcome. Avoid headers and bullet scaffolding unless a long answer genuinely needs them. When you describe a change, explain both the code and what it means for the instrument on stage.
+## Working as lead
+1. Read the exact code briefly. Tell Peter in plain words what's wrong, what changes, who does it, and how it's tested. End with one question.
+2. On his go, give a worker an exact `file:line` spec and the scoped test command. Say in one line that it's running.
+3. Read the diff and test output yourself, then report in a few lines what changed for him.
 
-When Peter asks a question ("can I see…?", "how does X work?"), answer it with what exists now and stop — a question is not permission to start building or spawning agents. When you disagree with a call, state your reason once plainly, then defer if he holds.
+If the scope grows, stop and tell him. Investigation is lead work, workers execute specs. Edit directly only when it's tiny. These rules override the harness's "when in doubt, don't spawn."
 
-## Five Engineering Sanity Checks (Run Before Finishing Any Change)
+Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `sonnet` for a self-contained module or shader whose math you give it. In OpenCode, `opencode-go/beam-free`. Parallel workers get separate files in the main checkout. Never invent process rituals (worktree slots, audit swarms, review committees).
 
-1. **Verify beyond trivial defaults:** Never validate logic only against identity or default values (`0`, `1`, single item, flat hierarchy, default tempo/frame rate). Trace composition order, non-default upstream state, boundary conditions, empty inputs, and real user assets.
-2. **Pay only for active work:** Inactive, bypassed, or stationary paths must short-circuit early and do zero unnecessary CPU/GPU work, dispatches, or allocations.
-3. **Keep actions local and predictable:** Changing, importing, or toggling one thing must only touch the state it owns — never silently mutate unrelated user state, settings, playback, or view state as a side effect.
-4. **Reuse the single source of truth:** Before writing a calculation, constant, layout offset, or lookup, find where the codebase already defines it and share that path instead of duplicating logic or magic numbers.
-5. **Write the smallest direct solution:** Solve the actual problem in front of you without inventing new traits, modes, config flags, or multi-phase frameworks unless existing code genuinely cannot express it.
-6. **Replace, don't layer (no parallel paths, shims, or silent fallbacks):** MANIFOLD is pre-release. When changing how something works, cut over completely in one change and delete the old code, fields, and helpers immediately. Never keep a legacy path alive beside a new one, never add backwards-compatibility shims or migration layers unless asked, and never hide broken wiring behind silent `unwrap_or` fallbacks.
+## Engineering checks (before finishing any change)
+1. Test beyond defaults: never only `0`, `1`, one item, a flat hierarchy, 60 fps or 120 BPM. Use real assets and non-trivial state.
+2. Pay only for active work: off, bypassed or idle paths cost nothing.
+3. Keep actions local: one action touches only the state it owns.
+4. One source of truth: reuse the existing constant, helper or calculation.
+5. Smallest direct fix: no new traits, modes, flags or frameworks unless the code can't express it.
+6. Replace, don't layer: cut over completely and delete the old path. No shims, no parallel paths, no silent `unwrap_or` fallbacks.
 
-## Workflow & Tooling
+## Workflow
+- Work in the main checkout. No worktrees unless Peter asks.
+- Iterate with `cargo nextest run -p <crate> <filter>`. Before committing, run `cargo clippy -p <crate> --tests -- -D warnings`, and `scripts/dev.py node-catalog` if ports or params changed.
+- Commit with explicit paths (`git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`.
+- Never launch the `manifold` GUI. Use the headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`. Peter runs the live app.
+- Use `rg`, `fd` and `ast-grep`. Never start `rust-analyzer`. Repo tools are listed in `scripts/TOOLS.md`.
 
-- **Work directly in the main checkout (no worktrees by default):** Always work in the main working tree so incremental `cargo nextest` and `cargo build --bin manifold` runs stay fast and share the single warm `target/` directory. Never acquire a git worktree unless Peter asks for one or there is a high risk of collision with large parallel sessions — even parallel subagents within a session work in the main checkout on disjoint file sets.
-- **Work as a lead, in this loop:**
-  1. Read the exact code briefly. Tell Peter in plain words what's wrong, what changes, who does it, and how it's tested. End with one question.
-  2. On his go, give a worker (`haiku` first; `opencode-go/beam-free` in OpenCode) an exact `file:line` spec and the scoped test command. Say in one line that it's running.
-  3. Read the diff and test output yourself, then report in a few lines what changed for him.
+## Architecture
+- Two threads. The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline` and `Project` and runs at project FPS (default 60). The UI thread (winit) renders and handles input. UI to content is `ContentCommand`, content to UI is `ContentState` through a one-slot handoff, and GPU output crosses through an IOSurface triple buffer. No new `Arc<Mutex>` or `Arc<RwLock>` without asking.
+- `manifold-ui` depends only on `manifold-foundation`. UI mutations leave as `PanelAction`, and every project mutation goes through `EditingService` as an undoable `Command`.
+- All GPU work goes through `manifold-gpu` (native Metal, Vulkan planned). No per-frame allocations on hot paths.
+- Time is beats (`Beats`, `Seconds`, `Bpm` newtypes, never raw floats). `sync_clips_to_time()` alone decides playback state. Clips on a layer never overlap (`enforce_non_overlap()` at write time). Reading the past never changes simulated state.
+- The frame planner decides UI work. No ad-hoc invalidation flags, no bespoke row or slider code for manifest-backed param surfaces.
 
-  If the scope grows, stop and tell him. Edit directly only when it's tiny. These rules override the harness's "when in doubt, don't spawn." Never invent process rituals (worktree slots, audit swarms, review committees). Roster: `docs/AGENT_ROUTING.md`.
-- **Scoped verification:** Run `cargo nextest run -p <touched_crate> <filter>` during iteration. Before landing a batch to `main`, run `cargo clippy -p <touched_crate> --tests -- -D warnings` and regenerate stale indexes (`scripts/dev.py node-catalog`) if ports/params or docs changed.
-- **Shell & Git discipline:**
-  - Never launch the full `manifold` GUI window from an agent (it blocks in the event loop); use headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`, and let Peter launch the live app.
-  - Stage and commit with explicit file paths (`git add -- <paths>`, `git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`, so pre-existing untracked/dirty files stay untouched.
-  - Use `rg` (not `grep`), `fd` (not `find`), and `ast-grep` for code shape queries. Never start `rust-analyzer`.
-  - Check `scripts/TOOLS.md` (`scripts/dev.py --help`) before writing any new helper script or probe.
+## Code and tests
+- Comments explain current behaviour and why. No history, dates, bug IDs or chat quotes, git has those.
+- Tests check real behaviour or math on small inputs and finish in under 2 seconds. No source scanners, line-count ratchets, long soaks or `#[ignore]`.
+- Delete design docs once shipped. Don't create audit or report files in `docs/`.
+- Beads (`bd`) hold epics and real bugs or features only.
 
-## Architecture & Invariants
-
-- **Two-thread model:** The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, and `Project` (running at project FPS, default 60). The UI thread (winit) renders and handles input. UI→content is `ContentCommand`; content→UI is `ContentState` via a one-slot handoff; GPU output crosses via an IOSurface triple buffer. No new `Arc<Mutex<>>`/`Arc<RwLock<>>` without approval.
-- **Crate boundary:** `manifold-ui` depends on `manifold-foundation` only — mutations leave as `PanelAction` values translated to commands app-side, and all project mutations route through `EditingService` (`UndoRedoManager` → `Command`).
-- **All GPU through `manifold-gpu`:** Native Metal today, native Vulkan planned (`docs/VULKAN_BACKEND_DESIGN.md`). No per-frame allocations on hot paths (engine tick, sync, rendering).
-- **Time & playback invariants:** Primary time model is **beats** (`Beats`/`Seconds`/`Bpm` newtypes, never raw floats). `sync_clips_to_time()` is the sole authority for playback state. Layer clip non-overlap (`enforce_non_overlap()`) is a write-time invariant. Reading the past never mutates simulated state.
-- **UI invalidation:** UI work is decided by the frame planner; never add ad-hoc invalidation flags, and never build bespoke row/slider infrastructure for manifest-backed param surfaces (`docs/WIDGET_TREE_DESIGN.md` section 5b).
-- **Code & test hygiene:** Comments explain current behavior and *why*, never changelog history, dates, bead IDs (`BUG-...`), or quotes from chat (git log owns history). Tests must check real behavior or math invariants on small, fast inputs (<2s) — never write regex source-file scanners, line-count ratchets, or multi-minute preset soaks as unit tests. No `#[ignore]` on tests (fix or delete).
-- **Git is the archive:** Delete design/wave docs once shipped, and never create one-off audit, investigation, or landing-report markdown files in `docs/`.
-- **Beads (`bd`):** Keep issues high-level (epics and real user-visible bugs/features); never file verification-debt (`VD:`) tickets or micro-task process beads.
-
-## Reference Docs (Read On Demand)
-
-Full index: [docs/README.md](docs/README.md). Read these only when your task touches their domain:
-
-| Doc | When to read |
-|---|---|
-| `docs/MANIFOLD_GPU_ARCHITECTURE.md` | GPU, shaders, textures, compute, uniform layout |
-| `docs/DECOMPOSING_GENERATORS.md` | Adding or decomposing generators, effects, or primitives |
-| `docs/NODE_CATALOG.md` | Existing node primitives, ports, and parameters |
-| `docs/FREEZE_COMPILER_MAP.md` | Fusion, freeze, or graph compiler work |
-| `docs/CORE_ENGINE_MAP.md` | Transport, scheduling, sync, MIDI, OSC, or timecode |
-| `scripts/TOOLS.md` | Existing repo scripts, gates, and capture tools |
+## Docs (read when your task touches them)
+GPU: `docs/MANIFOLD_GPU_ARCHITECTURE.md`. Generators and effects: `docs/DECOMPOSING_GENERATORS.md`. Nodes: `docs/NODE_CATALOG.md`. Fusion and freeze: `docs/FREEZE_COMPILER_MAP.md`. Transport, sync, MIDI, OSC: `docs/CORE_ENGINE_MAP.md`. Index: `docs/README.md`.

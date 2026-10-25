@@ -7,7 +7,6 @@
 - `CORE_ENGINE_MAP.md` companion; see `DECOMPOSING_GENERATORS.md`
 - `NODE_CATALOG.md` — node inventory (regenerate, don't hand-edit)
 - `DEVELOPMENT_REFERENCE.md` — dev quick reference
-- `AGENT_ROUTING.md` — agent routing table
 - `DESIGN_DOC_STANDARD.md` — design doc contract
 - `HEADLESS_UI_HARNESS.md` — headless UI harness usage
 - `GLB_IMPORT_OPTIMIZATION_GUIDE.md` — photoscan import optimization

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Machine-wide GPU queue: one GPU run at a time, across every agent and worktree.
+"""Machine-wide GPU lock: one GPU run at a time, across every agent and worktree.
 
     scripts/gpu_queue.py [--label TEXT] -- <command...>   run under the lock
     scripts/gpu_queue.py status                           who holds it, since when
@@ -39,9 +39,7 @@ count. A run nested inside a holder does not wait again.
 
 Importable: `with gpu_queue.hold("label"): ...` for scripts that take the lock
 for a whole multi-process run. Waiting is poll-based, not first-come
-first-served. A landing announces itself with `landing_pending()` before it
-builds; nightly callers use `hold(..., priority="nightly")` and yield to that
-announcement between independent GPU runs.
+first-served.
 
 Obsolete when: the Vulkan backend ships its own device-level scheduler, or
 GPU runs move off this machine.
@@ -50,8 +48,6 @@ GPU runs move off this machine.
 import argparse
 import contextlib
 import fcntl
-import json
-import math
 import os
 import signal
 import secrets
@@ -63,10 +59,6 @@ from pathlib import Path
 POLL_SECONDS = 0.25
 REPORT_SECONDS = 30.0
 HOLDER_ENV = "MANIFOLD_GPU_LOCK_HOLDER"
-LANDING_PENDING_DIR = "landing.pending"
-NIGHTLY_WAITING = "nightly.waiting"
-ADMISSION_LOCK = "gpu.admission"
-RESERVATION = "gpu.reservation"
 APP_PROCESS = "manifold"
 APP_WAIT_ENV = "MANIFOLD_GPU_APP_WAIT"
 APP_WAIT_DEFAULT_SECONDS = 8 * 60
@@ -80,311 +72,6 @@ _held_depth = 0
 def queue_dir():
     override = os.environ.get("MANIFOLD_GPU_QUEUE_DIR")
     return Path(override) if override else Path.home() / ".cache" / "manifold"
-
-
-def _landing_pending_dir(directory):
-    return Path(directory) / LANDING_PENDING_DIR
-
-
-def _read_pending(path):
-    info = {}
-    try:
-        text = path.read_text()
-    except OSError:
-        return info
-    for line in text.splitlines():
-        key, sep, value = line.partition("=")
-        if sep:
-            info[key] = value
-    return info
-
-
-def process_start_identity(pid=None):
-    """Return a stable process-start token, or ``None`` when it is unknown.
-
-    A PID alone is unsafe for landing announcements: the kernel can recycle it
-    after a landing dies.  Linux exposes a monotonic start tick in procfs;
-    macOS exposes the start timestamp through libproc.  Keep this helper small
-    and patchable so queue tests can exercise PID reuse deterministically.
-    """
-    pid = os.getpid() if pid is None else int(pid)
-    try:
-        stat = Path(f"/proc/{pid}/stat")
-        if stat.exists():
-            fields = stat.read_text().rsplit(") ", 1)[-1].split()
-            if len(fields) > 19:
-                return f"proc:{fields[19]}"
-    except (OSError, ValueError):
-        pass
-    if sys.platform == "darwin":
-        try:
-            import ctypes
-
-            class ProcBsdInfo(ctypes.Structure):
-                _fields_ = [
-                    ("flags", ctypes.c_uint32), ("status", ctypes.c_uint32),
-                    ("xstatus", ctypes.c_uint32), ("pid", ctypes.c_uint32),
-                    ("ppid", ctypes.c_uint32), ("uid", ctypes.c_uint32),
-                    ("gid", ctypes.c_uint32), ("ruid", ctypes.c_uint32),
-                    ("rgid", ctypes.c_uint32), ("svuid", ctypes.c_uint32),
-                    ("svgid", ctypes.c_uint32), ("reserved", ctypes.c_uint32),
-                    ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
-                    ("nfiles", ctypes.c_uint32), ("pgid", ctypes.c_uint32),
-                    ("pjobc", ctypes.c_uint32), ("tdev", ctypes.c_uint32),
-                    ("tpgid", ctypes.c_uint32), ("nice", ctypes.c_int32),
-                    ("start_sec", ctypes.c_uint64), ("start_usec", ctypes.c_uint64),
-                ]
-
-            libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
-            proc_pidinfo = libproc.proc_pidinfo
-            proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
-                                     ctypes.c_void_p, ctypes.c_int]
-            proc_pidinfo.restype = ctypes.c_int
-            info = ProcBsdInfo()
-            if proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) == ctypes.sizeof(info):
-                return f"proc:{info.start_sec}.{info.start_usec}"
-        except (OSError, AttributeError, TypeError):
-            pass
-    try:
-        result = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
-                                capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    value = result.stdout.strip()
-    return f"ps:{value}" if result.returncode == 0 and value else None
-
-
-def _identity_live(info):
-    """Whether a pending record still names the same process incarnation."""
-    pid = info.get("pid", "")
-    expected = info.get("start", "")
-    if not pid.isdigit() or int(pid) <= 1 or not expected:
-        return False
-    try:
-        os.kill(int(pid), 0)
-    except PermissionError:
-        pass  # A live process outside our signal permission still owns its record.
-    except OSError:
-        return False
-    return process_start_identity(int(pid)) == expected
-
-
-def pending_landings(directory=None):
-    """Return live landing announcements, removing dead or malformed records."""
-    directory = Path(directory) if directory else queue_dir()
-    pending_dir = _landing_pending_dir(directory)
-    try:
-        paths = list(pending_dir.iterdir())
-    except OSError:
-        return []
-    live = []
-    for path in paths:
-        if path.suffix != '.pending' or not path.is_file():
-            continue
-        info = _read_pending(path)
-        if _identity_live(info):
-            info["path"] = str(path)
-            live.append(info)
-        else:
-            with contextlib.suppress(OSError):
-                path.unlink()
-    return live
-
-
-def _pending_description(info):
-    label = info.get("label", "landing")
-    return f"pid {info.get('pid', '?')} `{label}`"
-
-
-@contextlib.contextmanager
-def landing_pending(directory=None, label="landing"):
-    """Announce a live landing so nightly GPU work yields before its next leg."""
-    directory = Path(directory) if directory else queue_dir()
-    pending_dir = _landing_pending_dir(directory)
-    pending_dir.mkdir(parents=True, exist_ok=True)
-    nonce = secrets.token_hex(16)
-    start = process_start_identity()
-    if not start:
-        raise RuntimeError("cannot identify landing process start")
-    path = pending_dir / f"{os.getpid()}.{nonce}.pending"
-    body = (f"pid={os.getpid()}\nstart={start}\nnonce={nonce}\nsince={time.time():.3f}\n"
-            f"label={' '.join(str(label).split())[:300]}\n")
-    tmp = pending_dir / f".{path.name}.tmp"
-    tmp.write_text(body)
-    os.replace(tmp, path)
-    try:
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            path.unlink()
-
-
-def _nightly_waiting_path(directory):
-    return Path(directory) / NIGHTLY_WAITING
-
-
-def _nightly_waiting(directory):
-    """Read the fair-queue turn marker, removing a dead owner."""
-    path = _nightly_waiting_path(directory)
-    info = _read_pending(path)
-    if not info:
-        return {}
-    if not _identity_live(info):
-        with contextlib.suppress(OSError):
-            path.unlink()
-        return {}
-    info["path"] = str(path)
-    return info
-
-
-def _batch_paths(info):
-    return {path for path in info.get("batch", "").split("|") if path}
-
-
-def _write_nightly_waiting(directory, batch):
-    start = process_start_identity()
-    if not start:
-        raise RuntimeError("cannot identify nightly process start")
-    path = _nightly_waiting_path(directory)
-    body = (f"pid={os.getpid()}\nstart={start}\nsince={time.time():.3f}\n"
-            f"batch={'|'.join(sorted(batch))}\n")
-    tmp = directory / f".{path.name}.tmp.{os.getpid()}"
-    tmp.write_text(body)
-    os.replace(tmp, path)
-    return path
-
-
-def _remove_own_nightly_waiting(directory):
-    with _admission_guard(directory):
-        _remove_own_nightly_waiting_locked(directory)
-
-
-def _remove_own_nightly_waiting_locked(directory):
-    path = _nightly_waiting_path(directory)
-    info = _read_pending(path)
-    if _is_own_turn(info):
-        with contextlib.suppress(OSError):
-            path.unlink()
-
-
-@contextlib.contextmanager
-def _admission_guard(directory):
-    """Serialize nightly turn selection without holding the GPU lock."""
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    fd = os.open(directory / ADMISSION_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-
-
-def _reservation_path(directory):
-    return Path(directory) / RESERVATION
-
-
-def _read_reservation_locked(directory, now=None):
-    """Read the campaign reservation, expiring malformed or old records."""
-    path = _reservation_path(directory)
-    try:
-        record = json.loads(path.read_text())
-        end = float(record["end_epoch"])
-        owner = str(record["owner"]).strip()
-        reason = str(record["reason"]).strip()
-        if (not owner or not reason or not math.isfinite(end)
-                or end <= 0):
-            raise ValueError("invalid reservation")
-    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
-        if path.exists():
-            with contextlib.suppress(OSError):
-                path.unlink()
-        return {}
-    if (time.time() if now is None else now) >= end:
-        with contextlib.suppress(OSError):
-            path.unlink()
-        return {}
-    record["owner"] = owner
-    record["reason"] = reason
-    record["end_epoch"] = end
-    return record
-
-
-def reservation(directory=None, now=None):
-    """Return the live campaign reservation, expiring it automatically."""
-    directory = Path(directory) if directory else queue_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    with _admission_guard(directory):
-        return _read_reservation_locked(directory, now=now)
-
-
-def reserve(owner, reason, seconds, directory=None, now=None):
-    """Atomically reserve nightly GPU work for a bounded campaign interval."""
-    owner = " ".join(str(owner).split())[:120]
-    reason = " ".join(str(reason).split())[:300]
-    seconds = float(seconds)
-    if not owner or not reason or not math.isfinite(seconds) or seconds <= 0:
-        raise ValueError("reservation needs an owner, reason, and positive seconds")
-    directory = Path(directory) if directory else queue_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    start = time.time() if now is None else float(now)
-    record = {"owner": owner, "reason": reason, "end_epoch": start + seconds}
-    with _admission_guard(directory):
-        old = _read_reservation_locked(directory, now=start)
-        if old:
-            raise RuntimeError(
-                f"GPU reservation already held by {old['owner']} until {old['end_epoch']:.3f}")
-        path = _reservation_path(directory)
-        tmp = directory / f".{path.name}.tmp.{os.getpid()}"
-        tmp.write_text(json.dumps(record, sort_keys=True) + "\n")
-        os.replace(tmp, path)
-    return record
-
-
-def clear_reservation(directory=None):
-    """Clear a campaign reservation under the admission guard."""
-    directory = Path(directory) if directory else queue_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    with _admission_guard(directory):
-        path = _reservation_path(directory)
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
-
-
-def _own_landing_paths(directory):
-    with _admission_guard(directory):
-        return _own_landing_paths_locked(directory)
-
-
-def _own_landing_paths_locked(directory):
-    pid = str(os.getpid())
-    start = process_start_identity()
-    if not start:
-        return set()
-    return {info["path"] for info in pending_landings(directory)
-            if info.get("pid") == pid and info.get("start") == start}
-
-
-def _normal_waits_for_nightly(directory):
-    """Block newer normal work while a nightly turn drains its landing batch."""
-    with _admission_guard(directory):
-        return _normal_waits_for_nightly_locked(directory)
-
-
-def _is_own_turn(info):
-    return (bool(info) and info.get("pid") == str(os.getpid())
-            and info.get("start") == process_start_identity())
-
-
-def _normal_waits_for_nightly_locked(directory):
-    waiting = _nightly_waiting(directory)
-    if not waiting:
-        return False
-    # A landing already in the frozen batch must be allowed to acquire and
-    # drain; announcements after that snapshot wait for the nightly turn.
-    return not (_own_landing_paths_locked(directory) & _batch_paths(waiting))
 
 
 def read_holder(directory):
@@ -502,16 +189,8 @@ class Held:
             os.environ[HOLDER_ENV] = self.previous_token
 
 
-def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out=None,
-            priority="normal"):
-    """Block until this process may use the GPU. Returns a `Held`.
-
-    ``priority="nightly"`` freezes the currently announced landing batch,
-    admits one nightly leg after that batch drains, and defers announcements
-    made after the snapshot. An active holder is never interrupted.
-    """
-    if priority not in {"normal", "nightly"}:
-        raise ValueError(f"unknown GPU queue priority: {priority}")
+def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out=None):
+    """Block until this process may use the GPU. Returns a `Held`."""
     out = out or sys.stderr
     directory = Path(directory) if directory else queue_dir()
     directory.mkdir(parents=True, exist_ok=True)
@@ -521,78 +200,28 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
     ancestors = None
     try:
         while True:
-            acquired = False
-            busy_info = None
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
+                break
             except BlockingIOError:
                 busy_info = read_holder(directory)
-                # Check inherited ownership before applying queue fairness. A
-                # cargo/test child can be a nightly-priority caller while its
-                # landing parent already owns the lock; making it wait here
-                # would deadlock the parent behind its child.
-                inherited = _token_matches(busy_info)
-                holder_pid = busy_info.get("pid", "")
-                if not inherited and holder_pid.isdigit():
-                    if ancestors is None:
-                        ancestors = set(ancestor_pids())
-                    inherited = int(holder_pid) in ancestors
-                if inherited:
-                    os.close(fd)
-                    return Held(None, directory)
-
-            with _admission_guard(directory):
-                waiting = _nightly_waiting(directory)
-                campaign = _read_reservation_locked(directory)
-                reservation_active = bool(campaign)
-                allowed = True
-                campaign_reserved = False
-                if priority == "nightly":
-                    if campaign:
-                        campaign_reserved = True
-                        allowed = False
-                        busy_info = {
-                            "label": f"reservation: {campaign['reason']}",
-                            "pid": "campaign",
-                            "since": campaign["end_epoch"],
-                            "cwd": campaign["owner"],
-                        }
-                if priority == "nightly" and not campaign_reserved:
-                    if waiting and not _is_own_turn(waiting):
-                        allowed = False
-                    elif not waiting:
-                        pending = pending_landings(directory)
-                        _write_nightly_waiting(directory,
-                                               {info["path"] for info in pending
-                                                if info.get("path")})
-                        waiting = _nightly_waiting(directory)
-                    if waiting and _is_own_turn(waiting):
-                        pending = pending_landings(directory)
-                        allowed = not any(info["path"] in _batch_paths(waiting)
-                                          for info in pending if info.get("path"))
-                elif priority != "nightly" and waiting and not reservation_active:
-                    allowed = not _normal_waits_for_nightly_locked(directory)
-
-                if allowed and acquired:
-                    if priority == "nightly":
-                        _remove_own_nightly_waiting_locked(directory)
-                    break
-
-            if acquired:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            if busy_info is not None:
-                now = time.monotonic()
-                if last_report is None or now - last_report >= report:
-                    verb = "waiting for the GPU" if last_report is None else "still waiting for the GPU"
-                    print(f"[gpu-queue] {verb}: held by {_describe(busy_info)}",
-                          file=out, flush=True)
-                    last_report = now
+            inherited = _token_matches(busy_info)
+            holder_pid = busy_info.get("pid", "")
+            if not inherited and holder_pid.isdigit():
+                if ancestors is None:
+                    ancestors = set(ancestor_pids())
+                inherited = int(holder_pid) in ancestors
+            if inherited:
+                os.close(fd)
+                return Held(None, directory)
+            now = time.monotonic()
+            if last_report is None or now - last_report >= report:
+                verb = "waiting for the GPU" if last_report is None else "still waiting for the GPU"
+                print(f"[gpu-queue] {verb}: held by {_describe(busy_info)}",
+                      file=out, flush=True)
+                last_report = now
             time.sleep(poll)
     except BaseException:
-        with _admission_guard(directory):
-            if priority == "nightly":
-                _remove_own_nightly_waiting_locked(directory)
         os.close(fd)
         raise
     if last_report is not None:
@@ -610,7 +239,7 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
 
 
 @contextlib.contextmanager
-def hold(label, priority="normal", **kwargs):
+def hold(label, **kwargs):
     """Hold the GPU lock for the body; re-entrant within and across processes."""
     global _held_depth
     if _held_depth:
@@ -622,7 +251,7 @@ def hold(label, priority="normal", **kwargs):
         return
     if not _token_matches(read_holder(Path(kwargs.get("directory") or queue_dir()))):
         await_app_quit(label, kwargs.get("out"))
-    held = acquire(label, priority=priority, **kwargs)
+    held = acquire(label, **kwargs)
     _held_depth = 1
     try:
         yield
@@ -723,37 +352,6 @@ def _run_build(command):
     except OSError as err:
         print(f"gpu_queue: cannot run {command[0]}: {err}", file=sys.stderr)
         return 127
-
-
-def run_admitted(command, *, directory=None, **kwargs):
-    """Launch one process atomically with respect to campaign reservations.
-
-    The reservation check and ``Popen`` share ``gpu.admission``.  A campaign
-    can therefore either observe the build already launched or prevent the
-    launch; it cannot slip between the check and process creation.  The
-    process itself runs after the guard is released, so a long build does not
-    block a reservation from being created.  ``None`` means the caller should
-    defer and retry the complete operation later.
-    """
-    directory = Path(directory) if directory else queue_dir()
-    popen_kwargs = dict(kwargs)
-    timeout = popen_kwargs.pop("timeout", None)
-    if popen_kwargs.pop("capture_output", False):
-        popen_kwargs.setdefault("stdout", subprocess.PIPE)
-        popen_kwargs.setdefault("stderr", subprocess.PIPE)
-    with _admission_guard(directory):
-        if _read_reservation_locked(directory):
-            return None
-        child = subprocess.Popen(command, **popen_kwargs)
-    try:
-        stdout, stderr = child.communicate(timeout=timeout)
-    except BaseException:
-        with contextlib.suppress(BaseException):
-            child.kill()
-        with contextlib.suppress(BaseException):
-            child.communicate()
-        raise
-    return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
 
 
 def _ancestor_holds(directory=None):
@@ -905,35 +503,10 @@ def status(directory=None, out=None):
         os.close(fd)
 
 
-def _reservation_cli(parser, args):
-    try:
-        if args.action == "reserve":
-            record = reserve(args.owner, args.reason, args.seconds)
-            print(json.dumps(record, sort_keys=True))
-        else:
-            clear_reservation()
-            print("GPU reservation cleared")
-        return 0
-    except (RuntimeError, ValueError) as err:
-        print(f"gpu_queue: {err}", file=sys.stderr)
-        return 2
-
-
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "status":
         return status()
-    if argv and argv[0] in {"reserve", "clear"}:
-        parser = argparse.ArgumentParser(description="Manage the expiring nightly GPU reservation")
-        parser.add_argument("action", choices=("reserve", "clear"))
-        parser.add_argument("--owner", default="", help="campaign or process owning the reservation")
-        parser.add_argument("--reason", default="", help="why nightly work is deferred")
-        parser.add_argument("--seconds", type=float, default=0,
-                            help="reservation duration in seconds")
-        args = parser.parse_args(argv)
-        if args.action == "reserve" and not args.seconds:
-            parser.error("reserve requires --seconds")
-        return _reservation_cli(parser, args)
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", help="shown to waiters (default: the command)")
