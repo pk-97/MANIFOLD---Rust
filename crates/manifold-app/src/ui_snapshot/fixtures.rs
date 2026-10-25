@@ -732,7 +732,7 @@ fn automation_placeholder_scene() -> SceneData {
     data
 }
 
-/// AUDIO_SENDS_UX_DESIGN Phase 2 gate scene: two sends, one fully wired (fed
+/// Audio sends gate scene: two sends, one fully wired (fed
 /// by an audio layer, consumed by an enabled audio mod on a named layer's
 /// effect param AND an enabled trigger route to a named layer) and one left
 /// completely empty — so the Audio Setup panel's Inputs/Consumers sections
@@ -1068,9 +1068,8 @@ fn inspector_scene() -> SceneData {
 
     glow.effects = Some(vec![mirror, bloom, strobe]);
 
-    // P3b: one enabled `LayerClipTrigger` on GLOW itself — the layer this
-    // scene selects — so the inspector's AUDIO TRIGGERS section (P3b,
-    // AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md) has a real row to
+    // One enabled `LayerClipTrigger` on GLOW itself — the layer this
+    // scene selects — so the inspector's AUDIO TRIGGERS section has a real row to
     // show/expand. Kick + Low mirrors the design doc's own row-label example
     // verbatim ("Low → Kick").
     let mut glow_trigger = manifold_core::audio_trigger::LayerClipTrigger::new(
@@ -1206,8 +1205,7 @@ fn bug060_scene() -> SceneData {
     }
 }
 
-/// `UI_HARNESS_UNIFICATION_DESIGN.md` P0 (D7): Peter's stated BUG-060
-/// worst-case — a Plasma GENERATOR layer (selected/active, so the inspector
+/// Peter's stated worst-case — a Plasma GENERATOR layer (selected/active, so the inspector
 /// shows its own card too), carrying a stacked Color Compass effect (3
 /// instances — the reopen notes' "Plasma + stacked Color Compass" repro)
 /// plus 6 additional DISTINCT effects chosen for high param counts / dense

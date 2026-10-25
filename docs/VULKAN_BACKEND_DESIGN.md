@@ -7,7 +7,7 @@
 This document is the implementation contract for a Sonnet-class agent. Every judgment call is already made — the tables below say what to build, in what order, and what the oracle is at each step. Where the doc says DECIDED, do not re-litigate; where it says VERIFY, the parity suite is the referee.
 
 **Prerequisites:** none (Phase 0 scaffold shipped). This is a background track and nothing else waits on it.
-The `manifold-gpu` inventory here is a 2026-07-02 snapshot and this is the deepest doc in the build order — re-derive the API-surface inventory at the start of every phase.
+The `manifold-gpu` inventory here is a snapshot and this is the deepest doc in the build order — re-derive the API-surface inventory at the start of every phase.
 
 ---
 

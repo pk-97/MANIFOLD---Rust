@@ -1,6 +1,5 @@
 //! `node.twist_mesh` — per-vertex twist of an `Array<MeshVertex>` about its
-//! own bend axis (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, section 3 atom
-//! table).
+//! own bend axis.
 //!
 //! `theta(v) = angle * (coord(v) - center) * w`, where `coord(v)` is the
 //! vertex's coordinate along `axis` and `w` is the optional per-vertex

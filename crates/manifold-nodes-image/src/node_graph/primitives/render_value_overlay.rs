@@ -546,7 +546,7 @@ impl Primitive for RenderValueOverlay {
 
         let gpu = ctx.gpu_encoder();
 
-        // COMPILE_CONTRACT_DESIGN P2: create pipeline BEFORE early return
+        // Create pipeline BEFORE early return
         // so warmup creates it even with zero detections.
         let pipeline = self.render_pipeline.get_or_insert_with(|| {
             let blend = GpuBlendState {

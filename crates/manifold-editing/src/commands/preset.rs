@@ -165,7 +165,7 @@ impl Command for ForkPresetCommand {
     }
 }
 
-/// Save to Project (PRESET_LIBRARY_DESIGN D4, P3): register `source_def` as a
+/// Save to Project: register `source_def` as a
 /// new project-embedded preset (`origin: Saved`), WITHOUT retargeting any
 /// instance. This is a "library door" — publishing the current effective
 /// look as a new named entry the project's picker can hand out to any card —
@@ -248,7 +248,7 @@ impl Command for SaveToProjectCommand {
 }
 
 /// Revert a diverged instance back to tracking its library entry
-/// (PRESET_LIBRARY_DESIGN D3/section 4, P4): clears the per-instance graph override
+/// Clears the per-instance graph override
 /// (`inst.graph = None`), undoable. The card/editor's "MODIFIED" badge is
 /// exactly `graph.is_some()` (D3/section 6.6 — no hashing), so this is the single
 /// action that turns the badge back off.
@@ -360,8 +360,7 @@ impl Command for RevertToLibraryCommand {
 }
 
 /// Rename a project-embedded preset's `display_name` in place
-/// (PRESET_LIBRARY_DESIGN P5, D6: the browser's "This Project" right-click
-/// management menu). The id and filename-equivalent (the embedded preset is
+/// (the browser's "This Project" right-click management menu). The id and filename-equivalent (the embedded preset is
 /// serialized in-project, so there's no separate file) never change — only
 /// `preset_metadata.display_name` — matching `UserLibrary::rename`'s
 /// same-shape guarantee for My Library entries (D8: the id is the stable
@@ -420,9 +419,7 @@ impl Command for RenameEmbeddedPresetCommand {
     }
 }
 
-/// Delete a project-embedded preset (PRESET_LIBRARY_DESIGN P5, D6: the
-/// browser's "This Project" right-click management menu, gated by a native
-/// Yes/No confirm at the call site). Undoable — mirrors
+/// Delete a project-embedded preset (the browser's "This Project" right-click management menu, gated by a native Yes/No confirm at the call site). Undoable — mirrors
 /// [`SaveToProjectCommand`]'s execute/undo shape with execute and undo
 /// swapped: capture what `remove_embedded_preset` returns once, re-insert it
 /// on undo.
@@ -672,7 +669,7 @@ mod tests {
         );
     }
 
-    // ── SaveToProjectCommand (PRESET_LIBRARY_DESIGN P3) ─────────────────
+    // ── SaveToProjectCommand ─────────────────
 
     #[test]
     fn save_to_project_upserts_saved_origin_and_round_trips() {
@@ -773,7 +770,7 @@ mod tests {
         );
     }
 
-    // ── RevertToLibraryCommand (PRESET_LIBRARY_DESIGN P4) ───────────────
+    // ── RevertToLibraryCommand ───────────────
 
     #[test]
     fn revert_to_library_clears_graph_and_undo_restores_it() {
@@ -832,7 +829,7 @@ mod tests {
         );
     }
 
-    // ── RenameEmbeddedPresetCommand (PRESET_LIBRARY_DESIGN P5) ──────────
+    // ── RenameEmbeddedPresetCommand ──────────
 
     #[test]
     fn rename_embedded_preset_edits_display_name_but_keeps_id_and_undoes() {
@@ -891,7 +888,7 @@ mod tests {
         assert!(project.embedded_preset(&missing).is_none());
     }
 
-    // ── DeleteEmbeddedPresetCommand (PRESET_LIBRARY_DESIGN P5) ──────────
+    // ── DeleteEmbeddedPresetCommand ──────────
 
     #[test]
     fn delete_embedded_preset_removes_it_and_undo_reinserts_it() {

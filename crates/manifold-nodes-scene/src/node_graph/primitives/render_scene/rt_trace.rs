@@ -200,7 +200,7 @@ impl RenderScene {
                 0.1, // refl_rough_band (unused)
                 svt_slot,
             )
-            // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
+            // Instance_id-indexed
             // normal/gi-material reads land in the slot rows [N, N+Σ).
             .with_slot_row_base(objects.len() as u32)
             .with_lights(
@@ -248,7 +248,7 @@ impl RenderScene {
                 0.1,
                 svt_slot,
             )
-            // RT_INSTANCING_DESIGN.md D11: instance_id-indexed
+            // Instance_id-indexed
             // normal/gi-material reads land in the slot rows [N, N+Σ).
             .with_slot_row_base(objects.len() as u32)
             .with_lights(
@@ -258,7 +258,7 @@ impl RenderScene {
             .with_env_rotation(pre.env_rotation);
             // RS-B: gi_materials_data already built above (same order as
             // `objects` + `accel`), reused for the GPU upload here.
-            // RT_INSTANCING_DESIGN.md D11: canonical per-object rows at
+            // Canonical per-object rows at
             // [0, N) (the built block, one memcpy) + per-slot rows at
             // [N, N+Σ) duplicating each object's row object-major
             // (same slot addressing as `ensure_normal_sources`), so
@@ -456,7 +456,7 @@ impl RenderScene {
             // denoise_aux_ready is false and this block idles one frame.
             if denoise_aux_ready {
                 let hit_dist_target = spec_hit_dist_out.expect("denoise_aux_ready implies Some");
-                // COMPILE_CONTRACT_DESIGN P2: hit_dist_extract pipeline is prewarmed
+                // Hit_dist_extract pipeline is prewarmed
                 // at startup, but use lazy creation as fallback if prewarm hasn't run.
                 if self.hit_dist_extract_pipeline.is_none() {
                     self.hit_dist_extract_pipeline = Some(gpu.device.create_compute_pipeline(

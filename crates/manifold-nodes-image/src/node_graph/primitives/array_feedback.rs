@@ -1,6 +1,6 @@
 //! `node.array_feedback` — one-frame delay for `Array<Particle>` wires.
 //!
-//! Phase A.6 of `BUFFER_PORT_PLAN`. The Array analog of texture
+//! The Array analog of texture
 //! `node.feedback`: a state-backed primitive that exposes last
 //! frame's input on this frame's output. Lets particle pipelines
 //! close their per-frame loops without introducing graph cycles —

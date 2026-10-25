@@ -24,7 +24,7 @@ detected onset. Peter's directives, verbatim, which decide the shape:
 On stage this buys: per-drum triggers from the live feed (snare-only strobes,
 hat shimmer) and, offline, master-only import analysis with no demucs and no
 Python in the product. Companion docs: the measurement campaign this closes (sustained
-material stays the tracker's job), KICK_REALTIME_DESIGN.md (the trained live kick detector and the detector worker
+material stays the tracker's job), the trained live kick detector and the detector worker
 this design's per-drum detectors plug into).
 
 ## 1. Audit — what exists (verified 2026-07-18, this session)

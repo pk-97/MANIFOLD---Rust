@@ -8,7 +8,6 @@ doc to read before touching fusion, and the doc a bug hunt attacks. It
 supersedes the *status* sections of the older design docs (which record how we
 got here, not where we are):
 
-- `BUFFER_CHAIN_FUSION_DESIGN.md (deleted)` — written before derived-uniform fusion
   shipped. Its blocker table is resolved; FluidSim buffer regions fuse today
   (`fluidsim_buffer_fusion_renders_like_unfused`).
 
@@ -55,7 +54,7 @@ Engine paths below are relative to `crates/manifold-node-engine/src/`. The legac
 | `freeze/diff.rs` | GPU texture-diff reducer (max-abs + over-count verdicts) — the oracle's measuring device. | 305 |
 | `crates/manifold-nodes/tests/contracts/freeze/proof.rs` | The oracle suite (test-only): render-two-ways proofs, per-feature. See section 10. | — |
 | `freeze/reference.rs` | Frozen golden hand-kernels for codegen-drift checks. | 101 |
-| `primitives/wgsl_compute.rs` | The host primitive every fused kernel becomes. Ports/params/bindings derived from the WGSL by naga introspection; parses all freeze markers. Params are always uniforms — `@static_param` value-baking is deleted (COMPILE_CONTRACT_DESIGN D2). | 3440 |
+| `primitives/wgsl_compute.rs` | The host primitive every fused kernel becomes. Ports/params/bindings derived from the WGSL by naga introspection; parses all freeze markers. Params are always uniforms — `@static_param` value-baking is deleted. | 3440 |
 | `exec/execution_plan.rs` | `compile(graph)`: topo + liveness filter + resource dims/canvas-scale propagation + lifetimes (`free_after`) + persistent resources + late-capture steps + hoistable classification. | 1411 |
 | `exec/execution.rs` | The executor: per-frame liveness (mux short-circuit), memoized-dataflow skip (`is_pure`), empty-output skip, preview capture, dump/thumbnail pinning, the aliased-output stale guard, end-of-frame feedback texture swap. | 2923 |
 | `load/graph_loader.rs` | `instantiate_def`: flatten groups → construct + configure primitives → wires; array output pre-allocation (`array_output_capacity`). | 1838 |
@@ -239,7 +238,7 @@ port stays a normal uniform member (wire wins, matching `run()`). The uniform
 field is emitted at the param's original struct position and passed to the
 body at its param position — never duplicated by the trailing
 derived-field/arg emission, always packed from live values (no baked-const
-variants; COMPILE_CONTRACT_DESIGN D2).
+variants).
 Without the declaration the fused kernel freezes the value at the param
 default (the Glitch freeze); the classify.rs source scan
 (`every_fusable_time_reading_atom_declares_frame_time_or_derived`) fails CI on
@@ -303,7 +302,7 @@ should diff both ends.
 | `// @sampler_address_mode: repeat\|mirror` on `samp` | fused texture codegen | Create the shared gather sampler at this mode (WGSL can't express address modes). `clamp` emits no marker — byte-identical legacy text. |
 | `// @bool_uniform: <field>` | fused texture/buffer codegen | Retains Bool parameter metadata when WGSL stores it as `u32`. Seeded values stay Bool; live `BoolThreshold` bindings pack true only above 0.5. |
 | `// @reset_gated` | seed-pattern kernels | Node grows a synthetic optional `reset_trigger` input; dispatches only on integer edges. On skip of an *aliased* kernel it calls `mark_gpu_accessed()` — the executor stale-guard's documented escape hatch. |
-| ~~`// @static_param: <field>`~~ | deleted (COMPILE_CONTRACT_DESIGN D2 — P3) | Params are always uniforms; value-keyed kernel specialization is forbidden by the compile contract. |
+| ~~`// @static_param: <field>`~~ | deleted | Params are always uniforms; value-keyed kernel specialization is forbidden by the compile contract. |
 | `// @pure` | hand-authored kernels (BlackHole bake) | Author asserts output = f(params, inputs) → memoizer may hold it. |
 | `// @fusion: pointwise\|source` (+ `fn body`) | user-authored fragment-form `wgsl_compute` | The node synthesizes its standalone kernel via `generate_standalone` and reports a real `fusion_kind`, so user fragments fuse like built-ins. |
 | `// @camera_external: camera_ext_N` (P0/D7, 2026-07-12) | fused texture/buffer codegen, when a region member has a wired `Camera` input | Declares a synthetic, non-introspected `Camera`-typed input port on the fused node — the only channel a CPU-struct with no WGSL representation can travel through the def. Producer wire (Camera→Camera) reuses the ordinary `control_wires` rewrite. |
@@ -368,7 +367,7 @@ contract is tiered — this is written down nowhere else:
    fp32 is an explicit `outputFormats` opt-in on data textures, never a
    compiler default.
 
-**Static-param specialization** is deleted (COMPILE_CONTRACT_DESIGN D2, P3):
+**Static-param specialization** is deleted:
 every fused-kernel param is a uniform, packed from live values each frame.
 Value-keyed kernel compilation was the compile contract's exact inverse —
 see that design doc for the deletion decision and its measured cost.
@@ -444,7 +443,6 @@ invariant a fused def must respect:
    at `late_capture` (`Backend::swap_texture_2d`, end of frame); cross-format
    loops bridge one dispatch. The editor thumbnail path pins the pre-swap
    texture identity (post-frame re-resolve strobed black on alternate frames).
-   Full history: `FEEDBACK_PINGPONG_DESIGN.md (deleted)`.
 6. **Element-space authority** — `space.rs` never re-derives the dim rules; it
    builds the unfused plan and reads `resource_dims`/`resource_canvas_scales`.
    The plan's propagation (concrete / canvas-scaled / canvas, mixed-input ⇒
@@ -558,8 +556,8 @@ and edges #3/#7 below, which no lens engaged.
    character as the original issue, just narrower.
 6. Buffer fan-out regions, nested stencils, Table/String params, and
    resampler-into-region remain deliberate boundaries — under-fusing by
-   design. (Vec3/Vec4/Color params lifted P5; multi-output texture atoms
-   — voronoi_2d, block_displace_field — lifted P6, FUSION_SOTA_DESIGN.md D4.)
+   design. (Vec3/Vec4/Color params lifted; multi-output texture atoms
+   — voronoi_2d, block_displace_field — lifted.)
 7. FIXED: `leak_params`/`leak_ports`/
    `Box::leak` of views are gone — fused caches (`FUSED_EFFECT_CACHE`/
    `FUSED_GENERATOR_CACHE`/`SEGMENT_CACHE`) hold `Arc<T>` with owned

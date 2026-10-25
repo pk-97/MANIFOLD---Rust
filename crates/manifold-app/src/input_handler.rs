@@ -953,7 +953,7 @@ mod b14_keyboard_layer_tests {
         assert_eq!(host.zoom_back_calls, 0);
     }
 
-    // ── D4 Finder-paste arbitration ──
+    // ── Finder-paste arbitration ──
     // Decision table: internal-empty/external-file, internal-fresh/
     // external-stale, both-present-external-newer, text-only-pasteboard.
 

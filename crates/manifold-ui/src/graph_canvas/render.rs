@@ -94,7 +94,7 @@ impl GraphCanvas {
             );
         }
 
-        // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN D4, P3) —
+        // Save to Library / Save to Project —
         // only when there's an active graph to save (mirrors the header
         // label's own "No active graph" gate).
         if !self.nodes.is_empty() {
@@ -119,7 +119,7 @@ impl GraphCanvas {
             );
         }
 
-        // Push to Library (PRESET_LIBRARY_DESIGN D3, P4) — only when
+        // Push to Library — only when
         // diverged (mirrors "Reset to Default"'s own gate; pushing an
         // undiverged card would overwrite the library file with itself).
         if self.has_graph_mod {

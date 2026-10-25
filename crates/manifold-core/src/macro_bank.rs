@@ -43,8 +43,7 @@ impl MacroCurve {
     }
 
     /// Exact inverse of [`Self::apply`] — total and closed-form: every
-    /// current variant is strictly monotonic on `[0, 1]`
-    /// (`PARAM_TWO_WAY_BINDING_DESIGN.md` D3), so there is no read-only
+    /// current variant is strictly monotonic on `[0, 1]`, so there is no read-only
     /// fallback to reach for here. Input clamped to `[0, 1]` like `apply`.
     /// If a future variant is non-monotonic, add it here first — that's
     /// where it fails to typecheck conceptually (a read-only fallback is

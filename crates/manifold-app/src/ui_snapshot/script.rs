@@ -663,7 +663,7 @@ impl RunnerEditor {
     }
 }
 
-/// The count gate's state for one flow (UI_INVALIDATION_DESIGN.md D10, D11).
+/// The count gate's state for one flow.
 #[derive(Default)]
 struct WorkWindow {
     /// Set by the first `ResetWork`. Inside a window a `Step` frame skips its
@@ -2244,7 +2244,7 @@ impl Runner {
         out
     }
 
-    /// `AssertFresh` (UI_INVALIDATION_DESIGN.md D10, INV-4): the incremental
+    /// `AssertFresh`: the incremental
     /// frame must equal a full projection and build from the same inputs.
     fn assert_fresh(
         &mut self,
@@ -3716,8 +3716,7 @@ impl Runner {
     /// built here (that was `render_ui_to_png`'s old, always-full-clear
     /// shape; see `render.rs`'s module doc). Draws the SAME
     /// `crate::ui_frame::render_main_ui_passes` the live app and
-    /// `render_ui_to_png` call (P2, `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md`
-    /// section 4 step 2 — no more parallel `draw_immediate_passes`) on top, then
+    /// `render_ui_to_png` call (no more parallel `draw_immediate_passes`) on top, then
     /// stamps D9b's pointer crosshair(s) CPU-side on the readback COPY —
     /// never into the atlas/offscreen, which would poison it for any later
     /// frame or the P0 differential shelf tool. No thumbnails here (this

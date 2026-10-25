@@ -114,7 +114,7 @@ impl UIRoot {
         (self.overlay_version << 8) | u64::from(self.current_overlay_open_mask())
     }
 
-    /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw keepalive as ONE
+    /// The redraw keepalive as ONE
     /// aggregate predicate, OR-ed into each window's own `offscreen_dirty` by
     /// its caller (never a per-window keepalive list).
     ///
@@ -147,7 +147,7 @@ impl UIRoot {
     /// already placed it last/topmost — D2/D3's "drag ghost/toast paths").
     /// `Z_ORDER`'s bottom→top loop order becomes insertion order WITHIN
     /// each tier, so relative overlay stacking is unchanged. Every overlay
-    /// mints into the Overlays arena (UI_INVALIDATION_DESIGN.md D7), and
+    /// mints into the Overlays arena, and
     /// `overlay_draw` holds that arena's slots. The region's own root is
     /// deliberately kept OUT of the `(start, end)` range, so these ranges
     /// render via `render_sub_region` (ancestor-
@@ -212,8 +212,7 @@ impl UIRoot {
         self.overlay_rects = rects;
     }
 
-    /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 (D2 precondition, fix-shape
-    /// spec 2026-07-14): explicit-size entry point onto `build_overlays` for
+        /// Explicit-size entry point onto `build_overlays` for
     /// windows that never call `build()`. The graph editor's `Workspace::
     /// ui_root` is built via plain `UIRoot::new()` (`workspace.rs`) and never
     /// `.build()` — that method clears the tree and lays out the WHOLE
@@ -344,7 +343,7 @@ impl UIRoot {
     /// `TextSessionOwner` and calls `cancel_if_owned_by` — closing the
     /// orphaned-search-session bug for every current and future
     /// overlay-hosted text field, not just the browser search
-    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3).
+    ///.
     pub fn take_closed_overlays(&mut self) -> smallvec::SmallVec<[OverlayId; 2]> {
         std::mem::take(&mut self.closed_overlays)
     }
@@ -431,7 +430,7 @@ impl UIRoot {
     }
 }
 
-/// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P2: `UIRoot::overlay_redraw_needed()`
+/// `UIRoot::overlay_redraw_needed()`
 /// unit tests — proves the aggregate's wiring to its one live member (the
 /// toast; see that function's doc comment for why the popup professional
 /// pass's now-permanently-`false` `is_animating()` stubs aren't OR-ed in).

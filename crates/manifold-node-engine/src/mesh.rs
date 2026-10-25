@@ -1,5 +1,4 @@
-//! Shared mesh-domain item layouts used by Phase B of
-//! `BUFFER_PORT_PLAN` — the primitives that decompose 3D and
+//! Shared mesh-domain item layouts used by the primitives that decompose 3D and
 //! 4D wireframe generators (MetallicGlass, Tesseract,
 //! Duocylinder, Wireframe, NestedCubes, DigitalPlants).
 //!
@@ -162,7 +161,7 @@ impl KnownItem for InstanceTransform {
 }
 
 /// One joint's skin matrix (`jointWorldMatrix * inverseBindMatrix`),
-/// column-major — GLTF_ANIMATION_DESIGN.md A2 (D2). Produced by
+/// column-major. Produced by
 /// `node.gltf_skeleton_pose` (CPU, one buffer write per frame from the
 /// sampled skeleton pose) and consumed by `node.skin_mesh` via a
 /// `BufferGather` input (joint-index lookup, not coincident with the

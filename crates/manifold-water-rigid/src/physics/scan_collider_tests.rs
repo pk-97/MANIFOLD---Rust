@@ -1,5 +1,5 @@
 //! A small Body dropped on the cliff scan rests on the surface the scan
-//! draws (SCENE_REFINEMENT_DESIGN.md section 3, P2d (Scan colliders)). The
+//! draws. The
 //! Collider is the exact mesh, which needs every triangle under the body (the
 //! Box3D patch in `native/box3d/README.md`), and at the import fit scale it
 //! leaves out the slivers Box3D drops instead of being refused (BUG-za99y

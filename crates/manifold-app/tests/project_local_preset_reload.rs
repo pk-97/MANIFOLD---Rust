@@ -9,7 +9,7 @@
 //! vanished; re-importing the same .glb revived them because import
 //! registers the template first).
 //!
-//! Three defenses are proven here (PARAM_STORAGE_BOUNDARIES_DESIGN.md P1):
+//! Three defenses are proven here:
 //! 1. Ordering (root fix): `load_project_from_json_with` installs the file's
 //!    own embedded presets right after the typed deserialize, then calls
 //!    `Project::reconcile_param_manifests` to rebuild every instance's

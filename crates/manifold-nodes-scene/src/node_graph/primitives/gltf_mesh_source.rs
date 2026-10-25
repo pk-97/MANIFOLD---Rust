@@ -24,7 +24,7 @@ use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::scene::source_asset::{LoadedAsset, SourceAssetIdentity, mesh_identity};
 
-/// `fit` enum labels (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D7). Index 0
+/// `fit` enum labels. Index 0
 /// (`none`) is the default and a strict no-op — every scan arrives at
 /// arbitrary scale/origin; `unit_box` normalizes it so deformer defaults and
 /// `node.mesh_ramp`'s 0..1 bounds are meaningful without a separate
@@ -192,7 +192,7 @@ manifold_node_engine::primitive! {
             ty: ParamType::Int,
             default: ParamValue::Float(-1.0),
             // -1 (default) = unset, falls through to mesh_index/WholeScene
-            // below. -2 is GLB_XFAIL_BURNDOWN_DESIGN.md D4's reserved
+            // below. -2 is reserved
             // sentinel (`gltf_load::DEFAULT_MATERIAL_MESH_PARAM`) selecting
             // the glTF default-material (materialless) geometry — real
             // glTF material indices are always >= 0, so widening the range
@@ -339,7 +339,7 @@ manifold_node_engine::primitive! {
         // updates the instant a new selection is requested, before the
         // async parse finishes, so gating the per-frame copy on it would
         // incorrectly skip while stale vertices are still in
-        // `cached_verts`. RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1.
+        // `cached_verts`.
         content_version: u64 = 0,
         // (content_version, dst identity) the staging→output copy last
         // ran for. Sentinel values guarantee the first real copy runs.
@@ -588,7 +588,7 @@ impl Primitive for GltfMeshSource {
                         own_space,
                     }
                 } else if material_index == DEFAULT_MATERIAL_MESH_PARAM {
-                    // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): the
+                    // The
                     // synthetic default-material object — every primitive
                     // with no glTF material, scene-wide.
                     GltfMeshSelector::DefaultMaterial
@@ -1468,7 +1468,7 @@ mod tests {
     }
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
+/// Run deliberately:
 /// `cargo test -p manifold-nodes-scene --features gpu-proofs
 /// node_graph::primitives::gltf_mesh_source::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1616,7 +1616,7 @@ mod gpu_tests {
         (backend, r_out, slot)
     }
 
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate: on a static
+    /// On a static
     /// asset, frame 2's output is bit-identical to frame 1's, and the
     /// staging→output copy skip (`mark_outputs_unchanged`) fires on frame 2.
     #[test]

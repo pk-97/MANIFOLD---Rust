@@ -155,7 +155,7 @@ and presents through a float ExtendedLinearSRGB surface. SDR video and recording
 apply the explicit project SDR rendering policy after master effects, before transfer encoding.
 Off preserves linear SDR values and clips highlights; a selected curve compresses the image
 into SDR. Workspace SDR preview uses this same policy. See
-[Colour presentation](COLOUR_PRESENTATION_DESIGN.md). Every path in
+Colour presentation. Every path in
 and out applies its own transfer function — and they do not all agree:
 
 | Path | Transfer function | EDR (>1.0) handling |
@@ -192,7 +192,7 @@ quality is hardcoded (JPEG 95).
 - Ad-hoc threads: image decode (`std::thread::spawn` per request), still-export encode
   (named, detached), video import probe (background).
 - Both renderers cache `device_ptr: *const GpuDevice` re-pointed by
-  `ContentThread::run()` — the exact BUG-054 (renderer-device-ptr-dangles) / FOUNDATIONAL_GAPS A6 pattern, twice.
+  `ContentThread::run()` — the exact dangling renderer-device-pointer pattern, twice.
 - ffmpeg mux: blocking subprocess **on the content thread** at finalize (acceptable
   offline; export mode has already suspended live rendering).
 

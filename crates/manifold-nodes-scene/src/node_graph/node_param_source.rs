@@ -110,7 +110,6 @@ inventory::submit! {
 }
 
 /// Registration parity for the node param seam
-/// (RENDERER_CRATE_SPLIT_DESIGN.md section 6 (Decided, do not reopen) item 14):
 /// core's `NodeParamSource` answers exactly what this crate builds.
 #[cfg(test)]
 mod node_param_source_parity {

@@ -38,7 +38,7 @@ pub(crate) struct PerformModeState {
     /// Hover state of the exit button — drives color change.
     pub(crate) exit_button_hover: bool,
 
-    /// What the HUD on screen was drawn from (UI_INVALIDATION_DESIGN.md D17).
+    /// What the HUD on screen was drawn from.
     /// Equal inputs keep the drawn frame; `None` draws the next frame.
     pub(crate) shown: Option<super::frame::PerformHudInputs>,
 

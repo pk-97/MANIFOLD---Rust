@@ -1,4 +1,4 @@
-//! `projection_input_matrix` (UI_INVALIDATION_DESIGN.md D10, INV-16).
+//! `projection_input_matrix`.
 //!
 //! Loads a fixture, perturbs one project part or one `FrameInputs` field at a
 //! time, runs each projection and push on the base and the perturbed state,

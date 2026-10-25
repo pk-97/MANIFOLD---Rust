@@ -204,7 +204,7 @@ impl Primitive for SpawnFromMesh {
 
         let gpu = ctx.gpu_encoder();
 
-        // COMPILE_CONTRACT_DESIGN P2: create pipelines at run start BEFORE any
+        // Create pipelines at run start BEFORE any
         // early returns so warmup creates them even with empty mesh.
         const SHADER_SRC: &str = include_str!("shaders/spawn_from_mesh.wgsl");
         if self.pipeline.is_none() {

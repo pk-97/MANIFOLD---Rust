@@ -1,5 +1,5 @@
 // node.scatter_particles — atomic scatter of particles into a u32
-// fixed-point accumulator. Phase A.7 of BUFFER_PORT_PLAN.
+// fixed-point accumulator.
 //
 // Single entry point `splat_main`: each live particle adds
 // `scaled_energy` to its texel via atomicAdd. The downstream

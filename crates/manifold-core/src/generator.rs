@@ -45,7 +45,7 @@ mod tests {
     // `migrate_pads_short_param_arrays_with_defaults_preserving_existing`,
     // `set_param_after_registry_growth_does_not_wipe_existing_values`, and
     // `set_base_param_writes_through_for_json_only_generator_with_no_registry_entry`
-    // were DELETED (PARAM_STORAGE_DESIGN.md D3): all three exercised the old
+    // were DELETED: all three exercised the old
     // positional `param_values` auto-grow-on-write behavior
     // (`migrate_to_registry_length` / the implicit align-to-registry-length
     // triggered by an out-of-range `set_base_param` index). The id-keyed

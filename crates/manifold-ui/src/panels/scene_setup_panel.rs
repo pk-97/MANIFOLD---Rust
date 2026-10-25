@@ -1,5 +1,5 @@
 //! The Scene tab of the inspector (SCENE_DOCUMENT_DESIGN.md section 8 (Cards
-//! by kind), SCENE_SURFACES_DESIGN.md D8 (Scene tab tree)).
+//! by kind)).
 //!
 //! The tree of scene items sits in its own pane on top (`outliner.rs`), and
 //! the selected item's header (`item_header.rs`) and controls, grouped by

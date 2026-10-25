@@ -65,7 +65,7 @@ struct ReflectUniforms {
     _pad2: u32,
 }
 
-/// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
+/// Producer stasis: the kernel's FULL
 /// dependency set — every resolved uniform value PLUS the input array's
 /// logical content version (params alone are NOT sufficient: the input buffer's
 /// content can change while every reflect param holds constant, e.g. an

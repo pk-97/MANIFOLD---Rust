@@ -8,7 +8,7 @@
 struct Uniforms {
     out_width: f32,
     out_height: f32,
-    // GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167): 0 = passthrough (default,
+    // (BUG-167): 0 = passthrough (default,
     // byte-identical to before this field existed); 1 = gloss_to_roughness
     // — repack a KHR_materials_pbrSpecularGlossiness
     // `specularGlossinessTexture` (RGB = specular tint, A = glossiness)

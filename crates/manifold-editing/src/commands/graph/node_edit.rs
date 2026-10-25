@@ -1007,7 +1007,7 @@ impl Command for SetGraphNodeParamCommand {
         // default) reroutes through the card slot — `apply_bindings` makes
         // the manifest value the sole authority the render sees, so the
         // def-node write would be stomped next frame. The inverse reshape
-        // (PARAM_TWO_WAY_BINDING_DESIGN.md D2) converts the node-units value
+        // converts the node-units value
         // to the card value; never dual-write. Root-level edits only —
         // binding metadata addresses root node ids.
         if self.scope_path.is_empty()
@@ -1239,7 +1239,7 @@ pub struct RevertEffectGraphCommand {
     /// User-added params the cleared graph carried, captured at their original
     /// display positions so undo can re-insert them exactly. Removing them is
     /// what makes `prune_orphaned_automation` see the driver's target gone and
-    /// prune it (PARAM_STORAGE_DESIGN.md D3); without it the manifest still
+    /// prune it; without it the manifest still
     /// holds the orphaned param and the sweep is a no-op.
     removed_params: Vec<(usize, manifold_core::params::Param)>,
     /// Scene-modifier library reset delegates to the owner-aware preset

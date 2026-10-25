@@ -32,8 +32,7 @@ pub enum ParamOrigin {
     UserAdded,
 }
 
-/// Where a param's spec came from (SCENE_SURFACES_DESIGN.md D2 (one live
-/// lookup)). In memory only: the join sets it when the manifest is built.
+/// Where a param's spec came from. In memory only: the join sets it when the manifest is built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SpecSource {
     /// The live lookup described it; the code is the authority.
@@ -47,8 +46,7 @@ pub enum SpecSource {
     Unresolved,
 }
 
-/// Per-control display choices a project saves (SCENE_SURFACES_DESIGN.md D7
-/// (one saved choice set)). The calibration wire block loads into `slider`,
+/// Per-control display choices a project saves. The calibration wire block loads into `slider`,
 /// `curve` and `invert`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParamChoices {
@@ -127,8 +125,7 @@ pub struct Param {
     pub origin: ParamOrigin,
     /// Where `spec` came from; never serialized.
     pub source: SpecSource,
-    /// The user's display choices on this control (SCENE_SURFACES_DESIGN.md
-    /// D7 (one saved choice set)). Already applied to `spec`.
+    /// The user's display choices on this control. Already applied to `spec`.
     pub choices: ParamChoices,
     /// Effective (post-modulation) value — what the renderer reads.
     pub value: f32,
@@ -163,7 +160,7 @@ pub struct Param {
 impl Param {
     /// A user's section edit. On a control the lookup describes, the saved
     /// section is ignored on load, so the edit is kept as a section choice
-    /// (SCENE_SURFACES_DESIGN.md D7 (one saved choice set)). Returns the prior
+    /// Returns the prior
     /// choice when one was recorded, for undo.
     pub fn choose_section(&mut self, section: Option<String>) -> Option<Option<Option<String>>> {
         self.spec.section = section.clone();
@@ -219,8 +216,7 @@ impl Param {
     /// The slider range: the user's choice when one is saved, else the
     /// declared range. What the slider spans, what OSC, MIDI and Ableton 0–1
     /// map over, and what modulation depth is measured over. Never a limit,
-    /// the reshape or the wrap period (SCENE_SURFACES_DESIGN.md D15 (slider
-    /// range and hard limit)).
+    /// the reshape or the wrap period.
     #[inline]
     pub fn slider_span(&self) -> (f32, f32) {
         self.choices
@@ -228,8 +224,7 @@ impl Param {
             .unwrap_or((self.spec.min, self.spec.max))
     }
 
-    /// The value automation and modulation may write (SCENE_SURFACES_DESIGN.md
-    /// D15 (slider range and hard limit)). A periodic param wraps over the
+    /// The value automation and modulation may write. A periodic param wraps over the
     /// declared range. Otherwise the output stays inside the user's slider
     /// range when one is set, else the declared range: only a hand drag or a
     /// typed value goes past the slider's ends.
@@ -681,7 +676,7 @@ mod tests {
     }
 
     /// New-storage replacement for the deleted `bench_old_resolve_param_in_baseline`
-    /// (PARAM_STORAGE_DESIGN section 5). Measures `ParamManifest::get(id)` worst-case: a
+    /// Measures `ParamManifest::get(id)` worst-case: a
     /// 40-param manifest, the target id LAST, and every id sharing a long common
     /// prefix so each non-matching compare does realistic work (real ids look like
     /// `user.mix.amount.1`). The old positional resolver (`resolve_param_in`, which

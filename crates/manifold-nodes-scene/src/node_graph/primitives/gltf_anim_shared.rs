@@ -1,7 +1,7 @@
 //! Shared clock/sampling logic for the three glTF CPU animation samplers
 //! (`gltf_animation_source`, `gltf_skeleton_pose`, `gltf_morph_weights`).
 //!
-//! GLTF_ANIMATION_DESIGN.md A4: A1–A3 each duplicated a tiny one-line
+//! A1–A3 each duplicated a tiny one-line
 //! `default_progress` formula "rather than shared ... no other coupling".
 //! A4's new logic — loop-mode wrapping, retrigger-origin capture, and
 //! compound-key row-range scanning for clip selection — is neither tiny nor
@@ -167,7 +167,7 @@ fn hermite<const N: usize>(
     std::array::from_fn(|i| h00 * p0[i] + h10 * td * m0[i] + h01 * p1[i] + h11 * td * m1[i])
 }
 
-// ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md D3/P2 — slice-based samplers ──────────
+// ─── Slice-based samplers ──────────
 // The former table-row samplers (`sample_vec3_range`/`sample_quat_range`/
 // `sample_scalar_range`, `row_range_for_key`/`row_range_for_compound_key`,
 // the `Interp` enum) are DELETED — every one of the three glTF CPU
@@ -314,7 +314,7 @@ pub(crate) fn sample_quat_slice(
 /// Extract morph target `target_index`'s scalar weight from a `Weights`
 /// channel's flat SoA (`values[i*target_count + target_index]` is keyframe
 /// `i`'s value for that one target) at time `t`. LINEAR-only
-/// (GLTF_ANIMATION_DESIGN.md A3, unchanged by this design — glTF's own
+/// (glTF's own
 /// spec allows STEP/CUBICSPLINE on weights channels, but this codebase's
 /// importer never emitted anything but LINEAR for them, and
 /// `Channel::from_weights` hard-codes `mode: GltfInterp::Linear`).
@@ -529,7 +529,7 @@ mod tests {
         );
     }
 
-    // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md P1 — slice samplers ────────────────
+    // ─── Slice samplers ────────────────
     // Same fixtures as the table-based tests above, re-expressed as flat
     // slices — proves the slice path is value-identical to the table path
     // it's replacing (D3).
@@ -648,7 +648,7 @@ mod tests {
         );
     }
 
-    // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md P2 — weight-channel slice sampler ──
+    // ─── Weight-channel slice sampler ──
 
     #[test]
     fn sample_weight_slice_lerps_one_target_out_of_a_multi_target_channel() {

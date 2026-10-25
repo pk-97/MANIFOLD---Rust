@@ -1,4 +1,4 @@
-//! The one live param lookup (SCENE_SURFACES_DESIGN.md D2 (one live lookup)).
+//! The one live param lookup.
 //!
 //! What the code declares about a control — name, slider range, hard limit,
 //! unit, scene placement, value labels, angle/toggle/trigger flags — comes from
@@ -672,7 +672,6 @@ impl<'a> Join<'a> {
     /// Whether the lookup supplies this control's name, so a save writes it
     /// without one: a template control, a lone exact auto-stamp or a lone
     /// scene-modifier control. Every other control owns its name
-    /// (SCENE_SURFACES_DESIGN.md D24 (who owns a control's name)).
     pub(crate) fn lookup_names(&self, id: &str) -> bool {
         self.template_for(id).is_some() || self.lookup_owns_words(id)
     }

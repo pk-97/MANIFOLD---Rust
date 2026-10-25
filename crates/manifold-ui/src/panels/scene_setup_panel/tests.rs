@@ -531,7 +531,7 @@ fn add_menu(
 }
 
 /// Each section's + offers only what belongs there, and a refused entry
-/// says why (SCENE_REFINEMENT_DESIGN rulings 2 and 4).
+/// says why.
 #[test]
 fn each_section_adds_its_own_and_says_why_one_is_refused() {
     let cube = item("cube", ItemKind::Object, "Cube", 0, None);

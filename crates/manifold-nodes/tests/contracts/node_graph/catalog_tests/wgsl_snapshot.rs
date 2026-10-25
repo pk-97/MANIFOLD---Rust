@@ -85,7 +85,7 @@ fn golden_path() -> std::path::PathBuf {
         .join("tests/fixtures/fused_wgsl_snapshot.txt")
 }
 
-/// P1 hard gate (FUSION_SOTA_DESIGN D1): the marker refactor must emit
+/// Hard gate: the marker refactor must emit
 /// byte-identical WGSL for every bundled preset. The golden fixture was
 /// captured from origin/main HEAD (6888ea28, pre-refactor codegen) by
 /// temporarily stashing only `freeze/codegen.rs` + `freeze/install.rs` (the

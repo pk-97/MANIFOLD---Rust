@@ -1,6 +1,5 @@
 //! `node.revolve_curve` — revolve a 2D profile curve around the Y axis into
-//! a 3D positions+uv grid (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D5, section 3
-//! curve→mesh table).
+//! a 3D positions+uv grid.
 //!
 //! `profile: Array<CurvePoint>` (x = radius, y = height) sweeps into a
 //! `profile_len × (segments+1)` grid: `pos(i,j) = (x_i·cos(phi_j), y_i,

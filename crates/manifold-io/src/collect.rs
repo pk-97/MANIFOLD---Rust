@@ -1901,7 +1901,7 @@ mod tests {
         assert!(!unflagged_json.contains("file_path"), "{unflagged_json}");
     }
 
-    // ── P4 gate: Collect All and Save round trip ──
+    // ── Collect All and Save round trip ──
     //
     // Synthetic project referencing fixture files in a temp dir — video + audio
     // + a GLB carried as a binding-driven string param (no flag) whose value

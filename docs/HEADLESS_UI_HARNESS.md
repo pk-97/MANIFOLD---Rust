@@ -65,7 +65,7 @@ Headless UI composition uses the same RGBA16Float format as live windows. PNG
 capture applies the piecewise linear-to-sRGB transfer before 8-bit quantization
 and writes sRGB metadata. HDR highlights beyond SDR white clip in this PNG
 representation; it is not evidence of physical HDR display output. See
-[Colour presentation](COLOUR_PRESENTATION_DESIGN.md).
+Colour presentation.
 
 ## Scenes
 

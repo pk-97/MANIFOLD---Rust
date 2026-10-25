@@ -600,7 +600,7 @@ impl ContentThread {
 
     /// Execute one content frame: tick engine, render, send state to UI.
     /// Separated from the main loop to allow wrapping in autoreleasepool on macOS.
-    /// `pub(crate)` (not private): PERF_BUDGET_GATE_DESIGN.md P1's headless
+    /// `pub(crate)` (not private): the headless
     /// `perf-soak` xtask drives frames directly (real-time paced via
     /// `self.timer.wait_for_deadline()` between calls, same as `run()`'s own
     /// loop) instead of going through the command channel — no behavior

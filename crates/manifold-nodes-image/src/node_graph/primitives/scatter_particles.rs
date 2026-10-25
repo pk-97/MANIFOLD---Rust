@@ -1,7 +1,7 @@
 //! `node.draw_particles` — atomic-add splat of particles into a
 //! `u32` fixed-point accumulator.
 //!
-//! Phase A.7 of `BUFFER_PORT_PLAN`. Reads particle positions from
+//! Reads particle positions from
 //! an Array(Particle) input and writes to an Array(u32) accumulator
 //! buffer sized `width × height`. Each live particle adds the
 //! configured `scaled_energy` to its nearest texel via `atomicAdd`.

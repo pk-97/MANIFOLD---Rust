@@ -1,4 +1,4 @@
-//! In-place clip writes for a drag preview (UI_INVALIDATION_DESIGN.md P7a).
+//! In-place clip writes for a drag preview.
 //!
 //! A preview move touches only the clips the gesture drags. The panel keeps a
 //! clip-id index (built by `set_clips`) so the app writes those entries

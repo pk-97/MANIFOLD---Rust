@@ -1,4 +1,4 @@
-//! The Scene tab's two panes (SCENE_SURFACES_DESIGN.md D8 (Scene tab tree)):
+//! The Scene tab's two panes:
 //! the tree on top and the selected item's settings below, each its own
 //! scroll column, with a split the user drags between them. Blender's
 //! Outliner over Properties, Unity's Hierarchy over Inspector: scrolling a

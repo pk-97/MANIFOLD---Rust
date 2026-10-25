@@ -333,7 +333,7 @@ impl DropdownPanel {
         // event-handling code, outside the overlay build's own region
         // bracket, so it needs its own. It mints into the tree's overlay
         // region, so that region's next rebuild replaces it
-        // (UI_INVALIDATION_DESIGN.md D7). Content containment does NOT come
+        // Content containment does NOT come
         // from this region — it comes from the shell container's
         // CLIPS_CHILDREN (`popup_shell::build`) plus per-element viewport
         // culling in `build_nodes`.

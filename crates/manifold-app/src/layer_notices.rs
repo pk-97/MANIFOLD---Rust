@@ -1,5 +1,5 @@
 //! What the stage shows about a layer whose graph failed or whose GPU frames
-//! ran away (SCENE_REFINEMENT_DESIGN.md section 3 (Phases and lanes), P1b):
+//! ran away:
 //! one plain toast per failing node, naming the layer and then the item, and
 //! Draw Again on the World card of a stopped layer. The technical text goes
 //! to the log only. `ContentState` carries the whole list, so a newer state

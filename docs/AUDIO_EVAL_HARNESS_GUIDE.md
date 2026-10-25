@@ -8,15 +8,13 @@ Written so a session with NO prior context can run, read, and judge results.
 ## 0. Trained detectors — what holds
 
 The kick and snare detectors are trained models; their model file, parity tests and the
-release path are in [DETECTOR_RUNTIME_DESIGN.md](DETECTOR_RUNTIME_DESIGN.md)
-(section 3, The release path). The research tools are
+release path are covered by the detector runtime code. The research tools are
 `tools/audio_analysis/eval/kick_goal_*.py` and `run_kick_goal_*.py`. The pre-model DSP
 research log (attack probes, rejection trials, the H-series) lives in git history; its
 transferable rules are below. These rules apply to every trained detector (kick now,
 snare and clap next, under BUG-9ngk8 (trained audio detectors)).
 
-Snare training and every A/B run through the Detector Lab: `tools/audio_analysis/lab/README.md` for the steps,
-[DETECTOR_LAB_DESIGN.md](DETECTOR_LAB_DESIGN.md) for the rules. Bass, synth and kick move there next.
+Snare training and every A/B run through the Detector Lab: `tools/audio_analysis/lab/README.md` for the steps and the rules. Bass, synth and kick move there next.
 
 - **Labels come from Peter's projects and stems, never public datasets** (commercial
   licensing). Project notes are shifted by an export offset proven against a stem, and

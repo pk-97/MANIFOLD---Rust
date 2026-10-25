@@ -231,7 +231,7 @@ pub struct PlaybackEngine {
     // Live clip manager (MIDI phantom clips)
     live_clip_manager: Option<LiveClipManager>,
 
-    // Session mode runtime (P2). Never serialized, never undo-wrapped. Sibling of `live_clip_manager`; always
+    // Session mode runtime. Never serialized, never undo-wrapped. Sibling of `live_clip_manager`; always
     // present (unlike the live-clip manager, it holds no platform resources).
     session_runtime: SessionRuntime,
 
@@ -239,8 +239,7 @@ pub struct PlaybackEngine {
     // one-shot fires from incoming audio transients each tick.
     live_trigger_state: crate::live_trigger::LiveTriggerState,
 
-    // D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-    // P3c, BUG-082's fix): the current tick's shaped-signal capture for every
+    // Fire meter: the current tick's shaped-signal capture for every
     // fire-mode config, written by `evaluate_modulation` (param gate cards)
     // and `tick_audio_triggers` (clip triggers) into ONE shared instance,
     // reset at the top of each `tick_playing`/`tick_non_playing`. `Copy`, so

@@ -1,5 +1,4 @@
 //! `node.morph_targets_blend` — glTF additive N-ary morph-target blend
-//! (GLTF_ANIMATION_DESIGN.md A3).
 //!
 //! Barrier-free pure per-element kernel: for each vertex, sums up to
 //! `target_count` weighted deltas (`node.gltf_morph_deltas_source`'s

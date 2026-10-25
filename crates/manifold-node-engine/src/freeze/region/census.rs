@@ -14,9 +14,9 @@ use crate::ports::PortType;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 manifold_core::testkit_visible! {
-/// One of the eight buckets FUSION_SOTA_DESIGN.md D4/P3 names. `Other`
-/// catches every boundary that isn't one of D4's four under-fusing
-/// families or the D3 BufferIndex-shaped family — control wires,
+/// One of the eight buckets the census names. `Other`
+/// catches every boundary that isn't one of the four under-fusing
+/// families or the BufferIndex-shaped family — control wires,
 /// register-heavy bodies, non-GPU/IoBridge/DrawCall/CrossFrameState/
 /// BarrieredReduction/FusedBundle/ConversionDebt atoms, Texture3D ports,
 /// q16/particle-loop cuts, specialization-token cuts, and any
@@ -442,7 +442,7 @@ pub enum FixtureCorpus {
 }
 
 /// Run the census over every bundled effect/generator preset plus the
-/// fixture corpus, and render the FUSION_SOTA_DESIGN section D4 report.
+/// fixture corpus, and render the report.
 /// Returns the report text.
 pub fn build_census_report(fixture: FixtureCorpus) -> String {
     let registry = PrimitiveRegistry::with_builtin();

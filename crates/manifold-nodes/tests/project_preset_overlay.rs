@@ -127,7 +127,7 @@ fn fake_effect_preset(id: &str, marker: &str) -> String {
     )
 }
 
-/// D5 (PRESET_LIBRARY_DESIGN P2): a `Snapshot`-origin overlay entry sits
+/// A `Snapshot`-origin overlay entry sits
 /// BELOW disk — a real stock preset's file always wins over a stale
 /// snapshot cached in the project. "Bloom" ships as a real stock effect
 /// preset (`assets/effect-presets/Bloom.json`); installing a bogus Snapshot

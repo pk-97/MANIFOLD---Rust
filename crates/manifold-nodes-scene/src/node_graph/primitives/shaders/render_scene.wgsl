@@ -50,7 +50,7 @@ struct Vertex {
 // manual padding is needed. Total 800 bytes (four mat4x4s + thirty-four
 // vec4s; stale as "272"/"320"/"448"/"464"/"480" in older comments — grew
 // with the P3 atmosphere fields, the P2 prev_view_proj/prev_model pair, the
-// VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field,
+// Shaft_params field,
 // texture_flags2, and
 // the five-vec4 material-extension
 // block at the end;
@@ -132,7 +132,7 @@ struct Uniforms {
     alpha_params: vec4<f32>,
     // x: light_count (as f32, unbounded — the `lights` storage buffer is
     // runtime-sized), y: ambient (this object's material.ambient),
-    // z: exposure_ev (CAMERA_AND_LENS_DESIGN.md section 2 D5 — the camera lens'
+    // z: exposure_ev (the camera lens'
     // exposure_ev; every fragment entry multiplies its final straight rgb
     // by exp2(exposure_ev) just before returning), w: reserved.
     scene_params: vec4<f32>,
@@ -148,13 +148,13 @@ struct Uniforms {
     appearance: vec4<f32>,
     // rgb: ambient/sky tint multiplier on the ambient term (1,1,1 = neutral).
     ambient_tint: vec4<f32>,
-    // VOLUMETRIC_LIGHT_DESIGN.md D1 (P1 plumbing only — no march kernel
+    // Plumbing only — no march kernel
     // reads this field yet, it is not consumed by any fragment entry point
     // below). x: shaft_intensity (0 = off, THE fader), y: shaft_anisotropy
     // (Henyey-Greenstein g), z: shaft_quality (0/1/2 = Low/Med/High, as
     // f32), w: reserved.
     shaft_params: vec4<f32>,
-    // GBUFFER_DESIGN.md section 2 D5 (P2): previous-frame scene view_proj and this
+    // Previous-frame scene view_proj and this
     // object's previous-frame model matrix — inputs to the EMIT_VELOCITY
     // pipeline variant's vs_main (clip_prev = prev_view_proj * prev_model *
     // position). Always present, ONE Uniforms layout shared by both the
@@ -248,7 +248,7 @@ fn env_lookup_uv(dir: vec3<f32>) -> vec2<f32> {
     return vec2<f32>((atan2(dir.z, dir.x) + u.appearance.w) / (2.0 * PI) + 0.5,
         asin(clamp(dir.y, -1.0, 1.0)) / PI + 0.5);
 }
-// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family samplers, each built
+// Per-map-family samplers, each built
 // Rust-side from that glTF texture's OWN wrapS/wrapT/filter (default
 // REPEAT+linear when the texture has no explicit `sampler`) — no longer one
 // scene-wide hardcoded-REPEAT sampler. envmap_sampler (binding 3) stays
@@ -841,7 +841,7 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     return pcf_average(slot, suv, ref_depth, texel, i32(khw_raw));
 }
 
-// GBUFFER_DESIGN.md section 2 D5, P2: the EMIT_VELOCITY pipeline variant's
+// The EMIT_VELOCITY pipeline variant's
 // FsOut struct is text-substituted in here (replacing this comment) so
 // fs_unlit/fs_pbr/fs_cel can return a second MRT output
 // (`@location(1) velocity`) alongside `color`. Inert (a no-op comment) in
@@ -854,7 +854,7 @@ struct VsOut {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec4<f32>,
-    // GBUFFER_DESIGN.md section 2 D5, P2: EMIT_VELOCITY substitutes
+    // EMIT_VELOCITY substitutes
     // `@location(3) clip_now: vec4<f32>, @location(4) clip_prev: vec4<f32>,`
     // here — the CURRENT and PREVIOUS clip-space positions, carried as
     // plain (perspective-correctly interpolated) varyings rather than
@@ -929,7 +929,7 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     out.vertex_color = v.color;
     out.instance_scale = abs(inst.pos_scale.w);
     out.clip_pos = u.view_proj * world;
-    // GBUFFER_DESIGN.md section 2 D5, P2: EMIT_VELOCITY substitutes
+    // EMIT_VELOCITY substitutes
     // `out.clip_now = out.clip_pos; let prev_world = u.prev_model *
     // vec4<f32>(inst_pos, 1.0); out.clip_prev = u.prev_view_proj *
     // prev_world;` here — reusing THIS frame's `inst_pos` (there is no
@@ -1526,7 +1526,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5. Multiplies the
+    // exp2(exposure_ev). Multiplies the
     // final STRAIGHT rgb (post-fog, post-emission, pre-output); alpha is
     // untouched (alpha contract). exposure_ev = 0 (PINHOLE default) → ×1,
     // byte-identical to pre-lens builds (I2/I5).
@@ -2111,7 +2111,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let coat_rgb = direct_coat + coat_ibl;
     let lit = base_rgb * (1.0 - fc) + coat_rgb * clearcoat;
 
-    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
+    // exp2(exposure_ev), see fs_unlit.
     let rgb = apply_fog(lit, in.world_pos) * exp2(u.scene_params.z);
     return apply_appearance(rgb, albedo.a, in.appearance_weight);
 }
@@ -2149,7 +2149,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
         lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w * vis;
     }
     let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
-    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
+    // exp2(exposure_ev), see fs_unlit.
     let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return apply_appearance(rgb, albedo.a, in.appearance_weight);
 }

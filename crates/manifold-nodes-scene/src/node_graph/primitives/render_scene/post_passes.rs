@@ -373,7 +373,7 @@ impl RenderScene {
             // render-res scratch the upscaler read (`target`). `native_color`
             // is Rgba16Float storage-writeable, so this is one compute pass —
             // no new scratch and no second blit.
-            // COMPILE_CONTRACT_DESIGN P2: upscale_alpha_combine pipeline is prewarmed
+            // Upscale_alpha_combine pipeline is prewarmed
             // at startup, but use lazy creation as fallback if prewarm hasn't run.
             if self.upscale_alpha_combine_pipeline.is_none() {
                 self.upscale_alpha_combine_pipeline = Some(gpu.device.create_compute_pipeline(

@@ -47,7 +47,7 @@ enum OscParamTarget {
 }
 
 /// What an incoming 0–1 value maps over and what may cap it
-/// (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)): 0–1 spans the
+/// 0–1 spans the
 /// slider range, the user's when set; only a declared limit clamps.
 #[derive(Clone, Copy)]
 struct OscRange {

@@ -1,5 +1,4 @@
-//! The shared tree-overlay pass (`EDITOR_WINDOW_UNIFICATION_DESIGN.md` D1,
-//! P1) — the single owner of the tree-overlay pass sequence for EVERY
+//! The shared tree-overlay pass — the single owner of the tree-overlay pass sequence for EVERY
 //! `UIRoot`-hosting window: `overlay_draw` loop (per-overlay
 //! `Depth::OVERLAY.above(i)`, scrim-skip shadow hook, `render_sub_region`) →
 //! TOOLTIP tier (card-drag ghost, text-input overlay) → browser-popup
@@ -19,7 +18,7 @@
 //! Enqueue-only into `ui_renderer` (the caller owns `begin_frame`, the
 //! `prepare`/`render` flush, and the encoder) EXCEPT thumbnail registration,
 //! which needs `device`. Precedent: the `ui_frame.rs`/`editor_frame.rs` seam
-//! extractions themselves (`UI_HARNESS_UNIFICATION_DESIGN.md` P1/P3).
+//! extractions themselves.
 //!
 //! ── Deviations from the design doc's section 3 committed signature, found at
 //! VERIFY-AT-IMPL:
@@ -42,8 +41,8 @@ use manifold_ui_paint::ui_renderer::{Depth, UIRenderer};
 use crate::ui_root::UIRoot;
 
 /// Caller-resolved inputs. Every `Option` is input PRESENCE (the
-/// `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 3 caller test, extended across
-/// windows by D4) — never caller identity. `text_input` is `Some` only when
+/// caller test, extended across
+/// windows) — never caller identity. `text_input` is `Some` only when
 /// the active session belongs to THIS window
 /// (`TextInputState::is_owned_by_main`/`is_owned_by_editor`); this function
 /// must never see a `WorkspaceKind`/`is_graph_editor` flag (D4's forbidden
@@ -69,7 +68,7 @@ pub(crate) fn render_tree_overlay_passes(
         frame_timer,
     } = inputs;
 
-    // Browser popup thumbnails (PRESET_LIBRARY_DESIGN P6, D7): decode +
+    // Browser popup thumbnails: decode +
     // register every open item's PNG ONCE per distinct path (checked via
     // `has_image`, so a re-open in the same process is free too) — never
     // per frame, never a render. `device` is unconditional here (the caller

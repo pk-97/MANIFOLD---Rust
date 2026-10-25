@@ -1,6 +1,6 @@
 // node.resolve_accumulator — read u32 fixed-point accumulator,
 // divide by FIXED_POINT_SCALE, write as float density into the
-// output Rgba16Float texture. Phase A.7 of BUFFER_PORT_PLAN.
+// output Rgba16Float texture.
 //
 // Pairs with node.scatter_particles (2D) and node.scatter_particles_camera
 // (3D→2D): scatter emits u32 atomic-add accumulations; resolve normalises,

@@ -2652,7 +2652,7 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // Drawer reveal (UI_INVALIDATION_DESIGN.md decided item 10): with a reveal
+    // Drawer reveal: with a reveal
     // height and a drawer to show, the drawer builds once at its full size
     // under a clip of the reveal height, and `new_cy` reserves exactly that
     // height. The open/close tween then moves the clip and what sits below it

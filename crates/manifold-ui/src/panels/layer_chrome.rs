@@ -452,7 +452,7 @@ pub(super) mod tests {
         assert!(found);
     }
 
-    /// INV-S13 (SCENE_SURFACES_DESIGN.md section 4): a long layer name ends
+    /// A long layer name ends
     /// in an ellipsis before the chevron and the Opacity slider, never under
     /// them (BUG-pmbd3.16 (card header name/Opacity collision)).
     #[test]

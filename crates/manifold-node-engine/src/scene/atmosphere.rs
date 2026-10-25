@@ -35,7 +35,7 @@ pub struct Atmosphere {
     /// term; a reserved). `[1,1,1,1]` = neutral (unwired default).
     pub ambient_tint: [f32; 4],
     /// Light-shaft (volumetric inscatter) master gain
-    /// (VOLUMETRIC_LIGHT_DESIGN.md D1). `0` = off (default): the march
+    /// `0` = off (default): the march
     /// never runs, output byte-identical to today. THE fader.
     pub shaft_intensity: f32,
     /// Henyey–Greenstein anisotropy `g` in `[-0.9, 0.9]`. `0.6` default —

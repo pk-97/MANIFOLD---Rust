@@ -557,7 +557,7 @@ fn rigid_impulses_native_error_latches_receipt_and_reset_recovers() {
     assert_eq!(receipts(&mut simulation).len(), 1);
 }
 
-/// WATER_SIMULATION_DESIGN.md "Transport pause / water speed zero": held
+/// Transport pause / water speed zero: held
 /// rigid bodies discard incoming impulses, so resume never fires a pile.
 #[test]
 fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {

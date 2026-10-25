@@ -171,7 +171,7 @@ pub(crate) fn begin_perform_frame(
 }
 
 /// The shared values the HUD shows, compared by retained pointer, never by
-/// content (UI_INVALIDATION_DESIGN.md section 3): a version per source.
+/// content: a version per source.
 #[derive(Default)]
 pub(crate) struct PerformIntake {
     /// Moves when a new Ableton session arrives: cue, track and macro names,
@@ -248,7 +248,7 @@ impl ShownTracks {
 
 /// Everything the perform HUD draws, field by field from `draw_cue_hud`,
 /// `draw_sync_indicators`, `draw_macros_column` and `draw_exit_button`, at
-/// the resolution it is drawn (UI_INVALIDATION_DESIGN.md D17). Equal inputs
+/// the resolution it is drawn. Equal inputs
 /// keep the frame already on screen, so an idle perform frame derives no
 /// strings and lists and draws nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

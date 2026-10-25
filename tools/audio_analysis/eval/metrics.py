@@ -1,7 +1,7 @@
-"""Metric definitions — FROZEN at P1.
+"""Metric definitions — FROZEN.
 
-"Every metric change after P1 is a
-Peter escalation, because it invalidates all recorded baselines." Do not add,
+Every metric change after the freeze is a
+Peter escalation, because it invalidates all recorded baselines. Do not add,
 remove, or redefine a metric here without that escalation — extend with a new
 function under a new name instead of changing an existing one's semantics.
 

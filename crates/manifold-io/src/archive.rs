@@ -278,8 +278,7 @@ pub fn read_history_snapshot(path: &str, hash: &str) -> Result<String, String> {
 // ──────────────────────────────────────
 
 /// SHA-256 of data, returns first 16 hex chars.
-/// Port of C# ProjectArchive.ComputeHash (lines 489-498); widened per
-/// PROJECT_FILE_INTEGRITY_DESIGN D7.
+/// Port of C# ProjectArchive.ComputeHash (lines 489-498); widened to 64 bits.
 fn compute_hash(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);

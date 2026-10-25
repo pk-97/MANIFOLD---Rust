@@ -313,7 +313,7 @@ pub struct RenameGroupCommand {
     /// Pre-edit handle. `Some(prev)` once captured (the rename was applied);
     /// stays `None` when the rename was rejected or never executed.
     prev: Option<Option<String>>,
-    /// D5 rename-sweep undo state:
+    /// Rename-sweep undo state:
     /// `(param_id, prior_section)` for every card spec whose `section`
     /// followed this rename (it equaled the OLD group name and its binding
     /// target resolved inside the renamed group). Empty when nothing

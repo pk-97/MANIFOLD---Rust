@@ -98,7 +98,7 @@ pub(crate) enum PointerDown {
 
 /// The main window's per-frame session upkeep, right after
 /// `UIRoot::process_events`: a session dies with the overlay that hosted it
-/// (OVERLAY_SESSIONS_AND_PICKER_DESIGN.md D2), the browser popup takes its
+///, the browser popup takes its
 /// search session on the frame after it opens, and that session's overlay
 /// follows the popup's real search bar (zero until the popup tree exists).
 pub(crate) fn pump_main_window(text_input: &mut TextInputState, ui_root: &mut UIRoot) {
@@ -754,7 +754,7 @@ pub(crate) fn commit<'a>(
                 && let Some(parsed) = crate::text_input::parse_lenient_numeric(text)
             {
                 // A typed value may exceed the slider's travel
-                // (PARAM_RANGE_CONTRACT_DESIGN.md D3). Angle rows type degrees.
+                //. Angle rows type degrees.
                 let mut v = crate::text_input::degrees_commit_value(parsed, ctx.degrees);
                 if ctx.whole_numbers {
                     v = v.round();
@@ -974,7 +974,7 @@ pub(crate) fn commit<'a>(
         TextInputField::RenamePreset => {
             // My Library renames the file (no undo, as Push to Library); a
             // project preset renames through an undoable command
-            // (PRESET_LIBRARY_DESIGN D6).
+            //.
             if let Some(ctx) = text_input.rename_preset.take() {
                 let typed = text.trim();
                 if typed.is_empty() {

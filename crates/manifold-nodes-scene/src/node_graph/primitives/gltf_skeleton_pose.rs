@@ -3,14 +3,14 @@
 //! (`Array(JointMatrix)`, one skin matrix per joint) `node.skin_mesh`
 //! reads via a `BufferGather` lookup.
 //!
-//! GLTF_ANIMATION_DESIGN.md A2 (D2): CPU-side, content-thread, per-frame —
+//! CPU-side, content-thread, per-frame —
 //! the same "sampling is graph-native, no parallel player subsystem"
 //! doctrine `node.gltf_animation_source` (A1) already proves, extended
 //! from 9 scalar outputs to an array of matrices because a joint palette
 //! (up to ~256 joints for the spec-typical case) doesn't fit the
 //! port-shadow-scalar shape.
 //!
-//! GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: keyframe/topology payload no longer
+//! Keyframe/topology payload no longer
 //! lives in this node's Table params (the six Table params below stay
 //! DECLARED for round-trip/migration but are no longer read — P2 deletes
 //! them). Instead `path` + `skin_index` select an `Arc<GltfAnimSet>` from
@@ -72,7 +72,7 @@ manifold_node_engine::primitive! {
         joint_matrices: Array(JointMatrix),
     },
     params: [
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D1/P1: comes via
+        // Comes via
         // presetMetadata.stringBindings, same convention as
         // node.gltf_mesh_source's `path`. Selects the `Arc<GltfAnimSet>`
         // this node samples from `gltf_anim_cache`'s shared cache.
@@ -85,7 +85,7 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         // Which `document.skins()` entry (index into `GltfAnimSet::skins`)
-        // this node poses. GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): the
+        // this node poses. The
         // reserved sentinel `-2` selects NODE-SLOT mode instead — this
         // node poses `node_slots` (below) via whole-hierarchy composition
         // rather than a real glTF skin's joint list. Real skin indices are
@@ -99,7 +99,7 @@ manifold_node_engine::primitive! {
             range: Some((-2.0, 63.0)),
             enum_values: &[],
         },
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): read only in node-slot
+        // Read only in node-slot
         // mode (`skin_index == -2`). Rows: `[scene_node_index]`, row `i` =
         // palette slot `i` — the SAME slot order
         // `find_material_contributing_nodes` derives at runtime for
@@ -145,7 +145,7 @@ manifold_node_engine::primitive! {
             label: "Clip",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            // GLTF_ANIM_RUNTIME_V2_DESIGN.md D6: follows the file, not an
+            // Follows the file, not an
             // arbitrary A4-era cap (the dragon fixture has 52 clips).
             range: Some((0.0, 255.0)),
             enum_values: &[],
@@ -187,7 +187,7 @@ manifold_node_engine::primitive! {
             range: Some((0.0, MAX_JOINTS as f32)),
             enum_values: &[],
         },
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: these six Tables are NO LONGER
+        // These six Tables are NO LONGER
         // READ by `run()` — topology/track data now comes from the
         // `Arc<GltfAnimSet>` selected by `path`/`skin_index` above. Kept
         // DECLARED (not deleted) so an already-saved project round-trips
@@ -268,7 +268,7 @@ manifold_node_engine::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         trigger_latch: TriggerLatch = TriggerLatch::new(),
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: last `path` a load was
+        // Last `path` a load was
         // triggered for (re-triggers on change, same key-gating shape
         // `gltf_mesh_source`'s `last_key` uses).
         last_path: String = String::new(),
@@ -321,7 +321,7 @@ fn resolve_world(
     w
 }
 
-/// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): composes `node`'s WORLD matrix
+/// Composes `node`'s WORLD matrix
 /// by walking the WHOLE scene hierarchy via `anim_set.node_parents` —
 /// unlike [`resolve_world`] above (which walks only WITHIN a skin's own
 /// joint list), this has no per-skin joint list to fall back on, since a
@@ -380,7 +380,7 @@ fn rest_space(anim_set: &GltfAnimSet, node: usize) -> Mat4 {
     manifold_core::scene_doc::transform::affine_inverse(world).unwrap_or(MAT4_IDENTITY)
 }
 
-/// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): node-slot rigid-palette pose —
+/// Node-slot rigid-palette pose —
 /// selected by `skin_index == -2`. `node_slots[i]` is the scene-node index
 /// for palette slot `i` (stamped by `gltf_import.rs` from
 /// `GltfObjectRigidMultiNode::slot_nodes`, or a hand-authored graph's own
@@ -446,8 +446,8 @@ pub(crate) fn sample_node_slot_pose(
 
 /// Sample joint `node`'s LOCAL translation/rotation/scale at time `t`
 /// within `clip`, falling back to `anim_set.node_bind_trs[node]` per
-/// channel when `clip` carries no track for it — GLTF_ANIM_RUNTIME_V2_DESIGN.md
-/// D3: `Some(channel)` runs the slice binary-search sampler,
+/// channel when `clip` carries no track for it.
+/// `Some(channel)` runs the slice binary-search sampler,
 /// `None` returns the bind value directly (a single static row, same as
 /// A2's original mat4_from_table-identity-except-bind-pose behavior).
 fn sample_joint_local(anim_set: &GltfAnimSet, clip: &AnimClip, node: u32, t: f32) -> Mat4 {
@@ -494,7 +494,7 @@ fn sample_joint_local(anim_set: &GltfAnimSet, clip: &AnimClip, node: u32, t: f32
     mat4_from_trs(tr, rot, sc)
 }
 
-/// The full per-frame pose algorithm (GLTF_ANIM_RUNTIME_V2_DESIGN.md P1),
+/// The full per-frame pose algorithm,
 /// pure and `EffectNodeContext`-free so it's directly unit- and
 /// perf-testable: sample every joint's local TRS from `anim_set`, compose
 /// world matrices by walking the skin's own parent chain
@@ -657,7 +657,7 @@ impl Primitive for GltfSkeletonPose {
             return;
         }
 
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: `path`/`skin_index` select the
+        // `path`/`skin_index` select the
         // shared `Arc<GltfAnimSet>` instead of reading the six Table
         // params (declared above, no longer read). P2: the load is moved
         // BEFORE `duration_s`/`progress` are resolved so a resident clip's
@@ -667,7 +667,7 @@ impl Primitive for GltfSkeletonPose {
             Some(ParamValue::String(s)) => s.as_str().to_owned(),
             _ => String::new(),
         };
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): read as i32 (not clamped
+        // Read as i32 (not clamped
         // to usize) so the `-2` node-slot sentinel survives — a clamped
         // read would collapse it to skin 0.
         let skin_index_raw = match ctx.params.get("skin_index") {
@@ -741,7 +741,7 @@ impl Primitive for GltfSkeletonPose {
         );
         let t = progress * duration_s;
 
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): `-2` selects the
+        // `-2` selects the
         // node-slot rigid palette over a real glTF skin.
         let skin_matrices = if skin_index_raw == NODE_SLOT_MODE {
             let node_slots: Vec<u32> = table_or_empty(ctx.params.get("node_slots"))
@@ -945,7 +945,7 @@ mod tests {
         );
     }
 
-    // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md P1 — cache-backed sampling ─────────
+    // ─── Cache-backed sampling ─────────
 
     fn translation_channel(node: u32, keys: &[(f32, [f32; 3])]) -> Channel {
         Channel {
@@ -1133,7 +1133,7 @@ mod tests {
         );
     }
 
-    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D6/P2 gate: `clip_index`'s range is
+    /// Gate: `clip_index`'s range is
     /// `(0, 255)`, past the old A4-era 31-clip cap — a synthetic
     /// `GltfAnimSet` with 40 distinct single-joint clips proves selection
     /// actually works past 31, not just that the param accepts a bigger
@@ -1182,7 +1182,7 @@ mod tests {
 
     /// P1's mandatory perf gate: a synthetic dragon-fixture-scale
     /// `GltfAnimSet` (52 clips x 630 channels x ~160 keys, 300 joints,
-    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md section 3) sampled for one full pose must
+    /// Sampled for one full pose must
     /// stay well under budget with the binary-search slice path — the
     /// exact O(rows) linear-scan cost class this design removes. Debug
     /// build asserts < 8ms (the doc's stated debug ceiling); release is
@@ -1268,7 +1268,7 @@ mod tests {
         );
     }
 
-    // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3) — node-slot rigid palette ──
+    // ─── Node-slot rigid palette ──
 
     /// D4's inverse-bind identity property, at the value level (the phase
     /// brief's mandatory unit test): with EVERY node at its static bind

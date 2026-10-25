@@ -1,6 +1,5 @@
-// node.render_scene internal pass (VOLUMETRIC_LIGHT_DESIGN.md D2, P2/P3) —
-// half-res single-scattering light-shaft march. Committed algorithm (section 2 D2's
-// block), implemented verbatim — no substitution. P3: every wired light
+// node.render_scene internal pass —
+// half-res single-scattering light-shaft march. Committed algorithm, implemented verbatim — no substitution. P3: every wired light
 // (Sun, Point, and Spot) contributes; attenuation follows Light's selected
 // legacy or physical policy, and Point/Spot shadow sampling is
 // frustum-clipped against the light's single-frustum view-proj (light.rs:
@@ -15,7 +14,7 @@
 // (ssao_from_depth.wgsl, coc_from_depth.wgsl), so this file validates
 // standalone under `tests/wgsl_validation.rs`'s auto-discovery. Both
 // implementations MUST stay bit-for-bit the same formula (synthesis-drift
-// is the bug class this convention risks — GBUFFER_DESIGN.md section 2 D4).
+// is the bug class this convention risks.
 fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
     return (near * far) / (near + raw * (far - near));
 }
@@ -48,7 +47,7 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var half_depth: texture_2d<f32>;
-// P3 (VOLUMETRIC_LIGHT_DESIGN.md's own P3): every wired light (Sun AND
+// Every wired light (Sun AND
 // Point and Spot), 4 vec4s per light:
 //   [i*4+0] = Sun: dir-toward-light (.xyz, toward the light, matches
 //             `Light::light_dir_at`'s Sun case), .w = 0.0 (mode Sun)
@@ -130,7 +129,7 @@ fn henyey_greenstein(g: f32, cos_theta: f32) -> f32 {
     return (1.0 - g2) / (4.0 * PI * denom);
 }
 
-// CINEMATIC_POST_DESIGN.md D2's committed hash, reused verbatim as the
+// The committed hash, reused verbatim as the
 // march-start jitter (D2/D5: deterministic, no temporal accumulation).
 fn hash01(px: vec2<f32>) -> f32 {
     return fract(sin(dot(px, vec2<f32>(12.9898, 78.233))) * 43758.5453);

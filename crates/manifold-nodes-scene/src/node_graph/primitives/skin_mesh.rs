@@ -1,5 +1,4 @@
 //! `node.skin_mesh` — per-vertex linear-blend GPU skinning
-//! (GLTF_ANIMATION_DESIGN.md A2, D2).
 //!
 //! Barrier-free pure per-element kernel: for each vertex, blend up to 4
 //! joint matrices (`node.gltf_skeleton_pose`'s `Array(JointMatrix)`

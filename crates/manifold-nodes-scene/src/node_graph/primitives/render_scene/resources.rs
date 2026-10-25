@@ -91,7 +91,7 @@ impl RenderScene {
             if depth_wired || wants_shafts_now || self.gizmo_depth_wanted {
                 self.ensure_depth_resolve_scratch(gpu.device, width, height);
             }
-            // GBUFFER_DESIGN.md section 2 D1/D5 (P2): the velocity aux-MRT
+            // The velocity aux-MRT
             // memoryless target is allocated ONLY when wired this frame —
             // this call site (not `ensure_msaa_targets`, which always runs)
             // is the actual zero-cost-when-unwired enforcement point.
@@ -176,7 +176,7 @@ impl RenderScene {
                 }
             }
             self.ensure_sampler(gpu.device);
-            // GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure every distinct
+            // Ensure every distinct
             // per-map-family sampler this frame's draws need. Runs before
             // Pass 2 builds `binding_sets`, so every lookup there is
             // guaranteed a cache hit.
@@ -292,7 +292,7 @@ impl RenderScene {
                 self.ensure_rt_atrous_post_params_buffer(gpu.device);
                 self.rt_irr_needs_reset = self.rt_irr_needs_reset || irr_reallocated;
             }
-            // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the whole feature's
+            // The whole feature's
             // real GPU cost gate. `wants_shafts_now == false` (the default)
             // means none of these run and none of these textures/pipelines
             // are ever allocated — the "unwired = zero cost" contract
@@ -455,8 +455,8 @@ impl RenderScene {
     }
 
     /// Ensure the memoryless MSAA `Rg16Float` velocity aux-MRT target
-    /// matches the render target size (GBUFFER_DESIGN.md section 2 D5, P2). Called
-    /// ONLY when `evaluate` finds `velocity` wired this frame (D1 lazy
+    /// matches the render target size. Called
+    /// ONLY when `evaluate` finds `velocity` wired this frame (lazy
     /// rule) — an unwired scene never calls this, so it costs nothing.
     pub(super) fn ensure_velocity_msaa_target(
         &mut self,
@@ -599,7 +599,7 @@ impl RenderScene {
         }
     }
 
-    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: pack a `MapSamplerDesc` into a small
+    /// Pack a `MapSamplerDesc` into a small
     /// dense key for the `material_samplers` cache. `GpuAddressMode`/
     /// `GpuFilterMode` don't derive `Hash` (foreign types in `manifold-gpu`,
     /// not worth adding a derive there for one call site) — a hand-rolled
@@ -626,7 +626,7 @@ impl RenderScene {
             | (desc.mip_filter.map_or(2, filter_code) << 6)
     }
 
-    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure a cached sampler exists for
+    /// Ensure a cached sampler exists for
     /// `desc`, creating it on first sight. Replaces the single hardcoded
     /// REPEAT material-map sampler (binding 22, landed `85b5bb9d`) — but
     /// `MapSamplerDesc::default()` (an unwired map, or a glTF texture with
@@ -872,7 +872,7 @@ impl RenderScene {
             .resize(casters.len().max(have_layers), None);
     }
 
-    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): ensure the half-res
+    /// Ensure the half-res
     /// `shaft_inscatter` (`Rgba16Float`) and `shaft_depth_half` (`R32Float`)
     /// textures match `half_w x half_h`, recreating on resize. Same
     /// `ensure_shadow_map` lazy pattern — called ONLY when [`wants_shafts`]
@@ -916,7 +916,7 @@ impl RenderScene {
         self.shaft_half_height = half_h;
     }
 
-    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): ensure the full-res internal
+    /// Ensure the full-res internal
     /// depth-resolve target used ONLY when shafts are on and the graph's
     /// `depth` output is unwired this frame — "shafts-on forces the
     /// internal Sample0 depth resolve even when `depth` is unwired" (D3).
@@ -1786,7 +1786,7 @@ impl RenderScene {
         }
     }
 
-    /// VOLUMETRIC_LIGHT_DESIGN.md D2/D3 (P2): ensure the three internal
+    /// Ensure the three internal
     /// shaft pipelines exist. Compiled once, straight from `include_str!`
     /// WGSL — each file forks its own `linearize_depth` copy (the
     /// established "forked, not shared" convention this codebase's other
@@ -1899,7 +1899,7 @@ impl RenderScene {
                 mip_levels: 1,
             }));
         }
-        // COMPILE_CONTRACT_DESIGN P2: IBL pipelines are prewarmed at startup
+        // IBL pipelines are prewarmed at startup
         // in prewarm_pipelines, but use lazy creation as fallback if prewarm
         // hasn't run yet (e.g., during warmup itself).
         if self.ibl_prefilter_pipeline.is_none() {

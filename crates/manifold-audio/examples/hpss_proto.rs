@@ -1,4 +1,4 @@
-//! BUG-046 offline HPSS prototype — P6a.
+//! Offline HPSS prototype.
 //!
 //! PROTOTYPE-ONLY sweep tool, no runtime integration: replicates the live
 //! column formation + SuperFlux fire path of `analysis.rs` exactly (validated:

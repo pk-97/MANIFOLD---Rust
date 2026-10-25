@@ -213,7 +213,7 @@ impl MetalFxDenoisedScaler {
         };
 
         // Motion vectors arrive in NDC-space `(dx, dy)` per pixel
-        // (GBUFFER_DESIGN.md section 2 D5). MetalFX expects motion in
+        // MetalFX expects motion in
         // pixel units: multiplying by half the render-resolution
         // converts an NDC delta spanning [-1, 1] across the full input
         // width/height into pixels.

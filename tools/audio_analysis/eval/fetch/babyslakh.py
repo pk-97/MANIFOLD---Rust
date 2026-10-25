@@ -1,5 +1,5 @@
 """Fetch babyslakh_16k — the small (~880MB, 20-track) Slakh2100 bring-up
-subset (aligned MIDI + true stems). License CC-BY 4.0 (Zenodo record 4603870, verified 2026-07-17).
+subset (aligned MIDI + true stems). License CC-BY 4.0 (Zenodo record 4603870).
 
 The full Slakh2100 test split (P3's job, 225 tracks / ~11GB) is a separate,
 larger fetch — not this script.

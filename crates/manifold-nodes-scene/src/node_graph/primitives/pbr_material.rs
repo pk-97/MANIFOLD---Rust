@@ -34,7 +34,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
 const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
-// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings, same
+// Per-map-family sampler settings, same
 // enum-param shape as `alpha_mode` above (no port-shadow scalar — these are
 // discrete glTF sampler enums, not continuous factors). Index 0 is each
 // enum's neutral/default value (Repeat, Linear) — `run()` maps these
@@ -774,7 +774,7 @@ manifold_node_engine::primitive! {
             range: Some((-128.0, 128.0)),
             enum_values: &[],
         },
-        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
+        // Per-map-family sampler settings.
         // Same 5-family fanout as the UV-transform block above; defaults
         // (Repeat/Repeat/Linear/Linear) reproduce glTF's implicit
         // no-sampler default AND the pre-D3 hardcoded `material_sampler`
@@ -1495,7 +1495,7 @@ impl Primitive for PbrMaterial {
         let [base_color_uv_transform, normal_uv_transform, mr_uv_transform, occlusion_uv_transform, emissive_uv_transform] =
             UV_XF_KEYS.map(uv_xf);
 
-        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
+        // Per-map-family sampler settings.
         // `enum_or` reads an Enum param (Float fallback mirrors alpha_mode's
         // own dual-read above — a hand-authored graph JSON may carry either
         // shape); anything out of range falls through to index 0 (Repeat /

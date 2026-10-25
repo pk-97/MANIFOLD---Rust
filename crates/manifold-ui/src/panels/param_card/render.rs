@@ -1013,7 +1013,7 @@ impl ParamCardPanel {
     /// `build_section_header`, plus, when `title_navigates`, an "Open in
     /// Scene" button at the row end (`card_section.reveal`): the heading
     /// (`card_section.title`), the triangle and the bar only fold, the button
-    /// opens the Scene tab (SCENE_SURFACES_DESIGN.md D10).
+    /// opens the Scene tab.
     pub(crate) fn build_section_header_with_title(
         tree: &mut UITree,
         parent: Option<NodeId>,

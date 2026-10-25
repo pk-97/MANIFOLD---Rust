@@ -1,6 +1,5 @@
 """Stage 1 -- DSP-only drum object detector, no training, no ADTOF anywhere
-in the path. Per the approach text
-(activated by the 2026-07-18 ADTOF bake-off addendum, phase B1):
+in the path. Per the approach text:
 
     "DSP object detectors on the demucs drum stem (no training): the live
     kick detector's logic offline with non-causal luxuries -- larger/

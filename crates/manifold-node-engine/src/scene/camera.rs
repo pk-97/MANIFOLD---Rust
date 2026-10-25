@@ -1157,7 +1157,7 @@ mod tests {
         assert!((ortho[2][3] - 0.0).abs() < 1e-5);
     }
 
-    // ===== LensParams (CAMERA_AND_LENS_DESIGN.md section 2 D4, P2) =====
+    // ===== LensParams =====
 
     #[test]
     fn pinhole_lens_is_neutral_per_committed_field_semantics() {

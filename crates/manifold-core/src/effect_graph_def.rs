@@ -517,12 +517,12 @@ pub struct PresetMetadata {
     /// PRESET_BROWSER_AUDITION D8/§3.4). `None` = every layer type;
     /// `Some([LayerType::Dmx])` = DMX layers only (the LED-* presets).
     /// `LayerType` accepts both its camelCase name and its legacy
-    /// pre-D15 spelling on the wire (see `types.rs`).
+    /// spelling on the wire (see `types.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer_types: Option<Vec<crate::types::LayerType>>,
     /// Outer-card slider definitions. Each entry corresponds to one
     /// host-visible parameter. An entry the live lookup describes is saved
-    /// as a stub (SCENE_SURFACES_DESIGN.md D2 (one live lookup)), see
+    /// as a stub, see
     /// [`ParamSpecDef::lookup_stub`].
     #[serde(serialize_with = "serialize_param_specs")]
     pub params: Vec<ParamSpecDef>,
@@ -559,7 +559,7 @@ pub struct PresetMetadata {
     pub string_bindings: Vec<StringBindingDef>,
     /// Scene bounds for glTF imports: `(bbox_min, bbox_max)` per axis,
     /// used to derive scene-relative translate slider ranges
-    /// (SCENE_PANEL_UX_DESIGN.md). Populated by the importer's framing
+    /// Populated by the importer's framing
     /// math (BUG-774a), read at VM-build time. `None` for presets that
     /// aren't scene imports or were imported before this field existed —
     /// the scene panel falls back to camera-distance proxy or descriptor
@@ -657,8 +657,7 @@ pub struct ParamSpecDef {
     /// two ways — at expose, from the innermost enclosing group's display
     /// name; by the glTF importer, per-object knobs get the object's group
     /// name and shared knobs get `"Camera"`/`"Sun"`/`"Environment"` — never
-    /// derived from graph structure at display time (the manifest is the
-    /// single source, matching `PARAM_STORAGE_BOUNDARIES_DESIGN` D4).
+    /// derived from graph structure at display time.
     /// `serde(default)` keeps every existing preset loading; skipped on
     /// serialize when absent so a no-section preset stays byte-identical
     /// (the `is_angle` precedent above).
@@ -681,8 +680,7 @@ pub struct ParamSpecDef {
     /// and parameter identity remain authoritative elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_role: Option<crate::material_inspector::MaterialParamRole>,
-    /// What the value may never pass (SCENE_SURFACES_DESIGN.md D15 (slider
-    /// range and hard limit)). Saved only on authored specs.
+    /// What the value may never pass. Saved only on authored specs.
     #[serde(
         default,
         skip_serializing_if = "manifold_foundation::param_range::HardLimit::is_slider"
@@ -722,8 +720,7 @@ impl ParamSpecDef {
     }
 
     /// The declared-range clamp under `Param::driven_value` when the user has
-    /// no slider range (SCENE_SURFACES_DESIGN.md D15 (slider range and hard
-    /// limit)). A periodic param wraps over the declared range — `rem_euclid`,
+    /// no slider range. A periodic param wraps over the declared range — `rem_euclid`,
     /// so a downward saw lands in range — so a saw or a ramp past the end
     /// keeps spinning (BUG-039). Anything else clamps to the hard limit,
     /// `Slider` being the declared range. A degenerate range (`max <= min`)

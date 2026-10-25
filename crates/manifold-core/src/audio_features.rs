@@ -43,7 +43,7 @@ pub struct BandFeatures {
     /// Tracked dominant-object log-frequency position within this band's bin
     /// window, 0..1 (same mapping as `brightness`). HOLDS its last value on
     /// dropout — gate with `presence`, never read 0 as "low pitch". Filled by
-    /// the D5 ridge tracker, one per
+    /// the ridge tracker, one per
     /// band window (Full/Low/Mid/High), all four run over one shared salience
     /// column (D4).
     pub pitch: f32,

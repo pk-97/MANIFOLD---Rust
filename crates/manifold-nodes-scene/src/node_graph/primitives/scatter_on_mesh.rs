@@ -1,6 +1,6 @@
 //! `node.scatter_on_mesh` — scatter `Array<InstanceTransform>` across a
 //! mesh's own surface, area-weighted so density is uniform regardless of
-//! triangulation (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D8, section 3 P4 row).
+//! triangulation.
 //!
 //! Same 3-pass area/scan/place shape as `spawn_from_mesh.rs` — the
 //! committed precedent (D8): per-triangle area (one thread per triangle),

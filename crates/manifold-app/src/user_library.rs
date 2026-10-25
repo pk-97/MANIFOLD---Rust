@@ -102,7 +102,7 @@ impl UserLibrary {
     }
 
     /// Path a library entry's save-time thumbnail PNG lives (or would live)
-    /// at, for `kind` (PRESET_LIBRARY_DESIGN P6, D7) — same directory + stem
+    /// at, for `kind` — same directory + stem
     /// as [`Self::path_for`]'s JSON, `.png` extension. Pure path computation
     /// (no device access; the caller renders + writes the bytes after a
     /// successful [`Self::save`]) so callers can check existence
@@ -203,7 +203,7 @@ impl UserLibrary {
     }
 
     /// Whether `id` names an entry with a file under THIS user root — the
-    /// user-vs-factory test (`PRESET_LIBRARY_DESIGN` D3/P4): a factory/stock
+    /// user-vs-factory test: a factory/stock
     /// preset never lives under `root` (section 4's structural guarantee, same one
     /// [`Self::delete`]/[`Self::rename`] rely on), so this is exactly "can
     /// [`Self::push`] overwrite this id, or does the caller need to fall
@@ -212,8 +212,7 @@ impl UserLibrary {
         self.path_for(kind, id.as_str()).is_file()
     }
 
-    /// Push to Library (PRESET_LIBRARY_DESIGN section 4: "Push to Library =
-    /// `UserLibrary::save` targeting the existing entry's file"): overwrite
+    /// Push to Library: overwrite
     /// an EXISTING user-library entry's file in place with `def` — unlike
     /// [`Self::save`], this NEVER mints a new id/name; the id and filename
     /// stay exactly as they are, so every OTHER instance still tracking
@@ -523,7 +522,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // ── push (PRESET_LIBRARY_DESIGN P4) ─────────────────────────────────
+    // ── push ─────────────────────────────────
 
     #[test]
     fn push_overwrites_an_existing_user_entry_in_place() {

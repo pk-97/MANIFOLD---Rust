@@ -90,8 +90,7 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.20.0".to_string());
     }
 
-    // Saved bundled controls are stubs the live lookup fills (SCENE_SURFACES_DESIGN.md
-    // D20 (version bump for stubs)); no shape change, the bump makes older builds refuse.
+    // Saved bundled controls are stubs the live lookup fills; no shape change, the bump makes older builds refuse.
     if is_version_less_than(&version, "1.21.0") {
         root["projectVersion"] = Value::String("1.21.0".to_string());
     }
@@ -149,7 +148,7 @@ pub(crate) fn for_each_preset_instance(root: &mut Value, mut f: impl FnMut(&mut 
 }
 
 /// `pub(crate)`: the forward-compat guard in `loader.rs` reuses this same
-/// comparator (PROJECT_FILE_INTEGRITY_DESIGN section 3.3 — do not duplicate it).
+/// comparator; do not duplicate it.
 pub(crate) fn is_version_less_than(version: &str, threshold: &str) -> bool {
     let v_parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
     let t_parts: Vec<u32> = threshold

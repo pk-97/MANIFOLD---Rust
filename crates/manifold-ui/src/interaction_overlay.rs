@@ -815,7 +815,7 @@ pub struct InteractionOverlay {
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
     modifiers: Modifiers,
 
-    // ── P2 motion ──────────────
+    // ── Motion ──────────────
     // Purely visual drag feedback — the model already moves/snaps instantly
     // (D15: data first, visual follows); these only change what the render
     // loop draws for the dragged clip set. Shared scalars, not per-clip:
@@ -1184,7 +1184,7 @@ impl InteractionOverlay {
         }
     }
 
-    // ── P2 motion ──────────────
+    // ── Motion ──────────────
 
     /// Per-frame tween tick for the overlay's drag-visual pieces (grab lift,
     /// duplicate ghost, grid settle, landing-line flash, error shake). Call
@@ -4489,7 +4489,7 @@ mod b4_group_move_tests;
 #[cfg(test)]
 mod p1_4_gesture_integrity_tests;
 
-// ── P2 motion tests ────────────────
+// ── Motion tests ────────────────
 // `InteractionOverlay` has no existing test harness (every other method here
 // takes `&mut dyn TimelineEditingHost`, which would need a full mock to
 // exercise) — these drive the new drag-visual state machine directly via

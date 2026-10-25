@@ -209,7 +209,7 @@ impl ContentThread {
         }
     }
 
-    /// Load-time warmup pass (WARMUP_DESIGN.md P1). Runs inside the
+    /// Load-time warmup pass. Runs inside the
     /// `LoadProject` handler after the project is initialized and resized.
     /// Blocks the content thread, publishes per-layer progress, and aborts
     /// if a Shutdown command arrives.
@@ -229,7 +229,7 @@ impl ContentThread {
 
         // Collect layers that need warmup: generator layers plus any layer
         // carrying still-image clips (P2b). Skip video layers — they stay on
-        // decoder lookahead (WARMUP_DESIGN.md D8).
+        // decoder lookahead.
         let warmup_layers: Vec<(usize, manifold_core::LayerId, String)> = project
             .timeline
             .layers
@@ -535,7 +535,7 @@ impl ContentThread {
 
         // Clear progress and re-clear trigger latches so warmup frames don't
         // pollute the first live frame's sample_and_hold / clip_trigger_cycle
-        // state (WARMUP_DESIGN.md 3.2 step 5).
+        // state.
         state_tx.publish(ContentState {
             body: true,
             warmup: None,

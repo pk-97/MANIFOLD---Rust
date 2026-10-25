@@ -5,7 +5,7 @@ use manifold_nodes_scene::node_graph::primitives::gltf_animation_source::{
 };
 use std::{borrow::Cow, sync::Arc};
 
-/// GLTF_ANIMATION_DESIGN.md A1's performer-gesture gate, at the
+/// The performer-gesture gate, at the
 /// GRAPH level: `node.lfo` (Saw, one cycle per beat) wired directly
 /// into `node.gltf_animation_source.progress`, sampled just before
 /// and just after the LFO's own wrap point (beats 0.999 and 1.001 —

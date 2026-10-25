@@ -458,7 +458,7 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// slots. Read and performed by the executor after `late_capture`
     /// returns; ignored on the `evaluate` path.
     pub texture_swap_request: Option<(&'static str, &'static str)>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5/I3 — set by
+    /// Set by
     /// [`Self::mark_outputs_unchanged`], read by the executor after
     /// `run`/`evaluate` returns and stored per node per frame (P1 stub —
     /// nothing consumes the stored value yet; P2 gates dirty-caching
@@ -479,7 +479,7 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// only async producers (a source whose upload is still in flight)
     /// declare pending.
     pub outputs_pending: bool,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — the evaluating
+    /// The evaluating
     /// [`Executor`](crate::node_graph::execution::Executor)'s rebuild epoch:
     /// a process-global monotonic counter renewed at creation and reset.
     /// Exists so a node that
@@ -613,7 +613,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         self.texture_swap_request = Some((out_port, in_port));
     }
 
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — declare that this
+    /// Declare that this
     /// node's outputs this frame are unchanged from last frame.
     ///
     /// **I3's contract, verbatim: a node may declare it only when its

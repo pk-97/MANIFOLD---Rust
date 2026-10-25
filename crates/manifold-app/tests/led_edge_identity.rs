@@ -1,5 +1,4 @@
-//! MVP-P1 edge-identity pinning
-//! erratum): the controller already forces edge-extend widths to (0.5, 0.5)
+//! Edge-identity pinning: the controller already forces edge-extend widths to (0.5, 0.5)
 //! for ALL routes (`artnet.rs`), which makes the shader's horizontal mapping
 //! an identity (source_u == uv.x). This test pins that behavior against
 //! `manifold_led`'s public API so a shader or controller change that

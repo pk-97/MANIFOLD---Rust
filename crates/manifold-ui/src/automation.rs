@@ -78,7 +78,7 @@ pub enum AutomationAction {
     },
     /// Set or clear a card or Scene tab param's slider range through the real
     /// dispatch (`ParamsAction::SetSliderRange`), the commit of "Set slider
-    /// range…" (SCENE_SURFACES_DESIGN.md D15). Headless runs have no type-in
+    /// range…". Headless runs have no type-in
     /// seam, so this is the flow's way to the same write.
     SetSliderRange {
         param: FlowScrubTarget,
@@ -143,7 +143,7 @@ pub enum AutomationAction {
     Focus {
         window: FlowWindow,
     },
-    /// Start a work-count window (UI_INVALIDATION_DESIGN.md D10).
+    /// Start a work-count window.
     ResetWork,
     /// Compare the work counted since the last `ResetWork` against the
     /// ceilings recorded for this flow's `window`; a kind with no ceiling has
@@ -151,7 +151,7 @@ pub enum AutomationAction {
     AssertWork {
         window: String,
     },
-    /// The freshness check (UI_INVALIDATION_DESIGN.md D10, INV-4): record the
+    /// The freshness check: record the
     /// tree, the immediate-pass inputs and the pending toast, force every
     /// projection and a full build from the same inputs, record again, and
     /// fail on any difference. Generations, node slots and input-state flags

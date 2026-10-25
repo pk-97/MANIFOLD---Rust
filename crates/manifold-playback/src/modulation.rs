@@ -5931,7 +5931,7 @@ mod tests {
         }
     }
 
-    // ── UX-P3a (SCENE_PANEL_UX_DESIGN.md D8): exposure-on-demand → modulation ──
+    // ── Exposure-on-demand → modulation ──
     //
     // The scene panel's mod button (`crates/manifold-ui/src/panels/
     // scene_setup_panel.rs`) never targets the modulation pipeline directly —

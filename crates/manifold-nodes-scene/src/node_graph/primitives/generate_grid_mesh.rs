@@ -1,7 +1,7 @@
 //! `node.grid_mesh` — emit a regular NxM grid of
 //! `MeshVertex` items laid out as a flat plane in XZ.
 //!
-//! Phase B of `BUFFER_PORT_PLAN`. First primitive in the mesh
+//! First primitive in the mesh
 //! family — zero inputs, one Array(MeshVertex) output. Params
 //! drive grid resolution and world-space size; the chain build
 //! pre-allocates `max_capacity` vertices and the runtime

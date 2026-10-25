@@ -344,7 +344,7 @@ impl Primitive for BlobDetectFfi {
 
         let gpu = ctx.gpu_encoder();
 
-        // COMPILE_CONTRACT_DESIGN P2: create pipelines AFTER gpu_encoder is available
+        // Create pipelines AFTER gpu_encoder is available
         // but BEFORE any early returns so warmup creates them even with zero blobs.
         if self.upload_pipeline.is_none() {
             self.upload_pipeline = Some(gpu.device.create_compute_pipeline(

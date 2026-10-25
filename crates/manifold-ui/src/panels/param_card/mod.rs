@@ -362,7 +362,7 @@ pub struct ParamCardPanel {
     /// restart.
     section_folded: ahash::AHashMap<String, bool>,
     /// A scene card: section folds are saved choices and a section title
-    /// opens the Scene tab (SCENE_SURFACES_DESIGN.md D10).
+    /// opens the Scene tab.
     scene_sections: bool,
 
     copied_flash: CopyToClipboardLabelState,
@@ -609,8 +609,7 @@ impl ParamCardPanel {
         &self.effect_id
     }
 
-    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-    /// P3c, BUG-082's fix; widened 2026-07-11): push this tick's live
+    /// Fire meter: push this tick's live
     /// shaped-signal level onto every OPEN row's Amount meter — in place, no
     /// rebuild. Every enabled audio-mod row now captures a level on the
     /// content-thread side (`evaluate_instance_audio_mods`), not just
@@ -649,7 +648,6 @@ impl ParamCardPanel {
         }
     }
 
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// param index of the currently-OPEN fire-mode (`is_trigger` or
     /// `is_trigger_gate`, armed)
     /// drawer, if any — deliberately narrower than the Amount meter itself
@@ -811,7 +809,7 @@ impl ParamCardPanel {
     /// Whether this card's targeted instance has diverged from its library
     /// entry (`PresetInstance.graph.is_some()` — the same bit that drives
     /// the MOD badge). Read by the card context menu
-    /// (PRESET_LIBRARY_DESIGN P4) to gate Revert/Push to Library — mirrors
+    /// to gate Revert/Push to Library — mirrors
     /// [`Self::param_has_ableton_mapping`]'s read-only accessor style.
     pub fn has_graph_mod(&self) -> bool {
         self.state.has_graph_mod
@@ -1960,8 +1958,7 @@ pub(super) mod tests {
 
     #[test]
     fn open_fire_mode_drawer_send_and_band_read_the_armed_trigger_gate_row() {
-        // P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item
-        // 5): the fixture arms the clip_trigger row on send "send-kick",
+        // The fixture arms the clip_trigger row on send "send-kick",
         // band index 1 (Low) — the accessors must report exactly that.
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
@@ -3935,7 +3932,7 @@ pub(super) mod tests {
         assert!((expanded_h - base_h - audio_h - DRAWER_BOTTOM_GAP).abs() < 0.1);
     }
 
-    // ── P2 dispatch-family coverage —
+    // ── Dispatch-family coverage —
     // roles the pre-existing suite above didn't already regression-pin
     // (DriverBtn/AudioBtn/ToggleBtn/MappingChevron/SectionHeader/ModTab were
     // covered before this lane and stayed green through the RowIndex swap;

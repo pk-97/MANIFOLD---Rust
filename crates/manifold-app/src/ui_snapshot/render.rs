@@ -10,7 +10,7 @@
 //! `crate::ui_frame::composite_main_ui_frame` — the SAME function
 //! `present_all_windows` and `cache_path_full_render` call.
 //!
-//! P2 (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 4 step 2): the immediate-mode
+//! The immediate-mode
 //! passes that used to continue here as this module's own `draw_immediate_
 //! passes` (clip bodies, optional injected thumbnails, clip names,
 //! automation lanes, top-level overlays) are now `crate::ui_frame::
@@ -353,7 +353,7 @@ pub fn render_graph_editor_to_png(
     // captured next to (or instead of) its expanded rows. Empty for every
     // caller that doesn't care (byte-identical to the pre-D6 behavior).
     force_collapsed: &[u32],
-    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 acceptance demo: open this
+    // Acceptance demo: open this
     // window's own `browser_popup` (Node mode, the same widget
     // `GraphEditCommand::OpenNodePicker` opens live) BEFORE
     // `build_overlays_for_screen` runs below, so the overlay driver records
@@ -362,7 +362,7 @@ pub fn render_graph_editor_to_png(
     // inspection. `false` for every existing caller (byte-identical to the
     // pre-P1 PNGs).
     open_node_picker: bool,
-    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P2 acceptance demo: toggle this
+    // Acceptance demo: toggle this
     // window's own `perf_hud` visible (placeholder metrics — no `ContentState`
     // exists on this headless path) BEFORE `build_overlays_for_screen` runs
     // below, same driver as `open_node_picker` — proves row 6's "whatever
@@ -493,7 +493,7 @@ pub fn render_graph_editor_to_png(
         canvas.set_node_preview_src(src);
     }
 
-    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1: open the node picker (if
+    // Open the node picker (if
     // asked) and record it into the tree via the SAME driver
     // `present_graph_editor_window` calls each frame — `build_overlays_for_
     // screen`, not a parallel `begin_region`/`.build()` reimplementation.

@@ -4,13 +4,12 @@
 
 **Status:** Living guide. Originally written 2026-05-21 after the Plasma + Lissajous generator decomposition; updated 2026-05-26 after the post-migration inventory revealed the fused-bundle failure mode and the no-fused-monolith rule landed. Read before starting **any** decomposition — generator, effect, or in-place audit of an existing primitive that looks like a fused bundle.
 
-> **Update 2026-05-28:** The `Array<T>` references throughout this guide (in primitive type signatures, stride conventions, decomposition recipes) describe wire topology that survives the Channel type system migration byte-identical — but the canonical macro syntax is now `Channels<T>` (for the seven typed families with a `KnownItem::SPECS` impl) or `Channels[name: Type, ...]` (for ad-hoc signatures). Read `Array<Particle>` here as `Channels<Particle>`; `Array<u32>` becomes `Channels<u32>` (`[value: U32]` signature); `Array<f32>` with stride conventions becomes `Channels[name: F32, ...]` with named channels. The "stride conventions in `composition_notes`" anti-pattern section 6 (Migration map — every typed array → its Channels signature) used to warn about is now structurally impossible — channel names live on the wire.
+> The `Array<T>` references throughout this guide (in primitive type signatures, stride conventions, decomposition recipes) describe wire topology that survives the Channel type system migration byte-identical — but the canonical macro syntax is now `Channels<T>` (for the seven typed families with a `KnownItem::SPECS` impl) or `Channels[name: Type, ...]` (for ad-hoc signatures). Read `Array<Particle>` here as `Channels<Particle>`; `Array<u32>` becomes `Channels<u32>` (`[value: U32]` signature); `Array<f32>` with stride conventions becomes `Channels[name: F32, ...]` with named channels. The "stride conventions in `composition_notes`" anti-pattern section 6 (Migration map — every typed array → its Channels signature) used to warn about is now structurally impossible — channel names live on the wire.
 
 This guide is the *how-to-think*, not the *how-to-add-a-primitive*. Companion docs:
 
 - [NODE_CATALOG.md](NODE_CATALOG.md) — the settled spec for atoms / effects. Source of truth for type IDs and what exists.
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — mechanics of writing a new primitive (`primitive!` macro, parity test pattern).
-- [AUDIT_GRAPH_GENERATOR_HOT_PATH.md](AUDIT_GRAPH_GENERATOR_HOT_PATH.md) — the bug classes the system used to have. Everything 🔴/🟠 is closed; read it to know what *not* to reintroduce.
 
 ---
 

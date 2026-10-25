@@ -622,7 +622,6 @@ pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> Preset
         // never line-based.
         PresetKind::Effect => (false, leak_value_alias_table(&meta.value_aliases)),
         // Generators may be line-based; they carry no value-alias table yet
-        // (capability gap, see PRESET_UNIFICATION_PLAN Step 9 follow-ups).
         PresetKind::Generator => (meta.is_line_based, &[]),
         PresetKind::SceneModifier => (false, &[]),
     };

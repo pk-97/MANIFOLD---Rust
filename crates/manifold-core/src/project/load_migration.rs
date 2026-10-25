@@ -94,10 +94,7 @@ impl Project {
         // Clamp saved playhead
         self.saved_playhead_time = self.saved_playhead_time.max(0.0);
 
-        // (The former `align_all_effect_params` / `migrate_all_generator_params`
-        // positional-resize passes are gone: the id-keyed manifest is seeded
-        // whole on load and never has a length to reconcile — PARAM_STORAGE_DESIGN.md
-        // D3.)
+        //
 
         // V1.1 → V1.2 migration: every driver/envelope/Ableton mapping
         // deserialized from a legacy `paramIndex: i32` shape needs its

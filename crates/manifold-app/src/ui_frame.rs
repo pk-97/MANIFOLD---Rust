@@ -1,4 +1,4 @@
-//! The shared per-frame UI seam (`UI_HARNESS_UNIFICATION_DESIGN.md` D3, P1).
+//! The shared per-frame UI seam.
 //!
 //! Two functions extracted VERBATIM (moved, not rewritten) from
 //! `app_render.rs`'s `tick_and_render` and `present_all_windows`: the
@@ -11,7 +11,7 @@
 //! change) — everything here is `pub(crate)`.
 //!
 //! ── Deviations from the design doc's section 4 committed signatures
-//! (`UI_HARNESS_UNIFICATION_DESIGN.md` section 4), found at VERIFY-AT-IMPL and
+//!, found at VERIFY-AT-IMPL and
 //! reported to the orchestrator rather than silently absorbed — see the P1
 //! phase report for the full escalation writeup:
 //!
@@ -76,8 +76,7 @@
 //!    drop the `present.panel_cache` profiler timer's coverage of fast-path
 //!    frames (cosmetic — those frames had nothing to time anyway).
 //!
-//! ── `render_main_ui_passes` (P2, `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md`
-//! section 4 step 2) — additional deviations found at VERIFY-AT-IMPL:
+//! ── `render_main_ui_passes` — additional deviations found at VERIFY-AT-IMPL:
 //!
 //! 6. Profiling is split by value, not deleted. The async **GPU-time sink**
 //!    IS preserved: it's threaded in as `MainUiPassInputs::gpu_sink`
@@ -167,7 +166,7 @@ pub(crate) struct UiFrameSignals {
     pub rects_moved: bool,
 }
 
-/// The executor's tree half (UI_INVALIDATION_DESIGN.md D6, D7): each planned
+/// The executor's tree half: each planned
 /// region rebuilt alone with its atlas slot invalidated, each translated
 /// region moved in place, the timeline scroll applied in place. THE single
 /// place these decisions are applied; the only caller of `UIRoot::build`,
@@ -890,8 +889,7 @@ pub(crate) struct VqtPassState<'a> {
     pub content_low_hz: f32,
     pub content_mid_hz: f32,
     pub scope_cursor_y: f32,
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
-    /// the band a currently-open fire-mode drawer is reading, if any — `Some`
+    /// The band a currently-open fire-mode drawer is reading, if any — `Some`
     /// dims the spectrum outside it, `None` (no drawer open, or Full band)
     /// dims nothing. Caller-resolved from `UIRoot::open_fire_mode_drawer_band`.
     pub band_dim: Option<manifold_ui::types::AudioBand>,
@@ -915,7 +913,7 @@ pub(crate) type LandingFlash = (f32, Beats, usize, usize);
 
 /// Caller-resolved per-pass data for [`render_main_ui_passes`]. Every
 /// `Option`/empty field is a legitimate "input absent"
-/// (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 3): the live app fills what it
+///: the live app fills what it
 /// has this frame; the harness fills the subset it can resolve headless and
 /// leaves the rest `None`/empty. A pass whose input is absent skips itself
 /// — the live app skips the same pass on a frame whose own input happens to
@@ -969,15 +967,13 @@ pub(crate) struct MainUiPassInputs<'a> {
 /// (`present_all_windows`) and the headless harness (`render_ui_to_png`,
 /// `script.rs`'s `Runner`). Branches only on input presence (an
 /// absent/empty field on `inputs`), never on caller identity
-/// (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 3): every skip here is a skip
+///: every skip here is a skip
 /// the live app itself takes on a frame whose own input happens to be
 /// absent. Commits its own encoder (mirrors `composite_main_ui_frame`'s
 /// internal commit) — the caller creates no encoder of its own for these
 /// passes.
 /// Precedent: `present_all_windows` (pre-extraction) :3920-4695; deletes the
-/// harness's `draw_immediate_passes` and its overlay pass (BUG-097, closed
-/// by construction — see `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 4 step
-/// 1, not point-fixed).
+/// harness's `draw_immediate_passes` and its overlay pass (closed by construction, not point-fixed).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_main_ui_passes(
     device: &GpuDevice,
@@ -1232,7 +1228,7 @@ pub(crate) fn render_main_ui_passes(
         );
     }
 
-    // Tree-overlay pass (`EDITOR_WINDOW_UNIFICATION_DESIGN.md` D1, P1): browser-
+    // Tree-overlay pass: browser-
     // popup thumbnail registration, the overlay_draw loop, and the TOOLTIP
     // tier (card-drag ghost + text-input overlay), shared with the
     // graph-editor window — see `tree_passes.rs`. `text_input` is `Some`
@@ -1364,7 +1360,7 @@ pub(crate) fn render_main_ui_passes(
             let hovered_divider = ui_root
                 .audio_setup_panel
                 .divider_hover_index(cursor_screen_y);
-            // P7 band dimming: the KEPT range in the same [lo_yfb, hi_yfb]
+            // Band dimming: the KEPT range in the same [lo_yfb, hi_yfb]
             // normalised space the dividers already use — Low/Mid/High slice
             // the same two crossovers differently; Full (or no drawer open)
             // dims nothing.

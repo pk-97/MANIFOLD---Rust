@@ -431,7 +431,7 @@ impl RenderScene {
         self.params = params;
         self.num_objects = objects;
         self.num_lights = lights;
-        // GBUFFER_DESIGN.md section 2 D5 (P2): an object-count change may reassign
+        // An object-count change may reassign
         // what slot `n` means, so any previous-frame history is discarded
         // here rather than risked — the next `evaluate()` after a rebuild
         // treats every object as brand new (first-frame zero velocity),
@@ -441,7 +441,7 @@ impl RenderScene {
         self.prev_view_proj = None;
         self.prev_cam_state = None;
 
-        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): format every
+        // Format every
         // port name exactly once, here, at rebuild time (only reached on an
         // `objects`/`lights` param change — never per frame). `evaluate()`
         // indexes these by object/light number instead of calling `format!`

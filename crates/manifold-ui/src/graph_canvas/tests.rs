@@ -2644,7 +2644,7 @@ fn graph_canvas_targets_enumerates_nodes_ports_and_wires_with_payload_ids() {
     assert_eq!(wires[0].payload, "scope=/from=0:out/to=2:in");
 }
 
-// ─── D6: group-face param rows ─────
+// ─── Group-face param rows ─────
 //
 // A group box mirrors, as live rows, every already-exposed card param whose
 // binding target resolves to a node inside it (transitively through nested

@@ -1,4 +1,4 @@
-//! `IMPORT_RESPONSIVENESS_DESIGN.md` P3 gates 2 and 3 — deliberate-run
+//! Import responsiveness gates 2 and 3 — deliberate-run
 //! harnesses (feature `journey-proofs`, matching `bug219_verify.rs`'s
 //! gating: real `GpuDevice`/`ContentThread` construction, not default-sweep
 //! material).

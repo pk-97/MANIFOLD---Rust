@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 /// (the ONE slider-surface shape, shared with the graph metadata now that
 /// `ParamDef` no longer exists as a separate near-twin) plus the one fact a
 /// registry entry genuinely owns that a card manifest must not carry — the
-/// range contract (PARAM_RANGE_CONTRACT_DESIGN.md D3/D4: the card manifest
-/// must stay unable to carry a contract). Not serialized: `PresetDef` and its
+/// range contract (the card manifest must stay unable to carry a contract). Not serialized: `PresetDef` and its
 /// `param_defs` are built in-memory at registry-construction time from
 /// `inventory::submit!` sources or JSON-loaded `ParamSpecDef`s, never
 /// deserialized as this shape.
@@ -25,8 +24,7 @@ pub struct RegistryParamDef {
     /// not cross — as opposed to `spec.min`/`spec.max`, which are display
     /// hints (default slider travel) a card, text entry, or modulation is
     /// free to exceed. `None` for the overwhelming majority of params
-    /// (PARAM_RANGE_CONTRACT_DESIGN.md D6: remove-by-default — no
-    /// kernel/shader proof, no contract). See [`RangeContract`].
+    /// (remove-by-default — no kernel/shader proof, no contract). See [`RangeContract`].
     pub contract: Option<RangeContract>,
 }
 

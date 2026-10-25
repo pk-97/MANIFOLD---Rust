@@ -163,7 +163,7 @@ primitive into a preset and eyeballing the freeze debug output.
 ## Install-time pipeline creation (COMPILE_CONTRACT)
 
 **All pipelines must be created at install time, not on first use.** This is a
-hard requirement from `COMPILE_CONTRACT_DESIGN.md` D2: the live rig cannot pay
+hard requirement: the live rig cannot pay
 for shader compilation during a show.
 
 For primitives using the `primitive!` macro:
@@ -420,7 +420,7 @@ Use `crates/manifold-nodes/tests/gpu_proofs/render_legacy_parity.rs` as a refere
 - **Don't ship a fused single-effect / single-generator bundle.** This applies to effect and generator graphs (2D, TouchDesigner-style). Engine internals follow DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes), including its code-modularity rule. If your graph primitive internally orchestrates multiple distinct dispatches that each do a different operation, that's a graph, not a primitive. Build the atoms separately and wire them in JSON. The recurring failure mode in past decomposition passes was reaching for a fused kernel to pass parity quickly; the no-fused-monolith rule prohibits this regardless of parity-test pressure. If parity drift is the concern, spec intermediate texture formats up to `Rgba32Float` to eliminate the rounding gap — the bandwidth cost is negligible on M-series and the bundle-as-primitive cost is structural.
 - **Don't touch the kernel without re-reading the purpose.** `purpose` states the math and lives right next to the shader in the same file, on screen during the edit — there's no excuse for it drifting. Touch the kernel, re-read the purpose.
 - **Rasterizer with texture inputs → declare `output_canvas_scale` `(1, 1)`.** The plan compiler's default sizes a node's output as *max of its texture input dims* — right for image-processing nodes, wrong for a rasterizer whose texture inputs are scene resources (envmap, base-color/normal maps, LUT-like lookups): without the declaration your render target inherits the largest wired map's dims instead of the canvas. BUG-140 (glb-import-non-square-aspect-distortion) shipped exactly this — imported glb scenes rendered into the envmap's 1024×1024 and were stretched to canvas (aspect distortion + resolution loss). `render_scene` / `render_3d_mesh` / `render_instanced_3d_mesh` are the reference impls (`impl Primitive` override, one method). Explicit declarations beat the max-of-inputs heuristic since 2026-07-12.
-- **Async initialization (background parse, model load, GPU accel build) → override `warmup_pending()`.** The load-time pre-roll renders every layer until no node reports pending; an async primitive without the override first-touches on stage and trips the cold-touch detector. Contract: WARMUP_DESIGN.md D4 (quiescence query). Reference impls: `gltf_mesh_source`, `hdri_source` (the `io_pending` idiom), `render_scene` (rt_accel readiness).
+- **Async initialization (background parse, model load, GPU accel build) → override `warmup_pending()`.** The load-time pre-roll renders every layer until no node reports pending; an async primitive without the override first-touches on stage and trips the cold-touch detector. The contract is the quiescence query. Reference impls: `gltf_mesh_source`, `hdri_source` (the `io_pending` idiom), `render_scene` (rt_accel readiness).
 
 ## Parity-without-fusion
 

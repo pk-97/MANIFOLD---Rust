@@ -2223,7 +2223,7 @@ impl EffectNode for WgslCompute {
         let node_id = ctx.node_id;
 
         // Pack the uniform: every member of the generic layout. Params stay
-        // uniforms (COMPILE_CONTRACT_DESIGN D2) — no value-baked variants.
+        // uniforms — no value-baked variants.
         if let Some(layout) = &self.uniform_layout {
                     for byte in self.uniform_scratch.iter_mut() {
                         *byte = 0;

@@ -1,4 +1,4 @@
-//! RT_INSTANCING_DESIGN.md P2 — value-level proofs for the RT instancing
+//! Value-level proofs for the RT instancing
 //! path (D10: synthetic buffers only, CPU oracle from the SAME TRS/mirror
 //! math the raster uses — render_scene.wgsl:781-813 semantics). Covers
 //! INV-RTI1 (RT sees the raster's instance set), INV-RTI2 (mirror exactness

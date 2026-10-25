@@ -10,9 +10,9 @@ lives in run.py's separate `--set` flag, a different invocation entirely
 (§3, forbidden item (c): "let the sweep 'just once' read [that split] to
 check progress — no").
 
-P1 ships the cache-safe skeleton; the actual grid/random search over
+The cache-safe skeleton ships; the actual grid/random search over
 post-processing params (rolling-median window, threshold k, refractory
-windows) is P4's deliverable.
+windows) is still to come.
 """
 
 from __future__ import annotations

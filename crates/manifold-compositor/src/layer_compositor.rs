@@ -299,7 +299,7 @@ fn has_enabled_effects(effects: &[PresetInstance]) -> bool {
 }
 
 manifold_core::testkit_visible! {
-/// One unique per-clip chain topology (WARMUP_DESIGN P7 D17): a clip's
+/// One unique per-clip chain topology: a clip's
 /// effective post-fx set — the layer's effects followed by the clip's own
 /// (`TimelineClip::effects`, the legacy per-clip field; empty in projects
 /// saved since per-clip effects moved to the layer) — plus the layer's
@@ -315,8 +315,7 @@ pub(crate) struct ClipChainTopology {
 
 manifold_core::testkit_visible! {
 /// Walk every clip on every visual layer and collect the UNIQUE effective
-/// chain topologies, deduped by the production topology hash (WARMUP_DESIGN
-/// P7 D17). Bounded by unique topology, not clip count — the design's point:
+/// chain topologies, deduped by the production topology hash. Bounded by unique topology, not clip count — the design's point:
 /// a show with a thousand clips carries a handful of distinct chains. Group
 /// and non-visual lanes are skipped (group chains warm via
 /// `prewarm_group_chains`, audio layers never enter the compositor).
@@ -647,7 +646,7 @@ pub struct LayerCompositor {
     dump_request: Option<crate::compositor::DumpRequest>,
 
     /// Per-step GPU/CPU attribution profiling on/off for every chain this
-    /// compositor owns (PERF_BUDGET_GATE_DESIGN P2 / D6). Fanned out to each
+    /// compositor owns. Fanned out to each
     /// chain's executor at dispatch time (see `fx_scope`/`led_scope`
     /// helpers) — `false` costs one `bool` set per dispatch, zero GPU/CPU
     /// timing. Set via [`Self::set_profiling`].
@@ -1133,7 +1132,7 @@ impl LayerCompositor {
         outcome
     }
 
-    /// P7 D17 (WARMUP_DESIGN section 5): build every unique per-clip chain
+    /// Build every unique per-clip chain
     /// topology through the production `dispatch_chain` path. The per-layer
     /// warm above leaves each layer's FIRST clip's topology resident (D11);
     /// any other clip whose effective post-fx set differs is a topology the
@@ -3262,7 +3261,7 @@ impl Compositor for LayerCompositor {
         self.dump_request = request;
     }
 
-    /// PERF_BUDGET_GATE_DESIGN P2 / D6: fan out to every chain this
+    /// Fan out to every chain this
     /// compositor currently owns (screen, group, LED-group, master, LED
     /// master), applying the profiling flag + this chain's instance-identity
     /// scope. New chains built later this frame (or on a future frame) get

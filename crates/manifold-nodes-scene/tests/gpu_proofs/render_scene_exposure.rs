@@ -1,5 +1,4 @@
-//! `node.camera_lens` exposure proof (CAMERA_AND_LENS_DESIGN.md section 2 D5, section 4
-//! P2 gate).
+//! `node.camera_lens` exposure proof.
 //!
 //! A single unlit white quad, lit only by its own emission-free albedo (no
 //! lights needed — `fs_unlit` has no light loop), viewed through

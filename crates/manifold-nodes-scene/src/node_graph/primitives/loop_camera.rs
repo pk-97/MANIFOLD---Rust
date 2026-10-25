@@ -1,6 +1,4 @@
 //! `node.loop_camera` — beat-locked flythrough camera for scene looping
-//! (SCENE_LOOP_DESIGN.md D3, SCENE_MODIFIER_FRAMEWORK P4 controls,
-//! SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D3).
 //!
 //! Emits a single [`Camera`] on `out`. Position advances along the chosen
 //! axis over the loop phase: travel = home + d(phase)·K·P·cell_size, where
@@ -76,8 +74,8 @@ manifold_node_engine::primitive! {
         ParamDef {
             name: Cow::Borrowed("home"),
             label: "Home",
-            // Phase-0 start along the travel axis (SCENE_LOOP_DESIGN D10 +
-            // the BUG-70wo gap rule): the plan builder's cell is two
+            // Start along the travel axis (
+            // the gap rule): the plan builder's cell is two
             // object-depths and home = -cell/2 puts the camera mid-gap, one
             // half-depth of air in front of copy 0's near face — the phase-0
             // frame is an approach shot, wrap-identical to phase 1.
@@ -147,7 +145,7 @@ manifold_node_engine::primitive! {
         // term below is a function of the loop PHASE alone (INV-3): the
         // frame at phase 0 equals the frame at phase 1 by construction.
         // Nothing here may read the frame clock — a non-phased driver is
-        // the one-frame wrap jump (SCENE_LOOP_DESIGN D8).
+        // the one-frame wrap jump.
         //
         // Flow: travel = d(phase) where d(p) = p − A·sin(2πp)/(2π).
         // d(0)=0, d(1)=1 and d'(0)=d'(1)=1−A — equal slope at both seams

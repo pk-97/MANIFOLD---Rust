@@ -835,7 +835,7 @@ pub fn run(args: &[String]) -> ! {
     }
 
     // Warmup verification surface: any cold touch recorded after the warmup
-    // pass's reset means a lazy path fired late (WARMUP_DESIGN.md INV1).
+    // pass's reset means a lazy path fired late.
     {
         use manifold_core::cold_touch::{ColdTouchKind, cold_touch_count, total_cold_touches};
         eprintln!(

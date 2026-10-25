@@ -91,12 +91,12 @@ impl RenderScene {
         // already (re)allocated above, sized to this exact `target`'s
         // format — see `opaque_scene_color_target_format`'s doc comment for
         // why that ensure call has to happen before this point.
-        // GBUFFER_DESIGN.md section 2 D1: `None` when unwired — the graph compiler
+        // `None` when unwired — the graph compiler
         // never assigns "depth" a step-output binding in that case (same
         // lazy mechanism as `render_mesh`'s G-buffer outputs), so this pass
         // costs zero new bytes unless a consumer actually wired it (I1).
         let graph_depth_resolve_target = ctx.outputs.texture_2d("depth");
-        // VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): when shafts are on and `depth`
+        // When shafts are on and `depth`
         // is unwired, resolve into the internal target instead (ensured
         // above) so the march has a depth source regardless — "shafts-on
         // forces the internal Sample0 depth resolve even when `depth` is
@@ -109,7 +109,7 @@ impl RenderScene {
             } else {
                 None
             });
-        // GBUFFER_DESIGN.md section 2 D1/D5 (P2): same lazy rule as `depth` —
+        // Same lazy rule as `depth` —
         // `None` when unwired, costing zero new bytes (I1).
         let velocity_resolve_target = ctx.outputs.texture_2d("velocity");
         // RAYTRACING_DESIGN.md section 12 AM1: same lazy rule again.
@@ -121,7 +121,7 @@ impl RenderScene {
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
         let sampler = self.sampler.as_ref().expect("just inserted");
-        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-draw, per-map-family sampler
+        // Per-draw, per-map-family sampler
         // lookup — every descriptor was ensured into the cache above, so
         // this is a guaranteed hit, never a fallback/dummy.
         let material_samplers = &self.material_samplers;
@@ -330,7 +330,7 @@ impl RenderScene {
                         binding: 21,
                         texture: draw.emissive_map.unwrap_or(dummy),
                     },
-                    // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family
+                    // Per-map-family
                     // samplers, one per texture family — no longer one
                     // scene-wide REPEAT sampler. Order matches
                     // `ObjectDraw::sampler_descs` / `Material`'s field order.
@@ -567,7 +567,7 @@ impl RenderScene {
             ))
         };
 
-        // GBUFFER_DESIGN.md section 2 D5 (P2): the aux-MRT slot P1 built but never
+        // The aux-MRT slot P1 built but never
         // exercised. `velocity_pair` is `Some` only when BOTH this node's
         // own memoryless velocity_msaa scratch AND the graph-allocated
         // single-sample resolve target exist — i.e. exactly when

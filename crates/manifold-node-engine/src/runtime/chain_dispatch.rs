@@ -241,8 +241,7 @@ impl ChainSlot {
 /// owner is reset.
 ///
 /// `scope` is this chain's instance identity for profiled GPU-attribution
-/// tags (`fx:{layer_id}`, `master`, `led:{...}` — PERF_BUDGET_GATE_DESIGN P2 /
-/// D6 correction) and `profiling` is whether attribution profiling is on this
+/// tags (`fx:{layer_id}`, `master`, `led:{...}`) and `profiling` is whether attribution profiling is on this
 /// frame. Both are (re-)applied on every call — including across a rebuild,
 /// which replaces the cached [`PresetRuntime`] and its executor — so a scope
 /// or profiling toggle can never go stale on a topology change. The cost when

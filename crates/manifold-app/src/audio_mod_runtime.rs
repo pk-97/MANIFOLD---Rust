@@ -268,7 +268,7 @@ pub struct AudioModRuntime {
     /// switches each analyzer's ridge tracker on/off per tick (byte-identical
     /// analysis when off, so unbound projects pay nothing).
     pitch_sends: ahash::AHashSet<AudioSendId>,
-    /// D4 activation set (AUDIO_SENDS_UX_DESIGN section 3.2): sends with at least one
+    /// Activation set: sends with at least one
     /// enabled audio mod or enabled trigger route — `Project::analysis_consumed_sends`.
     /// Recomputed only on a data-version change, mirroring `pitch_sends`. The
     /// per-send loop skips any send outside this set that also isn't the
@@ -448,7 +448,7 @@ impl AudioModRuntime {
                 self.visuals.set_first_send(None);
             }
             self.reconcile(engine.project());
-            // D4 activation set (AUDIO_SENDS_UX_DESIGN section 3.2): recomputed only here,
+            // Activation set: recomputed only here,
             // never per tick.
             self.consumed = engine
                 .project()
@@ -592,7 +592,7 @@ impl AudioModRuntime {
                 if is_tapped {
                     tapped_index = Some(i);
                 }
-                // D4 gate (AUDIO_SENDS_UX_DESIGN section 3.2): a send outside the
+                // Gate: a send outside the
                 // consumed set and not the scope-tapped send costs nothing —
                 // no mono push, no analyzer entry. One hash lookup per send.
                 if !is_tapped && !self.consumed.contains(&send.id) {
@@ -813,7 +813,7 @@ impl AudioModRuntime {
                 features[i] = entry.analyzer.latest();
             }
 
-            // P1 gate instrument (AUDIO_SENDS_UX_DESIGN section 4 Phase 1): only runs
+            // Instrument: only runs
             // when `trace` was cached true at construction — zero cost otherwise.
             if self.trace {
                 let ids: Vec<&str> = hop_batches

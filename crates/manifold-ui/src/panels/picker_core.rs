@@ -1,7 +1,7 @@
 //! `PickerCore` — the reusable pick-from-a-list model shared by every
 //! search + category-chip + filtered-grid + keyboard-nav surface.
 //!
-//! `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 4, D3. Owns items, categories,
+//! Owns items, categories,
 //! filter text, the filtered index list, the keyboard cursor, and scroll —
 //! plus the interaction rules (typing filters, chips filter, arrows move,
 //! Enter picks, Escape dismisses). Deliberately does NOT render: the browser
@@ -10,7 +10,6 @@
 //!
 //! The browser popup (`browser_popup.rs`) is the first consumer, migrated in
 //! P2 of the design doc; a second consumer is the library browser
-//! (`PRESET_LIBRARY_DESIGN.md` P3).
 
 use crate::input::Key;
 use crate::scroll_container::ScrollContainer;
@@ -25,11 +24,10 @@ pub struct PickerItem {
     pub category: Option<String>,
     /// Extra haystack (aliases etc.); filter matches label + this.
     pub search_text: Option<String>,
-    /// Source-filter dimension (PRESET_LIBRARY_DESIGN P5, D6): `None` for
+    /// Source-filter dimension: `None` for
     /// pickers with no source concept (the graph-editor node picker).
     pub source: Option<Source>,
-    /// Absolute path to a save-time-rendered thumbnail PNG (PRESET_LIBRARY_DESIGN
-    /// P6, D7) — `Some` for a Factory/My-Library entry that has one, `None`
+    /// Absolute path to a save-time-rendered thumbnail PNG — `Some` for a Factory/My-Library entry that has one, `None`
     /// otherwise (This-Project entries never do; browse time never renders one
     /// to fill the gap). Doubles as the cache key the app decodes+registers
     /// once per distinct path (`manifold_ui::node::texture_handle_for_key`).
@@ -37,8 +35,7 @@ pub struct PickerItem {
 }
 
 /// Which of the three library places an item's def lives in — the browser's
-/// filter row (PRESET_LIBRARY_DESIGN P5, D6: "All · Factory · My Library ·
-/// This Project"). `None` (no filter dimension) is for pickers that aren't
+/// filter row ("All · Factory · My Library · This Project"). `None` (no filter dimension) is for pickers that aren't
 /// preset browsers (e.g. the graph-editor node picker).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -72,7 +69,7 @@ pub struct PickerCore {
     items: Vec<PickerItem>,
     categories: Vec<String>,
     active_category: Option<String>,
-    /// Source-filter dimension (PRESET_LIBRARY_DESIGN P5, D6) — `None` = "All".
+    /// Source-filter dimension — `None` = "All".
     active_source: Option<Source>,
     filter: String,
     /// Indices into `items` that pass the current category + source + filter.
@@ -131,8 +128,7 @@ impl PickerCore {
         self.rebuild_filtered();
     }
 
-    /// Set the active source chip (`None` = "All" — PRESET_LIBRARY_DESIGN P5,
-    /// D6). Resets scroll + cursor, mirroring [`Self::set_category`].
+    /// Set the active source chip. Resets scroll + cursor, mirroring [`Self::set_category`].
     pub fn set_source(&mut self, source: Option<Source>) {
         self.active_source = source;
         self.scroll.reset();
@@ -219,15 +215,14 @@ impl PickerCore {
     }
 
     /// Every item, regardless of the current filter/category/source
-    /// (PRESET_LIBRARY_DESIGN P6) — the app decodes+registers every open
+    /// The app decodes+registers every open
     /// item's thumbnail up front (a bounded corpus, tens of presets) rather
     /// than tracking which ones are currently filtered into view.
     pub fn all_items(&self) -> impl Iterator<Item = &PickerItem> {
         self.items.iter()
     }
 
-    /// Handle keyboard nav in grid geometry (PRESET_BROWSER_AUDITION_DESIGN
-    /// D14): Left/Right move within the cursor's row (clamped at the row
+    /// Handle keyboard nav in grid geometry: Left/Right move within the cursor's row (clamped at the row
     /// edges — they never cross rows), Up/Down move a full row with
     /// wraparound, Home/End jump to the first/last item, PageUp/PageDown
     /// move one screenful (`page` rows × `columns`, clamped, no wrap).
@@ -305,8 +300,7 @@ impl PickerCore {
 
     /// Verbatim move of `BrowserPopupPanel::rebuild_filtered_list`:
     /// case-insensitive substring over `search_text.unwrap_or(label)`, with a
-    /// category pre-filter, plus the source pre-filter (PRESET_LIBRARY_DESIGN
-    /// P5, D6). Resets the keyboard cursor — a changed filtered set
+    /// category pre-filter, plus the source pre-filter. Resets the keyboard cursor — a changed filtered set
     /// invalidates any prior position.
     fn rebuild_filtered(&mut self) {
         self.filtered.clear();
@@ -447,7 +441,7 @@ mod tests {
         assert_eq!(p.filtered_len(), 4);
     }
 
-    // ── Source filter (PRESET_LIBRARY_DESIGN P5, D6) ────────────────────
+    // ── Source filter ────────────────────
 
     #[test]
     fn source_filter_alone_selects_only_that_source() {
@@ -562,7 +556,7 @@ mod tests {
         assert_eq!(p.cursor(), Some(0));
     }
 
-    // ── Grid geometry (PRESET_BROWSER_AUDITION_DESIGN D14) ─────────────
+    // ── Grid geometry ─────────────
 
     /// A 3-column grid over 10 items: Down moves a full row (0→3→6→9); the
     /// wraparound lands a full row ahead, modulo the item count (9 → 2, the

@@ -87,12 +87,8 @@ or seed. Do not add another compositor-level state cache.
 
 Motion Mosh and Data Mosh extend this contract for retained image and mask
 history. Their retained-state decisions, recovery behavior, fixed flow lag,
-and reset expectations are defined in
-[`MOSH_EFFECTS_DESIGN.md`](MOSH_EFFECTS_DESIGN.md).
+and reset expectations are defined with the mosh effects.
 
 ## Related docs
 
-- [`MOSH_EFFECTS_DESIGN.md`](MOSH_EFFECTS_DESIGN.md) — retained-state contract for Motion Mosh and Data Mosh.
-- `CHAIN_POOL_REFACTOR_PLAN.md (deleted)` — LayerId-keyed pool design.
 - [`ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md) — primitive authoring and lifecycle hooks.
-- [`PRIMITIVE_LIBRARY_DESIGN.md`](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog and composition patterns.

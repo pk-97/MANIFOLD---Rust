@@ -1454,7 +1454,7 @@ impl RowHost {
     /// value cell and gaps, and the value cell itself, so a right-click
     /// anywhere off the track opens it. A switch or pick-list row opens the
     /// same menu from its label and its button. Both the param card and the
-    /// Scene tab register their rows here (SCENE_SURFACES_DESIGN.md D10).
+    /// Scene tab register their rows here.
     /// A row with an affordance (a scene item's field, the Scale link) is
     /// no manifest param, so it has nothing to map and gets no menu
     /// (SCENE_DOCUMENT_DESIGN.md ruling 3).

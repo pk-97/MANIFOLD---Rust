@@ -1,5 +1,5 @@
 //! `node.scene_array` — camera-windowed `Array<InstanceTransform>` generator
-//! for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D1/D4/D5/D6).
+//! for the endless corridor.
 //!
 //! Slot `w` ↔ corridor cell `c = base_cell − behind + w`; the cell's transform
 //! is a translation `c · cell_size` along `axis` plus deterministic jitter
@@ -182,14 +182,13 @@ struct SceneArrayUniforms {
     _pad2: u32,
 }
 
-/// INV-RTI4 (RT_INSTANCING_DESIGN.md) producer stasis: the kernel's FULL
+/// Producer stasis: the kernel's FULL
 /// input tuple — every resolved value that feeds the uniforms, compared
 /// fixed-size on the hot path. When unchanged, `run` skips the buffer
 /// rewrite and declares `mark_outputs_unchanged`, so the output slot's
 /// write generation HOLDS — which is exactly what lets the RT accel key
 /// hold across static frames ("static instances are free"). `rebuild_epoch`
-/// folds in the executor lifetime (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md
-/// D6): a state-carrying rebuild resets generation counters, and a stale
+/// folds in the executor lifetime: a state-carrying rebuild resets generation counters, and a stale
 /// key from the old executor must never match the new one's low numbers.
 #[derive(Clone, Copy, PartialEq)]
 pub struct SceneArrayStasisKey {
@@ -211,7 +210,7 @@ pub struct SceneArrayStasisKey {
 manifold_node_engine::primitive! {
     name: SceneArray,
     type_id: "node.scene_array",
-    purpose: "Camera-windowed Array<InstanceTransform> for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md). Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), and the window spans every cell the camera's view reaches up to its far plane, ahead, behind and across (whichever way it looks), plus a margin, keeping a few cells on the side it faces away from for the shadow maps; past the buffer the side seen further is cut first. Every cell that can render exists in the buffer, so no edge hole opens. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
+    purpose: "Camera-windowed Array<InstanceTransform> for the endless corridor. Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), and the window spans every cell the camera's view reaches up to its far plane, ahead, behind and across (whichever way it looks), plus a margin, keeping a few cells on the side it faces away from for the shadow maps; past the buffer the side seen further is cut first. Every cell that can render exists in the buffer, so no edge hole opens. Unwired, the corridor runs from the origin (base_cell 0, behind 8, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
     inputs: {
         // D2: the camera arrives as one Camera port — the atom picks the axis
         // component from its own axis param, so axis and position can never

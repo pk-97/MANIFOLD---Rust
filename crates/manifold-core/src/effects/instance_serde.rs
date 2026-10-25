@@ -8,7 +8,7 @@ use super::*;
 
 // ─── Wire-format helpers for `params` (V1.4) ───
 //
-// PARAM_STORAGE_DESIGN.md D4/D12: the typed loader understands ONLY the V1.4
+// The typed loader understands ONLY the V1.4
 // id-keyed `params` shape, and the manifest is the single authority. The four
 // older positional/keyed value shapes only exist in files below the 1.11.0
 // floor, which the loader refuses.
@@ -58,7 +58,7 @@ pub(super) struct ParamEntryWire {
         skip_serializing_if = "crate::params::ClipTriggerSource::is_own_layer"
     )]
     clip_trigger_source: crate::params::ClipTriggerSource,
-    /// The user's choices (SCENE_SURFACES_DESIGN.md D7 (one saved choice set)).
+    /// The user's choices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rename: Option<String>,
     #[serde(
@@ -204,9 +204,7 @@ impl Serialize for ManifestSer<'_> {
 }
 
 /// Serializes the instance's graph override with `preset_metadata.params`
-/// rewritten from the live manifest (PARAM_STORAGE_BOUNDARIES_DESIGN.md D12/
-/// D4: `meta.params` is derived on save from the manifest, the sole live
-/// authority — not a second thing calibration keeps in sync by hand). Every
+/// rewritten from the live manifest (`meta.params` is derived on save from the manifest, the sole live authority — not a second thing calibration keeps in sync by hand). Every
 /// OTHER field on the graph (nodes, wires, `preset_metadata.bindings`, etc.)
 /// serializes unchanged — this wrapper touches only the `params` list's
 /// per-entry CONTENT, by id, never its shape: which entries exist is still
@@ -245,7 +243,6 @@ impl Serialize for GraphWithDerivedParams<'_> {
         // this mirrors (D1) is priced the same way.
         let mut derived = self.graph.clone();
         // Only a control whose name the lookup supplies saves without one
-        // (SCENE_SURFACES_DESIGN.md D24 (who owns a control's name)).
         let join = crate::param_lookup::Join::new(self.preset, self.graph);
         let lookup_names = |id: &str| {
             self.joined
@@ -383,7 +380,7 @@ fn gather_known_params(
     // Generator with a per-instance graph: its `meta.params` is the full
     // ordered control list; origin is driven by a matching `user_added`
     // binding. Each bundled control is joined with the live lookup
-    // (SCENE_SURFACES_DESIGN.md D2 (one live lookup)); user-added controls
+    // User-added controls
     // keep their saved spec.
     if is_generator
         && let Some(graph_def) = graph.as_ref()
@@ -661,8 +658,7 @@ pub(super) fn build_param_manifest(
 }
 
 /// Make the graph's `meta.params` what the manifest says, so the in-memory
-/// graph equals what a save and reload give back (SCENE_SURFACES_DESIGN.md
-/// D2 (one live lookup)). Unresolved controls keep their saved copy.
+/// graph equals what a save and reload give back. Unresolved controls keep their saved copy.
 pub(super) fn normalize_meta_params(
     graph: &mut Option<EffectGraphDef>,
     manifest: &crate::params::ParamManifest,
@@ -887,7 +883,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
         // template + the graph's `user_added` bindings, then overlay the
         // incoming `params` map (value/exposed/base/calibration by id, inline
         // spec for self-describing user params). Stash a copy of the wire
-        // map first (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1) — the loader's
+        // map first — the loader's
         // `reconcile_param_manifests` re-runs this same build later, against
         // whatever registry state exists once the project's own embedded
         // presets have been installed.

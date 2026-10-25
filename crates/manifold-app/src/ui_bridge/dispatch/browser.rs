@@ -9,7 +9,7 @@ use manifold_ui::BrowserAction;
 
 /// `manifold_ui::panels::browser_popup::BrowserPopupMode` stands in for
 /// `manifold_core::preset_def::PresetKind` on the UI side of the browser's
-/// management actions (PRESET_LIBRARY_DESIGN P5) — `manifold-ui` mirrors core
+/// management actions — `manifold-ui` mirrors core
 /// types rather than depending on `manifold-core` (see `BrowserCellContext`'s
 /// doc comment). Node and action pickers have no preset-management commands.
 pub(crate) fn browser_mode_to_kind(

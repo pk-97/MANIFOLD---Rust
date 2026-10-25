@@ -1090,7 +1090,7 @@ mod tests {
         }
     }
 
-    /// MVP-P3b wire-form pin: the int is
+    /// Wire-form pin: the int is
     /// the only form ever written; "Led" stays accepted on load from hand-built
     /// JSON; an unknown value must keep falling back to Video, never panic.
     #[test]

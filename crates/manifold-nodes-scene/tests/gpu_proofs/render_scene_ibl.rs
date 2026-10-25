@@ -156,7 +156,7 @@ fn peak_spread_fraction(luma: &[f32]) -> f32 {
     count as f32 / luma.len() as f32
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 gate (I2 + I4). Reuses
+/// Gate (I2 + I4). Reuses
 /// `ibl_scene_json` (above) for a scene whose ONLY light is the envmap, so
 /// any output delta is attributable to the IBL convolution path this phase
 /// re-convolution-gates. `apply_inner_param_overrides` is the SAME live-edit

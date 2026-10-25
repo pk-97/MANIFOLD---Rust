@@ -65,7 +65,7 @@ const MIN_REGION_LEN: usize = 2;
 manifold_core::testkit_visible! {
 /// How a graph node participates in fusion, resolved once per node.
 ///
-/// `pub(crate)` (with [`classify_node`]) since GRAPH_TOOLING_DESIGN P3's
+/// `pub(crate)` (with [`classify_node`]) since the
 /// `graph_tool fusion` verb calls it directly for its per-node report — the
 /// exact same classification `partition_regions` grows regions from, never
 /// a second implementation.
@@ -1199,7 +1199,7 @@ manifold_core::testkit_visible! {
 /// including "the registry doesn't know this type" — is a `Boundary`.
 ///
 /// `pub(crate)`: `graph_tool fusion`'s report module calls this directly per
-/// node (GRAPH_TOOLING_DESIGN P3) to explain *why* a node sits outside every
+/// node to explain *why* a node sits outside every
 /// region — reusing this exact function rather than re-deriving the verdict.
 pub(crate) fn classify_node(
     node: &EffectGraphNode,

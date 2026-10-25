@@ -33,7 +33,7 @@ use manifold_node_engine::{
     persistence::PrimitiveRegistry, state_store::StateStore,
 };
 
-/// Thumbnail dimensions (STATIC_THUMBNAILS_DESIGN §3.1): 16:9, matching the
+/// Thumbnail dimensions: 16:9, matching the
 /// browser cells (170×96).
 pub const THUMBNAIL_WIDTH: u32 = 256;
 pub const THUMBNAIL_HEIGHT: u32 = 144;
@@ -136,7 +136,7 @@ fn factory_thumbnail_root(kind: PresetKind) -> Option<PathBuf> {
 /// Path a factory preset's committed thumbnail lives at for `id`. The caller
 /// checks `Path::is_file()` — a factory preset with no thumbnail yet (or one
 /// that hasn't shipped through the dev bin) simply resolves to a path that
-/// doesn't exist, and the browser falls back to text (D7's clean fallback).
+/// doesn't exist, and the browser falls back to text.
 pub fn factory_thumbnail_path(kind: PresetKind, id: &str) -> Option<PathBuf> {
     Some(factory_thumbnail_root(kind)?.join(format!("{id}.png")))
 }
@@ -362,7 +362,7 @@ fn render_generator(
 // The D2 test card — a designed synthetic frame, generated in code
 // ---------------------------------------------------------------------------
 
-/// One pixel of the four-region test card (STATIC_THUMBNAILS_DESIGN §3.1).
+/// One pixel of the four-region test card.
 /// Shared between the GPU upload builder and the migrated expected-value
 /// tests so the two can't drift apart. Returns straight-alpha RGBA; every
 /// region is fully opaque.

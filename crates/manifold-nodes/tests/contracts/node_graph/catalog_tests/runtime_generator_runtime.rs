@@ -706,7 +706,7 @@ fn generator_binding_scale_folds_into_inner_param() {
 ///
 /// The range half changed on purpose: the reshape normalises over the
 /// declared slider range, never the user's slider range
-/// (SCENE_SURFACES_DESIGN.md D15 (slider range vs hard limit)), so a
+/// so a
 /// widened calibration range must NOT reach the node.
 #[test]
 fn generator_rebuild_reshape_honors_live_manifest_over_stale_shadow() {
@@ -995,7 +995,7 @@ fn trivial_passthrough_generator_loads_and_executes() {
     preset.execute_frame(frame_time());
 }
 
-/// BUG per PARAM_TWO_WAY_BINDING_DESIGN.md P2 D5: a wired scalar input
+/// A wired scalar input
 /// is resolved live, per-frame, via `EffectNodeContext::scalar_or_param`
 /// (wire first, param second) — it never writes back into
 /// `NodeInstance::params`. The old `live_node_params` read only the

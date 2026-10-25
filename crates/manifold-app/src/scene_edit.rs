@@ -410,8 +410,7 @@ const SWARM_FORCES: [SwarmForce; 3] = [
 
 /// Remove each of `items` and everything under it, in one undo step. An item
 /// inside another removed item goes with it, and so does every Material only
-/// removed items drew with (ruling 1 of SCENE_REFINEMENT_DESIGN.md section
-/// 2 (Rulings)).
+/// removed items drew with.
 pub(crate) fn remove(
     project: &Project,
     layer: &LayerId,

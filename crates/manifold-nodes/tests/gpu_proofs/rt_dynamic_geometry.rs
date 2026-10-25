@@ -849,8 +849,8 @@ fn cs_main() {
         assert!(report.is_empty(), "{report}");
 
         // ── Section 2: three snapshots queued before ONE completion wait.
-        // The per-snapshot variation rides the WIRED instance path
-        // (RT_INSTANCING_DESIGN.md D1): each snapshot's transform is
+        // The per-snapshot variation rides the WIRED instance path:
+        // each snapshot's transform is
         // written GPU-side into the instance wire buffer by the write
         // kernel, ahead of the descriptor-build dispatch + TLAS refit on
         // the same command buffer — values move GPU→GPU (INV-RTI6), so

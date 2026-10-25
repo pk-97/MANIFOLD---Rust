@@ -1,6 +1,6 @@
 // node.scene_array — fusable BUFFER body (freeze section 12, buffer domain),
 // POINTWISE per output slot. Windowed modulo-tiled corridor
-// (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D1/D4/D5): slot w ↔ corridor cell
+// Slot w ↔ corridor cell
 // c = base_cell − behind + w, transform = translation c·cell_size along axis
 // plus jitter keyed on the Euclidean (c mod pattern_length). Slots at or beyond
 // behind+ahead+1 are surplus capacity — zero-scale, same mask as BUG-757c.

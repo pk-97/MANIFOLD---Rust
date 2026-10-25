@@ -118,7 +118,7 @@ pub struct Application {
     /// never a log-only failure. `None` while no import is in flight.
     pub(crate) import_failures_rx: Option<std::sync::mpsc::Receiver<Vec<String>>>,
 
-    /// IMPORT_RESPONSIVENESS_DESIGN.md D3: the background model-import
+    /// The background model-import
     /// worker's progress channel — one long-lived pair for the process's
     /// lifetime (unlike `import_failures_rx`, which is created fresh per
     /// batch), since imports queue rather than run in parallel (see
@@ -138,7 +138,7 @@ pub struct Application {
     /// Model file facts by path, read on a worker (`crate::scene_models`).
     pub(crate) model_store: crate::scene_models::ModelStore,
 
-    /// Gig-resilience breadcrumb sidecar, phase P2. Cadence gate — pure logic, ticked from the content-state drain in
+    /// Gig-resilience breadcrumb sidecar. Cadence gate — pure logic, ticked from the content-state drain in
     /// both editor and perform mode (unlike autosave, NOT parked in perform
     /// mode: the breadcrumb is exactly what a live show needs).
     pub(crate) breadcrumb_cadence: crate::breadcrumb::BreadcrumbCadence,

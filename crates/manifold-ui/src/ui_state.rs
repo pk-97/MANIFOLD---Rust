@@ -93,7 +93,7 @@ pub struct UIState {
     /// `selected_clip_ids` field + `selection_region.is_active` flag pair.
     selection: TimelineSelection,
 
-    /// UI_INVALIDATION_DESIGN.md D14: the selection carries three versions
+    /// The selection carries three versions
     /// instead of one. `identity` moves only when `selection_identity()` or the
     /// scope pin changes (the inspector's input); `visual` moves on any change
     /// of a selection set (in-place timeline visuals); `cursor` moves when the

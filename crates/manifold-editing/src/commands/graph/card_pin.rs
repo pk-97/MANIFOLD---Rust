@@ -1,5 +1,4 @@
-//! Show on Card / Remove from Card (SCENE_SURFACES_DESIGN.md D7 (user
-//! choices), D10 (cross-surface gestures)).
+//! Show on Card / Remove from Card.
 //!
 //! A pin is a per-control choice in `ParamChoices.pin`; the card projection
 //! reads it, so the command only writes that one field. `None` hands the

@@ -194,7 +194,7 @@ impl ParamSpec {
             },
             // Same story for range contracts: this compile-time inventory
             // struct describes an outer card param, which never carries a
-            // contract (PARAM_RANGE_CONTRACT_DESIGN.md D3/D4).
+            // contract.
             contract: None,
         }
     }

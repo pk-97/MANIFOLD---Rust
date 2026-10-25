@@ -97,7 +97,7 @@ impl Project {
     /// library id (still named by `effect_type`, D8) is not collected here
     /// because no self-containment snapshot is needed for it.
     ///
-    /// Used at save time (PRESET_LIBRARY_DESIGN D5) to know which library
+    /// Used at save time to know which library
     /// ids need their current def cached into `embedded_presets` as
     /// `origin: Snapshot`. Renderer-free (reads only instance state), so it
     /// lives in core; the actual catalog lookup + upsert happens app-side
@@ -167,8 +167,7 @@ impl Project {
     }
 
     /// Rebuild every instance's `ParamManifest` from its stashed wire entries
-    /// against the CURRENT registry (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1) —
-    /// call after the project's embedded presets are installed. Idempotent:
+    /// against the CURRENT registry, call after the project's embedded presets are installed. Idempotent:
     /// instances with no stash (freshly constructed, or already resolved by
     /// an earlier call) are untouched. Walks exactly the homes
     /// `tracking_preset_ids` walks (its mut sibling, above).

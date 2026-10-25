@@ -1,5 +1,5 @@
 //! What a control's value may never pass, kept apart from what its slider
-//! spans (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+//! spans.
 
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +35,7 @@ impl HardLimit {
 
     /// Clamp a typed or OSC value: only a declared limit restricts it. Under
     /// `Slider` it passes through, since a range hint never restricts what a
-    /// user enters (PARAM_RANGE_CONTRACT_DESIGN.md D3 (hints never restrict)).
+    /// user enters.
     pub fn clamp_input(self, v: f32, declared: (f32, f32)) -> f32 {
         if self.is_slider() {
             v

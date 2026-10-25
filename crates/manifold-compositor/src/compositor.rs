@@ -297,7 +297,7 @@ pub trait Compositor: Send {
 
     /// Enable/disable per-step GPU attribution profiling on every effect
     /// chain (screen + LED + master) this compositor owns
-    /// (PERF_BUDGET_GATE_DESIGN P2 / D6). Fans out to each chain's executor
+    /// Fans out to each chain's executor
     /// with its instance-identity scope (`fx:{layer_id}`, `master`,
     /// `led:{...}`) already applied at chain-insertion time. Default no-op
     /// for compositors without effect chains.
@@ -386,7 +386,7 @@ pub trait Compositor: Send {
         WarmupOutcome::Quiescent
     }
 
-    /// Warm up every unique per-clip chain topology (WARMUP_DESIGN P7 D17)
+    /// Warm up every unique per-clip chain topology
     /// so clips whose effective post-fx set differs from their layer's
     /// first clip don't build — and compile fused kernels — on stage at
     /// clip boundaries. Default no-op for compositors without effect chains.
@@ -415,7 +415,7 @@ pub trait Compositor: Send {
     }
 
     /// Drain every owned chain's per-step CPU profiles recorded on the last
-    /// profiled frame (PERF_BUDGET_GATE_DESIGN P2). Default empty.
+    /// profiled frame. Default empty.
     fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         Vec::new()
     }

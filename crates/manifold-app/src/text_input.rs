@@ -33,7 +33,7 @@ pub enum TextInputField {
     EditorInspectorParam,
     /// "Set slider range…" type-in ("min to max"; empty resets). The target
     /// and id ride on [`TextInputState::inspector_param`]. Commit dispatches
-    /// `SetSliderRange` (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+    /// `SetSliderRange` 
     SliderRange,
     /// The same slider range entry, hosted by the graph-editor window.
     EditorSliderRange,
@@ -78,14 +78,13 @@ pub enum TextInputField {
     /// `TextInputState::graph_table_edit`; commit parses the new f32, rebuilds the
     /// one cell, and routes to `SetGraphNodeParam(Table)`.
     GraphTableCell,
-    /// Save to Library / Save to Project name prompt (PRESET_LIBRARY_DESIGN
-    /// D4, P3) — one field for both destinations (which one rides on
+    /// Save to Library / Save to Project name prompt — one field for both destinations (which one rides on
     /// `TextInputState::save_preset`, since `EffectGraphDef` isn't `Copy`).
     /// Opened from the card context menu AND the graph editor header; commit
     /// either calls `UserLibrary::save` directly (Library) or executes
     /// `SaveToProjectCommand` (Project).
     SavePresetName,
-    /// Browser management-menu Rename prompt (PRESET_LIBRARY_DESIGN P5, D6) —
+    /// Browser management-menu Rename prompt —
     /// one field for both sources (which one rides on
     /// `TextInputState::rename_preset`, since `PresetTypeId` isn't `Copy`).
     /// Opened from the browser's right-click menu; commit calls
@@ -145,8 +144,7 @@ pub struct TableCellEdit {
 
 /// Context for an in-flight inspector param type-in — set when the box opens
 /// ([`TextInputField::InspectorParam`]) and read on commit. Lives off the `Copy`
-/// field enum because `ParamId` isn't `Copy`. No `min`/`max` here (removed
-/// PARAM_RANGE_CONTRACT_DESIGN.md P1): the commit path no longer clamps a
+/// field enum because `ParamId` isn't `Copy`. No `min`/`max` here. The commit path no longer clamps a
 /// typed value to the param's display hint, so nothing reads them.
 #[derive(Debug, Clone)]
 pub struct InspectorParamCtx {
@@ -250,7 +248,7 @@ pub struct RenamePresetCtx {
 }
 
 /// Which overlay (and in which window) an in-flight text session belongs to —
-/// `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2. Set by `begin_owned`;
+/// Set by `begin_owned`;
 /// `None` means the field is panel-owned (BPM, layer name, etc.), not hosted
 /// inside an overlay. The app's overlay pump drains `UIRoot::take_closed_overlays`
 /// once per frame per window and calls `cancel_if_owned_by` for each closed id,
@@ -402,7 +400,7 @@ impl TextInputState {
         }
     }
 
-    /// D4 (`EDITOR_WINDOW_UNIFICATION_DESIGN.md`): whether this session's
+    /// Whether this session's
     /// TOOLTIP-depth overlay is owned by the graph-editor window's shared
     /// tree-overlay pass (`crate::tree_passes::render_tree_overlay_passes`).
     /// `active` gates whether there's a session to draw at all;
@@ -466,7 +464,7 @@ impl TextInputState {
     }
 
     /// `begin()` + tag the session with the overlay hosting it
-    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2). The app's overlay
+    ///. The app's overlay
     /// pump cancels this session via [`Self::cancel_if_owned_by`] when
     /// `owner`'s overlay closes, so the field can't outlive its host.
     pub fn begin_owned(

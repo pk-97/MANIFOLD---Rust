@@ -1,5 +1,5 @@
 //! D8.4 acceptance — Stone Effects v1/v2 as the held-out corridor inputs
-//! (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D8.4, P3 phase).
+//!.
 //!
 //! Deliberate native-GPU journey: run with `--features journey-proofs`
 //! and `CORRIDOR_PROJECT_DIR` pointing at the two reference projects.

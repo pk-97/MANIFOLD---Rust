@@ -1,4 +1,4 @@
-//! `paint_and_hit_order_match_full_build` (UI_INVALIDATION_DESIGN.md INV-14).
+//! `paint_and_hit_order_match_full_build`.
 //!
 //! Builds the main window with every stacked surface open at once (a
 //! dropdown, the Ableton picker, a toast, the warmup overlay, a card-drag

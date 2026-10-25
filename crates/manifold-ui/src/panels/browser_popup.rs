@@ -4,7 +4,7 @@
 //! and optional paste button. Completely separate from DropdownPanel —
 //! different layout, interaction, and rendering model.
 //!
-//! `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3/section 4 (P1+P2): per-open state is a
+//! Per-open state is a
 //! [`BrowserSession`] constructed whole by [`BrowserPopupPanel::open`] and
 //! dropped whole by [`BrowserPopupPanel::close`] — no field-by-field reset
 //! list to keep in sync as fields get added. Filtering, category-chip
@@ -39,7 +39,7 @@ use manifold_foundation::LayerId;
 
 // ── Layout constants ──
 //
-// P3 (PRESET_BROWSER_AUDITION_DESIGN D12) replaces the Unity-era fixed
+// This replaces the Unity-era fixed
 // POPUP_WIDTH 600 / CELL 185×42.5 / POPUP_MAX_HEIGHT 550. Cells are true
 // 16:9 — the committed thumbnails are 16:9 and the grid reads as a wall of
 // small previews; do not resize cells off 16:9.
@@ -85,8 +85,7 @@ const SEARCH_TEXT: Color32 = Color32::new(168, 168, 172, 255);
 const CELL_NORMAL: Color32 = Color32::new(36, 36, 38, 255);
 const CELL_HOVER: Color32 = Color32::new(51, 51, 56, 255);
 const CELL_PRESSED: Color32 = Color32::new(46, 46, 48, 255);
-/// Translucent hover/press tints for an image-filled cell (PRESET_LIBRARY_DESIGN
-/// P6, D7) — `CELL_HOVER`/`CELL_PRESSED` are fully opaque and would blot the
+/// Translucent hover/press tints for an image-filled cell — `CELL_HOVER`/`CELL_PRESSED` are fully opaque and would blot the
 /// thumbnail; these composite over it as a subtle lift instead.
 const CELL_HOVER_OVER_IMAGE: Color32 = color::BROWSER_CELL_HOVER_OVER_IMAGE;
 const CELL_PRESSED_OVER_IMAGE: Color32 = color::BROWSER_CELL_PRESSED_OVER_IMAGE;
@@ -113,7 +112,7 @@ const CAT_PATTERN: Color32 = Color32::new(95, 190, 140, 255); // design-token-ex
 const CAT_SIM: Color32 = Color32::new(230, 145, 85, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
 const CAT_TEXT_MEDIA: Color32 = Color32::new(150, 165, 190, 255); // design-token-exempt: P3 category accent palette, tokenize into color.rs at landing
 
-/// Fixed source-chip order (PRESET_LIBRARY_DESIGN P5, D6): "All" is chip 0
+/// Fixed source-chip order: "All" is chip 0
 /// (handled like the category row's "All"), then these three, always in this
 /// order so a right-click's stored [`Source`] and the rendered chip agree.
 const SOURCE_CHIPS: [(Source, &str); 3] = [
@@ -166,7 +165,7 @@ pub enum BrowserPopupAction {
 }
 
 /// Everything the app needs to open the browser's right-click management menu
-/// (PRESET_LIBRARY_DESIGN P5, D6) for one cell — returned by
+/// for one cell — returned by
 /// [`BrowserPopupPanel::handle_right_click`]. `mode` is always `Effect` or
 /// `Generator` (never `Node` — see that method's doc); it stands in for
 /// `manifold_core::preset_def::PresetKind` here since this crate mirrors
@@ -232,8 +231,7 @@ const ACTION_EDIT_GAP: f32 = 6.0;
 const FONT_PREVIEW_SIZE: u16 = color::FONT_HEADING;
 
 /// Per-cell metadata needed for click AND right-click routing. Selection only
-/// needs `type_id`; the right-click management menu (PRESET_LIBRARY_DESIGN
-/// P5) additionally needs the cell's classified source.
+/// needs `type_id`; the right-click management menu additionally needs the cell's classified source.
 #[derive(Clone)]
 struct CellMeta {
     item_index: usize,
@@ -263,7 +261,7 @@ struct BrowserLayout {
     search_bar_id: Option<NodeId>,
     chip_all_id: Option<NodeId>,
     chip_ids: Vec<NodeId>,
-    /// Source-filter row (PRESET_LIBRARY_DESIGN P5, D6) — `None` for Node
+    /// Source-filter row — `None` for Node
     /// mode, which has no source concept and renders no row.
     source_all_id: Option<NodeId>,
     /// Parallel to [`SOURCE_CHIPS`] — `source_chip_ids[i]` is the chip for
@@ -307,7 +305,7 @@ impl BrowserLayout {
     }
 }
 
-/// Per-open state (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D1) —
+/// Per-open state —
 /// constructed whole by `open()`, dropped whole by `close()`.
 pub struct BrowserSession {
     pub mode: BrowserPopupMode,
@@ -392,7 +390,7 @@ impl BrowserPopupPanel {
             .and_then(|session| session.layer_id.as_ref())
     }
 
-    /// Every open item's thumbnail path (PRESET_LIBRARY_DESIGN P6, D7),
+    /// Every open item's thumbnail path,
     /// regardless of the current filter/category/source — the app decodes +
     /// registers each one, once per distinct path, so the picture is ready
     /// the moment a cell scrolls into view. Empty when closed or in Node
@@ -517,8 +515,7 @@ impl BrowserPopupPanel {
         }
     }
 
-    /// Set the active source chip (`None` = "All" — PRESET_LIBRARY_DESIGN P5,
-    /// D6). Mirrors [`Self::set_category`].
+    /// Set the active source chip. Mirrors [`Self::set_category`].
     pub fn set_source(&mut self, source: Option<Source>) {
         if let Some(session) = self.session.as_mut() {
             session.picker.set_source(source);
@@ -715,7 +712,7 @@ impl BrowserPopupPanel {
         ));
         cy += SEARCH_BAR_HEIGHT + SECTION_SPACING;
 
-        // Source filter row (PRESET_LIBRARY_DESIGN P5, D6): "All · Factory ·
+        // Source filter row: "All · Factory ·
         // My Library · This Project", above the category chips. Node mode
         // (the graph-editor's add-node picker) has no source concept, so it
         // renders no row.
@@ -851,9 +848,8 @@ impl BrowserPopupPanel {
             }
 
             // Image cell: the save-time-rendered / factory-committed
-            // thumbnail (STATIC_THUMBNAILS_DESIGN D1 — statics only, no live
-            // preview); else a flat-color cell exactly as before (D7's
-            // "clean fallback"). An image cell gets the caption strip with
+            // thumbnail; else a flat-color cell exactly as before, the
+            // "clean fallback". An image cell gets the caption strip with
             // the name inside it (F7/F8), with real named x-insets — the
             // space-padded prefix hack is gone (F10). All non-interactive
             // nodes paint BEFORE the button, so they never shadow its click
@@ -1559,7 +1555,7 @@ impl Overlay for BrowserPopupPanel {
                 }
                 OverlayResponse::Consumed(Vec::new())
             }
-            // Right-click management menu (PRESET_LIBRARY_DESIGN P5, D6).
+            // Right-click management menu.
             // Deliberately does NOT close the popup — the menu (a
             // `DropdownPanel` the app opens) stacks on top of it, same as
             // the card's right-click menu stacks on top of the inspector.

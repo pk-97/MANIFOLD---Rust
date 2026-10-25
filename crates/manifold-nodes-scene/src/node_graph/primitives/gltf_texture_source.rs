@@ -146,7 +146,7 @@ manifold_node_engine::primitive! {
     ],
     // depth_rule: zero-input IO bridge that loads externally-authored image content (not procedurally defined) — treated like system.source's boundary Inherit rather than SourceHeight, since there's no formula whose own luminance is a meaningful height
     depth_rule: Inherit,
-    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.image_folder's `folder` and node.gltf_mesh_source's `path`. texture_index selects among document.textures() (not the raw image index — the primitive resolves each texture's image source internally). color_space is the one param that isn't cosmetic: sRGB (default) is correct for anything the eye reads as color — base-color/albedo maps — so the hardware linearizes on sample; Linear is for data maps (normal, metallic-roughness, occlusion) where the raw bytes ARE the value and gamma-decoding them would corrupt the data. width/height set the output resolution — the glTF importer sets them to the source image's exact dimensions so the stretch-blit is a 1:1 copy; manual drops before a File is picked resample (stretch-fill, no aspect-fit) to the 1024² default. mode=gloss_to_roughness (GLB_XFAIL_BURNDOWN_DESIGN.md D2) repacks a KHR_materials_pbrSpecularGlossiness specularGlossinessTexture's alpha (glossiness) into render_scene's glTF metal-rough packing (G=roughness=1-gloss, B=metallic=0) at blit time, so a spec-gloss texture can wire into the same `mrMap` input a real metal-rough texture uses — passthrough (default) is a byte-identical plain copy. Wire `out` into node.render_scene's `base_color_map_N` input.",
+    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.image_folder's `folder` and node.gltf_mesh_source's `path`. texture_index selects among document.textures() (not the raw image index — the primitive resolves each texture's image source internally). color_space is the one param that isn't cosmetic: sRGB (default) is correct for anything the eye reads as color — base-color/albedo maps — so the hardware linearizes on sample; Linear is for data maps (normal, metallic-roughness, occlusion) where the raw bytes ARE the value and gamma-decoding them would corrupt the data. width/height set the output resolution — the glTF importer sets them to the source image's exact dimensions so the stretch-blit is a 1:1 copy; manual drops before a File is picked resample (stretch-fill, no aspect-fit) to the 1024² default. mode=gloss_to_roughness repacks a KHR_materials_pbrSpecularGlossiness specularGlossinessTexture's alpha (glossiness) into render_scene's glTF metal-rough packing (G=roughness=1-gloss, B=metallic=0) at blit time, so a spec-gloss texture can wire into the same `mrMap` input a real metal-rough texture uses — passthrough (default) is a byte-identical plain copy. Wire `out` into node.render_scene's `base_color_map_N` input.",
     examples: [],
     picker: { label: "Texture File", category: Atom },
     summary: "Loads a picture file, or an image embedded in a glTF/.glb model, as a texture, so a Material's picture or an imported model's baked-in map flows into the render pipeline like any other texture source.",
@@ -181,7 +181,7 @@ manifold_node_engine::primitive! {
         uploaded: bool = false,
         // Identity of the `out` texture the level-0 blit + mip chain were
         // last written for (IMPORT_FIDELITY F-P6 introduced this for mips
-        // only; RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 extends it
+        // only; this extends it
         // to gate the level-0 blit dispatch itself). Comparing
         // `GpuTexture::identity_key` catches both a fresh decode (via
         // `fresh_upload`) and a pool recycle/resize (different physical
@@ -408,7 +408,7 @@ impl Primitive for GltfTextureSource {
         };
 
         // 8+9. Level-0 blit + mip regen, gated together
-        // (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1): both rewrite
+        // Both rewrite
         // `out`'s content, so both are skipped together whenever nothing
         // that determines that content changed since we last wrote it —
         // the decoded pixels (`fresh_upload`), the repack mode (affects
@@ -1829,7 +1829,7 @@ mod gpu_tests {
         );
     }
 
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate: on a static
+    /// On a static
     /// asset, frame 2's output is bit-identical to frame 1's, and the
     /// blit+mip skip (`mark_outputs_unchanged`) fires on frame 2.
     #[test]

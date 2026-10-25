@@ -180,7 +180,7 @@ pub trait TimelineEditingHost {
     // NOTE: auto_scroll_for_drag (Unity: AutoScrollTimelineForDrag) removed
     // from the trait — it was a permanent no-op stub ("the actual scroll
     // logic remains in tick_and_render", which never materialized). B11
-    // (`TIMELINE_INTERACTION_P1_SPEC.md`) implements edge autoscroll directly
+    // implements edge autoscroll directly
     // on `TimelineViewportPanel::autoscroll_edge` (the single P0 scroll
     // owner), called from the overlay's drag handlers — no host indirection
     // needed since the viewport already owns the scroll state.

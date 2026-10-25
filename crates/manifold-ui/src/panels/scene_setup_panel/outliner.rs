@@ -1,5 +1,4 @@
-//! The Scene tab tree (SCENE_DOCUMENT_DESIGN.md section 8, amended by
-//! SCENE_REFINEMENT_DESIGN.md ruling 4): six rows in one style, World,
+//! The Scene tab tree: six rows in one style, World,
 //! Camera, Lighting, Objects, Forces and Modifiers, each with what it holds
 //! one step in below it. Lighting is one row for every light. Every row but
 //! World carries a + at the right edge that adds what belongs there. An

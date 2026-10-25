@@ -123,7 +123,7 @@ impl PresetRuntime {
     /// [`EffectNodeContext::scalar_or_param`](crate::node_graph::effect_node::EffectNodeContext::scalar_or_param)'s
     /// port-shadows-param resolution order, so the editor's live value tap
     /// doesn't freeze on a wire-driven scalar param while the render keeps
-    /// moving (PARAM_TWO_WAY_BINDING_DESIGN.md P2 D5).
+    /// moving.
     pub fn live_node_params(
         &self,
         effect_id: &EffectId,
@@ -287,7 +287,7 @@ impl PresetRuntime {
     }
 
     /// Enable/disable per-step attribution profiling on this chain's executor
-    /// (PERF_BUDGET_GATE_DESIGN P2 / D6). Off by default — one branch per
+    /// Off by default — one branch per
     /// step on the live path.
     pub fn set_profiling(&mut self, on: bool) {
         self.executor.set_profiling(on);

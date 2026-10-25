@@ -177,7 +177,7 @@ impl EffectNode for MultiBlend {
         Some(manifold_node_engine::freeze::classify::BoundaryReason::Blocked)
     }
 
-    /// PARAM_RANGE_CONTRACT_DESIGN.md D6/section 2 mechanical grant: `num_inputs`
+    /// Mechanical grant: `num_inputs`
     /// sizes the live port allocation — `reconfigure` (this file, line 191)
     /// clamps to `[2, MAX_INPUTS]` before `rebuild_ports` slices the static
     /// `IN_PORT_NAMES` table.
@@ -303,7 +303,7 @@ inventory::submit! {
 }
 
 impl MultiBlend {
-    /// COMPILE_CONTRACT_DESIGN P2: prewarm all num_inputs variants (2..MAX_INPUTS)
+    /// Prewarm all num_inputs variants (2..MAX_INPUTS)
     /// at startup. Each variant compiles a specialized shader for that exact count.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
         for k in 2..=MAX_INPUTS {

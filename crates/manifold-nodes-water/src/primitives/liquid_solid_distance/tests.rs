@@ -1,5 +1,5 @@
 //! FLIP's solid atom against Matter's body mover: the proof names both
-//! solvers, so it links from the registration crate (WATER_CRATES_DESIGN.md D8).
+//! solvers, so it links from the registration crate.
 use manifold_node_engine::primitive::PrimitiveSpec;
 use manifold_water_gpu_flip::primitives::liquid_solid_distance::LiquidSolidDistance;
 use manifold_water_gpu_mpm::primitives::matter_move_bodies::MatterMoveBodies;

@@ -17,7 +17,7 @@ use manifold_node_engine::scene::material::{MapSamplerDesc, MaterialMapInfo};
 
 /// glTF extensions MANIFOLD's importer actually supports, independent of
 /// what the pinned `gltf` 1.4.1 crate's own feature-flag set types —
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D1. Everything in `Cargo.toml`'s `gltf`
+/// Everything in `Cargo.toml`'s `gltf`
 /// feature list (which includes `KHR_materials_unlit`; the parse reads every
 /// material field genuinely and the scene lights an unlit-authored material
 /// like any other), plus extensions
@@ -64,13 +64,12 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     // Raw-JSON sniffed + manual decode,
     // no crate feature exists for this extension at 1.4.1:
     "EXT_texture_webp",
-    // GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168) — raw-JSON sniffed per-node
+    // Raw-JSON sniffed per-node
     // TRANSLATION/ROTATION/SCALE, composed in [`node_instance_transforms`]:
     "EXT_mesh_gpu_instancing",
 ];
 
-/// The ONE parse entry for `.glb`/`.gltf` files (`GLB_XFAIL_BURNDOWN_DESIGN.md`
-/// D1/D3-data-model-delta) — every other call site in this crate routes
+/// The ONE parse entry for `.glb`/`.gltf` files — every other call site in this crate routes
 /// through this helper instead of the `gltf` crate's `gltf::import(path)`
 /// convenience function.
 ///
@@ -94,7 +93,7 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
 /// error naming it, not the crate's generic "Unsupported extension".
 /// The document+buffer half of [`import_glb`] — parse, re-validate, gate
 /// `extensionsRequired`, and resolve buffers, but stop short of image
-/// decode. GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: `gltf_anim_cache.rs`'s loader
+/// decode. `gltf_anim_cache.rs`'s loader
 /// needs the document and buffers (to read animation/skin accessors) but
 /// never touches a texture, so routing it through the full `import_glb`
 /// would decode every image on a thread whose only job is keyframe data —
@@ -344,7 +343,7 @@ fn decode_webp_image(
 }
 
 /// Resolve the scene(s) to import when a glb has no default `scene` index
-/// (spec-legal — `GLB_XFAIL_BURNDOWN_DESIGN.md` D5, fixes BUG-172):
+/// (spec-legal):
 /// the default scene if present; else the union of every `scenes[]` entry's
 /// nodes; else every parentless (root) node in the document. Returns owned
 /// nodes (not a `Scene` — there may be no single scene backing the union).
@@ -586,7 +585,7 @@ pub(crate) fn collect_punctual_lights(document: &gltf::Document) -> Vec<GltfPunc
     out
 }
 
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): build a column-major `Mat4`
+/// Build a column-major `Mat4`
 /// from a glTF-convention TRS triple (`q` = quaternion `[x, y, z, w]`) — the
 /// same formula the glTF spec uses to define a node's own TRS matrix, so an
 /// `EXT_mesh_gpu_instancing` instance transform composes with `mat4_mul`
@@ -619,7 +618,7 @@ pub(crate) fn mat4_from_trs(t: [f32; 3], q: [f32; 4], s: [f32; 3]) -> Mat4 {
     ]
 }
 
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D6: read one accessor's raw components as
+/// Read one accessor's raw components as
 /// `f32`, un-interleaving `view.stride()` if present. `EXT_mesh_gpu_instancing`'s
 /// TRANSLATION/ROTATION/SCALE accessors are always plain `FLOAT` VEC3/VEC4
 /// per spec (no normalized integers, no sparse) — anything else errors
@@ -659,7 +658,7 @@ fn read_f32_accessor(accessor: &gltf::Accessor, buffers: &[gltf::buffer::Data]) 
     Ok(out)
 }
 
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): `EXT_mesh_gpu_instancing`
+/// `EXT_mesh_gpu_instancing`
 /// raw-JSON sniff (⚠ VERIFIED-AT-IMPL: no typed support in gltf 1.4.1 — no
 /// `EXT_mesh_gpu_instancing` feature or accessor exists in either `gltf` or
 /// `gltf-json` 1.4.1's source, same absence pattern as `KHR_materials_clearcoat`).
@@ -759,7 +758,7 @@ pub(crate) enum GltfMeshSelector {
     /// but keeps only matching primitives.
     Material { material_index: u32 },
     /// Every primitive with NO material (`primitive.material().index() ==
-    /// None`, glTF's implicit default material) — GLB_XFAIL_BURNDOWN_DESIGN.md
+    /// None`, glTF's implicit default material)
     /// D4 (BUG-171)'s synthetic-material object. Scene-wide, like
     /// `Material`, since materialless primitives can be scattered across
     /// any node.
@@ -769,7 +768,6 @@ pub(crate) enum GltfMeshSelector {
 /// Which primitives `walk_gltf_node` keeps, generalizing the old
 /// `Option<u32>` (`None` = every primitive, `Some(idx)` = one material) to
 /// also express "only the materialless (default-material) primitives" —
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D4.
 #[derive(Clone, Copy)]
 enum MaterialFilter {
     All,
@@ -1021,7 +1019,7 @@ fn flatten_primitive_indexed(
 /// index equals `idx` are flattened (the importer's per-material object);
 /// `None` takes every primitive (the whole-scene combine).
 ///
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): a node carrying
+/// A node carrying
 /// `EXT_mesh_gpu_instancing` flattens its mesh's primitives once PER
 /// INSTANCE, each at `world * instance_transform`, instead of once at
 /// `world` — the same "N repeated nodes" result the extension exists to
@@ -1897,7 +1895,7 @@ fn image_data_to_rgba8(data: gltf::image::Data) -> Result<(u32, u32, Vec<u8>), S
 }
 
 manifold_core::testkit_visible! {
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): glTF `wrapS`/`wrapT`, decoupled
+/// glTF `wrapS`/`wrapT`, decoupled
 /// from `manifold_gpu` (this module is content-thread parse code, no GPU
 /// dependency) — the scene compiler translates these into `node.pbr_material`'s
 /// enum params, which `render_scene` then reads back into
@@ -1924,7 +1922,7 @@ pub(crate) enum GltfFilterMode {
 }
 
 manifold_core::testkit_visible! {
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D3: one map family's sampler settings.
+/// One map family's sampler settings.
 /// Default reproduces glTF's implicit no-sampler default (Repeat/Repeat/
 /// Linear/Linear) — byte-identical to the pre-D3 hardcoded REPEAT sampler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2206,7 +2204,7 @@ pub(crate) struct GltfMaterialInfo {
     /// neutral, no tint).
     pub volume_attenuation_color: [f32; 3],
     /// `thicknessTexture` index, if any (G channel scales
-    /// `thicknessFactor`). E1/E2 mapped the factor only; the
+    /// `thicknessFactor`). Mapped the factor only; the
     /// texture-completion sweep closes this gap.
     pub volume_thickness_texture: Option<u32>,
     /// glTF `alphaMode == BLEND` on the source material. F-P4 downgrades
@@ -2259,7 +2257,7 @@ pub(crate) struct GltfMaterialInfo {
     pub core_tex_coords: [u32; 5],
     /// `true` when `mr_texture` above actually points at a
     /// `KHR_materials_pbrSpecularGlossiness` `specularGlossinessTexture`
-    /// (GLB_XFAIL_BURNDOWN_DESIGN.md D2, BUG-167) rather than a genuine
+    /// rather than a genuine
     /// glTF metallic-roughness map — its usable channel is glossiness in
     /// ALPHA, not roughness/metallic in G/B. the scene compiler wires the
     /// `node.gltf_texture_source` feeding this map with `mode =
@@ -2270,7 +2268,7 @@ pub(crate) struct GltfMaterialInfo {
     /// alpha is repacked as glossiness, so both channels remain available to
     /// the downstream material.
     pub mr_texture_is_gloss_alpha: bool,
-    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
+    /// Per-map-family sampler
     /// settings, read straight off each map's own glTF `sampler` (default
     /// when unwired or the texture has no explicit sampler:
     /// `GltfSamplerInfo::default()`, Repeat/Repeat/Linear/Linear —
@@ -2288,7 +2286,7 @@ pub(crate) struct GltfMaterialInfo {
 
 /// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
 /// scalar factors to MANIFOLD's metal-rough vocabulary
-/// (GLB_XFAIL_BURNDOWN_DESIGN.md D2, BUG-167). Pure/value-level so it's
+/// Pure/value-level so it's
 /// unit-testable without a parsed `Document` — see the `tests` module.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SpecGlossConversion {
@@ -2324,13 +2322,13 @@ manifold_core::testkit_visible! {
 /// "unset" default (`-1`, which falls through to the `mesh_index`/
 /// `WholeScene` path; see `gltf_mesh_source.rs::run`). Real glTF material
 /// indices are always `>= 0`, so `-2` never collides with a genuine
-/// selection. GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171).
+/// selection.
 pub(crate) const DEFAULT_MATERIAL_MESH_PARAM: i32 = -2;
 }
 
 /// The model file's material list reserves this sentinel for the synthetic
 /// glTF-default-material entry (D4) — pinned by
-/// `GLB_XFAIL_BURNDOWN_DESIGN.md` section 3: real glTF material indices are
+/// Real glTF material indices are
 /// always `< u32::MAX` (the format has no material anywhere near that
 /// count), so this can never collide with a genuine index.
 /// The scene compiler must treat it as "no glTF material to re-query" —
@@ -2495,7 +2493,7 @@ pub(crate) struct QuatTrack {
 
 manifold_core::testkit_visible! {
 /// One LINEAR-sampled morph-target-weights keyframe track (glTF `weights`
-/// channel target path) — GLTF_ANIMATION_DESIGN.md A3. glTF interleaves
+/// channel target path). glTF interleaves
 /// every target's weight into one flat output accessor per keyframe
 /// (`count = input.count * target_count`); de-interleaved here so
 /// `values[i]` is keyframe `i`'s full per-target weight vector (length
@@ -2518,7 +2516,7 @@ pub(crate) struct GltfNodeAnimation {
     pub translation: Option<Vec3Track>,
     pub rotation: Option<QuatTrack>,
     pub scale: Option<Vec3Track>,
-    /// GLTF_ANIMATION_DESIGN.md A3: this node's morph-target `weights`
+    /// This node's morph-target `weights`
     /// channel, when present. Populated the same single-node-owns-this-
     /// channel way TRS channels are — a `weights` channel targets the
     /// mesh-owning node itself (glTF 2.0 section 3.7.2.1: it animates that node's
@@ -2573,7 +2571,7 @@ pub(crate) fn parse_animations(
                 if is_weights && interpolation != gltf::animation::Interpolation::Linear {
                     skipped_channels.push(format!(
                         "node {node_index}: {interpolation:?} interpolation not supported on \
-                         morph-weight channels (GLTF_ANIMATION_DESIGN.md A3 is LINEAR-only)"
+                         morph-weight channels (LINEAR-only)"
                     ));
                     continue;
                 }
@@ -2610,7 +2608,7 @@ pub(crate) fn parse_animations(
                     gltf::animation::util::ReadOutputs::MorphTargetWeights(it) => {
                         // glTF interleaves every target's weight per
                         // keyframe into one flat accessor
-                        // (GLTF_ANIMATION_DESIGN.md A3) — de-interleave
+                        // De-interleave
                         // into one `target_count`-wide row per keyframe.
                         // `it` yields `f32`/normalized-int weights
                         // regardless of the accessor's storage type.
@@ -2681,7 +2679,7 @@ fn quat_track_from_raw(times: Vec<f32>, raw: Vec<[f32; 4]>, mode: GltfInterp) ->
     }
 }
 
-// ─── GLTF_ANIMATION_DESIGN.md A2 — skinning (D2) ───────────────────────
+// ─── Skinning ───────────────────────
 
 manifold_core::testkit_visible! {
 /// One glTF `skins[]` entry's PARSE-TIME-STATIC topology — which node is
@@ -2708,7 +2706,7 @@ pub(crate) struct GltfSkinInfo {
     /// value when no ancestor animates.
     pub joint_root_world: Vec<Mat4>,
     pub inverse_bind_matrices: Vec<Mat4>,
-    // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: the per-joint bind-TRS fields that
+    // The per-joint bind-TRS fields that
     // used to live here (`joint_bind_translation`/`_rotation`/`_scale`)
     // are DELETED — deduped into `GltfAnimSet::node_bind_trs` (P1, indexed
     // by whole-scene node index rather than duplicated per-skin), which
@@ -2869,7 +2867,7 @@ pub(crate) fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Da
         .collect()
 }
 
-// ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3) — rigid multi-node via the
+// ─── Rigid multi-node via the
 // node-slot palette ──────────────────────────────────────────────────
 
 /// Every scene-node index (ascending) whose mesh has at least one
@@ -2900,7 +2898,7 @@ pub(crate) fn find_material_contributing_nodes(
     set.into_iter().collect()
 }
 
-// ─── GLTF_ANIMATION_DESIGN.md A3 — morph targets ───────────────────────
+// ─── Morph targets ───────────────────────
 
 /// (vertices, per-vertex joint indices as f32, per-vertex weights) — the
 /// coincident triple `node.gltf_skinned_mesh_source` uploads as its three
@@ -3025,7 +3023,7 @@ fn collect_skinned_nodes_for_material<'a>(
 
 /// Flatten `slot_nodes`' primitives (filtered to `material_index`) into a
 /// triangle-list `MeshVertex` buffer plus coincident per-vertex
-/// joints/weights, GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): LOCAL space per
+/// joints/weights, LOCAL space per
 /// contributing node (no node-transform applied — exactly [`flatten_skinned_node`]'s
 /// convention, since D4's rigid palette positions every vertex entirely via
 /// its slot's `node.skin_mesh` matrix, same as real skinning). Every vertex
@@ -3119,7 +3117,7 @@ fn flatten_rigid_multi_node(
     Ok((verts, joints, weights))
 }
 
-/// Load a `.glb`'s skinned OR (GLTF_ANIM_RUNTIME_V2_DESIGN.md D4, P3)
+/// Load a `.glb`'s skinned OR
 /// rigid-multi-node-palette geometry for `material_index`. Collects EVERY
 /// skinned node contributing the material (A2's original single-node scope
 /// is the common one-node case of the same loop); when more than one is
@@ -3203,7 +3201,7 @@ pub(crate) fn load_gltf_skinned_mesh(
     ))
 }
 
-// ─── GLTF_ANIMATION_DESIGN.md A3 — morph target deltas (runtime load) ──
+// ─── Morph target deltas (runtime load) ──
 
 /// Find the first mesh-owning node (DFS, default-scene rooted) whose mesh
 /// carries a primitive matching `material_index` — no `skin()` requirement,
@@ -3497,7 +3495,7 @@ pub(crate) fn material_info(
     let mut mr_texture_is_gloss_alpha = false;
     let emissive_uv_transform = fold_typed(m.emissive_texture());
 
-    // GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167):
+
     // KHR_materials_pbrSpecularGlossiness converts to metal-rough
     // HERE, at parse time — the scene compiler/`render_scene.wgsl`
     // never see spec-gloss. A material can't carry both
@@ -3900,7 +3898,7 @@ pub(crate) fn material_info(
 
     let emissive = m.emissive_factor();
     let emissive_strength = m.emissive_strength().unwrap_or(1.0);
-    // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): one lookup per map
+    // One lookup per map
     // family, keyed off the same texture index each map's own
     // field above already resolved — `None` (map unwired) reads
     // `GltfSamplerInfo::default()` inside the helper.
@@ -4116,7 +4114,7 @@ mod animation_tests {
         }
     }
 
-    /// GLTF_ANIMATION_DESIGN.md A1 gate fixture. Re-derived inventory
+    /// Gate fixture. Re-derived inventory
     /// finding (this session): `BoxAnimated.glb` is NOT the "one node,
     /// one mesh, one material" asset the phase brief assumed — it has
     /// TWO materials ("inner"/"outer") and its single animated object
@@ -5222,7 +5220,7 @@ mod tests {
         }
     }
 
-    /// GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167) value-level gate: known
+    /// Value-level gate: known
     /// spec-gloss factors → expected metal-rough numbers. Full gloss (1.0)
     /// is a mirror — roughness 0.0 (perfectly smooth, `glossiness_factor`'s
     /// own documented meaning); full rough spec-gloss (glossiness 0.0) →

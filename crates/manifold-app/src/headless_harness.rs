@@ -3,8 +3,7 @@
 //! `Application::resumed()` builds (`app.rs` ~2093-2278), minus every
 //! UI-surface concern (no window, no IOSurface bridges, no MIDI device open,
 //! no LED controller, no OSC listening). Originally lived inside
-//! `journey_proof.rs` (test-only); extracted here (PERF_BUDGET_GATE_DESIGN.md
-//! P1) so the headless `cargo xtask perf-soak` binary path can drive a real
+//! `journey_proof.rs` (test-only); extracted here so the headless `cargo xtask perf-soak` binary path can drive a real
 //! `ContentThread` outside `#[cfg(test)]` — `journey_proof.rs` and the
 //! BUG-035/037 regression guards now import [`headless_content_thread`] from
 //! here instead of defining it locally. No behavior change: same struct

@@ -294,7 +294,7 @@ impl EditingService {
 
     /// Description of the command `undo()` would act on next. Read this
     /// BEFORE calling `undo()` — see `UndoRedoManager::peek_undo_description`.
-    /// D11 undo/redo toast.
+    /// Undo/redo toast.
     pub fn peek_undo_description(&self) -> Option<&str> {
         self.undo_manager.peek_undo_description()
     }
@@ -1582,7 +1582,7 @@ mod stamp_tests {
 
 #[cfg(test)]
 mod paste_type_guard_tests {
-    // D9: an audio clip pastes only onto
+    // An audio clip pastes only onto
     // an existing audio layer, symmetric with the pre-existing generator/
     // video mismatch guard in `paste_clips`.
     use super::*;

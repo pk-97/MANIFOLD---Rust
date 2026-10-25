@@ -63,7 +63,7 @@ use manifold_media::export_config::ExportConfig;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 // Headless `ContentThread` construction now lives in `headless_harness.rs`
-// (PERF_BUDGET_GATE_DESIGN.md P1) — shared with the non-test `perf-soak`
+// — shared with the non-test `perf-soak`
 // binary path, which can't reach a `#[cfg(test)]` item.
 use crate::headless_harness::headless_content_thread;
 
@@ -618,7 +618,7 @@ pub(crate) fn star_field_generator_layer(index: i32) -> Layer {
     layer
 }
 
-/// Cut-placement fixture (CLIP_BOUNDARY_FRAME_DESIGN D5/D6): two StarField
+/// Cut-placement fixture: two StarField
 /// generator layers whose clips meet at beat 4. The top layer (index 0
 /// renders last, on top) is dim and covers [4, 8); the bottom layer is bright
 /// and covers [0, 4). Before the boundary the bright clip shows through the
@@ -1047,7 +1047,7 @@ mod tests {
         );
     }
 
-    /// CLIP_BOUNDARY_FRAME_DESIGN D5/D6 render-path proof: export the
+    /// Render-path proof: export the
     /// cut-boundary fixture and assert the visible cut lands on EXACTLY the
     /// boundary frame — frame 0 renders the clip owning the export start,
     /// the frame before the boundary still shows the outgoing clip, and the
@@ -1187,7 +1187,7 @@ mod tests {
         );
     }
 
-    /// SECTION_EXPORT_DESIGN acceptance demo (P1 gate, real-export half): one
+    /// Acceptance demo (real-export half): one
     /// project, two markers (named "Drop" at beat 2, unnamed at beat 5) over
     /// the 8-beat content range, `split_at_markers = true`. Produces three
     /// files — `export--section-1`, `export--Drop`, `export--section-3` —

@@ -143,8 +143,7 @@ fn descend_level_ref<'a>(
 /// Resolve the card binding (if any) governing `(node_id, param_name)` at
 /// `scope_path` within `def` — BUG-158 write-back. Descends to the node's level,
 /// reads its stable `NodeId`, then looks that up against
-/// `preset_metadata.bindings` (the single unified list post
-/// `PRESET_UNIFICATION_PLAN.md` — bundled and user-added bindings both live
+/// `preset_metadata.bindings` (the single unified list: bundled and user-added bindings both live
 /// here). Mirrors [`full_reshape_from_instance`]'s reshape lookup, keyed the
 /// other way (by node target instead of outer id). `None` when the node has
 /// no stable id (a bundled node that's never been targeted), the level
@@ -1590,7 +1589,7 @@ impl Application {
     }
 
     /// Open the shared Save to Library / Save to Project name-prompt text
-    /// input (PRESET_LIBRARY_DESIGN D4, P3). Shared tail for the card-menu
+    /// input. Shared tail for the card-menu
     /// path (`PanelAction::SaveToLibrary`/`SaveToProject`, resolved by
     /// `dispatch_inspector` and handed back via `DispatchResult`) — the
     /// graph editor header path (`GraphEditCommand::SaveGraphToLibrary`/
@@ -1623,8 +1622,7 @@ impl Application {
         });
     }
 
-    /// Open the browser management-menu Rename prompt (PRESET_LIBRARY_DESIGN
-    /// P5, D6) — same shape as [`Self::begin_save_preset_prompt`] (panel-
+    /// Open the browser management-menu Rename prompt — same shape as [`Self::begin_save_preset_prompt`] (panel-
     /// owned, not `begin_owned`: by the time this runs, the dropdown that
     /// offered "Rename…" has already closed itself on selection, so tagging
     /// this session with that overlay's id would have it cancelled the very
@@ -2642,7 +2640,7 @@ mod preview_target_tests {
     }
 }
 
-/// `PARAM_TWO_WAY_BINDING_DESIGN.md` P1: the dispatch-layer binding lookup
+/// The dispatch-layer binding lookup
 /// (`binding_for_node_param`) and wired-backstop (`node_param_is_wired`) that
 /// the `SetGraphNodeParam` reroute arm depends on. These are the read-only
 /// resolution pieces the reroute is built from; `card_reshape_roundtrips` /

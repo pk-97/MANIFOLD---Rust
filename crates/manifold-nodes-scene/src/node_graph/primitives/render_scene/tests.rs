@@ -2,7 +2,7 @@ use super::*;
 use manifold_node_engine::ports::ArrayType;
 use manifold_node_engine::scene::transform::Transform;
 
-/// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
+/// The CPU half of "off = zero cost".
 /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`
 /// false, and a fresh `RenderScene` must never have called any
 /// `ensure_` function for the shaft-inscatter slot — it stays `None`.
@@ -466,7 +466,7 @@ fn bilateral_weight(z_full: f32, z_tap: f32) -> f32 {
     (-(dz * dz) * 400.0).exp()
 }
 
-/// VOLUMETRIC_LIGHT_DESIGN.md V5: the committed upsample weights must
+/// The committed upsample weights must
 /// not bleed the far side of a depth silhouette into the near side by
 /// more than 1%. Synthetic 2x2 half-res neighbourhood: three taps share
 /// the near-side depth (matching the full-res center pixel exactly,
@@ -727,7 +727,7 @@ fn billboard_coincident_camera_falls_back_to_existing_rotation() {
     assert_eq!(rot, t.rot_euler);
 }
 
-// ---- GBUFFER_DESIGN.md P1, I1 — lazy `depth` output ----
+// ---- Lazy `depth` output ----
 //
 // Descriptor-level, no GPU device: `depth`'s step-output binding (and
 // therefore the R32Float resolve texture the backend would allocate for

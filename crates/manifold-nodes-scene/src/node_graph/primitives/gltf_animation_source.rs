@@ -2,13 +2,13 @@
 //! clip at a live `progress` (0..1) and emits the nine scalars
 //! `node.transform_3d`'s port-shadowed inputs already accept.
 //!
-//! GLTF_ANIMATION_DESIGN.md A1 (D1): "animating a rigid node is animating
+//! "Animating a rigid node is animating
 //! params" — this node does no scene-graph work itself; it is a pure
 //! CPU sampler that turns keyframe channels into the nine `pos_x/y/z,
 //! rot_x/y/z, scale_x/y/z` scalars, wired straight into an object's
 //! `node.transform_3d`.
 //!
-//! GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: keyframe payload no longer lives in
+//! Keyframe payload no longer lives in
 //! this node's Table params (the pre-P2 `translation_track`/`rotation_
 //! track`/`scale_track` Tables are DELETED, not just unread — see the
 //! phase brief's D5 migration for the pre-P2-preset path). Instead `path`
@@ -89,7 +89,7 @@ manifold_node_engine::primitive! {
         scale_z: ScalarF32,
     },
     params: [
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D1/P2: comes via
+        // Comes via
         // presetMetadata.stringBindings, same convention as
         // node.gltf_mesh_source's/node.gltf_skeleton_pose's `path`.
         // Selects the `Arc<GltfAnimSet>` this node samples from
@@ -102,7 +102,7 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: one node-index selector PER
+        // One node-index selector PER
         // CHANNEL — see the module doc comment for why a single shared
         // selector is wrong (BoxAnimated.glb). `-1` (the default) means
         // "this object's channel is never animated in any clip" — the
@@ -155,7 +155,7 @@ manifold_node_engine::primitive! {
             label: "Clip",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            // GLTF_ANIM_RUNTIME_V2_DESIGN.md D6: follows the file, not an
+            // Follows the file, not an
             // arbitrary A4-era cap.
             range: Some((0.0, 255.0)),
             enum_values: &[],
@@ -193,7 +193,7 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
-        // GLTF_ANIMATION_DESIGN.md A1 fix (found rendering BoxAnimated.glb's
+        // Fix (found rendering BoxAnimated.glb's
         // own goldens — the four phases came out pixel-identical): a
         // transform_3d input port is a port-SHADOW — wiring it makes the
         // wire win OUTRIGHT over the node's own static param, it does not
@@ -244,7 +244,7 @@ manifold_node_engine::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         trigger_latch: TriggerLatch = TriggerLatch::new(),
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: same key-gated background-load
+        // Same key-gated background-load
         // shape node.gltf_skeleton_pose's P1 rewire introduced.
         last_path: String = String::new(),
         anim_set: Option<Arc<LoadedAnimSet>> = None,
@@ -338,7 +338,7 @@ impl Primitive for GltfAnimationSource {
             .or_else(|| ctx.params.get("trigger_count").and_then(ParamValue::as_scalar));
         self.trigger_latch.update(trigger_count, ctx.time.beats.0);
 
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: `path` selects the shared
+        // `path` selects the shared
         // `Arc<GltfAnimSet>` — same key-gated background-load shape
         // node.gltf_skeleton_pose's P1 rewire introduced. Moved BEFORE
         // duration_s/progress so a resident clip's own `AnimClip::
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn no_anim_set_loaded_holds_the_outputs_pre_existing_contents() {
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: before a background load
+        // Before a background load
         // resolves (or with no `path` at all), `run()` returns without
         // writing ANY output — a fresh slot's own zero-init, never a
         // fabricated "scale defaults to 1" write.
@@ -700,7 +700,7 @@ mod tests {
 
 
 
-    /// GLTF_ANIMATION_DESIGN.md A4's performer-gesture gate: a `trigger_count`
+    /// Performer-gesture gate: a `trigger_count`
     /// step (the value MIDI NoteOn drives via the phantom-clip path — see
     /// the phase brief's scope note) restarts the clip from `progress≈0`
     /// within one frame, on the default (unwired-`progress`) beat-drive path.

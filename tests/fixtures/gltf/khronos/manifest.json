@@ -148,7 +148,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-164 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P4/D3): render_scene now binds one sampler per map family (base/normal/mr/occlusion/emissive), each built from that glTF texture's own wrapS/wrapT/filter instead of one scene-wide hardcoded REPEAT sampler. This asset's 10 materials use the SAME source textures under DIFFERENT samplers (clamp/repeat/mirror per S/T axis) -- the per-quadrant divergence in the golden IS the proof; single-sided vs double-sided (unrelated to D3) is expected to differ per the asset's own design."
+    "note": "render_scene now binds one sampler per map family (base/normal/mr/occlusion/emissive), each built from that glTF texture's own wrapS/wrapT/filter instead of one scene-wide hardcoded REPEAT sampler. This asset's 10 materials use the SAME source textures under DIFFERENT samplers (clamp/repeat/mirror per S/T axis) -- the per-quadrant divergence in the golden IS the proof; single-sided vs double-sided (unrelated to D3) is expected to differ per the asset's own design."
   },
   {
     "asset": "AnimatedMorphCube.glb",
@@ -885,7 +885,7 @@
     "asset": "AnimationPointerUVs.glb",
     "checks": [],
     "status": "xfail:BUG-170",
-    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility, extended 2026-07-16 during E6"
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility"
   },
   {
     "asset": "AnisotropyBarnLamp.glb",
@@ -953,7 +953,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "E2b: thicker glass along the Thickness Factor row attenuates more (Beer-Lambert distance-dependent darkening) -- a per-instance thickness gradient the old material-level alpha formula (thickness-independent) could not produce"
+    "note": "thicker glass along the Thickness Factor row attenuates more (Beer-Lambert distance-dependent darkening) -- a per-instance thickness gradient the old material-level alpha formula (thickness-independent) could not produce"
   },
   {
     "asset": "CarConcept.glb",
@@ -1091,7 +1091,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "E2b: real screen-space refraction (D3) -- the glass-bowl region carries measurably more image detail (rim + decal + refracted checkerboard) than a plain-background patch, which the old alpha-blend approximation (near-zero alpha for fully transmissive glass) could not produce"
+    "note": "real screen-space refraction -- the glass-bowl region carries measurably more image detail (rim + decal + refracted checkerboard) than a plain-background patch, which the old alpha-blend approximation (near-zero alpha for fully transmissive glass) could not produce"
   },
   {
     "asset": "CompareVolume.glb",
@@ -1108,25 +1108,25 @@
       }
     ],
     "status": "expect_pass",
-    "note": "E2b: KHR_materials_volume Beer-Lambert attenuation -- the volume-attenuated bowl reads distinctly green (attenuationColor), a color shift the old code (which never read attenuationColor/attenuationDistance) could not produce. BUG-185 re-baseline (2026-07-17, eyeballed render): E6's thicknessTexture honoring made the tint follow the thickness map, so the old upper-interior region went legitimately thin/clear; region moved to the bowl's thick lower interior (measured G-R 10.13 there, ~0 with volume off), floor 8 -> 6 for margin on both sides"
+    "note": "KHR_materials_volume Beer-Lambert attenuation -- the volume-attenuated bowl reads distinctly green (attenuationColor), a color shift the old code (which never read attenuationColor/attenuationDistance) could not produce. Re-baselined (eyeballed render): thicknessTexture honoring made the tint follow the thickness map, so the old upper-interior region went legitimately thin/clear; region moved to the bowl's thick lower interior (measured G-R 10.13 there, ~0 with volume off), floor 8 -> 6 for margin on both sides"
   },
   {
     "asset": "DiffuseTransmissionPlant.glb",
     "checks": [],
     "status": "xfail:diffuse-transmission-deferred",
-    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash)"
   },
   {
     "asset": "DiffuseTransmissionTeacup.glb",
     "checks": [],
     "status": "xfail:diffuse-transmission-deferred",
-    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash)"
   },
   {
     "asset": "DiffuseTransmissionTest.glb",
     "checks": [],
     "status": "xfail:diffuse-transmission-deferred",
-    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash)"
   },
   {
     "asset": "DispersionTest.glb",
@@ -1277,13 +1277,13 @@
     "asset": "PotOfCoalsAnimationPointer.glb",
     "checks": [],
     "status": "xfail:BUG-170",
-    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility, extended 2026-07-16 during E6"
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility"
   },
   {
     "asset": "ScatteringSkull.glb",
     "checks": [],
     "status": "xfail:diffuse-transmission-deferred",
-    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash)"
   },
   {
     "asset": "SheenChair.glb",
@@ -1427,7 +1427,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-165 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P1): root cause was node.orbit_camera's fixed near=0.05 clip plane clipping this real-world-scale (radius 0.017) object entirely, not a texture-decode race \u2014 see gltf_import.rs's near_clip computation"
+    "note": "root cause was node.orbit_camera's fixed near=0.05 clip plane clipping this real-world-scale (radius 0.017) object entirely, not a texture-decode race \u2014 see gltf_import.rs's near_clip computation"
   },
   {
     "asset": "VirtualCity.glb",
@@ -1449,7 +1449,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-166 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2): import_glb() replaces gltf::import() with a slice-based parse gated on MANIFOLD's own extensionsRequired allowlist (includes KHR_materials_clearcoat) instead of the crate's feature-flag veto; clearcoat render mapping was already shipped"
+    "note": "import_glb() replaces gltf::import() with a slice-based parse gated on MANIFOLD's own extensionsRequired allowlist (includes KHR_materials_clearcoat) instead of the crate's feature-flag veto; clearcoat render mapping was already shipped"
   },
   {
     "asset": "UnlitTest.glb",
@@ -1465,7 +1465,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-166 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2): import_glb()'s own extensionsRequired allowlist (includes KHR_materials_unlit) replaces the crate's feature-flag veto, so this now imports and renders. KHR_materials_unlit itself is not yet wired to the UnlitMaterial primitive (tracked separately as BUG-174) \u2014 this asset renders via the default lit path, not true unlit shading."
+    "note": "import_glb()'s own extensionsRequired allowlist (includes KHR_materials_unlit) replaces the crate's feature-flag veto, so this now imports and renders. KHR_materials_unlit itself is not yet wired to the UnlitMaterial primitive (tracked separately as BUG-174) \u2014 this asset renders via the default lit path, not true unlit shading."
   },
   {
     "asset": "SpecGlossVsMetalRough.glb",
@@ -1481,7 +1481,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-167 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P3/D2): KHR_materials_pbrSpecularGlossiness converts to metal-rough at import (diffuseFactor/diffuseTexture->base color, glossinessFactor->roughness, specularFactor(mean)->specular_factor). KNOWN LIMITATION (not a regression, a named Deferred item, doc section 8): the specularGlossinessTexture's RGB specular TINT is not sampled (deferred \u2014 needs a shader change) \u2014 on THIS asset the spec-gloss bottle half is visibly darker/less saturated than its metal-rough twin because the tint carries the gold color the deferred map would supply. The two halves no longer look broken (both render, both are lit, both show the logo/geometry) but are not yet pixel-alike. Revival trigger named in the doc is now empirically met by this exact asset."
+    "note": "KHR_materials_pbrSpecularGlossiness converts to metal-rough at import (diffuseFactor/diffuseTexture->base color, glossinessFactor->roughness, specularFactor(mean)->specular_factor). KNOWN LIMITATION (not a regression, a named Deferred item, doc section 8): the specularGlossinessTexture's RGB specular TINT is not sampled (deferred \u2014 needs a shader change) \u2014 on THIS asset the spec-gloss bottle half is visibly darker/less saturated than its metal-rough twin because the tint carries the gold color the deferred map would supply. The two halves no longer look broken (both render, both are lit, both show the logo/geometry) but are not yet pixel-alike. Revival trigger named in the doc is now empirically met by this exact asset."
   },
   {
     "asset": "SimpleInstancing.glb",
@@ -1497,7 +1497,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-168 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P4/D6): EXT_mesh_gpu_instancing parsed via raw-JSON sniff (no typed support in gltf 1.4.1); each instance's TRANSLATION/ROTATION/SCALE composes with the node's own world transform and bakes a separate world-space copy into the SAME per-material combined mesh at flatten time -- zero new code in the render/graph-assembly path (v1 expands to N wired copies, not true GPU instancing, per D6's explicit rejection of render_instanced_3d_mesh). 125 instances render as 125 visibly distinct cubes; object_count stays 1 (one render_scene object, one combined 4500-vertex mesh) since instancing never adds materials -- OBJECT_SAFETY_MAX's trigger condition (deferred) does not apply here."
+    "note": "EXT_mesh_gpu_instancing parsed via raw-JSON sniff (no typed support in gltf 1.4.1); each instance's TRANSLATION/ROTATION/SCALE composes with the node's own world transform and bakes a separate world-space copy into the SAME per-material combined mesh at flatten time -- zero new code in the render/graph-assembly path (v1 expands to N wired copies, not true GPU instancing, per D6's explicit rejection of render_instanced_3d_mesh). 125 instances render as 125 visibly distinct cubes; object_count stays 1 (one render_scene object, one combined 4500-vertex mesh) since instancing never adds materials -- OBJECT_SAFETY_MAX's trigger condition (deferred) does not apply here."
   },
   {
     "asset": "MetalRoughSpheresNoTextures.glb",
@@ -1513,7 +1513,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-169 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P1): NOT a texture-less-material/lighting bug \u2014 same root cause as BUG-165, node.orbit_camera's fixed near=0.05 clip plane clipping this small-scale (radius 0.0056) object entirely \u2014 see gltf_import.rs's near_clip computation"
+    "note": "NOT a texture-less-material/lighting bug \u2014 same root cause as BUG-165, node.orbit_camera's fixed near=0.05 clip plane clipping this small-scale (radius 0.0056) object entirely \u2014 see gltf_import.rs's near_clip computation"
   },
   {
     "asset": "AnimatedColorsCube.glb",
@@ -1563,7 +1563,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-172 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2, D5): missing default_scene now falls back to the union of all scenes' roots via the shared scene-fallback helper. Golden re-captured 2026-10-22 (BUG-elwvu.14, RecursiveSkeletons skinning against its golden): the old golden was the old importer bailing out to one unskinned column (84 distinct skins on one material); it now shows the file, four skinned trees with their branches, straight because every joint rotation is identity at time 0."
+    "note": "missing default_scene now falls back to the union of all scenes' roots via the shared scene-fallback helper. Golden re-captured: the old golden was the old importer bailing out to one unskinned column (84 distinct skins on one material); it now shows the file, four skinned trees with their branches, straight because every joint rotation is identity at time 0."
   },
   {
     "asset": "NodePerformanceTest.glb",

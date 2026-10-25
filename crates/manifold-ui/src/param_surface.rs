@@ -18,7 +18,7 @@
 //!
 //! Anything that can't be expressed this way is an escalation, by definition
 //! of the layer. Building row/slider/drawer machinery anywhere else is
-//! forbidden (Peter's standing rule, INV-8).
+//! forbidden (Peter's standing rule).
 
 use crate::panels::GraphParamTarget;
 use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RowMod};
@@ -229,8 +229,7 @@ pub struct RowSpec {
     /// The control's scene descriptor (role and control group) when the
     /// lookup has one. The Scene tab groups and filters its rows by it.
     pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,
-    /// What a drag may reach past the slider's end (SCENE_SURFACES_DESIGN.md
-    /// D15 (slider range and hard limit)). The projection resolves `Slider`
+    /// What a drag may reach past the slider's end. The projection resolves `Slider`
     /// to the declared range, so `min`/`max` (the slider range) only set the
     /// drag's speed; a hand-built row left at `Slider` clamps to its span.
     pub limit: manifold_foundation::param_range::HardLimit,

@@ -97,7 +97,7 @@ pub struct EmissiveTriangleGpu {
     pub uv1: [f32; 2],
     pub uv2: [f32; 2],
     pub object_index: u32,
-    /// RT_INSTANCING_DESIGN.md D8: the TLAS descriptor slot of THIS entry's
+    /// The TLAS descriptor slot of THIS entry's
     /// copy. In instanced mode the entries stay LOCAL-space and the kernel
     /// composes world positions from `emissive_descriptors[descriptor_index]`;
     /// the D7 fast path sets this to the object index (descriptor_index ==

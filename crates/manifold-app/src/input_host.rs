@@ -1504,7 +1504,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.selection.clear_automation_selection();
     }
 
-    // ── D4/D5 Finder-paste arbitration ──
+    // ── Finder-paste arbitration ──
 
     fn pasteboard_file_urls(&self) -> Vec<std::path::PathBuf> {
         #[cfg(target_os = "macos")]

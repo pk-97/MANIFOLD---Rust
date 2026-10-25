@@ -159,7 +159,7 @@ impl ScrollContainer {
     }
 
     /// Apply one block's height change to this column in place
-    /// (UI_INVALIDATION_DESIGN.md decided item 10: a drawer opens by reveal).
+    /// A drawer opens by reveal.
     /// The block's clip and its card frame take the new height, a node that
     /// encloses the whole card (a section or group frame) grows with it, and
     /// every node from the block's top down moves by `dy`, except the block's

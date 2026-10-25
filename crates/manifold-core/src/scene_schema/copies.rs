@@ -286,8 +286,7 @@ pub fn acts_on_copies(modifier: ModifierType) -> bool {
         .any(|entry| entry.modifier == modifier)
 }
 
-/// Why a copy Modifier is not offered for a target (SCENE_REFINEMENT_DESIGN
-/// ruling 2): it moves whole copies, so it acts only where Copies is on.
+/// Why a copy Modifier is not offered for a target: it moves whole copies, so it acts only where Copies is on.
 pub const TURN_ON_COPIES: &str = "Turn on Copies to move them";
 
 /// Whether `item`, or anything inside it, has Copies on.
@@ -367,7 +366,7 @@ mod tests {
     use crate::scene_doc::{ItemId, ModifierFields, ObjectFields};
 
     /// A copy type is offered only where its targets have Copies on
-    /// (SCENE_REFINEMENT_DESIGN ruling 2), in the Type list and the Targets
+    /// in the Type list and the Targets
     /// picker alike.
     #[test]
     fn copy_types_need_copies_on_their_targets() {

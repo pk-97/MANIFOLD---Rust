@@ -25,7 +25,7 @@ tick later than today, and event quantization grows from 16.7 ms to the solver t
 D1–D6 were decided by Peter and the lead on 2026-09-29 and are restated here, not
 reopened. D7 onward are this design's calls.
 
-Companions: [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md) (current CPU FLIP
+Companions: the current CPU FLIP
 contract; its historical GPU proposal is mined only for surface ideas);
 [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) and
 [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (atom rules, codegen mandate);
@@ -651,7 +651,7 @@ pose wiring), `WaterDamBreak.json` (whitewater instances and counts), `FluidSim3
 | Lattice box as scalars | **New, two users** — `node.transform_components` | CPU atom, the inverse of `node.transform_3d`. Buffer codegen binds params and arrays only, and a `Transform` wire into a GPU atom is a fusion cut, so the seam keeps `grid_bounds: Transform` and the surface and MLS-MPM atoms read its centre and size as scalars. |
 | MC emit | **New** — `node.volume_surface_mesh` | D16. `capacity` param (vertices, multiple of 3); `scan` and level set are `BufferGather`; `total` input drives the error. Writes the attributes (retired with CPU FLIP; in git history) writes. |
 | Mesh consumer | **Exists** | `node.scene_object.vertices` → `node.render_scene`, unchanged. |
-| Whitewater to instances | **Built in the GPU MPM solver's P1 (Water kernel, look gates and the cost probe)** — `node.particles_to_copies` | Pointwise `FluidParticle` → `InstanceTransform` (`pos_scale` = position, radius), with a `live_count` input that turns slots past the producer's count into holes. `node.copy_positions` goes the other way. |
+| Whitewater to instances | **Built in the GPU MPM solver's Water kernel, look gates and cost probe** — `node.particles_to_copies` | Pointwise `FluidParticle` → `InstanceTransform` (`pos_scale` = position, radius), with a `live_count` input that turns slots past the producer's count into holes. `node.copy_positions` goes the other way. |
 | One `gpu_fluid_mesher` node | **Forbidden** | DECOMPOSING_GENERATORS.md section 1.1 (No fused single-effect or single-generator monoliths). |
 
 Every atom that reads the lattice takes its box as centre and size scalars and its
@@ -1193,7 +1193,7 @@ proofs; record the rest. **Done: no lever kept.** The surface stays 5.27 ms p95.
 |---|---|---|
 | Anisotropy once per tick | The volume already reads each particle's stored ellipsoid (`FluidBlob`, built once per frame by `node.shape_particle_blobs`); a cell visit costs one 3×3 multiply, nothing to hoist. At the 60 Hz producer tick equals frame. | Already so; nothing to gain at 60 Hz |
 | Bin-local shared memory for the volume gather | Tiled kernel (one workgroup per 4×4×4 node block, the block's bins copied to workgroup memory, same sum order) passed the brute-force proof but took 30.4 ms against 1.95 ms at ×2, 103 ms against 5.5 at ×3: the tile needs 31 KB of the core's 32 KB, leaving one 64-thread workgroup per core. | Dropped |
-| Cooperative brick gather (2026-10-06) | One half brick per workgroup, its bins' blobs staged in chunks, each lane visiting its own window in the generated kernel's order; bitwise after an exact-position helper. Oracle res 64: particle_volume 1.5–4.5× slower across CHUNK 64/128/256, tick p95 +4.3 to +23 ms. Barrier count and per-lane imbalance (visits p50 ≈ 0, p95 ≈ 3,300–4,000) outweigh the staging. PARTICLE_VOLUME_BRICK_GATHER_DESIGN.md (deleted) section 10 (Result). | Dropped |
+| Cooperative brick gather | One half brick per workgroup, its bins' blobs staged in chunks, each lane visiting its own window in the generated kernel's order; bitwise after an exact-position helper. Oracle res 64: particle_volume 1.5–4.5× slower across CHUNK 64/128/256, tick p95 +4.3 to +23 ms. Barrier count and per-lane imbalance (visits p50 ≈ 0, p95 ≈ 3,300–4,000) outweigh the staging. | Dropped |
 | Half-precision neighbour reads | Scalar model at res 64 ×2 scales over 2,000 nodes: f16 blob fields move the level set by up to 9.1e-2 with world-space centres and 1.4e-3 with bin-relative ones, 10⁷–10⁹ f32 ULPs against a 1-LSB bar. | Dropped |
 
 ### P6e — Surface look: a distance level set
@@ -1479,7 +1479,7 @@ available here.
 
 ### P7 — Add Fluid authors the GPU surface
 
-- **Entry state:** P6 merged. Add Water is now the Water scene template (`gpu_flip_family_template`) inserted by `InsertSceneTemplateCommand` in `scene_template.rs`; `AddSceneFluidCommand` is deleted.
+- **Entry state:** Add Water is now the Water scene template (`gpu_flip_family_template`) inserted by `InsertSceneTemplateCommand` in `scene_template.rs`; `AddSceneFluidCommand` is deleted.
 - **Read-back:** D9, D12, D13; GROUPING_GRAPHS.md.
 - **Deliverables:** the Water template inserts the Liquid Surface group between `node.fluid_surface` and the water object, at 30 Hz, with Surface Detail mapped as in P6. Existing scenes are not migrated. Test `scene_physics_add_fluid_gpu_surface_undo_reload`. UI flow `scripts/ui-flows/scene-fluid-gpu-surface.json`: add fluid → play → raise Surface Detail → undo/redo → save/reload → play again, asserting the group exists and the water object's `vertices` producer is `node.volume_surface_mesh`.
 - **Gate:** the test, the new flow and every `scene-fluid-*` flow on disk pass (count them); focused editing/app/renderer clippy clean.

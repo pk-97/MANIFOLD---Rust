@@ -192,7 +192,7 @@ impl Primitive for GaussianBlurVariableWidth {
 }
 
 impl GaussianBlurVariableWidth {
-    /// COMPILE_CONTRACT_DESIGN P2: prewarm all 6 quality×weighting variants
+    /// Prewarm all 6 quality×weighting variants
     /// at startup. quality ∈ {0, 1, 2}, weighting_mode ∈ {0, 1}.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
         for quality in 0u32..3 {

@@ -91,7 +91,7 @@ pub struct GraphEditDiagnostic {
 /// one-slot handoff ([`state_channel`]); a replaced state folds into its
 /// replacement ([`ContentState::absorb_replaced`]).
 ///
-/// Orphan enforcement (UI_PROJECTION_LAYER_DESIGN.md P0): manifold-app is a
+/// Orphan enforcement: manifold-app is a
 /// bin crate, so rustc's dead_code lint sees every read site — a field written
 /// by the content thread but never read on the UI side fails
 /// `cargo clippy -- -D warnings`. Never re-add `#[allow(dead_code)]` here;
@@ -161,8 +161,7 @@ pub struct ContentState {
     pub audio_send_levels: [f32; manifold_audio::analysis::MAX_SENDS],
     /// Number of valid entries in [`Self::audio_send_levels`].
     pub audio_send_count: usize,
-    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-    /// P3c, BUG-082's fix): the shaped `AudioModShape::condition()` signal
+    /// Fire meter: the shaped `AudioModShape::condition()` signal
     /// for every fire-mode config (param gate cards + clip triggers)
     /// evaluated this tick — the SAME value the evaluator edge-detects
     /// against the fixed 0.5 threshold (D3 AS-BUILT). `Copy`/fixed-size
@@ -220,10 +219,8 @@ pub struct ContentState {
     // ── Live Recording ─────────────────────────────────────────────
     /// Whether a live recording is currently in progress.
     pub is_live_recording: bool,
-    /// Video frames dropped this recording (texture-pool exhaustion). BUG-084
-    /// — surfaced on the layer-header record button. Restored (with its
-    /// consumer, per UI_PROJECTION_LAYER_DESIGN I1) from the P0 orphan purge
-    /// that originally deleted it un-consumed.
+    /// Video frames dropped this recording (texture-pool exhaustion).
+    /// Surfaced on the layer-header record button.
     pub recording_dropped_frames: u32,
     /// Audio sample-frames dropped this recording by the native encoder's
     /// backpressure gate (`LiveRecordingPlugin.m`'s `WriteAudioSamples`).
@@ -234,9 +231,7 @@ pub struct ContentState {
     pub recording_dropped_audio_frames: u32,
 
     // ── Export ────────────────────────────────────────────────────
-    /// Whether an export is currently in progress. BUG-083: restored (with
-    /// its UI consumer, per UI_PROJECTION_LAYER_DESIGN I1) from the P0
-    /// orphan purge that originally deleted this un-consumed.
+    /// Whether an export is currently in progress.
     pub is_exporting: bool,
     /// Export progress, 0.0..1.0. BUG-083.
     pub export_progress: f32,
@@ -255,7 +250,7 @@ pub struct ContentState {
 
     // ── Undo/redo ─────────────────────────────────────────────────
     /// Set on the tick an undo/redo actually happened; `None` every other
-    /// tick. D11 undo/redo toast — see
+    /// tick. Undo/redo toast: see
     /// [`UndoRedoEvent`]'s doc comment for why this differs from
     /// `export_finished`'s out-of-band pattern.
     pub undo_redo_event: Option<UndoRedoEvent>,

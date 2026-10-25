@@ -1,4 +1,4 @@
-//! Layered, tile-bounded depth of field. See CINEMATIC_POST_DESIGN.md D10.
+//! Layered, tile-bounded depth of field.
 //! Runtime and proofs use the same encoding method; caches belong to the node.
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuDevice, GpuFilterMode, GpuSamplerDesc, GpuTexture,

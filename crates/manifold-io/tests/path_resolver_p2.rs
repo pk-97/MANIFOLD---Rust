@@ -1,4 +1,4 @@
-//! P2 gate — PathResolver extension.
+//! PathResolver extension.
 //!
 //! A temp-dir project whose audio clip and GLB string param reference
 //! now-broken absolute paths must re-link after the files are moved into a

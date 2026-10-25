@@ -806,7 +806,7 @@ mod layer_tap_tests {
     /// to master), the `LayerTap` must STILL stream the tone — proving the tap reads
     /// the frame *before* the output volume. If this fails, kira applies the
     /// sub-track volume before the effect chain and analysis-only needs a different
-    /// tap point (see AUDIO_LAYER_DESIGN section 5).
+    /// tap point.
     #[test]
     fn tap_stays_hot_when_subtrack_muted_to_master() {
         let mut playback = mock_playback();

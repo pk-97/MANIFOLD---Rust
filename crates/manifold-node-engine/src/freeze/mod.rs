@@ -5,8 +5,7 @@
 //! Collapses maximal runs of pure per-element GPU atoms into one generated
 //! WGSL kernel per region — read once, math in registers, write once — to
 //! eliminate the VRAM round-trips that make the naive node-graph runtime ~5×
-//! slower than the old hand-fused Rust effects (Phase 0 findings:
-//! `GRAPH_FREEZE_PHASE0_FINDINGS.md`, deleted; git keeps it). [`classify`] tags every
+//! slower than the old hand-fused Rust effects. [`classify`] tags every
 //! primitive's fusion eligibility; [`region`] partitions a graph into maximal
 //! fusable regions (texture and buffer domains); [`codegen`] and [`install`]
 //! generate the fused kernel per region and swap it into the graph as one

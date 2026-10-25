@@ -1,5 +1,5 @@
 //! `graph_tool` — CLI verbs over the `validate_def`/fusion seams for agents
-//! authoring graph JSON (GRAPH_TOOLING_DESIGN D2).
+//! authoring graph JSON.
 //!
 //! ```text
 //! graph_tool validate <file.json> --kind effect|generator [--json]
@@ -15,7 +15,7 @@
 //! `validate_graph` tool per D7).
 //!
 //! `fusion` runs the def through the exact flatten + partition the freeze
-//! pipeline itself uses ([`fusion_report`] — GRAPH_TOOLING_DESIGN P3, D10)
+//! pipeline itself uses [`fusion_report`]
 //! and prints per-node classification, region membership, cut reasons, and
 //! an estimated dispatch count.
 //!

@@ -221,8 +221,8 @@ pub static SCENE_MODIFIER_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
     LazyLock::new(|| ArcSwap::from(load_catalog(&SCENE_MODIFIER_DIRS)));
 
 manifold_core::testkit_visible! {
-/// Project-scoped preset overlay (Phase 4; split into two origin tiers by
-/// PRESET_LIBRARY_DESIGN D5/P2). `(type_id, json)` for the currently-loaded
+/// Project-scoped preset overlay (split into two origin tiers).
+/// `(type_id, json)` for the currently-loaded
 /// project's `embedded_presets`, split by [`EmbeddedOrigin`] and merged in
 /// [`build_catalog`] at two different tiers:
 ///
@@ -595,7 +595,7 @@ pub(crate) fn build_catalog_with_overlays(
         ));
     }
 
-    // Merge order (PRESET_LIBRARY_DESIGN D5/P2): Snapshot overlay (bottom) →
+    // Merge order: Snapshot overlay (bottom) →
     // stock → user → Saved overlay (top). Snapshot entries are save-time
     // self-containment plumbing (D5) — disk (stock/user) always wins over
     // one, so an improved/restored library file is never shadowed by a

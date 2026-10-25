@@ -177,7 +177,7 @@ pub struct MappingPopover {
     /// `PanelAction` so the app routes to the right `UserParamBinding`.
     binding_id: String,
     label: String,
-    /// The binding's card section. `None` = unsectioned. Editable via `EditField::Section` (P5c).
+    /// The binding's card section. `None` = unsectioned. Editable via `EditField::Section`.
     section: Option<String>,
     /// The binding's declared min/max *range bounds* (the slider's full
     /// span). The trim handles select a sub-window within this; we map a

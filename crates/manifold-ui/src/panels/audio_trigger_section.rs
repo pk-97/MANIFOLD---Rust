@@ -708,7 +708,7 @@ impl AudioTriggerSection {
         self.dragging_shape.is_active()
     }
 
-    /// D6 fire meter: push this tick's live shaped-signal level onto
+    /// Fire meter: push this tick's live shaped-signal level onto
     /// every open row's Sensitivity meter — in place, no rebuild. Keyed on
     /// `(layer_id, row index)` via `manifold_foundation::
     /// fire_meter_key_for_clip_trigger` — the SAME constructor the
@@ -734,7 +734,6 @@ impl AudioTriggerSection {
         }
     }
 
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// row index of the currently-OPEN clip-trigger drawer, if any.
     /// `audio_configs[i].is_some()` already means "this row is expanded AND
     /// the section isn't collapsed" (see `configure_and_build`'s gate).

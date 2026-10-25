@@ -1,4 +1,4 @@
-//! Workspace dependency boundaries from RENDERER_CRATE_SPLIT_DESIGN.md section 3.
+//! Workspace dependency boundaries from the crate layering rules.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -258,7 +258,7 @@ const LAYERS: &[Layer] = &[
         normal_and_build: &["manifold-gpu", "manifold-node-engine", "manifold-physics"],
         dev: &["manifold-foundation", "manifold-node-engine"],
     },
-    // WATER_CRATES_DESIGN.md D1: rigid sits below every liquid and names none of them.
+    // Rigid sits below every liquid and names none of them.
     Layer {
         package: "manifold-water-rigid",
         normal_and_build: &[
@@ -445,7 +445,7 @@ fn engine_water_vocabulary_only_shrinks() {
     );
 }
 
-/// INV-W2 (WATER_CRATES_DESIGN.md section 8): the rigid crate's code names no
+/// The rigid crate's code names no
 /// liquid solver. Comments are skipped; the allowlist is the pair contract
 /// (D2) and the coupled-step tests that use manifold-fluids as their oracle.
 const RIGID_LIQUID_WORD_EXEMPT: &[&str] = &["node.rs", "physics/coupling_tests.rs"];
@@ -563,7 +563,7 @@ fn water_crates_declare_exactly_testkit_and_gpu_proofs() {
     assert!(water >= 2, "water crates missing from cargo metadata");
 }
 
-/// INV-W2 liquid companion (WATER_CRATES_DESIGN.md section 4.2): the seam's
+/// Liquid companion: the seam's
 /// code names no solver. Comments and node descriptor prose are skipped;
 /// `whitewater.rs` owns the grid vocabulary by name, and `clock.rs` keeps the
 /// table of each solver's interval-duration input by type id.

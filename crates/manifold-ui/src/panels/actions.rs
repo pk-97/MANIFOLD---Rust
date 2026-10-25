@@ -142,7 +142,7 @@ pub enum LayerAction {
     ToggleMute(LayerId),
     ToggleSolo(LayerId),
     /// Toggle an audio layer's analysis-only output state (silent to master, still
-    /// feeding its send). See LAYER_CONTROLS_DESIGN section 5.3.
+    /// feeding its send).
     ToggleAnalysisOnly(LayerId),
     ToggleLed(LayerId),
     SetBlendMode(LayerId, String),
@@ -400,7 +400,7 @@ pub enum ParamsAction {
     SectionFoldToggled,
     /// A scene card section header's fold triangle was clicked; the card
     /// already flipped its own state. The app saves the choice in the
-    /// instance's fold lists (SCENE_SURFACES_DESIGN.md D7 (user choices)).
+    /// instance's fold lists.
     CardSectionFolded {
         target: GraphParamTarget,
         section: String,
@@ -414,8 +414,7 @@ pub enum ParamsAction {
         Option<manifold_foundation::scene_surface::CardPin>,
     ),
     /// Set slider range / Reset slider range: the user's slider span for one
-    /// control, `None` to clear it (SCENE_SURFACES_DESIGN.md D15 (slider range
-    /// and hard limit)). Display only; the value is never moved.
+    /// control, `None` to clear it. Display only; the value is never moved.
     SetSliderRange(GraphParamTarget, ParamId, Option<(f32, f32)>),
     /// Show in Scene tab: switch the inspector to the Scene tab and reveal
     /// the item that owns this row.
@@ -522,19 +521,19 @@ pub enum ParamsAction {
     /// Import a `.json` preset file as a project-embedded preset and retarget
     /// the targeted instance to it (native open dialog).
     ImportPreset(GraphParamTarget),
-    /// Save to Library (PRESET_LIBRARY_DESIGN D4): publish the targeted
+    /// Save to Library: publish the targeted
     /// preset's current effective definition as a new named entry under the
     /// user's library folder. Opens a name-prompt text-input session (NOT a
     /// native file dialog — Export/Import are the only `rfd` users); the
     /// actual write happens on commit.
     SaveToLibrary(GraphParamTarget),
-    /// Save to Project (PRESET_LIBRARY_DESIGN D4): publish the targeted
+    /// Save to Project: publish the targeted
     /// preset's current effective definition as a new `origin: Saved`
     /// project-embedded preset, WITHOUT retargeting the instance that
     /// triggered it (unlike Make Unique / Import). Opens the same
     /// name-prompt text-input session as Save to Library.
     SaveToProject(GraphParamTarget),
-    /// Revert to Library (PRESET_LIBRARY_DESIGN D3, P4): clear the targeted
+    /// Revert to Library: clear the targeted
     /// preset's per-instance graph override, going back to tracking its
     /// library entry (undoable). Shown in the card menu only when the card
     /// is diverged (`graph.is_some()`) — reverting an already-tracking
@@ -626,8 +625,7 @@ pub enum ModulationAction {
     /// useful and adds a lot of clutter"); the variant and the runtime field
     /// and `condition()` arm it drives stay compiled for a possible future
     /// re-wire. Un-suppression trigger for any dead-code warning this
-    /// strands: re-wire per AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md
-    /// section 7.2 item 2.
+    /// strands: re-wire the variant.
     AudioModSetRateOfChange(GraphParamTarget, ParamId),
     // Audio-mod shaping-slider scrub trio (sensitivity / attack / release)
     // migrated to `PanelAction::Scrub` (`ValueRef::AudioModShape`, P-I / D4).
@@ -795,7 +793,7 @@ pub enum RootAction {
     /// raytracing sample tiers + ray resolution, real-time and export columns.
     /// Opened from the Settings popup; a floating overlay, not a dock.
     OpenRtQuality,
-    /// Scene Setup outliner selection moved (D1 of SCENE_PANEL_UX_DESIGN.md).
+    /// Scene Setup outliner selection moved.
     /// The panel has already updated its UI-local selection and moved its
     /// selection version, which re-runs `sync_inspector_data` this same
     /// frame — same-frame Properties update, no polling, no per-frame rebuild.

@@ -2258,7 +2258,7 @@ mod tests {
         );
     }
 
-    // ── GLTF_ANIM_RUNTIME_V2_DESIGN.md P2/D5 — old-shape sampler migration ──
+    // ── Old-shape sampler migration ──
 
     fn minimal_preset_metadata() -> manifold_core::effect_graph_def::PresetMetadata {
         manifold_core::effect_graph_def::PresetMetadata {

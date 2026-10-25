@@ -3,8 +3,8 @@
 //!
 //! Companion to `metalfx_upscaler.rs` (the spatial, single-frame variant,
 //! the template this module follows). The temporal variant additionally
-//! consumes depth + motion vectors (the exact formats W0 stores per-scene
-//! for RT-enabled scenes, GBUFFER_DESIGN.md section 2 D2/D5) and blends across
+//! consumes depth + motion vectors (the exact formats stored per scene
+//! for RT-enabled scenes) and blends across
 //! frames, so callers must:
 //!   1. Apply [`jitter_offset`] to the scene camera's projection BEFORE
 //!      rendering color/depth/velocity at `src_w x src_h` — this is what

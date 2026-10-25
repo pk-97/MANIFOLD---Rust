@@ -1,4 +1,4 @@
-//! GLTF_ANIM_RUNTIME_V2_DESIGN.md D1/D2 — the shared, file-backed,
+//! The shared, file-backed,
 //! `Weak`-held animation cache. Keyframe payload no longer lives in any
 //! graph def's `ParamValue::Table`; instead every glTF sampler primitive
 //! (`node.gltf_skeleton_pose` first, P1; the other two samplers follow in
@@ -8,9 +8,8 @@
 //! frees the payload — the delete-recovers-memory property is structural,
 //! not a cleanup pass.
 //!
-//! `ANIM_CACHE` is this design's one approved piece of new shared state
-//! (CLAUDE.md "No new shared state" — approved by
-//! GLTF_ANIM_RUNTIME_V2_DESIGN.md D2): a coarse `Mutex` around a tiny map,
+//! `ANIM_CACHE` is the one piece of new shared state
+//! (CLAUDE.md "No new shared state" rule): a coarse `Mutex` around a tiny map,
 //! touched only at load/drop, never per-frame. Loads happen on a spawned
 //! thread, the same `mpsc` background-load pattern
 //! `gltf_morph_deltas_source.rs:96` already proves — this module reuses it
@@ -170,8 +169,7 @@ impl Channel {
         }
     }
 
-    /// Morph-weight channels are LINEAR-only (GLTF_ANIMATION_DESIGN.md A3,
-    /// unchanged by this design) — never CubicSpline, so no tangent data.
+    /// Morph-weight channels are LINEAR-only, never CubicSpline, so no tangent data.
     fn from_weights(target_node: u32, track: &gltf_load::WeightsTrack, target_count: u32) -> Self {
         let mut values = Vec::with_capacity(track.values.len() * target_count as usize);
         for row in &track.values {
@@ -192,7 +190,7 @@ impl Channel {
 /// One `document.animations()` entry — index == glTF `animations[]` index.
 #[derive(Debug, Clone)]
 pub struct AnimClip {
-    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: read by all three samplers
+    /// Read by all three samplers
     /// (`node.gltf_animation_source`/`node.gltf_skeleton_pose`/
     /// `node.gltf_morph_weights`) once an `Arc<GltfAnimSet>` is resident —
     /// wins over the `clip_durations` Table param, which stays declared
@@ -230,7 +228,7 @@ impl AnimClip {
             .find(|c| c.kind == ChannelKind::Scale)
     }
 
-    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: `node.gltf_morph_weights`' cache
+    /// `node.gltf_morph_weights`' cache
     /// lookup — a `Weights` channel is keyed by the SAME `target_node`
     /// convention as TRS channels (the mesh-owning node), matched
     /// regardless of `target_count` (the caller checks that separately).
@@ -251,7 +249,7 @@ pub struct GltfAnimSet {
     /// Index == `document.skins()` index.
     pub skins: Vec<SkinTopology>,
     /// Whole-scene node hierarchy, index == glTF node index; `-1` = root.
-    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): read by
+    /// Read by
     /// `gltf_skeleton_pose::resolve_world_whole_scene` — the node-slot
     /// rigid palette's whole-hierarchy parent-chain composition, which has
     /// no per-skin joint list to walk instead (unlike `SkinTopology::joint_parent`,

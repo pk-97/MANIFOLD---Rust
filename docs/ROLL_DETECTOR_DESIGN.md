@@ -1,7 +1,7 @@
 # Roll Detector — kick and snare rolls as one rising state beside the single-hit triggers
 
 **Status:** PROPOSED · awaiting Peter (section 15, open decisions) · 2026-10-12 · Fable
-**Prerequisites:** DETECTOR_LAB_DESIGN.md P6 and DETECTOR_RUNTIME_DESIGN.md P4 (both shipped on main at df8030ca6); the roll census, section 8 (Data), says the exam needs more real roll songs before P3.
+**Prerequisites:** the detector lab and detector runtime (both shipped); the roll census, section 8 (Data), says the exam needs more real roll songs before P3.
 
 <!-- index: A plug-in detector pair (kick_roll, snare_roll) built in the Detector Lab and run by the generic runtime: a roll is a state (on, rate, off) not a hit; labels from MIDI note density; never touches the kick and snare models. -->
 
@@ -27,15 +27,15 @@ speeds up; the Kick and Snare triggers keep flashing where they flash today. A p
 intensity (brightness, zoom, feedback) and the hit cells to flashes, and the build ramps with the music instead of
 stuttering at the refractory. When the roll detector is wrong the cell is wrong on its own; nothing else moves.
 
-Binding constraints (DESIGN_AUTHORING.md section 1 (the intake)): **label truth** — roll truth comes only from MIDI
+Binding constraints: **label truth** — roll truth comes only from MIDI
 note density, never from audio analysis (memory `detector-label-truth`); **fidelity** — Rust equals Python per part,
 as every lab-built detector; **hot path** — the detector runs on the detector worker, allocation-free, under the D16
-CPU ceiling (DETECTOR_RUNTIME_DESIGN.md D16); **persistence** — `AudioFeatureKind` is saved in projects, so new kinds
+CPU ceiling; **persistence** — `AudioFeatureKind` is saved in projects, so new kinds
 are additive; **performance surface** — two new feature cells and two trigger chips.
 
 Companion docs:
-- [DETECTOR_LAB_DESIGN.md](DETECTOR_LAB_DESIGN.md) — the parts, configs, runs, honest cutoffs and the A/B; this design adds one finder, one measure, one decision rule and two families.
-- [DETECTOR_RUNTIME_DESIGN.md](DETECTOR_RUNTIME_DESIGN.md) — the model file contract and the generic runtime; this design adds parts to `runtime_parts.json` and two embedded slots.
+- The detector lab: the parts, configs, runs, honest cutoffs and the A/B; this design adds one finder, one measure, one decision rule and two families.
+- The detector runtime: the model file contract and the generic runtime; this design adds parts to `runtime_parts.json` and two embedded slots.
 - [AUDIO_EVAL_HARNESS_GUIDE.md](AUDIO_EVAL_HARNESS_GUIDE.md) section 0 (trained detectors) — the rules every trained detector follows (rolls out of the standard labels; oracle frontier first; three seeds).
 
 ## 1. Audit — what exists (verified 2026-10-12 on main at df8030ca6; Python paths under `tools/audio_analysis/`, Rust under `crates/manifold-audio/src/`)
@@ -45,7 +45,7 @@ Extend, don't redesign.
 | Piece | Where | State |
 |---|---|---|
 | The roll rule, already the standard detectors' exclusion | `eval/detector_labels.py:341 roll_spans` (runs of ≥ 4 hits, each < 200 ms after the last, padded 250 ms); `:326 dense_spans` (snare: any two hits < `dense_s` .200 apart, `Family:50`) | exists; the roll truth is its complement (D2) |
-| Kick labels drop roll kicks and unscore the spans | `eval/kick_labels.py:9,100` (`roll_spans` on every kick time the record knows, `song_labels :63`); `eval/kick_generated.py:42` | exists; 129 of 4733 kicks in rolls (DETECTOR_LAB_DESIGN.md P6 as built) |
+| Kick labels drop roll kicks and unscore the spans | `eval/kick_labels.py:9,100` (`roll_spans` on every kick time the record knows, `song_labels :63`); `eval/kick_generated.py:42` | exists; 129 of 4733 kicks in rolls |
 | Snare labels keep roll snares as `dense_pos`, spans unscored | `eval/detector_labels.py:466`; `eval/snare_generated.py:38–46`; `eval/snare_labels.py:27 drop_kick_rolls` | exists; `detector_eval.dense_recall :248` reports per-hit recall inside them |
 | Generated label sets, MIDI-only truth, one of them built for rolls | `eval/generated_sets.py:45 SETS` — Rolls set "VAR 1-4 (groove, kick and snare build-up rolls, drops) and MUSIC 1-12 (genre sections, 90-174 BPM)"; sections `rolls_var01..04`, `rolls_music01..12` in `lab/songs.json` | exists; train only (lab D8) |
 | Candidate finders as a registry; audio-only finders run on a bare clip | `lab/components.py:52 FINDERS`, `:73 AUDIO_FINDERS`, `:76 audio_candidates`, `Candidates` (cand, avail, hop, sr) | exists; one entry away: a `tick` finder |
@@ -135,7 +135,7 @@ overnight guard rails: causal, no grid cues).
 - decision `state` — section 4.3: on when p ≥ cutoff, off after `hangover` ticks below the off cutoff; the cutoff
   chosen on held-out exam songs for start-event F1, as every detector's.
 Rejected for v1: a net on a long slice (a 600 ms slice with coarse time bins, `kick_goal_nn.py:46 TBINS`), because
-it needs its own 64-band spectrum per detector (the net is most of a detector's CPU, DETECTOR_RUNTIME_DESIGN.md D16)
+it needs its own 64-band spectrum per detector (the net is most of a detector's CPU)
 and the windowed measures are the proven shape for a rate question; Deferred with the trigger in section 14.
 Rejected: reading the family detector's `p_combined` as a measure, because the family nets are trained to reject
 hits inside rolls (snare sim: .03 caught at sixteenths) and it would key the roll's model on the family's release;
@@ -147,13 +147,13 @@ Deferred. Rejected: the song-history stage for rolls (D1).
 `eval/roll_features.py`, never by adding a centres parameter to `kick_goal_lowbank.py`: that module's source is part
 of the kick's `low16` code key, so an edit moves the kick's model keys and run ids (`lab/run.py:223 model_key`;
 AUDIO_EVAL_HARNESS_GUIDE.md section 0 (trained detectors): add a module instead). The constants ship in the model
-file as `roll.*` entries, so Rust reads them and nothing is written twice (DETECTOR_RUNTIME_DESIGN.md D1).
+file as `roll.*` entries, so Rust reads them and nothing is written twice.
 
 **D6. Labels are built by `eval/roll_labels.py` (project songs) and `eval/roll_generated.py` (generated sets),
 into `GOAL/kick_roll_labels.json`, `snare_roll_labels.json` and their `_generated` twins (`registry.FAMILIES`).** The
 builders call the family builders' note extraction (`kick_labels.song_labels`'s record truth, `detector_labels.song`'s
 parts) and never edit them (an edit would move the family's labels sha, which is in every run id, `lab/run.py:156`).
-Schema: the lab's dict (DETECTOR_LAB_DESIGN.md D4) with `positives` = starts, `window_s = [-0.06, 0.30]` (a fire
+Schema: the lab's dict with `positives` = starts, `window_s = [-0.06, 0.30]` (a fire
 from 60 ms before the 4th note to 300 ms after it catches the start), two new keys `active` (spans [start, end] per
 roll, training positives, D7) and `hard_spans` (vouched-negative spans: every double and triple from its first note
 to its last plus 200 ms; every hat run and bass-note run of ≥ 4 notes under 200 ms; section 3.2), `unscored` = the
@@ -164,7 +164,7 @@ for that song (the sidecar read by the parent labels' sha) and the roll labels r
 is not a roll audit's business. Rejected: writing the raw note list into the family labels files, because it changes
 their sha.
 
-**D7. Four named edits to shared lab code, each bit-identical by default** (the DETECTOR_LAB_DESIGN.md D1 pattern):
+**D7. Four named edits to shared lab code, each bit-identical by default** (the lab's pattern):
 1. `detector_eval.rows`: when the labels carry `active`, candidates inside those spans are `y = 1` and train; when
    they carry `hard_spans`, candidates inside are vouched negatives (`hard = True`). Files without the keys produce the
    same (mask, y, hard) as today (test: every committed labels file, byte for byte).
@@ -198,7 +198,7 @@ songs** (two roll songs per group, so every held-out group has recall to measure
 
 **D10. CPU budget: 10 ms per audio second per roll detector in a release build**, so the send's detectors total
 kick 40 + snare-with-kick 70 (the kick runs once) + 2 × 10 = 90, under the 100 ms ceiling
-(DETECTOR_RUNTIME_DESIGN.md D16; today's numbers from its section 5.4 (how the shipped kick keeps working)).
+(today's numbers, from how the shipped kick keeps working).
 Expected: 16 biquads at 48 kHz plus a 1 ms decimation about 2 ms/s, the per-tick autocorrelation under 1 ms/s, trees
 negligible. **Trigger:** a cover or release set over 10 stops the phase and goes to Peter with the per-part breakdown.
 
@@ -312,7 +312,7 @@ window mean, lags `τ ∈ [25, 250]` ms (`roll.lag_ms` [25, 250]), 12 numbers in
 
 Width 24: columns 1–12 for W = 0.25 s, 13–24 for W = 0.70 s. The first `W` of a stream reads a shorter window
 (whatever has arrived); new goldens lead with 0.5 s of silence so the start edge never reaches a golden
-(DETECTOR_RUNTIME_DESIGN.md D10). The rate the detector reports is `1000 / period_ms` of the short window when
+The rate the detector reports is `1000 / period_ms` of the short window when
 its `acf_peak ≥ 0.3`, else of the long window (`roll.rate_min_acf` .3); the model file carries every constant.
 
 Industry methods this builds on, named: the onset-strength envelope is the half-wave-rectified band-flux of
@@ -681,7 +681,7 @@ open decision 4. P1 and P2 do not wait for it.
 ### P6 — Ship (data, one session per family; lands with P5)
 
 - **Entry state:** P5 green on the branch; the exam real by D9's bar or Peter's ruling on open decision 3; Peter's yes on the P2/P3 numbers; run seeds saved for `kick_roll_v1` and `snare_roll_v1`.
-- **Deliverables:** `release.py train kick_roll_v1 --seed S`, `export <id> --set kick_roll --ship`, the same for the snare; the goldens replace the cover sets; `release.json` scores quoted in the commit; the supersession sweep: DETECTOR_LAB_DESIGN.md and DETECTOR_RUNTIME_DESIGN.md Deferred rows "families beyond kick and snare" pointed here, AUDIO_EVAL_HARNESS_GUIDE.md section 0 (trained detectors) rolls bullet pointed here, memory `detector-label-truth`'s "a separate roll detector may come later" line updated, BUG-9ngk8.6 (roll detector for kick and snare rolls) closed, this doc's status line; `scripts/gen_docs_index.py`.
+- **Deliverables:** `release.py train kick_roll_v1 --seed S`, `export <id> --set kick_roll --ship`, the same for the snare; the goldens replace the cover sets; `release.json` scores quoted in the commit.
 - **Gate:** `cargo nextest run -p manifold-audio`; cost in release (D10); `scripts/landing_gate.py --skip-gpu`; section 7.3 all five.
 - **Demo:** L4, Peter, with the worktree binary path in the landing message: a build-up song on an analysed send; Kick Roll and Snare Roll chips rise through the build; Kick and Snare chips fire as before.
 - **Forbidden:** any Rust edit (a parity failure is a P4 bug: escalate); a dirty-tree `train_id`; shipping with the exam below what Peter accepted.

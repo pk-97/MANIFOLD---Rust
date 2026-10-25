@@ -14,7 +14,7 @@ fn whitewater_preset_archive_preserves_graph() {
     instance.graph = Some(def.clone());
     instance.refresh_manifest_from_graph();
     // The live graph: the authored def with each control's range and flags
-    // read from the lookup (SCENE_SURFACES_DESIGN.md D2 (one live lookup)).
+    // read from the lookup.
     let live = instance.graph.clone().expect("live generator graph");
     let path = std::env::temp_dir().join(format!(
         "whitewater_round_trip_{}_{}.manifold",

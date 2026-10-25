@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regenerate docs/GLB_CONFORMANCE_STATUS.md from
-tests/fixtures/gltf/khronos/manifest.json — the G-P7 certification record (asset x status x gap). Pure formatting: this
+tests/fixtures/gltf/khronos/manifest.json — the certification record (asset x status x gap). Pure formatting: this
 script asserts nothing about renderability, it only reflects what the
 manifest already says. Re-run after any manifest classification change.
 

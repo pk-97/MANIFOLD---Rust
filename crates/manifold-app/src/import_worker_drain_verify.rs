@@ -1,4 +1,4 @@
-//! `IMPORT_RESPONSIVENESS_DESIGN.md` P3 gate 1 — the L3 flow driver
+//! Import worker drain gate 1 — the L3 flow driver
 //! (`scripts/ui-flows/`) has no way to express a file drop yet (no flow verb
 //! drives drag-drop), so per the phase brief's own stated fallback this is
 //! an integration test on the drain loop instead: it proves `Stage` events

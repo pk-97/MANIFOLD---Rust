@@ -3,14 +3,14 @@
 //! current per-target weight vector (`Array(f32)`, one weight per target)
 //! `node.morph_targets_blend` reads via a `BufferGather` lookup.
 //!
-//! GLTF_ANIMATION_DESIGN.md A3: a sibling of `node.gltf_skeleton_pose`
+//! A sibling of `node.gltf_skeleton_pose`
 //! (same "sampling is graph-native, no parallel player subsystem"
 //! doctrine, same binary-search+lerp sampler shape) — simpler than joint
 //! posing because a morph weight is a single scalar per target, not a
 //! composed TRS matrix: no parent-chain walk, just one channel lookup per
 //! target per frame.
 //!
-//! GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: keyframe payload no longer lives in
+//! Keyframe payload no longer lives in
 //! this node's Table params (the pre-P2 `weight_tracks` Table is DELETED).
 //! Instead `path` + `target_node` select an `Arc<GltfAnimSet>` from
 //! `gltf_anim_cache`'s shared, file-backed, `Weak`-held cache —
@@ -62,7 +62,7 @@ manifold_node_engine::primitive! {
         weights: Array(f32),
     },
     params: [
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D1/P2: comes via
+        // Comes via
         // presetMetadata.stringBindings, same convention as
         // node.gltf_mesh_source's/node.gltf_skeleton_pose's `path`.
         // Selects the `Arc<GltfAnimSet>` this node samples from
@@ -107,7 +107,7 @@ manifold_node_engine::primitive! {
             label: "Clip",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            // GLTF_ANIM_RUNTIME_V2_DESIGN.md D6: follows the file, not an
+            // Follows the file, not an
             // arbitrary A4-era cap.
             range: Some((0.0, 255.0)),
             enum_values: &[],
@@ -149,7 +149,7 @@ manifold_node_engine::primitive! {
             range: Some((0.0, MAX_TARGETS as f32)),
             enum_values: &[],
         },
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D1: NOT keyframe payload —
+        // NOT keyframe payload —
         // O(target_count) topology (a handful of floats, the SAME scale
         // `clip_durations` stays declared at), so it stays a graph-def
         // param rather than moving to the cache. Rows: [target_index,
@@ -176,7 +176,7 @@ manifold_node_engine::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         trigger_latch: TriggerLatch = TriggerLatch::new(),
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: same key-gated background-load
+        // Same key-gated background-load
         // shape node.gltf_skeleton_pose's P1 rewire introduced.
         last_path: String = String::new(),
         anim_set: Option<Arc<LoadedAnimSet>> = None,
@@ -296,7 +296,7 @@ impl Primitive for GltfMorphWeights {
             return;
         }
 
-        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: `path`/`target_node` select
+        // `path`/`target_node` select
         // the shared `Arc<GltfAnimSet>` — same key-gated background-load
         // shape node.gltf_skeleton_pose's P1 rewire introduced. Moved
         // BEFORE duration_s/progress so a resident clip's own

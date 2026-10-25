@@ -19,8 +19,8 @@ Peter's directives, verbatim:
   would be super cool with these render modes" (2026-09-15) — performability
   is the point, not editor convenience.
 
-Companions: `SCENE_MODIFIER_FRAMEWORK_DESIGN.md` (the card/descriptor
-contract this rides — D5 gate-family enable, D4 card home),
+Companions: the card/descriptor
+contract this rides (D5 gate-family enable, D4 card home),
 (file-authored recipes; **no new Rust
 registrations**), `REALTIME_3D_DESIGN.md` D5 (the atmosphere port precedent),
 `ADDING_PRIMITIVES.md` (the one new atom).

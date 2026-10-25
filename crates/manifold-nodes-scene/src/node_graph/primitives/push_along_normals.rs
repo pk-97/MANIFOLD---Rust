@@ -1,6 +1,6 @@
 //! `node.push_along_normals` — displace each vertex of an `Array<MeshVertex>`
 //! outward (or inward) along its own normal. The core "inflate / breathe"
-//! deformer (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D1/D2/D4).
+//! deformer.
 //!
 //! `pos += normal * amount * w * f`, where `w` is the optional per-vertex
 //! `weights` input (D2 — a short or unwired weights buffer degrades to

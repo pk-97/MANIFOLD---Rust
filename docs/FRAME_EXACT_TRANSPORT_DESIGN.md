@@ -211,7 +211,7 @@ Audit items 1.1–1.9 cite the pre-P2 base. These anchors are current. P3's work
 | Link tempo already outranks the CLK estimate as the live tempo | `content_thread.rs:1819-1827` | Link is the tempo plane. D21 keeps that for the follower's base tempo. |
 | AbletonOSC values are caught on the receive thread into a latest-only slot and stamped with the frame's time when drained. Several reports in one frame collapse to one | `ableton_bridge.rs:641-662`, `:907-910`, `:2458-2459` | Up to one frame of stamp error: about 8 ms of mean lag in the D7 noise model. D7. |
 | The AbletonOSC relay has a tempo listener, used only for dead reckoning | `transport_sync.rs:326-331` | D8's "no live tempo channel" was wrong. D8 now follows it. |
-| The timecode sender is LiveMTC, a third-party Max for Live device, not in this repo. Peter ruled the M4L path unused on 2026-07-07 | `osc_sync.rs:4`, `:14-15` | P3 cannot change the sender (D7, and the Deferred table). |
+| The timecode sender is LiveMTC, a third-party Max for Live device, not in this repo. Peter ruled the M4L path unused | `osc_sync.rs:4`, `:14-15` | P3 cannot change the sender (D7, and the Deferred table). |
 | The timecode receiver takes one float of song seconds, but every OSC argument becomes `f32` | `osc_sync.rs:314`; `osc_receiver.rs:197-200` | `f32` seconds are 0.24 ms coarse at one hour. D7 keeps doubles. |
 | Timecode and OSC messages are stamped when the frame drains them, not when the packet arrives | `osc_receiver.rs:161-186`; `content_thread.rs:1877` | D7 stamps on the receive thread. |
 | The backward-move guard is beat-based | `engine.rs:1815-1824` | Only a backward seek reaches it after P3; the trim never moves the beat backward (D6). |
@@ -979,7 +979,7 @@ P1 and P2 land together as one merge. That merge keeps today's external-sync beh
 - CORE_ENGINE_MAP.md section 4 (Time model & tempo), section 7 (External sync) and section 11 (The threshold table).
 - The two stale CORE_ENGINE_MAP items in audit item 1.9.
 - VSYNC_AND_FRAME_PACING.md, "Content Thread Pacing": add the grid deadline.
-- P3 only: CORE_ENGINE_MAP.md section 13 (Honest edges), item 5 (live external tempo) and item 6 (f32 seams in the beat plumbing) for what D20 and D21 settle; close BUG-0u1al (Link-initiated Play never caches the Link beat offset), its audit-pilot duplicate and BUG-wfs20 (Stale Link tempo after peers vanish writes beat-0 tempo point).
+- P3 only: CORE_ENGINE_MAP.md section 13 (Honest edges), item 5 (live external tempo) and item 6 (f32 seams in the beat plumbing) for what D20 and D21 settle; close two bugs: Link-initiated Play never caches the Link beat offset, and stale Link tempo after peers vanish writes a beat-0 tempo point.
 - Run `scripts/gen_docs_index.py`.
 
 Total estimate: P1 and P2 landed. P3 is about 650 lines changed plus 550 of tests and source models, down from the first revision's 900 plus 900: snaps, the adaptive estimator, the visible latency field and the separate extraction commit are gone. P4 is about 150 plus 100.

@@ -91,7 +91,7 @@ These close the loop between image content and scalar modulation. ColorCompass u
 
 Live registries beat hand-maintained tables — the inventory channels populate the catalog at compile time, and the JSON preset directory is browsable directly.
 
-- **Primitives** — shipping in `crates/manifold-nodes-image/src/node_graph/primitives/` and `crates/manifold-nodes-scene/src/node_graph/primitives/`, with engine built-ins and water under `crates/manifold-node-engine/src/`. See [NODE_CATALOG.md](NODE_CATALOG.md) for the curated naming + categorisation spec, [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) for the design rationale and decomposition recipes.
+- **Primitives** — shipping in `crates/manifold-nodes-image/src/node_graph/primitives/` and `crates/manifold-nodes-scene/src/node_graph/primitives/`, with engine built-ins and water under `crates/manifold-node-engine/src/`. See [NODE_CATALOG.md](NODE_CATALOG.md) for the curated naming + categorisation spec.
 - **Atomic complex primitives** — `crates/manifold-node-engine/src/atomic/` holds the three irreducible kernels (Plasma, FluidSim2D, Glitch); FluidSim3D lives alongside the primitives. These don't decompose to atoms without losing what they are.
 - **Composite Rust builders** — `crates/manifold-nodes-image/src/node_graph/composites/` (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity). Dev fixtures for parity tests; new composites ship as JSON.
 - **Shipping presets** — `crates/manifold-nodes/assets/effect-presets/` (29 as of 2026-05-19). Each is one JSON file; the build script codegens the bundled table.
@@ -136,11 +136,11 @@ Inside the graph editor, every inner-node param row has an expose checkbox. Chec
 
 **Status:** Architecturally committed, implementation deferred.
 
-[PRIMITIVE_LIBRARY_DESIGN.md section 12.5 (Decomposition + fusion-on-compile)](PRIMITIVE_LIBRARY_DESIGN.md) commits the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
+Decomposition and fusion-on-compile commit the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
 
 The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction / multi-pass / stateful), partition algorithm, and `naga_oil`-based toolchain are designed in detail at section 8.2–section 8.4 of this doc's predecessor and still apply.
 
-**Why deferred:** section 12.5 / section 12.9 of PRIMITIVE_LIBRARY_DESIGN explicitly defers until measured frame-budget pressure on a real show file demands it (Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure). section 12.6 also softened the urgency — scalar wires removed the fp16-quantisation motivation, so the remaining pressure is purely dispatch overhead, which is fine at current scale.
+**Why deferred:** fusion waits until measured frame-budget pressure on a real show file demands it (Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure). Scalar wires also softened the urgency: they removed the fp16-quantisation motivation, so the remaining pressure is purely dispatch overhead, which is fine at current scale.
 
 ---
 
@@ -148,7 +148,7 @@ The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction
 
 **V1 (current):** Parameter tweaks during playback are free. Topology edits (adding nodes, rewiring) trigger a synchronous chain rebuild on the content thread; rebuilds are rare enough post-chain-pool-refactor that the cost is invisible in practice.
 
-**V2 (parked):** Atomic `Arc<ExecutionPlan>` swap with state-continuity rules. The compile thread is designed but not built — see section 10. The trigger for building it is editing during a live show becoming a routine performer surface (see section 12.9 "Mid-show preset editing safety" in PRIMITIVE_LIBRARY_DESIGN.md).
+**V2 (parked):** Atomic `Arc<ExecutionPlan>` swap with state-continuity rules. The compile thread is designed but not built — see section 10. The trigger for building it is editing during a live show becoming a routine performer surface.
 
 ---
 
@@ -181,7 +181,7 @@ Designed but parked:
 - **Project bundling** of custom composites into the V2 ZIP under `graphs/custom_composites/`.
 - **Bundle wins** on identity-collision with the user's library.
 
-The mid-show editing safety question (section 12.9 of PRIMITIVE_LIBRARY_DESIGN) is upstream of shipping user composites — it dictates whether mid-show edits apply live, undo cleanly, and handle node-removal without breaking a render.
+The mid-show editing safety question is upstream of shipping user composites — it dictates whether mid-show edits apply live, undo cleanly, and handle node-removal without breaking a render.
 
 ---
 
@@ -202,21 +202,19 @@ User-saved composites (V2) will land under `graphs/custom_composites/<id>.json` 
 
 Real ones, parked. Not the "(none yet)" placeholder from V0.
 
-- **Mid-show preset editing safety.** If presets become M4L-style devices and the graph editor is the depth, editing during a live performance is a real possibility. What gets undo? What happens if a user removes a node mid-render? See section 12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
-- **Rebake-on-change scheduler caching.** Heavy generators (Black Hole's deflection map, ParametricSurface mesh build) need per-node dirty bits so the executor can skip re-evaluation when inputs haven't changed. Similar pattern to skip-passthrough but content-based. See section 12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
-- **When to build fusion-on-compile.** Pending a measured profile on a fully-decomposed Black Hole or FluidSim on the Liveschool fixture. See section 8 above and section 12.5 / section 12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
-- **Chain pool rekey by semantic ID.** [CHAIN_POOL_REFACTOR_PLAN.md](CHAIN_POOL_REFACTOR_PLAN.md) is audited and designed but not started. Layer reorder still hits the positional-indexing bug class.
-- **Array port / Buffer port.** section 12.3 of PRIMITIVE_LIBRARY_DESIGN.md promotes Array (particle pipelines) to V1. Buffer (audio waveforms) and 3D-volume primitives remain V2.
+- **Mid-show preset editing safety.** If presets become M4L-style devices and the graph editor is the depth, editing during a live performance is a real possibility. What gets undo? What happens if a user removes a node mid-render?
+- **Rebake-on-change scheduler caching.** Heavy generators (Black Hole's deflection map, ParametricSurface mesh build) need per-node dirty bits so the executor can skip re-evaluation when inputs haven't changed. Similar pattern to skip-passthrough but content-based.
+- **When to build fusion-on-compile.** Pending a measured profile on a fully-decomposed Black Hole or FluidSim on the Liveschool fixture. See section 8 above.
+- **Chain pool rekey by semantic ID.** Not started. Layer reorder still hits the positional-indexing bug class.
+- **Array port / Buffer port.** Array (particle pipelines) is V1. Buffer (audio waveforms) and 3D-volume primitives remain V2.
 
 ---
 
 ## 15. References
 
-- [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog, decomposition recipes, parity tests, design rationale
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — authoring a new primitive
 - [ADDING_EFFECTS_AND_GENERATORS.md](ADDING_EFFECTS_AND_GENERATORS.md) — authoring a new preset (JSON workflow)
 - [NODE_CATALOG.md](NODE_CATALOG.md) — naming + categorisation spec
-- [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) — historical record of Phases 1–5
 - [EFFECT_CHAIN_LIFECYCLE.md](EFFECT_CHAIN_LIFECYCLE.md) — chain pool, state-cache eviction, feedback bleed-through
 - [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) — Metal backend, texture formats, uniform layout
 - `crates/manifold-node-engine/src/` — module structure for the runtime

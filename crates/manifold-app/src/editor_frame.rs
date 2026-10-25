@@ -1,4 +1,4 @@
-//! The graph editor window's frame seam (UI_INVALIDATION_DESIGN.md D17, P5c):
+//! The graph editor window's frame seam:
 //! its open, its planner and the composite, shared by the live App
 //! (`present_graph_editor_window`) and the ui-snap script runner.
 //!
@@ -711,7 +711,7 @@ impl LiveSurfaces {
 /// Whether the editor's offscreen must composite this frame: a dirty mark
 /// from input or the canvas (`dirty`), a live surface on screen or playback
 /// running, a moved [`CompositeKey`], an animating overlay
-/// (`EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6, the same keepalive as the main
+/// (the same keepalive as the main
 /// window's), an unpainted panel node or a dirty overlay. An idle editor
 /// composites nothing and re-presents its last frame.
 pub(crate) fn needs_composite(

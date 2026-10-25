@@ -2248,8 +2248,7 @@ impl EffectNode for CellProbe {
 /// The Scene Loop's cell follows the live rows on the frame they change, as
 /// Blender's Array follows its object: Copies Columns and Count, Copies
 /// Spacing and an Object's scale all move the tiles at once. Bodies physics
-/// moves never move them: the cell measures where things start
-/// (SCENE_REFINEMENT_DESIGN.md P3b).
+/// moves never move them: the cell measures where things start.
 #[test]
 fn the_loop_cell_follows_live_rows_and_never_a_moving_body() {
     use manifold_core::scene_doc::{

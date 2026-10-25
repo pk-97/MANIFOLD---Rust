@@ -1,11 +1,11 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — sections through 16 landed; stage-3 spatial denoise + firefly clamp landed (RT_STAGE3_DENOISE_DESIGN.md; closes the BUG-312 (RT ray noise speckle) lineage) but measured inert under motion (BUG-27bs (RT spatial denoise inert under continuous motion)) → stage-4 motion denoise APPROVED not built; MetalFX classic is the operating point (Metal 4 hard-off, BUG-woji (MTL4FX denoiser crash)). OWED: Peter's looks (17.7, DN-I, TL-C, ED-A hero), multi-bounce, R2 constants, fast-camera denoiser, noise-gate re-baseline, P5 export, P6 interp. · K3 + Peter
+**Status:** IN PROGRESS — sections through 16 landed; stage-3 spatial denoise + firefly clamp landed but measured inert under motion → stage-4 motion denoise APPROVED not built; MetalFX classic is the operating point (Metal 4 hard-off, MTL4FX denoiser crash). OWED: Peter's looks (17.7, DN-I, TL-C, ED-A hero), multi-bounce, R2 constants, fast-camera denoiser, noise-gate re-baseline, P5 export, P6 interp. · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 
-This doc graduates **the hybrid ray tracing direction** into a full design, extended by the 2026-07-21 discussion. Governing insight: MANIFOLD's scene class — **static photoscanned hero objects, few lights, emissive sources, void backgrounds** — is close to the best case for hardware RT (tiny acceleration structures, most rays exit to void), while the current raster stack (GTAO + per-light shadow maps + env/sun) is the expensive general-case machinery, struggling at ~45fps/4K on the hero scenes. RT collapses that stack into one mechanism whose cost scales with rays×resolution, not lights×polys — and rays×resolution is exactly what MetalFX (already integrated) buys back. Peter's target, verbatim: **"I want things to look better than Unreal Engine maxed out"** — achievable *because* of narrow scope; the design must not creep toward a general-purpose renderer.
+This doc graduates **the hybrid ray tracing direction** into a full design, extended by a later discussion. Governing insight: MANIFOLD's scene class — **static photoscanned hero objects, few lights, emissive sources, void backgrounds** — is close to the best case for hardware RT (tiny acceleration structures, most rays exit to void), while the current raster stack (GTAO + per-light shadow maps + env/sun) is the expensive general-case machinery, struggling at ~45fps/4K on the hero scenes. RT collapses that stack into one mechanism whose cost scales with rays×resolution, not lights×polys — and rays×resolution is exactly what MetalFX (already integrated) buys back. Peter's target, verbatim: **"I want things to look better than Unreal Engine maxed out"** — achievable *because* of narrow scope; the design must not creep toward a general-purpose renderer.
 
-Companions: `REALTIME_3D_DESIGN.md` (the scene system RT extends), `MANIFOLD_GPU_ARCHITECTURE.md`, `CINEMATIC_POST_DESIGN.md` (post chain stays downstream, unchanged), `VULKAN_BACKEND_DESIGN.md` (parity seam).
+Companions: `REALTIME_3D_DESIGN.md` (the scene system RT extends), `MANIFOLD_GPU_ARCHITECTURE.md`, `VULKAN_BACKEND_DESIGN.md` (parity seam).
 
 ## 1. Audit — what exists (verified 2026-07-21)
 
@@ -15,8 +15,8 @@ Companions: `REALTIME_3D_DESIGN.md` (the scene system RT extends), `MANIFOLD_GPU
 | Soft shadows (PCSS penumbra) | REALTIME_3D_DESIGN.md section status "SHIPPED @ `feat/pcss-penumbra` 2026-07-12" | The raster baseline RT shadows must beat. |
 | GTAO | `crates/manifold-nodes-image/src/node_graph/primitives/ssao_gtao.rs` | The raster AO RT AO replaces. |
 | PBR material model | `crates/manifold-core` material types (M1–M6 SHIPPED); glTF/Khronos import via `crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs` | Metallic-roughness + emissive already deserialized and typed — RT consumes this as-is. **No new material system in v1** (Peter agrees; node-based material editor is a future direction — graphs *drive* material params first, *define* materials later). |
-| Hybrid RT direction | Hybrid ray tracing (post-release), graduated 2026-07-21 | Direction + backend seam decided in principle; this doc is its graduation. Its rejections stand (no real-time path tracing; emissive-as-real-GI in raster rejected). |
-| HDR pipeline + tonemapping | CINEMATIC_POST_DESIGN.md (SHIPPED) | Peter: HDR path "already sorted". RT plugs into existing linear-HDR → grade chain. |
+| Hybrid RT direction | Hybrid ray tracing (post-release) | Direction + backend seam decided in principle; this doc is its graduation. Its rejections stand (no real-time path tracing; emissive-as-real-GI in raster rejected). |
+| HDR pipeline + tonemapping | Shipped | Peter: HDR path "already sorted". RT plugs into existing linear-HDR → grade chain. |
 | Hardware | M4 Max 36GB — Metal ray queries + `MTLAccelerationStructure` (hardware RT since M3). Frame interpolation requires Metal 4 / macOS Tahoe (min-OS decision, section 5 D8). |
 
 Extend, don't redesign. Instruction to executor: RT is an **extension of the REALTIME_3D scene pass** that outputs into the node graph like the current scene render does — not a set of graph pseudo-atoms, not a parallel renderer.
@@ -36,8 +36,8 @@ Extend, don't redesign. Instruction to executor: RT is an **extension of the REA
 - **D11 — Mode B committed (Peter, 2026-07-22).** Native-res raster + half-res soft-shadow/AO/GI rays, depth-aware upsample of the lighting buffers (trivial pass — ray *count* is the cost lever; native-res rays = 4× and blows budget). 120-frame 4K run WAIVED by Peter: interim numbers + visual read decided it. Modes A/C dead.
 - **D12 — Single overnight wave, Fable→Opus→Sonnet (Peter, 2026-07-22).** Fable writes briefs (kernel signatures + required proofs) and reviews — writes no code; Opus dispatches; Sonnet lanes execute, porting the P0 prototype kernels rather than inventing. Spine: RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors; proves BUG-136) → P1 → P2+P3; P4 needs only infra section 2, runs parallel. Staged lanes on one branch (everything touches the scene pass); only independent pieces fan out. Wave dispatches against post-Wave-3 layout. Denoiser look + final visual sign-off = Peter's morning gate.
 - **D13 — P5 export path cut from this wave (Peter, 2026-07-22).** D7's design stands; build later, own trigger. P6 frame interpolation stays Tahoe-deferred (D6/D8); hand-rolled interpolation rejected outright.
-- **D14 — Stored G-buffer is per-scene, tied to the RT toggle.** RENDERING_INFRA_V2 section 2's open decision (always-store vs opt-in vs tier-gated) is answered narrowly for this wave: a scene with RT enabled stores depth + motion vectors to real textures; a non-RT scene keeps today's memoryless path and pays zero bandwidth. Widening to always-store (DoF/motion-blur/SSR for raster scenes) stays RENDERING_INFRA_V2's measured decision, untouched. Amendable by Peter without reopening this doc's phases. **As built (W0, `f76253f5`):** `EffectNode::force_consumed_outputs` default trait hook + one fold-in at `ExecutionPlan::compile`'s `consumed_outputs`; `render_scene` gained `rt_enabled: Bool` (default false, serialization lands in P1) — reuses GBUFFER_DESIGN's shipped lazy `depth`/`velocity` outputs, no new textures or formats. BUG-136 outcome: velocity math PROVED correct under a real orbit; live-app suspects remain open.
-- **D17 — Current-frame acceleration updates share the render encoder (scene-modifier RT, 2026-09-18).** Encode instance descriptors, selective BLAS build/refit, TLAS update, emissive preparation and trace after the same frame's mesh writes. Never privately submit or wait midway through the frame. Prepare retained resources during candidate warmup, including RT-off scenes, and admit the aggregate memory before publication. Required pending geometry rejects the frame; RT does not trace an old or partial scene. The old content-settle/defer/ready transition is superseded. Export uses the same ordering and its existing completion boundary.
+- **D14 — Stored G-buffer is per-scene, tied to the RT toggle.** RENDERING_INFRA_V2 section 2's open decision (always-store vs opt-in vs tier-gated) is answered narrowly for this wave: a scene with RT enabled stores depth + motion vectors to real textures; a non-RT scene keeps today's memoryless path and pays zero bandwidth. Widening to always-store (DoF/motion-blur/SSR for raster scenes) stays RENDERING_INFRA_V2's measured decision, untouched. Amendable by Peter without reopening this doc's phases. **As built (W0, `f76253f5`):** `EffectNode::force_consumed_outputs` default trait hook + one fold-in at `ExecutionPlan::compile`'s `consumed_outputs`; `render_scene` gained `rt_enabled: Bool` (default false, serialization lands in P1) — reuses the shipped lazy `depth`/`velocity` outputs, no new textures or formats. BUG-136 outcome: velocity math PROVED correct under a real orbit; live-app suspects remain open.
+- **D17 — Current-frame acceleration updates share the render encoder (scene-modifier RT).** Encode instance descriptors, selective BLAS build/refit, TLAS update, emissive preparation and trace after the same frame's mesh writes. Never privately submit or wait midway through the frame. Prepare retained resources during candidate warmup, including RT-off scenes, and admit the aggregate memory before publication. Required pending geometry rejects the frame; RT does not trace an old or partial scene. The old content-settle/defer/ready transition is superseded. Export uses the same ordering and its existing completion boundary.
 - **D16 — P1 integration: RT shadows ride the existing opaque depth prepass; forward stays forward (ruled mid-wave 2026-07-22 night, Fable; P1's escalation).** No deferred combine pass is built. `render_scene` already renders an opaque depth prepass (`opaque_depth_snapshot`) before its lighting pass — that is the mode-B slot. When `rt_enabled`: half-res shadow-ray dispatch after the prepass (origins from prepass depth + inverse view-proj; bias normals via screen-space reconstruction from depth — no normal G-buffer target in P1; P2 adds one only if bias artifacts or AO demand it), depth-aware upsample to native, and the forward lighting shader samples the mask as the light visibility factor in place of the shadow-map sample (one uniform-gated bool, not a pipeline permutation). Shadow maps stop rendering for RT scenes. **Seam note:** P2's soft shadows + AO join the SAME half-res dispatch and SAME upsample — this is the extension point, not a new pass.
 - **D15 — D3's cut-reset signal is NODE-LOCAL for v1 (ruled mid-wave 2026-07-22 night, Fable; P4's escalation).** No cut/trigger signal reaches node-graph evaluation today (audit: `FrameTime`/`EffectNodeContext` carry none; ContentPipeline has no clip-changed concept; the audio `"clip_trigger"` param is an unrelated envelope gate — repurposing it is FORBIDDEN). v1 shape: ONE shared runtime helper in `manifold-nodes`'s node_graph runtime (plain per-node state, no new shared state) that resets a node's temporal history when (a) its `owner_key` changes vs stored — covers live clip retriggers — or (b) frame time is discontinuous (>1.5× frame period, either direction) — covers seeks, loops, stutter retriggers, arrangement jumps. Strobes trip neither (same clip, continuous time), so D3's strobe rule holds by construction; demodulated accumulation (P2) handles in-clip light flips. P4 builds the helper; P2 MUST wire its accumulator to the SAME helper (P2's negative-`rg` no-second-reset-path gate enforces it). **Integration seam note for future work:** anything downstream needing "a cut happened" (frame interpolation P6, future temporal effects) wires to this helper, not a new detector — until the deferred engine-side signal (section 7) replaces it, at which point the helper becomes the single place to rewire.
 
@@ -55,7 +55,7 @@ Maps Peter's three named artifacts to mechanisms: **hatchy shadows** (shadow-map
 
 ## 5. Phasing
 
-Only **P0 is briefed now**; P1+ briefs are written *after* P0, to STANDARD, because their content depends on which mode wins (DESIGN_AUTHORING: no oracle numbers, no committed design).
+Only **P0 is briefed now**; P1+ briefs are written *after* P0, to STANDARD, because their content depends on which mode wins (no oracle numbers, no committed design).
 
 ### P0 — standalone Metal prototype (measurement, not product code)
 
@@ -105,7 +105,7 @@ Spine W0 → P1 → P2 + P3; P4 parallel after W0. Staged lanes on one wave bran
 
 **P3 — emissive GI + RT volumetrics.**
 - *Entry:* P2 landed on wave branch.
-- *Read-back:* D4/D5; section 5.1 self-emission gap note; prototype GI gather; VOLUMETRIC_LIGHT_DESIGN.md P1 findings (fog state of play, BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…) context — DEFERRED, do not touch).
+- *Read-back:* D4/D5; section 5.1 self-emission gap note; prototype GI gather; fog state of play ( BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…) context — DEFERRED, do not touch).
 - *Deliverables:* emissive gather incl. sun-bounce term (the section 5.1 gap: P0 had env+emissive only) + self-emission in combine (emissives glow themselves); volumetric march sampling shadow-ray visibility instead of shadow maps when RT on (D5); emissive-colored volumetric glow.
 - *Gate:* value test on the combine term — CPU-computed expected for a 2-triangle emissive fixture, including the self-emission term; scripted probes — neighbor-region mean brightness delta (emissive on vs off) > stated threshold, emissive-surface region mean ≥ its material emissive value, volumetric shaft region brighter with emissive on than off; gpu-proofs run.
 - *Demo (Peter only):* emissive + god-ray PNGs — L2.
@@ -165,7 +165,7 @@ section is the durable brief for the next RT session.
    upsample with an SVGF-class spatial+temporal filter; only after that, re-judge the ray
    budgets (the committed constants in render_scene.rs are placeholders for accumulated input).
    **LINEAGE CLOSED 2026-08-28:** T1-D landed the pre-accumulation half;
-   RT_STAGE3_DENOISE_DESIGN.md (BUG-eytk (spatial à-trous denoiser)) landed the
+   The spatial à-trous denoiser landed the
    post-accumulation half.
 
 **Tier 2 — correctness + cost, after Tier 1:**
@@ -238,7 +238,7 @@ Three things future RT work should take from how this was found:
 
 ## 9. RT Reflections — traced specular for the PBR base lobe (Tier 3 item 7; APPROVED 2026-07-24 · **R1 LANDED 2026-07-25** — probe: mirror on 2.15 vs off 0.82 (delta 1.33); empty-scene equality 0.305 ≈ 0.308; worst frame 9.82 ms; native byte-diff identical. R2 LANDED 2026-07-26; R3 not started)
 
-Folded in from `RT_REFLECTIONS_DESIGN.md` (draft deleted on fold, per its own header). Reviewed by
+Reviewed by
 K3 (lead) 2026-07-24: every section 1 code anchor re-verified against main (`render_scene.wgsl:1518`
 substitution site, binding 43 free, `GiMaterial` 32 B at `raytrace.rs:1478`, kernel helpers at the
 named lines). **Review rulings (Q1–Q5 from the draft's section 0):**
@@ -721,8 +721,7 @@ only, on the accumulation path.
 Graduates the multi-bounce GI item (T3-8); that item is this
 design's intake and its findings stand except where the audit below corrects them. Build
 order is Peter's priority call 2026-07-29 (status header). Execution vehicle: lane
-sessions under lead review — the workflow-program vehicle that ran the P3 shakedown
-(WORKFLOW_RUNTIME_DESIGN.md (deleted) section 5 (Phasing)) was retired 2026-07-31.
+sessions under lead review — the workflow-program vehicle that ran the P3 shakedown was retired.
 
 **Stage translation.** Colour bleeding between surfaces: a red wall tints the white floor
 next to it; a glowing hero object fills a concave shell with its own colour instead of
@@ -863,8 +862,7 @@ recursive specular (section 9.7, unchanged).
 - **MB-A:** landed. One-shot execute could not produce the refactor (six parked attempts
   across two runs — the emitted helper broke MSL's declare-before-use ordering, invisible
   to a blind diff); a lane fixed forward on the committed attempt. I-MB1 byte identity and
-  I-MB3 single-home held through the program's gate. Boundary lesson recorded as
-  WORKFLOW_RUNTIME_DESIGN.md (deleted) section 5 (Phasing — P3 outcome).
+  I-MB3 single-home held through the program's gate. Boundary lesson recorded as the P3 outcome.
 - **MB-B:** landed. The constant flip succeeded one-shot, first attempt. The bleed probe
   then parked on byte-identical captures — root cause one layer down: the RT pass was
   gated on `!casters.is_empty()` (predates GI), so zero-light emissive scenes had NO
@@ -893,7 +891,7 @@ neighbours instead of growing a fake contact gradient.
 
 | Piece | Where | State |
 |---|---|---|
-| Lazy G-buffer outputs, MSAA target + resolve pattern | `render_scene.rs:315-340` (`depth` R32Float, `velocity` Rg16Float — rendered only when wired, GBUFFER_DESIGN.md section 2 (Decisions) D1) | `ao_mask` is a third instance of the same mechanism; no spare channel exists (depth 1-ch, velocity 2-ch, color alpha is scene alpha) |
+| Lazy G-buffer outputs, MSAA target + resolve pattern | `render_scene.rs:315-340` (`depth` R32Float, `velocity` Rg16Float — rendered only when wired) | `ao_mask` is a third instance of the same mechanism; no spare channel exists (depth 1-ch, velocity 2-ch, color alpha is scene alpha) |
 | The RT gate expression | `render_scene.rs:3588` — `rt_enabled && rt_ready` (latched built flag) | Reused verbatim; bool, not a ramp (Peter 2026-07-30: nobody flips RT mid-show) |
 | Material kind at draw time | `baked_look` in `pbr_material.rs` — BUG-pt6g (unlit imports default to lit) made it the opt-back-in flag → emitted `Material` unlit kind | The per-pixel zero source |
 | Importer AO group | `gltf_import/scene.rs:628-683` — ssao_gtao → bilateral H/V → `node.mix` Multiply | The consumer to rewire |
@@ -1711,7 +1709,7 @@ so the glow can breathe with the music like every other material param.
 |---|---|---|
 | Two-sided shading normal | `render_scene.wgsl:1372-1374` (`fs_pbr`: `if dot(N, V) < 0.0 { N = -N; }`) | Present — and it is exactly why backlit petals go dark: after the flip, a petal facing the camera away from the sun has N·L = 0. |
 | Glass transmission (KHR_materials_transmission + volume) | `render_scene.wgsl:1032-1153` (`sample_transmission`/`transmission_diffuse`), composition `:1776-1786` | SHIPPED: screen-space refraction + Beer–Lambert, REPLACES the diffuse response. Wrong physics for petals — this is the specular/refraction lobe for vases and windows, not diffuse transmission. |
-| Diffuse transmission (KHR_materials_diffuse_transmission) | Deferred; not parsed (`rg diffuse_transmission crates/` → zero code hits; BUG-213 (unparsed-extension reporting) tracks even the missing report line) | The Khronos lobe petals actually want. Its deferral trigger fires here: this design IS the follow-up phase. D10 (frozen Khronos PBR set) is not violated — this is a shipped-family Khronos extension, not a new material system. |
+| Diffuse transmission (KHR_materials_diffuse_transmission) | Deferred; not parsed (`rg diffuse_transmission crates/` → zero code hits) | The Khronos lobe petals actually want. Its deferral trigger fires here: this design IS the follow-up phase. D10 (frozen Khronos PBR set) is not violated — this is a shipped-family Khronos extension, not a new material system. |
 | Per-caster RT shadow visibility | `raytrace.rs:1304-1346` (sv loop), consumed by `render_scene.wgsl:635-665` (`shadow_factor` — RT branch `:647-650` reads `rt_shadow_mask`, one channel per caster slot) | The term TL-B extends. Binary today: blocked or not. |
 | Alpha-aware walk | `raytrace.rs:871-898` (`walk_with_alpha_test`), 5 call sites | T2-A's mechanism. A ray at a cutout texel already has three relevant outcomes available: below-cutoff → pass through; accepted → block. TL adds the third state: accepted on a translucent object → attenuate and continue. **Cost-critical observation:** for alpha-mask foliage the hardware early-out is already lost (`encode_blas_build`'s `setOpaque(!alpha_mask)`, comment `raytrace.rs:861`) — shadow rays through petal clusters ALREADY iterate candidate lists. Transmission is an increment on a walk that exists, not a new walk. |
 | Per-object material table | `GiMaterial` (`raytrace.rs:602-606`, 48 B, size-asserted; populated `render_scene.rs:3976`) | Grows one vec4 (translucency factor) — the T1-B/T2-A/R1 extend-the-table precedent, fourth extension. |
@@ -1941,7 +1939,7 @@ the entire trace budget, rejected outright, not deferred.
 ray-budget re-judge (Peter's standing deferral) shows the temporal-upscaled
 config (rays at 1/3 native) with headroom, AND (b) a staged look wants canopy
 god-rays specifically — the alpha-cutout volumetric-shadows item in
-VOLUMETRIC_LIGHT_DESIGN.md section 6 (Deferred) is the same want and joins
+The deferred volumetric-light item is the same want and joins
 this trigger. When revived, the shape is the sun-only quarter-step variant
 above plus section 15 (many-light) if it has landed, since many-light beam
 carving is the same per-step visibility problem.
@@ -2064,7 +2062,7 @@ with triggers: section 16.8. B: section 16.6, not in a phase.
   walk-extension cost on every ray class — the trigger bar is high.
 - **Per-step RT visibility in the volumetric march (feature B)** — section
   16.6: priced, trigger named there (budget re-judge headroom + a canopy
-  god-ray look; absorbs the VOLUMETRIC_LIGHT_DESIGN.md deferred item named
+  god-ray look; absorbs the deferred item named
   there).
 - **Thickness-varying transmission (thickness maps)** — trigger: an asset
   class with real thickness data (scanning workflow change). The factor is

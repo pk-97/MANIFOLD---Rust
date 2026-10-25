@@ -141,8 +141,7 @@ impl RigidSimulation {
         }
         self.validate_impulse_targets(&payload.targets)?;
         // Pause and Simulation Speed 0 discard incoming events, so resume never
-        // fires a saved-up pile (WATER_SIMULATION_DESIGN.md "Transport pause /
-        // water speed zero"). Admission succeeds so the producer rearms; the
+        // fires a saved-up pile. Admission succeeds so the producer rearms; the
         // discard receipt is the only record, never an applied one.
         if self.held.is_held() {
             if self.impulse_discarded.len() < IMPULSE_CAPACITY {

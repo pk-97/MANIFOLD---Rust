@@ -549,7 +549,7 @@ fn mirror_effect_side(
     inner_convert: manifold_core::effects::ParamConvert,
     inner_is_angle: bool,
     inner_value_labels: &[String],
-    // D5: the innermost
+    // The innermost
     // enclosing group's display name, resolved by the caller from
     // `scope_path` BEFORE this fn runs. Only used on the append-new-binding
     // path (a static-slot toggle flips an EXISTING bundled spec, whose
@@ -1066,9 +1066,7 @@ mod tests {
         let fx_inst = project.find_effect_by_id(&fx).unwrap();
         let ub_id = fx_inst.user_param_bindings()[0].id.clone();
 
-        // "save" — serialize the instance (this is what the project save
-        // path emits per effect; PARAM_STORAGE_BOUNDARIES_DESIGN D12 derives
-        // `graph.preset_metadata.params` from the live manifest here).
+        // "save" — serialize the instance.
         let json = serde_json::to_string(fx_inst).unwrap();
         // "reload"
         let back: manifold_core::effects::PresetInstance = serde_json::from_str(&json).unwrap();
@@ -2062,7 +2060,7 @@ mod tests {
         assert_eq!(fx.user_param_bindings().len(), 0);
     }
 
-    /// `PARAM_TWO_WAY_BINDING_DESIGN.md` D9: unmapping a user-added binding
+    /// Unmapping a user-added binding
     /// freezes the card's current effective value into the def slot the
     /// binding stops governing, instead of leaving whatever stale value sat
     /// there — so the render never visually snaps on unmap.

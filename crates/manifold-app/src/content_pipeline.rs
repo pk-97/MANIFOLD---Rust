@@ -737,7 +737,7 @@ pub struct ContentPipeline {
     /// controller is initialized; defaults to LedSettings defaults otherwise.
     led_grid_size: (u32, u32),
 
-    /// PERF_BUDGET_GATE_DESIGN P2 / D6: per-dispatch GPU timestamp sampler,
+    /// Per-dispatch GPU timestamp sampler,
     /// created once (sized against the fixture's span count — see
     /// `set_profiling`'s doc) and re-attached to both the Generators and
     /// Compositor command buffers every profiled frame. `None` until
@@ -957,7 +957,7 @@ impl ContentPipeline {
         }
     }
 
-    /// PERF_BUDGET_GATE_DESIGN P2 / D6: turn per-dispatch GPU attribution
+    /// Turn per-dispatch GPU attribution
     /// profiling on/off for this content pipeline's next frames. `max_spans`
     /// sizes the sampler (two counter samples per span) — the caller (the
     /// `--profile` xtask) verifies this against the fixture's actual span
@@ -2215,7 +2215,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if !self.profiling_enabled {
                 self.tap_gpu_time(&mut gen_enc, "Generators");
             }
-            // PERF_BUDGET_GATE_DESIGN P2 / D6: a --profile run samples every
+            // A --profile run samples every
             // dispatch; each executor is scoped `gen:{layer_id}` at install.
             if self.profiling_enabled
                 && let Some(sampler) = self.profiling_sampler.clone()
@@ -2518,7 +2518,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         if !self.profiling_enabled {
             self.tap_gpu_time(&mut native_enc, "Compositor");
         }
-        // PERF_BUDGET_GATE_DESIGN P2 / D6: same sampler, same command buffer
+        // Same sampler, same command buffer
         // — the compositor was forced to `composite_serial` by
         // `set_profiling` so this IS the single shared compositor command
         // buffer D6 needs. Every chain's executor was already scoped
@@ -3901,7 +3901,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.compositor.prewarm_layer_chains(layer, pass, device)
     }
 
-    /// P7 D17 (WARMUP_DESIGN section 5): build every unique per-clip chain
+    /// P7 D17: build every unique per-clip chain
     /// topology (layer post-fx + clip post-fx, the production
     /// `is_compatible` inputs) through the production chain-build path, so
     /// later clips with different post-fx sets don't build — and compile

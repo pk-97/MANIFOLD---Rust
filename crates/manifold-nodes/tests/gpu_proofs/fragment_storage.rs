@@ -1,5 +1,4 @@
-//! Fragment-stage storage-buffer proof (RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN
-//! D7). No shipped fragment entry point reads a `var<storage>` buffer through
+//! Fragment-stage storage-buffer proof. No shipped fragment entry point reads a `var<storage>` buffer through
 //! the SPIRV-Cross → MSL render path — vertex stages do (render_scene's
 //! `verts`), compute kernels do, fragments never have. The lights design
 //! moves light data into exactly such a binding, so this proves the mechanic

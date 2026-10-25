@@ -204,7 +204,7 @@ this crate.
   divergence between the replica and the authoritative content-thread
   `Project` gets persisted by whichever path fires next — silently different
   files from the "same" state. Nothing currently proves replica convergence;
-  UI_ARCHITECTURE_AUDIT describes the optimistic-apply design but no test
+  The optimistic-apply design is described but no test
   compares the two serializations. Cheap probe: serialize both after a
   scripted edit session and diff. (Also: three save functions exist for two
   paths — the dead ported one should die.)

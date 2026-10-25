@@ -338,7 +338,7 @@ impl GraphCanvas {
     }
 
     /// Bounding rect of the "Push to Library" header button
-    /// (PRESET_LIBRARY_DESIGN D3, P4) — immediately left of "Save to
+    /// Immediately left of "Save to
     /// Library". Only ever shown while diverged (`has_graph_mod`), same
     /// gate as "Reset to Default".
     pub(crate) fn push_to_library_button_rect(&self, viewport: Rect) -> Rect {

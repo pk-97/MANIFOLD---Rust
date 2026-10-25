@@ -4,7 +4,7 @@
 //! importer (P3), and eventually the MCP `validate_graph` tool (D7).
 //!
 //! `validate_def` is `check_presets::check_one`'s body MOVED here
-//! verbatim (GRAPH_TOOLING_DESIGN P1, D1) — not a reimplementation.
+//! verbatim — not a reimplementation.
 //! It runs the exact pipeline the runtime loader takes
 //! (`EffectGraphDefExt::into_graph` → `compile`, plus the generator
 //! chain build via `PresetRuntime::from_def_with_device` for
@@ -421,8 +421,7 @@ struct ResolvedTargetParam {
     type_id: String,
     param_def: crate::parameters::ParamDef,
     /// The inner param's [`RangeContract`](manifold_core::effects::RangeContract),
-    /// if any — read via `EffectNode::param_contract` (PARAM_RANGE_CONTRACT_DESIGN.md
-    /// P1). `None` for the overwhelming majority of params, which carry only a
+    /// if any — read via `EffectNode::param_contract` . `None` for the overwhelming majority of params, which carry only a
     /// display hint (`param_def.range`).
     contract: Option<manifold_core::effects::RangeContract>,
 }
@@ -477,7 +476,7 @@ fn feeds_input(graph: &crate::graph::Graph, carrier: &NodeId, node: &NodeId, inp
 }
 
 manifold_core::testkit_visible! {
-/// D8 card lints (GRAPH_TOOLING_DESIGN P4) — the checks beyond
+/// Card lints — the checks beyond
 /// `check_bindings_resolve` that make sure a card never lies to the
 /// performer. Split by severity per D8: errors are structural breakage
 /// (a dead slider, a dangling target, a mislabeled mode, a
@@ -586,8 +585,7 @@ pub(crate) fn check_card_lints(
     // a `node.value` after the first target whose `out` wire feeds the first
     // target's own input of that name carries the counter on its wire (a
     // shared World Reset, `scene_world_controls`); the first target
-    // describes the control (SCENE_SURFACES_DESIGN.md D22 (a fan-out is
-    // described by its first binding)).
+    // describes the control (a fan-out is described by its first binding).
     if let Some(graph) = graph {
         for param in meta.params.iter().filter(|p| p.is_trigger) {
             let first = meta.bindings.iter().find(|b| b.id == param.id).and_then(|b| match &b.target {
@@ -691,8 +689,7 @@ pub(crate) fn check_card_lints(
     }
 
     // (h) ERROR — card [min, max] mapped through scale/offset escapes the
-    // inner param's declared RangeContract (PARAM_RANGE_CONTRACT_DESIGN.md
-    // D4). A contract names a real physical/mathematical boundary, so a
+    // inner param's declared RangeContract . A contract names a real physical/mathematical boundary, so a
     // card escaping it is always a bug. A param with no contract — the
     // overwhelming majority — produces NOTHING here: its `range` is a
     // display hint only, and a card is free to remap past a hint (that's
@@ -767,7 +764,7 @@ mod tests {
 
     use crate::persistence::PrimitiveRegistry;
 
-    // ── PARAM_RANGE_CONTRACT_DESIGN.md P1 fixture ───────────────────
+    // ── Fixture ───────────────────
     //
     // A test-only primitive (`node.__` prefix — excluded from every
     // registry-walking meta-test, per the `every_boundary_atom_declares_its_reason`
@@ -1249,7 +1246,7 @@ mod tests {
 
     /// (h) — card range mapped through scale/offset lands outside the
     /// inner param's declared `range` (a display hint, not a contract).
-    /// PARAM_RANGE_CONTRACT_DESIGN.md D4: hint disagreement is not a
+    /// Hint disagreement is not a
     /// finding at all — a card is free to remap past a hint. `node.invert`'s
     /// `intensity` carries no `RangeContract`, so this produces NOTHING.
     #[test]

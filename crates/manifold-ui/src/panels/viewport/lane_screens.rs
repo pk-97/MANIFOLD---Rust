@@ -1,7 +1,6 @@
 //! Automation lane screen geometry: one [`AutomationLaneScreen`] per visible
 //! lane. The whole-viewport rebuild and the one-lane rebuild a drag preview
-//! uses (UI_INVALIDATION_DESIGN.md P7a) run the same per-lane code, so there
-//! is one copy of the screen math.
+//! uses run the same per-lane code, so there is one copy of the screen math.
 
 use super::model::{self, AutomationLaneScreen};
 use super::*;

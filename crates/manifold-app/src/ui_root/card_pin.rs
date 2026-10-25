@@ -1,5 +1,4 @@
-//! The scene items of the one param menu (SCENE_SURFACES_DESIGN.md D10
-//! (cross-surface gestures)): Show on Card from the Scene tab, Remove from
+//! The scene items of the one param menu (cross-surface gestures): Show on Card from the Scene tab, Remove from
 //! Card and Show in Scene tab from the scene card; and the slider range items
 //! every param row carries, on both surfaces (D15 (slider range and hard
 //! limit)).

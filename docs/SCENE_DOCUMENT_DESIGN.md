@@ -8,7 +8,7 @@
 
 **Document type:** Design and plan. A fresh session builds from this doc alone.
 **Execution contract:** [CLAUDE.md](../CLAUDE.md) for seats, briefs and gates.
-**Supersedes:** the card, exposure and starter sections of [SCENE_SURFACES_DESIGN.md](SCENE_SURFACES_DESIGN.md); the fluid-role model of the water family; the open compound-model lanes G2b to G7.
+**Supersedes:** the fluid-role model of the water family; the open compound-model lanes G2b to G7.
 **Judged by:** Peter in the app. No card render sets are made or kept.
 
 Binding constraints:
@@ -139,7 +139,7 @@ Where we deliberately differ, and why:
 - Every live property is a param in the layer's manifest, id `<item id>.<property>`, created by the compiler from the kind's table. Structural fields are never params (section 7.4).
 - Ownership: content thread. Mutation: `EditingService` commands only, each one undo step. Serialization: the document plus the manifest, as JSON inside the project. The UI reads the document from its `Arc<Project>` snapshot through one seam, `scene_of(project, layer) -> Arc<SceneVm>`; every host (project bridge, projection, gizmo, edit selection, setup check) uses it. There is no second constructor.
 - The compiler is the only writer of a scene layer's graph (ruling 18).
-- The layer card shows only what the user pinned (SCENE_SURFACES_DESIGN D4). A saved scene keeps its pins.
+- The layer card shows only what the user pinned. A saved scene keeps its pins.
 
 ### 7.2 Identity and the five commands
 
@@ -720,7 +720,7 @@ Files: `scene_compile/copies.rs`, `scene_schema/copies.rs`, Modifier type entrie
 4. Copies of a group take any number of parts (ruling 23): `MAX_GROUP_PARTS` goes.
 
 **L21 (Opus): the scene-wide modifiers: Scene Loop, Math View, Scene Mirror.**
-Files: `scene_compile/scene_loop.rs`, `math_view.rs` and `scene_mirror.rs` (new), `scene_schema/scene_wide.rs` (new; their rows), their Modifier type entries in `scene_doc.rs`, the Loop rig in `scene_schema/camera.rs` and `scene_compile/camera.rs`. Reads docs/SCENE_LOOP_DESIGN and docs/SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN first. Joins: after L15 (the Modifier kind and the scene's bounds) and L8 (camera files and the camera pick).
+Files: `scene_compile/scene_loop.rs`, `math_view.rs` and `scene_mirror.rs` (new), `scene_schema/scene_wide.rs` (new; their rows), their Modifier type entries in `scene_doc.rs`, the Loop rig in `scene_schema/camera.rs` and `scene_compile/camera.rs`. Joins: after L15 (the Modifier kind and the scene's bounds) and L8 (camera files and the camera pick).
 1. Scene Loop, Math View and Scene Mirror are Modifier types. They always act on the whole scene, and their card has no Targets row.
 2. A scene holds at most one Scene Loop and one Math View; a second Add is disabled with that reason.
 3. Scene Loop tiles every item into a corridor, and every camera sees it.

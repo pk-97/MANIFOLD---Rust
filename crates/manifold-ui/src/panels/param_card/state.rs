@@ -566,7 +566,7 @@ impl ParamCardPanel {
     }
 
     /// Move the built tree to where the drawer and tab-ink tweens are now
-    /// (UI_INVALIDATION_DESIGN.md decided item 10: drawers open by reveal).
+    /// Drawers open by reveal.
     /// Each drawer whose height moved since the tree showed it is pushed as a
     /// [`Reflow`] for the column to apply; each sliding ink moves to its
     /// tween's x. Nothing for a card the current tree does not hold: one not

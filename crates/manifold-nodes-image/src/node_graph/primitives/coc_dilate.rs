@@ -60,7 +60,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Inherit,
-    composition_notes: "Insert between node.coc_from_depth and the two node.variable_blur (H then V) nodes that consume its `width` input: coc_from_depth.out -> coc_dilate.in, coc_dilate.out -> variable_blur_h.width AND -> variable_blur_v.width (both H and V read the SAME dilated CoC texture). R/B keep the magnitude convention node.variable_blur reads from `width.r`; G carries the sign flag (1.0 = nearer than focus) and is ignored by node.variable_blur but propagated for node.bokeh_gather's layered near/far split. For node.bokeh_gather, connect coc_from_depth directly: its layered gather computes bounds internally (CINEMATIC_POST_DESIGN D10).",
+    composition_notes: "Insert between node.coc_from_depth and the two node.variable_blur (H then V) nodes that consume its `width` input: coc_from_depth.out -> coc_dilate.in, coc_dilate.out -> variable_blur_h.width AND -> variable_blur_v.width (both H and V read the SAME dilated CoC texture). R/B keep the magnitude convention node.variable_blur reads from `width.r`; G carries the sign flag (1.0 = nearer than focus) and is ignored by node.variable_blur but propagated for node.bokeh_gather's layered near/far split. For node.bokeh_gather, connect coc_from_depth directly: its layered gather computes bounds internally.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "CoC Dilate", category: Atom },
     summary: "Spreads the maximum blur amount from a depth-of-field mask into its neighboring pixels, so the transition from sharp to blurry looks soft instead of having a hard visible edge.",

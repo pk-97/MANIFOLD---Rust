@@ -1,5 +1,5 @@
-//! The scene surface vocabulary shared by core and ui
-//! (SCENE_SURFACES_DESIGN.md section 3.1 (vocabulary)). Declaration order is
+//! The scene surface vocabulary shared by core and ui.
+//! Declaration order is
 //! display order.
 
 use std::borrow::Cow;

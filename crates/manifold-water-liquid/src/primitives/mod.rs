@@ -1,5 +1,5 @@
 //! Seam atoms: every liquid solver dispatches these, so their node types and
-//! helpers are the liquid contract (WATER_CRATES_DESIGN.md D3).
+//! helpers are the liquid contract.
 pub mod dot_products;
 pub mod face_sample_component;
 pub mod fluid_role_source;

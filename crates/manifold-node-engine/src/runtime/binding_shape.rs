@@ -1,7 +1,6 @@
 //! Each outer control's runtime reshape and name, by binding id.
 //!
-//! The reshape normalises over the declared slider range, never the user's
-//! (SCENE_SURFACES_DESIGN.md D15 (slider range vs hard limit)), so a build
+//! The reshape normalises over the declared slider range, never the user's slider range, so a build
 //! with no manifest and a build with one give the same reshape. Curve and
 //! invert are user choices, read from the manifest when there is one.
 

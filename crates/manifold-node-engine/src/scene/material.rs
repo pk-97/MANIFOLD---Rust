@@ -27,7 +27,7 @@
 //! in `emission.rgb`. The alpha channel of `emission` is reserved (currently
 //! `1.0`).
 
-/// Per-map-family sampler settings (GLB_XFAIL_BURNDOWN_DESIGN.md D3):
+/// Per-map-family sampler settings:
 /// glTF's `wrapS`/`wrapT`/`magFilter`/`minFilter`, read straight off the
 /// texture's own `sampler` object rather than a single scene-wide REPEAT
 /// sampler. Reuses [`manifold_gpu::GpuAddressMode`]/[`manifold_gpu::GpuFilterMode`]
@@ -222,7 +222,7 @@ pub struct Material {
 
     // ---- PBR dielectric F0. Inert
     // when `kind != Pbr` — same "unread by other kinds" pattern as
-    // `metallic`/`roughness` above. Defaults reproduce the pre-G-P4
+    // `metallic`/`roughness` above. Defaults reproduce the
     // hardcoded F0 = 0.04 exactly: `((1.5-1)/(1.5+1))^2 * 1.0 * [1,1,1] =
     // [0.04, 0.04, 0.04]`. ----
     /// glTF `KHR_materials_ior`'s `ior` (default `1.5`, glTF's implicit
@@ -347,7 +347,7 @@ pub struct Material {
     /// the corresponding transport path.
     pub subsurface: Subsurface,
 
-    // ---- Per-map-family samplers (GLB_XFAIL_BURNDOWN_DESIGN.md D3).
+    // ---- Per-map-family samplers.
     // Replaces `render_scene`'s single hardcoded REPEAT `material_sampler`
     // (`85b5bb9d`) — each map family samples with its OWN glTF sampler
     // settings. Default (`MapSamplerDesc::default()`) reproduces the old

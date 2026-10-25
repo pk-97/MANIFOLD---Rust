@@ -303,7 +303,7 @@ pub(crate) fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
 /// recycled per-layer chain pool. So the only thing bounded here is small CPU
 /// memory, one entry per *distinct* edited shape.
 ///
-/// FUSION_SOTA_DESIGN D5: values are `Arc`-owned now (not a leaked
+/// Values are `Arc`-owned (not a leaked
 /// `&'static`), so past the cap the cache evicts the least-recently-hit entry
 /// instead of refusing to insert — an evicted `Arc`'s memory genuinely frees
 /// once every clone (the render path never holds one past a single chain
@@ -770,8 +770,7 @@ thread_local! {
         std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
     /// Keys currently in flight on the worker — dedupes enqueues across the
     /// rebuilds that happen while a compile is pending. Value is the enqueue
-    /// time, so [`pump_segment_results`] can expire a wedged key (D2,
-    /// FUSION_SOTA_DESIGN section 2): a panic already survives via `catch_unwind` in
+    /// time, so [`pump_segment_results`] can expire a wedged key: a panic already survives via `catch_unwind` in
     /// the worker, but a truly hung compile (infinite loop, not a panic) would
     /// otherwise leave the key `Pending` forever.
     static SEGMENT_PENDING: std::cell::RefCell<AHashMap<u64, std::time::Instant>> =
@@ -1089,8 +1088,7 @@ pub fn fused_segment_view_for(cards: &[(EffectGraphDef, Arc<LoadedPresetView>)])
     }
 }
 
-// Test-only panic injection for `compile_segment_view` (D2, FUSION_SOTA_DESIGN
-// section 2): armed by `segment_worker_panic_refuses_key` to prove the worker survives
+// Test-only panic injection for `compile_segment_view`: armed by `segment_worker_panic_refuses_key` to prove the worker survives
 // a panicking compile. Compiled only under `#[cfg(test)]` — no production code
 // path can reach it.
 #[cfg(test)]
@@ -1955,7 +1953,7 @@ pub(crate) fn fuse_canonical_def_masked(
         // `emit_derived_uniform_markers` in codegen.rs / `introspect` in
         // `primitives/wgsl_compute.rs`).
         let mut camera_ext_producers: Vec<(u32, String)> = Vec::new();
-        // FUSION_SOTA_DESIGN P7 (D5): `RegionNode<'a>` is already
+        // `RegionNode<'a>` is already
         // lifetime-generic, so the params/inputs/outputs it borrows off each
         // constructed `node` don't need `'static` — they only need to outlive
         // this region's `codegen::generate_fused` call below. The old code
@@ -2843,7 +2841,7 @@ mod tests {
         );
     }
 
-    /// FUSION_SOTA_DESIGN D5: at cap, `LruCache` evicts the single
+    /// At cap, `LruCache` evicts the single
     /// least-recently-*hit* entry rather than refusing the insert — the
     /// replacement for the old "stop inserting past `FUSED_CACHE_CAP`"
     /// behavior, now safe because values are `Arc`-owned (an eviction's
@@ -3466,7 +3464,7 @@ mod tests {
         }
     }
 
-    /// FUSION_SOTA_DESIGN P7 (D5) negative gate: the fused-cache leak model is
+    /// Negative gate: the fused-cache leak model is
     /// gone. Every fused artifact (effect view / generator def / segment
     /// view) is `Arc`-owned now, and every leaked interior was replaced by
     /// owned data borrowed for exactly the fuse-build call that needs it —
@@ -3510,7 +3508,7 @@ mod tests {
         assert!(
             violations.is_empty(),
             "a process-leak call was found under node_graph/freeze/ — the fused-cache \
-             leak model (FUSION_SOTA_DESIGN D5) must stay fully Arc/owned, not leaked:\n{}",
+             leak model must stay fully Arc/owned, not leaked:\n{}",
             violations.join("\n")
         );
     }

@@ -57,7 +57,7 @@ pub(crate) use crate::editor_bridge::seed_def_for_project;
 pub(crate) use crate::editor_bridge::serialized_value_as_f32;
 
 /// A node-face scrub session currently rerouted through a card binding's
-/// write-back path (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1). Opened at the
+/// write-back path. Opened at the
 /// first `SetGraphNodeParam` on a bound `(node_id, param_name)`, updated live
 /// on every subsequent move, closed on the matching
 /// `EndGraphNodeParamScrub` — one undo-worthy `ChangeGraphParamCommand`
@@ -280,7 +280,7 @@ impl Application {
         // 1a0b. Video-import probe-failure surfacing (BUG-133) — same
         // drain-site cadence as autosave; see `tick_import_failures`.
         self.tick_import_failures();
-        // IMPORT_RESPONSIVENESS_DESIGN.md D3: drain the background
+        // Drain the background
         // model-import worker's progress channel at the same per-frame site.
         self.drain_import_progress();
         self.sweep_model_facts();
@@ -1284,7 +1284,7 @@ impl Application {
                                 category: Some(a.category.clone()),
                                 search_text,
                                 // Node mode has no source concept
-                                // (PRESET_LIBRARY_DESIGN P5, D6) — the
+                                // — the
                                 // graph-editor's node picker never renders
                                 // the source row or the management menu.
                                 source: None,
@@ -1395,8 +1395,7 @@ impl Application {
                 }
                 manifold_ui::GraphEditCommand::SaveGraphToLibrary { anchor }
                 | manifold_ui::GraphEditCommand::SaveGraphToProject { anchor } => {
-                    // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN
-                    // D4, P3), triggered from the graph editor header. The
+                    // Save to Library / Save to Project, triggered from the graph editor header. The
                     // watched instance's CURRENT effective definition — its
                     // diverged `graph` if `Some`, else the catalog default —
                     // with the card's live slider values snapshotted in, same
@@ -1444,7 +1443,7 @@ impl Application {
                         self.ws.ui_root.toast.show(reason.to_string());
                         continue;
                     }
-                    // Push to Library (PRESET_LIBRARY_DESIGN D3, P4): only
+                    // Push to Library: only
                     // reachable while diverged (the header pill is gated on
                     // `has_graph_mod`), so the source is the instance's OWN
                     // diverged graph — no catalog-default fallback (there
@@ -2285,7 +2284,7 @@ impl Application {
             self.ws.offscreen_dirty = true;
         }
 
-        // 6·motion. `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw
+        // 6·motion. The redraw
         // keepalive aggregate — while any tree overlay is still animating
         // (today: the D11 toast's enter/hold/fade), force `offscreen_dirty`
         // so the overlay pass (gated on it, `present_all_windows`) keeps
@@ -2295,8 +2294,7 @@ impl Application {
             self.ws.offscreen_dirty = true;
         }
 
-        // 6·fire-meter. D6 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-        // P3c, BUG-082's fix): push this tick's live shaped-signal levels onto
+        // 6·fire-meter. Push this tick's live shaped-signal levels onto
         // every open fire-mode drawer's Amount meter in the inspector — in
         // place, no rebuild. Unconditional (unlike the Audio Setup meters
         // below): a fire-mode drawer can be open in the inspector whether or
@@ -2370,8 +2368,7 @@ impl Application {
         // (drives the worker's VQT column producer). Only on change — closing the
         // panel sends `None`, stopping column production.
         //
-        // P7 tap-follow (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-        // section 7.2 item 5): a currently-open fire-mode drawer (clip trigger or
+        // Tap-follow: a currently-open fire-mode drawer (clip trigger or
         // `is_trigger_gate` param card) wins over the panel's own selected
         // send — collapsing it falls straight back to the panel's selection,
         // since this is computed fresh every frame, never persisted (section 7.3 P7

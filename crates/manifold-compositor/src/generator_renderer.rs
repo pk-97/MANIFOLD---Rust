@@ -120,7 +120,7 @@ pub struct GeneratorRenderer {
     /// when this changes (mirrors the effect chain's `preview_effect` rebuild key).
     preview_layer: Option<LayerId>,
     /// Per-step GPU/CPU attribution profiling on/off for every generator this
-    /// renderer owns (PERF_BUDGET_GATE_DESIGN P2 / D6). Applied to each
+    /// renderer owns. Applied to each
     /// generator's executor at chain-insertion time
     /// (`install_layer_generator`) and fanned out to already-live generators
     /// via [`Self::set_profiling`]. `false` costs one `bool` set per
@@ -219,7 +219,7 @@ impl GeneratorRenderer {
     }
 
     /// Enable/disable per-step attribution profiling on every generator this
-    /// renderer owns (PERF_BUDGET_GATE_DESIGN P2 / D6). Fans out to
+    /// renderer owns. Fans out to
     /// already-installed generators; `install_layer_generator` applies the
     /// same flag to any generator installed after this call.
     pub fn set_profiling(&mut self, on: bool) {

@@ -1,5 +1,4 @@
 //! `node.render_scene` shadow-map CACHING proof
-//! (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P2 — I1/I4 gate).
 //!
 //! P2 adds a per-caster dirty-check key (D6) that skips the depth-only
 //! shadow batch when nothing the shadow pass reads has changed since the

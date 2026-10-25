@@ -318,8 +318,7 @@ pub fn binding_id_for_node_param_in(
 }
 
 /// Everything a node-param write needs to reroute through the owning card
-/// slot (BUG-1l7f redirect, `PARAM_TWO_WAY_BINDING_DESIGN.md` D2): the
-/// manifest id to write, the fold inputs for [`invert_card_reshape`], and
+/// slot: the manifest id to write, the fold inputs for [`invert_card_reshape`], and
 /// the binding's authored default — the value the render falls back to when
 /// the manifest slot is absent, which is what undo must restore in that
 /// case.
@@ -410,8 +409,8 @@ pub fn apply_card_reshape(
     v * scale + offset
 }
 
-/// Exact inverse of [`apply_card_reshape`] where one exists
-/// (`PARAM_TWO_WAY_BINDING_DESIGN.md` D2) — the write-back direction for a
+/// Exact inverse of [`apply_card_reshape`] where one exists.
+/// This is the write-back direction for a
 /// node-face edit on a card-bound param: given the target's new value, solve
 /// for the card value that would forward-reshape to it. Returns `None` only
 /// for a degenerate affine (`scale ≈ 0`, unrepresentable). Out-of-range
@@ -452,7 +451,7 @@ pub fn invert_card_reshape(
 // ─── Param Value (per-slot state) ───
 
 // A single parameter slot's runtime state used to live here.
-// `ParamSlot` is DELETED (PARAM_STORAGE_DESIGN.md D1/D3). Its four fields
+// `ParamSlot` is DELETED. Its four fields
 // (`value`, `base`, `exposed`, `touched`) now live on `crate::params::Param`
 // alongside the descriptor (`spec`), `origin`, and `calibrated` — one struct,
 // one list, id as identity. Construct a param with `Param::bundled(spec)` /
@@ -471,8 +470,8 @@ pub fn invert_card_reshape(
 pub struct RemovedExposure {
     /// Display position in the [`crate::params::ParamManifest`] this entry
     /// occupied — captured purely to restore card order via `insert_at`
-    /// (PARAM_STORAGE_DESIGN.md D10: a display-order snapshot, never an
-    /// identity). `None` when the pruned binding had no param entry
+    /// (a display-order snapshot, never an identity). `None` when the pruned binding had no param
+    /// entry
     /// (composite / fan-out binding with no outer slider).
     pub(super) param_position: Option<usize>,
     /// Index in `preset_metadata.bindings` the `BindingDef` occupied.
@@ -532,7 +531,7 @@ mod tests {
         );
     }
 
-    /// `PARAM_TWO_WAY_BINDING_DESIGN.md` invariant: forward and inverse
+    /// Invariant: forward and inverse
     /// cannot drift. For a grid of (min, max, invert, curve, scale, offset) ×
     /// values: `apply(invert(x)) ≈ x` within 1e-4 across all four curves;
     /// `invert(apply(x)) ≈ x` for in-range x.

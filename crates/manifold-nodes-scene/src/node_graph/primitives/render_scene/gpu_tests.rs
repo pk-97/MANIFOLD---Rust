@@ -219,7 +219,7 @@ fn henyey_greenstein_test(g: f32, cos_theta: f32) -> f32 {
     (1.0 - g2) / (4.0 * std::f32::consts::PI * denom)
 }
 
-/// CINEMATIC_POST_DESIGN.md D2's committed hash, Rust twin — WGSL
+/// The committed hash, Rust twin — WGSL
 /// `fract` is `x - floor(x)` (always non-negative), NOT Rust's
 /// `f32::fract` (which truncates toward zero and can be negative).
 #[allow(clippy::excessive_precision)] // the committed hash constant, verbatim
@@ -230,7 +230,7 @@ fn hash01(px: [f32; 2]) -> f32 {
 }
 
 /// One march-visible light, CPU-twin shape mirroring `shaft_lights`'
-/// binding(2) 3-vec4 packing (VOLUMETRIC_LIGHT_DESIGN.md D2, P3): `slot
+/// binding(2) 3-vec4 packing: `slot
 /// < 0.0` means unshadowed glow (no caster table lookup at all) — this
 /// is how the Point-light case below stays simple (no second shadow
 /// map fixture needed; D2's honest "no slot -> vis=1.0" consequence is
@@ -367,7 +367,7 @@ fn cpu_march_reference(
     ]
 }
 
-/// VOLUMETRIC_LIGHT_DESIGN.md V3: the SHIPPING `shaft_march.wgsl` kernel
+/// The SHIPPING `shaft_march.wgsl` kernel
 /// (dispatched exactly as `ensure_shaft_pipelines`/`evaluate` builds it —
 /// `depth_common.wgsl` concatenated ahead) must agree with
 /// `cpu_march_reference` (same committed D2 math, independent Rust

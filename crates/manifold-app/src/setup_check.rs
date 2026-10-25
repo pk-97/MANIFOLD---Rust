@@ -715,8 +715,7 @@ impl SlotCheck {
     }
 }
 
-/// The cards' setup check as a frame-planner input (UI_INVALIDATION_DESIGN.md
-/// D6): a hash of the problem list the active layer's card and the Scene
+/// The cards' setup check as a frame-planner input: a hash of the problem list the active layer's card and the Scene
 /// panel's card show. A knob scrub that leaves the list alone, or one on
 /// another layer, leaves the hash alone, so live values still update in
 /// place (D22). Each card keeps its own layer's scene model and re-checks it

@@ -3,7 +3,7 @@
 //! LOCAL-space (bind-pose) geometry plus coincident per-vertex JOINTS_0/
 //! WEIGHTS_0 arrays, so `node.skin_mesh` can deform it per frame.
 //!
-//! GLTF_ANIMATION_DESIGN.md A2 (D2): a sibling of `node.gltf_mesh_source`
+//! A sibling of `node.gltf_mesh_source`
 //! (same background-thread parse + staging-buffer-per-frame-blit
 //! pattern), NOT an extension of it — that primitive's Material selector
 //! world-transforms vertices by the contributing node's own bind matrix,
@@ -78,7 +78,7 @@ manifold_node_engine::primitive! {
             label: "Material Index",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            // BUG-207: -2 is GLB_XFAIL_BURNDOWN_DESIGN.md D4's reserved
+            // -2 is reserved
             // sentinel (`gltf_load::DEFAULT_MATERIAL_MESH_PARAM`) selecting
             // the sole skinned node contributing the glTF default
             // (materialless) material — real glTF material indices are
@@ -153,8 +153,7 @@ manifold_node_engine::primitive! {
         // `gltf_mesh_source`'s identical field for why this (not
         // `last_key`) is the correct content-change signal. Shared across
         // all three outputs since they always update together (one parse
-        // produces all three). RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md
-        // P1/R1.
+        // produces all three).
         content_version: u64 = 0,
         last_copied_content_version: u64 = u64::MAX,
         // Per-output dst identity — the three outputs are separate
@@ -463,7 +462,7 @@ mod tests {
     }
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
+/// Run deliberately:
 /// `cargo test -p manifold-nodes-scene --features gpu-proofs
 /// node_graph::primitives::gltf_skinned_mesh_source::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -692,7 +691,7 @@ mod gpu_tests {
         (backend, verts_slot, joints_slot, weights_slot)
     }
 
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate: on a static
+    /// On a static
     /// asset, frame 2's three outputs are bit-identical to frame 1's, and
     /// the copy skip (`mark_outputs_unchanged`) fires on frame 2.
     #[test]

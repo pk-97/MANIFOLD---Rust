@@ -5,7 +5,7 @@
 use super::*;
 
 /// The production chain-topology key, exposed for load-time clip-topology
-/// enumeration (WARMUP_DESIGN P7 D17): warmup dedups per-clip effective
+/// enumeration: warmup dedups per-clip effective
 /// chains against the exact inputs `is_compatible` hashes, so a warmed
 /// topology is precisely one the stage dispatch reuses.
 pub fn chain_topology_hash(
@@ -261,7 +261,7 @@ impl PresetRuntime {
     /// `None` for a standalone build (thumbnails / `check_presets` /
     /// `freeze_profile` / gltf import / freeze proofs). Either way the
     /// reshape spans the declared range; the manifest only adds the user's
-    /// curve, invert and name (`binding_shape`, SCENE_SURFACES_DESIGN.md D15).
+    /// curve, invert and name (`binding_shape`).
     pub fn from_def(
         doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
@@ -362,7 +362,7 @@ manifold_core::testkit_visible! {
             .map(|m| m.bindings.clone())
             .unwrap_or_default();
         // Reshape over the declared range, curve and invert from the
-        // manifest, name from the manifest (SCENE_SURFACES_DESIGN.md D15).
+        // manifest, name from the manifest.
         let shapes = super::binding_shape::binding_shapes(&doc, manifest);
         let string_binding_specs: Vec<manifold_core::effect_graph_def::StringBindingDef> = doc
             .preset_metadata

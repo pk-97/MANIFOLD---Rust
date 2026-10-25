@@ -1,8 +1,8 @@
-//! RT_INSTANCING_DESIGN.md P3/D8 — the emissive light table spans (object,
+//! The emissive light table spans (object,
 //! slot) pairs: an instanced emissive object (loop count = 2, one quad
 //! duplicated per slot) lights a diffuse receiver card, and the traced
 //! irradiance matches a CPU oracle that accounts for BOTH copies emitting.
-//! This proof is the arbiter of the D8 weighting derivation: the alias
+//! This proof is the arbiter of the weighting derivation: the alias
 //! proposal is per-slot-duplicated LOCAL power and the kernel weights by
 //! the sampled entry's TRUE world area composed from the TLAS descriptor
 //! buffer — if the normalization were off by the copy count or a scale

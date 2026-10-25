@@ -8,8 +8,7 @@
 //! row's property being the recipe's own param id, with two exceptions:
 //! Scene Loop also drives every camera on the Loop rig, so its Beats, Stride,
 //! Home, Near and Far reach those cameras' nodes and Pattern reaches both
-//! the corridor and the cameras (camera travel per loop is a whole number of
-//! patterns, SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D3); and Spacing is the
+//! the corridor and the cameras; and Spacing is the
 //! gap the scene's `node.loop_cell` adds to the measured length of what it
 //! tiles, the one cell both the corridor and the cameras read.
 

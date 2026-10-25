@@ -21,7 +21,7 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::atmosphere::Atmosphere;
 
 /// `shaft_quality` enum labels, index = `Atmosphere::shaft_quality`
-/// (VOLUMETRIC_LIGHT_DESIGN.md D1: `0` Low/16 steps, `1` Med/24 (default),
+/// (`0` Low/16 steps, `1` Med/24 (default),
 /// `2` High/32).
 const SHAFT_QUALITIES: &[&str] = &["Low", "Med", "High"];
 

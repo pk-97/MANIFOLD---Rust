@@ -3,7 +3,7 @@
 Sibling package to ``manifold_audio`` — imports it one-way (eval -> manifold_audio,
 never the reverse). Plain Python, runs under the same bundled runtime.
 
-Metrics (metrics.py) are frozen at P1 — any change is a Peter escalation.
+Metrics (metrics.py) are frozen — any change is a Peter escalation.
 """
 
 from __future__ import annotations

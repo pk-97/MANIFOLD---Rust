@@ -225,8 +225,7 @@ pub struct TimelineViewportPanel {
     // moved/trimmed: (position, duration, layer_index). `None` outside a
     // move/trim gesture. Set once per frame by app_render.rs from the
     // overlay's drag state (`set_drag_readout`); display-only, no styling
-    // (deferred to UI_CRAFT_AND_MOTION per `TIMELINE_INTERACTION_P1_SPEC.md`
-    // B13/section 6.9).
+    //.
     drag_readout: Option<(Beats, Beats, usize)>,
     /// Dirty-checked format cache — house pattern is `TransportDisplayCache`
     /// (`manifold-app/src/ui_bridge/state_sync.rs`): `format!` runs only

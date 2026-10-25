@@ -130,7 +130,7 @@ fn compile_pipeline_with_constants(
     mut slot_map: SlotMap,
     constants: Option<&MTLFunctionConstantValues>,
 ) -> GpuComputePipeline {
-    // COMPILE_CONTRACT_DESIGN D1: the MSL path records cold touches too —
+    // The MSL path records cold touches too —
     // the WGSL-path-only counter left this whole file invisible to the
     // no-compiles-during-playback gate.
     record_cold_touch(ColdTouchKind::PipelineCompile);
@@ -744,7 +744,7 @@ pub struct MetalShadowRayTracer {
     trace_timing: RefCell<TraceTiming>,
 }
 
-/// COMPILE_CONTRACT_DESIGN D3: the RT pipeline set is device-global code —
+/// The RT pipeline set is device-global code —
 /// one MSL library and its PSOs, compiled once per process behind
 /// [`GpuDevice::rt_pipelines`] (OnceLock; the MSL source is a per-build
 /// constant, so the OnceLock IS the source-hash cache). Tracer instances
@@ -766,7 +766,7 @@ pub struct RtPipelines {
     /// through the production AS and candidate-hit walk for gpu_proofs.
     /// Never dispatched by the production `render_scene.rs` path.
     pub debug_ray_query_pipeline: GpuComputePipeline,
-    /// RT_INSTANCING_DESIGN.md D1/P0: the TLAS descriptor-build kernel —
+    /// The TLAS descriptor-build kernel —
     /// dispatched ahead of the TLAS build/refit on the same command buffer
     /// in instanced mode (never on the D7 fast path).
     pub descriptor_build_pipeline: GpuComputePipeline,
@@ -1154,7 +1154,7 @@ impl RtPipelines {
             identity_slot_map(&debug_ray_query_slots),
         );
 
-        // RT_INSTANCING_DESIGN.md D1/P0: descriptor-build kernel —
+        // Descriptor-build kernel —
         // descriptors out at [[buffer(0)]], per-object build params at
         // [[buffer(1)]]. Signatures and slot maps change together (the R1
         // slot-map incident class).
@@ -1279,14 +1279,14 @@ impl RtPipelines {
 
 impl MetalShadowRayTracer {
     /// Populate the device-global RT pipeline set at startup
-    /// (COMPILE_CONTRACT_DESIGN P1) — after this, tracer construction
+    /// After this, tracer construction
     /// compiles nothing.
     pub fn prewarm(device: &GpuDevice) {
         device.rt_pipelines();
     }
 
     pub fn new(device: &GpuDevice) -> Self {
-        // COMPILE_CONTRACT_DESIGN D3: code is device-global (compiled once
+        // Code is device-global (compiled once
         // per process); the tracer instance owns only data.
         Self::with_pipelines(device, device.rt_pipelines())
     }
@@ -1678,7 +1678,7 @@ impl MetalShadowRayTracer {
         instance_id: u32,
         primitive_id: u32,
         bary: [f32; 2],
-        // RT_INSTANCING_DESIGN.md D11: the SAME slot-row base the
+        // The SAME slot-row base the
         // production kernel's params carry (object count N) — the debug
         // surface must exercise the production slot-row indexing, not the
         // canonical rows.
@@ -2408,7 +2408,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 buffer: emissive_aliases,
                 offset: 0,
             },
-            // RT_INSTANCING_DESIGN.md D8: the TLAS instance-descriptor
+            // The TLAS instance-descriptor
             // buffer — the kernel composes local-space emissive entries to
             // world through it in instanced mode. Always bound (the D7 fast
             // path never reads it; encoder.rs's accel dispatch already
@@ -3648,7 +3648,7 @@ mod tests {
         }));
     }
 
-    /// COMPILE_CONTRACT_DESIGN INV2: code is device-global — a second tracer
+    /// Code is device-global — a second tracer
     /// construction (the fresh-RenderScene trigger: chain rebuild/eviction)
     /// compiles nothing. Pre-hoist this failed: each `new` compiled the MSL
     /// library + 7 PSOs.

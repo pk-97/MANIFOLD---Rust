@@ -47,7 +47,7 @@ pub struct NodeInputs<'a> {
     /// is intentionally scoped to one named port; all other input ports keep
     /// resolving through the graph backend.
     camera_override: Option<(&'static str, Camera)>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
+    /// Per-physical-slot write
     /// generation counters, indexed by `Slot.0`, owned by the [`Executor`]
     /// (see `Executor::slot_generations`). Threaded through so
     /// [`Self::storage_revision`] can resolve a port name to its current
@@ -344,7 +344,7 @@ impl<'a> NodeInputs<'a> {
         self.bindings.is_empty()
     }
 
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 — build a name→[`Slot`]
+    /// Build a name→[`Slot`]
     /// index ONCE, for a node whose `evaluate` looks up MANY ports by name
     /// per frame (e.g. `render_scene`'s `objects × ~20` mesh/material/map/
     /// transform ports). `slot`/`texture_2d`/etc. above stay the normal path
@@ -417,7 +417,7 @@ impl<'a> NodeInputs<'a> {
     /// [`SceneObject`] bound to an already-resolved [`Slot`] — no name
     /// scan, unlike [`Self::object`]. `render_scene`'s draw-assembly loop
     /// resolves `object_k` through its per-frame `build_index()` map
-    /// (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4), same shape as
+    /// Same shape as
     /// `array_slot`/`light_slot` above.
     pub fn object_slot(&self, slot: Slot) -> Option<SceneObject> {
         self.backend.object(slot)
@@ -712,7 +712,7 @@ impl<'a> NodeOutputs<'a> {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod array_accessor_tests {
-    //! Phase A.5 of `BUFFER_PORT_PLAN`. Verifies the
+    //! Verifies the
     //! [`NodeInputs::array`] / [`NodeOutputs::array`] accessors
     //! resolve port names through the backend's [`PortType::Array`]
     //! storage end-to-end.

@@ -1,5 +1,4 @@
-//! MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN P4 round-trip gate (BUG-036
-//! rule): save a project using a bundled
+//! Round-trip gate: save a project using a bundled
 //! STOCK generator preset with EDITED outer params -> reload -> the
 //! params must survive intact AND a driver must still resolve and be
 //! able to modulate them after reload, not only right after creation.

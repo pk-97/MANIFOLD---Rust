@@ -364,7 +364,7 @@ fn param_surface(
         warn_provisional_manifest_once(&inst.id);
     }
 
-    // ── ONE walk over the manifest (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4):
+    // ── ONE walk over the manifest:
     // `inst.params` already carries every fact a row needs — descriptor
     // (spec) + state (exposed), id-keyed, insertion order IS card order —
     // because `build_param_manifest` resolved the registry-vs-graph-metadata
@@ -610,13 +610,9 @@ fn param_surface(
             inst.id.clone(),
             true,
             false,
-            // PRESET_LIBRARY_DESIGN D3/P4: a generator's per-card divergence
-            // is the SAME `graph.is_some()` bit as an effect's (graph-home
-            // unification put both on `PresetInstance`) — this was
-            // hardcoded `false` (a pre-P4 gap that permanently suppressed
-            // the MOD badge on generator cards regardless of actual
-            // divergence), fixed to read the real state like the Effect arm
-            // above.
+            // A generator's per-card divergence is the SAME `graph.is_some()`
+            // bit as an effect's, so it reads the real state like the Effect
+            // arm above.
             inst.graph.is_some(),
         ),
     };

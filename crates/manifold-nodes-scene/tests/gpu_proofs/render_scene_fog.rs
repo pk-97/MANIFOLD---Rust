@@ -94,9 +94,9 @@ fn fog_scene_json(fog: Option<(f32, f32, f32, f32)>) -> String {
 
 /// Same ground-plane scene as [`fog_scene_json`], no fog, with a
 /// `node.atmosphere` wired whose ONLY non-default field is `shaft_intensity`
-/// (VOLUMETRIC_LIGHT_DESIGN.md D1/D2). At `shaft_intensity == 0` (the
+/// At `shaft_intensity == 0` (the
 /// default/unwired value) this must still be byte-identical to no atmosphere
-/// at all (V1) — the march never runs. Non-zero values now (P2) drive the
+/// at all (V1) — the march never runs. Non-zero values now drive the
 /// real march kernel.
 fn shaft_scene_json(shaft_intensity: f32) -> String {
     let mut nodes = String::from(
@@ -156,7 +156,7 @@ fn shaft_scene_json(shaft_intensity: f32) -> String {
 
 #[test]
 fn shafts_off_byte_identical() {
-    // VOLUMETRIC_LIGHT_DESIGN.md V1 (re-run at P2): shaft_intensity == 0
+    // (re-run at P2): shaft_intensity == 0
     // (default, unwired) must render byte-identical to today, even now that
     // the march kernel exists — `wants_shafts` gates it off entirely, no
     // texture/pipeline is ever touched.
@@ -250,7 +250,7 @@ fn shaft_and_fog_scene_json(fog_density: f32, shaft_intensity: f32) -> String {
 
 #[test]
 fn shafts_two_runs_bit_identical() {
-    // VOLUMETRIC_LIGHT_DESIGN.md V2: the journey-proofs determinism
+    // The journey-proofs determinism
     // property, scene-local. Committed hash jitter + fixed step counts +
     // no temporal accumulation (D5) means two independent renders of the
     // SAME graph must be bit-for-bit identical — not merely close.
@@ -265,7 +265,7 @@ fn shafts_two_runs_bit_identical() {
 
 #[test]
 fn shafts_leave_alpha_untouched() {
-    // VOLUMETRIC_LIGHT_DESIGN.md V4: the additive composite's alpha channel
+    // The additive composite's alpha channel
     // must be untouched by the shaft blend (D3) — the ROP's src_alpha=Zero/
     // dst_alpha=One enforces this, this test proves it at the pixel.
     let on = shaft_and_fog_scene_json(0.15, 1.2);
@@ -332,7 +332,7 @@ fn shaft_intensity_is_a_monotonic_performer_fader() {
 /// so callers can exercise both the shadow-clipped-carve path and the
 /// unshadowed-glow path), with a wired `node.atmosphere` (fog + shafts).
 /// `color` lets the performer-gesture test drive the light's colour across
-/// frames with zero new binding work (VOLUMETRIC_LIGHT_DESIGN.md P3: "key
+/// frames with zero new binding work ("key
 /// light color bound to a beat envelope").
 #[allow(clippy::too_many_arguments)]
 fn point_light_shaft_scene_json(
@@ -403,7 +403,7 @@ fn point_light_shaft_scene_json(
     )
 }
 
-/// VOLUMETRIC_LIGHT_DESIGN.md P3 performer gesture: "key light color bound
+/// Performer gesture: "key light color bound
 /// to a beat envelope — the beams pulse with the music with ZERO new
 /// binding work." `light.color` is already a per-frame CPU wire value (no
 /// GPU-side plumbing added for this) — driving it across frames must move
@@ -424,7 +424,7 @@ fn point_light_color_modulation_tracks_beam_luminance_with_zero_new_binding() {
     );
 }
 
-/// VOLUMETRIC_LIGHT_DESIGN.md P3 V3 (Point case, end-to-end through the
+/// (Point case, end-to-end through the
 /// real graph — the gpu_tests module's `shaft_march_matches_cpu_reference`
 /// proves the kernel math directly; this proves a Point light wired
 /// through `node.light` -> `node.render_scene` actually reaches the march

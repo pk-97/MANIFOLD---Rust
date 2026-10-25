@@ -188,7 +188,7 @@ impl Watercolor {
         }
     }
 
-    /// COMPILE_CONTRACT_DESIGN P2: prewarm all seven watercolor pipelines
+    /// Prewarm all seven watercolor pipelines
     /// at startup so the first watercolor frame is a cache hit.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
         device.create_specialized_compute_pipeline(

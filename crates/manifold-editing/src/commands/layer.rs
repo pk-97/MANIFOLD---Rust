@@ -1261,7 +1261,7 @@ mod tests {
         Layer::new(name.to_string(), LayerType::Video, index)
     }
 
-    /// MVP-P1b default-preset contract:
+    /// Default-preset contract:
     /// creating an LED layer seeds `gen_params` with the bundled LED Fill
     /// preset id — the id is the contract; MVP-P2 grows the graph underneath
     /// it. A missing gen_params here is the "cleared generator" black-render
@@ -1338,7 +1338,7 @@ mod tests {
         assert_eq!(audio_layer_routing(2).1, None);
     }
 
-    // ── MVP-P3a: gen-carrying predicate ──
+    // ── Gen-carrying predicate ──
 
     const TEST_LED_GEN_A: PresetTypeId = PresetTypeId::new("TestLedGenA");
     const TEST_LED_GEN_B: PresetTypeId = PresetTypeId::new("TestLedGenB");

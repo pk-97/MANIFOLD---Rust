@@ -161,7 +161,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
     // (vtx1), w2=0.25 (vtx2). CPU oracle (Python):
     // normalize(0.25*(0,0,1) + 0.5*(0,0,1) + 0.25*(0,1,0))
     //   = (0.0, 0.31622776601683794, 0.9486832980505138).
-    // RT_INSTANCING_DESIGN.md D11: the debug surface takes the same
+    // The debug surface takes the same
     // slot-row base as production params (the object count) — it reads the
     // slot region [N, N+Σ), not the canonical rows.
     let slot_row_base = objects.len() as u32;

@@ -109,7 +109,7 @@ pub struct RtAccel {
     /// pub(crate): encoder.rs's dispatch useResource coverage (BUG-jddy
     /// arm 5) declares both BLASes and this buffer.
     ///
-    /// RT_INSTANCING_DESIGN.md D1: in the INSTANCED mode (any object wired
+    /// In the INSTANCED mode (any object wired
     /// with `instances_addr != 0` at build — P1.5: 1-capacity included,
     /// its TRS is GPU-side) this is the GPU-private buffer
     /// the descriptor-build kernel writes and the TLAS build/refit consumes
@@ -119,20 +119,20 @@ pub struct RtAccel {
     /// CPU-authored descriptor scratch. Updates snapshot this mapped buffer
     /// into the GPU-private `instance_buffer` before the AS encoder reads it.
     pub(crate) instance_buffer_scratch: GpuBuffer,
-    /// RT_INSTANCING_DESIGN.md D1/D7: true when the accel was built with
+    /// True when the accel was built with
     /// the GPU descriptor-build path (any object had `instances_addr != 0`
     /// at build — P1.5: 1-capacity included). Refit then re-dispatches the descriptor
     /// kernel + TLAS refit in one command buffer instead of rewriting
     /// `instance_buffer` from the CPU (it is GPU-private in this mode).
     pub(crate) instanced: bool,
-    /// RT_INSTANCING_DESIGN.md D9/P0.5: Σ effective instance slots at
+    /// Σ effective instance slots at
     /// BUILD time. Refit asserts the running Σ equals this — a capacity
     /// shrink with an unchanged object count would otherwise leave stale
     /// descriptors beyond the rewritten range (the count assert alone
     /// can't see it). Rigid topology: a real change rebuilds instead.
     pub(crate) instance_slot_total: u32,
     pub(crate) topology: Vec<RtGeometryTopology>,
-    /// RT_INSTANCING_DESIGN.md D1: GPU-private per-object descriptor-build
+    /// GPU-private per-object descriptor-build
     /// params (model matrix, `instances_addr`, slot base/count, cast mask).
     /// The retained scratch row is snapshotted here every instanced
     /// build/refit from the CURRENT `objects` slice. `None` in the D7 fast
@@ -494,7 +494,7 @@ pub struct RtObjectGeometry<'a> {
     /// it stays hit by every query EXCEPT the shadow/sun-bounce rays that
     /// mask against `RT_MASK_SHADOW_CASTER` alone.
     pub cast_shadows: bool,
-    /// RT_INSTANCING_DESIGN.md D1/D7: bindless GPU address of this object's
+    /// Bindless GPU address of this object's
     /// `Array<InstanceTransform>` wire (mesh_common.rs's 32-byte
     /// `InstanceTransform` layout), or 0 when unwired. Wired with
     /// wired with `instance_slots > 1` puts the accel on the GPU
@@ -505,14 +505,14 @@ pub struct RtObjectGeometry<'a> {
     /// object at a single identity-slot descriptor, exactly as before this
     /// field existed.
     pub instances_addr: u64,
-    /// RT_INSTANCING_DESIGN.md: the buffer backing `instances_addr` — the
+    /// The buffer backing `instances_addr` — the
     /// BUG-84fv lifetime handle. The descriptor-build kernel reads instance
     /// values through the raw address, which no binding declares, so the
     /// build/refit pins this handle through its async completion exactly
     /// like `vertex_buffer` above. `Some` iff `instances_addr != 0`;
     /// `instances_addr` must be this buffer's `gpu_address()`.
     pub instances_buffer: Option<&'a GpuBuffer>,
-    /// RT_INSTANCING_DESIGN.md D2/D9: per-object instance-slot CAPACITY
+    /// Per-object instance-slot CAPACITY
     /// (rigid topology — a change rebuilds the accel). 0 or 1 = unwired /
     /// identity (the D7 fast path). The raster's live count is in-band
     /// (`pos_scale.w == 0` = dead slot), so capacity is all the CPU needs.
@@ -700,7 +700,7 @@ fn to_packed_4x3(m: [[f32; 4]; 4]) -> MTLPackedFloat4x3 {
     }
 }
 
-/// RT_INSTANCING_DESIGN.md D1: encode the descriptor-build compute dispatch
+/// Encode the descriptor-build compute dispatch
 /// onto an already-open command buffer, ahead of the TLAS build/refit on
 /// the SAME buffer (sequential encoders execute in creation order — the
 /// GPU ordering the design requires; INV-RTI6: values move GPU→GPU only,
@@ -773,7 +773,7 @@ fn instance_mask(cast_shadows: bool) -> u32 {
         }
 }
 
-// ─── P3: caller-ordered acceleration ─────
+// ─── Caller-ordered acceleration ─────
 //
 // The accel lifecycle is three explicit steps on the CALLER's command
 // stream: plan (CPU-only sizing) → prepare (allocate/reuse, no GPU
@@ -1960,7 +1960,7 @@ fn model_handedness(m: [[f32; 4]; 4]) -> f32 {
 /// the actual vertex data itself — the bindless address does that lookup
 /// on the GPU, at ray-hit time.
 ///
-/// RT_INSTANCING_DESIGN.md D11 (supersedes D3's object-major duplication):
+/// One table, replacing the object-major duplication:
 /// ONE table — canonical per-object rows at `[0, N)`, per-slot rows at
 /// `[N, N + Σ)`. Object-indexed kernel readers (the `n4.w` roughness
 /// lookups in `atrous_filter`/`accumulate_irradiance`, the RS-C emissive

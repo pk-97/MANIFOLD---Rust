@@ -1,5 +1,5 @@
 //! Fusion report — per-node classification + region summary for `graph_tool
-//! fusion` (GRAPH_TOOLING_DESIGN D2/D10, section 3 "Committed shapes").
+//! fusion`.
 //!
 //! Calls [`region::partition_regions`] — the exact pure function the freeze
 //! pipeline itself calls to grow fusion regions — and reuses its private

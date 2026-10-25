@@ -1,6 +1,6 @@
 # Card Authoring — semantic intent → idiom, for the outer effect/generator card
 
-**Status:** working guide · 2026-07-13
+**Status:** working guide
 **Prerequisites:** Every row and every lint below is already decided; this doc transcribes and formats them and adds none.
 
 The "card" is the outer-facing surface of an effect or generator preset: the

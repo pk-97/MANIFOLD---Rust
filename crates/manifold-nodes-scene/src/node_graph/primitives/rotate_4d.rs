@@ -1,7 +1,7 @@
 //! `node.rotate_4d` — apply a 4D rotation (XY, ZW, XW planes) to
 //! an `Array<Vec4Vertex>` stream.
 //!
-//! Phase B of `BUFFER_PORT_PLAN`. Mirrors
+//! Mirrors
 //! `generators::generator_math::rotate_4d` so the behaviour is
 //! bit-identical to Tesseract / Duocylinder / Wireframe when
 //! wired with the same base verts. The transform primitive in

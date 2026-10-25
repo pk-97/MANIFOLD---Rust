@@ -667,7 +667,7 @@ impl Application {
     /// a scene layer (a new one when the project has none) — the "drop a model
     /// in and it renders" gesture.
     ///
-    /// `IMPORT_RESPONSIVENESS_DESIGN.md` D3: this is spawn+enqueue only. The
+    /// This is spawn+enqueue only. The
     /// blocking work (optional Blender convert and the CPU glTF parse) runs on a background thread
     /// (`crate::import_worker::run_import_worker`); this function never
     /// blocks the UI thread. A drop while a worker is already in flight is

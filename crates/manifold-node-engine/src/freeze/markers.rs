@@ -1,4 +1,4 @@
-//! The freeze compiler's marker ABI — single-sourced (FUSION_SOTA_DESIGN D1).
+//! The freeze compiler's marker ABI, single-sourced here.
 //!
 //! Codegen (`freeze::codegen`, `freeze::install`) and the runtime host
 //! primitive (`primitives::wgsl_compute`) communicate through WGSL **comment
@@ -280,7 +280,7 @@ mod tests {
     use super::*;
 
     /// Every variant round-trips: `parse(&m.emit()) == Some(m)`. One
-    /// representative instance per variant (invariant table, FUSION_SOTA_DESIGN section 3).
+    /// representative instance per variant (invariant table).
     #[test]
     fn marker_roundtrip_every_variant() {
         let variants = vec![
@@ -470,7 +470,7 @@ mod tests {
         }
     }
 
-    /// Invariant (FUSION_SOTA_DESIGN D1 / section 3): every marker byte on the wire is
+    /// Invariant: every marker byte on the wire is
     /// produced/consumed by THIS module. A Rust string literal starting `"// @`
     /// anywhere else in `manifold-node-engine/src` is a hand-formatted/hand-matched
     /// marker that has drifted out of the single-sourced grammar — the exact

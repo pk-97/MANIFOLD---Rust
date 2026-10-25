@@ -219,7 +219,7 @@ impl ToastPanel {
         self.transient.tick(dt_ms)
     }
 
-    /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: whether this overlay still
+    /// Whether this overlay still
     /// needs a per-frame tick to progress (enter/hold/fade) or to detect its
     /// own completion. Named to match the sibling popups' `is_animating()`
     /// (`browser_popup`/`ableton_picker`/`settings_popup`), which the popup
@@ -403,7 +403,7 @@ mod tests {
         assert!(!toast.is_open(), "closed once the whole timeline elapses");
     }
 
-    /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6/P2: `is_animating()` is the
+    /// `is_animating()` is the
     /// sole live member of `UIRoot::overlay_redraw_needed()`'s aggregate —
     /// this is the "animating overlay ⇒ predicate true" proof the phase
     /// brief asks for, at the panel level (the aggregate itself is a

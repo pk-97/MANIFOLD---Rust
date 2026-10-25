@@ -104,7 +104,7 @@ impl RenderScene {
                 let vp = l.shadow_view_proj();
                 let resolution = shadow_map_resolution(l.shadow_resolution);
 
-                // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this caster's
+                // This caster's
                 // dirty-check key — everything the depth-only batch below
                 // reads. `shadow_view_proj()` is a pure function of the
                 // light alone (light.rs), so a static light reproduces the

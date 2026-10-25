@@ -1,4 +1,4 @@
-//! Per-thread work counters for the count gate (UI_INVALIDATION_DESIGN.md D10).
+//! Per-thread work counters for the count gate.
 //!
 //! Each counted site calls [`record_work`]. Counters are thread-local only, so
 //! the UI thread and the content thread count separately and a test reads the

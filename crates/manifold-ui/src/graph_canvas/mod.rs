@@ -392,7 +392,7 @@ const RESET_BUTTON_H: f32 = 18.0;
 /// Gap between the reset button and the zoom indicator on its right.
 const RESET_BUTTON_RIGHT_GAP: f32 = 96.0;
 /// Save to Library / Save to Project / Push to Library header pills
-/// (PRESET_LIBRARY_DESIGN D4/D3, P3/P4) — same row as "Reset to Default",
+/// Same row as "Reset to Default",
 /// anchored to its (always-reserved, whether or not Reset itself is
 /// currently shown) slot so the pills don't shift position when the
 /// modified state changes. Color lives in `color.rs` (the design-token
@@ -445,7 +445,7 @@ pub struct GraphCanvas {
     /// from its own view and interaction state: pan, zoom, the cursor (the
     /// tooltip, row lifts and ghost wire follow it), hover, selection, drags,
     /// the popovers, scope, search, the debug overlay. The editor window's
-    /// composite key reads it (UI_INVALIDATION_DESIGN.md D17, D19); the
+    /// composite key reads it; the
     /// snapshot, aspect and tweens reach the composite through the canvas
     /// feed instead.
     pub(crate) view_version: u64,
@@ -583,7 +583,7 @@ pub struct GraphCanvas {
     /// pattern as `enum_dropdown` / `vec_editor`.
     pub(crate) table_editor: Option<TableEditor>,
 
-    // ── P2 motion ──────────────────
+    // ── Motion ──────────────────
     // No per-frame tick existed anywhere in this module before these three —
     // `GraphCanvas::tick` (below) is the one new per-frame seam, called from
     // `app_render.rs` right next to the existing `canvas.set_snapshot(..)`

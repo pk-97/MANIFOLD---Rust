@@ -1,5 +1,5 @@
-"""P2 beat/downbeat scoring against real ground truth
-P2 gate: "beat F1 + downbeat F1 >= madmom baseline - noise floor on dev AND
+"""Beat/downbeat scoring against real ground truth
+Gate: "beat F1 + downbeat F1 >= madmom baseline - noise floor on dev AND
 heldout").
 
 Ground truth source: the live-show corpus (Addendum 2026-07-17). P1's

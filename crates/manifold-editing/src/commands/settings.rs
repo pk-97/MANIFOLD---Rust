@@ -1842,7 +1842,7 @@ mod tests {
         );
     }
 
-    // ── MVP-P3a: paste generator on gen-carrying lanes ──
+    // ── Paste generator on gen-carrying lanes ──
 
     use manifold_core::effects::PresetInstance;
     use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};

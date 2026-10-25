@@ -1,5 +1,4 @@
-//! Set slider range… / Reset slider range (SCENE_SURFACES_DESIGN.md D7 (user
-//! choices), D15 (slider range and hard limit)).
+//! Set slider range… / Reset slider range.
 //!
 //! The range is a per-control choice in `ParamChoices.slider`. It moves what
 //! the slider spans and what a 0–1 controller sweeps; the declared range on

@@ -5,7 +5,7 @@
 //! The corridor is the stock `SceneLoop` recipe, one scene modifier instance
 //! on every drawn object: its `node.scene_array` builds the cells around the
 //! camera the render uses, so a cut to any camera keeps the tiling
-//! (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D1, D2). The Loop cameras are the
+//! The Loop cameras are the
 //! camera emitter's (`camera.rs`); this card's Beats, Pattern, Stride, Home,
 //! Near and Far drive all of them, so camera travel per loop is always a
 //! whole number of patterns and the wrap is pure (corridor D3).
@@ -16,7 +16,6 @@
 //! along the corridor, live, and adds the card's Spacing as a gap. Dragging
 //! a Transform, scale or Copies row moves the tiles on the same frame; a body
 //! physics moves never does, since the boxes are where things start
-//! (SCENE_REFINEMENT_DESIGN.md P3b).
 //!
 //! For an object drawn once, the corridor is the first instance stage, before
 //! the chain's own: it replaces the single pose with the cells, and every
@@ -58,7 +57,7 @@ const WORLD_SPACE: u32 = 2;
 /// The corridor's starting scale, from the scene's rest-pose box as the
 /// compiler sees it: Spacing starts at the scene's depth along the travel
 /// axis (Z), so a cell starts at twice it, one depth of scene and one of open
-/// air (SCENE_LOOP_DESIGN.md D4, the gap rule). The box holds every drawn
+/// air (the gap rule). The box holds every drawn
 /// mesh and every swarm's spread ([`super::swarm::SPREAD`]). The live cell is
 /// `node.loop_cell`'s; this seeds Spacing and the starts and ranges of Home,
 /// Near and Far.
@@ -85,7 +84,7 @@ impl Corridor {
     }
 
     /// A Scene Loop row's start, default and slider range for `property`,
-    /// where the scene's scale decides them (SCENE_LOOP_DESIGN.md D11).
+    /// where the scene's scale decides them.
     fn scaled(&self, property: &str) -> Option<(f32, (f32, f32))> {
         let c = self.cell;
         Some(match property {

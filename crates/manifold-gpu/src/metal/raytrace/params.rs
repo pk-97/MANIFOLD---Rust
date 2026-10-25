@@ -143,7 +143,7 @@ pub struct ShadowRayParams {
     pub env_rotation: f32,
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
-    /// RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows in
+    /// Row-base of the per-slot table rows in
     /// the shared `normal_sources`/`gi_materials` buffers — canonical
     /// per-object rows at `[0, N)`, per-slot rows at `[N, N+Σ)`. The kernel
     /// adds this to every `instance_id`-indexed read. `new()` defaults 0
@@ -204,7 +204,7 @@ impl ShadowRayParams {
         }
     }
 
-    /// RT_INSTANCING_DESIGN.md D11: production passes the object count N so
+    /// Production passes the object count N so
     /// `instance_id`-indexed table reads land in the per-slot rows
     /// `[N, N+Σ)`. Rides the params (not a new binding) — the SAME
     /// discipline as `AccumulateParams`' flag setters.
@@ -441,13 +441,13 @@ pub struct RtNormalSource {
     /// `float4` would 16-align against this offset.
     pub emissive_uv_m: [f32; 4],
     pub emissive_uv_t: [f32; 2],
-    /// RT_INSTANCING_DESIGN.md D6: the owning OBJECT index of this per-slot
+    /// The owning OBJECT index of this per-slot
     /// row — `trace_shadow_rays` packs it into `out_n.w` at the primary hit
     /// so `accumulate_irradiance`'s `obj_motion` lookup stays per-object.
     /// For unwired scenes `object_index == instance_id` (one row per
     /// object), byte-identical to the pre-instancing id.
     pub object_index: u32,
-    /// RT_INSTANCING_DESIGN.md D3: bindless address of THIS slot's
+    /// Bindless address of THIS slot's
     /// `InstanceTransform` (the renderer's 32-byte layout,
     /// mesh_common.rs:96 — mirrored manually in the MSL; manifold-gpu
     /// cannot depend on manifold-nodes), or 0 when unwired. When
@@ -530,7 +530,7 @@ const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 688);
 const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, sampling) == 8);
 const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, extension_uv_transforms) == 328);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, extra_tex_indices) == 964);
-// RT_INSTANCING_DESIGN.md D3: the consumed `_pad2` words become
+// The consumed `_pad2` words become
 // object_index (108) + instance_addr (112) — asserted, not hand-counted.
 // P4b: the appended appearance/index fields — asserted the same way.
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, object_index) == 108);
@@ -550,7 +550,7 @@ const _: () = assert!(std::mem::offset_of!(RtNormalSource, tangent_offset) == 23
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_matrix) == 236);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 272);
 
-/// RT_INSTANCING_DESIGN.md D1/P0: manual mirror of the renderer's
+/// Manual mirror of the renderer's
 /// `mesh::InstanceTransform` (32 bytes,
 /// `pos_scale` xyz position + w uniform scale, `rot_pad` xyz XYZ Euler +
 /// w mirror marker) — manifold-gpu cannot depend on manifold-nodes, so
@@ -561,7 +561,7 @@ const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 
 /// `instances_addr + slot * 32`.
 pub(crate) const RT_INSTANCE_TRANSFORM_BYTES: usize = 32;
 
-/// RT_INSTANCING_DESIGN.md D1/P0: Rust mirror of the embedded-MSL
+/// Rust mirror of the embedded-MSL
 /// `RtAsInstanceDescriptor` — itself the field-for-field mirror of
 /// `MTLAccelerationStructureInstanceDescriptor` the descriptor-build kernel
 /// writes. The CPU never authors descriptors in instanced mode (the buffer
@@ -596,7 +596,7 @@ const _: () = assert!(
         )
 );
 
-/// RT_INSTANCING_DESIGN.md D1/P0: Rust mirror of the embedded-MSL
+/// Rust mirror of the embedded-MSL
 /// `RtInstanceBuildObj` — one entry per object, rewritten every instanced
 /// build/refit from the current `objects` slice (transforms, wired
 /// instance address, slot base/count, cast mask) and consumed by the
@@ -628,7 +628,7 @@ const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_base) == 72)
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, slot_count) == 76);
 const _: () = assert!(std::mem::offset_of!(RtInstanceBuildObj, cast_shadows) == 80);
 
-/// RT_INSTANCING_DESIGN.md D7 + P1.5: an object occupies `instance_slots`
+/// An object occupies `instance_slots`
 /// TLAS slots when wired (its TRS lives GPU-side); an UNWIRED object
 /// collapses to the single identity slot of the D7 fast path. P1.5: the
 /// plural-capacity qualifier is gone — a wired 1-capacity buffer still

@@ -60,8 +60,7 @@ impl InspectorCompositePanel {
     }
 
     /// The root of the drag ghost and indicator while a card drag is live,
-    /// minted first into the tree's ghost region (UI_INVALIDATION_DESIGN.md
-    /// D7): its region is what the ghost pass paints, and the frame refills
+    /// minted first into the tree's ghost region: its region is what the ghost pass paints, and the frame refills
     /// the region when it holds anything else.
     pub fn card_drag_ghost_root(&self) -> Option<NodeId> {
         if self.card_drag_active {
@@ -289,7 +288,7 @@ impl InspectorCompositePanel {
         // paint outside whatever rect it starts at and outside the
         // inspector's own region clip — the region mechanism's one
         // sanctioned overflow case. It mints into the tree's ghost region
-        // (UI_INVALIDATION_DESIGN.md D7): no atlas slot, refilled by the
+        // No atlas slot, refilled by the
         // frame while the drag lives, so a ghost appears or moves without
         // rebuilding the inspector.
         let col_x = self.viewport_rect.x + COLUMN_PAD;

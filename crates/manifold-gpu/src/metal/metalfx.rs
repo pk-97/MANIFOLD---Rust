@@ -254,7 +254,7 @@ impl MetalFxTemporalScaler {
             scaler.setInputContentWidth(input_width as usize);
             scaler.setInputContentHeight(input_height as usize);
             // Motion vectors arrive in NDC-space `(dx, dy)` per pixel
-            // (GBUFFER_DESIGN.md section 2 D5 — the format W0 stores). MetalFX
+            // (the format W0 stores). MetalFX
             // expects motion in pixel units: multiplying by half the
             // render-resolution converts an NDC delta spanning [-1, 1]
             // across the full input width/height into pixels.

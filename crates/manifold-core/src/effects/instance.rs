@@ -16,7 +16,7 @@ use super::*;
 ///
 /// Serialization (custom impls below):
 ///
-/// - `params` is one id-keyed V1.4 map (PARAM_STORAGE_DESIGN.md section 4):
+/// - `params` is one id-keyed V1.4 map:
 ///   `{ id: { value, exposed, base? } }`, `base` present iff
 ///   `base_tracked`. This is the ONLY wire shape the typed (de)serialize
 ///   understands — the historical positional/keyed value duo (a values
@@ -46,7 +46,7 @@ pub struct PresetInstance {
     pub(super) effect_type: PresetTypeId,
     pub enabled: bool,
     pub collapsed: bool,
-    /// Id-keyed parameter manifest (PARAM_STORAGE_DESIGN.md D1): descriptor
+    /// Id-keyed parameter manifest: descriptor
     /// and live state in one [`crate::params::Param`] per parameter, keyed by
     /// id, with insertion order as card display order. Replaces the former
     /// positional `Vec<ParamSlot>` plus three id→index resolvers — there is no
@@ -65,7 +65,7 @@ pub struct PresetInstance {
     /// appears on the wire at all. Not serialized; derived on load.
     pub base_tracked: bool,
     /// Raw V1.4 wire entries, held between deserialize and the loader's
-    /// reconcile pass (`PARAM_STORAGE_BOUNDARIES_DESIGN.md` D1/D3). The
+    /// reconcile pass. The
     /// custom `Serialize` impl above never reads this field, so it never
     /// rides the wire. `Some` from the moment `Deserialize`/`into_instance`
     /// builds the manifest until [`Self::reconcile_manifest`] rebuilds it
@@ -121,8 +121,7 @@ pub struct PresetInstance {
     /// Not serialized; resets to 0 on load.
     pub graph_structure_version: u32,
 
-    /// Card section titles the user folded (SCENE_SURFACES_DESIGN.md D7 (one
-    /// saved choice set)). View state; skipped on the wire when empty.
+    /// Card section titles the user folded. View state; skipped on the wire when empty.
     pub folded_sections: Vec<String>,
     /// Card section titles the user unfolded. Only a section that folds by
     /// default (D11 (lights): Lighting past eight lights) needs this; a title
@@ -658,7 +657,7 @@ impl PresetInstance {
     /// The per-instance graph's user-added [`BindingDef`]s, in declaration
     /// order — the **single source of truth** for this effect's
     /// user-exposed parameters after the binding-storage unification
-    /// (`PRESET_UNIFICATION_PLAN.md` step 3). User bindings no longer live
+    /// User bindings no longer live
     /// in a parallel `PresetInstance.user_param_bindings` Vec; they are the
     /// `user_added` entries of `graph.preset_metadata.bindings`, exactly
     /// like the generator side. Empty when the effect has no per-instance
@@ -734,7 +733,7 @@ impl PresetInstance {
         };
         // The full slider surface (range + curve + invert + label) is the
         // manifest entry's live `spec` — so a recalibrated user param's range
-        // reaches the renderer (PARAM_STORAGE_DESIGN.md D6). scale/offset come
+        // reaches the renderer. scale/offset come
         // from the binding recipe. Identity fallback when no manifest entry.
         let param = self.params.get(&b.id);
         let spec = param.map(|p| &p.spec);
@@ -772,7 +771,7 @@ impl PresetInstance {
     }
 
     // `static_param_count`, `param_id_to_value_index`, and `resolve_param` are
-    // DELETED (PARAM_STORAGE_DESIGN.md D3): there is no positional slot to
+    // DELETED: there is no positional slot to
     // resolve an id to, and no static/user split with addressing meaning. A
     // consumer that needs a param's value/range/whole-number data reads
     // `self.params.get(id)` and takes it off the entry
@@ -1000,7 +999,7 @@ impl PresetInstance {
         self.params.insert_at(bundled + position, param);
     }
 
-    // `align_to_definition` is DELETED (PARAM_STORAGE_DESIGN.md D3). It existed
+    // `align_to_definition` is DELETED. It existed
     // to resize the positional `param_values` array to the registry/graph param
     // count after a load or a binding edit — there is no positional array to
     // resize now. The manifest is coherent by construction: it is seeded whole
@@ -1378,7 +1377,7 @@ impl PresetInstance {
     }
 
     /// Put `param_id` on the scene card for good when a modulator attaches
-    /// to it (SCENE_SURFACES D6 (attached rows)): a scene control with no
+    /// to it: a scene control with no
     /// pin is off the card, since its role never places it, so it is pinned
     /// Shown, and switching the modulator off or removing it never takes the
     /// control away. Returns the pin it replaced, or `None` when it wrote
@@ -1460,7 +1459,7 @@ impl PresetInstance {
 /// read the generator registry via `self.effect_type` (which holds the preset
 /// type for both kinds). Only ever called on generator-kind instances.
 impl PresetInstance {
-    // `migrate_to_registry_length` is DELETED (PARAM_STORAGE_DESIGN.md D3):
+    // `migrate_to_registry_length` is DELETED:
     // there is no lazy positional tail to pad. A generator's manifest is seeded
     // whole from the template at instantiation (`init_defaults_for_type`) and at
     // load (`build_param_manifest`).
@@ -1609,7 +1608,6 @@ impl PresetInstance {
         // registry template — so trim the reseeded template to the snapshot
         // length; without this, restoring a shorter snapshot leaves the
         // registry-default tail entries appended past the snapshot
-        // (PARAM_STORAGE_DESIGN.md D-storage).
         self.init_defaults_for_type(gen_type);
         self.params.truncate(params.len());
         for (p, v) in self.params.iter_mut().zip(params.iter()) {
@@ -1701,7 +1699,7 @@ mod tests {
 
     // `bundled_slider_delete_does_not_misroute_survivor_drivers` (and its
     // `TestBundledSliderMisroute` fixture registration) was DELETED
-    // (PARAM_STORAGE_DESIGN.md D3): it existed to prove a fix for a bug
+    // It existed to prove a fix for a bug
     // that only the OLD dual-resolution scheme could have — a live
     // per-instance `meta.params` position (`param_id_to_value_index`)
     // disagreeing with a frozen-registry position (`resolve_param_in`)
@@ -1865,7 +1863,7 @@ mod tests {
         );
     }
 
-    /// Regression for PARAM_STORAGE_BOUNDARIES_DESIGN.md P2 (D12): `graph
+    /// Regression: `graph
     /// preset_metadata.params` is derived from the live manifest ONLY at
     /// serialize time — `EditParamMappingCommand` no longer dual-writes it,
     /// so the sole way a calibrated range can reach the wire is
@@ -1883,8 +1881,7 @@ mod tests {
 
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
         fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
-        // Calibrate the manifest — the live authority (PARAM_STORAGE_DESIGN
-        // D6) — diverging it from the template range the graph below still
+        // Calibrate the manifest — the live authority — diverging it from the template range the graph below still
         // carries untouched.
         {
             let p = fx.params.get_mut("amount").unwrap();
@@ -1992,7 +1989,7 @@ mod tests {
 
         // Round trip: the user's range comes back as the slider span. The
         // declared range is rebuilt from the catalog, never from the user's
-        // choice (SCENE_SURFACES_DESIGN.md D15 (slider range vs hard limit)).
+        // choice.
         let back: PresetInstance = serde_json::from_str(&json).unwrap();
         assert_eq!(
             back.params.get("amount").unwrap().slider_span(),

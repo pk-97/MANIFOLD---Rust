@@ -39,7 +39,7 @@ pub struct EmbeddedPreset {
     /// The complete preset definition (graph + `preset_metadata`).
     pub def: EffectGraphDef,
     /// `Saved` = user pressed "Save to Project" / "Make Unique" / import
-    /// (PRESET_LIBRARY_DESIGN D4/D9) — deliberate, resolves ON TOP of stock/
+    /// Deliberate, resolves ON TOP of stock/
     /// user disk tiers. `Snapshot` = auto-captured at save for
     /// self-containment (D5) — pruned + refreshed every save, resolves
     /// BELOW disk (disk wins over a stale snapshot; the snapshot is the

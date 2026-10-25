@@ -22,7 +22,7 @@ pub enum ZTier {
 
 const TIERS: [ZTier; 4] = [ZTier::Base, ZTier::Chrome, ZTier::Overlay, ZTier::Ghost];
 
-/// Region arenas per tree (UI_INVALIDATION_DESIGN.md D7). A region id is the
+/// Region arenas per tree. A region id is the
 /// window's region discriminant (`MainRegion` in the main window), and it is
 /// also the region's paint rank inside a tier.
 pub const MAX_REGIONS: usize = 16;
@@ -127,7 +127,7 @@ impl RegionArena {
 }
 
 /// Node storage for the bitmap UI system: one arena per region
-/// (UI_INVALIDATION_DESIGN.md D7, section 3). Rebuilding a region clears and
+/// Rebuilding a region clears and
 /// refills its own arena only, so the other regions' nodes, ids and atlas
 /// pixels stay untouched.
 ///
@@ -518,7 +518,7 @@ impl UITree {
         )
     }
 
-    /// Add a non-interactive image node (PRESET_LIBRARY_DESIGN P6, D7):
+    /// Add a non-interactive image node:
     /// draws `texture` — a handle the renderer resolves against its
     /// registered-image cache — filling the rect, rounded to `corner_radius`.
     /// Non-interactive by design — an interactive sibling drawn in the same

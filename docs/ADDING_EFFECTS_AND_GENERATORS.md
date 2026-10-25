@@ -185,7 +185,6 @@ Generators will eventually follow effects onto a JSON-authoritative workflow und
 
 - [NODE_GRAPH_SYSTEM.md](NODE_GRAPH_SYSTEM.md) — graph runtime and preset architecture
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — authoring a new primitive (the atoms JSON presets reference)
-- [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog, decomposition recipes
 - Bindings unification (one ResolvedBinding, one ParamConvert)
 - `crates/manifold-node-engine/src/load/preset_loader.rs` — disk scan, catalog build, fail-loud rules, hot-reload watcher
 - `crates/manifold-nodes/src/node_graph/bundled_presets.rs` — thin lookup over the disk-loaded catalog + the `every_bundled_preset_loads_validates_and_compiles` test

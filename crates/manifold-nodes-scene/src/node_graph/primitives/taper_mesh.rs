@@ -1,5 +1,5 @@
 //! `node.taper_mesh` — per-vertex taper of an `Array<MeshVertex>` along
-//! `axis` (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, section 3 atom table).
+//! `axis`.
 //!
 //! `s(v) = mix(1, taper, clamp((coord(v) - center) / length, 0, 1) * w)`,
 //! where `coord(v)` is the vertex's coordinate along `axis` and `w` is the

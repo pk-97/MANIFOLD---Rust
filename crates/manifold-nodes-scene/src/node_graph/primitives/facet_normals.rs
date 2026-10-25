@@ -1,6 +1,6 @@
 //! `node.facet_normals` — recompute exact per-triangle flat normals for an
 //! `Array<MeshVertex>` flat triangle list. The v1 normal-policy "reset"
-//! atom (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D4): after a heavy
+//! atom: after a heavy
 //! `push_along_normals` / (future) `morph_mesh` whose normals were left
 //! approximate, wire this downstream to trade the smooth-normal look for
 //! an exact faceted one.

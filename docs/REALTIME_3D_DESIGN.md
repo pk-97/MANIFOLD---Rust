@@ -1,10 +1,9 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: IN PROGRESS** — on main: P0–P6 (materials, `node.render_scene`, shadows + fog, cameras, viewport — mechanics in the `viewport_*` module docs — gizmos), P8 instancing, P9 PCSS, section 9 (spawn-from-mesh). Remaining: P7 (starter preset + polish, section 5 (Phasing)). Amendments: D3/D8; `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead budget (D4); transforms ride `node.transform_3d` — P1's "not port-shadowed" deviation retired. · designed 2026-07-03
+**Status: IN PROGRESS** — on main: P0–P6 (materials, `node.render_scene`, shadows + fog, cameras, viewport — mechanics in the `viewport_*` module docs — gizmos), P8 instancing, P9 PCSS, section 9 (spawn-from-mesh). Remaining: P7 (starter preset + polish, section 5 (Phasing)). Amendments: D3/D8; `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead budget (D4); transforms ride `node.transform_3d` — P1's "not port-shadowed" deviation retired.
 **Prerequisites: the material system M1–M5 (its contract unchanged; this design consumes its extension points).**
 
-Water integration is specified in [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md)
-section 7: optional water surface inputs, opaque snapshot reuse and scene-depth writes.
+Water integration adds optional water surface inputs, opaque snapshot reuse and scene-depth writes.
 This is planned work, not a claim that liquids already render here.
 
 Peter's directives (2026-07-03): proper realtime 3D scenes with proper lighting — "I
@@ -52,12 +51,12 @@ between this doc and execution.
   path; existing presets untouched.
 - **D3 — Object port group = `mesh_n` (Array(MeshVertex)) + `transform_n` (TRS params,
   port-shadowed) + `material_n` (Material).**
-  **[AMENDED 2026-07-06: the transform member
+  **[Amended: the transform member
   is `transform_n: Transform` (CPU-struct port fed by `node.transform_3d`, whose own
   scalar params are port-shadowed); render_scene carries no per-object params.]**
   **[AMENDED 2026-07-10 (F2) — the "8 objects, 4 lights" caps in the original draft
   are dead. Shipped `render_scene` is `OBJECT_SLIDER_MAX = 64` objects; light count is
-  owned by `RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN.md` (up to 64 soft / 127 hard), not
+  owned by the light system (up to 64 soft / 127 hard), not
   this doc. Object/light counts are UI sliders, not the shadow budget — the bounded-cost
   guarantee moved to the shadow-caster cap in D4.]**
   (`light_0..N` dynamic ports — Light is a CPU struct; no `Array<Light>` port type

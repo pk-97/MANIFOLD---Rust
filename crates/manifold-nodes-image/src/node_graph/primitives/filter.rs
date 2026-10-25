@@ -322,7 +322,7 @@ impl Default for Blur {
 }
 
 impl Blur {
-    /// COMPILE_CONTRACT_DESIGN P2: compile both the legacy and Smooth kernels
+    /// Compile both the legacy and Smooth kernels
     /// before a live frame can encounter either mode.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
         device.create_compute_pipeline(include_str!("shaders/blur.wgsl"), "cs_main", "node.blur");

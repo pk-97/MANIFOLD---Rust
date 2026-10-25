@@ -11,9 +11,7 @@ timecode — and the doc a bug hunt attacks (section 13). It is the sibling of
 maps what decides *which clips are alive and what time it is*.
 
 Written immediately after SESSION_MODE P2 merged (`SessionRuntime` as the
-third ref source); sections marked (P2) are that fresh. Updated 2026-08-20
-for DESIRED_STATE_RECONCILIATION_DESIGN.md (sections 3 and 5 rewritten):
-every-tick reconcile, hot mute as presentation, layer-aware binding identity.
+third ref source); sections marked (P2) are that fresh. Updated: every-tick reconcile, hot mute as presentation, layer-aware binding identity.
 
 ---
 
@@ -133,7 +131,7 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
        → evaluate_modulation (pushes fire_meters) → correct_video_drift (every 2s, not in export)
        → filter_ready_clips → compute_prewarm_candidates
      non-playing branch: sync_clips_to_time (same every-tick reconcile —
-       DESIRED_STATE_RECONCILIATION_DESIGN.md D1; seek_active_clips only when
+       seek_active_clips only when
        membership changed), rates,
        audio triggers meter-only walk (pushes fire_meters, never fires — BUG-109 P5,
        section 6), modulation (pushes fire_meters), filter
@@ -178,7 +176,7 @@ bar 33 under any tempo automation; a BPM change keeps every clip on its bar.
 
 Everything that starts or stops a clip goes through this one idempotent
 function, and it runs EVERY tick in EVERY transport state
-(DESIRED_STATE_RECONCILIATION_DESIGN.md D1 — the old `sync_clips_dirty`
+(the old `sync_clips_dirty`
 deferral is deleted; correctness no longer depends on callers requesting a
 re-sync). It returns whether membership changed; the paused tick uses that
 to gate `seek_active_clips` (scrub re-anchors via `seek_to` directly):
@@ -198,7 +196,7 @@ to gate `seek_active_clips` (scrub re-anchors via `seek_to` directly):
 4. `ClipScheduler::compute_sync` — pure diff against `active_clip_ids`;
    micro-clip guard: don't start non-looping clips with < 0.02s-worth of beats
    remaining.
-5. Layer-mismatch heal (P3, DESIRED_STATE_RECONCILIATION_DESIGN.md D5): an
+5. Layer-mismatch heal: an
    active clip whose project layer changed (a drag) gets no to_stop/to_start
    from the clip_id diff, so the engine compares `active_clip_layers`
    (stamped at start) against each ref's `layer_id` and heals mismatches with
@@ -242,8 +240,7 @@ shaped `condition()` signal into `engine.fire_meters` (D6 fire meter), keyed
 (`LiveTriggerState::evaluate_meter_only`) that pushes the identical signal
 without ever advancing the fire edge or emitting a `FireRequest` — a
 performer tuning a trigger at soundcheck (transport stopped, track through
-the tap) still sees the meter move, but nothing can fire while stopped
-(BUG-109 (fire-meter-dead-in-all-transport-states), fixed by AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md section 7 (Wave 2 (2026-07-11) — as-built correction + P5–P8) P5).
+the tap) still sees the meter move, but nothing can fire while stopped.
 `fire_meters` itself resets exactly ONCE per tick, at the top of
 `engine.tick`, before either branch's evaluators run — a prior per-branch
 reset placed after the playing branch's own step-3b push silently wiped it

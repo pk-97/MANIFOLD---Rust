@@ -824,8 +824,7 @@ impl GraphCanvas {
                 return;
             }
         }
-        // Save to Library / Save to Project header pills (PRESET_LIBRARY_DESIGN
-        // D4, P3) — same chrome-priority as Reset; only present when there's an
+        // Save to Library / Save to Project header pills — same chrome-priority as Reset; only present when there's an
         // active graph (mirrors the render-side gate).
         if !self.nodes.is_empty() {
             let sp_rect = self.save_to_project_button_rect(viewport);
@@ -853,7 +852,7 @@ impl GraphCanvas {
                 return;
             }
         }
-        // Push to Library header pill (PRESET_LIBRARY_DESIGN D3, P4) — same
+        // Push to Library header pill — same
         // chrome-priority, only present while diverged (mirrors the
         // render-side gate).
         if self.has_graph_mod {
@@ -1396,7 +1395,7 @@ impl GraphCanvas {
             }
             // `EndGraphNodeParamScrub` closes out the drag's write-back
             // gesture with ONE undo-worthy commit: a card-bound row's
-            // (PARAM_TWO_WAY_BINDING_DESIGN.md D1) OR — since BUG-282 — an
+            // OR an
             // ordinary unbound row's `unbound_node_param_drag` session, whose
             // in-flight ticks live-write with no undo entry. Only emitted when
             // the press actually moved: a zero-move press+release (a plain

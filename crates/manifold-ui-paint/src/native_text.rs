@@ -1768,7 +1768,7 @@ impl NativeTextRenderer {
 /// ever-changing strings (timecodes, readouts).
 const MAX_MEASURE_CACHE: usize = 2048;
 
-/// The one text measurer (UI_INVALIDATION_DESIGN D9, INV-7): CoreText CTLine
+/// The one text measurer: CoreText CTLine
 /// widths behind a bounded cache. Each `UITree` owns one; the renderer
 /// measures through the tree it draws, so build-time layout and paint agree.
 /// GPU-free. The `RefCell` makes `&self` measurement possible; it lives on the

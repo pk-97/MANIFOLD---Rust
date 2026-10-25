@@ -1,5 +1,4 @@
 //! `node.morph_mesh` — static two-mesh lerp between two `Array<MeshVertex>`s
-//! (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4/D9, section 3 atom table).
 //!
 //! `n = min(count_a, count_b)`; `pos = mix(a, b, t * w)`, `normal =
 //! normalize(mix(a.normal, b.normal, t * w))`, `uv` from `a`. With the

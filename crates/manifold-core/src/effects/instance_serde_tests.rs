@@ -3,7 +3,7 @@
 use super::super::test_support::*;
 use super::*;
 
-// ── PresetInstance `params` wire format (V1.4, PARAM_STORAGE_DESIGN.md section 4) ──
+// ── PresetInstance `params` wire format ──
 //
 // The typed (de)serialize understands ONLY the id-keyed `params` map —
 // files below the 1.11.0 floor, which carried the older `paramValues`

@@ -2,7 +2,7 @@
 //! accumulator buffer (produced by `node.draw_particles`) into
 //! a float density texture.
 //!
-//! Phase A.7 of `BUFFER_PORT_PLAN`. Reads each accumulator cell,
+//! Reads each accumulator cell,
 //! divides by `fixed_point_scale` (default 4096, matching FluidSim),
 //! and writes the result as a uniform RGB density into an
 //! `Rgba16Float` storage texture. Output alpha is always 1.0.

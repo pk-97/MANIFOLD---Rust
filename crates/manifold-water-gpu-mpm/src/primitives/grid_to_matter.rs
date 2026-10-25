@@ -1,5 +1,5 @@
 //! `node.grid_to_matter` — the MLS-MPM grid-to-particle transfer and point
-//! update, finished against the colliders (D29), with the
+//! update, finished against the colliders, with the
 //! push-out's momentum added to each dynamic body's reaction words (D30).
 
 use std::borrow::Cow;

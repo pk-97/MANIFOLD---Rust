@@ -114,7 +114,7 @@ pub struct MuxTexture {
     latched_selector: Option<f32>,
     pipeline: Option<GpuComputePipeline>,
     sampler: Option<GpuSampler>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — hash of
+    /// Hash of
     /// (effective selector index actually rendered, selected source slot's
     /// write generation, selected source texture identity, output texture
     /// identity, executor rebuild epoch) from the last frame this node
@@ -207,7 +207,7 @@ impl EffectNode for MuxTexture {
         Some(crate::freeze::classify::BoundaryReason::Blocked)
     }
 
-    /// PARAM_RANGE_CONTRACT_DESIGN.md D6/section 2 mechanical grant: both params on
+    /// Mechanical grant: both params on
     /// this hand-`impl EffectNode` primitive address/size a discrete
     /// resource, evidenced by this file's own defensive clamps (curated in
     /// `freeze::classify::tests::every_range_contract_names_a_real_boundary`).
@@ -354,7 +354,7 @@ impl EffectNode for MuxTexture {
         let (w, h) = (out.width, out.height);
         let out_identity = out.identity_key();
 
-        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197: gate this
+        // Gate this
         // evaluate's dispatch (or clear-fallback) on everything that
         // determines its output content — the effective selector index,
         // the selected source's write generation + physical identity (the
@@ -547,7 +547,7 @@ mod tests {
     }
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 gate: the
+/// Gate: the
 /// evaluate-path dispatch skip, exercised directly (no `Graph`/`Executor`
 /// needed — bindings are constructed by hand, same shape as
 /// `gltf_texture_source`'s and `bake_equirect_envmap`'s own P1/P3

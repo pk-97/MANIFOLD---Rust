@@ -1,4 +1,4 @@
-//! The main window's frame planner (UI_INVALIDATION_DESIGN.md D5, D6, P4b).
+//! The main window's frame planner.
 //!
 //! `plan_frame` compares this frame's [`FrameInputs`] with last frame's and
 //! returns the work to do. It is a pure function over integers: equal inputs

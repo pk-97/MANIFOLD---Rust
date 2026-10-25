@@ -29,7 +29,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUT_DIR="${REPO_ROOT}/tests/fixtures/gltf/khronos"
 mkdir -p "${OUT_DIR}"
 
-# G-P7: every asset in the pinned Khronos commit
+# Every asset in the pinned Khronos commit
 # that has a glTF-Binary variant (118 as of the pin below), EXCEPT
 # TextureTransformTest — fetched separately below via its established
 # gltf+sidecar handling (G-P4), since the pin ships it only as a multi-file

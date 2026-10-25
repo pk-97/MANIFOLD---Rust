@@ -342,8 +342,7 @@ pub struct Executor {
     profiling: bool,
     /// This executor's instance identity (`fx:{layer_id}`, `gen:{layer_id}`,
     /// `master`, `led:{...}`) — set by the owning compositor/generator-
-    /// renderer at chain-insertion time (D6 correction, PERF_BUDGET_GATE_DESIGN
-    /// P2). Stamped as the `"{scope}:s{idx}"` prefix on every profiled tag so
+    /// renderer at chain-insertion time . Stamped as the `"{scope}:s{idx}"` prefix on every profiled tag so
     /// GPU spans from a multi-executor, multi-command-buffer frame join back
     /// to the right instance instead of colliding on a bare `s{idx}`. Empty
     /// string is a valid (unscoped) default — the tag format always includes
@@ -366,7 +365,7 @@ pub struct Executor {
     /// detect upstream changes. Non-pure producers bump every frame they run,
     /// which conservatively keeps their consumers dirty.
     resource_epoch: ahash::AHashMap<ResourceId, u64>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-step "this node
+    /// Per-step "this node
     /// declared its outputs unchanged this frame" flag
     /// (`ctx.mark_outputs_unchanged()`). Reset to `false` for every step
     /// EVERY frame (unlike `step_memo`, which persists across frames) —
@@ -379,7 +378,7 @@ pub struct Executor {
     /// frame. A skipped step never captures state, and a skipped substep
     /// boundary never iterates its region.
     pending_skipped: Vec<bool>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
+    /// Per-physical-slot write
     /// generation, indexed by `Slot.0`. Bumped at the single choke point
     /// where a step's outputs are committed (the same site `resource_epoch`
     /// bumps, immediately below it), UNLESS `node_declared_unchanged[idx]`
@@ -451,7 +450,7 @@ pub struct Executor {
     /// Resources whose logical content revision changed at the current
     /// commit. Reused to drive memo epochs without allocating per frame.
     content_changed_resources: Vec<ResourceId>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — this executor
+    /// This executor
     /// instance's rebuild epoch, renewed at construction and reset from
     /// [`NEXT_REBUILD_EPOCH`] (a process-global monotonic counter; precedent:
     /// `chain_dispatch.rs`'s `CHAIN_REBUILD_COUNT`, `bundled_presets.rs`'s
@@ -518,7 +517,7 @@ pub struct Executor {
     live_scalar_inputs: Vec<(NodeInstanceId, &'static str, f32)>,
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — process-global source for
+/// Process-global source for
 /// [`Executor::rebuild_epoch`]. Starts at 1 (0 is never issued, left free
 /// as an obviously-invalid sentinel for any future test/default construction
 /// that doesn't go through `Executor::new`).
@@ -5701,7 +5700,7 @@ mod tests {
     }
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — the alias-path
+/// The alias-path
 /// generation-propagation gate needs a real backend: pool recycling can
 /// legitimately hand the SAME `ResourceId` a DIFFERENT physical `Slot`
 /// across frames whenever a resource is released and reacquired every
@@ -6106,7 +6105,7 @@ mod alias_gpu_tests {
         }
     }
 
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 gate: a
+    /// Gate: a
     /// param-driven (`skip_passthrough`) alias — `mux_texture`'s
     /// inline-selector fast path is the production case that motivated
     /// this — propagates its aliased input's write generation through to

@@ -313,7 +313,7 @@ impl GpuBuffer {
     /// Raw pointer identity as a plain integer — the [`GpuTexture::identity_key`]
     /// sibling. Lets a caller cache "is this the SAME physical buffer as last
     /// frame" without holding a borrowed `&GpuBuffer` across frames
-    /// (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 — a slot's pool-recycled
+    /// (a slot's pool-recycled
     /// buffer must be treated as changed content even when the CPU-side cache
     /// that feeds it didn't change).
     pub fn identity_key(&self) -> usize {

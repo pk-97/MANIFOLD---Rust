@@ -87,7 +87,7 @@ fn render_generator_thumbnail_produces_non_trivial_png() {
 }
 
 #[cfg(feature = "gpu-proofs")]
-/// Determinism gate (STATIC_THUMBNAILS_DESIGN §4): Bloom (effect) and a
+/// Determinism gate: Bloom (effect) and a
 /// stateful generator, rendered twice each through the full capture
 /// recipe, must produce byte-identical PNGs with every pixel opaque.
 #[test]

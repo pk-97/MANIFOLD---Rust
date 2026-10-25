@@ -133,7 +133,7 @@ impl SceneImpulseToast {
 
 /// Push engine state into UI panels (called once per frame, AFTER build):
 /// the event drain, the chrome push, the selection push and the live push
-/// in that order (UI_INVALIDATION_DESIGN.md D15). The frame seam calls the
+/// in that order. The frame seam calls the
 /// pieces itself so the selection push runs only on its inputs.
 #[cfg(feature = "ui-snapshot")]
 #[allow(clippy::too_many_arguments)]

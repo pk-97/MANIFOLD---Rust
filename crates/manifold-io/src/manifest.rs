@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// The archive container format this build writes and is the newest it can
 /// open. Coarse secondary gate for a future container-format bump — the
 /// primary forward-compat gate is `manifold_core::project::CURRENT_PROJECT_VERSION`,
-/// not this (PROJECT_FILE_INTEGRITY_DESIGN D2/D5).
+/// not this.
 pub const CURRENT_ARCHIVE_FORMAT_VERSION: i32 = 2;
 
 /// Envelope stored as manifest.json inside a V2 .manifold zip archive.

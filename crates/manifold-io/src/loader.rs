@@ -169,8 +169,7 @@ pub fn load_project_from_json(json: &str) -> Result<Project, LoadError> {
 }
 
 /// [`load_project_from_json`] with the embedded-presets install hook (see
-/// [`load_project_with`]). Ordering (`PARAM_STORAGE_BOUNDARIES_DESIGN.md`
-/// D1–D3), all inside this one function so no caller can get it wrong:
+/// [`load_project_with`]). Ordering: all inside this one function so no caller can get it wrong:
 /// deserialize (each instance stashes its raw `params` wire map) → install
 /// the file's own embedded presets into the registry → reconcile every
 /// instance's manifest against that now-complete registry.
@@ -178,7 +177,7 @@ pub fn load_project_from_json_with(
     json: &str,
     register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
 ) -> Result<Project, LoadError> {
-    // Version guards (PROJECT_FILE_INTEGRITY_DESIGN D1/D5) run before
+    // Version guards run before
     // migrate_if_needed: migrate is forward-only, would pass a too-new file
     // to deserialize, which drops fields this build doesn't know (BUG-062),
     // and has no rungs below the floor.
@@ -890,7 +889,7 @@ mod layer_led_flag_round_trip_tests {
 
 #[cfg(test)]
 mod layer_type_dmx_round_trip_tests {
-    //! MVP-P3b positive gate: the DMX
+    //! Positive gate: the DMX
     //! layer type must survive a save → reload cycle as int 4, and hand-built
     //! JSON carrying either int 4 or the legacy string "Led" must load as
     //! Dmx — not silently fall back to Video. Same harness as the

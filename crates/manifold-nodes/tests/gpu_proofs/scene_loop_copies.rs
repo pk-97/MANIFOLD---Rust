@@ -181,7 +181,7 @@ fn the_loop_wraps_a_copies_grid_and_a_swarm_cleanly() {
 }
 
 /// Vortex Fragments on the cube draws the cut's live vertices, never the cut
-/// map's padded capacity (SCENE_REFINEMENT_DESIGN.md section 4 (Checks)). The
+/// map's padded capacity. The
 /// cube is glass because the probe reads the transmissive draws.
 #[cfg(feature = "fluid-perf-proofs")]
 #[test]

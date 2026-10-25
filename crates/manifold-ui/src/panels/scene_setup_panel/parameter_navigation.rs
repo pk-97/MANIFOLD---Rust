@@ -34,7 +34,7 @@ impl ScenePanel {
 
     /// Show `param` in the Scene tab: select the item that owns it, open an
     /// active response tab and scroll it into view on the next build.
-    /// Ownership comes from the param's id (SCENE_SURFACES_DESIGN.md D10).
+    /// Ownership comes from the param's id.
     /// Changes no authored state; `false` leaves the selection as it was.
     pub fn reveal_param(
         &mut self,
@@ -60,7 +60,7 @@ impl ScenePanel {
         true
     }
 
-    /// A card section title's reveal (SCENE_SURFACES_DESIGN.md D10): the
+    /// A card section title's reveal: the
     /// section's first row owned by Lighting or an object, else its first
     /// row. So the card's Lighting title opens Lighting.
     pub fn reveal_section(

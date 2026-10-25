@@ -250,8 +250,7 @@ pub struct UiAutomationPoint {
     pub value_norm: f32,
     pub shape: UiSegmentShape,
     /// The point's value lies past the lane's slider range: `value_norm`
-    /// is pinned at the edge and the lane marks it (SCENE_SURFACES_DESIGN.md
-    /// D15 (slider range and hard limit)).
+    /// is pinned at the edge and the lane marks it.
     pub past_end: bool,
 }
 

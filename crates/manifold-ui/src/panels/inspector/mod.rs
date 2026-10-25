@@ -232,7 +232,7 @@ pub struct InspectorCompositePanel {
     mods_compact: bool,
     /// Bumped by the view setters only when a UI-only view value changes
     /// (tab, compact, a card fold or mod tab). The frame planner keys the
-    /// inspector rebuild on it (UI_INVALIDATION_DESIGN.md D17).
+    /// inspector rebuild on it.
     view_version: u64,
 
     // Section visibility is derived from `active_tab` (the single source of
@@ -257,7 +257,7 @@ pub struct InspectorCompositePanel {
     /// editing crate's EffectTarget from it at pick time.
     inspecting_layer_id: Option<LayerId>,
     /// A row just put on the scene card from the Scene tab; it flashes the
-    /// next time the card is shown (SCENE_SURFACES_DESIGN.md D10).
+    /// next time the card is shown.
     pending_card_flash: Option<(LayerId, manifold_foundation::ParamId)>,
 
     // Scroll state — two independent columns via ScrollContainer
@@ -833,7 +833,7 @@ impl InspectorCompositePanel {
     }
 
     /// Whether the effect at `(tab, fx_idx)` has diverged from its library
-    /// entry (PRESET_LIBRARY_DESIGN D3/P4) — same tab-resolution as
+    /// entry — same tab-resolution as
     /// [`Self::is_effect_ableton_mapped`], read by the card context menu to
     /// gate Revert/Push to Library.
     pub fn effect_has_graph_mod(&self, tab: InspectorTab, effect_id: &EffectId) -> bool {
@@ -950,8 +950,7 @@ impl InspectorCompositePanel {
         &mut self.audio_trigger_section
     }
 
-    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-    /// P3c, BUG-082's fix): push this tick's live shaped-signal levels onto
+    /// Fire meter: push this tick's live shaped-signal levels onto
     /// every open fire-mode drawer's Amount meter across the inspector — in
     /// place, no rebuild (never gated behind a projection; the caller runs
     /// this every UI tick regardless, mirroring
@@ -976,7 +975,6 @@ impl InspectorCompositePanel {
             .update_fire_meters(tree, fire_level, dt);
     }
 
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// the send whichever fire-mode drawer is currently open across the whole
     /// inspector is reading, if any — master effects, active-layer effects,
     /// the active layer's generator, and the layer's own clip triggers, same
@@ -3040,7 +3038,7 @@ mod tests {
         }
     }
 
-    /// INV-3 regression pin: the drag
+    /// Regression pin: the drag
     /// interaction path reads no geometry snapshot — it follows the live
     /// tree end to end, from a post-scroll cursor position through to the
     /// emitted `PanelAction`. The `drag_hit_test_uses_live_bounds_after_in_

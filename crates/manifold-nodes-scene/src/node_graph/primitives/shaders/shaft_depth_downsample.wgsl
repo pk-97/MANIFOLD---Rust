@@ -1,4 +1,4 @@
-// node.render_scene internal pass (VOLUMETRIC_LIGHT_DESIGN.md D3, P2) — half-res
+// node.render_scene internal pass — half-res
 // point-sample downsample of the resolved scene depth (R32Float raw [0,1]
 // reversed-Z clip depth: 1=near, 0=far/background). Feeds both the march
 // kernel (ray-endpoint depth) and the

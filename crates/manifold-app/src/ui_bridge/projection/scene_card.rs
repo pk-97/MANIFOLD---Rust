@@ -1,5 +1,4 @@
-//! The scene card: a scene generator's performance surface
-//! (SCENE_DOCUMENT_DESIGN.md section 7.17, SCENE_SURFACES_DESIGN.md D4).
+//! The scene card: a scene generator's performance surface.
 //!
 //! Rows stay ordinary manifest rows with their real ids, values, modulation
 //! and mappings. This module only chooses, names, sections and orders them,

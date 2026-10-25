@@ -1144,7 +1144,7 @@ impl Drop for MetalBackend {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod array_buffer_tests {
-    //! Phase A.4 of `BUFFER_PORT_PLAN`. Covers `pre_bind_array` →
+    //! Covers `pre_bind_array` →
     //! `array_buffer` round-trip, idempotency of acquire on a
     //! pre-bound slot, no-op release for pinned arrays, and
     //! `drop_all_resources` cleanup.

@@ -697,8 +697,7 @@ manifold_core::testkit_visible! {
 pub(crate) struct PressureSolver {
     pipelines: Option<Pipelines>,
     buffers: Option<Buffers>,
-    /// The round template every solve runs (GPU_FLIP_PRESSURE_CAP_DESIGN.md
-    /// section 3.2): the same chunked executes on every encoder path.
+    /// The round template every solve runs : the same chunked executes on every encoder path.
     templates: Option<GpuTemplateStore>,
     /// The GPU FLIP clock plan every pass reads (gpu_flip_pressure.wgsl
     /// slot_plan): zeros, always active, until the step sets its slot's.

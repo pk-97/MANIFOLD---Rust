@@ -1,5 +1,4 @@
-//! SCENE_LOOP_DESIGN.md INV-3 + SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md D8:
-//! wrap purity — frame at phase 0 == frame at phase 1.
+//! Wrap purity — frame at phase 0 == frame at phase 1.
 //!
 //! Renders a minimal corridor graph at beat=0 (phase 0) and beat=8 (phase
 //! wraps to 0 via `.fract()`) via `render_viewport_frame`, then asserts
@@ -523,7 +522,7 @@ fn wrap_parity_with_fog_driver() {
 /// against a temporarily phase-APERIODIC sway driver (sway keyed on
 /// ctx.time.beats instead of the phase input — one frame of source change,
 /// run, reverted) before going green. A non-phased driver is the class
-/// this gate exists to catch (SCENE_LOOP_DESIGN D8).
+/// this gate exists to catch.
 #[test]
 fn wrap_parity_with_movement_controls() {
     let def = build_loop_graph_with_controls();

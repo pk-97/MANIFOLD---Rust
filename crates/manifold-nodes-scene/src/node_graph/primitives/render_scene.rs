@@ -581,7 +581,7 @@ static RENDER_SCENE_OUTPUTS: [NodeOutput; 10] = [
         kind: PortKind::Output,
         required: false,
     },
-    // GBUFFER_DESIGN.md section 2 D1: lazy — rendered ONLY when wired (same rule
+    // Lazy — rendered ONLY when wired (same rule
     // as `render_mesh`'s `world_pos`/`world_normal`). Raw [0,1] clip depth
     // (D2), `R32Float` via the `output_format` override below.
     NodePort {
@@ -590,7 +590,7 @@ static RENDER_SCENE_OUTPUTS: [NodeOutput; 10] = [
         kind: PortKind::Output,
         required: false,
     },
-    // GBUFFER_DESIGN.md section 2 D5 (P2): lazy, same D1 rule as `depth`. NDC-space
+    // Lazy, same rule as `depth`. NDC-space
     // per-pixel motion (camera + rigid-object motion only — see D5's
     // documented v1 limitation), `Rg16Float` via `output_format` below.
     NodePort {
@@ -737,8 +737,7 @@ struct RenderSceneUniforms {
     alpha_params: [f32; 4],
     /// `(light_count, ambient, exposure_ev, 0)`. `light_count` is the sole
     /// source of truth for how many `@binding(8)` entries the shader reads —
-    /// NOT `arrayLength` (D1). `exposure_ev` (CAMERA_AND_LENS_DESIGN.md section 2
-    /// D5, was zero-padded until P2) is the camera's `lens.exposure_ev` —
+    /// NOT `arrayLength`. `exposure_ev` is the camera's `lens.exposure_ev` —
     /// the shader multiplies its final straight rgb by `exp2(exposure_ev)`.
     scene_params: [f32; 4],
     /// Atmosphere (P3): fog colour (rgb; a reserved). Scene-wide — the same
@@ -766,19 +765,19 @@ struct RenderSceneUniforms {
     appearance: [f32; 4],
     /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
     ambient_tint: [f32; 4],
-    /// VOLUMETRIC_LIGHT_DESIGN.md D1 (P1 plumbing only — no march kernel
+    /// Plumbing only — no march kernel
     /// reads this yet). `x`: shaft_intensity (0 = off, THE fader), `y`:
     /// shaft_anisotropy (Henyey-Greenstein g), `z`: shaft_quality (0/1/2 =
     /// Low/Med/High, as f32), `w`: reserved.
     shaft_params: [f32; 4],
-    /// GBUFFER_DESIGN.md section 2 D5 (P2): previous frame's scene `view_proj`.
+    /// Previous frame's scene `view_proj`.
     /// Always present — one `Uniforms` layout shared by both the
     /// velocity-on and velocity-off pipeline variants (the velocity-off
     /// shader code simply never reads it). Seeded to THIS frame's
     /// `view_proj` on the node's very first `evaluate()` (no history yet),
     /// so first-frame velocity is exactly zero (see `RenderScene::evaluate`).
     prev_view_proj: [[f32; 4]; 4],
-    /// GBUFFER_DESIGN.md section 2 D5 (P2): this object's previous-frame `model`
+    /// This object's previous-frame `model`
     /// matrix. Same always-present / first-frame-seeded rule as
     /// `prev_view_proj`.
     prev_model: [[f32; 4]; 4],
@@ -949,8 +948,7 @@ pub struct RenderScene {
     params: Vec<ParamDef>,
     num_objects: u32,
     num_lights: u32,
-    /// Keyed `(MaterialKind, emit_velocity)` — GBUFFER_DESIGN.md section 2 D5
-    /// (P2): the velocity-on/off pipeline variants are two DISTINCT
+    /// Keyed `(MaterialKind, emit_velocity)` . The velocity-on/off pipeline variants are two DISTINCT
     /// compiled pipelines per material (function-constant text
     /// substitution, not a second WGSL file — see `pipeline_for`), so the
     /// cache key grows from `MaterialKind` alone. 4 materials × 2 = 8
@@ -999,7 +997,7 @@ pub struct RenderScene {
     depth_width: u32,
     depth_height: u32,
     /// Memoryless 4x-MSAA `Rg16Float` velocity aux-MRT target
-    /// (GBUFFER_DESIGN.md section 2 D5, P2's `aux_color` slot). Allocated ONLY
+    /// (the `aux_color` slot). Allocated ONLY
     /// when `evaluate` finds the `velocity` output wired this frame (the
     /// D1 lazy rule) — an unwired scene never calls
     /// `ensure_velocity_msaa_target`, so it costs nothing.
@@ -1119,8 +1117,7 @@ pub struct RenderScene {
     /// unavailable" degradation, so a performer leaving `temporal_upscale`
     /// on on unsupported hardware doesn't spam the log every frame.
     rt_temporal_unavailable_logged: bool,
-    /// Per-object-slot previous-frame `model` matrix (GBUFFER_DESIGN.md section 2
-    /// D5, P2), indexed by object slot `n`. `None` at a slot means "no
+    /// Per-object-slot previous-frame `model` matrix, indexed by object slot `n`. `None` at a slot means "no
     /// history yet" — the frame that finds `None` there seeds
     /// `prev_model = model` (this frame's own value) so that object's
     /// first-ever velocity is exactly zero, not approximately. Resized and
@@ -1129,7 +1126,7 @@ pub struct RenderScene {
     /// discarded rather than risked). Stored as the instance-space pair
     /// `[model, instance_inner]`.
     prev_model: Vec<Option<[[[f32; 4]; 4]; 2]>>,
-    /// Previous frame's scene `view_proj` (GBUFFER_DESIGN.md section 2 D5, P2).
+    /// Previous frame's scene `view_proj`.
     /// `None` = no history yet (same first-frame seeding rule as
     /// `prev_model`); reset on every `rebuild`.
     prev_view_proj: Option<[[f32; 4]; 4]>,
@@ -1181,7 +1178,7 @@ pub struct RenderScene {
     sampler: Option<manifold_gpu::GpuSampler>,
     /// Screen-space refraction must never wrap to the opposite image edge.
     refraction_sampler: Option<manifold_gpu::GpuSampler>,
-    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family material samplers
+    /// Per-map-family material samplers
     /// (bindings 22..26), keyed by [`sampler_cache_key`] — one entry per
     /// DISTINCT `MapSamplerDesc` seen so far, not per object or per family
     /// (most scenes share the same wrap/filter settings across every
@@ -1206,7 +1203,7 @@ pub struct RenderScene {
     shadow_maps: Option<ShadowMapArray>,
     /// A (side, layers) the GPU refused, so it is not retried every frame.
     shadow_maps_refused: Option<(u32, usize)>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — per-caster shadow
+    /// Per-caster shadow
     /// dirty-check key (a 64-bit hash of everything the shadow pass reads
     /// for that caster this frame — see the shadow loop below for the exact
     /// component list). `Some(key) == this frame's freshly computed key`
@@ -1237,13 +1234,13 @@ pub struct RenderScene {
     /// exactly `model_n` — an unwired object costs one extra 32-byte L1
     /// storage-buffer read, nothing observable in the output.
     identity_instance_stub: Option<manifold_gpu::GpuBuffer>,
-    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): half-res `Rgba16Float` light-shaft
+    /// Half-res `Rgba16Float` light-shaft
     /// inscatter texture, lazily created via the `ensure_shadow_map` pattern
     /// ONLY when [`wants_shafts`] is true. Stays `None` when shafts are off
     /// (the `wants_shafts_gate` V1 test pins this half of the
     /// zero-cost-when-off contract).
     shaft_inscatter: Option<manifold_gpu::GpuTexture>,
-    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): half-res `R32Float` point-sampled
+    /// Half-res `R32Float` point-sampled
     /// depth downsample, feeding both the march (ray-endpoint depth) and the
     /// upsample-composite (depth-similarity weights). Same lazy-creation
     /// rule as `shaft_inscatter`.
@@ -1252,7 +1249,7 @@ pub struct RenderScene {
     /// (resize detection, same pattern as `depth_width`/`depth_height`).
     shaft_half_width: u32,
     shaft_half_height: u32,
-    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): full-res `R32Float` internal
+    /// Full-res `R32Float` internal
     /// depth resolve, used ONLY when shafts are on AND the graph's `depth`
     /// output is unwired — "shafts-on forces the internal Sample0 depth
     /// resolve even when `depth` is unwired" (D3). When `depth` IS wired,
@@ -1273,8 +1270,7 @@ pub struct RenderScene {
     /// Split-sum IBL. Prefiltered
     /// specular mip chain (`PREFILTER_BASE_WIDTH`×`PREFILTER_BASE_HEIGHT`,
     /// `PREFILTER_MIP_COUNT` mips) — allocated ONCE (fixed size, never
-    /// resized). RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3):
-    /// re-convolved only when `ibl_cache_key` misses (see
+    /// resized). Re-convolved only when `ibl_cache_key` misses (see
     /// `run_ibl_convolution`'s doc comment for the generation-signal safety
     /// argument).
     prefiltered_specular: Option<manifold_gpu::GpuTexture>,
@@ -1286,7 +1282,7 @@ pub struct RenderScene {
     /// computed ONCE per device, gated by `brdf_lut_built`, never rebuilt.
     brdf_lut: Option<manifold_gpu::GpuTexture>,
     brdf_lut_built: bool,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3): the IBL dirty-check
+    /// The IBL dirty-check
     /// key the prefiltered-specular/irradiance convolution last ran with —
     /// a hash of (logical envmap content version, executor rebuild epoch). `Some(key) == this frame's freshly computed
     /// key` means the persisted `prefiltered_specular`/`irradiance_map`
@@ -1578,7 +1574,7 @@ pub struct RenderScene {
     /// RAYTRACING_DESIGN.md section 17.5 DN-G (DN3): gesture-active signal
     /// this frame, same capture pattern as `denoiser_lighting_changed`.
     denoiser_gesture_active: bool,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): this object's port
+    /// This object's port
     /// names, generated once in [`Self::rebuild`] instead of re-formatted
     /// every `evaluate()` call. section 1's CPU row measured ~22 `format!`
     /// allocations per object per frame plus a linear `NodeInputs::slot`
@@ -1598,7 +1594,7 @@ pub struct RenderScene {
     light_port_names: Vec<Box<str>>,
 }
 
-/// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
+/// The sole CPU gate for the whole
 /// light-shaft feature. `shaft_intensity <= 0` (the unwired default) means
 /// the march must never run and no shaft texture is ever allocated — the
 /// "unwired = zero cost" contract, extended from fog to shafts.
@@ -1764,7 +1760,7 @@ fn prepare_rt_table<T>(
     })
 }
 
-/// Half-res march uniforms (VOLUMETRIC_LIGHT_DESIGN.md D2). Mirrors
+/// Half-res march uniforms. Mirrors
 /// `shaft_march.wgsl`'s `Uniforms` struct field-for-field — four vec4s of
 /// camera basis (each carrying one derived scalar in `.w`), then fog/shaft
 /// params, then march-loop scalars. 96 bytes = 6 x 16, naga's uniform-size
@@ -1781,7 +1777,7 @@ struct ShaftMarchUniforms {
 }
 const _: () = assert!(std::mem::size_of::<ShaftMarchUniforms>() == 96);
 
-/// Upsample-composite uniforms (VOLUMETRIC_LIGHT_DESIGN.md D3). Just the
+/// Upsample-composite uniforms. Just the
 /// camera near/far the bilateral weight's `linearize_depth` needs.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1875,7 +1871,7 @@ struct ObjectDraw<'ctx> {
     volume_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
     diffuse_transmission_map: Option<&'ctx manifold_gpu::GpuTexture>,
     diffuse_transmission_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
-    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: this object's per-map-family
+    /// This object's per-map-family
     /// sampler settings, order `[base_color, normal, mr, occlusion,
     /// emissive]` — matches `binding_sets`' 22..26 slot order below.
     /// Resolved to actual `&GpuSampler`s in Pass 2 via
@@ -2201,7 +2197,7 @@ impl RenderScene {
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
             type_id: RENDER_SCENE_TYPE_ID,
-            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) plus scene_object's optional instance_count scalar — wired, the live count is clamped to the backing buffer capacity for main, shadow, and RT draws; unwired preserves capacity-based behavior. Each instance's world transform is composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Each object also carries four optional maps: normal_map_n (tangent-space, glTF convention, reconstructed into world space via a screen-space cotangent frame — no vertex tangents needed), mr_map_n (glTF metallic-roughness packing: G=roughness, B=metallic), occlusion_map_n (R channel, darkens ONLY the PBR diffuse IBL term, never direct lighting or specular IBL), and emissive_map_n (sRGB, multiplied by the material's emission factor, added after lighting in every material kind including Unlit). All four are unwired-safe (dummy-bound, byte-identical output). `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. Atmosphere/fog (P3) and split-sum IBL (F-P1) apply scene-wide.",
+            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) plus scene_object's optional instance_count scalar — wired, the live count is clamped to the backing buffer capacity for main, shadow, and RT draws; unwired preserves capacity-based behavior. Each instance's world transform is composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Each object also carries four optional maps: normal_map_n (tangent-space, glTF convention, reconstructed into world space via a screen-space cotangent frame — no vertex tangents needed), mr_map_n (glTF metallic-roughness packing: G=roughness, B=metallic), occlusion_map_n (R channel, darkens ONLY the PBR diffuse IBL term, never direct lighting or specular IBL), and emissive_map_n (sRGB, multiplied by the material's emission factor, added after lighting in every material kind including Unlit). All four are unwired-safe (dummy-bound, byte-identical output). `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. Atmosphere/fog and split-sum IBL apply scene-wide.",
             composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/normal_map_n/mr_map_n/occlusion_map_n/emissive_map_n/transform_n/instances_n object ports, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n and the four D3 maps are all optional — leaving any unwired renders that object exactly as before that port existed. Wire scene_object's optional `instance_count` scalar to bound active copies; values are floored, clamped to capacity, and invalid/non-positive values draw zero. instances_n is optional — wire node.scatter_on_mesh (or any Array(InstanceTransform) producer) to draw that many copies; density control lives on the producer (e.g. scatter_on_mesh's port-shadowed count), not on render_scene. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
             examples: &[],
             inputs: &[],
@@ -2320,7 +2316,7 @@ fn build_uniforms(
             material.clearcoat,
             material.clearcoat_roughness,
         ],
-        // z = exposure_ev (CAMERA_AND_LENS_DESIGN.md section 2 D5) — the fragment
+        // z = exposure_ev — the fragment
         // shaders multiply their final straight rgb by exp2(scene_params.z).
         // Every builder defaults `cam.lens` to `LensParams::PINHOLE`
         // (exposure_ev = 0.0), so an unwired lens is byte-identical (I2/I5).
@@ -2551,7 +2547,7 @@ impl EffectNode for RenderScene {
         }
     }
 
-    /// `depth` is `R32Float` (GBUFFER_DESIGN.md section 2 D2 — raw device depth,
+    /// `depth` is `R32Float` (raw device depth,
     /// not linearized: consumers linearize via the shared `depth.wgsl`
     /// helper, D4). `velocity` is `Rg16Float` (section 2 D5 — NDC-space `(dx,
     /// dy)` per pixel). `color` uses the backend default.
@@ -2559,7 +2555,7 @@ impl EffectNode for RenderScene {
     /// AND `velocity` into the plan's `consumed_outputs` regardless of
     /// wiring — the per-scene RT toggle's whole effect on the stored
     /// G-buffer. `false` (the default) returns empty, so an ordinary scene
-    /// stays exactly on GBUFFER_DESIGN's lazy-by-wire rule (D1),
+    /// stays exactly on the lazy-by-wire rule,
     /// byte-identical to before this param existed.
     ///
     /// section 5.2 P4: `temporal_upscale == true` forces the SAME two outputs —
@@ -3014,8 +3010,7 @@ impl RenderScene {
         // `ShadowRayParams::new` is well-formed with that (`caster_count
         // = 0`, kernel's `n_casters` loop is zero-iteration, every
         // `shadow_factor` caster-slot lookup already returns fully-lit
-        // for a light with no caster slot). RT_INSTANCING_DESIGN.md D1/D2:
-        // the accel below is instance-aware — one TLAS slot per wired
+        // for a light with no caster slot). The accel below is instance-aware — one TLAS slot per wired
         // instance capacity, composed GPU-side (descriptor-build kernel),
         // so instanced objects trace one copy per live raster slot. ----
         if let Some((alpha_textures, topo_key, content_key)) = rt_tables

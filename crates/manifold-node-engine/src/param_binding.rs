@@ -95,8 +95,7 @@ pub enum ParamTarget {
     Node {
         node_id: NodeId,
         /// `Borrowed` for a compile-time/canonical param name; `Owned` for a
-        /// fuse-computed field name (`n{idx}_<param>`) — the FUSION_SOTA_DESIGN
-        /// D5 fix: this used to force a `Box::leak` per fuse-build (unbounded
+        /// fuse-computed field name (`n{idx}_<param>`) — the name is owned, not leaked per fuse-build (a leak would be unbounded
         /// past `FUSED_CACHE_CAP`); `Cow` lets a retargeted binding own its
         /// field name instead, same trick already used by
         /// [`ParamTarget::Composite::outer_name`].
@@ -1229,7 +1228,7 @@ mod tests {
         assert_eq!(inst.params.get("scale"), Some(&ParamValue::Float(0.75)));
     }
 
-    /// PARAM_RANGE_CONTRACT_DESIGN.md D3/invariant table: a hint (declared
+    /// Invariant table: a hint (declared
     /// `range`, the display-only slider span) never restricts a write
     /// through the real param-binding write path — the same path a card
     /// binding write takes. `binding fixture.scale`'s declared hint is

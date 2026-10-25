@@ -85,7 +85,7 @@ pub fn run(args: &[String]) {
     // `batch <scene> <script> ...`: many `--script` flows in one process
     // (`script::run_batch`), for `scripts/run_ui_flows.py`.
     // `--record-work`: every `AssertWork` step writes the counts it observed as
-    // the flow's ceilings instead of checking them (UI_INVALIDATION_DESIGN D11).
+    // the flow's ceilings instead of checking them.
     let record_work = args.iter().any(|a| a == "--record-work");
     if scene == "batch" {
         let pairs: Vec<&String> = args[2..].iter().filter(|a| *a != "--record-work").collect();
@@ -119,13 +119,13 @@ pub fn run(args: &[String]) {
     let want_catalog = args.iter().any(|a| a == "--catalog");
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
-    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 acceptance demo: `editor`-scene
+    // Acceptance demo: `editor`-scene
     // only (checked at the dispatch site below) — opens the graph editor's own
     // node picker before the render, through the same `build_overlays_for_
     // screen` seam the live window uses, so the PNG proves BUG-151 fixed on
     // the real headless path.
     let want_open_picker = args.iter().any(|a| a == "--open-picker");
-    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P2 acceptance demo: `editor`-scene
+    // Acceptance demo: `editor`-scene
     // only (checked at the dispatch site below) — toggles the perf HUD open
     // before the render, through the SAME `build_overlays_for_screen` seam
     // `--open-picker` uses, proving row 6's "whatever overlay_draw holds"
@@ -1248,8 +1248,7 @@ mod cache_path_full_render {
     }
 
     // `CompositeResources` (the offscreen target + atlas/blit pipelines
-    // `composite_main_ui_frame` needs) now lives in `composite_resources.rs`
-    // (P2, `UI_HARNESS_UNIFICATION_DESIGN.md` D3) — shared with `render.rs`'s
+    // `composite_main_ui_frame` needs) now lives in `composite_resources.rs`, shared with `render.rs`'s
     // `render_ui_to_png`, which needed the identical resources. Was a private
     // copy duplicated in this test module; see that file's module doc.
 
@@ -1271,8 +1270,7 @@ mod cache_path_full_render {
         super::render::readback(device, &res.offscreen, w, h)
     }
 
-    // `save_ui_png`/`save_filmstrip_png` now live in `render.rs` (P2,
-    // `UI_HARNESS_UNIFICATION_DESIGN.md` D3) — shared with `script.rs`'s
+    // `save_ui_png`/`save_filmstrip_png` now live in `render.rs`, shared with `script.rs`'s
     // `Runner`, which needed the identical helpers for its own filmstrip/
     // snapshot artifacts. Were private copies duplicated in this test
     // module; see `render.rs`'s doc comments on both.
@@ -1690,7 +1688,7 @@ mod editor_window_harness {
         let text_input = crate::text_input::TextInputState::new();
         let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
 
-        // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1: same driver the live
+        // Same driver the live
         // window and `render_graph_editor_to_png` use — no overlay is open
         // here, so this only records an empty `overlay_draw`
         // (the base render below covers the default arena).
@@ -1780,9 +1778,8 @@ mod editor_window_harness {
 
 #[cfg(test)]
 mod overlay_fidelity_proof {
-    //! BUG-097 — the permanent RED→GREEN regression proof for the overlay
-    //! pass, closed by construction in
-    //! `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 4 step 2.
+    //! The permanent RED→GREEN regression proof for the overlay
+    //! pass, closed by construction.
     //!
     //! `UIRoot::build_overlays` mints each open overlay as its own region and
     //! records `(start, end)` with `start = tree.count()` taken AFTER

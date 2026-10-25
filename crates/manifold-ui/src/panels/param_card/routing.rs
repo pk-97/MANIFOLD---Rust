@@ -100,8 +100,7 @@ impl ParamCardPanel {
                 return Vec::new();
             }
             let target = self.param_target();
-            // A scene card's fold is a saved choice (SCENE_SURFACES_DESIGN.md
-            // D7): flip it here and let the app save it.
+            // A scene card's fold is a saved choice: flip it here and let the app save it.
             if role == RowRole::SectionHeader
                 && self.scene_sections
                 && let Some(section) = self

@@ -76,8 +76,7 @@ const KEY_CONSUMER_ROW_BASE: u64 = 74_000;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 
 // ── Layout ──
-/// Minimum panel width. The dock (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN`
-/// D1) supplies the width from `ScreenLayout::audio_setup()`; the panel builds
+/// Minimum panel width. The dock supplies the width from `ScreenLayout::audio_setup()`; the panel builds
 /// its rows into whatever it's given, floored here so the send row's columns
 /// stay legible.
 const PANEL_W_MIN: f32 = 460.0;
@@ -272,7 +271,7 @@ enum AudioSetupDrag {
 pub struct AudioSetupPanel {
     /// Bumped only by the view setters below, and only when the value changes
     /// (open, selected send, armed delete). The frame planner keys the dock
-    /// rebuild on it (UI_INVALIDATION_DESIGN.md D17, panel view versions).
+    /// rebuild on it.
     view_version: u64,
     open: bool,
     // Configured data.
@@ -2790,7 +2789,7 @@ pub(super) mod tests {
         );
     }
 
-    // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───
+    // ─── Inputs / Consumers sections ───
 
     #[test]
     fn inputs_section_is_read_only_routing_display() {

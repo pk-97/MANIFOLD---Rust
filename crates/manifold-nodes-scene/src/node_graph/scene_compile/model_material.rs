@@ -184,7 +184,7 @@ struct MapFamily {
     /// for it (`scene_schema::material::MODEL_MAP_ROLES`).
     port: &'static str,
     /// 1 repacks a spec-gloss alpha into G = roughness, B = metallic
-    /// (GLB_XFAIL_BURNDOWN_DESIGN.md D2); 0 passes through.
+    /// 0 passes through.
     channel_mode: fn(&GltfMaterialInfo) -> u32,
 }
 

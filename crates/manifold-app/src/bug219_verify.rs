@@ -21,7 +21,7 @@
 //! stubbed `content_tx` channel is a faithful, unmodified call of the real
 //! UI-thread code path.
 //!
-//! P3 (`IMPORT_RESPONSIVENESS_DESIGN.md` D3) moved the blocking work off
+//! The blocking work moved off
 //! `import_model_file` onto a background thread — the method now returns
 //! almost immediately (spawn+enqueue only). [`drive_import_to_completion`]
 //! is this harness's adaptation: it drains `Application::drain_import_progress`
@@ -51,7 +51,7 @@
 //! RUST_BACKTRACE=full cargo test -p manifold-app --features journey-proofs \
 //!   bug219_interactive_import_sequential_pressure -- --ignored --nocapture
 //! ```
-//! `#[ignore]`d (per IMPORT_RESPONSIVENESS_DESIGN P1's gate): this loads a
+//! `#[ignore]`d : this loads a
 //! real 43MB GLB through a real GPU-resident import path 3 times per run —
 //! not default-sweep material, and it is explicitly probing a
 //! crash/OOM-shaped bug, so it must never run un-asked-for in CI or the
@@ -190,7 +190,7 @@ fn spawn_background_content_thread() -> Arc<AtomicBool> {
 /// BUG-219's entry. RSS is sampled around every call so a non-crash run
 /// still yields memory evidence for the backlog entry.
 #[test]
-#[ignore = "loads a real 43MB GLB through the real GPU-resident interactive import path up to 3x per run — deliberate-run only, probing a crash/OOM bug (IMPORT_RESPONSIVENESS_DESIGN P1); never in the default sweep or CI"]
+#[ignore = "loads a real 43MB GLB through the real GPU-resident interactive import path up to 3x per run — deliberate-run only, probing a crash/OOM bug; never in the default sweep or CI"]
 fn bug219_interactive_import_sequential_pressure() {
     let path = fixture_path();
     assert!(
@@ -251,7 +251,7 @@ fn bug219_interactive_import_sequential_pressure() {
     );
 }
 
-/// IMPORT_RESPONSIVENESS_DESIGN.md P2 measurement: the sibling test above
+/// Measurement: the sibling test above
 /// (`headless_application`, `Application::new()` untouched) always has
 /// `gpu: None` because `resumed()` never runs headless — so it can only
 /// exercise D2's *lazy-fallback* branch (`validation_gpu_device`'s `None`
@@ -266,7 +266,7 @@ fn bug219_interactive_import_sequential_pressure() {
 /// unlike the pre-P2 code which built one throwaway `GpuDevice` PER import
 /// on top of whatever device already existed.
 #[test]
-#[ignore = "loads a real 43MB GLB through the real GPU-resident interactive import path up to 3x per run — deliberate-run only, probing a crash/OOM bug (IMPORT_RESPONSIVENESS_DESIGN P1/P2); never in the default sweep or CI"]
+#[ignore = "loads a real 43MB GLB through the real GPU-resident interactive import path up to 3x per run — deliberate-run only, probing a crash/OOM bug; never in the default sweep or CI"]
 fn bug219_interactive_import_with_existing_gpu_context_reuses_device() {
     let path = fixture_path();
     assert!(

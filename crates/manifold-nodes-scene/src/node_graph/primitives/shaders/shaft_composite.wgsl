@@ -1,4 +1,4 @@
-// node.render_scene internal pass (VOLUMETRIC_LIGHT_DESIGN.md D3, P2) —
+// node.render_scene internal pass —
 // full-res depth-aware bilateral upsample of the half-res light-shaft
 // inscatter, composited additively into the resolved scene color. The
 // composite itself is hardware additive blending (src=One/dst=One on rgb,

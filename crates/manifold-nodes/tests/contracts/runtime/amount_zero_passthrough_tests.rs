@@ -58,7 +58,7 @@ const FORMERLY_SKIPPABLE_EFFECTS: &[(&str, &str)] = &[
     ("VoronoiPrism", "amount"),
 ];
 
-/// The D2 test card the thumbnail path uses (STATIC_THUMBNAILS_DESIGN §3.1),
+/// The test card the thumbnail path uses,
 /// kept as raw CPU f16 bytes so we can compare output against a deterministic
 /// expected buffer without an extra GPU readback. Shares `test_card_pixel`
 /// with the GPU upload builder so the two can't drift apart.

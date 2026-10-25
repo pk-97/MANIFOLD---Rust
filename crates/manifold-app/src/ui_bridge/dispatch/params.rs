@@ -475,8 +475,7 @@ pub(crate) fn dispatch_params(
             section,
             folded,
         } => {
-            // A scene card fold is a saved view choice (SCENE_SURFACES_DESIGN.md
-            // D7), not an undo step: written to the local project so the
+            // A scene card fold is a saved view choice, not an undo step: written to the local project so the
             // rebuild sees it, and through MutateProject so the next snapshot
             // keeps it, like EffectCollapseToggle.
             let Some(target) = resolve_graph_target(
@@ -1213,7 +1212,7 @@ pub(crate) fn dispatch_params(
             ctx,
         ),
 
-        // ── Browser: sources, badges, management (PRESET_LIBRARY_DESIGN P5) ──
+        // ── Browser: sources, badges, management ──
         // `BrowserCellRightClicked` opens its menu entirely inside
         // `UIRoot::try_open_dropdown` — this arm only keeps the match
         // exhaustive (same pattern as `CardRightClicked` above).

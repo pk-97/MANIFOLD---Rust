@@ -273,7 +273,7 @@ struct PreparedBatch {
     depth: Depth,
 }
 
-/// A static-image draw (PRESET_LIBRARY_DESIGN P6, D7): browser cells filling
+/// A static-image draw: browser cells filling
 /// their body with a save-time-rendered thumbnail. Non-interactive — the
 /// existing button node drawn in the same rect keeps handling clicks/hover;
 /// this only queues the picture.  Accumulated during tree traversal from
@@ -511,7 +511,7 @@ pub struct UIRenderer {
     prepared_physical_w: u32,
     prepared_physical_h: u32,
 
-    // ── Static images (PRESET_LIBRARY_DESIGN P6, D7) ────────────────────
+    // ── Static images ────────────────────
     // A separate small textured pipeline from the flat/gradient rect one —
     // one texture bound per quad, no atlas (the browser's cell count is
     // bounded — tens of presets — so per-quad draw calls are cheap).
@@ -612,7 +612,7 @@ impl UIRenderer {
         let vbuf_ring = (0..BUF_RING_SIZE).map(|_| None).collect();
         let ibuf_ring = (0..BUF_RING_SIZE).map(|_| None).collect();
 
-        // ── Static-image pipeline (PRESET_LIBRARY_DESIGN P6, D7) ──
+        // ── Static-image pipeline ──
         let image_layout = GpuVertexLayout {
             stride: std::mem::size_of::<ImageVertex>() as u32,
             attributes: vec![
@@ -713,7 +713,7 @@ impl UIRenderer {
         self.frame_fence = Some(fence);
     }
 
-    // ── Static images (PRESET_LIBRARY_DESIGN P6, D7) ────────────────────
+    // ── Static images ────────────────────
 
     /// Whether `handle` already has a registered GPU texture — the app calls
     /// this before decoding a PNG so a distinct key is decoded+uploaded at
@@ -1335,7 +1335,7 @@ impl UIRenderer {
             });
         }
 
-        // Static image (PRESET_LIBRARY_DESIGN P6, D7): a browser cell's
+        // Static image: a browser cell's
         // thumbnail fill. Queued after the (transparent, for an Image node)
         // background so it paints in the same relative order a bg fill
         // would, and before text so a caption/badge label drawn on the same
@@ -1945,7 +1945,7 @@ impl UIRenderer {
             }
         }
 
-        // Static images (PRESET_LIBRARY_DESIGN P6, D7): one quad per queued
+        // Static images: one quad per queued
         // command, into a dedicated small ring-buffered vertex buffer (a
         // separate textured pipeline from the flat/gradient rect one, so it
         // can't share `self.vertices`). Capped at `MAX_IMAGE_QUADS` — a
@@ -2151,7 +2151,7 @@ impl UIRenderer {
                 }
             }
 
-            // Static images (PRESET_LIBRARY_DESIGN P6, D7) — after this
+            // Static images — after this
             // depth's rects, before its text, so a caption/badge label
             // painted on the same cell stays legible on top of the picture.
             // One draw call per image (a distinct texture each — no atlas),
@@ -2368,7 +2368,7 @@ mod tests {
         );
     }
 
-    /// Decode-cache proof (PRESET_LIBRARY_DESIGN P6, D7): `register_image` is
+    /// Decode-cache proof: `register_image` is
     /// idempotent — the SAME `TextureHandle` uploads a GPU texture only on
     /// its first call, reporting `false` (no-op) on every subsequent one, so
     /// the app-side "decode + register" loop never re-uploads a key it has

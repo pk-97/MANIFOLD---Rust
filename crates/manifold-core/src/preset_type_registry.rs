@@ -61,7 +61,7 @@ pub const ALL_CATEGORIES: &[&str] = &[SPATIAL, COLOR, STYLIZE, FILMIC, DIAGNOSTI
 // the former per-kind registry, so position-indexed pickers
 // (`ui_bridge::project::set_gen_type`) stay stable.
 //
-// `ArcSwap` (PRESET_LIBRARY_DESIGN P3 entry-state fix), mirroring
+// `ArcSwap`, mirroring
 // `preset_definition_registry::PRESET_DEFINITIONS`: this registry backs the
 // Add-effect / Add-generator browser popup's item list, and used to be a
 // `LazyLock<Vec<_>>` computed once and never refreshed — a preset JSON added
@@ -233,7 +233,7 @@ mod tests {
         }
     }
 
-    /// PRESET_LIBRARY_DESIGN P3 entry-state fix: `rebuild` must make a
+    /// `rebuild` must make a
     /// newly-added preset visible immediately (no restart) AND must drop one
     /// that's no longer present (a full swap, matching a file delete on
     /// reload) — not just accrete forever. This is the exact defect the

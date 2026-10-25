@@ -694,7 +694,7 @@ pub fn param_value_text_fit<'a>(
 /// tracking for a non-fine drag, since `base` is the grab value); the fine
 /// factor scales that to a tenth. `[min, max]` is the slider range, which sets
 /// the speed only: the value carries on past the slider's end and stops at
-/// `limit` (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+/// `limit`.
 pub(crate) fn fine_scrub_value(
     base: f32,
     dx: f32,

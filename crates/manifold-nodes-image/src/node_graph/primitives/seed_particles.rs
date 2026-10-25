@@ -1,7 +1,7 @@
 //! `node.spawn_particles` — emit a freshly-initialised
 //! `Array<Particle>` each frame.
 //!
-//! Phase A.7 of `BUFFER_PORT_PLAN`. The first primitive in the
+//! The first primitive in the
 //! particle family — zero inputs, one Array output, params drive
 //! how many particles are alive (`active_count`) and the max
 //! buffer capacity (`max_capacity`) the chain build pre-allocates.

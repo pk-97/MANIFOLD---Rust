@@ -127,7 +127,7 @@ impl RenderScene {
                 .map(manifold_gpu::GpuBuffer::identity_key)
                 .hash(&mut hasher);
             hasher.write_u32(o.triangle_count);
-            // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
+            // Instance-slot
             // CAPACITY is topology — the TLAS slot count is baked at
             // build time, so a capacity change prepares a replacement
             // before this frame's update. Same rule as manifold-gpu's
@@ -153,7 +153,7 @@ impl RenderScene {
             // change — folded into the SAME key so a toggle with no
             // transform change still triggers a refit.
             hasher.write_u8(o.cast_shadows as u8);
-            // RT_INSTANCING_DESIGN.md D9/INV-RTI4: a wired instances
+            // A wired instances
             // buffer's CONTENT changes refit (descriptor-build
             // re-dispatch + TLAS refit in one command buffer). Static
             // loop/mirror buffers never bump the generation, so the
@@ -263,7 +263,7 @@ impl RenderScene {
             // count, same NLL-borrow reason the tracer/masks/params
             // buffers above are ensured before `opaque_draws`'
             // long-lived immutable borrow starts.
-            // RT_INSTANCING_DESIGN.md D11: the GPU table is canonical
+            // The GPU table is canonical
             // per-object rows [0, N) + per-slot rows [N, N+Σ), matching
             // `ensure_normal_sources` — object-indexed readers (n4.w
             // roughness, RS-C sampler) use the canonical rows,
@@ -550,7 +550,7 @@ impl RenderScene {
                         emissive_uv_m: d.uniforms.emissive_uv_m,
                         emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
                         cast_shadows: d.cast_shadows,
-                        // RT_INSTANCING_DESIGN.md D1/D7 (P1): wire the
+                        // Wire the
                         // instance binding from `d.instances` /
                         // `d.instance_count` — the buffer's GPU address plus the
                         // live slot count. The count is part of the RT topology

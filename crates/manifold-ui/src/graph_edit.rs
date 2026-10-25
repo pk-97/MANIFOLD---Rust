@@ -61,18 +61,18 @@ pub enum GraphEditCommand {
     /// (`instance.graph = None`). Emitted by the "Reset to Default"
     /// button in the graph editor header when the card is diverged.
     RevertEffectGraph,
-    /// Save to Library (PRESET_LIBRARY_DESIGN D4, P3): publish the watched
+    /// Save to Library: publish the watched
     /// graph's current effective definition as a new user-library entry.
     /// Opens the shared name-prompt text-input session anchored at the
     /// header button; the write happens on commit. Emitted by the "Save to
     /// Library" header button.
     SaveGraphToLibrary { anchor: (f32, f32, f32, f32) },
-    /// Save to Project (PRESET_LIBRARY_DESIGN D4, P3): publish the watched
+    /// Save to Project: publish the watched
     /// graph's current effective definition as a new `origin: Saved`
     /// project-embedded preset, without retargeting the watched instance.
     /// Emitted by the "Save to Project" header button.
     SaveGraphToProject { anchor: (f32, f32, f32, f32) },
-    /// Push to Library (PRESET_LIBRARY_DESIGN D3, P4): overwrite the
+    /// Push to Library: overwrite the
     /// watched instance's tracked user-library file with its current
     /// (diverged) definition — every OTHER instance still tracking that id
     /// picks it up via the existing hot-reload watcher. A factory/stock id
@@ -104,7 +104,7 @@ pub enum GraphEditCommand {
     /// unconditionally by the canvas's `ParamScrub` release path — harmless
     /// for an ordinary (unbound) row, where the app has nothing tracked for
     /// it. Exists so the dispatch layer can close out a **card-bound**
-    /// param's write-back gesture (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1)
+    /// param's write-back gesture
     /// with exactly one undo-worthy commit for the whole drag, instead of
     /// one per pointer-move — every `SetGraphNodeParam` during the drag
     /// already wrote the live (card) value, so there is nothing left to

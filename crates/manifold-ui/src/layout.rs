@@ -22,7 +22,7 @@ pub struct ScreenLayout {
     /// the inspector's LEFT edge that expands leftward when opened, shrinking
     /// the content area (preview + timeline) — never the inspector, which stays
     /// right-anchored. One rule at every width: content shrinks, no overlay
-    /// fallback (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D1).
+    /// fallback.
     pub audio_setup_width: f32,
     /// Timeline height as fraction of content area. 0.30 = bottom 30%.
     /// Clamped to [0.15, 0.70] by resize handle.

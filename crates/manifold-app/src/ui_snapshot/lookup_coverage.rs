@@ -1,5 +1,4 @@
-//! Every control the app ships resolves through the live param lookup
-//! (SCENE_SURFACES_DESIGN.md D2 (one live lookup)): bundled presets and the
+//! Every control the app ships resolves through the live param lookup: bundled presets and the
 //! headless-UI fixtures, which are the scene projects the card is drawn from.
 
 use manifold_core::effect_graph_def::BindingTarget;
@@ -102,7 +101,7 @@ fn card_rows(project: &manifold_core::project::Project) -> Vec<String> {
     rows
 }
 
-/// SCENE_SURFACES_DESIGN.md P1 gate: the card rows of the scene fixtures
+/// The card rows of the scene fixtures
 /// before the join (the saved copies) and after a save and reload through
 /// the lookup. Every differing line is a stale copy the join corrected.
 #[test]
@@ -288,7 +287,7 @@ fn joined_vs_saved(fx: &PresetInstance) -> (usize, Vec<String>) {
     (compared, diffs)
 }
 
-/// SCENE_SURFACES_DESIGN.md P1 gate (no visible change): for every control
+/// No visible change: for every control
 /// the lookup describes, the joined name, range and flags equal the saved
 /// full spec the stamp wrote.
 #[test]
@@ -562,7 +561,7 @@ fn saved_scene_has_id_only_lookup_entries() {
     }
 }
 
-/// SCENE_SURFACES_DESIGN.md P8 round trip: a slider range set on a card row
+/// Round trip: a slider range set on a card row
 /// and on a Scene tab row holds across save and reload, and the declared
 /// range under it never moves.
 #[test]
@@ -630,7 +629,7 @@ fn slider_range_round_trips_on_card_and_panel_rows() {
     }
 }
 
-/// SCENE_SURFACES_DESIGN.md P5 round trip: a gltfscene project saved with
+/// Round trip: a gltfscene project saved with
 /// the old labels written into its controls loads with the new labels and
 /// units, with no migration, and every OSC address still resolves to the
 /// same control.

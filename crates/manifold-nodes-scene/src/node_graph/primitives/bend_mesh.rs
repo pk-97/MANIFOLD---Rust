@@ -1,5 +1,4 @@
 //! `node.bend_mesh` — classic per-vertex bend of an `Array<MeshVertex>`
-//! (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, section 3 atom table).
 //!
 //! Rotation convention (bend axis `A`, companion `C` = the next axis in
 //! cyclic X→Y→Z→X order, rotation happens about the THIRD axis `B` — the

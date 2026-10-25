@@ -1620,10 +1620,9 @@ impl ContentThread {
         Some(texture.raw_ptr())
     }
 
-    /// Send export progress to the UI thread. BUG-083: `is_exporting` /
-    /// `export_progress` / `export_status` were deleted un-consumed by the
-    /// 2026-07-09 ContentState orphan purge (UI_PROJECTION_LAYER_DESIGN.md
-    /// P0) — this call kept running as a transport keep-alive into a void.
+    /// Send export progress to the UI thread.
+    /// Consumed as notifications by the export modal (`ui_root/export.rs`),
+    /// without replacing the full playback snapshot with default fields.
     /// Consumed as notifications by the export modal (`ui_root/export.rs`),
     /// without replacing the full playback snapshot with default fields.
     #[cfg(target_os = "macos")]

@@ -1,6 +1,6 @@
 //! Bare-glb import-graph frame loop for
 //! `cargo xtask perf-soak <file.glb|.gltf> [--size WxH] [--frames N]
-//! [--profile]` — PERF_BUDGET_GATE_DESIGN.md D7 / P2b.
+//! [--profile]`.
 //!
 //! Sibling to `perf_soak.rs`'s project-mode loop, NOT a variant of it: this
 //! module never touches the project loader, the content thread, or
@@ -121,7 +121,7 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
         None => DEFAULT_FRAMES,
     };
     let profile_mode = args.iter().any(|a| a == "--profile");
-    // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D3b/P4: a continuously-
+    // A continuously-
     // animated fixture (e.g. BrainStem.glb) never emits a byte-stable frame,
     // so the io_pending/stability convergence loop below spins to
     // `WARMUP_CAP` and errors on every run. `--warmup-frames N` bypasses the
@@ -380,7 +380,7 @@ fn run_profiled(
     runtime.set_profiling(true);
     runtime.set_profile_scope("import");
 
-    // D4b (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md, amendment mid-P0): a
+    // A
     // node's internal GPU passes (shadow, IBL prefilter/irradiance, main)
     // never call `set_profile_tag` — they all share ONE tag (the node's) but
     // each `reserve()` site carries a distinct `label`. Rows stay keyed by
@@ -443,7 +443,7 @@ fn run_profiled(
                         });
                     *agg.passes.entry(span.label.clone()).or_insert(0.0) += span.millis;
                 }
-                // D4b: a span whose tag matches no live executor step this
+                // A span whose tag matches no live executor step this
                 // frame is reported explicitly, grouped by its OWN label —
                 // never silently dropped, never collapsed into one scalar.
                 None => *frame.unmatched.entry(span.label.clone()).or_insert(0.0) += span.millis,
@@ -492,7 +492,7 @@ fn run_profiled(
             let mut nodes_json: Vec<serde_json::Value> = node_rows
                 .iter()
                 .map(|(tag, agg, gpu_ms)| {
-                    // D4b: nested per-pass breakdown — each distinct `label`
+                    // Nested per-pass breakdown — each distinct `label`
                     // under this node's tag gets its own {label, gpu_ms,
                     // share_of_frame} row, sorted descending by gpu_ms,
                     // always an array (even length 1).

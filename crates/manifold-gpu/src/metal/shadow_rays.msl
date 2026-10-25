@@ -104,7 +104,7 @@ struct EmissiveTriangle {
     float2 uv1;
     float2 uv2;
     // Owning object — gi_materials/normal_sources canonical-row lookups
-    // (RS-C), unchanged by RT_INSTANCING_DESIGN.md D8.
+    // (RS-C), unchanged by instancing.
     uint   object_index;
     // D8: the TLAS descriptor slot of THIS entry's copy (CPU knows the slot
     // bases — it computes them for the descriptor-build params). The
@@ -243,7 +243,7 @@ struct ShadowRayParams {
     // and `render_scene.wgsl`'s `Uniforms.view_proj` convention. The Rust
     // mirror asserts its offset (80).
     float4x4 inv_view_proj;
-    // RT_INSTANCING_DESIGN.md D11: row-base of the per-slot table rows —
+    // Row-base of the per-slot table rows —
     // the tables are ONE buffer with canonical per-object rows at [0, N)
     // and per-slot rows at [N, N+Σ); every instance_id-indexed read adds
     // this base (production passes the object count). 0 reads the
@@ -384,7 +384,7 @@ struct RtNormalSource {
     uint   emissive_tex_index;
     float  emissive_uv_m[4];
     float  emissive_uv_t[2];
-    // RT_INSTANCING_DESIGN.md D6/D3: the owning OBJECT index of this
+    // The owning OBJECT index of this
     // per-slot row (packed into out_n.w at the primary hit) + the bindless
     // address of THIS slot's InstanceTransform (0 = unwired). Declared in
     // this order so the ulong lands 8-aligned at 112 — the Rust mirror
@@ -427,7 +427,7 @@ struct RtNormalSource {
     uint   _pad_inner;
 };
 
-// RT_INSTANCING_DESIGN.md D3/D4: manual MSL mirror of the renderer's
+// Manual MSL mirror of the renderer's
 // `generators::mesh_common::InstanceTransform` (32 bytes: pos_scale =
 // xyz position + w uniform scale, rot_pad = xyz XYZ Euler + w mirror
 // marker) — manifold-gpu cannot import manifold-nodes types, so the
@@ -441,7 +441,7 @@ struct RtInstanceTransform {
     float4 rot_pad;
 };
 
-// RT_INSTANCING_DESIGN.md D4: bit-parity copy of the raster's `euler_xyz`
+// Bit-parity copy of the raster's `euler_xyz`
 // (render_scene.wgsl:457, itself bit-for-bit
 // render_instanced_3d_mesh.wgsl's — both named sources per the design's
 // P0 brief). WGSL's mat3x3 constructor takes COLUMN vectors and MSL's
@@ -473,7 +473,7 @@ static float3x3 rti_euler_xyz(float3 angles) {
     return rz * ry * rx;
 }
 
-// RT_INSTANCING_DESIGN.md D3/D12: the vs_main instance fold for DIRECTIONS
+// The vs_main instance fold for DIRECTIONS
 // (render_scene.wgsl:781-813 bit parity) — load the slot's
 // InstanceTransform (0 = unwired, identity) and apply rot·(d·msign). Shared
 // by the vertex-normal fetch (D3) and the tangent-frame edge directions
@@ -528,7 +528,7 @@ static float2 rt_apply_uv_transform(float2 uv, device const float* m) {
         m[2] * uv.x + m[3] * uv.y + m[5]);
 }
 
-// RT_INSTANCING_DESIGN.md D8: field-for-field mirror of
+// Field-for-field mirror of
 // MTLAccelerationStructureInstanceDescriptor (packed transform + four u32s
 // = 64 bytes) — used by BOTH the trace kernel (emissive world composition
 // from `emissive_descriptors`, buffer(6)) and the descriptor-build kernel
@@ -830,7 +830,7 @@ static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
     device const packed_float3* n_ptr =
         (device const packed_float3*)(base + (ulong)vi * (ulong)src.vertex_stride + (ulong)src.normal_offset);
     float3 n_local = float3(*n_ptr);
-    // RT_INSTANCING_DESIGN.md D3: a wired instance slot folds the LOCAL
+    // A wired instance slot folds the LOCAL
     // normal with rot·(n·msign) BEFORE the row's object-level normal_matrix.
     // Unwired rows pass through unchanged —
     // byte-identical to the pre-instancing fetch.
@@ -1027,7 +1027,7 @@ static bool tangent_frame_at_hit(
     device const packed_float3* p2_ptr =
         (device const packed_float3*)(base + (ulong)v2 * (ulong)src.vertex_stride);
     float3x3 model = float3x3(float3(src.model_matrix_col0), float3(src.model_matrix_col1), float3(src.model_matrix_col2));
-    // RT_INSTANCING_DESIGN.md D12: edge directions take the SAME instance
+    // Edge directions take the SAME instance
     // fold as the normal (rot·(d·msign), D3's helper) before the model
     // matrix — edges are directions, and a frame derived from unfoldered
     // edges on an instanced (especially mirrored) surface is off by the
@@ -1988,7 +1988,7 @@ kernel void trace_shadow_rays(
     // are free buffer slots (buffers 0-3 are accel/params/gi/normal).
     device const EmissiveTriangle* emissive_table  [[buffer(4)]],
     device const EmissiveAliasEntry* emissive_aliases [[buffer(5)]],
-    // RT_INSTANCING_DESIGN.md D8: the TLAS instance-descriptor buffer (the
+    // The TLAS instance-descriptor buffer (the
     // same buffer the accel structure references — the composed world
     // transform of EVERY slot, refreshed by every instanced refit). Read
     // only when `emissive_entries_are_local`; bound always (ABI-stub
@@ -2040,7 +2040,7 @@ kernel void trace_shadow_rays(
     bool owns_normal = do_diffuse ||
         (do_reflection && p.ao_spp == 0u && p.gi_spp == 0u);
     bool clears_reflection = do_diffuse && p.refl_spp == 0u;
-    // RT_INSTANCING_DESIGN.md D11: the material/normal tables are ONE
+    // The material/normal tables are ONE
     // buffer — canonical per-object rows at [0, N), per-slot rows at
     // [N, N+Σ). Every read indexed by a committed instance_id (a SLOT)
     // goes through these base-offset pointers; object-indexed sites (the
@@ -2155,7 +2155,7 @@ kernel void trace_shadow_rays(
                 shading_n = perturb_normal_with_map(
                     slot_sources[primary_iid], slot_sources, material_textures,
                     primary_iid, primary_pid, primary_bary, n);
-                // RT_INSTANCING_DESIGN.md D6: out_n.w carries the owning
+                // out_n.w carries the owning
                 // OBJECT index (obj_motion stays per-object), NOT the
                 // per-slot instance_id. Unwired scenes: object_index ==
                 // instance_id, byte-identical to the pre-instancing pack.
@@ -3246,7 +3246,7 @@ kernel void atrous_filter(
 // (which run on the layer texture after `node.render_scene` returns) don't
 // smear RT firefly outliers into bright bokeh blobs. The median is over the
 // non-void texels of the 3x3 (center included — the "3..9-element non-void
-// subset" of RT_STAGE3_DENOISE_DESIGN.md section 3.2); void texels (depth
+// subset"); void texels (depth
 // <= 0.0) are excluded, a center void texel passes through untouched (an
 // EXR sun disc in the void background is legit content, never clamped), and
 // fewer than 3 non-void texels also passes through (a silhouette glint
@@ -4112,7 +4112,7 @@ struct DebugFetchNormalParams {
     uint instance_id;
     uint primitive_id;
     packed_float2 bary;
-    // RT_INSTANCING_DESIGN.md D11: same slot-row base the production
+    // Same slot-row base the production
     // kernel's params carry — the debug surface must exercise the SAME
     // indexing as `trace_shadow_rays`, not the canonical rows.
     uint slot_row_base;
@@ -4154,7 +4154,7 @@ struct DebugRayQueryHit {
 };
 
 struct DebugRayQueryParams {
-    // RT_INSTANCING_DESIGN.md D11: same slot-row base the production
+    // Same slot-row base the production
     // kernel's params carry — the query exercises production slot-row
     // indexing, not the canonical rows.
     uint slot_row_base;
@@ -4301,8 +4301,7 @@ static float4 atrous_post_center(
     texture2d<float> src_irr,
     uint2 tid)
 {
-    // Tuning constants — committed ranges from RT_STAGE3_DENOISE_DESIGN.md
-    // section 3.1 (atrous_post kernel): scale 4.0 (2-8), floor 0.02
+    // Tuning constants — committed ranges for the atrous_post kernel: scale 4.0 (2-8), floor 0.02
     // (0.01-0.05), spatial gain 2.0 (1-4, anchored to
     // ATROUS_REFL_VARIANCE_GAIN), early-out 0.004 ≈ 1 8-bit level
     // (0.002-0.01). Function scope, not program scope — MSL requires
@@ -4425,8 +4424,7 @@ kernel void debug_atrous_post(
     out[0] = packed_float4(c);
 }
 
-// ─── RT instancing: TLAS descriptor-build kernel (RT_INSTANCING_DESIGN.md
-// D1/D3/D4) ─────────────────────────────────────────────────────────────
+// ─── RT instancing: TLAS descriptor-build kernel ─────────────────────────────────────────────────────────────
 //
 // One thread per (object, slot): composes the slot's world matrix
 // `model_obj · (rot·diag(msign·scale) | pos)` EXACTLY as the raster's

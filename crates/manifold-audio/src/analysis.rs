@@ -506,7 +506,7 @@ fn form_tilted_column(
 
 /// How far the ODF must exceed its adaptive baseline (the rolling MEDIAN) to fire.
 /// THE sensitivity knob — lower catches softer onsets, higher is stricter.
-/// Raised 2.0 → 7.0 by the P3 sweep: at 2.0 the dive/riser/
+/// Raised 2.0 → 7.0: at 2.0 the dive/riser/
 /// growl scenarios false-fired continuously (their timbre/tilt motion reads as
 /// broadband dB flux even after the frequency max-filter); 7.0 is the minimal
 /// value (paired with `SUPERFLUX_DELTA` 48.0) that silences all three while
@@ -1221,10 +1221,10 @@ impl RidgeTracker {
     }
 }
 
-/// D6 presence recalibration.
+/// Presence recalibration.
 /// `window_energy` (raw magnitude energy, summed over the whole window) was
 /// the wrong denominator on two counts, both measured against
-/// `selftest_dive.png` 2026-07-06: (1) it mixes scales — the numerator is a
+/// `selftest_dive.png`: (1) it mixes scales — the numerator is a
 /// harmonic-SUM salience value (~5 weighted terms) while the denominator was
 /// a wide window's total RAW energy (dozens of real harmonic bins for a
 /// buzzy source), so even a flawlessly tracked object reads a tiny ratio
@@ -2150,9 +2150,8 @@ impl StreamingSendAnalyzer {
             // ramp never reads as a transient (matches the live worker).
             state.has_prev = state.window.len() >= n_fft;
 
-            // D5 tracker: salience is
-            // computed ONCE per hop from the untilted, floored column (D1 as
-            // amended), then each of the four windows' trackers update from
+            // Salience is
+            // computed ONCE per hop from the untilted, floored column, then each of the four windows' trackers update from
             // that one shared array (D4). Gated on `pitch_tracking` (D7,
             // simplified for P2 — off by default, the harness turns it on) and
             // `have_prev` — an untouched/disabled project's other five

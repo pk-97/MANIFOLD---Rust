@@ -33,8 +33,7 @@ mod overlay;
 /// field, an `overlay_mut` arm, and a `Z_ORDER` entry, and the exhaustive match
 /// then forces the wiring.
 ///
-/// `pub(crate)`: `text_input::TextSessionOwner` (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
-/// section 3, D2) tags a text session with the id of the overlay hosting it, so the
+/// `pub(crate)`: `text_input::TextSessionOwner` tags a text session with the id of the overlay hosting it, so the
 /// crate needs to name overlays outside this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OverlayId {
@@ -42,7 +41,7 @@ pub(crate) enum OverlayId {
     Dropdown,
     // Audio Setup is no longer an overlay — it is a `ScreenLayout` dock column
     // built from the root pass and routed at the docked-panel site
-    // (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D1/section 3.5).
+    //.
     Settings,
     RtQuality,
     BrowserPopup,
@@ -108,7 +107,7 @@ pub struct EmbeddedPresetItem {
     pub kind: manifold_core::preset_def::PresetKind,
     pub type_id: String,
     pub display_name: String,
-    /// PRESET_LIBRARY_DESIGN P5, D6: `Saved` entries are always listed
+    /// `Saved` entries are always listed
     /// ("This Project"); `Snapshot` entries are listed only when their id
     /// resolves nowhere else (badged "missing from library") — the
     /// classification lives in `build_preset_picker_items`, which needs this
@@ -271,8 +270,7 @@ pub struct UIRoot {
     cursor_hover_actions: Vec<PanelAction>,
 
     /// `PanelAction`s produced by keyboard-driven overlay picking outside the
-    /// normal per-frame event queue (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
-    /// section 4/section 5 P2 arrow/Enter nav). An active `SearchFilter` text session
+    /// normal per-frame event queue (arrow and Enter nav). An active `SearchFilter` text session
     /// intercepts keys in `window_input.rs` before they ever reach
     /// `route_overlay_event`, so the browser popup's `handle_key_nav` is
     /// called directly from there; the resulting action is stashed here and
@@ -304,7 +302,7 @@ pub struct UIRoot {
         manifold_core::effects::ParamId,
     )>,
     /// Show in Scene tab / a card section title: revealed once the Scene tab
-    /// is projected (SCENE_SURFACES_DESIGN.md D10). A section carries all its
+    /// is projected. A section carries all its
     /// rows; the Scene tab picks which to reveal.
     pending_scene_reveal: Option<(
         manifold_ui::view::UiGraphTarget,
@@ -379,7 +377,7 @@ pub struct UIRoot {
     /// at the screen origin, away from where the seams live in practice.
     overlay_rects: Vec<(OverlayId, Rect)>,
     /// Overlays whose `is_open()` flipped false since the last drain —
-    /// `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2. Populated by
+    /// Populated by
     /// `route_overlay_event` (covers Escape and normal click routing for both
     /// windows) and `note_overlay_closed_if` (covers the graph-editor window's
     /// bespoke browser-popup routing, which bypasses `route_overlay_event`).
@@ -488,7 +486,7 @@ impl UIRoot {
 
     /// Take the content thread's shared lists by pointer: each is compared
     /// against the Arc this root retains, never element by element
-    /// (UI_INVALIDATION_DESIGN.md section 3). True when the Ableton session
+    ///. True when the Ableton session
     /// changed.
     pub fn intake_shared(&mut self, content_state: &crate::content_state::ContentState) -> bool {
         if !std::sync::Arc::ptr_eq(&self.midi_device_names, &content_state.midi_device_names) {
@@ -947,7 +945,7 @@ impl UIRoot {
     /// Build all panels. Call once after creation and after resize.
     ///
     /// Every main region builds into its own arena, in `MainRegion` order
-    /// (UI_INVALIDATION_DESIGN.md D7), under a region root that clips it and
+    ///, under a region root that clips it and
     /// carries its stacking tier.
     /// A region rebuilds alone through [`build_region`](Self::build_region)
     /// after its arena is cleared.
@@ -1786,8 +1784,7 @@ impl UIRoot {
         self.audio_setup_panel.update_meters(&mut self.tree, levels);
     }
 
-    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-    /// P3c, BUG-082's fix): push this tick's live shaped-signal levels onto
+    /// Fire meter: push this tick's live shaped-signal levels onto
     /// every open fire-mode drawer's Amount meter in the inspector — in
     /// place, every UI tick, unconditional (unlike `update_audio_meters`
     /// above, this isn't gated on any panel being open — the inspector's own
@@ -1805,8 +1802,7 @@ impl UIRoot {
             .update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
-    /// the send whichever fire-mode drawer is currently open in the inspector
+    /// The send whichever fire-mode drawer is currently open in the inspector
     /// is reading, if any. `manifold_core::AudioSendId` is
     /// `manifold_foundation::AudioSendId` re-exported at its historical path,
     /// so this crosses the boundary for

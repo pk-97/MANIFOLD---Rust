@@ -3,7 +3,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// `work-trace` builds count every allocation as `WorkKind::FrameAlloc` on the
-/// allocating thread (UI_INVALIDATION_DESIGN.md D10). Shipping builds keep the
+/// allocating thread. Shipping builds keep the
 /// plain allocator.
 #[cfg(feature = "work-trace")]
 #[global_allocator]
@@ -93,8 +93,7 @@ mod scene_tree_move;
 mod scene_view_copy;
 mod selection_outline;
 mod setup_check;
-// Shared headless `ContentThread` construction (PERF_BUDGET_GATE_DESIGN.md
-// P1) — used by the `journey-proofs` test harness (only compiled in test
+// Shared headless `ContentThread` construction — used by the `journey-proofs` test harness (only compiled in test
 // mode) AND the `perf-soak` xtask binary path (a real, non-test caller), so
 // it lives outside `#[cfg(test)]` itself. Gated so a plain non-test build
 // with only `journey-proofs` on doesn't compile a module with zero callers
@@ -129,7 +128,7 @@ mod journey_proof;
 mod bug219_verify;
 mod perform_mode;
 // `cargo xtask perf-soak <project> --seconds N [--start <beats>]
-// [--update-baseline]` — PERF_BUDGET_GATE_DESIGN.md P1: headless, real-time
+// [--update-baseline]` — headless, real-time
 // paced content-thread soak of a real project + baseline gate. macOS-only
 // (native Metal `ContentThread`, same constraint as `journey-proofs`).
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
@@ -138,8 +137,7 @@ mod perf_soak;
 // frame of a real project with per-pass GPU timestamps, calm vs splash.
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod frame_time;
-// Sibling frame loop for bare-glb/gltf input — PERF_BUDGET_GATE_DESIGN.md D7 /
-// P2b. Same feature gate as `perf_soak` (dispatched from inside its `run()`).
+// Sibling frame loop for bare-glb/gltf input. Same feature gate as `perf_soak` (dispatched from inside its `run()`).
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod perf_soak_import;
 // ── RT washout probe (temporary, env-gated) ─────────────────────

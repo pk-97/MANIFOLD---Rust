@@ -3,7 +3,7 @@
 //! morph-target POSITION/NORMAL deltas as a flattened target-major
 //! `Array(MeshVertex)`.
 //!
-//! GLTF_ANIMATION_DESIGN.md A3: a sibling of `node.gltf_skinned_mesh_source`
+//! A sibling of `node.gltf_skinned_mesh_source`
 //! (same background-thread parse + staging-buffer-per-frame-blit pattern),
 //! NOT an extension of `node.gltf_mesh_source` — deltas are per-vertex
 //! PER-TARGET data (`target_count * vertex_count` elements), the same
@@ -62,7 +62,7 @@ manifold_node_engine::primitive! {
             label: "Material Index",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            // BUG-207: -2 is GLB_XFAIL_BURNDOWN_DESIGN.md D4's reserved
+            // -2 is reserved
             // sentinel (`gltf_load::DEFAULT_MATERIAL_MESH_PARAM`) selecting
             // the sole mesh-owning node contributing the glTF default
             // (materialless) material — real glTF material indices are
@@ -108,7 +108,6 @@ manifold_node_engine::primitive! {
         // Bumped every time a background parse lands — see
         // `gltf_mesh_source`'s identical field for why this (not
         // `last_key`) is the correct content-change signal.
-        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1.
         content_version: u64 = 0,
         last_copied_content_version: u64 = u64::MAX,
         last_copied_dst_identity: usize = 0,
@@ -245,7 +244,7 @@ impl Primitive for GltfMorphDeltasSource {
     }
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
+/// Run deliberately:
 /// `cargo test -p manifold-nodes-scene --features gpu-proofs
 /// node_graph::primitives::gltf_morph_deltas_source::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]

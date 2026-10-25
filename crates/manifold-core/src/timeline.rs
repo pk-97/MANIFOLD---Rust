@@ -687,7 +687,7 @@ mod add_layer_tests {
     use super::*;
     use crate::preset_type_id::PresetTypeId;
 
-    /// MVP-P3a pin: `add_layer` seeds
+    /// `add_layer` seeds
     /// the generator through `change_generator_type`, so widening the guard
     /// to `hosts_generator()` is what makes an LED layer arrive with its
     /// default preset. Pre-fix the `!= Generator` guard no-opped and the

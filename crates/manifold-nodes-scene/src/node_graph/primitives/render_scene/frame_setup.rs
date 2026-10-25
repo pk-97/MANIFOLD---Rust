@@ -110,7 +110,7 @@ impl RenderScene {
                 );
                 return None;
             };
-            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
+            // This object's
             // `mesh_n` write generation, feeds the shadow cache key below.
             let vertices_content = mesh_slot.and_then(|s| ctx.inputs.content_version_of(s));
             if object
@@ -365,7 +365,7 @@ impl RenderScene {
                 object.instances_space,
                 object.instances.is_some(),
             );
-            // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
+            // `None` at this slot (no history
             // yet — a brand-new node, or the slot right after a rebuild)
             // seeds prev = current, giving THIS object exactly-zero
             // first-frame velocity. Stored immediately after reading (not
@@ -448,8 +448,7 @@ impl RenderScene {
             if anisotropy_map.is_some() {
                 uniforms.transmission_volume_params[3] = 1.0; // w = anisotropy_map present
             }
-            // Texture completion sweep: every reserved single-flag `w` slot the E1
-            // migration left is now spent (see the five ifs above), so
+            // Texture completion sweep: every reserved single-flag `w` slot is now spent (see the five ifs above), so
             // these seven new presence bits are packed as a bitmask into
             // the LAST two reserved `w` slots (`pbr_specular_tint.w`,
             // `volume_attenuation_color.w`) rather than growing the
@@ -488,7 +487,7 @@ impl RenderScene {
             }
             uniforms.volume_attenuation_color[3] = clearcoat_family_flags as f32;
 
-            // GLB_XFAIL_BURNDOWN_DESIGN.md D3: read while `material` is
+            // Read while `material` is
             // still in scope (it's consumed by `build_uniforms` above by
             // reference, still live here).
             let sampler_descs = [
@@ -795,7 +794,7 @@ impl RenderScene {
         let objects = self.num_objects as usize;
         let lights_n = self.num_lights as usize;
 
-        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): built ONCE per
+        // Built ONCE per
         // frame from this frame's wired ports (`bindings.rs`'s
         // `NodeInputs::build_index`), then every per-light/per-object port
         // lookup below resolves through it in O(1) instead of the
@@ -842,7 +841,7 @@ impl RenderScene {
         let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * LIGHT_VEC4_STRIDE);
         let mut light_count: u32 = 0;
         let mut casters: Vec<manifold_node_engine::scene::light::Light> = Vec::new();
-        // VOLUMETRIC_LIGHT_DESIGN.md D2 (P3): every wired light (Sun AND
+        // Every wired light (Sun AND
         // Point) contributes to the march — 3-vec4-per-light packing,
         // matching `shaft_march.wgsl`'s `shaft_lights` binding(2) layout
         // field-for-field:
@@ -1156,7 +1155,7 @@ impl RenderScene {
         // ran this frame — gates the composite rebind (the composite
         // binds `rt_irr_filtered` when true, raw history slot when false).
         let irr_filtered_valid = false;
-        // GBUFFER_DESIGN.md section 2 D1: lazy — `velocity` costs nothing unless a
+        // Lazy — `velocity` costs nothing unless a
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
         let velocity_wired = ctx.outputs.texture_2d("velocity").is_some();
@@ -1198,7 +1197,7 @@ impl RenderScene {
             && specular_albedo_resolve_target.is_some()
             && reactive_resolve_target.is_some()
             && spec_hit_dist_out.is_some();
-        // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the sole CPU gate for the
+        // The sole CPU gate for the
         // whole light-shaft feature, checked once per frame like
         // `velocity_wired`. `depth_wired` decides whether the march reads
         // the graph-allocated resolve target or the internal one (D3:
@@ -1206,7 +1205,7 @@ impl RenderScene {
         // `depth` is unwired").
         let wants_shafts_now = wants_shafts(&atmosphere);
         let depth_wired = ctx.outputs.texture_2d("depth").is_some();
-        // GBUFFER_DESIGN.md section 2 D5 (P2): `None` (no history yet) seeds to
+        // `None` (no history yet) seeds to
         // THIS frame's own `view_proj`, so a scene's first-ever evaluate()
         // has prev == current and velocity is exactly zero — not
         // approximately. Stored immediately (not gated on `velocity_wired`)

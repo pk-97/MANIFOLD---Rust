@@ -1,4 +1,4 @@
-//! INV-8 enforcement (Peter's standing
+//! Enforcement (Peter's standing
 //! directive): "Agents must never create their own infra for basic things
 //! like rows, sliders, drawers, etc ever again during implementation."
 //!

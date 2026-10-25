@@ -3,7 +3,7 @@
 use super::*;
 
 impl RenderScene {
-    /// GBUFFER_DESIGN.md section 2 D5 (P2) text-substitution patterns that turn
+    /// Text-substitution patterns that turn
     /// the base `render_scene.wgsl` (unmodified — the velocity-off
     /// pipeline compiles the file exactly as it ships) into the
     /// EMIT_VELOCITY variant: inject the `FsOut` struct and `VsOut`'s two
@@ -480,7 +480,7 @@ impl RenderScene {
             }
         }
 
-        // BUG-found-by-P3-perf-gate (VOLUMETRIC_LIGHT_DESIGN.md P3): the
+        // The
         // shadow depth-only pipeline (`ensure_shadow_pass`) and the three
         // shaft pipelines (`ensure_shaft_pipelines`) are BOTH asset-
         // independent (fixed shader source, fixed entry points) — the exact
@@ -546,7 +546,7 @@ impl RenderScene {
             "node.render_scene points",
         );
 
-        // COMPILE_CONTRACT_DESIGN P2: IBL pipelines are fixed-source,
+        // IBL pipelines are fixed-source,
         // asset-independent (shader source depends only on render_scene's
         // own WGSL files, not on any envmap content). Warm them here so
         // the first frame that enables IBL is a cache hit, not a mid-show
@@ -576,7 +576,7 @@ impl RenderScene {
             "node.render_scene ibl brdf lut",
         );
 
-        // COMPILE_CONTRACT_DESIGN P2: hit_dist_extract and upscale_alpha_combine
+        // Hit_dist_extract and upscale_alpha_combine
         // are both fixed-source compute pipelines, independent of scene content.
         // Warm them here so their first use is a cache hit.
         device.create_compute_pipeline(

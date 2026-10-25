@@ -63,8 +63,8 @@
 //! scenario's own known f0 curve (dive = the exponential glide formula,
 //! wobble/growl = constant 150.0) or `NaN` where there is no single tracked
 //! fundamental (kicks, busymix, riser) or for file inputs (unknown ground
-//! truth). `salience_f0_hz` is the P1 harmonic-sum salience peak converted to Hz, or `NaN`
-//! on a fully-floored column. `tracked_f0_hz` is the P2 D5 Full-tracker's
+//! truth). `salience_f0_hz` is the harmonic-sum salience peak converted to Hz, or `NaN`
+//! on a fully-floored column. `tracked_f0_hz` is the Full tracker's
 //! `pitch_hz`, `NaN` until the Full tracker has acquired at least once
 //! (`pitch_confidence` still exactly 0). `<band>_pitch`/`<band>_presence` are
 //! the D5 tracker's per-band `BandFeatures::pitch`/`presence`, RAW (unshaped)
@@ -473,12 +473,12 @@ fn analyze_and_render(
     //    a real ground-truth curve; wobble/kicks/busymix/riser and file jobs
     //    don't (no gate for these).
     if args.selftest && (label == "dive" || label == "growl") {
-        // P1 gate, as amended 2026-07-06:
+        // Gate:
         // per-hop argmax is "trackable", not near-perfect — the dive's 7-voice
         // beating genuinely cancels the fundamental for ~4-hop stretches, which
-        // no memoryless estimator can beat; the D5 tracker's hold (38 hops)
+        // no memoryless estimator can beat; the tracker's hold (38 hops)
         // absorbs it. Gate: dive >= 60% AND max miss-run <= 38 hops; growl
-        // (no beating) >= 95%. The >= 95% smoothness bar lives in P2's tracked
+        // (no beating) >= 95%. The >= 95% smoothness bar lives in the tracked
         // trajectory, where temporal integration exists.
         const WARMUP_HOPS: usize = 32;
         let bpo_f = bpo as f32;
@@ -525,8 +525,7 @@ fn analyze_and_render(
     // the line only apply to the synth scenarios.
     print_p3_fires(label, &records);
 
-    // ── P2 gates: the D5 tracker's
-    // numeric acceptance bar, one line per metric, selftest only.
+    // ── Tracker gates: numeric acceptance bar, one line per metric, selftest only.
     if args.selftest {
         print_p2_gates(label, &records, dt, ground_truth);
         print_p2b_gates(label, &records, dt, ground_truth);
@@ -569,7 +568,7 @@ fn semitones_vs(f_hz: f32, ref_hz: f32) -> f32 {
     12.0 * (f_hz / ref_hz.max(1e-6)).log2()
 }
 
-/// P3 sweep instrument:
+/// Sweep instrument:
 /// counts hops (after warm-up) where a band's `Transients` feature hit its
 /// fired value (`> 0.999` — the same threshold `update_trackers` reads to
 /// treat a hop as "this band's onset fired this hop", not the decayed tail).
@@ -615,7 +614,7 @@ fn print_p3_fires(label: &str, records: &[HopRecord]) {
     println!("P3 {label}: kick_hops={kick_hops:?}");
 }
 
-/// P2 numeric gates, one `P2 <scenario>: <metric>=<value> (gate <op> <bound>) PASS|FAIL`
+/// Numeric gates, one `P2 <scenario>: <metric>=<value> (gate <op> <bound>) PASS|FAIL`
 /// line per metric, per selftest scenario. Reads only `HopRecord::raw`
 /// (RAW, unshaped values — the ground-truth-comparison surface, same
 /// convention as the CSV) and `tracked_f0_hz`.
@@ -819,7 +818,7 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
     }
 }
 
-/// D6 presence-recalibration gates. These are
+/// Presence-recalibration gates. These are
 /// Peter's acceptance criteria read directly off `selftest_dive.png`:
 /// presence must clear the `PITCH_DISPLAY_PRESENCE` display bar for a
 /// genuinely tracked object, and must NOT clear it for a near-empty band
@@ -930,7 +929,7 @@ fn print_p2b_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gr
     }
 }
 
-/// P2c gates. `notes`
+/// The `notes` gate
 /// is the note-attack regression the six original tones (all continuous
 /// tones) never exercised. One `P2c notes: <metric>=<value> (gate <op>
 /// <bound>) PASS|FAIL` line per criterion, plus the octave note's own

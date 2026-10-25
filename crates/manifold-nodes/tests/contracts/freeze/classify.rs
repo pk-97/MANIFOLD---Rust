@@ -176,8 +176,7 @@ mod tests {
         use manifold_node_engine::persistence::PrimitiveRegistry;
 
         // Curated table: every `(type_id, param_id, reason)` any registered
-        // primitive is allowed to declare a `RangeContract` for. Empty in
-        // P1; seeded in P2 (PARAM_RANGE_CONTRACT_DESIGN.md section 2/D6) — each
+        // primitive is allowed to declare a `RangeContract` for. Each
         // entry names its kernel/shader evidence file:line so a contract
         // can't creep back onto a merely-conventional range.
         //

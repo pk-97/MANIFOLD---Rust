@@ -9,7 +9,7 @@ use manifold_ui::tree::UITree;
 use crate::ui_renderer::UIRenderer;
 
 /// Identifies a cacheable panel slot: one per atlas-backed region
-/// (UI_INVALIDATION_DESIGN.md D7). Overlays and the card-drag ghost draw
+/// Overlays and the card-drag ghost draw
 /// outside the atlas and have none. Each window's cache owns its own slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]

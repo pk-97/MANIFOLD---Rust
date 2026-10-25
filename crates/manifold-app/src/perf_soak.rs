@@ -1,5 +1,5 @@
 //! `cargo xtask perf-soak <project> --seconds N [--start <beats>]
-//! [--update-baseline]` — PERF_BUDGET_GATE_DESIGN.md P1.
+//! [--update-baseline]`.
 //!
 //! Uses shared production loading and paced content ticks. Content work,
 //! actual tick intervals and GPU surface waits are separate measurements.
@@ -534,7 +534,7 @@ fn cold_touch_summary() -> serde_json::Value {
 }
 
 /// `--work-idle`: the content half of the live idle trace
-/// (UI_INVALIDATION_DESIGN.md INV-3). Loads the project, asks for thumbnails
+///. Loads the project, asks for thumbnails
 /// of the clips near the playhead, settles paused until their capture is
 /// done, then runs paced paused frames for `seconds` and counts the work
 /// each frame did on the content thread. Returns whether every frame was
@@ -1068,7 +1068,7 @@ struct ProfiledFrame {
 }
 
 /// `cargo xtask perf-soak <project> --seconds N [--start <beats>] --profile`
-/// — PERF_BUDGET_GATE_DESIGN.md P2 / D6 attribution pass. Re-runs the same
+/// Attribution pass. Re-runs the same
 /// real-time-paced window as `run_soak`, but with per-dispatch GPU
 /// attribution profiling on: forces `composite_serial` (one shared
 /// compositor command buffer for the sampler — D6 correction), joins GPU

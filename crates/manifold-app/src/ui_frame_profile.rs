@@ -15,8 +15,7 @@
 //! large). See `present_all_windows` / `tick_and_render` for the call sites.
 //!
 //! Since the immediate-pass assembly moved into the shared harness/live seam
-//! (`render_main_ui_passes`, `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 4 step
-//! 2), the seven per-pass CPU timers (grid/clips/waveforms/thumbnails/lane/
+//! (`render_main_ui_passes`), the seven per-pass CPU timers (grid/clips/waveforms/thumbnails/lane/
 //! overlay/commit) coalesce into one `present.main_ui_passes` label and the
 //! per-frame integer counts (clips/thumbnails drawn) are gone — those were fed
 //! only from inside that block, and the CPU-side enqueue cost of each pass is
@@ -45,8 +44,7 @@ const ORDER: &[&str] = &[
     "update_repaint_upload",
     "present.panel_cache",
     "present.clear_atlas_compositor",
-    // `render_main_ui_passes` (the shared harness/live seam,
-    // `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 4 step 2) coalesces the old
+    // `render_main_ui_passes` (the shared harness/live seam) coalesces the old
     // per-pass labels below into one timer — the seam doesn't thread
     // `Application`-only `UiFrameProfile` state through a function the
     // harness also calls. See `ui_frame.rs` module doc deviation #6.

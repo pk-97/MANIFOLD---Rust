@@ -15,7 +15,7 @@
 //! content thread never stalls on a multi-megabyte HDR decode.
 //!
 //! The level-0 blit + mip regen are gated
-//! (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3): on a static file (no
+//! On a static file (no
 //! fresh decode, same output-texture identity) `run()` skips both dispatches
 //! and declares `mark_outputs_unchanged()`, so `node.render_scene`'s IBL
 //! re-convolution gate (which reads this node's write generation) can trust
@@ -143,7 +143,7 @@ manifold_node_engine::primitive! {
     ],
     // depth_rule: zero-input IO bridge loading an externally-authored .exr — same reasoning as gltf_texture_source
     depth_rule: Inherit,
-    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.gltf_texture_source's `path`. Wire `out` into node.render_scene's `envmap` input directly (D6: the bake/prefilter path is unchanged — render_scene already consumes any equirect texture on that port) or through node.switch_texture alongside a node.bake_environment output to let a card enum (Softbox vs HDRI) pick between them live. width/height set the output resolution — the decoded EXR is stretched to fill it every frame; the default 2048x1024 keeps the split-sum IBL prefilter's per-frame convolution cost bounded.",
+    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.gltf_texture_source's `path`. Wire `out` into node.render_scene's `envmap` input directly (the bake/prefilter path is unchanged — render_scene already consumes any equirect texture on that port) or through node.switch_texture alongside a node.bake_environment output to let a card enum (Softbox vs HDRI) pick between them live. width/height set the output resolution — the decoded EXR is stretched to fill it every frame; the default 2048x1024 keeps the split-sum IBL prefilter's per-frame convolution cost bounded.",
     examples: [],
     picker: { label: "HDRI Source", category: Atom },
     summary: "Loads a linear-HDR .exr environment map from disk as a texture, so a real-world HDRI capture flows into node.render_scene's envmap input like any other texture source.",
@@ -173,9 +173,9 @@ manifold_node_engine::primitive! {
         uploaded: bool = false,
         // Identity of the `out` texture the level-0 blit + mip chain were
         // last written for (IMPORT_FIDELITY F-P6 introduced this for mips
-        // only; RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 extends it to
+        // only; this extends it to
         // gate the level-0 blit dispatch itself, mirroring
-        // node.gltf_texture_source's P1 gate). Comparing
+        // node.gltf_texture_source's gate). Comparing
         // `GpuTexture::identity_key` catches both a fresh decode (via
         // `fresh_upload`) and a pool recycle/resize (different physical
         // texture) without a per-frame mip pass or blit dispatch.
@@ -333,8 +333,8 @@ impl Primitive for HdriSource {
         };
 
         // 7+8. Level-0 blit + mip regen, gated together
-        // (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3, mirroring
-        // node.gltf_texture_source's P1 gate): both rewrite `out`'s content,
+        // Mirroring
+        // node.gltf_texture_source's gate): both rewrite `out`'s content,
         // so both are skipped together whenever nothing that determines
         // that content changed since we last wrote it — the decoded pixels
         // (`fresh_upload`) or `out`'s own physical identity (pool
@@ -351,7 +351,7 @@ impl Primitive for HdriSource {
             ctx.mark_outputs_unchanged();
         } else {
             let gpu = ctx.gpu_encoder();
-            // COMPILE_CONTRACT_DESIGN P2: prewarmed at startup, so this is a
+            // Prewarmed at startup, so this is a
             // device-cache hit in production — the get_or_create stays because
             // test harnesses and headless tools never run the startup prewarm.
             // A true cold compile here is recorded by the cold-touch counter.
@@ -820,7 +820,7 @@ mod gpu_tests {
     }
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 gate: `run()`'s level-0
+/// Gate: `run()`'s level-0
 /// blit + mip regen skip, exercised through the real
 /// `EffectNodeContext`/`MetalBackend` harness (same shape as
 /// `gltf_texture_source`'s P1 gpu_tests module — this node has zero graph

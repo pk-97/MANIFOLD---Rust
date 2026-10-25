@@ -2,7 +2,7 @@
 //!
 //! User-added effect bindings used to live in a parallel
 //! `PresetInstance.user_param_bindings` Vec. The binding-storage
-//! unification (`PRESET_UNIFICATION_PLAN.md` step 3) folds them into the
+//! unification folds them into the
 //! per-instance graph's `preset_metadata.bindings` (`user_added`), the
 //! same single list generators already use. The on-disk JSON fold-in
 //! lives in `manifold-io`'s v1.3→v1.4 migration — but that layer can't

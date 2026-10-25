@@ -794,7 +794,7 @@ mod param_mod_lookup_tests {
         }
     }
 
-    /// UX-P3b (SCENE_PANEL_UX_DESIGN.md sizing amendment): the reusable
+    /// The reusable
     /// single-param query must find the SAME driver `preset_to_config`'s
     /// `build_card_modulation` would find for that id at its real card
     /// position — it just doesn't need that position, because it always

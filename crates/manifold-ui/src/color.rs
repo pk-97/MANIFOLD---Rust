@@ -605,8 +605,7 @@ pub const HEADER_BUTTON_HOVER: Color32 = Color32::new(90, 90, 94, 255);
 pub const HEADER_BUTTON_PRESSED: Color32 = Color32::new(55, 55, 58, 255);
 pub const HEADER_PROGRESS_FILL: Color32 = Color32::new(89, 173, 232, 255);
 
-// Graph editor header pills (Save to Library / Save to Project / Push to
-// Library — PRESET_LIBRARY_DESIGN D4/D3, P3/P4). Token home per the
+// Graph editor header pills. Token home per the
 // design-token guard (`tests/design_tokens.rs`) — `graph_canvas/mod.rs`
 // re-exports this rather than defining its own raw literal.
 pub const GRAPH_SAVE_BUTTON_BG: Color32 = Color32::new(74, 96, 138, 230);
@@ -676,7 +675,7 @@ pub const MODAL_SCRIM: Color32 = Color32::new(0, 0, 0, 170);
 pub const MODAL_BG: Color32 = Color32::new(19, 19, 20, 255);
 pub const MODAL_BORDER: Color32 = Color32::new(48, 48, 52, 255);
 
-// Browser popup image cells (PRESET_LIBRARY_DESIGN P6, D7) — a thumbnail-
+// Browser popup image cells — a thumbnail-
 // filled cell needs translucent (not opaque) hover/press tints so the picture
 // stays visible under the interaction feedback, plus a dark caption strip so
 // the label reads over arbitrary thumbnail content.
@@ -789,7 +788,7 @@ pub const MAX_INSPECTOR_WIDTH: f32 = 900.0;
 pub const DEFAULT_INSPECTOR_WIDTH: f32 = 500.0;
 pub const INSPECTOR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 
-// ── Audio Setup dock (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN D1) ──
+// ── Audio Setup dock ──
 // The Audio Setup panel is a fold-out column pinned to the inspector's LEFT
 // edge; it expands leftward when opened, shrinking preview + timeline (never
 // the inspector). 0.0 = closed. Default-open width sized for the panel's

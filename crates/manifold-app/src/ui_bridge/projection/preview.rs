@@ -1,4 +1,4 @@
-//! Drag-preview projections (UI_INVALIDATION_DESIGN.md P7a). A preview move
+//! Drag-preview projections. A preview move
 //! updates exactly the clips and lanes the `GesturePreview` recorded, in
 //! place; the full projections (`sync_clip_positions`,
 //! `sync_automation_lane_geometry`) run on commit, cancel and snapshot

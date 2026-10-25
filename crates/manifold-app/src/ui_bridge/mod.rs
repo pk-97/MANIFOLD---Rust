@@ -52,7 +52,7 @@ use crate::ui_root::UIRoot;
 /// Result of dispatching a panel action.
 pub struct DispatchResult {
     /// Set by the `SaveToLibrary`/`SaveToProject` card-menu actions
-    /// (PRESET_LIBRARY_DESIGN D4, P3): the resolved kind + current effective
+    ///: the resolved kind + current effective
     /// definition + destination, for the caller to open the shared
     /// name-prompt text-input session with. `dispatch_inspector` resolves the
     /// `GraphParamTarget` and the def (it already has `project` + the
@@ -64,7 +64,7 @@ pub struct DispatchResult {
         manifold_core::effect_graph_def::EffectGraphDef,
         crate::text_input::SavePresetDestination,
     )>,
-    /// Set by `BrowserRenamePresetClicked` (PRESET_LIBRARY_DESIGN P5, D6):
+    /// Set by `BrowserRenamePresetClicked`:
     /// the resolved kind + id + source + CURRENT display name, for the
     /// caller to open the shared name-prompt text-input session with — same
     /// handoff shape as `begin_save_preset` and for the same reason

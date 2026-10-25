@@ -1,5 +1,5 @@
 //! `node.layer_source` — emit another layer's composited output as a
-//! `Texture2D` wire (SCENE_FX_DESIGN.md section 3.3 "layer skins"), so a
+//! `Texture2D` wire, so a
 //! scene object's `emissive_map` / `base_color_map` can be driven by
 //! whatever another layer is playing. This is the first primitive that
 //! couples layers together; the coupling is unidirectional and one frame

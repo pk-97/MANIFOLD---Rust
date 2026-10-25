@@ -804,7 +804,7 @@ pub(crate) fn dispatch_scrub(
                     ),
                 ) {
                     // A typed or dragged value stops only at a declared hard
-                    // limit (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+                    // limit .
                     let val = ctx
                         .project
                         .with_preset_graph(&target, |inst| {

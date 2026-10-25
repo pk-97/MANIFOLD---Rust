@@ -1204,7 +1204,7 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
 
 /// The water mesher's controls and the scene group each joins. They shape
 /// how the surface is built, set once per scene: the Scene tab shows them,
-/// the card does not (SCENE_SURFACES_DESIGN.md section 3.6 (card
+/// the card does not (card
 /// projection), the Scene band's setup-role mesher row).
 pub const MESHER_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlGroup); 8] = {
     use manifold_foundation::scene_surface::ControlGroup::{Look, Whitewater};

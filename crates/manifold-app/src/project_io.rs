@@ -40,8 +40,7 @@ pub(crate) fn install_project_preset_overlay(project: &Project) {
 /// friends): the overlay + core definition registry are populated right
 /// after the project deserializes and right before
 /// `Project::reconcile_param_manifests` rebuilds every instance's param
-/// manifest against them (`PARAM_STORAGE_BOUNDARIES_DESIGN.md` D1–D3 —
-/// supersedes the pre-deserialize ordering that guarded against BUG-036).
+/// manifest against them.
 pub(crate) fn install_embedded_presets(presets: &[manifold_core::project::EmbeddedPreset]) {
     let mut effect = Vec::new();
     let mut generator = Vec::new();
@@ -67,7 +66,7 @@ pub(crate) fn install_embedded_presets(presets: &[manifold_core::project::Embedd
     );
 }
 
-/// Self-containment snapshot (PRESET_LIBRARY_DESIGN D5, P2). Called
+/// Self-containment snapshot. Called
 /// immediately before every on-disk save (manual save, Save As, autosave) so
 /// a `.manifold` file never strands a project on a library file that later
 /// disappears.
@@ -399,7 +398,7 @@ impl ProjectIOService {
         }
 
         // The install hook runs AFTER a successful typed deserialize
-        // (PARAM_STORAGE_BOUNDARIES_DESIGN.md D2/D3): the loader hands this
+        //: the loader hands this
         // project's own embedded presets to `install_embedded_presets`, then
         // reconciles every instance's param manifest against the
         // now-complete registry. A failed load never touches the overlay —
@@ -928,7 +927,7 @@ mod tests {
         );
     }
 
-    // ── BUG-063 — surface silent load-repairs (PROJECT_FILE_INTEGRITY_DESIGN section 3.6 P3) ──
+    // ── Surface silent load-repairs ──
     //
     // `manifold-app` is bin-only (no `[lib]` target), so an integration test
     // under `tests/*.rs` can't call `open_project_from_path` at all — only a
@@ -997,7 +996,7 @@ mod tests {
         );
     }
 
-    // ── PRESET_LIBRARY_DESIGN D5/P2 — snapshot-on-save ──────────────────
+    // ── Snapshot-on-save ──────────────────
     //
     // These exercise the actual production seam (`snapshot_and_prune_
     // embedded_presets`) rather than just the catalog-merge rule (covered

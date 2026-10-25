@@ -94,7 +94,7 @@ fn unchanged_save_dedups_no_history_spam() {
 
 #[test]
 fn differing_projects_produce_different_hashes() {
-    // Guards the P1 hash widen (24 -> 64 bits, PROJECT_FILE_INTEGRITY_DESIGN D7):
+    // Guards the 64-bit dedup hash:
     // two projects differing by a single field must dedup-hash differently,
     // and the hash must be the new 16-hex-char (64-bit) width.
     let path = temp_archive_path("hash-widen");

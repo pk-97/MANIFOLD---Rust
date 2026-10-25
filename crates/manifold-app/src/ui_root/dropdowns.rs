@@ -608,7 +608,7 @@ impl UIRoot {
 
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
     /// project. The frame planner runs it when the EmbeddedPresets stamp moved
-    /// (UI_INVALIDATION_DESIGN.md section 4).
+    ///.
     pub fn sync_embedded_presets(&mut self, project: &manifold_core::project::Project) {
         manifold_core::work_count::record_work(
             manifold_core::work_count::WorkKind::PresetListProjection,
@@ -666,7 +666,7 @@ impl UIRoot {
     }
 
     /// Classify one `kind`'s Add-picker items by source
-    /// (PRESET_LIBRARY_DESIGN P5, D6) — the single place this rule lives, so
+    /// — the single place this rule lives, so
     /// `AddEffectClicked` and `GenTypeClicked` can't drift apart:
     /// - **Factory** / **My Library**: every id `preset_type_registry`
     ///   resolves, split by `UserLibrary::is_user_entry` (a file under the
@@ -710,7 +710,7 @@ impl UIRoot {
             .map(|reg| {
                 let is_user = lib.is_user_entry(kind, &reg.id);
                 let id = reg.id.as_str().to_string();
-                // PRESET_LIBRARY_DESIGN P6, D7: a My-Library entry's PNG
+                // A My-Library entry's PNG
                 // sits beside its JSON (`UserLibrary::thumbnail_path`); a
                 // Factory entry's comes from the committed one-shot bin
                 // output. `None` (no `Path::is_file` check needed further)
@@ -752,7 +752,7 @@ impl UIRoot {
 
         for e in self.embedded_presets.iter().filter(|e| e.kind == kind) {
             use manifold_core::project::EmbeddedOrigin;
-            // STATIC_THUMBNAILS_DESIGN D8: an unresolvable Snapshot (its
+            // An unresolvable Snapshot (its
             // library file gone) is self-containment plumbing, not a
             // user-manageable choice — it never becomes a PickerItem (the
             // layers using it still show it on the layer card). A Snapshot

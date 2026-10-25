@@ -1,5 +1,5 @@
 //! The GPU FLIP solver: its step, pressure solve, clock, bodies and the
-//! particle atoms only FLIP dispatches (WATER_CRATES_DESIGN.md D1).
+//! particle atoms only FLIP dispatches.
 manifold_core::testkit_visible! { pub(crate) mod clamp_liquid_to_solids; }
 #[cfg(feature = "gpu-proofs")]
 #[cfg(all(test, feature = "gpu-proofs"))]

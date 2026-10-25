@@ -495,7 +495,7 @@ impl Default for UIStyle {
 pub type TextureHandle = u64;
 
 /// Derive a stable [`TextureHandle`] from a string key (an absolute file path,
-/// typically) — PRESET_LIBRARY_DESIGN P6. `manifold-ui` has no GPU access, so
+/// typically). `manifold-ui` has no GPU access, so
 /// it can't hold the actual texture; this pure hash lets a tree-building call
 /// (no device) and the app-side decode/registration call (has a device) agree
 /// on the same handle for the same key without any shared mutable state.

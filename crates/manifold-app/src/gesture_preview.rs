@@ -1,4 +1,4 @@
-//! The gesture preview (UI_INVALIDATION_DESIGN.md D12).
+//! The gesture preview.
 //!
 //! While a clip move or trim, a region move or an automation drag is in
 //! flight, the editing host writes the dragged state into the local project

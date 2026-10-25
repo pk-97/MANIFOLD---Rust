@@ -1063,9 +1063,9 @@ pub struct BindingMappingEdit {
 impl BindingMappingEdit {
     /// Apply the label/min/max/invert/curve fields onto the LIVE manifest
     /// entry's spec — the sole authority a card/renderer reads
-    /// (PARAM_STORAGE_DESIGN.md D6). Returns the PRE-edit values for undo.
+    /// Returns the PRE-edit values for undo.
     ///
-    /// PARAM_STORAGE_BOUNDARIES_DESIGN.md D4: the graph's `preset_metadata
+    /// The graph's `preset_metadata
     /// params` (`meta.params`) is a save-time-derived shadow now, not a
     /// second live target — this method never touches it. Writing these
     /// fields onto both the manifest AND `meta.params` was exactly the
@@ -1122,7 +1122,6 @@ impl BindingMappingEdit {
     /// is a choice, and a slider range equal to the declared range is none,
     /// so save and reload is a fixed point. The range goes to the slider
     /// choice alone; the spec keeps the declared range
-    /// (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
     fn apply_to_choices(
         &self,
         spec: &manifold_core::effect_graph_def::ParamSpecDef,
@@ -1149,9 +1148,7 @@ impl BindingMappingEdit {
     }
 
     /// Apply the scale/offset fields onto the graph's live `BindingDef` — the
-    /// ONLY home for them (no manifest field: scale/offset live on the
-    /// binding recipe, which synth reads directly, per PARAM_STORAGE_DESIGN
-    /// D6). Unlike the spec fields above, this write is NOT part of the
+    /// ONLY home for them. Unlike the spec fields above, this write is NOT part of the
     /// `meta.params` dual-write P2 deletes — it survives untouched. Returns
     /// the PRE-edit `(scale, offset)` for undo.
     fn apply_scale_offset(
@@ -1207,7 +1204,7 @@ struct MappingReverse {
 /// flag, response curve, or scale/offset — on an effect or generator addressed
 /// by a [`GraphTarget`].
 ///
-/// The reshape lives in TWO places now (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4):
+/// The reshape lives in TWO places now:
 /// label/min/max/invert/curve on the instance's live [`manifold_core::params
 /// ::ParamManifest`] entry (the sole authority a card/renderer reads); scale/
 /// offset on the instance's per-instance graph override's `BindingDef` (their
@@ -1360,7 +1357,7 @@ impl Command for EditParamMappingCommand {
                 // Guard: nothing to calibrate if the manifest doesn't carry
                 // this id (mirrors the old `meta.params.find(...)?` guard,
                 // now against the manifest — the actual authority a
-                // card/renderer reads. PARAM_STORAGE_BOUNDARIES_DESIGN.md D4).
+                // card/renderer reads.
                 host.params.get(&binding_id)?;
 
                 // scale/offset have no manifest home (they live on the
@@ -1378,8 +1375,7 @@ impl Command for EditParamMappingCommand {
                 };
 
                 // The manifest entry's `spec` is the LIVE reshape the
-                // renderer reads (`synth_user_binding` for a user param,
-                // calibration for a stock one — PARAM_STORAGE_DESIGN.md D6).
+                // renderer reads.
                 // `meta.params` on the graph is derived from the manifest at
                 // serialize time now (D12) — writing it here too would be
                 // the exact dual-write P2 deletes, so this is the SOLE spec
@@ -1678,7 +1674,7 @@ pub(crate) mod tests {
 
     /// Read a stock card param's `(invert, max, scale)` straight out of an
     /// instance's per-instance graph spec + binding. Post-P2
-    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4) `invert`/`max` here are only
+    /// `invert`/`max` here are only
     /// the SEEDED values (the graph's `preset_metadata.params` is a
     /// save-time-derived shadow now, not a live target) — `scale` is still
     /// live, since it has no manifest home. Use [`manifest_reshape`] to read
@@ -1707,9 +1703,8 @@ pub(crate) mod tests {
 
     /// Read a param's live `(invert, slider max)` off the MANIFEST — the sole
     /// authority a card/renderer reads after a calibration edit
-    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4). The max is the user's slider
-    /// span, never the declared range (SCENE_SURFACES_DESIGN.md D15 (slider
-    /// range vs hard limit)).
+    /// The max is the user's slider
+    /// span, never the declared range.
     fn manifest_reshape(inst: &manifold_core::effects::PresetInstance, id: &str) -> (bool, f32) {
         let p = inst.params.get(id).expect("manifest entry present");
         (p.spec.invert, p.slider_span().1)
@@ -1854,7 +1849,7 @@ pub(crate) mod tests {
 
     #[test]
     fn edit_mapping_writes_and_undoes_section() {
-        // D5: the calibration
+        // The calibration
         // popover's section edit — manifest-only (BOUNDARIES D4), same
         // one-shot execute/undo shape as every other reshape field here.
         let (mut project, effect_id, binding_id) = project_with_one_user_binding();
@@ -1935,7 +1930,7 @@ pub(crate) mod tests {
     /// default (`graph: None`) materializes the per-instance graph from the
     /// supplied `seed_def` (its scale/offset home) and calibrates the
     /// manifest spec (its invert/max home) — the post-P2 model
-    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4). Undo restores both to their
+    /// Undo restores both to their
     /// seeded values. `manifold-editing` has no renderer registry to seed
     /// the manifest from at instantiation, so the test hand-seeds it
     /// (`seed_manifest_param`) to mirror what a real registered preset gets

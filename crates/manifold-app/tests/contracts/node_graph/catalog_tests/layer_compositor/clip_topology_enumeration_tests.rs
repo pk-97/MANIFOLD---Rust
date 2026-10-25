@@ -1,4 +1,4 @@
-//! P7 D17 (WARMUP_DESIGN section 5) value-level coverage: the per-clip
+//! Value-level coverage: the per-clip
 //! topology enumeration dedups by the production topology hash without
 //! touching a GPU. Two clips with identical effective post-fx sets must
 //! yield one topology; differing sets must yield two.

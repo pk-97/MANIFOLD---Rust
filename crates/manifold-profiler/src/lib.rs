@@ -44,7 +44,7 @@ pub struct SessionMetadata {
 // ─── Per-Frame Data ────────────────────────────────────────────────
 
 /// One frame's worth of profiling data.
-// `Deserialize` (PERF_BUDGET_GATE_DESIGN.md P1): `cargo xtask perf-soak`
+// `Deserialize`: `cargo xtask perf-soak`
 // reads `frames.jsonl` back to find the worst frame's own per-section
 // breakdown (`SessionSummary.worst_frame.index` only names an index —
 // the per-section ms for THAT frame lives in its `FrameRecord`, not in the

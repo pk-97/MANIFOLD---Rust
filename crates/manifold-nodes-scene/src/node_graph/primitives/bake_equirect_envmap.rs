@@ -296,7 +296,7 @@ manifold_node_engine::primitive! {
         // The `hdri` input's logical content version at the last copy. `None`
         // reads as changed: a pending or unbound input is never assumed still.
         last_hdri_version: Option<ContentVersion> = None,
-        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 (D7): the full
+        // The full
         // uniform set the shader was last dispatched with, plus the output
         // texture's physical identity at that time. `run()`'s dispatch is
         // skipped (and `mark_outputs_unchanged()` declared) only when BOTH
@@ -420,7 +420,7 @@ impl Primitive for BakeEquirectEnvmap {
             sun_b,
         };
 
-        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 (D7's `last_key`
+        // `last_key`
         // pattern, generalized from R1): skip the dispatch entirely when
         // neither the full param set nor the output texture's physical
         // identity changed since the last time we wrote it. Identity is
@@ -1234,7 +1234,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 gate: `run()`'s dispatch
+/// Gate: `run()`'s dispatch
 /// skip, exercised through the real `EffectNodeContext`/`Graph`-adjacent
 /// harness (this node has zero inputs, so no full `Graph`/`Executor` is
 /// needed — same shape as `gltf_texture_source`'s P1 gpu_tests module).
