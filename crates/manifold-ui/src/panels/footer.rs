@@ -3,7 +3,6 @@
 //! The panel describes itself once in [`FooterPanel::view`]; the [`ChromeHost`]
 //! reconciler builds it and reconciles per-frame value changes in place. There
 //! is no `build()`/`update()` dual write and no hand-stored `self.*_id` fields.
-//! See `docs/CHROME_API_DESIGN.md`.
 
 use super::{Panel, PanelAction};
 use crate::TransportAction;

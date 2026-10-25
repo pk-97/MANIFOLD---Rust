@@ -112,7 +112,7 @@ pub fn run(args: &[String]) {
     }
 
     let want_dump = args.iter().any(|a| a == "--dump");
-    // D9 widget catalog (`docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md`): the
+    // Widget catalog: the
     // enumeration view over the inspector's manifest-backed cards — every
     // `ParamSurface` row's durable id + `RowRole` + named chrome, reusing the
     // dump's per-node durable ids (no new protocol). UITree scenes only.
@@ -169,7 +169,7 @@ pub fn run(args: &[String]) {
         }
     }
 
-    // `--script <file.json>` (UI_AUTOMATION_DESIGN.md section 6, P2): a JSON array of
+    // `--script <file.json>`: a JSON array of
     // `AutomationAction`s executed in order. Fully owns its own build + gate
     // exit code — bypasses the `--dump`/`--interact`/mockup flags below.
     if let Some(path) = script_path {
@@ -218,7 +218,7 @@ pub fn run(args: &[String]) {
         return;
     }
 
-    // The `gltfeditor` scene (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P4's demo
+    // The `gltfeditor` scene (demo
     // vehicle): the FULL graph-editor window over the REAL glTF-imported
     // generator (`fixtures::gltf_scene`, P3's own fixture) — proves the
     // importer's per-object group boxes carry their D6 param-mirror rows on
@@ -344,14 +344,14 @@ fn render_ui_scene(
     {
         // The inspector IS the subject: keep it at a generous width and give the
         // timeline a normal split so the selected layer's cards have room.
-        // `bug060` (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md P1 gate scene) and
-        // `paramsteps` (PARAM_STEP_ACTIONS P3) get the same treatment — both are
+        // `bug060` and
+        // `paramsteps` get the same treatment — both are
         // scrolled/inspector-subject scenes, not timeline ones. `gltfscene`
-        // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3 demo) is the same shape:
+        // is the same shape:
         // the imported generator's sectioned card is the subject. `bug047` is the
         // AUDIO_SETUP_DOCK D1 gate: the inspector must stay visible on the right
         // so the docked column (built LEFT of it) reads as pushing content, not
-        // replacing the inspector. `dmxcard` (LED_STRIPS_DESIGN MVP-P3c L3) is
+        // replacing the inspector. `dmxcard` is
         // the same shape: the selected DMX layer's LED Fill card is the subject —
         // without the inspector the card's Change button never renders.
         ui.layout.inspector_width = 600.0;
@@ -968,7 +968,7 @@ fn render_and_dump(
     println!("ui-snap: wrote {}", png.display());
 
     if want_dump {
-        // Custom-surface targets (UI_AUTOMATION_DESIGN.md D5/section 5): the same
+        // Custom-surface targets: the same
         // live geometry `render_ui_to_png` paints from and `ClipHitTester` /
         // `hit_test_automation` hit-test against — read once here so the dump
         // can never disagree with what's on screen or clickable.

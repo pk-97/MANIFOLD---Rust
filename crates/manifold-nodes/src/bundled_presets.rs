@@ -409,7 +409,7 @@ mod tests {
         }
     }
 
-    /// MVP-P1b default-preset contract (LED_STRIPS_DESIGN.md section 5b D12):
+    /// Default-preset contract:
     /// the LED Fill generator — the default for new LED layers — must resolve
     /// in the bundled catalog with metadata and a graph that validates and
     /// compiles. A miss here is the "missing-id fallback" the creation flow

@@ -1,4 +1,4 @@
-//! Debounced background autosave — GIG_RESILIENCE_DESIGN section 6, phase P1.
+//! Debounced background autosave.
 //!
 //! Trigger: dirty-debounced. `AUTOSAVE_DEBOUNCE` after the LAST edit, and only
 //! while `EditingService` reports dirty — never a blind wall-clock save. One

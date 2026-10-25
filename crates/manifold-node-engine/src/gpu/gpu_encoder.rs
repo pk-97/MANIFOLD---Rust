@@ -40,7 +40,7 @@ pub struct GpuEncoder<'a> {
     /// Live per-send audio histories used by audio-reactive graph sources.
     /// The registry is content-thread owned and only borrowed for this frame.
     pub audio_visuals: Option<&'a manifold_core::audio_visual::AudioVisualRegistry>,
-    /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): this frame's validity as
+    /// This frame's validity as
     /// observed by everything encoded through this wrapper. Owned per wrapper
     /// (never a global counter); `checkpoint`/command-buffer splits leave it
     /// intact. Callers merge it into the pipeline's `last_frame_status`

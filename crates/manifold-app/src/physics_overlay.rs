@@ -455,7 +455,7 @@ impl PreviewGizmo {
 }
 
 /// The preview's handle grips as a hit-test surface the automation dump
-/// can address (`UI_AUTOMATION_DESIGN.md` D5): they are drawn immediate-mode,
+/// can address: they are drawn immediate-mode,
 /// outside any tree. The ui-snap runner is its one reader.
 #[cfg(feature = "ui-snapshot")]
 pub(crate) struct GizmoHitTargets<'a>(pub &'a [(String, Vec2)]);

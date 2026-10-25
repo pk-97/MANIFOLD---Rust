@@ -25,7 +25,7 @@ pub struct ClipBody {
     pub muted: bool,
     pub locked: bool,
     pub generator: bool,
-    /// P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "duplicate-drag ghost"):
+    /// Duplicate-drag ghost:
     /// 0..1 body alpha multiplier. `1.0` (opaque) is the resting value every
     /// clip uses outside an alt-duplicate drag — `emit_clip_body` only
     /// departs from the usual hard-`opaque()` force when this is < 1.0, so a

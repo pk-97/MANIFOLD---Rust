@@ -1,4 +1,4 @@
-// The matter lattice's closed walls (GPU_MPM_SOLVER_DESIGN.md D5), declared
+// The matter lattice's closed walls, declared
 // through `wgsl_includes`. Specific to the MPM lattice: the authored face
 // sits on node 3, after the three padding nodes.
 

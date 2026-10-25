@@ -95,7 +95,7 @@ impl Primitive for WaveShearMesh {
             .map(|(_, capacity)| *capacity)
     }
 
-    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): a
+    /// Mesh revision declaration: a
     /// pure per-record deformation — output record `idx` is the coincident
     /// input record sheared in place (`shaders/wave_shear_mesh_body.wgsl`),
     /// never re-indexes, and output capacity follows `in` — so topology

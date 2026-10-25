@@ -318,7 +318,7 @@ impl RenderScene {
         }
     }
 
-    /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: run the split-sum IBL convolution
+    /// Run the split-sum IBL convolution
     /// passes. Call ONLY after [`Self::ensure_ibl_resources`].
     ///
     /// The BRDF LUT is envmap-independent (view/roughness-only) — built

@@ -1,5 +1,5 @@
 //! `node.age_whitewater` — FLIP's per-tick lifetime decay by type
-//! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.9, phase L2). A per-element
+//!A per-element
 //! atom on the codegen path.
 //!
 //! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.

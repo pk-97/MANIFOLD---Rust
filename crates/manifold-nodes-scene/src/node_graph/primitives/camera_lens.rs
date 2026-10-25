@@ -84,8 +84,7 @@ manifold_node_engine::primitive! {
             name: Cow::Borrowed("shutter_angle"),
             label: "Shutter Angle",
             ty: ParamType::Float,
-            // 180.0 per Peter's P4 directive (CINEMATIC_SCENE_TAIL_DESIGN.md):
-            // fresh imports smear motion by default. 0 still means "no motion
+            // 180.0. Fresh imports smear motion by default. 0 still means "no motion
             // blur" as behavior — the motion_blur atom's shutter-0 pass-through
             // is unchanged — only the default moved.
             default: ParamValue::Float(180.0),

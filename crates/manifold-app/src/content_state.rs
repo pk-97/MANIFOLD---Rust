@@ -29,7 +29,7 @@ pub struct NodePreviewInfo {
     pub outputs: Vec<(String, f32)>,
 }
 
-/// LED composite preview payload (LED_STRIPS_DESIGN MVP-P4, D22-D24): the
+/// LED composite preview payload: the
 /// latest completed Art-Net readback rides the per-tick snapshot to the UI,
 /// which blits it as a transposed band on the DMX lane's generator card.
 /// The pixels are the send path's OWN readback — post-`led_gain`, pre-master-
@@ -61,7 +61,7 @@ pub struct ExportFinishedEvent {
     pub output_path: String,
 }
 
-/// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — the real command
+/// undo/redo toast — the real command
 /// description, so the toast reads "Undo: Move Clip" instead of a generic
 /// "Undo". Unlike `ExportFinishedEvent` (a rare, out-of-band send from a
 /// blocking export thread), undo/redo run inline on every normal content-tick
@@ -210,8 +210,8 @@ pub struct ContentState {
     // ── LED output ────────────────────────────────────────────────
     /// Whether LED output is enabled.
     pub led_enabled: bool,
-    /// Composite preview for the DMX lane inspector (LED_STRIPS_DESIGN
-    /// MVP-P4). `Some` from the content thread's per-tick build — the inner
+    /// Composite preview for the DMX lane inspector
+    /// `Some` from the content thread's per-tick build — the inner
     /// `LedPreview::None` means "no LED controller"; the outer `None` is the
     /// degraded/export snapshot default (never published there), which the UI
     /// treats identically to `LedPreview::None` (no band).
@@ -255,7 +255,7 @@ pub struct ContentState {
 
     // ── Undo/redo ─────────────────────────────────────────────────
     /// Set on the tick an undo/redo actually happened; `None` every other
-    /// tick. D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — see
+    /// tick. D11 undo/redo toast — see
     /// [`UndoRedoEvent`]'s doc comment for why this differs from
     /// `export_finished`'s out-of-band pattern.
     pub undo_redo_event: Option<UndoRedoEvent>,
@@ -285,7 +285,7 @@ pub struct ContentState {
     pub sync_offsets: [f64; 3],
     pub ableton_transport_enabled: bool,
     /// Closed-loop transport sync health (Locked / Confirming / degraded /
-    /// warning) — drives the SYNC chip (ABLETON_TRANSPORT_SYNC_DESIGN D9/D10).
+    /// warning) — drives the SYNC chip.
     pub ableton_sync_status: manifold_playback::transport_sync::TransportSyncStatus,
     pub osc_sync_mode: OscSyncMode,
 
@@ -343,7 +343,7 @@ pub struct ContentState {
     /// Automation-lane override latches active this frame — runtime-only
     /// state (`manifold_playback::automation::AutomationLatches`, owned by
     /// `PlaybackEngine`, never part of `Project`/serialized; see
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 4). Copied each tick from
+    /// Copied each tick from
     /// `PlaybackEngine::automation_latches()`, mirroring how other runtime-only
     /// playback state (e.g. `audio_send_levels`) reaches the UI thread — lane
     /// *data* itself needs no such copy since it lives on `PresetInstance` and

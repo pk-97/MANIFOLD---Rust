@@ -21,7 +21,7 @@
 //! tracking — so it exercises the skeleton; the timeline and canvas wrappers
 //! exercise the typed payload and the delta.
 //!
-//! P7 migration progress (`docs/UI_WIDGET_UNIFICATION_DESIGN.md`): the audit
+//! migration progress: the audit
 //! at P7's start found `UIState` no longer owns a separate timeline-drag
 //! copy — it was already folded into `InteractionOverlay`'s `drag_mode`
 //! before this phase began (`ui_state.rs`: "Drag/trim lifecycle ... lives on

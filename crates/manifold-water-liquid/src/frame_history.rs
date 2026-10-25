@@ -1,5 +1,5 @@
 //! Retained particle-frame publications for `node.liquid_frame`
-//! (`docs/GPU_FLIP_DISPLAY_HISTORY_DESIGN.md` section 3): every frame-end
+//!Every frame-end
 //! endpoint is published into a slot of its own, several may be pending at
 //! once, and the display selects the retired pair bracketing the requested
 //! time. No slot is written except by its own publication and none reads

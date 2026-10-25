@@ -38,7 +38,7 @@ pub struct Workspace {
     // holds the workspace (`Application::graph_editor` vs the main `ws`), not
     // by matching this enum. Un-suppresses when per-window render/input
     // routing switches to matching on `kind` directly (see the module doc
-    // above + docs/GRAPH_EDITOR_REDESIGN.md).
+    // above).
     #[allow(dead_code)]
     pub kind: WorkspaceKind,
 

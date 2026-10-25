@@ -1,4 +1,4 @@
-//! Encode replay, the Metal store (`docs/ENCODE_REPLAY_DESIGN.md`): each
+//! Encode replay, the Metal store: each
 //! ring entry keeps its commands in indirect command buffer chunks, its
 //! inline bytes in shared arenas, and a retain on every pipeline and buffer
 //! it names. While a span is open, each recordable dispatch is checked

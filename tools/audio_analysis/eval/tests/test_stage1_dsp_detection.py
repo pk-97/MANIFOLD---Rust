@@ -1,7 +1,5 @@
 """manifold_audio/stage1_dsp_detection.py tests -- the ADTOF bake-off's
-Stage-1 DSP-only drum object detector (phase B1,
-docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md 2026-07-18 addendum, §7.1 approach
-text). Uses the eval/fetch/self_render.py fixtures (known truth by
+Stage-1 DSP-only drum object detector (phase B1). Uses the eval/fetch/self_render.py fixtures (known truth by
 construction, no annotation/transcription) as the test corpus -- this IS the
 "unit tests for the clustering and labeling stages on self-render fixtures"
 the bake-off brief calls for.

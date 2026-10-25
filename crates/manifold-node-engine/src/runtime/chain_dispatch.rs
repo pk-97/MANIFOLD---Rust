@@ -341,7 +341,7 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     // to rebuild from the freshly-loaded defs on the next frame.
     // Chain fusion: land any finished background segment compiles before the
     // rebuild decision, then rebuild chains that were waiting on one (the
-    // fused-segment swap-in — docs/CHAIN_FUSION_DESIGN.md section 5). At rest both
+    // fused-segment swap-in. At rest both
     // checks are a relaxed atomic load each.
     crate::freeze::install::pump_segment_results();
 
@@ -385,7 +385,7 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
         let t0 = std::time::Instant::now();
         // Hand the outgoing runtime to the build as the state-harvest donor:
         // unchanged cards carry their sims / trails / workers across the
-        // rebuild instead of resetting (docs/CHAIN_FUSION_DESIGN.md section 5).
+        // rebuild instead of resetting.
         let mut prior = cache.runtime.take();
         record_cold_touch(ColdTouchKind::ChainConstruction);
         let built = PresetRuntime::build(

@@ -515,7 +515,7 @@ impl PercussionClipBinding {
 
 /// Maps a source-file time to a timeline beat for per-clip detection, folding in
 /// where the clip sits (`start_beat`), how much of the file it skips (`in_point`),
-/// and warp. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md` section 4.
+/// and warp.
 ///
 /// Warped clips map linearly at their source BPM. Native-speed clips retain
 /// the tempo map so detection uses the same clock as playback:

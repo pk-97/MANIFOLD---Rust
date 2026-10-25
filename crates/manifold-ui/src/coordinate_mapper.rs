@@ -189,7 +189,7 @@ impl CoordinateMapper {
     /// - Group (any state) → a fixed container-header height (it shows no clips)
     /// - Otherwise → [`TrackHeight::Collapsed`] when collapsed, else
     ///   [`TrackHeight::Normal`] plus one [`color::AUTOMATION_LANE_STRIP_HEIGHT`]
-    ///   per visible automation lane (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) —
+    ///   per visible automation lane —
     ///   the same for video / generator / audio / text either way.
     pub fn layer_height(layers: &[UiLayer], index: usize) -> f32 {
         let layer = match layers.get(index) {
@@ -220,7 +220,7 @@ impl CoordinateMapper {
         }
 
         // Expanded content track: the base preset plus one strip per visible
-        // automation lane (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) — engaging
+        // automation lane — engaging
         // automation mode grows the track, exactly like Ableton.
         TrackHeight::Normal.px()
             + layer.automation_lane_count as f32 * color::AUTOMATION_LANE_STRIP_HEIGHT

@@ -1,5 +1,5 @@
 // node.render_scene internal pass — cosine-convolved diffuse irradiance
-// map (IMPORT_FIDELITY_DESIGN.md D2/F-P1). PARTIAL: prepends
+// map. PARTIAL: prepends
 // `pbr_brdf.wgsl` at pipeline-creation time (pbr_hammersley /
 // pbr_cosine_sample_hemisphere / pbr_dir_from_equirect_uv / pbr_equirect_uv
 // all live there) — does not validate standalone, see

@@ -206,7 +206,7 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     // "seed only params the target declares" param-copy semantics — no
     // PARAM_SEED_MIGRATIONS entry needed since there is nothing to seed.
     ("node.ssao_from_depth", "node.ssao_gtao"),
-    // LIQUID_SOLVER_SEAM_DESIGN.md P1: the solid lattice is every GPU
+    // The solid lattice is every GPU
     // liquid's, not MPM's. Port-identical plain rename.
     ("node.matter_solid_distance", "node.liquid_solid_distance"),
 ];

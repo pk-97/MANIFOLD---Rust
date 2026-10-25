@@ -1,4 +1,4 @@
-//! GPU proofs for encode replay (`docs/ENCODE_REPLAY_DESIGN.md` I1–I4):
+//! GPU proofs for encode replay:
 //! a replayed chain writes exactly what direct encoding writes, through
 //! changing uniforms, structural changes, texture work and indirect
 //! dispatches between stretches and word copies inside them (D9); an entry

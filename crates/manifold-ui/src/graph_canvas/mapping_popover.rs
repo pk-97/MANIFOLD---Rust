@@ -177,8 +177,7 @@ pub struct MappingPopover {
     /// `PanelAction` so the app routes to the right `UserParamBinding`.
     binding_id: String,
     label: String,
-    /// The binding's card section (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2
-    /// D5). `None` = unsectioned. Editable via `EditField::Section` (P5c).
+    /// The binding's card section. `None` = unsectioned. Editable via `EditField::Section` (P5c).
     section: Option<String>,
     /// The binding's declared min/max *range bounds* (the slider's full
     /// span). The trim handles select a sub-window within this; we map a
@@ -1276,8 +1275,8 @@ impl Default for MappingPopover {
     }
 }
 
-/// The automation mirror of `on_press`'s hit regions (`UI_AUTOMATION_DESIGN.md`
-/// D5): every field, button and curve cell of the open drawer, by label.
+/// The automation mirror of `on_press`'s hit regions:
+/// every field, button and curve cell of the open drawer, by label.
 /// Empty while closed.
 impl crate::hit_targets::HitTargets for MappingPopover {
     fn surface_id(&self) -> &'static str {

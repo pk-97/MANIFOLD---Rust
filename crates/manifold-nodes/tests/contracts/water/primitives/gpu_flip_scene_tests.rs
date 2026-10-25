@@ -1,5 +1,4 @@
-//! The GPU FLIP water step run on whole scenes (docs/GPU_FLIP_PRESSURE_SOLVE.md
-//! section 1 (the step)): the momentum, still-pool and meshed-volume proofs, and the scene
+//! The GPU FLIP water step run on whole scenes: the momentum, still-pool and meshed-volume proofs, and the scene
 //! runner the other water scene proofs share.
 //! `gpu_flip_scenes_cover_every_dispatch` proves every array these graphs
 //! allocate before any of them runs here.

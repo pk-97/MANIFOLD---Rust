@@ -152,7 +152,7 @@ typedef struct ManifoldFluidsWhitewaterSpawn {
 } ManifoldFluidsWhitewaterSpawn;
 
 // FLIP's whitewater lifecycle with emission off, fed fields and spawns from
-// outside (GPU_WHITEWATER_DESIGN.md D1, section 3.4). The grid is isize·jsize·ksize
+// outside. The grid is isize·jsize·ksize
 // cells of `cell_size` from `origin`, scene metres; particles cross the
 // boundary in scene space.
 int manifold_fluids_whitewater_create(uint32_t isize, uint32_t jsize, uint32_t ksize,

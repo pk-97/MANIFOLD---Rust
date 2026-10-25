@@ -1,4 +1,4 @@
-//! GLB conformance harness (GLB_CONFORMANCE_DESIGN.md G-P1) — renders every
+//! GLB conformance harness — renders every
 //! asset in `tests/fixtures/gltf/khronos/manifest.json` through the
 //! PRODUCTION import path (`compile_model_scene`) and gates each
 //! `expect_pass` asset with the numeric asserts named in the manifest, never
@@ -55,7 +55,7 @@ fn fixtures_dir() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Manifest schema (D1/D3, GLB_CONFORMANCE_DESIGN.md section 3)
+// Manifest schema
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
@@ -79,7 +79,7 @@ enum CheckSpec {
     /// Regression pin against our OWN prior render (D3) — never Khronos's.
     #[serde(rename = "golden")]
     Golden { file: String, mean_abs_tol: f64 },
-    /// GLB_CONFORMANCE_DESIGN.md G-P4: "feature on vs feature off changes
+    /// "feature on vs feature off changes
     /// the named quantity in the predicted direction" (D3), applied within
     /// ONE render instead of two — `region` (a dim tile: identity-transform
     /// UV sampling a dark part of the source texture, or specularFactor≈0)
@@ -97,7 +97,7 @@ enum CheckSpec {
         reference_region: [f64; 4],
         value: f64,
     },
-    /// GLB_CONFORMANCE_DESIGN.md G-P4: TextureTransformTest's "Offset U"
+    /// TextureTransformTest's "Offset U"
     /// badge tile flips hue (green ✓ when the transform is applied vs.
     /// olive ⊘ when it's ignored) at near-IDENTICAL luminance — verified
     /// empirically (falsification render: `region_mean_luminance_below`
@@ -105,7 +105,7 @@ enum CheckSpec {
     /// does). `mean(G) - mean(R)` over `region` must exceed `value`.
     #[serde(rename = "region_green_minus_red_above")]
     RegionGreenMinusRedAbove { region: [f64; 4], value: f64 },
-    /// GLB_CONFORMANCE_DESIGN.md G-P5: "clearcoat=1 sphere has brighter
+    /// "clearcoat=1 sphere has brighter
     /// specular peak than clearcoat=0" — a PEAK comparison, not a mean one.
     /// None of the existing mean-based kinds fit: ClearCoatTest's
     /// "Base layer"/"Coated" panels are near-identical diffuse red over
@@ -121,7 +121,7 @@ enum CheckSpec {
         reference_region: [f64; 4],
         value: f64,
     },
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: "the transmissive region is
+    /// "the transmissive region is
     /// NOT simply base_color.a-blended-flat" (D3's rejected-approximation
     /// criterion), expressed as luminance variance rather than mean/max —
     /// neither existing kind fits: a mean/max comparison can't tell a
@@ -167,7 +167,7 @@ fn region_mean_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
 
 /// Max luminance over a normalized `[x0,y0,x1,y1]` rect — same rect
 /// convention as [`region_mean_luminance`], same luminance weights.
-/// GLB_CONFORMANCE_DESIGN.md G-P5: isolates a specular PEAK, which a mean
+/// Isolates a specular PEAK, which a mean
 /// over the same region dilutes away (see `RegionMaxLuminanceAbove`'s doc
 /// comment).
 fn region_max_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
@@ -191,7 +191,7 @@ fn region_max_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
 
 /// Population std dev of luminance over a normalized `[x0,y0,x1,y1]` rect —
 /// same rect convention/weights as [`region_mean_luminance`].
-/// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: measures "how much real detail is
+/// Measures "how much real detail is
 /// in this region" — see `CheckSpec::RegionStdDevAbove`'s doc comment.
 fn region_stddev_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
     let x0 = ((region[0] * WIDTH as f64) as u32).min(WIDTH - 1);

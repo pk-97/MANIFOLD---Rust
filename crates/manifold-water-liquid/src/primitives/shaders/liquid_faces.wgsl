@@ -1,5 +1,5 @@
 // FLIP's MAC trilinear (macvelocityfield.cpp:519, :551, :583) on the seam's
-// face arrays (LIQUID_SOLVER_SEAM_DESIGN.md section 3.2), placed `pad` grid
+// face arrays, placed `pad` grid
 // cells into the whitewater grid as the lifecycle places them in FLIP's own
 // arrays, which hold zeros around them. Positions are in whitewater cells.
 // Bodies read the arrays themselves: an include never names a buffer.

@@ -1,7 +1,7 @@
 //! Overlay system — a uniform lifecycle over the top-level floating surfaces
 //! (dropdown, browser popup, Ableton picker, Audio Setup, perf HUD).
 //!
-//! See `docs/OVERLAY_SYSTEM_DESIGN.md`. The point: every overlay declares its
+//! The point: every overlay declares its
 //! modality, anchor, and size, and exposes build + event hooks, so one driver
 //! in the app layer owns build + draw + input for all of them. The render pass
 //! and input cascade stop hand-enumerating overlays by name, which is the class

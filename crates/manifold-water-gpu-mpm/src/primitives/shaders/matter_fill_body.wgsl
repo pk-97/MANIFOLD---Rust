@@ -1,5 +1,4 @@
-// node.matter_fill — BUFFER source body (GPU_MPM_SOLVER_DESIGN.md section 4.2,
-// D9). One thread per seeded point. Points are enumerated in lattice order:
+// node.matter_fill — BUFFER source body. One thread per seeded point. Points are enumerated in lattice order:
 // first the pool (every authored cell below `pool_cells`), then the column box
 // clipped above the pool; each cell holds 2³ or 3³ points, one per sub-cell,
 // jittered inside it by a hash of (seed, cell, sub-cell). id = birth ordinal.

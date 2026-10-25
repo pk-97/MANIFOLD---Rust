@@ -802,8 +802,7 @@ fn unrelated_layer_edge_after_reorder_does_not_confuse_the_gate() {
     );
 }
 
-// ── PARAM_STEP_ACTIONS round-trip gate (DESIGN_DOC_STANDARD section 5, BUG-036
-// rule) ──────────────────────────────────────────────────────────────────
+// ── PARAM_STEP_ACTIONS round-trip gate ──────────────────────────────────────────────────────────────────
 //
 // The P1 unit test (`modulation.rs`'s `serde round-trip` test) only proves
 // `serde_json::to_string`/`from_str` round-trips the isolated

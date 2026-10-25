@@ -1,5 +1,4 @@
-//! Handoff proofs for `node.whitewater_lifecycle` (`docs/GPU_WHITEWATER_DESIGN.md`
-//! section 3.5, section 3.7 Handoff; D11, I3–I6, I10): snapshots copied on the
+//! Handoff proofs for `node.whitewater_lifecycle`: snapshots copied on the
 //! GPU reach FLIP's lifecycle on its own thread byte for byte, each once,
 //! oldest first, only after their frame retired, and what the node publishes
 //! is FLIP's own population. Live never waits for the GPU or the worker;

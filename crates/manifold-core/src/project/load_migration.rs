@@ -69,7 +69,7 @@ impl Project {
         // (`ClipEdge` or `Both`) move that clip-edge half onto a new
         // `ParamEnvelope` on the same instance+param. `Both` becomes `Transient`
         // on the mod (audio transients only) and a parallel envelope (clip edges
-        // only). Continuous is untouched. See `docs/AUDIO_MODULATION_DESIGN.md`
+        // only). Continuous is untouched.
         // section 9 U2/D3.
         self.migrate_step_random_audio_mods_to_envelopes();
 
@@ -101,8 +101,7 @@ impl Project {
 
         // V1.1 → V1.2 migration: every driver/envelope/Ableton mapping
         // deserialized from a legacy `paramIndex: i32` shape needs its
-        // `param_id` filled in from the registry. See
-        // `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 8.
+        // `param_id` filled in from the registry.
         self.resolve_legacy_param_ids();
 
         // Slot-value migration. Walks the per-effect
@@ -217,7 +216,7 @@ impl Project {
     /// `AudioModShape::rate_of_change` anymore, on either carrier. A `true`
     /// flag saved before this migration would carry invisible behavior no
     /// UI can show, so every carrier gets cleared on load: `ParameterAudioMod
-    /// .shape` (every `PresetInstance.audio_mods` entry — master/layer/clip
+    /// shape` (every `PresetInstance.audio_mods` entry — master/layer/clip
     /// effects and the active layer's generator, via
     /// `for_each_preset_instance_mut`) and `LayerClipTrigger.shape` (every
     /// layer's `clip_triggers`). Counted + `eprintln!`'d, never silent — the
@@ -1371,7 +1370,7 @@ mod tests {
 
     #[test]
     fn clear_legacy_rate_on_flags_stays_cleared_across_a_save_reload_round_trip() {
-        // DESIGN_DOC_STANDARD section 5's round-trip gate: create-path green is half
+        // The round-trip gate: create-path green is half
         // a gate for stateful features. Save → reload must not resurrect the
         // flag `on_after_deserialize` cleared on the previous load.
         let mut p = Project::default();

@@ -578,7 +578,7 @@ pub struct ContentPipeline {
     /// frame-exact app test.
     #[cfg(test)]
     last_render_dt: f64,
-    /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
+    /// The merged validity of
     /// the last rendered frame — reset at the top of `render_content`, then
     /// merged from the generator wrapper before it drops and the compositor
     /// wrapper after rendering. Export rejects anything except Complete.
@@ -1406,7 +1406,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.issued_present.take()
     }
 
-    /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
+    /// The merged validity of
     /// the last `render_content` frame. Export rejects anything except
     /// `Complete`; warmup treats `PendingGeometry` as incomplete preparation.
     pub fn frame_render_status(
@@ -1852,7 +1852,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
     /// Apply project quality before rendering, including load-time warmup.
     pub(crate) fn apply_rt_quality(&mut self, engine: &mut PlaybackEngine, export_mode: bool) {
-        // RT_QUALITY_SETTINGS_DESIGN.md D2/D5: resolve the active quality
+        // Resolve the active quality
         // column once per frame, before any rendering. Copy out of the
         // project borrow so `engine` stays usable below.
         if let Some(project) = engine.project() {

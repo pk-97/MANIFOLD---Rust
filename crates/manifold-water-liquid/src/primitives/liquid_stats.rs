@@ -1,6 +1,5 @@
 //! `node.liquid_stats` — once per tick, reduce a particle liquid's state to
-//! its statistics words (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.1,
-//! amendment 2): non-finite records, live records, the fastest particle,
+//! its statistics words: non-finite records, live records, the fastest particle,
 //! mass, momentum and kinetic energy. A fixed reduction tree with no atomics
 //! keeps the words the same on every run. Exempt from the codegen mandate as
 //! a barriered reduction (ADDING_PRIMITIVES.md exclusion 1).

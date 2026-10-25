@@ -26,7 +26,7 @@ impl PresetRuntime {
         self.state_store.cleanup_all();
     }
 
-    /// State harvest across a rebuild (docs/CHAIN_FUSION_DESIGN.md section 5): for
+    /// State harvest across a rebuild: for
     /// every card whose `(effect_id, def_content_key)` matches a card in the
     /// prior runtime, move the prior node *impls* (the `Box<dyn EffectNode>`
     /// holding sim buffers, trail textures, DNN workers) and their StateStore

@@ -1,5 +1,4 @@
 //! Offline audio-reactive export driver — P2 of
-//! `docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md`.
 //!
 //! [`OfflineAudioModDriver`] is a sibling consumer of
 //! [`manifold_audio::analysis::StreamingSendAnalyzer`], NOT a mode of

@@ -1,7 +1,7 @@
 """BPM estimation (autocorrelation) and beat grid construction.
 
 Beats, downbeats, and tempo come from Beat This (manifold_audio.beat_tracking,
-CPJKU model) — see AUDIO_ANALYSIS_ACCURACY_DESIGN.md D1/D2, P2. The madmom
+CPJKU model). The madmom
 RNN+DBN beat/downbeat arms and the madmom-tempo-hypothesis scoring arm that
 used to live in this module are deleted, not paralleled; the pure-DSP
 autocorrelation estimator below (`estimate_bpm`) is the explicit no-model

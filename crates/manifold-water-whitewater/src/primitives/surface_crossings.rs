@@ -1,6 +1,6 @@
 //! `node.surface_crossings` — where the liquid surface crosses the refined
 //! level set's edges inside each whitewater cell
-//! (`docs/GPU_WHITEWATER_DESIGN.md` D4, section 3.3). A per-element gather on
+//!A per-element gather on
 //! the codegen path.
 
 use std::borrow::Cow;

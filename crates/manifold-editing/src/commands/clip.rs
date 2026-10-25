@@ -802,8 +802,7 @@ impl Command for SwapVideoCommand {
 /// detection **config** (sensitivities/routing/quantize — the user's tuning)
 /// while clearing the cached analysis + per-instrument counts (they describe
 /// the old audio). Never touches other clips or invokes detection — pairing
-/// this with the `detection_source` cleanup composite is the caller's job (see
-/// `docs/TIMELINE_INGEST_DESIGN.md` D6).
+/// this with the `detection_source` cleanup composite is the caller's job.
 #[derive(Debug)]
 pub struct ReplaceAudioFileCommand {
     clip_id: ClipId,

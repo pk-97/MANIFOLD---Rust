@@ -188,7 +188,7 @@ manifold_node_engine::primitive! {
         ParamDef {
             name: Cow::Borrowed("cast_shadows"),
             label: "Cast Shadows",
-            // R2 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): stays
+            // Stays
             // `Float`/0..1 (not `Bool`) on purpose — the composition notes
             // below need it modulatable by an LFO/trigger, which the `Bool`
             // ParamValue shape doesn't support. `enum_values` supplies

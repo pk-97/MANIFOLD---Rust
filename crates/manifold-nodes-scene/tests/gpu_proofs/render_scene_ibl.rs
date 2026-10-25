@@ -1,5 +1,4 @@
-//! `node.render_scene` split-sum IBL proof (IMPORT_FIDELITY_DESIGN.md
-//! D2/F-P1). Numeric, no image judgment (per the phase brief — Peter's
+//! `node.render_scene` split-sum IBL proof. Numeric, no image judgment (per the phase brief — Peter's
 //! in-app check is the landing click-script, not these PNGs; there are
 //! none).
 //!
@@ -529,7 +528,7 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
     // wall-clock cost measures the other tests too (BUG-ca67).
 }
 
-/// GLB_CONFORMANCE_DESIGN.md G-P6 deliverable: "prefilter cost measurement
+/// Deliverable: "prefilter cost measurement
 /// at 4096×2048 reported as a number ... if the first-frame convolution
 /// exceeds 10ms, drop the node's default width/height to 2048×1024 and
 /// state it." `node.hdri_source`'s default output (section 3 committed shape) IS
@@ -636,7 +635,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
          wired={wired_per_frame_ms:.3}ms/frame unwired={unwired_per_frame_ms:.3}ms/frame \
          delta={ibl_cost_ms:.3}ms/frame (re-tune trigger: >10ms -> drop \
          node.hdri_source's default to 2048x1024, which is ALREADY the \
-         committed default per GLB_CONFORMANCE_DESIGN.md section 3)"
+         committed default)"
     );
 }
 

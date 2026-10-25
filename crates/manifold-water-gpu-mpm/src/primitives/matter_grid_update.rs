@@ -1,7 +1,6 @@
 //! `node.matter_grid_update` — resolve the matter grid: momentum to velocity,
 //! gravity, the scene's forces and impulses (seam P8), closed walls,
-//! colliders and the CFL clamp (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1
-//! step 4).
+//! colliders and the CFL clamp.
 
 use std::borrow::Cow;
 

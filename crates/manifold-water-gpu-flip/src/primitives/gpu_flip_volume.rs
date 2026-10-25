@@ -1,6 +1,5 @@
 //! The water volume a surface mesh holds in the 4 m Dam Break tank, measured
-//! the same way for every solver in the water race
-//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 6 (measures)).
+//! the same way for every solver in the water race.
 
 /// The water a closed surface mesh holds inside the tank (the cube of side
 /// `size` from `min`) and its free surface's area, in m³ and m². The mesh

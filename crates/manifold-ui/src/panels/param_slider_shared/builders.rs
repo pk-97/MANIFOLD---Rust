@@ -1143,7 +1143,7 @@ fn build_mod_tab_strip(
 /// first-node/node-count bookkeeping is preserved.
 #[allow(clippy::too_many_arguments)]
 // Per-row interactive-control roles, OR'd into a row's key base (D4,
-// `docs/WIDGET_TREE_DESIGN.md`) to give each of a row's flat-parented
+// Give each of a row's flat-parented
 // controls a stable, reorder-proof WidgetId. Pre-shifted left 4 bits so the
 // low nibble is free for a role's own sub-tags (only `ROW_ROLE_SLIDER` uses
 // it today — see `slider::SLIDER_KEY_*`); `row_key_base()` shifts the row's
@@ -1159,7 +1159,7 @@ pub(crate) const ROW_ROLE_CHEVRON: u64 = 4 << 4;
 
 pub(crate) const ROW_ROLE_TOGGLE: u64 = 5 << 4;
 
-/// D5 card-section header row (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2) —
+/// card-section header row —
 /// keyed by the run's first row's identity, same scheme as the per-param
 /// roles above.
 pub(crate) const ROW_ROLE_SECTION_HEADER: u64 = 6 << 4;
@@ -1199,7 +1199,7 @@ pub(crate) const ROW_ROLE_SECTION_TITLE: u64 = 15 << 4;
 /// reorder / section fold / insertion. Nodes nested under an already-keyed
 /// node (fill/thumb under the slider track; a drawer's own buttons/sliders
 /// under its keyed container) inherit stability through the parent chain and
-/// need no key of their own (`docs/WIDGET_TREE_DESIGN.md` D4/P2).
+/// need no key of their own.
 pub(crate) fn param_row_key_base(id: &str) -> u64 {
     crate::param_surface::stable_key(id) << 8
 }
@@ -2184,7 +2184,7 @@ pub(crate) fn build_button_row(
         }
     }
 
-    // Automation naming pass (`WIDGET_TREE_DESIGN.md` section 5) — mirror the slider row.
+    // Automation naming pass — mirror the slider row.
     // A toggle/trigger row has no separate row-catcher; its button IS the row's
     // identity and its sole drivable control, so the param-id-derived name lands
     // there.
@@ -2629,7 +2629,7 @@ pub(crate) fn build_param_row(
         ROW_ROLE_AUDIO,
     );
 
-    // Automation naming pass (`WIDGET_TREE_DESIGN.md` section 5, D8/section 3): every converged
+    // Automation naming pass: every converged
     // card row carries a param-id-derived name on its row-root and its drivable
     // controls, so a `--script` flow can find and drive the row directly. Unlike
     // the mute/solo-chip idiom (one static name, `under_text` picks the row), a

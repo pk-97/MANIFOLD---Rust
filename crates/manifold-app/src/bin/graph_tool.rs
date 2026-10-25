@@ -19,8 +19,7 @@
 //! and prints per-node classification, region membership, cut reasons, and
 //! an estimated dispatch count.
 //!
-//! `migrate` runs
-//! (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D5) and
+//! `migrate` runs and
 //! [`manifold_core::initial_fill::migrate_initial_volume`] over the file —
 //! the same structural, version-gate-free rewrites every load applies — and
 //! prints the (possibly unchanged) def to stdout, or writes

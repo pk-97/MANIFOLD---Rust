@@ -1,7 +1,6 @@
 //! Inspector projection: the big `sync_inspector_data` selection sync, the
 //! per-card modulation builders, single-param modulation lookups, and audio/
-//! modifier label helpers. Moved from state_sync.rs (P-P,
-//! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
+//! modifier label helpers. Moved from state_sync.rs.
 
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
@@ -71,7 +70,7 @@ fn rack_groups(
 }
 
 /// Map the content thread's `LedPreview` across the projection boundary for
-/// the card (LED_STRIPS_DESIGN MVP-P4, D24). The gate is the same on both
+/// the card. The gate is the same on both
 /// call sites (structural sync + per-frame push): only a DMX lane's generator
 /// card carries the band (D22 — the whole composite, never a per-layer view),
 /// and the app-side `None`/`LedPreview::None` states render no band at all.
@@ -217,7 +216,7 @@ pub fn sync_inspector_data(
         ),
     );
 
-    // LED composite preview (LED_STRIPS_DESIGN MVP-P4): the band lives only on
+    // LED composite preview: the band lives only on
     // a DMX lane's generator card (D22). Presence is structural — set before
     // configure_gen_params below so the card build sees it this same sync.
     {

@@ -4,8 +4,7 @@
 `manifold-media` (all 13 Rust modules + both native Objective-C plugins) plus a periphery
 sweep of every call site in `manifold-app`. Sibling of `CORE_ENGINE_MAP.md` and
 `FREEZE_COMPILER_MAP.md`: this describes what is *built*, not what is planned.
-`MEDIA_BACKEND_DESIGN.md` (neutral decode/encode traits) and `VIDEO_IO_DESIGN.md`
-(Syphon/NDI) are the forward-looking contracts layered on top of this; where they disagree
+Forward-looking plans (neutral decode/encode traits, Syphon/NDI) sit on top of this; where they disagree
 with this file about the present, this file wins.
 
 **Scope.** The `manifold-media` crate and the app-side export path (`content_export.rs`).
@@ -216,9 +215,9 @@ quality is hardcoded (JPEG 95).
   loop; known-broken HDR (BUG-053 (hdr-live-recording-structural)).
 - **Audio for export:** rendered by `manifold_playback::audio_mixdown`, not this crate;
   this crate only muxes the resulting WAV.
-- **Future shape:** MEDIA_BACKEND_DESIGN.md (neutral traits, non-macOS encoders — the
+- **Future shape:** neutral traits, non-macOS encoders (the
   `ExportError::UnsupportedPlatform` variant is pre-allocated for it) and
-  VIDEO_IO_DESIGN.md (Syphon/NDI live interchange) — both forward-looking, neither
+  Syphon/NDI live interchange — both forward-looking, neither
   describes current behaviour.
 
 ## 12. Honest edges (the bug-hunt starts here)

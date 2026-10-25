@@ -1,6 +1,5 @@
 //! `node.face_sample_component` — one axis of GPU FLIP's face lattice as the
-//! seam's face array (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.2 (Grid
-//! outputs)). A per-element gather on the codegen path.
+//! seam's face array. A per-element gather on the codegen path.
 
 use std::borrow::Cow;
 

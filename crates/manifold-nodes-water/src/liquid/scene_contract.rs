@@ -1,4 +1,4 @@
-//! Invariant I3 (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`): every liquid domain
+//! Invariant I3: every liquid domain
 //! exposes what the scene uses, under FLIP's names. A gap is allowed only
 //! when `LIQUID_SCENE_OWED` names the phase that closes it; the list only
 //! shrinks, so an owed item that is already met fails too.

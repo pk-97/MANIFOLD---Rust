@@ -80,8 +80,7 @@ impl InputHandler {
             return true;
         }
 
-        // ── A — toggle automation lane visibility (P5, `docs/AUTOMATION_LANES_DESIGN.md`
-        // section 7's "Automation mode toggle", Live's `A`). Same effect as clicking
+        // ── A — toggle automation lane visibility (Live's `A`). Same effect as clicking
         // the transport bar's LANES button. Not gated on current visibility —
         // unlike `B`, this key must work from either state to turn lanes on
         // in the first place. ──
@@ -92,8 +91,7 @@ impl InputHandler {
             return true;
         }
 
-        // ── B — toggle automation draw/pencil mode (P4 Unit B,
-        // `docs/AUTOMATION_LANES_DESIGN.md` section 7's "Draw mode", Live's `B`).
+        // ── B — toggle automation draw/pencil mode (Live's `B`).
         // No pre-existing MANIFOLD binding on this key — bound directly,
         // Live-exact, no remap needed. Gated on automation mode being
         // visible: pencil mode is meaningless with no lanes shown. ──
@@ -220,7 +218,7 @@ impl InputHandler {
         }
 
         // ── Paste: Cmd+V (context-sensitive) (Unity line 308) ──
-        // D4 (docs/TIMELINE_INGEST_DESIGN.md section 2): arbitrate Finder-file
+        // arbitrate Finder-file
         // paste against the internal clip clipboard via AppKit's pasteboard
         // changeCount before falling through to the existing clip paste.
         if matches!(logical_key, Key::Character(c) if c.as_str() == "v") && m.is_command_only() {
@@ -309,8 +307,7 @@ impl InputHandler {
                 return true;
             }
             // Priority 1.5: selected automation breakpoint → delete it
-            // (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` section 7's "Delete
-            // removes the selection").
+            // "Delete removes the selection".
             if host.has_selected_automation_point() {
                 host.delete_selected_automation_point();
                 return true;
@@ -527,7 +524,7 @@ impl InputHandler {
     }
 }
 
-/// D4 (docs/TIMELINE_INGEST_DESIGN.md section 2): pure Cmd+V arbitration between a
+/// pure Cmd+V arbitration between a
 /// Finder file copy and the internal clip clipboard.
 ///
 /// `internal_snapshot` is the pasteboard `changeCount` recorded the last
@@ -565,7 +562,7 @@ mod b14_keyboard_layer_tests {
         split_calls: Vec<Vec<ClipId>>,
         zoom_to_selection_calls: u32,
         zoom_back_calls: u32,
-        // D4 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2).
+        // Finder-paste arbitration.
         pasteboard_files_val: Vec<std::path::PathBuf>,
         pasteboard_change_count_val: i64,
         internal_snapshot_val: Option<i64>,
@@ -956,7 +953,7 @@ mod b14_keyboard_layer_tests {
         assert_eq!(host.zoom_back_calls, 0);
     }
 
-    // ── D4 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2) ──
+    // ── D4 Finder-paste arbitration ──
     // Decision table: internal-empty/external-file, internal-fresh/
     // external-stale, both-present-external-newer, text-only-pasteboard.
 

@@ -878,7 +878,7 @@ impl TimelineViewportPanel {
     /// across frames (added fresh, like the other build_* elements above,
     /// only when a gesture is in flight — skipped entirely otherwise).
     /// Styling (colors, layout polish) is explicitly deferred to
-    /// `UI_CRAFT_AND_MOTION_PLAN.md` — this reuses existing plain label/bg
+    /// This reuses existing plain label/bg
     /// tokens, no new design decisions.
     ///
     /// Anchored in the ruler strip (like the insert-cursor marker), NOT

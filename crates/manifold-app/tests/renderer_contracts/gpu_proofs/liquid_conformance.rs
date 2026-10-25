@@ -1,6 +1,5 @@
 //! Checked against FLIP Fluids the engine's coupled tank (MIT); see THIRD_PARTY_NOTICES.md.
-//! The liquid conformance suite on the GPU (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`
-//! section 4 (Invariants & enforcement)): I4–I8, I11, I13, Speed 0.5 and
+//! The liquid conformance suite on the GPU (Invariants & enforcement): I4–I8, I11, I13, Speed 0.5 and
 //! Reset, run for every row of `LIQUID_SOLVERS` that names no exemption, on
 //! the row's own scenes. A check reads only what every liquid shares: the
 //! domain's clock and body outputs, the particle frame, the Box3D pose, and

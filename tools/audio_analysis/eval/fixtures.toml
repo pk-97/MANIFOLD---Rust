@@ -265,7 +265,7 @@ beat_range = [2416.0, 3104.0]
 notes = "provisional dev — has its own VOCAL marker, likely the vocal/ambient-heaviest song; keeping in dev balances heldout toward BASALT/STAGNATE's drum-heavy character"
 
 [fixture_common.liveshow]
-project_path_note = "master audio is gitignored, never committed; see the session's eval_corpus paths in docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md P1 landing report for absolute locations (Dropbox, outside the repo)"
+project_path_note = "master audio is gitignored, never committed; see the session's eval_corpus paths for absolute locations (Dropbox, outside the repo)"
 audio_offset_beats = 112.0
 grid_source = "tempoMap (project.json), 98 points, <=2ms per Peter"
 onset_excess_threshold = 0.2
@@ -332,8 +332,7 @@ notes = "P3 v1 seed (deliverable #4): a 16th-note arp (128bpm, D3's per-note gra
 
 # ---------------------------------------------------------------------------
 # 2026-07-18 additions (ADTOF bake-off phase B1) — E-GMD subset + Slakh2100
-# drum-stem truth. See docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md's 2026-07-18
-# addendum for the phasing (B1/B2/B3) this feeds.
+# drum-stem truth. Phasing (B1/B2/B3) this feeds.
 # ---------------------------------------------------------------------------
 
 [[fixture]]

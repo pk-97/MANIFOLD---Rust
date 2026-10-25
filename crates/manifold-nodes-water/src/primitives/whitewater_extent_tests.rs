@@ -1,5 +1,5 @@
 //! CPU proof that the whitewater grid atoms' arrays hold everything their
-//! dispatches read and write (GPU_WHITEWATER_DESIGN.md I9, an extent proof
+//! dispatches read and write (an extent proof
 //! before every new GPU size), at 64: the grid half, surface crossings to
 //! the extended curvature. No GPU: every size comes from the functions the
 //! atoms size and dispatch with.

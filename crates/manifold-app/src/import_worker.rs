@@ -129,7 +129,7 @@ pub(crate) fn run_import_worker(
     } = req;
 
     // FBX/.obj/.dae (MANIFOLD is glTF-only internally, per
-    // IMPORT_ANYTHING_WAVE_DESIGN.md Lane W3): convert through the user's
+    // Convert through the user's
     // installed Blender first, then continue with the produced `.glb`
     // through the exact same path a native glTF drop takes.
     let mut conversion_report_line: Option<String> = None;

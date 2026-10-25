@@ -1,5 +1,4 @@
-//! The rigid owner of a coupled GPU liquid (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`
-//! section 3.3, D6, D15-D18). The scene's Box3D world runs one tick behind
+//! The rigid owner of a coupled GPU liquid. The scene's Box3D world runs one tick behind
 //! the liquid: liquid tick k runs on the GPU from the bodies' state and
 //! support points at its start, moving each body by the coupled motion law
 //! and holding it on its supports through each pressure solve. Once its GPU

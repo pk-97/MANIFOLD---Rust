@@ -32,7 +32,7 @@
 | `manifold-native` | Native plugin FFI (`DepthEstimator`, `BlobDetector`) |
 | `manifold-profiler` | Profiling and instrumentation |
 | `manifold-led` | DMX/Art-Net LED output |
-| `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring + off-RT analysis worker (`docs/AUDIO_INFRASTRUCTURE.md` section 11 (Output taps), `docs/AUDIO_MODULATION_DESIGN.md`) |
+| `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring + off-RT analysis worker (`docs/AUDIO_INFRASTRUCTURE.md` section 11 (Output taps)) |
 | `manifold-spectral` | Spectral DSP and spectrogram rendering |
 | `manifold-recording` | Live recording of compositor output and optional audio input to QuickTime |
 | `manifold-app` | winit entry, Application, ContentThread, ContentPipeline |

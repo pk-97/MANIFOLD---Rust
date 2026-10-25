@@ -1,8 +1,8 @@
 //! `node.liquid_frame` — publish a particle liquid on the particle-frame seam
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.1): every frame that ends
+//!Every frame that ends
 //! on a new tick publishes it, with the solid lattice, the face grid, the
 //! interior distance and the whitewater classes when wired, into a retained
-//! history slot of its own (`docs/GPU_FLIP_DISPLAY_HISTORY_DESIGN.md`).
+//! history slot of its own.
 //! Frames A and B are the retired pair bracketing the display time. Exempt
 //! from the codegen mandate as cross-frame state (ADDING_PRIMITIVES.md
 //! exclusion 2): it owns the publication history.

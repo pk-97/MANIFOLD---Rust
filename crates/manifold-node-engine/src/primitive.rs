@@ -760,7 +760,7 @@ pub trait Primitive: PrimitiveSpec {
 
     /// Mirror of
     /// [`EffectNode::mesh_output_rule`](crate::node_graph::effect_node::EffectNode::mesh_output_rule).
-    /// Per design `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.1. Default is
+    /// Default is
     /// conservative `Written`/`Written`; primitives with fixed
     /// connectivity or aspect inheritance from a named input port
     /// override. Only outputs with the `MeshVertex` channel layout are
@@ -1494,7 +1494,6 @@ macro_rules! __primitive_port_type {
     // string literal (mirrors the `Channels[...]` array-port macro).
     // The texture's element-type per slot is implicit in the texture
     // format (no per-slot type required). See
-    // `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
     (Texture2D [
         R : $r:tt ,
         G : $g:tt ,
@@ -1670,7 +1669,7 @@ macro_rules! __channels_specs {
 /// declaration to a [`ChannelName`](crate::node_graph::ports::ChannelName).
 /// Accepts either a `well_known::*` constant ident or an inline string
 /// literal — same dual-form policy as `__channels_specs!` for Array
-/// ports (per `docs/CHANNEL_TYPE_SYSTEM.md` section 17).
+/// ports.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __texture_channel_name {

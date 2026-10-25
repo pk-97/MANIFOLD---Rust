@@ -13,7 +13,7 @@
 // liquid velocity is FLIP's MAC trilinear at the old position (0 outside
 // the grid), the solid its node lattice read trilinearly (a node past the
 // lattice reads 0). FLIP's near-solid early-out is dropped
-// (GPU_WHITEWATER_DESIGN.md section 3.9); its range check stays. Slots with
+//Its range check stays. Slots with
 // kind 3 is empty; kind 4 is dust, with FLIP's ID-dependent buoyancy and drag.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.

@@ -63,7 +63,7 @@ pub trait ClipRenderer: Any + Send {
     /// No-op for renderers without async decode.
     fn flush_pending_decodes(&mut self) {}
 
-    /// Per-frame RT quality column (RT_QUALITY_SETTINGS_DESIGN.md D5). The
+    /// Per-frame RT quality column. The
     /// content pipeline resolves the active column (realtime vs export) once
     /// per frame and fans it out to every renderer; renderers without RT
     /// graphs ignore it. The column stays a foundation value type so this

@@ -1,6 +1,5 @@
 //! The face grid on whole scenes: the matter component fused with a consumer
-//! against its standalone kernels (`docs/GPU_WHITEWATER_DESIGN.md` P1 (Grid
-//! outputs)).
+//! against its standalone kernels.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};

@@ -679,7 +679,7 @@ impl UIRoot {
     ///
     /// `tag_project_category` sets `category: Some("Project")` on the
     /// This-Project items (Effect mode's existing "Project" chip grouping).
-    /// Generator mode passes `true` since LED_STRIPS_DESIGN MVP-P3c: generator
+    /// Generator mode passes `true`: generator
     /// items carry their registry category (e.g. the LED presets' `"LED"`)
     /// and the chip row renders in the generator browser too.
     ///
@@ -1153,7 +1153,7 @@ impl UIRoot {
                 use manifold_core::preset_def::PresetKind;
                 use manifold_ui::panels::browser_popup::*;
 
-                // LED_STRIPS_DESIGN MVP-P3c: generator items carry their
+                // Generator items carry their
                 // registry category and the browser renders the chip row —
                 // same machinery as Effect mode, no fork.
                 //
@@ -2185,7 +2185,7 @@ impl UIRoot {
 
 #[cfg(test)]
 mod led_browser_scoped_open_tests {
-    //! LED_STRIPS_DESIGN MVP-P3c, asserted against the real `UIRoot` the way
+    //! Asserted against the real `UIRoot` the way
     //! the region structural tests do: a Generator-mode picker request built
     //! for a DMX-layer context opens the one shared browser with the "LED"
     //! chip active and only LED-category items filtered in; a plain

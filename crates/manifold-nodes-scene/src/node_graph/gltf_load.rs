@@ -24,15 +24,14 @@ use manifold_node_engine::scene::material::{MapSamplerDesc, MaterialMapInfo};
 /// this codebase maps downstream that the crate has no typed accessor for
 /// at this version:
 /// `KHR_materials_pbrSpecularGlossiness` (converted to metal-rough at
-/// import, BUG-167), `KHR_materials_clearcoat` (raw-JSON sniff,
-/// `GLB_CONFORMANCE_DESIGN.md` G-P5), and — as of
-/// `GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E1 — `KHR_materials_sheen`,
+/// import, BUG-167), `KHR_materials_clearcoat` (raw-JSON sniff),
+/// and `KHR_materials_sheen`,
 /// `KHR_materials_iridescence`, `KHR_materials_anisotropy`, and
 /// `KHR_materials_dispersion` (all four raw-JSON sniffed, same doctrine as
 /// clearcoat: no typed accessor exists for any of them in `gltf`/
 /// `gltf-json` 1.4.1). `KHR_materials_volume` is typed (Cargo feature
 /// enabled) so it's covered by the feature-list rows below instead.
-/// `EXT_texture_webp` (IMPORT_ANYTHING_WAVE_DESIGN.md W1) has no typed
+/// `EXT_texture_webp` has no typed
 /// crate feature at all — the extension's image source is read via the
 /// raw-JSON `extension_value` sniff and decoded ourselves in
 /// [`import_images_with_webp`], since the crate's own bundled `image`
@@ -53,7 +52,7 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     "KHR_materials_unlit",
     "KHR_materials_pbrSpecularGlossiness",
     "KHR_materials_clearcoat",
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1 — raw-JSON sniffed, no typed
+    // Raw-JSON sniffed, no typed
     // accessor at 1.4.1:
     "KHR_materials_sheen",
     "KHR_materials_iridescence",
@@ -62,7 +61,7 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     // RAYTRACING_DESIGN.md section 16 TL3 — raw-JSON sniffed, no typed
     // accessor at 1.4.1:
     "KHR_materials_diffuse_transmission",
-    // IMPORT_ANYTHING_WAVE_DESIGN.md W1 — raw-JSON sniffed + manual decode,
+    // Raw-JSON sniffed + manual decode,
     // no crate feature exists for this extension at 1.4.1:
     "EXT_texture_webp",
     // GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168) — raw-JSON sniffed per-node
@@ -227,7 +226,7 @@ pub(crate) fn import_glb(path: &std::path::Path) -> Result<GlbImport, String> {
 /// image has an unrecognized mime type — its bundled `image` dependency
 /// only compiles in `png`/`jpeg` decoders (see the crate's own `Cargo.toml`),
 /// so a WebP-textured asset never reaches MANIFOLD's own extension gate at
-/// all. IMPORT_ANYTHING_WAVE_DESIGN.md W1: decode webp images ourselves
+/// all. Decode webp images ourselves
 /// (our `image` dependency has the `webp` feature on) and fall back to the
 /// crate's own per-image decode for everything else.
 ///
@@ -2063,7 +2062,7 @@ pub(crate) struct GltfMaterialInfo {
     /// Index into `document.textures()` for the base-color map, if any.
     pub base_color_texture: Option<u32>,
     /// Index into `document.textures()` for the tangent-space normal map,
-    /// if any (glTF `normalTexture`) — IMPORT_FIDELITY_DESIGN.md D3/D5/D6.
+    /// if any (glTF `normalTexture`).
     pub normal_texture: Option<u32>,
     /// glTF `normalTexture.scale` (default 1.0).
     pub normal_scale: f32,
@@ -2083,14 +2082,13 @@ pub(crate) struct GltfMaterialInfo {
     /// `emission_intensity`, an existing wired param.
     pub emissive_strength: f32,
     /// `KHR_materials_transmission` factor (0.0 when the extension is
-    /// absent). IMPORT_FIDELITY_DESIGN.md D8/F-P5: a nonzero factor makes
+    /// absent). A nonzero factor makes
     /// the importer map this material to `Blend`, with
     /// `alpha = base_color.a * (1 - transmission_factor)`.
     pub transmission_factor: f32,
     /// `KHR_materials_transmission`'s `transmissionTexture` index, if any
     /// (R channel scales `transmissionFactor`).
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
-    /// surface): typed accessor, `gltf` 1.4.1 has the transmission
+    /// Typed accessor, `gltf` 1.4.1 has the transmission
     /// feature (see `transmission_factor` above).
     pub transmission_texture: Option<u32>,
     /// RAYTRACING_DESIGN.md section 16 TL3:
@@ -2110,7 +2108,7 @@ pub(crate) struct GltfMaterialInfo {
     pub diffuse_transmission_color_texture: Option<u32>,
     /// `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0` — glTF's
     /// own implicit default, and the value that makes G-P5's coat lobe
-    /// exactly inert). GLB_CONFORMANCE_DESIGN.md G-P5/D5: parsed by raw
+    /// exactly inert). Parsed by raw
     /// `extensions` JSON, not a typed accessor — gltf 1.4.1 has no
     /// `KHR_materials_clearcoat` feature (VERIFIED against the pinned
     /// crate's own `Cargo.toml`/source this session: no such feature name
@@ -2125,8 +2123,7 @@ pub(crate) struct GltfMaterialInfo {
     /// `1.0`).
     pub clearcoat_normal_scale: f32,
     /// `clearcoatTexture` index, if any (R channel scales
-    /// `clearcoatFactor`). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1
-    /// revised — full spec surface): E1/G-P5 mapped factors only; the
+    /// `clearcoatFactor`). The mapped factors only; the
     /// texture-completion sweep closes this gap the same way E3/E4/E5
     /// closed sheen/iridescence/anisotropy.
     pub clearcoat_texture: Option<u32>,
@@ -2140,7 +2137,7 @@ pub(crate) struct GltfMaterialInfo {
     pub clearcoat_normal_texture: Option<u32>,
     /// `KHR_materials_sheen`'s `sheenColorFactor` (default `[0,0,0]` —
     /// glTF's own implicit default, and the value that makes E1's sheen
-    /// lobe exactly inert). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1:
+    /// lobe exactly inert).
     /// raw-JSON sniff (`extension_value`), same doctrine as clearcoat — no
     /// typed accessor exists for `KHR_materials_sheen` in `gltf`/
     /// `gltf-json` 1.4.1 (VERIFIED this session: no such Cargo feature in
@@ -2150,8 +2147,7 @@ pub(crate) struct GltfMaterialInfo {
     pub sheen_roughness_factor: f32,
     /// `true` when `KHR_materials_sheen` carries a `sheenColorTexture`
     /// and/or `sheenRoughnessTexture`.
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3 (D1 revised — full spec
-    /// surface per family): index into `document.textures()` for
+    /// Index into `document.textures()` for
     /// `sheenColorTexture`, if any.
     pub sheen_color_texture: Option<u32>,
     /// `sheenRoughnessTexture`'s texture index, if any.
@@ -2170,8 +2166,7 @@ pub(crate) struct GltfMaterialInfo {
     pub iridescence_thickness_maximum: f32,
     /// `true` when `KHR_materials_iridescence` carries an
     /// `iridescenceTexture` and/or `iridescenceThicknessTexture`.
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4 (D1 revised — full spec
-    /// surface per family): index into `document.textures()` for
+    /// Index into `document.textures()` for
     /// `iridescenceTexture`, if any (R channel = iridescenceFactor scale).
     pub iridescence_texture: Option<u32>,
     /// `iridescenceThicknessTexture`'s texture index, if any (G channel =
@@ -2185,8 +2180,7 @@ pub(crate) struct GltfMaterialInfo {
     pub anisotropy_rotation: f32,
     /// `true` when `KHR_materials_anisotropy` carries an
     /// `anisotropyTexture`.
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5 (D1 revised — full spec
-    /// surface per family): index into `document.textures()` for
+    /// Index into `document.textures()` for
     /// `anisotropyTexture`, if any (RG = rotation cos/sin, B = strength,
     /// per the spec's tangent-space encoding).
     pub anisotropy_texture: Option<u32>,
@@ -2212,8 +2206,7 @@ pub(crate) struct GltfMaterialInfo {
     /// neutral, no tint).
     pub volume_attenuation_color: [f32; 3],
     /// `thicknessTexture` index, if any (G channel scales
-    /// `thicknessFactor`). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1
-    /// revised — full spec surface): E1/E2 mapped the factor only; the
+    /// `thicknessFactor`). E1/E2 mapped the factor only; the
     /// texture-completion sweep closes this gap.
     pub volume_thickness_texture: Option<u32>,
     /// glTF `alphaMode == BLEND` on the source material. F-P4 downgrades
@@ -2223,7 +2216,7 @@ pub(crate) struct GltfMaterialInfo {
     pub was_blend: bool,
     /// `KHR_materials_ior`'s `ior` (default 1.5 — glTF's implicit default,
     /// and the value that makes `dielectric_f0` below collapse to today's
-    /// hardcoded 0.04). GLB_CONFORMANCE_DESIGN.md G-P4/D5.
+    /// hardcoded 0.04).
     pub ior: f32,
     /// `KHR_materials_specular`'s `specularFactor` (default 1.0).
     pub specular_factor: f32,
@@ -2232,8 +2225,7 @@ pub(crate) struct GltfMaterialInfo {
     /// `KHR_materials_pbrSpecularGlossiness` RGB factor.
     pub specular_color_factor: [f32; 3],
     /// `specularTexture` index, if any (ALPHA channel scales
-    /// `specularFactor` per spec). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6
-    /// (D1 revised — full spec surface): G-P4 mapped factors only; the
+    /// `specularFactor` per spec). The mapped factors only; the
     /// texture-completion sweep closes this gap.
     pub specular_texture: Option<u32>,
     /// `specularColorTexture` index, if any (RGB, sRGB — tints
@@ -2244,8 +2236,8 @@ pub(crate) struct GltfMaterialInfo {
     /// 2×3 affine `[m00, m01, m10, m11, tx, ty]` s.t.
     /// `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)`. Identity
     /// (`[1,0,0,1,0,0]`) when the extension is absent on this texture
-    /// reference — byte-identical to no transform. GLB_CONFORMANCE_DESIGN.md
-    /// G-P4: EVERY map family carries its own transform (the four fields
+    /// reference — byte-identical to no transform.
+    /// EVERY map family carries its own transform (the four fields
     /// below) — the AMG puts transforms on 9 normalTexture infos and only
     /// 1 baseColorTexture, so base-color-only would leave its normal maps
     /// sampling untransformed UVs. A `texCoord` index override is preserved in
@@ -2308,7 +2300,7 @@ pub(crate) struct SpecGlossConversion {
 
 /// Convert spec-gloss's `glossinessFactor` + `specularFactor` (RGB) to
 /// metal-rough's `roughness` plus the existing dielectric F0 controls
-/// (`KHR_materials_specular`'s slots, GLB_CONFORMANCE_DESIGN.md G-P4).
+/// (`KHR_materials_specular`'s slots).
 /// The authored RGB factor is already an F0 colour, while MANIFOLD's shader
 /// multiplies the tint by the default dielectric reflectance (0.04), so the
 /// tint is normalized by 0.04 and the scalar weight stays at 1.0. `metallic`
@@ -2449,7 +2441,7 @@ pub(crate) struct GltfCameraInfo {
 
 /// glTF sampler interpolation mode, as encoded in the runtime track
 /// tables' trailing `mode` column (0/1/2 — `node_graph::primitives::
-/// gltf_anim_shared`'s `Interp`) — IMPORT_ANYTHING_WAVE_DESIGN.md W2.
+/// gltf_anim_shared`'s `Interp`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GltfInterp {
     #[default]
@@ -2471,8 +2463,7 @@ impl GltfInterp {
 
 manifold_core::testkit_visible! {
 /// One keyframe track (glTF `translation`/`scale` channel), any of the
-/// three glTF sampler interpolation modes — GLTF_ANIMATION_DESIGN.md A1,
-/// extended by IMPORT_ANYTHING_WAVE_DESIGN.md W2. `times` are seconds,
+/// three glTF sampler interpolation modes. `times` are seconds,
 /// non-decreasing per spec (`input` accessor); `values[i]` is the pose at
 /// `times[i]`. `in_tangents`/`out_tangents` are populated (same length as
 /// `values`) only when `mode == CubicSpline`; empty otherwise — glTF's own
@@ -2559,9 +2550,8 @@ pub(crate) struct GltfAnimationInfo {
 
 /// Parse every `document.animations()` entry into its per-node TRS
 /// tracks. LINEAR, STEP, and CUBICSPLINE interpolation are all supported
-/// for translation/rotation/scale channels (GLTF_ANIMATION_DESIGN.md A1 +
-/// IMPORT_ANYTHING_WAVE_DESIGN.md W2). Morph-weight channels stay
-/// LINEAR-only (A3 scope, unchanged by W2) — a non-LINEAR weights channel
+/// for translation/rotation/scale channels. Morph-weight channels stay
+/// LINEAR-only — a non-LINEAR weights channel
 /// still lands in `skipped_channels`, same as an unreadable weights
 /// accessor (a length that doesn't divide evenly by the keyframe count).
 pub(crate) fn parse_animations(
@@ -3472,13 +3462,13 @@ pub(crate) fn material_info(
     geometry_report_lines: &mut Vec<String>,
 ) -> GltfMaterialInfo {
     let pbr = m.pbr_metallic_roughness();
-    // IMPORT_FIDELITY_DESIGN.md D8/F-P5: BLEND maps to a real
+    // BLEND maps to a real
     // `Blend` material (see the scene compiler), never Mask cutout —
     // `alpha_mask` reflects ONLY the genuine glTF MASK mode.
     let was_blend = matches!(m.alpha_mode(), gltf::material::AlphaMode::Blend);
     let alpha_mask = matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask);
 
-    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
+    // KHR_texture_transform,
     // per-map (all five families — see the field doc comments).
     // base-color/mr/emissive route through `texture::Info`, which
     // has the typed `texture_transform()` accessor; normal and
@@ -3602,7 +3592,7 @@ pub(crate) fn material_info(
         typed_tex_coord(m.emissive_texture()),
     ];
 
-    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular +
+    // KHR_materials_specular +
     // KHR_materials_ior, mapped to F0 scale downstream
     // (the scene compiler). Defaults (1.5 / 1.0 / [1,1,1]) reproduce
     // today's hardcoded F0=0.04 exactly — see `fs_pbr`. D2:
@@ -3616,7 +3606,7 @@ pub(crate) fn material_info(
     } else {
         m.ior().unwrap_or(1.5)
     };
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6: raw-JSON texture-index
+    // Raw-JSON texture-index
     // helper, hoisted above its original sheen/iridescence/
     // anisotropy use so clearcoat/specular (parsed below, before
     // that block) can share it too.
@@ -3648,8 +3638,7 @@ pub(crate) fn material_info(
             .map(|s| s.specular_color_factor())
             .unwrap_or([1.0, 1.0, 1.0])
     });
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
-    // surface): specularTexture/specularColorTexture, typed
+    // specularTexture/specularColorTexture, typed
     // accessors on `Specular<'_>` (gltf 1.4.1 has the feature).
     let specular_texture = if spec_gloss_present {
         None
@@ -3668,7 +3657,7 @@ pub(crate) fn material_info(
             .map(|t| t.texture().index() as u32)
     };
 
-    // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat.
+    // KHR_materials_clearcoat.
     // No typed accessor in gltf 1.4.1 (verified: no
     // `KHR_materials_clearcoat` feature in either `gltf` or
     // `gltf-json` 1.4.1's own `Cargo.toml`) — raw JSON sniff via
@@ -3690,8 +3679,7 @@ pub(crate) fn material_info(
         .and_then(|v| v.get("scale"))
         .and_then(|v| v.as_f64())
         .unwrap_or(1.0) as f32;
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
-    // surface): clearcoatTexture/clearcoatRoughnessTexture/
+    // clearcoatTexture/clearcoatRoughnessTexture/
     // clearcoatNormalTexture, raw-JSON sniff (same `tex_idx`
     // doctrine sheen/iridescence/anisotropy already use — no typed
     // accessor exists for this extension at 1.4.1).
@@ -3701,7 +3689,7 @@ pub(crate) fn material_info(
     let clearcoat_normal_texture =
         clearcoat_ext.and_then(|v| tex_idx(v, "clearcoatNormalTexture"));
 
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_sheen.
+    // KHR_materials_sheen.
     // Same raw-JSON-sniff doctrine as clearcoat above — no typed
     // accessor at 1.4.1. glTF's own implicit defaults ([0,0,0] /
     // 0.0) make an absent extension byte-identical to pre-E1.
@@ -3730,7 +3718,7 @@ pub(crate) fn material_info(
     let sheen_roughness_texture =
         sheen_ext.and_then(|v| tex_idx(v, "sheenRoughnessTexture"));
 
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_iridescence.
+    // KHR_materials_iridescence.
     // Raw-JSON sniff — no typed accessor at 1.4.1.
     let iridescence_ext = m.extension_value("KHR_materials_iridescence");
     let iridescence_factor =
@@ -3748,7 +3736,7 @@ pub(crate) fn material_info(
     let iridescence_thickness_texture =
         iridescence_ext.and_then(|v| tex_idx(v, "iridescenceThicknessTexture"));
 
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_anisotropy.
+    // KHR_materials_anisotropy.
     // Raw-JSON sniff — no typed accessor at 1.4.1.
     let anisotropy_ext = m.extension_value("KHR_materials_anisotropy");
     let anisotropy_strength =
@@ -3757,7 +3745,7 @@ pub(crate) fn material_info(
         anisotropy_ext.map(|v| f1(v, "anisotropyRotation", 0.0)).unwrap_or(0.0);
     let anisotropy_texture = anisotropy_ext.and_then(|v| tex_idx(v, "anisotropyTexture"));
 
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_dispersion.
+    // KHR_materials_dispersion.
     // Raw-JSON sniff — no typed accessor at 1.4.1. Single-field
     // extension, no texture defined by the spec.
     let dispersion = m
@@ -3790,7 +3778,7 @@ pub(crate) fn material_info(
     let diffuse_transmission_color_texture = diffuse_transmission_ext
         .and_then(|v| tex_idx(v, "diffuseTransmissionColorTexture"));
 
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_volume.
+    // KHR_materials_volume.
     // Typed accessor (`Material::volume()`) — the Cargo feature IS
     // enabled at 1.4.1, unlike the four raw-JSON families above.
     // `attenuation_distance()`'s crate-level default is
@@ -3815,8 +3803,7 @@ pub(crate) fn material_info(
         .as_ref()
         .map(|v| v.attenuation_color())
         .unwrap_or([1.0, 1.0, 1.0]);
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
-    // surface): thicknessTexture, typed accessor (Volume has crate
+    // thicknessTexture, typed accessor (Volume has crate
     // support at 1.4.1, same as thickness_factor above).
     let volume_thickness_texture = volume_ext
         .as_ref()
@@ -4082,7 +4069,7 @@ mod animation_tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/hostile")
     }
 
-    /// IMPORT_ANYTHING_WAVE_DESIGN.md W2 (BUG-187's STEP half): before this
+    /// Before this
     /// lane, `step_interp.glb`'s translation channel was dropped with a
     /// report line (`gltf_load.rs`'s old LINEAR-only gate). Asserts it now
     /// parses into a real track carrying `GltfInterp::Step`, never
@@ -4219,7 +4206,7 @@ mod animation_tests {
         let animations = parse_animations(&document, &buffers);
         assert_eq!(animations.len(), 9, "one animation clip per channel in this fixture");
 
-        // IMPORT_ANYTHING_WAVE_DESIGN.md W2: all 9 clips now parse (3
+        // All 9 clips now parse (3
         // LINEAR + 3 STEP + 3 CUBICSPLINE, per the fixture's own naming —
         // "Step Scale"/"Linear Scale"/"CubicSpline Scale" etc.) — nothing
         // skipped, no TRS channel silently dropped or approximated.
@@ -5021,7 +5008,7 @@ mod tests {
         }
     }
 
-    /// IMPORT_ANYTHING_WAVE_DESIGN.md W1 (BUG-186): a cube whose only
+    /// A cube whose only
     /// texture is `EXT_texture_webp` (no fallback source, `extensionsRequired`).
     /// Asserts the decode succeeds and the pixels are a real gradient, not
     /// a flat fallback color.

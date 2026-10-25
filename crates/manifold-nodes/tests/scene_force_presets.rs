@@ -687,7 +687,7 @@ fn force_recipes_prepare_with_zero_selected_bodies() {
     }
 }
 
-/// The industry set (SCENE_SETUP_PROGRAMME.md D2 (Industry set)):
+/// The industry set:
 /// Wind and the Radial force validate, declare a shape, bind every control
 /// but Impulse, attach with and without bodies, and expand to the field
 /// they promise, the Radial force at its Pull and Burst starting values.

@@ -94,8 +94,7 @@ pub(crate) fn residual(p: &[f32], water: &[bool], f: &[f32], n: usize, h: f64) -
 }
 
 /// The ghost fluid's θ for air neighbour `air` of water cell `own`: the air
-/// side holds θ times the water's pressure (docs/GPU_FLIP_PRESSURE_SOLVE.md
-/// section 2 (the equation)).
+/// side holds θ times the water's pressure.
 fn ghost_ratio(phi: &[f32], own: usize, air: usize, h: f64) -> f64 {
     let centre = f64::from(phi[own]).min(-0.005 * h);
     (f64::from(phi[air]).max(0.0) / (centre + 1e-9)).clamp(-25.0, 25.0)

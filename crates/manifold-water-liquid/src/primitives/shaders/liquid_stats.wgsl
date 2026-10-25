@@ -1,5 +1,5 @@
 // node.liquid_stats — one tick's statistics of a particle liquid
-// (LIQUID_SOLVER_SEAM_DESIGN.md section 3.1, amendment 2). Two passes with one
+//Two passes with one
 // shared uniform:
 //   particles_main — each workgroup folds a fixed block of records, then a
 //                    fixed workgroup-memory tree, into one partial;

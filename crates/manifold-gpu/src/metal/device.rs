@@ -175,7 +175,7 @@ pub struct GpuDevice {
     /// lazy-cache pattern.
     linear_sampler: std::sync::OnceLock<GpuSampler>,
     /// The word-copy kernel a replay span turns buffer copies into
-    /// (docs/ENCODE_REPLAY_DESIGN.md D9). Built on the first replaying span.
+    /// Built on the first replaying span.
     replay_copy_kernel: std::sync::OnceLock<std::sync::Arc<GpuComputePipeline>>,
     /// Device-level Xcode capture scope. A scope only defines capture
     /// boundaries through begin/end calls, so it must be retained and
@@ -772,7 +772,7 @@ impl GpuDevice {
         let function = find_entry_function(&library, &msl_entry_name, &available, label, "compute");
 
         // A buffers-only pipeline can enter an encode-replay recording
-        // (docs/ENCODE_REPLAY_DESIGN.md D6); Metal refuses indirect-command
+        // Metal refuses indirect-command
         // support for a function that binds a texture or sampler directly.
         // With an archive loaded, the descriptor also looks the binary up
         // there and adds it on a miss.

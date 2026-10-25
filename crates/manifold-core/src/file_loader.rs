@@ -1,4 +1,4 @@
-//! The single list of file-loading node types (PROJECT_FOLDERS_DESIGN P5).
+//! The single list of file-loading node types.
 //!
 //! P1's `is_file_path` flag made collect opt-in per preset author; embedded
 //! presets saved before the flag existed silently skipped their GLBs
@@ -55,7 +55,7 @@ pub fn is_picture(path: &str) -> bool {
 
 /// The table: `type_id` → what that node reads from disk. Names only nodes
 /// whose path comes via an outer-card string binding (`stringParams` +
-/// `stringBindings`), per PROJECT_FOLDERS_DESIGN P5.
+/// `stringBindings`).
 use crate::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 
 // `tt`, not `literal`: a key may be a `&str` constant, which is both a match

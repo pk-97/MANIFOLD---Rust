@@ -25,7 +25,7 @@ pub use shadow_caster::{ShadowCaster, upload_shadow_casters};
 pub mod trace_planner;
 pub use trace_planner::*;
 // The recording core is unused on Vulkan until its store records command
-// buffers (docs/ENCODE_REPLAY_DESIGN.md D10); that store lifts this allow.
+// buffers; that store lifts this allow.
 #[cfg_attr(feature = "vulkan", allow(dead_code))]
 mod replay;
 pub use replay::{GATED_RANGE_BYTES, GpuReplayStats, REPLAY_RING, template_chunks};

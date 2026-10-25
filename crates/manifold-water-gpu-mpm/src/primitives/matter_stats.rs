@@ -1,7 +1,7 @@
 //! `node.matter_stats` — once per tick, reduce a matter domain's points and
 //! grid to 16 words: non-finite and clamp counts, live count, speed, J
 //! range, volume, fixed-point headroom, mass, momentum and energy
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` D14). A fixed reduction tree keeps the
+//!A fixed reduction tree keeps the
 //! sums deterministic. Exempt from the codegen mandate as a barriered
 //! reduction (ADDING_PRIMITIVES.md exclusion 1): the generated per-element
 //! wrapper returns early per thread, which would make its barriers

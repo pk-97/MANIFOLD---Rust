@@ -6,7 +6,7 @@
 //! it in one place. The capture/analysis subsystem reads this to configure its
 //! worker. Parallel to `midi_config` — input routing at the project root.
 //!
-//! See `docs/AUDIO_MODULATION_DESIGN.md` section 3.2.
+//!
 
 use serde::{Deserialize, Serialize};
 
@@ -135,8 +135,7 @@ pub struct AudioSend {
     /// gated to silence *before* the column is displayed, band-sliced, or
     /// feature-extracted — a per-send squelch so quiet bleed between hits can't
     /// trigger and doesn't clutter the scope. Default = OFF (passes everything).
-    /// Applied live (no capture restart), like [`AudioSend::gain_db`]. See
-    /// `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` section 7.
+    /// Applied live (no capture restart), like [`AudioSend::gain_db`].
     #[serde(default = "floor_db_off", skip_serializing_if = "floor_is_off")]
     pub floor_db: f32,
     /// Which extractors run for this send.

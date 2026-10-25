@@ -211,7 +211,7 @@ pub(crate) struct RowHost {
     /// colour with no entry follows its default (`RowHost::colour_open`).
     pub(super) colour_open: ahash::AHashMap<String, bool>,
     /// WidgetId → (row, role) reverse map, rebuilt every `build()` from the
-    /// same rows being rendered (D5, `docs/WIDGET_TREE_DESIGN.md` P2) — the
+    /// same rows being rendered — the
     /// ONLY sanctioned way `handle_click`/`handle_pointer_down`/`handle_drag`
     /// identify a row element. Cleared at the top of `build()`, repopulated by
     /// `reindex_row` as each row's controls land.

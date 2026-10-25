@@ -149,8 +149,7 @@ pub struct UIState {
     /// isn't pure selection.
     scope_pin: Option<(InspectorTab, SelectionIdentity)>,
 
-    /// Automation-mode view toggle (Live's `A`, P4 `docs/AUTOMATION_LANES_DESIGN.md`
-    /// section 7): show/hide lane strips across the timeline. Purely a view-state
+    /// Automation-mode view toggle (Live's `A`): show/hide lane strips across the timeline. Purely a view-state
     /// bool — never serialized, never routed through `EditingService` — but it
     /// DOES change the Y-layout (a visible lane grows its track), so any
     /// toggle must also mark the app's structural-sync dirty flag; see
@@ -160,8 +159,7 @@ pub struct UIState {
     automation_mode_visible: bool,
 
     /// The single selected breakpoint, for the Delete key (P4 Unit A —
-    /// marquee multi-select is a later unit; `docs/AUTOMATION_LANES_DESIGN.md`
-    /// section 7's "Marquee-select multiple dots and drag/delete them together").
+    /// marquee multi-select is a later unit.
     /// Set on a plain click on an existing dot; cleared on any other
     /// selection change or when automation mode toggles off. Never
     /// serialized — pure view/interaction state, same tier as
@@ -169,7 +167,7 @@ pub struct UIState {
     pub selected_automation_point: Option<UiAutomationPointRef>,
 
     /// Marquee (rubber-band) multi-selection of automation breakpoints (P4
-    /// Unit B, `docs/AUTOMATION_LANES_DESIGN.md` section 7's "Marquee-select
+    /// Unit B, "Marquee-select
     /// multiple dots and drag/delete them together"). Populated live during
     /// an `AutomationMarquee` drag; Delete removes the whole set as one undo
     /// entry, a drag starting on a member moves the whole set together. Same
@@ -193,8 +191,7 @@ pub struct UIState {
 
     /// The param most recently touched (slider grab, inspector knob drag) on
     /// each layer — independent of whether it has a real `AutomationLane`
-    /// yet (P5, `docs/AUTOMATION_LANES_DESIGN.md` section 7 addendum's
-    /// "touch-to-select" + "first-draw path"). While automation mode is
+    /// yet ("touch-to-select" + "first-draw path"). While automation mode is
     /// visible, a chosen param with no backing lane renders as a flat line
     /// at its current base value — Live's "every param has an implicit
     /// envelope" feel — and the first click on that line creates the real

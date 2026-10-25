@@ -1,5 +1,4 @@
-//! Failure-catalog integration harness for `AbletonTransportSync` (P2 of
-//! docs/ABLETON_TRANSPORT_SYNC_DESIGN.md).
+//! Failure-catalog integration harness for `AbletonTransportSync`.
 //!
 //! `FakeAbleton` is a pure model of Ableton Live + AbletonOSC: no sockets, no
 //! threads, no sleeps, no wall clock — everything is stepped by an explicit

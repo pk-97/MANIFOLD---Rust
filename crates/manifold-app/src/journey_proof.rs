@@ -1,5 +1,5 @@
 //! Headless release-journey export harness (feature `journey-proofs`,
-//! macOS-only). P3 of `docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md`, extended
+//! macOS-only). Extended
 //! per the release-journey queue item: a standing, feature-gated end-to-end
 //! proof that offline audio-reactive export actually moves pixels, not just a
 //! green unit test (`prove-render-path-before-claiming-visual-win`).
@@ -1093,7 +1093,7 @@ mod tests {
         );
     }
 
-    /// Round-trip gate (DESIGN_DOC_STANDARD section 5, from BUG-036): SAVE the
+    /// Round-trip gate: SAVE the
     /// audio-reactive fixture through the real project-io save path, RELOAD
     /// it through the real load path, export the RELOADED project. Bindings
     /// must modulate AFTER reload, not just after creation — the create-path

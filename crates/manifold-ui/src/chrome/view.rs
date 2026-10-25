@@ -3,7 +3,7 @@
 //! A panel builds a `View` tree from its own state; the [`layout`] engine
 //! resolves it to rects and the [`diff`] reconciler applies it to the
 //! [`UITree`](crate::tree::UITree). Builders are fluent and consume `self`, so a
-//! whole panel reads as one nested expression. See `docs/CHROME_API_DESIGN.md`.
+//! whole panel reads as one nested expression.
 //!
 //! [`layout`]: crate::chrome::layout
 //! [`diff`]: crate::chrome::diff
@@ -169,7 +169,7 @@ pub struct View {
     /// Optional stable-identity hint (currently advisory — the diff keys on
     /// structural shape; a future keyed reconciler reads this).
     pub(crate) key: Option<u64>,
-    /// Opt-in durable-WidgetId pin (D4, `docs/WIDGET_TREE_DESIGN.md`): when
+    /// Opt-in durable-WidgetId pin: when
     /// set, the host mints this node via `add_node_keyed`, so its identity
     /// survives sibling reorder (card roots in an effect chain). Distinct
     /// from `key`, which is lookup-only and merely host-unique — hosts can
@@ -177,7 +177,7 @@ pub struct View {
     /// collide across panels. Identity values must be globally derived
     /// (`param_surface::stable_key` over a real id), never small constants.
     pub(crate) identity: Option<u64>,
-    /// Automation component name (`UI_AUTOMATION_DESIGN.md` D8/section 3), registered
+    /// Automation component name, registered
     /// on the built `NodeId` via `UITree::set_name` once this view lands in the
     /// tree. `None` for the overwhelming majority of views — set only at the
     /// naming pass' high-value points (`.name("layer_header.mute")`).
@@ -467,8 +467,7 @@ impl View {
         self
     }
 
-    /// Register an automation component name for this node (`UI_AUTOMATION_DESIGN.md`
-    /// D8/section 3) — a static literal like `"transport.play"`. Applied once the view
+    /// Register an automation component name for this node — a static literal like `"transport.play"`. Applied once the view
     /// lands in the tree (`ChromeHost::build`/`materialize`); most views leave
     /// this unset.
     pub fn name(mut self, name: &'static str) -> Self {

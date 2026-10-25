@@ -2003,7 +2003,7 @@ extern "C" int manifold_fluids_world_whitewater(void *world,
     });
 }
 
-// ---- Whitewater lifecycle (GPU_WHITEWATER_DESIGN.md D1, D6, section 3.4) ----
+// ---- Whitewater lifecycle ----
 // FLIP's DiffuseParticleSimulation with emission off, fed through its public
 // API: the fields are whole-array copies into engine-owned grids, the spawns
 // go through loadDiffuseParticles. Nothing under flip_engine/ changes.

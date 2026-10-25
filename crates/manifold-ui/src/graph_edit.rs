@@ -111,8 +111,7 @@ pub enum GraphEditCommand {
     /// apply here, only to close the undo entry.
     EndGraphNodeParamScrub { node_id: u32, param_name: String },
     /// Set an **outer performance-card param** to a new value. Emitted by a
-    /// scrub/click on a group box's face row (D6,
-    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): that row is a live
+    /// scrub/click on a group box's face row: that row is a live
     /// mirror of an already-exposed card param, not an inner node's own row,
     /// so it's addressed the same way the card's own slider is — by the
     /// outer binding's stable `ParamId` string — rather than by

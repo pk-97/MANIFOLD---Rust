@@ -1,5 +1,5 @@
 // node.matter_body_reaction — BUFFER body, atomic scatter
-// (GPU_MPM_SOLVER_DESIGN.md section 4.1 step 5). One thread per lattice node,
+//One thread per lattice node,
 // after node.matter_grid_update. It repeats grid_update's projection from the
 // node's velocity after forces (v_before + dt·(g + forces(x)), plus impulses(x)
 // on the impulse tick's first substep, the walls, then each body in order, the

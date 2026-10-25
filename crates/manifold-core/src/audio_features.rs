@@ -8,7 +8,7 @@
 //! dependency on the audio/CoreAudio stack — it reads core types only.
 //!
 //! These are **runtime** values: never serialized, recomputed every analysis
-//! block. See `docs/AUDIO_MODULATION_DESIGN.md` section 5.
+//! block.
 
 mod hops;
 pub use hops::{
@@ -43,12 +43,11 @@ pub struct BandFeatures {
     /// Tracked dominant-object log-frequency position within this band's bin
     /// window, 0..1 (same mapping as `brightness`). HOLDS its last value on
     /// dropout — gate with `presence`, never read 0 as "low pitch". Filled by
-    /// the D5 ridge tracker (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md`), one per
+    /// the D5 ridge tracker, one per
     /// band window (Full/Low/Mid/High), all four run over one shared salience
     /// column (D4).
     pub pitch: f32,
-    /// Tracker confidence 0..1 (ridge salience / window energy, smoothed) —
-    /// see D5/D6 in `docs/AUDIO_OBJECT_TRACKING_DESIGN.md`.
+    /// Tracker confidence 0..1 (ridge salience / window energy, smoothed).
     pub presence: f32,
 }
 

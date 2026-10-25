@@ -2,8 +2,7 @@
 //! `UITree` — the graph canvas and its mapping popover.
 //!
 //! Chrome panels describe a `UITree` that `manifold-nodes` walks and draws.
-//! The graph canvas is immediate-mode by design (`docs/UI_ARCHITECTURE_OVERHAUL.md`
-//! section 5.4): it paints rects/lines/text directly each frame. Historically it called
+//! The graph canvas is immediate-mode by design it paints rects/lines/text directly each frame. Historically it called
 //! `manifold_nodes::ui_renderer::UIRenderer` for that, which forced the canvas
 //! to live app-side (a `manifold-ui` → `manifold-nodes` dependency is a cycle).
 //!

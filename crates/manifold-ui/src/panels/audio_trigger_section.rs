@@ -770,7 +770,6 @@ impl AudioTriggerSection {
     /// Right-click reset on the Sensitivity slider — the drawer's own
     /// `slider_resets`, registered exactly as `ParamCardPanel` does. Walks
     /// the contract via [`BitmapSlider::register_track_reset`]
-    /// (UI_WIDGET_UNIFICATION_DESIGN.md P1).
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         for cfg in self.audio_configs.iter().flatten() {
             let (dids, _) = cfg;
@@ -788,7 +787,7 @@ mod tests {
     use crate::panels::param_slider_shared::trigger_source_chips;
     use crate::types::AudioFeatureKind;
 
-    // P7 (`docs/UI_WIDGET_UNIFICATION_DESIGN.md`) behavior-pinning test for the
+    // Behavior-pinning test for the
     // `dragging_shape` grab/release lifecycle, written BEFORE migrating the
     // field from `Option<(usize, AudioShapeParam)>` onto `DragController<T>`.
     // Drives only the public `is_dragging`/`handle_release` surface (plus the

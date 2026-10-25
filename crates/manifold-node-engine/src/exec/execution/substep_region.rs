@@ -1,4 +1,4 @@
-//! The executor side of substep regions (`docs/GPU_MPM_SOLVER_DESIGN.md` D7):
+//! The executor side of substep regions:
 //! run the boundary once, then its body as many times as the boundary asks,
 //! writing the per-iteration scalars before each run and capturing after it.
 //! Every step goes through the one step evaluator the frame pass uses.
@@ -103,7 +103,7 @@ impl Executor {
         self.substep_scalar_values
             .resize(ports.iteration_scalars.len(), 0.0);
 
-        // The body replays its recorded dispatches (docs/ENCODE_REPLAY_DESIGN.md D1).
+        // The body replays its recorded dispatches.
         let replay = self.encode_replay && !self.dumps_arrays();
         if replay && let Some(gpu) = gpu.as_deref_mut() {
             let cache = std::mem::take(self.replay_caches.entry(region.boundary).or_default());

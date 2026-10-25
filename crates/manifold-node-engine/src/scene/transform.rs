@@ -7,7 +7,7 @@
 //! (`render_scene.rs:419`), which is unchanged by this port's introduction.
 //!
 //! Produced by `node.transform_3d`, consumed (P2 of
-//! `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md`) by `render_scene`'s
+//! by `render_scene`'s
 //! `transform_n` ports instead of nine per-object params. Same CPU-struct
 //! lifetime model as [`Camera`](crate::node_graph::camera::Camera),
 //! [`Light`](crate::node_graph::light::Light), and

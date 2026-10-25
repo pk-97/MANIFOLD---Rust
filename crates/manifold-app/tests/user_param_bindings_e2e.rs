@@ -23,7 +23,6 @@
 //! 4. After reload, the user-tail slot is still addressable by id
 //!    (round-trip-safe addressing — the doc's gate-to-Phase-4 condition).
 //!
-//! See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7.6 and section 9 Phase 3.
 
 // Force the linker to keep manifold-nodes's inventory::submit! blocks.
 use manifold_nodes as _;

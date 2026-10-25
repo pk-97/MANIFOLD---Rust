@@ -5,7 +5,7 @@
 //! disagrees with them about Eligible/Boundary and changes nothing about what
 //! fuses. `refusal_census_matches_classify_node` pins that agreement.
 //!
-//! The report is `docs/fusion_census.md`, written by
+//! The report is written by
 //! `cargo run -p manifold-app --example fusion_census`.
 
 use super::*;
@@ -348,7 +348,7 @@ fn census_def(
         .collect();
 
     // Pass 1 — per-node refusals. Dispatches-saved estimator: a
-    // CONSERVATIVE LOWER BOUND, documented in docs/fusion_census.md — 1 if
+    // CONSERVATIVE LOWER BOUND — 1 if
     // the refused node has at least one texture/Array-wired neighbour
     // (either direction) that classifies `Eligible`, else 0. That single
     // neighbour is the case lifting this node would join it to (2
@@ -443,7 +443,7 @@ pub enum FixtureCorpus {
 
 /// Run the census over every bundled effect/generator preset plus the
 /// fixture corpus, and render the FUSION_SOTA_DESIGN section D4 report.
-/// Returns the exact text committed to `docs/fusion_census.md`.
+/// Returns the report text.
 pub fn build_census_report(fixture: FixtureCorpus) -> String {
     let registry = PrimitiveRegistry::with_builtin();
     let mut stats: AHashMap<RefusalFamily, FamilyStats> = AHashMap::default();

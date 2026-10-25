@@ -1,5 +1,4 @@
-"""Slakh2100 drum-stem truth extraction for the ADTOF bake-off (phase B1,
-docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md 2026-07-18 addendum).
+"""Slakh2100 drum-stem truth extraction for the ADTOF bake-off (phase B1).
 
 Slakh's per-track `is_drum` stem IS already an isolated drum recording (no
 demucs separation needed to get a "drum stem" here -- Slakh renders each

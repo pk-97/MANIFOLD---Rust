@@ -1,6 +1,6 @@
 //! Transport projection: the per-frame transport display cache and the
 //! playhead auto-scroll check. Moved from state_sync.rs (P-P,
-//! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
+
 
 use crate::ui_root::UIRoot;
 

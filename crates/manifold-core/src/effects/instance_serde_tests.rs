@@ -532,8 +532,7 @@ fn preset_instance_automation_lanes_roundtrip_when_present() {
 #[test]
 fn legacy_audio_trigger_migrates_onto_a_parameter_audio_mod_on_the_gate_param() {
     // The exact `audioTrigger` shape a project saved during the one day
-    // section 8's `AudioTriggerMod` shipped (see
-    // `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` section 9 U5). A generator-kind
+    // section 8's `AudioTriggerMod` shipped. A generator-kind
     // instance's `graph.presetMetadata.params` is the only route to an
     // `is_trigger_gate` param outside the JSON preset path (the
     // compile-time `ParamSpec` inventory format has no field for it —

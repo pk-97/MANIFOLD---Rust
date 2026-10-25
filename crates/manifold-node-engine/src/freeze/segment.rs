@@ -1,5 +1,4 @@
-//! Cross-card chain fusion — concatenated segment defs (design:
-//! `docs/CHAIN_FUSION_DESIGN.md`).
+//! Cross-card chain fusion — concatenated segment defs.
 //!
 //! A chain is already ONE runtime graph; the per-seam round-trip exists only
 //! because fusion runs per card def. This module builds the **concatenated

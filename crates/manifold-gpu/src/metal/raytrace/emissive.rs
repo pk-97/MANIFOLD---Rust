@@ -1,5 +1,5 @@
 //! RS-B/RS-C (RAYTRACING_DESIGN.md section 15.3): the per-triangle emissive
-//! light table. SCENE_MODIFIER_RT_DESIGN.md §5.1 (P4a) replaced the CPU
+//! light table. The CPU
 //! build/refit path with `encode_emissive_table` — GPU candidate enumerate →
 //! radix sort → gather → alias → stats, driven only by the shared AS update
 //! path, reading CURRENT vertex/index data through raw GPU addresses so

@@ -7,7 +7,7 @@
 //! Operates directly over `TimelineViewportPanel::automation_lane_screens`'
 //! output — the SAME geometry the renderer draws from, so a click can never
 //! disagree with what's on screen (mirrors `ClipHitTester`'s "one source for
-//! draw and hit-test" discipline). See `docs/AUTOMATION_LANES_DESIGN.md` section 7.
+//! draw and hit-test" discipline).
 
 use crate::hit_targets::{HitTargetEntry, HitTargets};
 use crate::node::{Rect, Vec2};
@@ -21,7 +21,7 @@ use manifold_foundation::{Beats, ParamId};
 pub const DOT_HIT_RADIUS_PX: f32 = 7.0;
 
 /// Distance (screen pixels) from a segment's drawn curve that still grabs the
-/// segment (`docs/AUTOMATION_LANES_DESIGN.md` section 7's "drag a segment"
+/// segment ("drag a segment"
 /// bullets). Measured to the nearest point of the drawn stroke, so the steep
 /// part of a curve is as easy to grab as the flat part. Close to
 /// `DOT_HIT_RADIUS_PX`: a click has to land on the line, or it falls through
@@ -298,7 +298,7 @@ pub fn hit_test_automation(pos: Vec2, lanes: &[AutomationLaneScreen]) -> Option<
     None
 }
 
-// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/section 5) ───────────
+// ── Automation surface ───────────
 
 /// Stable text form of a lane's addressing target, shared by the strip and
 /// point payloads below (`"effect:<id>"` / `"generator:<id>"`).
@@ -848,7 +848,7 @@ mod tests {
         );
     }
 
-    // ── HitTargets (UI_AUTOMATION_DESIGN.md P1) ──────────────────────
+    // ── HitTargets ──────────────────────
 
     #[test]
     fn automation_hit_targets_enumerates_strips_and_points_with_payloads() {

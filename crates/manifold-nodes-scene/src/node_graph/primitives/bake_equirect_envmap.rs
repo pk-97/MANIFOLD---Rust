@@ -723,7 +723,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU value-level tests for D7 (softbox bake mode,
-    //! `docs/IMPORT_FIDELITY_DESIGN.md` F-P3). This atom is a hand-written
+    //! This atom is a hand-written
     //! WGSL compute shader dispatched directly (`boundary_reason:
     //! CrossFrameState` — a one-shot-per-rebuild state atom, exempt from the
     //! freeze/codegen path), so these tests dispatch the shader the same way

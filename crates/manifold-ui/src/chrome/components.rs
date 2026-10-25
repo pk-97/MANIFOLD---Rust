@@ -206,7 +206,7 @@ pub fn state_button_style(active_color: Color32, active: bool) -> UIStyle {
 
 // ── ChipMotion ──────────────────────────────────────────────────────
 // The one hover/press tween a kit control uses instead of the renderer's
-// instant flag-driven color jump (`UI_CRAFT_AND_MOTION_PLAN.md` P1: "kit chip
+// instant flag-driven color jump ("kit chip
 // hover/press — background tween + 1px press drop"). Owned by the caller's
 // own per-widget state — never a registry (`anim` module's D3) — and ticked
 // once per frame from the panel's existing per-frame update path. See

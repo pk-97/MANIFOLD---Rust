@@ -1,4 +1,4 @@
-//! SCENE_MODIFIER_RT_DESIGN.md P2 (BUG-e3p6.4) — rt_dynamic_fusion proof:
+//! rt_dynamic_fusion proof:
 //! the fused mesh-deformer kernel produces GPU output identical to the
 //! unfused atom chain. Renders mesh_input → ripple_mesh → ripple_mesh →
 //! render_mesh → final_output (the mesh-deformer shape that fuses today)

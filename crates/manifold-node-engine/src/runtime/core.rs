@@ -296,8 +296,7 @@ pub(crate) struct EffectSlot {
     /// applying.
     pub(super) user_bindings_version: u32,
     /// Content key of the card's EFFECTIVE def (edited graph or canonical) at
-    /// build time — the state-harvest match key (docs/CHAIN_FUSION_DESIGN.md
-    /// section 5). A rebuild harvests a card's node state from the prior runtime
+    /// build time — the state-harvest match key. A rebuild harvests a card's node state from the prior runtime
     /// only when `(effect_id, def_content_key)` match: same card, same inner
     /// content, so the old impls' baked configuration (ports, WGSL source,
     /// pipelines) is exactly what the new build constructed. Independent of
@@ -336,8 +335,7 @@ manifold_core::testkit_visible! {
 /// registry, not yet reconciled) reaching chain build means a load/ingest
 /// path skipped `reconcile_param_manifests()`. Loud in dev (panics), throttled
 /// once per instance in release. Extracted so the seam behavior is directly
-/// unit-testable without driving a full chain build — see
-/// `docs/PARAM_MANIFEST_GATE_DESIGN.md` D2, INV-1.
+/// unit-testable without driving a full chain build.
 #[doc(hidden)]
 pub(crate) fn assert_manifest_gate(fx: &PresetInstance) {
     debug_assert!(
@@ -468,7 +466,7 @@ impl PresetRuntime {
     /// their node state (impl instances + StateStore buckets) from it, so a
     /// reorder / add / bypass / editor-close / fused-segment swap-in never
     /// resets a sim or a feedback trail — state identity is the card, not the
-    /// chain position (docs/CHAIN_FUSION_DESIGN.md section 5). `None` on first build;
+    /// chain position. `None` on first build;
     /// skipped automatically when dimensions changed.
     pub fn try_build(inputs: ChainBuildInputs<'_>, prior: Option<&mut Self>) -> Option<Self> {
         Self::build(inputs, prior).ok().flatten()
@@ -579,7 +577,7 @@ impl PresetRuntime {
         // first effect (the dry path's fan-out source).
         let mut open_group: Option<OpenGroup> = None;
 
-        // ── Chain fusion (docs/CHAIN_FUSION_DESIGN.md): plan splice units. ──
+        // ── Chain fusion: plan splice units. ──
         // A maximal run of ≥2 adjacent eligible cards becomes a SEGMENT when a
         // compiled + gate-approved fused view exists in the content-keyed
         // cache. A miss enqueues a background compile and the run splices
@@ -1702,7 +1700,7 @@ impl PresetRuntime {
     /// frames must NOT count toward convergence, because a source emitting
     /// stable black during a long decode (a 74 MB 4k EXR takes seconds) is
     /// indistinguishable from a settled frame by readback alone
-    /// (GLB_CONFORMANCE_DESIGN.md G-P6 gate-review fix). Nodes pruned from
+    /// Nodes pruned from
     /// the frame's dispatch (e.g. a mux's unselected branch) never spawn
     /// their decode, so they report `false` and can't wedge the loop.
     pub fn io_pending(&self) -> bool {

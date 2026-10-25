@@ -1,5 +1,5 @@
 //! `node.keep_whitewater` — FLIP's whitewater removal as a keep flag per pool
-//! slot (`docs/GPU_WHITEWATER_DESIGN.md` section 3.9, phase L4). A
+//! slot. A
 //! per-element gather on the codegen path; `node.running_total` over the
 //! flags and the stage's compaction pass finish the removal.
 //!

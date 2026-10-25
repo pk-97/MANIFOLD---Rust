@@ -9,7 +9,7 @@
 //! laid rect by key and builds the slider into it, byte-identical to before. The
 //! host never owns the slider nodes, so the per-frame chrome reconcile and the
 //! slider drag never fight. The public interface is unchanged, so the inspector
-//! composite that drives this card is untouched. See `docs/CHROME_API_DESIGN.md`.
+//! composite that drives this card is untouched.
 
 use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::ParamsAction;

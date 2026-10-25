@@ -95,7 +95,7 @@ impl Primitive for NormalWaveMesh {
             .map(|(_, n)| *n)
     }
 
-    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): a
+    /// Mesh revision declaration: a
     /// pure per-record deformation — output record `idx` derives from
     /// input record `idx` and its own triangle's corners
     /// (`shaders/normal_wave_mesh_body.wgsl`), never re-indexes, and

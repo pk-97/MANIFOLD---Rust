@@ -1,5 +1,4 @@
-// node.matter_move_bodies — fusable BUFFER body, GATHER (GPU_MPM_SOLVER_DESIGN.md
-// section 4.1 step 2). One thread per body: its pose at the end of this
+// node.matter_move_bodies — fusable BUFFER body, GATHER. One thread per body: its pose at the end of this
 // substep s, t = (s + 1)·dt after the tick starts, from the domain's row for
 // this tick. Matches liquid::bodies::body_pose_at for prescribed bodies.
 //

@@ -401,7 +401,7 @@ pub(crate) fn marquee_hits(rect: (f32, f32, f32, f32), nodes: &[NodeView]) -> Ve
         .collect()
 }
 
-// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/section 5) ───────────
+// ── Automation surface ───────────
 
 /// `crate::node::Rect` conversion — [`HitTargetEntry`] carries the crate-wide
 /// UI `Rect` (shared with the clip/automation surfaces), while the canvas'

@@ -1,5 +1,5 @@
 //! GPU value proofs for node.gpu_flip_step's particle, face and solid passes
-//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)), each entry of the
+//! Each entry of the
 //! step's shader run on its own against a CPU f64 reference.
 //!
 //! The CPU references port FLIP Fluids rules (MIT, Copyright (C) 2026 Ryan L.
@@ -2269,7 +2269,7 @@ fn gpu_flip_liquid_fill_places_pool_then_box() {
         assert_eq!((g.velocity, g.id), ([0.0; 3], i as u32 + 1), "particle {i}");
     }
     // The domain run that sites a fill past its 4 m top reports it capped:
-    // the report the cards' setup check reads (SCENE_SETUP_PROGRAMME.md B3).
+    // the report the cards' setup check reads.
     let mut domain = super::gpu_flip_domain::GpuFlipDomain::new();
     let _ = harness.run(
         &mut domain,
@@ -2952,7 +2952,7 @@ fn two_tick_bodies(solids: &Solids) -> (Vec<LiquidBody>, Vec<f32>, Vec<BodySuppo
     (rows, reaction, contacts, step)
 }
 
-/// I18 (LIQUID_SOLVER_SEAM_DESIGN.md D15): pose_bodies poses each body of the
+/// I18: pose_bodies poses each body of the
 /// tick as the CPU law does: the dynamic body by `coupled_state_at` with a
 /// floor and a slanted wall cutting its predicted fall, the prescribed ones
 /// at their own velocity, every other field kept; and each body's mobility

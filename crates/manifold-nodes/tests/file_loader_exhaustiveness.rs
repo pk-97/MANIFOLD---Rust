@@ -1,4 +1,4 @@
-//! P5 exhaustiveness gate (PROJECT_FOLDERS_DESIGN section 5): the single list
+//! Exhaustiveness gate: the single list
 //! of file-loading node types is `manifold_core::file_loader::file_loader_kind`.
 //! These tests keep that list honest from the renderer side — a new
 //! file-loading primitive without a table entry is a red test, not a silent

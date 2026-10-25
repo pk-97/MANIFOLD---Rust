@@ -1,8 +1,7 @@
 //! A scene graph flattened once, with every stable node path mapped to its
 //! flat id. The renderer (forces, pairing, the scene panel model), editing
 //! (roles, Enable Physics) and the app ask scene questions through it, so they
-//! all walk the same graph (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.5
-//! (Scene recognition)).
+//! all walk the same graph.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 

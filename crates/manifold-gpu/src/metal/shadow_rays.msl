@@ -81,7 +81,7 @@ constant uint TRACE_REFLECTION = 2u;
 // discipline as `RT_MASK_VISIBLE` below).
 constant uint MAX_RT_EMISSIVE_TRIANGLES = 4096;
 
-// P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): ONE shared triangle-index
+// ONE shared triangle-index
 // resolution for every kernel in this file — normal/UV/appearance fetch,
 // normal-map frame derivation, and emissive generation. `index_base_addr ==
 // 0` means flat triangles (corner i is vertex i); otherwise the buffer is
@@ -133,7 +133,7 @@ struct EmissiveAliasEntry {
     uint  alias;
 };
 
-// SCENE_MODIFIER_RT_DESIGN.md §5.1 (P4a): the emissive table's count/mean/
+// The emissive table's count/mean/
 // area/local-flag live GPU-side in this 16-byte stats buffer — the trace
 // kernel's RIS sampler and the firefly clamp read it directly (no CPU-
 // authoritative copies on ShadowRayParams). Mirrors the Rust
@@ -227,7 +227,7 @@ struct ShadowRayParams {
     float  refl_rough_band;
     // RS-C: number of valid entries in `emissive_table`/`emissive_aliases`
     // buffers. 0 = no emissive geometry in the scene — the sampler is skipped.
-    // P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): the CPU-authoritative
+    // The CPU-authoritative
     // count/mean/area/local fields are DELETED — the kernels read the
     // GPU-written 16-byte `EmissiveTableStats` buffer ([[buffer(9)]] below).
     // RT-TL-C (RAYTRACING_DESIGN.md section 16 TL5): index of the designated
@@ -392,7 +392,7 @@ struct RtNormalSource {
     // field-for-field).
     uint   object_index;
     ulong  instance_addr;
-    // P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): appearance + indexed hit
+    // Appearance + indexed hit
     // attributes. `appearance_weights_addr` is the bindless address of the
     // per-vertex f32 weight buffer (0 = unwired, weight 1);
     // `appearance_weight_count` its float count (CPU-validated to equal
@@ -1133,7 +1133,7 @@ static float sample_candidate_alpha(
     return alpha * rt_sample_map(material_textures[src.alpha_tex_index],uv,src,0u).a;
 }
 
-// ─── P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): appearance coverage ────────
+// ─── Appearance coverage ────────
 // Appearance weights are a coverage/brightness control. The math is pinned
 // to the raster's `apply_appearance` (render_scene.wgsl:889):
 //   level = gain * weight (unwired weight = 1)
@@ -1996,7 +1996,7 @@ kernel void trace_shadow_rays(
     device const RtAsInstanceDescriptor* emissive_descriptors [[buffer(6)]],
     device RtTraceDiagnostics* diagnostics [[buffer(7)]],
     constant uint4& trace_region [[buffer(8)]],
-    // P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): GPU-written emissive stats —
+    // GPU-written emissive stats —
     // entry_count / entries_are_local / mean_power / total_area, replacing
     // the deleted ShadowRayParams fields. Always bound (the tracer's
     // zero-stats buffer when the scene has no table).
@@ -4118,7 +4118,7 @@ struct DebugFetchNormalParams {
     uint slot_row_base;
 };
 
-// SCENE_MODIFIER_RT_DESIGN.md P0/A0 (BUG-e3p6.4): deterministic ray-query
+// Deterministic ray-query
 // debug surface — traces CALLER-SUPPLIED world-space rays through the SAME
 // acceleration structure, slot-row indexing and candidate-hit walk
 // (`walk_with_alpha_test`, closest-hit mode) the production kernels use,
@@ -4549,7 +4549,7 @@ kernel void build_instance_descriptors(
     out->acceleration_structure_index = tid.y;
 }
 
-// SCENE_MODIFIER_RT_DESIGN.md §4.3 (P5): CPU-authored RT inputs are never
+// CPU-authored RT inputs are never
 // written into mapped tables at encode time — a write can land while an
 // earlier frame's dispatch still reads the same storage (observed on
 // hardware as last-write-wins tearing). The bytes ride the command buffer

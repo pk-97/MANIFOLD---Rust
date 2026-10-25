@@ -13,7 +13,7 @@ import numpy as np
 
 from manifold_audio.external_tools import _resolve_ffmpeg_path
 
-# D14 (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md): per-format decode-stage
+# Per-format decode-stage
 # alignment correction, measured by eval/click_track.py against known-
 # position click fixtures and written to decoder_alignment.json beside this
 # file. Absent file or absent key = zero correction (today's behavior,

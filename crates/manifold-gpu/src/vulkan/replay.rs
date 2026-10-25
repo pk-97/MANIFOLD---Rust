@@ -1,6 +1,5 @@
 //! Encode replay on Vulkan: not built. The twin of the Metal store is a
-//! secondary command buffer per ring entry (`docs/ENCODE_REPLAY_DESIGN.md`
-//! D10). Until the backend records command buffers, a span encodes
+//! secondary command buffer per ring entry. Until the backend records command buffers, a span encodes
 //! everything directly and the cache only carries stats.
 
 use super::device::GpuDevice;

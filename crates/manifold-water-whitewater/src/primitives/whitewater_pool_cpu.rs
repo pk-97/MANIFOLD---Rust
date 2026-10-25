@@ -1,5 +1,5 @@
 //! CPU statements of the GPU whitewater pool atoms, line for line with their
-//! WGSL bodies (`docs/GPU_WHITEWATER_DESIGN.md` section 3.9), and the proof
+//! WGSL bodies, and the proof
 //! that dropping FLIP's near-solid early-out changes no result in a domain
 //! closed by solid. Each decision also reports how close it came to its
 //! threshold, so a GPU proof can allow a hair's-breadth flip.
@@ -801,7 +801,7 @@ mod tests {
     use super::fixture::*;
     use super::*;
 
-    /// GPU_WHITEWATER_DESIGN.md section 3.9: in a domain closed by solid,
+    /// In a domain closed by solid,
     /// with no particle travelling more than 5 cells a tick, the advect with
     /// FLIP's near-solid early-out and without it agree bit for bit. The
     /// early-out skips the march only where no solid lies within reach.

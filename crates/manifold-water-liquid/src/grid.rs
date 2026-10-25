@@ -1,5 +1,4 @@
-//! The face grid a liquid domain publishes (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`
-//! section 3.2 (Grid outputs)): MAC faces in the FLIP engine's layout over
+//! The face grid a liquid domain publishes: MAC faces in the FLIP engine's layout over
 //! the domain's cells, one f32 array per axis in m/s, scene space. Every
 //! solver resamples its own lattice into this layout; no consumer sees a
 //! native one.

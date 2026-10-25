@@ -4,7 +4,7 @@
 // The clip owns its detection settings (`DetectionConfig`) and caches the events
 // from its last analysis (`PercussionAnalysisData`) so that changing sensitivity,
 // quantize, or routing can re-plan instantly without re-running the analysis
-// backend. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
+// backend.
 
 use std::collections::HashMap;
 

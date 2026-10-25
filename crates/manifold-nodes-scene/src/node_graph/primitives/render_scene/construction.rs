@@ -261,7 +261,7 @@ impl RenderScene {
                 required: false,
             });
         }
-        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4/P2: one `object_{i}:
+        // One `object_{i}:
         // Object` port per object, replacing the 21 legacy per-object port
         // families (mesh_i/material_i/17 maps/transform_i/instances_i).
         // `node.scene_object` binds all of that into one `SceneObject`;
@@ -424,8 +424,7 @@ impl RenderScene {
         ];
         // Per-object TRS is no longer a param loop here — `transform_{i}`
         // (added above) carries it as a `Transform` port fed by a
-        // `node.transform_3d` atom (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-        // section 2 D3). Do NOT re-add per-object params as an unwired fallback —
+        // `node.transform_3d` atom. Do NOT re-add per-object params as an unwired fallback —
         // that is the forbidden parallel-old-path shape D3 names explicitly.
 
         self.inputs = inputs;

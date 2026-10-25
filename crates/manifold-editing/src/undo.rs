@@ -161,8 +161,7 @@ impl UndoRedoManager {
     /// Description of the command `undo()` would act on next — the top of
     /// `undo_stack`. Read this BEFORE calling `undo()`: the command moves onto
     /// `redo_stack` once undone, so peeking after the fact would need a second
-    /// accessor. Lets a caller (the D11 undo/redo toast,
-    /// `UI_CRAFT_AND_MOTION_PLAN.md` P2) show the real command name — "Undo:
+    /// accessor. Lets a caller show the real command name — "Undo:
     /// Move Clip" — without exposing command objects themselves.
     pub fn peek_undo_description(&self) -> Option<&str> {
         self.undo_stack.back().map(|c| c.description())

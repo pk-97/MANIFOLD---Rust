@@ -1,5 +1,4 @@
 //! Forces and impulses for every GPU liquid domain
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P8; GPU_MPM_SOLVER_DESIGN.md D13).
 //!
 //! A domain calls the same things whatever its solver:
 //! - [`LiquidImpulses`] keeps scene impulses on the domain's accepted clock.

@@ -1,6 +1,6 @@
 //! Timeline projection: structural layer/track/clip sync into the viewport,
 //! clip-name/colour/waveform helpers, and lightweight per-frame clip position
-//! sync. Moved from state_sync.rs (P-P, UI_FUNNEL_DECOMPOSITION_DESIGN.md).
+//! sync. Moved from state_sync.rs (P-P).
 
 use super::trigger_routing::TriggerRoutingCatalog;
 use crate::app::SelectionState;
@@ -130,7 +130,7 @@ mod automation_order_tests {
 /// the layer headers and viewport both read. `_for_layout` (not the plain
 /// `layers_to_ui`) resolves `automation_lane_count` from
 /// `selection.automation_mode_visible`, the one flag that grows a track when
-/// lanes are visible (`docs/AUTOMATION_LANES_DESIGN.md` section 7).
+/// lanes are visible.
 pub fn sync_track_layout(ui: &mut UIRoot, project: &Project, selection: &SelectionState) {
     let layout_layers = crate::ui_translate::layers_to_ui_for_layout_with_view(
         &project.timeline.layers,
@@ -271,8 +271,8 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, selection: &Selecti
                     trigger_targets_label: ui.trigger_routing.targets_label(&layer.layer_id),
                     // The LED lane treatment: true for a mirror-flagged layer
                     // OR an LED-type layer — `routes_to_led` is the one model
-                    // predicate for "feeds the LED composite" (LED_STRIPS_DESIGN.md
-                    // D11). The mirror toggle renders non-interactive on LED
+                    // predicate for "feeds the LED composite"
+                    // The mirror toggle renders non-interactive on LED
                     // layers; this keeps its style truthfully "on".
                     is_led: layer.routes_to_led(),
                     is_led_layer: layer.is_dmx(),
@@ -588,7 +588,7 @@ pub fn sync_markers(ui: &mut UIRoot, project: &Project) {
 /// Re-projects `viewport`'s automation lane geometry from the live project:
 /// a point preview or restore (`InteractionOverlay` drags and press drafts)
 /// writes the local project, and the lanes must follow without a clip resync
-/// or a tree rebuild (`docs/AUTOMATION_LANES_DESIGN.md` section 7). No-op when
+/// or a tree rebuild. No-op when
 /// automation mode is hidden.
 pub fn sync_automation_lane_geometry(
     ui: &mut UIRoot,

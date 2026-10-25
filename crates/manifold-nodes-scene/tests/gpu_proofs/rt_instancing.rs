@@ -120,7 +120,7 @@ fn mat3_vec(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
 }
 
 /// vs_main's msign decode: marker k>0 = mirrored across the plane
-/// perpendicular to component k-1 (SCENE_MIRROR_DESIGN.md D5).
+/// perpendicular to component k-1.
 fn msign_of(marker: u32) -> [f32; 3] {
     [
         if marker == 1 { -1.0 } else { 1.0 },

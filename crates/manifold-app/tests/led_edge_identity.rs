@@ -1,4 +1,4 @@
-//! MVP-P1 edge-identity pinning (LED_STRIPS_DESIGN.md section 5b, D13
+//! MVP-P1 edge-identity pinning
 //! erratum): the controller already forces edge-extend widths to (0.5, 0.5)
 //! for ALL routes (`artnet.rs`), which makes the shader's horizontal mapping
 //! an identity (source_u == uv.x). This test pins that behavior against

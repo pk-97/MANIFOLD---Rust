@@ -94,7 +94,6 @@ pub struct Project {
     /// Audio input routing + named sends for audio modulation. Parallel to
     /// `midi_config`. Skipped on serialize when empty so projects that never
     /// configured audio round-trip byte-identically. See
-    /// `docs/AUDIO_MODULATION_DESIGN.md`.
     #[serde(
         default,
         skip_serializing_if = "crate::audio_setup::AudioSetup::is_empty"
@@ -129,7 +128,6 @@ pub struct Project {
     /// Session-mode grid: scenes (rows) x layer slots, launched live like
     /// Ableton session clips. Skipped on serialize when empty so projects
     /// that never touch session mode round-trip byte-identically. See
-    /// `docs/SESSION_MODE_DESIGN.md`.
     #[serde(default, skip_serializing_if = "SessionGrid::is_empty")]
     pub session: SessionGrid,
 }

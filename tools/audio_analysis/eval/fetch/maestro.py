@@ -1,5 +1,4 @@
-"""Fetch a ~20-track MAESTRO v3 selection, per
-docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §3/P3 ("~20 individually addressable
+"""Fetch a ~20-track MAESTRO v3 selection ("~20 individually addressable
 performances (real piano + aligned MIDI)").
 
 DEVIATION FROM THE BRIEF'S LITERAL WORDING (flagged per P3's own "if the doc

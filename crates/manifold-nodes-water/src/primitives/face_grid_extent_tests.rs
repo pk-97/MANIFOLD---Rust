@@ -1,5 +1,5 @@
 //! CPU proof that the face grid's arrays hold everything their dispatches
-//! read and write (GPU_WHITEWATER_DESIGN.md I9: an extent proof precedes
+//! read and write (an extent proof precedes
 //! every new GPU size), at 64 and at every Resolution the matter presets
 //! allow. No GPU: every size comes from the functions the atoms size and
 //! dispatch with.
@@ -117,7 +117,7 @@ fn face_grid_extents_at_64() {
 
 /// I2: whitewater reads face velocity at least one layer past the liquid.
 /// GPU FLIP extends two; MPM's faces carry none past the liquid yet, so an MPM
-/// face grid is refused by name (GPU_WHITEWATER_DESIGN.md section 3.6).
+/// face grid is refused by name.
 #[test]
 fn whitewater_refuses_unextended_faces() {
     use manifold_water_liquid::whitewater::require_extended_faces;

@@ -1,5 +1,4 @@
-//! The CPU extent proof (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.7
-//! (Safety rails), rule 1). Before any GPU run, a liquid preset's graph is
+//! The CPU extent proof (safety rails, rule 1). Before any GPU run, a liquid preset's graph is
 //! walked in plan order, and every buffer an atom dispatches over or indexes
 //! into is checked to cover that reach. Nothing here runs on the GPU.
 //!

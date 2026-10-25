@@ -424,8 +424,7 @@ mod tests {
         assert_eq!(labels, vec!["Gaussian Blur", "Blur TOP"]);
     }
 
-    /// Generator items re-tagged `category: "LED"` (LED_STRIPS_DESIGN
-    /// MVP-P3c) filter through `set_category` exactly like effect items —
+    /// Generator items re-tagged `category: "LED"` filter through `set_category` exactly like effect items —
     /// the lane-scoped browser open is a plain category prefilter.
     #[test]
     fn led_category_prefilter_selects_only_led_items() {

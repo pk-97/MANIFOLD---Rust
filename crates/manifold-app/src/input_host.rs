@@ -40,7 +40,7 @@ pub struct AppInputHost<'a> {
     pub has_output_window: bool,
     pub pending_close_output: &'a mut bool,
     pub pending_export: &'a mut bool,
-    /// D5 (docs/TIMELINE_INGEST_DESIGN.md): Finder-pasted files route through
+    /// Finder-pasted files route through
     /// the same ingest path a Finder drag-drop uses.
     pub project_io: &'a mut crate::project_io::ProjectIOService,
     /// Probe failures of a pasted video import, polled with the app's own
@@ -1504,7 +1504,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.selection.clear_automation_selection();
     }
 
-    // ── D4/D5 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2) ──
+    // ── D4/D5 Finder-paste arbitration ──
 
     fn pasteboard_file_urls(&self) -> Vec<std::path::PathBuf> {
         #[cfg(target_os = "macos")]

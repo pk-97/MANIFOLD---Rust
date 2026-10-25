@@ -754,7 +754,7 @@ pub(crate) fn dispatch_scrub(
                         })
                         .flatten();
                     if let Some(val) = val {
-                        // Touch-to-select (`AUTOMATION_LANES_DESIGN.md` section 7): the
+                        // Touch-to-select: the
                         // one funnel every param drag fires through, once per
                         // touch. Layer-scoped only.
                         if effective_tab.is_layer_scope()

@@ -384,7 +384,7 @@ pub(crate) fn unique_clip_chain_topologies(
 }
 }
 
-/// LED routing for a layer this frame (LED_STRIPS_DESIGN.md section 5b D11).
+/// LED routing for a layer this frame.
 /// Derived ONCE at `LayerOutput` construction from the descriptor's
 /// `layer_type` + `blit_to_led`; every downstream site reads this enum —
 /// no site re-derives the route from the raw fields.
@@ -661,7 +661,7 @@ pub struct LayerCompositor {
     )>,
     scene_viewport_error:
         Option<manifold_node_engine::scene::scene_viewport::SceneViewportHostError>,
-    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — per-frame RT quality values from the
+    /// Per-frame RT quality values from the
     /// active column (realtime vs export). Set per frame via [`set_rt_quality`];
     /// forwarded to every chain's executor through dispatch_chain. Default = live
     /// constants so tests and non-RT graphs run unchanged.
@@ -3812,7 +3812,7 @@ impl Compositor for LayerCompositor {
     }
 
     fn set_rt_quality(&mut self, q: manifold_node_engine::exec::effect_node::RtQuality) {
-        // RT_QUALITY_SETTINGS_DESIGN.md D5: forward to all chains, same sweep as set_profiling
+        // Forward to all chains, same sweep as set_profiling
         self.rt_quality = q;
         // Forward to all chains — same sweep as set_profiling
         for (_id, chain) in self.effect_chains.iter_mut() {

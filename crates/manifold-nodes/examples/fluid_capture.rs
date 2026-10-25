@@ -30,7 +30,7 @@
 //! nodes are `ID:<node>`); every Water still draws. Whitewater counts are the
 //! GPU's own words, read from the whitewater step's `counts_out` each offline frame.
 //! A GPU solver has no CPU mesh and reports its time in `gpu_ms`. `--look-metrics` records the particle look
-//! metrics of GPU_MPM_SOLVER_DESIGN.md section 7 (look gates) from each offline
+//! metrics (look gates) from each offline
 //! frame's published particles, through the same `matter::look` code the gate
 //! tests use, into `look_metrics.csv` and `look_summary.txt`.
 
@@ -106,8 +106,8 @@ struct CaptureOptions {
     /// normal, six little-endian f32 each) to `mesh/` for offline roughness
     /// measurement.
     dump_mesh: bool,
-    /// Record the particle look metrics (GPU_MPM_SOLVER_DESIGN.md section 7
-    /// (look gates) A1, A2, A5, A6) from each offline frame's particles.
+    /// Record the particle look metrics
+    /// (look gates A1, A2, A5, A6) from each offline frame's particles.
     look_metrics: bool,
     /// Every offline frame renders at the last frame's time (a stopped transport).
     hold_time: bool,
@@ -132,7 +132,7 @@ enum Solver {
 }
 
 /// The particle-frame contract every liquid publishes
-/// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.1 (Particle frame)). A node
+/// The particle-frame contract. A node
 /// whose outputs carry all of these is a frame publisher, whatever its type.
 const FRAME_PORTS: [&str; 5] = [
     "particles_a",
@@ -427,7 +427,7 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
         )
         .into());
     }
-    // Shared names across domains (GPU_MPM_SOLVER_DESIGN.md D17).
+    // Shared names across domains.
     let resolution = param_or_default(domain, domain_type.as_ref(), "resolution")?;
     let domain_size = param_or_default(domain, domain_type.as_ref(), "domain_size")?;
     if !(resolution.is_finite()

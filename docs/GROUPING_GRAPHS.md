@@ -13,8 +13,6 @@ graph editor's collapse-to-group UX. Names still matter because a human *perform
 result, but the author following this guide is the agent.
 
 Read alongside:
-- [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) — the flattener mechanics + JSON schema (the
-  authoritative spec for *what a group is*; this guide assumes it).
 - [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) section 6.6 (Name nodes for what they do, not how they're built) — naming nodes for what they do.
 
 ---
@@ -55,7 +53,7 @@ addresses inner nodes by `nodeId`, never by handle or position. So:
 > A slider that drove `turbulence_base` before still drives it after, no matter how many boxes
 > you wrap around it.
 
-(The NODE_GROUPS_DESIGN section 6 line about bindings targeting "prefixed handles" predates the
+(An older line about bindings targeting "prefixed handles" predates the
 node-id-targeting work — bindings target `nodeId` now, which is exactly why grouping is free.)
 
 Corollary: never rewrite a `nodeId` while grouping. If you're transforming the JSON
@@ -283,7 +281,7 @@ write it, run it, delete it. Leaving it in `tests/` ships a test that can't run 
 
 **Known limitation — edit the JSON, not a round-tripped copy.** Re-saving a grouped preset back
 through the runtime's serializer currently *re-flattens* it: the `from_graph` reconstruction of
-groups is deferred (NODE_GROUPS_DESIGN section 9), so a mutate-and-save drops the grouping. It's cosmetic,
+groups is deferred, so a mutate-and-save drops the grouping. It's cosmetic,
 not behavioral — but it means the bundled JSON on disk is the source of truth for a preset's group
 structure. Author there; don't expect groups to survive a round trip through a live `Graph`.
 

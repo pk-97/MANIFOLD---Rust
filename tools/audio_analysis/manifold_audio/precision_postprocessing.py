@@ -1,5 +1,4 @@
-"""Shared precision post-processing module (P4 §1,
-docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §4.2/D6/D9/D11) — applied to the
+"""Shared precision post-processing module — applied to the
 ADTOF drum path (kick/snare/hat/perc) and the basic_pitch synth path,
 per-class. This is a PARAMETER LAYER, not a new model: every knob OTHER
 than (a) has a neutral default (refractory=0, cofire weights=1.0,

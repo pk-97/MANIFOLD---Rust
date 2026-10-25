@@ -1,7 +1,7 @@
 //! Rack header controls: the bypass switch and the wet/dry slider.
 //!
 //! The rack is not a manifest card, so its slider is the plain chrome slider
-//! (`View::slider_row`, `docs/WIDGET_TREE_DESIGN.md` section 5b), driven by one
+//! (`View::slider_row`), driven by one
 //! `SliderDragState` and addressed by `ValueRef::RackWetDry`. The switch is the
 //! shared `components::toggle`. Both leave as `PanelAction` values; the app
 //! turns them into `ToggleGroupCommand` and `ChangeGroupWetDryCommand`.

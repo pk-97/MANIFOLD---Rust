@@ -20,7 +20,7 @@
 //! sits in the same region and slot, because the live node carries a different
 //! generation.
 //!
-//! See `docs/NODE_INTENT_DISPATCH.md` for the full design + migration plan.
+// !
 
 #[cfg(test)]
 use crate::TransportAction;

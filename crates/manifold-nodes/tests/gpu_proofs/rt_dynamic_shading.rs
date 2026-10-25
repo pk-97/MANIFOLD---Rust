@@ -1,5 +1,4 @@
-//! SCENE_MODIFIER_RT_DESIGN.md §5.1 / A4 (BUG-e3p6.4) — the
-//! `rt_dynamic_shading` group, P4a half: the emissive light table is
+//! The `rt_dynamic_shading` group, emissive half: the emissive light table is
 //! prepared on the GPU (`encode_emissive_table` — enumerate → radix sort →
 //! gather → alias → stats) and the trace/firefly kernels read the 16-byte
 //! GPU stats buffer. Every assertion compares against a CPU oracle computed

@@ -1,4 +1,4 @@
-//! `--script <file.json>` runner (`UI_AUTOMATION_DESIGN.md` section 6, P2 section 9). A
+//! `--script <file.json>` runner. A
 //! JSON array of `AutomationAction`s (`manifold_ui::automation`) executed in
 //! order against a scene fixture. Artifacts land in
 //! `target/ui-snapshots/<scene>/run-<script-stem>/`: a numbered PNG/dump per
@@ -2863,7 +2863,7 @@ impl Runner {
 
     /// Scroll `target`'s enclosing container until it sits inside the visible
     /// band, so a following `Pointer` step can act on a row that laid out far
-    /// below the fold (`WIDGET_TREE_DESIGN.md` section 5/section 6 converged card rows —
+    /// below the fold (converged card rows —
     /// `Angle` at y≈7789 in the gltfscene fixture). Loops [`Self::scroll_once`]
     /// and re-resolves each step, converging by OBSERVATION (it watches the
     /// target's rect move) rather than a fixture-fragile fixed delta. Direction
@@ -3779,7 +3779,7 @@ impl Runner {
             );
         }
         let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
-        // LED composite preview band (LED_STRIPS_DESIGN MVP-P4): a real
+        // LED composite preview band: a real
         // panel-bitmap instance so the band's quad paints in flow snapshots
         // too — same helper the base render path uses.
         let mut bitmap_gpu = super::render::make_panel_bitmap_gpu(render.device, ui);

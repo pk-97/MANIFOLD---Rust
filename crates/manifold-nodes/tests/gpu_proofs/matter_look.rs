@@ -1,6 +1,5 @@
 //! Look gates A1 and A3, and free-flight momentum
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` section 7 (look gates) and section 12
-//! (invariants)). A2, A4 and A6 were water look targets, withdrawn with the
+//! (look gates and invariants). A2, A4 and A6 were water look targets, withdrawn with the
 //! MPM water look goal; A5 compared splash against the CPU FLIP engine and was
 //! dropped with routine FLIP comparisons. Every metric comes from
 //! `matter::look` over seam particle frames. The Dam Break scene matches

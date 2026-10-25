@@ -310,7 +310,7 @@ impl PresetRuntime {
         self.executor.set_profile_scope(scope);
     }
 
-    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set per-frame RT quality values
+    /// Set per-frame RT quality values
     /// (samples per pixel for each RT term and ray resolution). Call once per
     /// frame before run() with the resolved values from the active project
     /// column (realtime vs export). Forwards to the executor.

@@ -1,4 +1,4 @@
-//! D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` section 4 P2) — a transient
+//! undo/redo toast — a transient
 //! bottom-center message eased in over `MOTION_SLOW`, held ~1.4s (longer for
 //! a long message, so it can be read), faded out over `MOTION_SLOW`. Reduces
 //! to one `Transient` (D3's one-shot-timed-event piece — the anim.rs
@@ -9,7 +9,7 @@
 //! Hosted as a first-class [`Overlay`] (`Modeless`, click-through, so it never
 //! steals input from whatever is under it; `SelfManaged` anchor, computed from
 //! the screen size the driver hands `build_at`) rather than a bespoke node —
-//! see `docs/OVERLAY_SYSTEM_DESIGN.md`. `is_open()` mirrors the `Transient`
+//! `is_open()` mirrors the `Transient`
 //! directly: once it finishes, the open set in the overlays' view key changes
 //! and the frame planner rebuilds the overlay region without the toast's
 //! nodes, exactly like every other overlay's

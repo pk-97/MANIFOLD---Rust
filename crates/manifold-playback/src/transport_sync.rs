@@ -1,7 +1,6 @@
 //! Closed-loop transport sync state machine for AbletonOSC mode.
 //!
-//! Design contract: docs/ABLETON_TRANSPORT_SYNC_DESIGN.md (section 4 signatures,
-//! section 4 transition table T1–T13). The one-sentence spec: a command to Ableton
+//! The one-sentence spec: a command to Ableton
 //! creates a *pending expectation*; inbound observations are matched against
 //! it by value (match = acknowledgment, contradiction while pending = stale
 //! pre-command state, contradiction while settled = genuine external command);

@@ -5,7 +5,7 @@
 crates/manifold-nodes-water/src/primitives/gpu_flip_pressure_tests.rs.
 
 Multigrid-preconditioned conjugate gradient (McAdams, Sifakis & Teran 2010),
-step for step as the graph runs it (docs/GPU_FLIP_PRESSURE_SOLVE.md): the
+step for step as the graph runs it: the
 masked Poisson equation L p = f on water cells, p = 0 on air, box walls
 closed, each face weighted by its open fraction (1 without solids). One
 V-cycle per iteration: red-black Gauss-Seidel, 2 sweeps before and 2 after,
@@ -32,8 +32,8 @@ f32 each, or zeros) and compares against that pressure's residual.
 
 --box cx,cy,cz,hx,hy,hz (fractions of the box side) puts a solid box in the
 water: face weights from its distance on the cell corners by FLIP Fluids'
-fractionInside (the GPU FLIP step's open_fractions pass), then per problem the gate of
-docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water): the
+fractionInside (the GPU FLIP step's open_fractions pass), then per problem the gate for
+solids in the water: the
 reference against a direct sparse solve, and the iterations the box takes to
 reach the empty tank's residual at each --iterations count.
 """
@@ -609,7 +609,7 @@ def body_direct(lv, body, f, h):
 
 
 def body_gate(n, box, fill, ratios, counts, level=0):
-    """docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water), D7's
+    """Solids in the water, the
     body rows: a still pool to `fill` with a box, one step of gravity. Per
     density ratio (0 = prescribed): the divergence after the projection and
     the body's velocity change, the lift against ρ g V, and the impulse
@@ -684,7 +684,7 @@ def touching_solid(water, faces):
 
 
 def separating(water, f, h, faces):
-    """Separating solids (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8): the
+    """Separating solids: the
     complementarity on each water cell touching a solid, solved exactly by
     the primal-dual active set over the direct solve. A cell presses (p ≥ 0)
     or is let go (p = 0 and its leftover divergence f − Σ w·p_j / h² ≥ 0).

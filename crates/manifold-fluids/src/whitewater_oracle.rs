@@ -1,6 +1,6 @@
 //! Checked against FLIP Fluids diffuseparticlesimulation.cpp and particlelevelset.cpp (MIT); see THIRD_PARTY_NOTICES.md.
 //! FLIP's own whitewater fields and emitter as test oracles
-//! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.7, O1 and O2). Built only with
+//!Built only with
 //! the `whitewater-oracle` feature; nothing in the product calls them.
 
 use std::ffi::c_void;

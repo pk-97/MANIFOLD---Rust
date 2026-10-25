@@ -1,4 +1,4 @@
-//! Encode replay in the executor (`docs/ENCODE_REPLAY_DESIGN.md` P1b): an
+//! Encode replay in the executor: an
 //! outermost substep region replays its recorded dispatches, and nothing a
 //! host can read changes. Every proof runs the same graph twice, replay off
 //! and on, and compares bytes.
@@ -242,8 +242,7 @@ fn image_delta(a: &[u8], b: &[u8]) -> f64 {
     sum / (a.len() / 2) as f64
 }
 
-/// Parity where direct runs themselves differ (`docs/ENCODE_REPLAY_DESIGN.md`
-/// P1b, Defaulted). Two direct runs of the Dam Break in one process do not
+/// Parity where direct runs themselves differ. Two direct runs of the Dam Break in one process do not
 /// always agree: some pairs match in every byte, others differ from frame 2
 /// on, in the Matter frame and everything downstream, by the same few
 /// discrete amounts (BUG-4n2g). A byte comparison can't tell replay from that, so the

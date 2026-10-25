@@ -1,23 +1,37 @@
-# MANIFOLD docs index (hand-curated)
+# MANIFOLD docs
 
-## Core architecture maps
-- `MANIFOLD_GPU_ARCHITECTURE.md` — native Metal backend, uniforms, textures
-- `CORE_ENGINE_MAP.md` — playback, control, timeline, MIDI/OSC
-- `FREEZE_COMPILER_MAP.md` — freeze/fusion compiler + graph runtime
-- `CORE_ENGINE_MAP.md` companion; see `DECOMPOSING_GENERATORS.md`
-- `NODE_CATALOG.md` — node inventory (regenerate, don't hand-edit)
-- `DEVELOPMENT_REFERENCE.md` — dev quick reference
-- `DESIGN_DOC_STANDARD.md` — design doc contract
-- `HEADLESS_UI_HARNESS.md` — headless UI harness usage
-- `GLB_IMPORT_OPTIMIZATION_GUIDE.md` — photoscan import optimization
+## Maps of the current code
+- `CORE_ENGINE_MAP.md`: playback, transport, timeline, MIDI and OSC
+- `FREEZE_COMPILER_MAP.md`: freeze and fusion compiler, graph runtime
+- `MANIFOLD_GPU_ARCHITECTURE.md`: native Metal backend, uniforms, textures
+- `MEDIA_EXPORT_MAP.md`: decode, encode and export
+- `PROJECT_IO_MAP.md`: project files, loading and saving
+- `NODE_GRAPH_SYSTEM.md`: how the node graph fits together
+- `NODE_CATALOG.md`: every node, generated (`scripts/dev.py node-catalog`)
+- `AUDIO_INFRASTRUCTURE.md`: audio input, analysis and routing
+- `VSYNC_AND_FRAME_PACING.md`: display links and frame pacing
+- `EFFECT_CHAIN_LIFECYCLE.md`: effect chain state across rebuilds
+- `SCENE_RENDER_MODE_DESIGN.md`: 3D render mode lifecycle
+- `SCENE_PANEL_VS_INSPECTOR_CARDS.md`: what the scene panel and inspector each own
+- `DEVELOPMENT_REFERENCE.md`: crates and common traps
 
-## Active design specs
-- Water: `GPU_FLIP_END_GAME_DESIGN.md`, `GPU_FLIP_PRESSURE_SOLVE.md`, `WATER_CRATES_DESIGN.md`
-- Rendering: `RENDERER_CRATE_SPLIT_DESIGN.md`, `RT_STAGE4_MOTION_DENOISE_DESIGN.md`
-- Audio: `AUDIO_ENGINE_DIRECTION.md`, `AUDIO_INFRASTRUCTURE.md`
-- UI: `SCENE_SURFACES_DESIGN.md`, `UI_RESPONSIVENESS_UNDER_LOAD_DESIGN.md`
-- Cross-cutting: `ADDING_PRIMITIVES.md`, `ADDING_EFFECTS_AND_GENERATORS.md`
+## Guides
+- `ADDING_PRIMITIVES.md`, `ADDING_EFFECTS_AND_GENERATORS.md`, `DECOMPOSING_GENERATORS.md`
+- `AUTHORING_GRAPHS.md`, `GROUPING_GRAPHS.md`, `CARD_AUTHORING.md`
+- `HEADLESS_UI_HARNESS.md`: headless UI snapshots and flows
+- `GLB_IMPORT_OPTIMIZATION_GUIDE.md`, `GLB_CONFORMANCE_STATUS.md`
+- `AUDIO_EVAL_HARNESS_GUIDE.md`
 
-## Notes
-- Shipped one-off wave/audit docs are deleted; git history is the archive.
-- Add new entries here when a living reference doc lands.
+## Work in progress
+- Water: `WATER_FIELD_WAVE_PLAN.md`, `GPU_FLIP_END_GAME_DESIGN.md`, `GPU_FLIP_NARROW_BAND_DESIGN.md`, `GPU_FLIP_SPARSE_BLOCKS_DESIGN.md`, `GPU_FLUID_SURFACE_DESIGN.md`, `LIVE_SIM_CLOCK_DESIGN.md`
+- 3D scene: `SCENE_DOCUMENT_DESIGN.md`, `REALTIME_3D_DESIGN.md`, `RAYTRACING_DESIGN.md`
+- Audio detectors: `AUDIO_EVENT_CLASSIFIER_DESIGN.md`, `DETECTOR_LABEL_REVIEW_DESIGN.md`, `ROLL_DETECTOR_DESIGN.md`
+- Transport: `FRAME_EXACT_TRANSPORT_DESIGN.md`
+- Project state: `SINGLE_TRUTH_PROJECT_STATE_DESIGN.md`
+- GPU backend: `VULKAN_BACKEND_DESIGN.md`
+
+## Ideas and business
+- `IDEAS.md`: features worth building that nobody is working on
+- `BUSINESS_PLAN.md`, `CAPABILITY_ROADMAP.md`, `COMPETITIVE_STEAL_PASS.md`, `AUDIO_ENGINE_DIRECTION.md`
+
+Delete a design doc when its work ships. Add a map or guide here when one lands.

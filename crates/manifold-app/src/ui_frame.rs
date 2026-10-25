@@ -1102,7 +1102,7 @@ pub(crate) fn render_main_ui_passes(
         rects.extend(ui_root.viewport.collapsed_group_rects());
 
         // LED composite preview band on the DMX lane's generator card
-        // (LED_STRIPS_DESIGN MVP-P4) — index 1003, uploaded when the card's
+        // Index 1003, uploaded when the card's
         // dirty flag fires. Absent/hidden → no quad.
         if let Some(rect) = ui_root.inspector.led_preview_rect(&ui_root.tree) {
             rects.push((manifold_ui::panels::param_card::LED_BAND_BITMAP_INDEX, rect));
@@ -1161,7 +1161,7 @@ pub(crate) fn render_main_ui_passes(
     // clip list resolved for the Pass 4b body emission this frame.
     manifold_ui_paint::clip_draw::emit_clip_names(ui_renderer, clip_rects, tracks);
 
-    // Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) —
+    // Automation lane strips —
     // on top of the clip names, same overlay pass. Empty whenever
     // automation mode is off (the caller never populated any lanes this
     // frame), so this is a no-op cost in the common case.

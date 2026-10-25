@@ -1,8 +1,7 @@
 //! Ported from FLIP Fluids pressuresolver.cpp and pcgsolver.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 //! Multigrid preconditioner after McAdams, Sifakis & Teran 2010.
 //! GPU FLIP's pressure solver: the multigrid-preconditioned conjugate
-//! gradient for L p = f on the water (docs/GPU_FLIP_PRESSURE_SOLVE.md section
-//! 3 (the solve)), as a module the step node encodes directly. One solver
+//! gradient for L p = f on the water, as a module the step node encodes directly. One solver
 //! serves every solve on one water lattice: [`PressureSolver::prepare`] builds
 //! the coarse levels and assembles every level's operator rows once (the
 //! reference `Level`'s assembly: six face weights and the ghost and plain
@@ -222,8 +221,7 @@ manifold_core::testkit_visible! {
 /// The water a solve runs on: the cell lattice, water per cell (> 0.5), the
 /// padded face grid of open fractions (the step's open_fractions pass, box
 /// walls 0), the cell size in metres, and the particles' signed distance per cell
-/// for the free surface's ghost rows (docs/GPU_FLIP_PRESSURE_SOLVE.md
-/// section 2 (the equation)). With no φ the rows are the plain ones, as the
+/// for the free surface's ghost rows. With no φ the rows are the plain ones, as the
 /// density solve runs; the coarse levels always are.
 pub(crate) struct Water<'a> {
     pub lattice: [u32; 3],

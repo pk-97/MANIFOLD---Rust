@@ -3,7 +3,7 @@
 **Status: agreed direction · 2026-07-03**
 **Audience: Peter. This doc is the playbook you execute in the real world — plain
 language on purpose. The one piece agents build (licensing, trial watermark,
-updater, crash telemetry) lives in `COMMERCIALIZATION_DESIGN.md`; release
+updater, crash telemetry); release
 sequencing lives in `DESIGN_BUILD_ORDER.md`.**
 
 ---

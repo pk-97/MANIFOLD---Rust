@@ -1,5 +1,4 @@
-// node.matter_grid_update — fusable BUFFER body (GPU_MPM_SOLVER_DESIGN.md
-// section 4.1 step 4). One thread per lattice node, x fastest:
+// node.matter_grid_update — fusable BUFFER body. One thread per lattice node, x fastest:
 //   v_before = momentum / mass                       (Liveliness reads it)
 //   v = v_before + dt · (g + forces(x))              (forces from tick_index's lattice)
 //   v += impulses(x)                                 (substep 0 of impulse_tick)

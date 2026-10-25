@@ -12,8 +12,7 @@
 //! Every struct here implements
 //! [`KnownItem`](crate::node_graph::ports::KnownItem) so the
 //! `primitive!` macro's `Array(T)` declaration carries the named
-//! Channels signature on the wire — see
-//! `docs/CHANNEL_TYPE_SYSTEM.md` section 6 for the per-family layouts.
+//! Channels signature on the wire. Each family has its own layout below.
 
 use crate::channel_names::well_known;
 use crate::ports::{ChannelElementType, ChannelSpec, KnownItem};
@@ -54,7 +53,7 @@ const _: () = {
     assert!(std::mem::offset_of!(MeshVertex, color) == 64);
 };
 
-/// Channels signature for [`MeshVertex`] per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.2.
+/// Channels signature for [`MeshVertex`].
 /// Std430 stride 80 matches the existing `#[repr(C)]` struct
 /// (vec3+vec3+vec2+vec2+vec4+vec4 with std430 alignment producing 80 bytes).
 pub const MESH_VERTEX_SPECS: &[ChannelSpec] = &[
@@ -99,7 +98,7 @@ pub struct Vec4Vertex {
 
 const _: () = assert!(std::mem::size_of::<Vec4Vertex>() == 16);
 
-/// Channels signature for [`Vec4Vertex`] per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.4.
+/// Channels signature for [`Vec4Vertex`].
 /// Paired scalars (x, y, z, w) at 4-byte alignment — preserves byte parity
 /// with `[f32; 4]` consumers. A single `position: Vec4F` would force 16-byte
 /// alignment and break those.
@@ -142,7 +141,7 @@ pub struct InstanceTransform {
 
 const _: () = assert!(std::mem::size_of::<InstanceTransform>() == 32);
 
-/// Channels signature for [`InstanceTransform`] per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.6.
+/// Channels signature for [`InstanceTransform`].
 /// Two Vec4F slots — std430 stride 32, align 16. The struct's Rust-side
 /// `align_of` is 4 (from `[f32; 4]`); the std430 alignment of 16 takes
 /// over at GPU bind time, which is what the existing shaders already
@@ -233,7 +232,7 @@ pub struct CurvePoint {
 
 const _: () = assert!(std::mem::size_of::<CurvePoint>() == 8);
 
-/// Channels signature for [`CurvePoint`] per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.3.
+/// Channels signature for [`CurvePoint`].
 /// Paired scalars (x, y) at 4-byte alignment, not a single Vec2F —
 /// the section 13(3) resolution: a Vec2F here would force 8-byte alignment
 /// and break consumers expecting the existing `[f32; 2]` layout.
@@ -281,7 +280,7 @@ impl EdgePair {
 
 const _: () = assert!(std::mem::size_of::<EdgePair>() == 8);
 
-/// Channels signature for [`EdgePair`] per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.5.
+/// Channels signature for [`EdgePair`].
 /// Two `u32` index channels at 4-byte alignment. Matches the struct's
 /// 8-byte size; the `SENTINEL` (a == u32::MAX) for unused slots survives
 /// as an associated constant on the Rust struct.
@@ -453,8 +452,7 @@ pub fn platonic_edges(shape: u32) -> &'static [EdgePair] {
 //   `Channels[x: F32, y: F32, width: F32, height: F32]`
 // (4×f32, 16 bytes, 4-byte aligned). The FFI producer + overlay
 // consumer each carry their own module-private `BlobRect` Pod struct
-// for the in-memory representation. See
-// `docs/CHANNEL_TYPE_SYSTEM.md` section 6.7.
+// for the in-memory representation.
 
 #[cfg(test)]
 mod mesh_common_specs_drift {

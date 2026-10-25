@@ -1,6 +1,5 @@
-//! Regenerate `docs/fusion_census.md`, the fusion refusal census
-//! (FUSION_SOTA P3 / D4), over every bundled preset plus the Liveschool
-//! fixture's embedded presets.
+//! Print the fusion refusal census over every bundled preset plus the
+//! Liveschool fixture's embedded presets, or write it to `--out <path>`.
 //!
 //! ```text
 //! cargo run -p manifold-app --example fusion_census [-- --out <path>]
@@ -42,10 +41,10 @@ fn fixture_path() -> Option<PathBuf> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let out = match args.iter().position(|a| a == "--out") {
-        Some(i) => PathBuf::from(args.get(i + 1).expect("--out needs a path")),
-        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/fusion_census.md"),
-    };
+    let out = args
+        .iter()
+        .position(|a| a == "--out")
+        .map(|i| PathBuf::from(args.get(i + 1).expect("--out needs a path")));
 
     let fixture = match fixture_path() {
         None => FixtureCorpus::NotFound,
@@ -62,6 +61,12 @@ fn main() {
     };
 
     let report = build_census_report(fixture);
-    std::fs::write(&out, &report).unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
-    eprintln!("[census] wrote {}", out.display());
+    match out {
+        Some(out) => {
+            std::fs::write(&out, &report)
+                .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
+            eprintln!("[census] wrote {}", out.display());
+        }
+        None => print!("{report}"),
+    }
 }

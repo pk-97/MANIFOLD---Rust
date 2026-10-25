@@ -100,7 +100,7 @@ pub(crate) fn render_tree_overlay_passes(
         ui_renderer.push_depth(Depth::OVERLAY.above(i as i32));
         // `render_sub_region`, not `render_tree_range`: each overlay's
         // `(start, end)` deliberately excludes its own
-        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` region root (see
+        // region root (see
         // `UIRoot::build_overlays`'s doc comment), so a
         // root-scan would never find that region and would render nothing.
         // `render_sub_region`'s ancestor-aware flat scan picks up the

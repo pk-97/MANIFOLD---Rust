@@ -1,5 +1,5 @@
 //! Substep repeat regions — the plan compiler's side of a bounded simulation
-//! loop inside one frame. Contract: `docs/GPU_MPM_SOLVER_DESIGN.md` D7.
+//! loop inside one frame.
 //!
 //! A *substep boundary* node declares its port names through
 //! [`SubstepBoundaryPorts`]. At compile time the nodes that are both
@@ -1168,7 +1168,7 @@ mod tests {
     }
 
     /// Two simulation steps per frame, each with its own solve region
-    /// (`docs/GPU_FLIP_PRESSURE_SOLVE.md` section 1 (the step)): the second region is seeded
+    /// The second region is seeded
     /// through a node outside both regions, which is not chaining.
     #[test]
     fn substeps_region_two_regions_in_sequence_through_an_outside_node() {

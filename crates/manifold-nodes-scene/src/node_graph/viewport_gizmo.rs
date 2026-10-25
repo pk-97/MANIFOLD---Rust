@@ -6,8 +6,7 @@
 //! the main output preview) calls this one core.
 //!
 //! **Every target comes from a shape declaration**
-//! (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model)):
-//! a target is one declared shape on one owner, read from
+//! A target is one declared shape on one owner, read from
 //! `SceneVm::shapes`. Its handles, the modes it supports and the limits on
 //! its values follow the shape kind alone; no target kind has handle code
 //! of its own.

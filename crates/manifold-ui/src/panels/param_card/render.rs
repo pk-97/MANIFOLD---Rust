@@ -157,7 +157,7 @@ impl ParamCardPanel {
         // `&self` while the loop needs `&mut self.drawer_height_anim`.
         //
         // Both contexts ease identically since
-        // `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4 (D4): the editor's
+        // The editor's
         // `UIRoot` now ticks its inspector every frame it presents
         // (`UIRoot::tick_inspector`), so an Author card's tween advances the
         // same as a Perform card's — the old never-ticked-Author snap
@@ -964,7 +964,7 @@ impl ParamCardPanel {
     }
 
     /// Contiguous runs of `rows[..].section` — the D5 display-grouping
-    /// unit (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2): a run is a maximal
+    /// unit: a run is a maximal
     /// span of consecutive rows sharing the same section value (`None`
     /// included — an unsectioned run renders with no header at all). A
     /// repeated section name after a gap is intentionally a SECOND run/header
@@ -1334,7 +1334,7 @@ impl ParamCardPanel {
                         "\u{203A}", // ›
                         param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
                     ));
-                    // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): one static name for
+                    // Naming pass: one static name for
                     // every row's chevron — which row comes from the selector's
                     // `under_text` query, not a per-row name string.
                     if let Some(id) = self.row_host.mapping_chevron_ids[i] {
@@ -1375,7 +1375,7 @@ impl ParamCardPanel {
         }
     }
 
-    // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D24) ──
+    // ── LED composite preview band ──
 
     /// Copy the 8×120 readback into the native-orientation band bitmap
     /// (8 wide × 120 tall — one column per strip, no transpose).
@@ -1507,7 +1507,7 @@ impl ParamCardPanel {
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
 
-        // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D24): the
+        // ── LED composite preview band: the
         // framed native-orientation readback (8 vertical strips, LED 0 at the
         // bottom) centred at the top of the card body. Absent on non-DMX cards
         // (the app never pushes a payload for them) and on collapsed cards —
@@ -2239,7 +2239,7 @@ impl ParamCardPanel {
 
 #[cfg(test)]
 mod led_band_tests {
-    //! LED_STRIPS_DESIGN MVP-P4 (D24): orientation proof for the
+    //! Orientation proof for the
     //! native-orientation band. The renderer's `led_composite_pixel_tests` +
     //! `led_preset_value_tests` pin the readback's ground truth — texture x =
     //! strip index, y = LED position (blit.rs), and `dmx.rs::

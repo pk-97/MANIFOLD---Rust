@@ -271,7 +271,7 @@ impl Application {
             &mut self.active_layer_id,
         );
 
-        // 1a. Debounced background autosave (GIG_RESILIENCE_DESIGN section 6). Runs
+        // 1a. Debounced background autosave. Runs
         // after the drain so it sees the latest data_version + dirty flag;
         // never reached in perform mode (early return above) — that IS the
         // D5 "autosave timer parks" behavior.
@@ -285,7 +285,7 @@ impl Application {
         self.drain_import_progress();
         self.sweep_model_facts();
 
-        // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1). Unlike
+        // 1a1. Breadcrumb sidecar. Unlike
         // autosave this is NOT parked in perform mode — see the matching
         // call in `tick_perform_mode` (perform_mode/render.rs) for that path.
         self.tick_breadcrumb();
@@ -500,7 +500,7 @@ impl Application {
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::undo(tx);
                     }
-                    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2):
+                    // Undo/redo toast:
                     // the real "Undo: <command name>" label now fires from
                     // `ui_bridge/state_sync.rs`'s `push_state`, once the
                     // content thread's `ContentState.undo_redo_event` round-
@@ -1129,7 +1129,7 @@ impl Application {
         // the main window's selection and active layer; its actions dispatch
         // against the editor's tree (`editor_input::dispatch_card_lane`). Card
         // clicks also retarget the canvas to that card's graph, once the
-        // editor borrow drops. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
+        // editor borrow drops.
         if !self.ws.ui_root.export_progress.is_open() && actions.len() > editor_card_seg_start {
             let (screen_w, screen_h) = self
                 .graph_editor_window_id
@@ -1789,8 +1789,7 @@ impl Application {
                     outer_param_id,
                     new_value,
                 } => {
-                    // D6 parity invariant (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md`
-                    // section 2): a group-face row mirrors an already-exposed card
+                    // Parity invariant: a group-face row mirrors an already-exposed card
                     // param, so it re-dispatches through the IDENTICAL
                     // `PanelAction::ParamChanged` handler the card's own
                     // slider uses (`ui_bridge/inspector.rs`) — never a
@@ -2276,8 +2275,7 @@ impl Application {
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ws.ui_root.update();
 
-        // 6·drag-motion. P2 drag-visual tweens (`UI_CRAFT_AND_MOTION_PLAN.md`
-        // D15/D17: grab lift, duplicate ghost, grid settle, landing-line
+        // 6·drag-motion. Drag-visual tweens: grab lift, duplicate ghost, grid settle, landing-line
         // flash, error shake). The clip-body pass draws them at paint time, so
         // a live tween only asks for a repaint (D8). The drawer and object-card
         // tweens need nothing here: they move their nodes in place in the
@@ -2416,7 +2414,7 @@ impl Application {
                 );
             }
 
-            // 6h. LED composite preview band (LED_STRIPS_DESIGN MVP-P4): the
+            // 6h. LED composite preview band: the
             // DMX lane's gen card holds the send path's latest readback as a
             // dirty-flagged CPU bitmap — upload on version change only; the
             // quad rides pass 4c (index 1003).

@@ -1,6 +1,6 @@
 """Stage 1 -- DSP-only drum object detector, no training, no ADTOF anywhere
-in the path. Per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §7.1's approach text
-(Deferred #1, activated by the 2026-07-18 ADTOF bake-off addendum, phase B1):
+in the path. Per the approach text
+(activated by the 2026-07-18 ADTOF bake-off addendum, phase B1):
 
     "DSP object detectors on the demucs drum stem (no training): the live
     kick detector's logic offline with non-causal luxuries -- larger/
@@ -77,7 +77,7 @@ FEATURE_WINDOW_SEC = 0.08
 DECAY_WINDOW_SEC = 0.15
 
 # Onset-detection bands + frame sizing, deliberately mirroring "the live kick
-# detector's logic offline" (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §7.1) --
+# detector's logic offline" --
 # manifold_audio.spectral.compute_band_onsets IS that logic (per-band
 # spectral flux + local-loudness normalization), the same mechanism
 # manifold_audio.analyzer.analyze_percussion already runs for the live kick
@@ -128,7 +128,7 @@ CLASS_NAMES = ("kick", "snare", "clap", "hat", "tom", "perc")
 # matters: eval/fit_stage1_profiles.py writes centroids in this exact order.
 FEATURE_NAMES = ("centroid_hz", "flatness", "low_ratio", "mid_ratio", "high_ratio", "decay_rate_db_per_sec")
 
-# B2 lever 2 (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md 2026-07-18 addendum):
+# B2 lever 2:
 # dev-fitted class-signature profiles replace the hand-tuned threshold
 # cascade (see _label_clusters_heuristic below, kept as the fallback when
 # this file doesn't exist). Fit by eval/fit_stage1_profiles.py from DEV
@@ -373,7 +373,7 @@ def _label_clusters_heuristic(raw_features: np.ndarray, labels: np.ndarray, k: i
     flatness, low_ratio, mid_ratio, high_ratio, decay_rate_db_per_sec].
 
     SUPERSEDED as the primary path by _label_clusters_nearest_profile (B2
-    lever 2, docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md 2026-07-18 addendum) --
+    lever 2) --
     kept as the fallback _label_clusters uses when the fitted profile file
     (eval/calibration/stage1_class_profiles.json) doesn't exist, so the
     module still functions (degraded) in an environment that hasn't run

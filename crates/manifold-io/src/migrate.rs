@@ -27,7 +27,7 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         .unwrap_or("1.0.0")
         .to_string();
 
-    // v1.11.0 -> v1.12.0: SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3/D4.
+    // v1.11.0 -> v1.12.0
     // `node.render_scene` sheds its nine-per-object TRS params for a
     // `transform_n: Transform` port; this rung synthesizes one
     // `node.transform_3d` node per legacy object (inside the object's own

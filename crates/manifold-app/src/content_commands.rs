@@ -1022,7 +1022,7 @@ impl ContentThread {
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 self.engine.seek_to(t);
                 // Seeks to Ableton are commanded explicitly, never inferred
-                // from beat divergence (ABLETON_TRANSPORT_SYNC_DESIGN D6).
+                // from beat divergence.
                 let beat = self.engine.time_to_timeline_beat(t).as_f32();
                 self.ableton_bridge.notify_local_seek(
                     beat,

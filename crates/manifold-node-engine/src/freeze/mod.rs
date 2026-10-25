@@ -1,6 +1,5 @@
 //! Freeze / fusion compiler — the production compiler on the live render
-//! path (design: `docs/GRAPH_FREEZE_COMPILER_DESIGN.md`; current-state map:
-//! `docs/FREEZE_COMPILER_MAP.md`, the authoritative reference for this
+//! path (current-state map: `docs/FREEZE_COMPILER_MAP.md`, the authoritative reference for this
 //! module).
 //!
 //! Collapses maximal runs of pure per-element GPU atoms into one generated

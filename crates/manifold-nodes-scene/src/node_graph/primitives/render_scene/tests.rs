@@ -371,10 +371,10 @@ fn render_scene_wgsl_parses_and_carries_tangent() {
     );
 }
 
-/// IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate: `texture_flags2`
+/// Negative gate: `texture_flags2`
 /// bits must be read ONLY inside their dedicated resolve functions
 /// (`resolve_mr`/`resolve_occlusion`/`resolve_emissive`, plus
-/// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4's `resolve_iridescence` —
+/// `resolve_iridescence` —
 /// `texture_flags2.w` is iridescence_map's presence flag, same reuse
 /// doctrine as the render_scene.rs E3/E4/E5 comment), never ad-hoc
 /// from a fragment entry point directly — the shape D3 explicitly
@@ -428,7 +428,7 @@ fn texture_flags2_is_read_only_inside_its_dedicated_resolve_functions() {
     assert_eq!(
         total, inside,
         "u.texture_flags2 must be read ONLY inside resolve_mr/resolve_occlusion/resolve_emissive/resolve_iridescence \
-             (IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate) — found a read elsewhere"
+             (negative gate) — found a read elsewhere"
     );
 }
 

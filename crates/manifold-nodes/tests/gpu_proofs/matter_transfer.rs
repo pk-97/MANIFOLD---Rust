@@ -1,5 +1,5 @@
 //! MLS-MPM transfer atoms on the GPU against the f64 CPU oracle
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` section 12 (Invariants and enforcement)).
+//! (invariants and enforcement).
 //! The chain runs without a substep region: each frame is one substep
 //! (clear → particle-to-grid → grid update → grid-to-particle), the point
 //! buffer updated in place across frames.

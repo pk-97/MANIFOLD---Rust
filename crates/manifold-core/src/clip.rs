@@ -22,7 +22,7 @@ pub struct TimelineClip {
     /// Relative form of `audio_file_path`, filled on save by
     /// `PathResolver::store_relative_paths` and preferred on load by
     /// `resolve_all` — the same store-relative / re-link chain video clips
-    /// get. Additive-optional (PROJECT_FOLDERS_DESIGN D4): old builds ignore
+    /// get. Additive-optional: old builds ignore
     /// it, new builds fill it on save, so no migration step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_audio_file_path: Option<String>,
@@ -41,14 +41,13 @@ pub struct TimelineClip {
     /// Relative form of `image_path`, filled on save by
     /// `PathResolver::store_relative_paths` and preferred on load by
     /// `resolve_all` — the same store-relative / re-link chain video clips
-    /// and audio clips get (PROJECT_FOLDERS_DESIGN P5, BUG-2jbn).
+    /// and audio clips get.
     /// Additive-optional: old builds ignore it, new builds fill it on save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_image_path: Option<String>,
 
     /// Per-clip percussion detection state (settings + cached analysis), present
     /// only on audio clips that have a detection config. See
-    /// `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_detection: Option<crate::audio_clip_detection::AudioClipDetection>,
 
@@ -639,7 +638,7 @@ mod tests {
 
     #[test]
     fn relative_audio_file_path_roundtrips_and_omits_when_unset() {
-        // PROJECT_FOLDERS_DESIGN D4 consequence: the additive-optional relative
+        // The additive-optional relative
         // sibling must serialize camelCase when set, round-trip, and vanish (not
         // `null`) when unset — pre-P2 projects stay byte-identical.
         let clip = TimelineClip::default();

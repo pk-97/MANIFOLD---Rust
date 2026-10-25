@@ -12,7 +12,7 @@
 
 #[cfg(test)]
 mod scene_card_convergence_tests {
-    //! SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a gates: a fog-density
+    //! Gates: a fog-density
     //! drag session dispatched through the REAL `dispatch_inspector` entry
     //! point (the same one `ui_bridge::dispatch` routes `PanelAction::
     //! ParamSnapshot`/`ParamChanged`/`ParamCommit` to) yields exactly ONE
@@ -2981,8 +2981,7 @@ mod scene_card_convergence_tests {
             );
         }
 
-        /// WIDGET_TREE_DESIGN.md section 7 P4, gaps #2/#3 carried from
-        /// `docs/landings/2026-07-21-widget-tree-p2.md`: bridge-level
+        /// Gaps #2/#3, carried into bridge-level
         /// dispatch tests for the modulation-family action kinds — every
         /// test above this point dispatches against a GENERATOR target
         /// only. Each kind here dispatches the SAME `PanelAction` against

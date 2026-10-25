@@ -1,5 +1,5 @@
 //! Physical stage layout — the data model behind the multi-display / totem
-//! canvas. See `docs/MULTI_DISPLAY_DESIGN.md`.
+//! canvas.
 //!
 //! `StageLayout` is **authored** data: a list of [`DisplayPlacement`]s the
 //! performer arranges on a stage plan. Everything else — island clustering,

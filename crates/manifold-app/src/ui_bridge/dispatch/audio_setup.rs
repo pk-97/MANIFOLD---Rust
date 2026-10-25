@@ -216,8 +216,7 @@ pub(crate) fn dispatch_audio_setup(
         // by `AudioSendId`, the raw dB rides `ScrubValue::Scalar` (Move clamps +
         // pushes a live edit), Commit emits `SetAudioSendGainCommand`. The
         // stepper / type-in / floor actions below stay one-shot commands.
-        // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8, audio-dock sibling):
-        // the type-in commit — ONE undo step, no clamp. Unlike
+        // The type-in commit — ONE undo step, no clamp. Unlike
         // `AudioSendGainDragChanged`'s live-drag path, a typed value is free
         // to exceed `AUDIO_SEND_GAIN_MIN_DB`/`MAX_DB` (PARAM_RANGE_CONTRACT
         // P1: those are the stepper's display travel, not a hard limit).

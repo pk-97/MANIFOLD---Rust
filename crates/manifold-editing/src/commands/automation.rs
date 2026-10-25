@@ -5,7 +5,7 @@
 //! instance through [`Project::with_preset_graph_mut`] (which auto-inits a
 //! generator's `gen_params` if it doesn't exist yet) and edits that
 //! instance's `automation_lanes`, keyed by `param_id` — there is no
-//! layer-scoped lane pool. See `docs/AUTOMATION_LANES_DESIGN.md` section 6.
+//! layer-scoped lane pool.
 //!
 //! Lanes are created implicitly: [`AddAutomationPointCommand`] creates the
 //! lane if none exists for the param yet (the design's section 6 command set has no

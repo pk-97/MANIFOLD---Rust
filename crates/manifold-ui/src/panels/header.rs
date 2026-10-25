@@ -4,7 +4,7 @@
 //! time display, and a right-to-left button group — expressed as a `Stack` of
 //! three `Fill` rows (left/center/right aligned) inset by a symmetric padding,
 //! so the centered group lands at true screen-centre. See the footer for the
-//! integration pattern and `docs/CHROME_API_DESIGN.md`.
+//! integration pattern.
 
 use super::{Panel, PanelAction};
 use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, components};

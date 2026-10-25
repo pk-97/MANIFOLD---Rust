@@ -6,8 +6,7 @@
 //! both kinds (discriminated by `kind`); effect ids and generator ids are
 //! globally disjoint (verified, and the definition store asserts it), so a
 //! single flat registry is unambiguous. JSON-loaded presets of both kinds
-//! carry their `category` (generator presets re-tagged `LED` included —
-//! LED_STRIPS_DESIGN MVP-P3c); inventory submissions carry only what their
+//! carry their `category`; inventory submissions carry only what their
 //! metadata struct has (effects: a category; generators: none).
 //! [`ALL_CATEGORIES`] is the effect picker's fixed bucket list — generator
 //! mode derives its chip names from the items instead.
@@ -268,7 +267,7 @@ mod tests {
         );
     }
 
-    /// LED_STRIPS_DESIGN MVP-P3c step 1: the registry stops discarding
+    /// The registry stops discarding
     /// generator JSON categories — `Some(category)` for every JSON-loaded
     /// generator, LED and non-LED alike (not a special case for one name).
     /// Inventory submissions keep `None` (`GeneratorMetadata` has no

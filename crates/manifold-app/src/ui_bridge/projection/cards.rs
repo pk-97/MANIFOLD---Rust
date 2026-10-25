@@ -1,7 +1,7 @@
 //! Card-surface projection: THE `param_surface` manifest walk that builds
 //! effect/generator `ParamSurface`s, its thin adapters and helpers, the
 //! per-frame card VALUE sync, and the macro-mapping label. Moved from
-//! state_sync.rs (P-P, UI_FUNNEL_DECOMPOSITION_DESIGN.md).
+//! state_sync.rs (P-P).
 
 use crate::ui_root::UIRoot;
 use manifold_core::effects::PresetInstance;
@@ -308,7 +308,7 @@ fn warn_provisional_manifest_once(id: &manifold_core::EffectId) {
     }
 }
 
-/// THE projection (D1, `docs/WIDGET_TREE_DESIGN.md` — replaces the former
+/// THE projection (replaces the former
 /// two-pass builder and its per-call id-to-index map). ONE manifest walk
 /// builds [`ParamRow`]s directly — descriptor
 /// (`spec`) verbatim from the manifest's `ParamSpecDef` fields, state
@@ -353,7 +353,7 @@ fn param_surface(
     // BUG-080 seam: a provisional manifest (built against an incomplete
     // registry, not yet reconciled) reaching UI row translation means a
     // load/ingest path skipped `reconcile_param_manifests()`. Loud in dev,
-    // throttled-once in release. See docs/PARAM_MANIFEST_GATE_DESIGN.md D2.
+    // throttled-once in release.
     debug_assert!(
         !inst.manifest_provisional(),
         "BUG-080: provisional manifest reached param_surface — a load/ingest path \

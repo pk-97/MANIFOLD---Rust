@@ -1,5 +1,5 @@
 //! Body-local signed-distance lattices for liquid colliders, sources and
-//! coupled hulls (`docs/GPU_MPM_SOLVER_DESIGN.md` D11). Built on the CPU where
+//! coupled hulls. Built on the CPU where
 //! role geometry is prepared, never on the content thread: a lattice costs
 //! nodes × triangles.
 
@@ -52,7 +52,7 @@ pub fn signed_distance_lattice(
 
 /// The solid of several meshes on one lattice, nodes `spacing` apart over
 /// their joint bounds grown by `padding` on every side
-/// (SCENE_SETUP_PROGRAMME.md D8 (open meshes are solids)). Each part of a
+/// Each part of a
 /// mesh ([`closed_triangles`]) is solid in one of two ways:
 ///
 /// - A closed part is the volume it bounds: the exact distance to its nearest

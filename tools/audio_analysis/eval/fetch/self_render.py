@@ -1,5 +1,4 @@
-"""Self-render generator v1, per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §3/P3
-dataset table: "agent-composed MIDI -> synth render, on-genre arps/stabs/
+"""Self-render generator v1. Dataset table: "agent-composed MIDI -> synth render, on-genre arps/stabs/
 pads with perfect truth, generated on demand, grows as gaps appear."
 
 This is deliberately v1 — a minimal proof that the on-demand generation loop
@@ -18,8 +17,7 @@ transcription involved):
     clap, closed hat, and tom, each with a distinct synthesized timbre
     (see synthesize_edm_kit_midi's per-class bursts), used as the known-truth
     fixture for manifold_audio.stage1_dsp_detection's clustering + centroid-
-    signature labeling unit tests (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md
-    §7.1: "clap/snare/hat/tom via per-onset features"). domain=electronic
+    signature labeling unit tests: "clap/snare/hat/tom via per-onset features". domain=electronic
     per the bake-off brief's "self-rendered EDM kits" deliverable.
 
 Rendered via eval/midi_synth.py (pretty_midi's additive synth — same

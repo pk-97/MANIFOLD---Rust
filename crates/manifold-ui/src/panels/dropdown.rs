@@ -327,7 +327,7 @@ impl DropdownPanel {
         self.anchor = Vec2::new(x, y);
         self.container_bounds = Rect::new(x, y, w, h);
 
-        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D3: `open_at` eagerly mints
+        // `open_at` eagerly mints
         // the dropdown's nodes here (so it's visible the instant it opens,
         // not waiting for the next overlay build) — this runs from
         // event-handling code, outside the overlay build's own region

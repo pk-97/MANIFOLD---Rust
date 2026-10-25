@@ -1,6 +1,4 @@
-// GPU FLIP's dynamic bodies inside the pressure solve (gpu_flip_bodies.rs,
-// docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water),
-// LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve)).
+// GPU FLIP's dynamic bodies inside the pressure solve.
 //
 // Faces and cells are laid out as in gpu_flip_step.wgsl. A face record's
 // three faces each name the body that owns them in the solid face velocity's
@@ -102,8 +100,7 @@ struct ClockPlan {
 @group(0) @binding(14) var<storage, read> lists: array<u32>;
 @group(0) @binding(15) var<storage, read> clock_plan: array<ClockPlan>;
 // Six vec4 per row of `bodies`: the body's packed 6 × 6 response to an
-// impulse while it stays on its supports (liquid_pose.wgsl
-// liquid_constrained_mobility; LIQUID_SOLVER_SEAM_DESIGN.md D16).
+// impulse while it stays on its supports.
 @group(0) @binding(16) var<storage, read> mobility: array<vec4<f32>>;
 
 // Entry (i, j) of body b's packed mobility.

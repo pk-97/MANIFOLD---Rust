@@ -1842,7 +1842,7 @@ mod tests {
         );
     }
 
-    // ── MVP-P3a: paste generator on gen-carrying lanes (LED_STRIPS_DESIGN.md section 5b D16) ──
+    // ── MVP-P3a: paste generator on gen-carrying lanes ──
 
     use manifold_core::effects::PresetInstance;
     use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
@@ -1939,8 +1939,7 @@ mod tests {
         );
     }
 
-    /// Predicate-shape pin (adversarial review, LED_STRIPS_DESIGN.md section
-    /// 5b D16): the predicate is type membership, NOT gen_params presence.
+    /// Predicate-shape pin: the predicate is type membership, NOT gen_params presence.
     /// Pasting onto a Generator layer whose gen_params is None must still
     /// create the instance — a presence-based guard regresses this to a
     /// silent no-op.

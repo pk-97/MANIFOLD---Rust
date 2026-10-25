@@ -1,5 +1,4 @@
-//! FLIP's whitewater lifecycle, fed from outside (`docs/GPU_WHITEWATER_DESIGN.md`
-//! D1, section 3.4): the vendored `DiffuseParticleSimulation` with emission
+//! FLIP's whitewater lifecycle, fed from outside: the vendored `DiffuseParticleSimulation` with emission
 //! off advances spawns it is handed over fields it is handed. Advection,
 //! buoyancy, drag, collisions, types, lifetimes and removal are FLIP's own.
 
@@ -47,7 +46,7 @@ impl WhitewaterGrid {
 
 /// One tick's fields, borrowed for the copy into the engine.
 pub struct WhitewaterFields<'a> {
-    /// Seam layout (`LIQUID_SOLVER_SEAM_DESIGN.md` section 3.2 (Grid outputs)):
+    /// Seam layout:
     /// MAC faces over `face_cells`, x fastest, m/s.
     pub face_u: &'a [f32],
     pub face_v: &'a [f32],

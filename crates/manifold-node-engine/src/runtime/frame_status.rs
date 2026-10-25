@@ -1,4 +1,4 @@
-//! SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): explicit per-frame validity.
+//! Explicit per-frame validity.
 //!
 //! A GPU completion fence can only say "no fault"; it cannot say "this frame
 //! traced the geometry the raster drew". `FrameRenderStatus` is the

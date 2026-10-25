@@ -1,12 +1,10 @@
 //! Ported from FLIP Fluids rigidpressurecoupling.h, rigidboundaryvelocity.cpp and rigidfluidcoupling.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 //! GPU FLIP's dynamic bodies inside the pressure solve
-//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water),
-//! LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve)): each
+//! Each
 //! body that takes a reaction adds its six velocity unknowns to the solve as
 //! the engine's mass-aware PCG does, so the operator is L + ρh·G M_c Gᵀ
 //! (`scripts/mgpcg_reference.py --body`, `body_solve`), M_c the body's
-//! mobility held on its supports (LIQUID_SOLVER_SEAM_DESIGN.md D16 (static
-//! contacts shape the prediction)): M⁻¹ for a free body. The passes, in
+//! mobility held on its supports (static contacts shape the prediction): M⁻¹ for a free body. The passes, in
 //! `shaders/gpu_flip_bodies.wgsl`:
 //!
 //! - inside every conjugate gradient iteration, the bodies' share of the

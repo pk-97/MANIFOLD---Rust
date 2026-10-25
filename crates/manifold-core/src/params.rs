@@ -147,8 +147,7 @@ pub struct Param {
     /// by playback reconciliation. Standalone presets have no project pattern.
     /// Prepared physics controls consume this without borrowing the project.
     pub clip_control_digest: Option<[u8; 32]>,
-    /// Runtime-only automation-latch flag (see `AUTOMATION_LANES_DESIGN.md`
-    /// section 4). Set by the single `set_base_param` funnel so the automation
+    /// Runtime-only automation-latch flag. Set by the single `set_base_param` funnel so the automation
     /// evaluator can detect "a hand touched this since I last looked". Never
     /// serialized.
     pub touched: bool,

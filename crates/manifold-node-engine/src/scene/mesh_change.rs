@@ -1,7 +1,6 @@
 //! Mesh revision metadata for automatic scene-modifier ray tracing.
 //!
-//! Types are specified verbatim in `docs/SCENE_MODIFIER_RT_DESIGN.md`
-//! section 3.1 (exact types and ownership) and section 3.3 (fusion and
+//! Types: exact types and ownership, and fusion and
 //! graph loading, owned prepared forms). Renderer-owned; `manifold-gpu`
 //! does not depend on them. No serde derives — the prepared forms are
 //! not serialized into `EffectGraphDef`, WGSL, or project files.

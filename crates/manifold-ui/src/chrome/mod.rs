@@ -13,7 +13,7 @@
 //! - [`diff`] — the reconciler ([`ChromeHost`]: build / in-place update /
 //!   needs-rebuild + intent population).
 //!
-//! See `docs/CHROME_API_DESIGN.md` for the full rationale and the Phase 2b
+//! The full rationale and the Phase 2b
 //! migration contract.
 
 pub mod components;

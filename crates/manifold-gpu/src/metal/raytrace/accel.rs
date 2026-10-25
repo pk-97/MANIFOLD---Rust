@@ -85,8 +85,7 @@ pub(crate) struct Blas {
 pub struct RtAccel {
     pub(crate) structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
     descriptor: Retained<MTLInstanceAccelerationStructureDescriptor>,
-    /// TLAS build scratch — retained (SCENE_MODIFIER_RT_DESIGN.md §4.2:
-    /// both scratch kinds are resident, sized from Metal's requirements).
+    /// TLAS build scratch — retained. Both scratch kinds are resident, sized from Metal's requirements.
     build_scratch: GpuBuffer,
     refit_scratch: GpuBuffer,
     /// True from preparation/replacement until the first encode builds the
@@ -518,7 +517,7 @@ pub struct RtObjectGeometry<'a> {
     /// identity (the D7 fast path). The raster's live count is in-band
     /// (`pos_scale.w == 0` = dead slot), so capacity is all the CPU needs.
     pub instance_slots: u32,
-    /// SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): per-vertex appearance-weight
+    /// Per-vertex appearance-weight
     /// buffer (`f32` per vertex, vertex-index addressed — indexed meshes
     /// included), `None` = unwired (weight 1). The checked weight count is
     /// the mesh vertex count: a wired buffer with fewer floats than
@@ -774,7 +773,7 @@ fn instance_mask(cast_shadows: bool) -> u32 {
         }
 }
 
-// ─── P3: caller-ordered acceleration (SCENE_MODIFIER_RT_DESIGN.md §4) ─────
+// ─── P3: caller-ordered acceleration ─────
 //
 // The accel lifecycle is three explicit steps on the CALLER's command
 // stream: plan (CPU-only sizing) → prepare (allocate/reuse, no GPU

@@ -9,7 +9,7 @@ torch<2.9
 torchaudio<2.9
 soundfile
 # Beat This (CPJKU) — beat/downbeat/tempo tracker, replaces madmom's
-# beat/downbeat/tempo arms (AUDIO_ANALYSIS_ACCURACY_DESIGN.md D1/D2, P2).
+# beat/downbeat/tempo arms.
 # Code + published weights both MIT (verified 2026-07-17 from
 # github.com/CPJKU/beat_this's LICENSE file and README "## License" section).
 # Pin the version; re-verify the license text on any bump.
@@ -29,7 +29,7 @@ pretty_midi
 librosa
 # Spotify Basic Pitch — polyphonic pitch detection for bass/synth/pad.
 basic-pitch
-# Eval harness (AUDIO_ANALYSIS_ACCURACY_DESIGN.md P1, tools/audio_analysis/eval/):
-# metrics.py uses mir_eval where its definitions match D10; pytest gates every phase.
+# Eval harness (tools/audio_analysis/eval/):
+# metrics.py uses mir_eval where its definitions match; pytest gates every phase.
 mir_eval
 pytest

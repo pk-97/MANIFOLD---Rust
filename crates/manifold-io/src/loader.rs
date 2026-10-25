@@ -697,7 +697,7 @@ mod legacy_clip_trigger_migration_tests {
     //! through the REAL loader pipeline + REAL serde — not
     //! `Project::migrate_legacy_clip_triggers` called directly (that's
     //! manifold-core's own unit-level proof). Create-path green is half a
-    //! gate (`docs/DESIGN_DOC_STANDARD.md` section 5, BUG-036): this proves
+    //! gate: this proves
     //! save -> reload survives too.
     //!
     //! `AudioSend.triggers` is `#[serde(skip_serializing)]`, so current code
@@ -890,7 +890,7 @@ mod layer_led_flag_round_trip_tests {
 
 #[cfg(test)]
 mod layer_type_dmx_round_trip_tests {
-    //! MVP-P3b positive gate (LED_STRIPS_DESIGN.md section 5b D15): the DMX
+    //! MVP-P3b positive gate: the DMX
     //! layer type must survive a save → reload cycle as int 4, and hand-built
     //! JSON carrying either int 4 or the legacy string "Led" must load as
     //! Dmx — not silently fall back to Video. Same harness as the

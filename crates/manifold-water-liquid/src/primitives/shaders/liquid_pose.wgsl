@@ -1,5 +1,4 @@
-// Body poses for the GPU liquid atoms (LIQUID_SOLVER_SEAM_DESIGN.md section
-// 3.6), declared through `wgsl_includes`. Matches liquid::bodies::body_pose_at.
+// Body poses for the GPU liquid atoms, declared through `wgsl_includes`. Matches liquid::bodies::body_pose_at.
 
 // v turned by the unit quaternion q (xyzw).
 fn liquid_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -41,7 +40,7 @@ fn liquid_body_velocity(linear: vec3<f32>, angular: vec3<f32>, centre: vec3<f32>
     return linear + liquid_cross_fma(angular, x - centre);
 }
 
-// A coupled body's support points (LIQUID_SOLVER_SEAM_DESIGN.md D16), five
+// A coupled body's support points, five
 // vec4 a point as liquid::bodies::BodySupports lays them: the lever arm and
 // friction; the normal out of the support (zero ends the points) and the
 // patch; the support's velocity and its spin about the normal; the patch
@@ -237,7 +236,7 @@ fn liquid_project_off(
     return out;
 }
 
-// The coupled motion law (LIQUID_SOLVER_SEAM_DESIGN.md D15, D16), the twin of
+// The coupled motion law, the twin of
 // manifold_physics::coupled_motion::coupled_state_at: a dynamic body t
 // seconds into its tick from its tick-start state, with push and turn the
 // reaction impulse the liquid has put on it so far and h Box3D's substep.

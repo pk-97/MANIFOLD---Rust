@@ -1,7 +1,6 @@
 //! Checked against FLIP Fluids rigidfluidcoupling.cpp (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU value proofs for the passes that put dynamic bodies inside the GPU
-//! FLIP pressure solve (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in
-//! the water)) against CPU f64 references: each body's impulse, the bodies'
+//! FLIP pressure solve (solids in the water) against CPU f64 references: each body's impulse, the bodies'
 //! share of the operator, the velocity change on the solid faces and the
 //! reaction. The lattice spans twelve tiles, partial edge tiles among them,
 //! so the slot order of the sum is exercised. Then the passes over the

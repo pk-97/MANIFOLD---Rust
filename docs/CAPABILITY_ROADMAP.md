@@ -18,7 +18,7 @@ The gaps are not in pixels. They are in **geometry (SOP-side), 3D shading, video
 
 These are settled directions. Pin them before building anything in the later sections.
 
-- **Audio stays first-class on the perform UI — never graph nodes.** No audio spectrum / FFT / band / onset primitives. The moment audio is just another graph input, Manifold concedes it's a TD patcher with a timeline bolted on. Audio reactivity routes through the perform-surface modulation path (param bindings), see [AUDIO_MODULATION_DESIGN.md](AUDIO_MODULATION_DESIGN.md). Memory: `audio-stays-on-perform-surface`.
+- **Audio stays first-class on the perform UI — never graph nodes.** No audio spectrum / FFT / band / onset primitives. The moment audio is just another graph input, Manifold concedes it's a TD patcher with a timeline bolted on. Audio reactivity routes through the perform-surface modulation path (param bindings). Memory: `audio-stays-on-perform-surface`.
 - **Output mapping is deferred to Resolume.** Manifold is the source-and-processing instrument; Resolume does projection mapping / warping / slicing. This only works *because* video-out (section 3) is how we hand Resolume the image — the two decisions reinforce each other. Don't build mapping.
 - **Video IO becomes first-class** (section 3).
 - **Timecode locks the score, not the render** (section 5). Manifold is not a video server. Memory: `timecode-locks-score-not-render`.
@@ -70,7 +70,7 @@ Fits the whole thesis: artists author in Blender (the best free 3D tool), Manifo
   - *Vertex-cache / baked animation* (Small data-path, sneaky-good) — bake a gnarly Blender sim (cloth, fracture, fluid) to per-frame vertex positions, play back by swapping vertex buffers. No rig eval. Huge visual richness for almost no engine — an artist does something impossible-to-simulate-live and we just stream the frames.
   - *Skeletal / skinned animation* (Large) — bones deforming a mesh by skin weights; skeleton pose eval + GPU skinning. The cathedral; do it last.
 - **The feature nobody else can have — the beat-retimed playhead.** An imported animation arrives with its own clock (seconds @ authored FPS). Drive its playhead with *beat atoms* instead — a `beat_ramp` scrubs progress, a trigger freezes it, loop a sub-range on the bar, scrub it backwards. The animation becomes a **beat-addressable parameter** (like `image_folder`'s position, but for a rigged mesh). A character that hits its pose *on the downbeat because you're scrubbing it* — that's the version worth building, and it's only possible because we're beat-native.
-- **Artist-workflow truth to document day one:** glTF only carries the *baked* material — Principled BSDF maps onto `pbr_material` cleanly, but the full Blender shader-node tree does **not** survive export. Guidance: bake looks to textures, use Principled. See [MATERIAL_SYSTEM_DESIGN.md](MATERIAL_SYSTEM_DESIGN.md).
+- **Artist-workflow truth to document day one:** glTF only carries the *baked* material — Principled BSDF maps onto `pbr_material` cleanly, but the full Blender shader-node tree does **not** survive export. Guidance: bake looks to textures, use Principled.
 
 ---
 

@@ -109,8 +109,7 @@ pub struct Graph {
     /// added via [`Graph::add_node`] don't appear here. Handles use borrowed
     /// static strings for fixed effect construction and owned strings for
     /// names loaded or generated at runtime. User bindings on disk store the
-    /// same string and look up the live id at apply time. See
-    /// `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7.
+    /// same string and look up the live id at apply time.
     handles: AHashMap<Cow<'static, str>, NodeInstanceId>,
     /// Bumped when a param write changes some node's
     /// [`EffectNode::force_consumed_outputs`] result (e.g. `render_scene`'s

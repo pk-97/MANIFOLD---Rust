@@ -103,7 +103,7 @@ manifold_node_engine::primitive! {
             range: Some((36.0, 8000000.0)),
             enum_values: &[],
         },
-        // BUG-194/BUG-195 (SCENE_SETUP_PANEL_DESIGN.md D4/D5): import-time
+        // Import-time
         // provenance, never read by `evaluate()`/`run()` — stamped by the
         // scene compiler and read back by the scene table's vertex-count
         // row and by Shatter.

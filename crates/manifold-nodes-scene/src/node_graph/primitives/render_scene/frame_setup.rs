@@ -50,7 +50,7 @@ impl RenderScene {
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
 
         let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(*objects);
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the sole CPU gate for the
+        // The sole CPU gate for the
         // Pass A/B split below. Only `Blend` objects ever reach Pass B
         // (`is_glass` in `gltf_import.rs` always routes a nonzero
         // `transmission_factor` to `Blend` alpha mode, so this condition and
@@ -59,7 +59,7 @@ impl RenderScene {
         let mut has_transmission = false;
 
         for n in 0..*objects {
-            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): every object's
+            // Every object's
             // full bundle (mesh/transform/material/17 maps/instances/
             // visible) arrives on ONE `object_n: Object` port — resolved
             // through `port_index` (built once per frame, above) instead of
@@ -210,7 +210,7 @@ impl RenderScene {
                 );
                 return None;
             }
-            // P4b (SCENE_MODIFIER_RT_DESIGN.md §5.2): appearance weights and
+            // Appearance weights and
             // gain are SUPPORTED under RT — the old rejection here is
             // removed now that `rt_dynamic_coverage_and_attributes` proves
             // the coverage/brightness behavior against the raster formula.
@@ -279,7 +279,7 @@ impl RenderScene {
             let base_color_map = object
                 .base_color_map
                 .and_then(|s| inputs.texture_2d_slot(s));
-            // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
+            // The four new optional
             // per-object texture ports.
             let normal_map = object.normal_map.and_then(|s| inputs.texture_2d_slot(s));
             let mr_map = object.mr_map.and_then(|s| inputs.texture_2d_slot(s));
@@ -288,7 +288,7 @@ impl RenderScene {
             let legacy_metallic_map = single_object.and_then(|_| inputs.texture_2d("metallic_map"));
             let occlusion_map = object.occlusion_map.and_then(|s| inputs.texture_2d_slot(s));
             let emissive_map = object.emissive_map.and_then(|s| inputs.texture_2d_slot(s));
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
+            // Sheen, iridescence and anisotropy maps.
             let sheen_color_map = object
                 .sheen_color_map
                 .and_then(|s| inputs.texture_2d_slot(s));
@@ -304,8 +304,7 @@ impl RenderScene {
             let anisotropy_map = object
                 .anisotropy_map
                 .and_then(|s| inputs.texture_2d_slot(s));
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-            // completion sweep).
+            // Texture completion sweep.
             let clearcoat_map = object.clearcoat_map.and_then(|s| inputs.texture_2d_slot(s));
             let clearcoat_roughness_map = object
                 .clearcoat_roughness_map
@@ -416,7 +415,7 @@ impl RenderScene {
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
-            // IMPORT_FIDELITY_DESIGN.md D3/F-P2 presence flags.
+            // Presence flags.
             if normal_map.is_some() {
                 uniforms.texture_flags[0] = 1.0; // x = normal_map present (resolve_normal's cotangent-frame gate)
             }
@@ -429,7 +428,7 @@ impl RenderScene {
             if emissive_map.is_some() {
                 uniforms.texture_flags2[2] = 1.0; // z = emissive_map present (resolve_emissive's gate)
             }
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised):
+            // Five new presence flags:
             // five new presence flags packed into the five reserved `w`/`y`
             // slots the E1 uniform migration already left inert (no struct
             // growth — same reuse doctrine as ior/specular_factor riding
@@ -449,8 +448,7 @@ impl RenderScene {
             if anisotropy_map.is_some() {
                 uniforms.transmission_volume_params[3] = 1.0; // w = anisotropy_map present
             }
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-            // completion sweep): every reserved single-flag `w` slot the E1
+            // Texture completion sweep: every reserved single-flag `w` slot the E1
             // migration left is now spent (see the five ifs above), so
             // these seven new presence bits are packed as a bitmask into
             // the LAST two reserved `w` slots (`pbr_specular_tint.w`,
@@ -536,7 +534,7 @@ impl RenderScene {
                 .clone()
             };
 
-            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
+            // View-space depth of this
             // object's translation (see the `sort_depth` doc comment above).
             let world_pos = [model[3][0], model[3][1], model[3][2]];
             let sort_depth = (world_pos[0] - cam.pos[0]) * cam.fwd[0]
@@ -1037,7 +1035,7 @@ impl RenderScene {
                 ctx.params.get("rt_firefly_clamp"),
                 Some(ParamValue::Bool(true))
             );
-        // RT_QUALITY_SETTINGS_DESIGN.md D5/D6: the active quality column,
+        // The active quality column,
         // resolved per frame by the compositor from project settings.
         // Copied out of ctx here — the dispatch code below runs after
         // gpu_encoder() mutable borrows, where ctx is unreadable.

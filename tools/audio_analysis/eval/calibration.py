@@ -1,6 +1,4 @@
-"""BUG-235 fix — per-fixture kick onset-convention calibration (P4 §0,
-docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md P4 entry: "Read-back: §4.2, D6, D9,
-D11"). This is a PREREQUISITE measurement/calibration step, NOT tuning: it
+"""BUG-235 fix — per-fixture kick onset-convention calibration. This is a PREREQUISITE measurement/calibration step, NOT tuning: it
 extends D14's mechanism ("measure a per-stage/per-detector systematic bias,
 apply the correction once at a defined seam") from decode/format skew to a
 per-fixture ONSET-CONVENTION mismatch between raw ADTOF kick output and the

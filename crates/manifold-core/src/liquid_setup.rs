@@ -1,6 +1,6 @@
 //! How a liquid's setup shapes fit its domain: the one geometric rule the
 //! solvers fill from and the setup check reports from
-//! (SCENE_SETUP_PROGRAMME.md section 3 B3, BUG-gm927 parts 1 and 2). A shape
+//!A shape
 //! that does not fit gets a defined result here (capped, clipped, ignored),
 //! never a refusal or a silent clamp: the check names whatever this changed.
 

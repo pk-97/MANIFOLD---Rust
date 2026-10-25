@@ -398,7 +398,7 @@ impl Application {
                     region.is_some() && self.selection.selection_count() == 0;
                 let hovered = self.ws.ui_root.viewport.hovered_clip_id();
                 // (already cleared above, unconditionally, before this gate)
-                // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17): grab
+                // motion: grab
                 // lift + grid settle + error shake are pure X/Y offsets
                 // applied to the SAME `ClipScreenRect` used below for
                 // waveforms/thumbnails/names — mutating `cr.rect` in place

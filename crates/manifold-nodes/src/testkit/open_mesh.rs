@@ -1,5 +1,5 @@
 //! An open mesh on disk for the open-mesh solid proofs
-//! (SCENE_SETUP_PROGRAMME.md D8 (open meshes are solids)), shared by the MPM
+//! (open meshes are solids), shared by the MPM
 //! and GPU FLIP scenes.
 
 /// Writes the unit square in the y = 0 plane as a one-sided glTF triangle

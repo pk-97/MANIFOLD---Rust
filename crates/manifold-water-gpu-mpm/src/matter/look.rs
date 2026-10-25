@@ -1,4 +1,4 @@
-//! Particle look metrics, GPU_MPM_SOLVER_DESIGN.md section 7 (look gates) A1–A6,
+//! Particle look metrics (look gates A1–A6),
 //! over particle frames of the seam. Matter and FLIP frames go through the same
 //! functions, so a gate compares solvers, not measurement code. A record is
 //! live when its radius is positive and its position finite (FLIP frames carry

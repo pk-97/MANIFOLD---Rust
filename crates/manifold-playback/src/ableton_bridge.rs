@@ -45,7 +45,7 @@ const RACK_MACRO_COUNT: usize = 8;
 const TRANSPORT_TIMEOUT_SECS: f64 = 2.0;
 // Transport echo windows, redundant-send counts, confirmation windows, and
 // the deferred play-seek all moved into the closed-loop state machine
-// (`transport_sync.rs`, docs/ABLETON_TRANSPORT_SYNC_DESIGN.md D3/D7/D11) —
+// —
 // commands are now acknowledged by value-matched observations, not guessed
 // at by wall-clock windows.
 
@@ -2555,7 +2555,7 @@ impl AbletonBridge {
     /// Called after engine tick (same timing slot as OscPositionSender::late_update).
     ///
     /// All echo/confirmation/retry decisions live in `transport_sync.rs`
-    /// (docs/ABLETON_TRANSPORT_SYNC_DESIGN.md section 4) — this method is I/O only.
+    /// — this method is I/O only.
     pub fn late_update_transport(
         &mut self,
         is_playing: bool,

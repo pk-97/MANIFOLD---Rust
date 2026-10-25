@@ -16,7 +16,7 @@ use crate::bodies::LiquidBodies;
 const UNIFORM_ARROW_SHARE: f32 = 0.25;
 
 /// What a liquid domain reports about the setup it last ran, for the setup
-/// check (SCENE_SETUP_PROGRAMME.md section 3 B3): what the fit capped or
+/// check: what the fit capped or
 /// clipped, where the column it clipped was, or why the geometry was
 /// refused. Kept across frames, so a steady frame allocates nothing.
 #[derive(Clone, Debug, Default)]

@@ -94,7 +94,7 @@ pub(super) fn dispatch_layer(
         }
         LayerAction::ToggleLed(id) => {
             // LED-type layers: `blit_to_led` is inert on them (the layer routes
-            // Direct regardless — LED_STRIPS_DESIGN.md section 5b D11), and the
+            // Direct regardless, and the
             // header chip is a state indicator, not this toggle. Flipping the
             // persisted mirror flag here would be a write the UI can't truthfully
             // show, so the action is a no-op for them.

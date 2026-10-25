@@ -431,7 +431,7 @@ impl ChromeHost {
     /// BUG-070) — the host owns the full set of slots it materialised, so this
     /// replay can't skip one the way a panel's own hand-written loop could.
     /// Walks the contract via [`BitmapSlider::register_track_reset`]
-    /// (UI_WIDGET_UNIFICATION_DESIGN.md P1) instead of hand-emitting the
+    /// instead of hand-emitting the
     /// `Gesture::RightClick` registration itself.
     pub fn register_slider_resets(&self, reg: &mut IntentRegistry) {
         for (_key, ids, reset) in &self.slider_ids {

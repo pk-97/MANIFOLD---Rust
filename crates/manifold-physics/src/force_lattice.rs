@@ -9,7 +9,6 @@ use crate::tick_samples::TickSamples;
 use crate::{FieldValue, VectorField};
 
 /// Solver cells per force-lattice cell along each axis
-/// (GPU_MPM_SOLVER_DESIGN.md D13).
 pub const FORCE_LATTICE_STRIDE: u32 = 4;
 
 /// Force lattices a buffer keeps room for up front: more than a live frame's

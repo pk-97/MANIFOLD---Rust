@@ -6,8 +6,7 @@
 //! as `node.spawn_from_mesh`.
 //!
 //! The particles port accepts any record that names where a point is and
-//! whether it is live (`Channels[permissive]`, CHANNEL_TYPE_SYSTEM.md section
-//! 11.4 (Per-port match-mode discipline)): a liquid particle's
+//! whether it is live: a liquid particle's
 //! `position_radius`, live when the radius is positive, or a `position` and an
 //! `id`, live when the id is non-zero and the position finite. So the matter
 //! solver sorts its own points in place of a converted copy each tick.

@@ -1,6 +1,6 @@
 //! Every declared shape in the scene, with the params it names resolved to
 //! their write address and authored value
-//! (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model)).
+//!
 //! The gizmo core builds every target from this list alone; nothing here
 //! knows a handle.
 

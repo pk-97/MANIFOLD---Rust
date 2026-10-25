@@ -1,5 +1,4 @@
-//! `node.gpu_flip_step` — one GPU FLIP water step (docs/GPU_FLIP_PRESSURE_SOLVE.md
-//! section 1 (the step)): sort, particle distance, particles to faces,
+//! `node.gpu_flip_step` — one GPU FLIP water step: sort, particle distance, particles to faces,
 //! extend, forces, solids, water mask from φ, divergence, pressure solve,
 //! projection, extend, constraint, density projection, then the particles
 //! move, remove crowded/extreme markers, compact, and emit inflow. One node
@@ -1291,8 +1290,7 @@ fn encode_pocket_coarsen(
     );
 }
 
-/// The step shader's atomic sites (I8, GPU_FLIP_PRESSURE_SOLVE.md section
-/// 7 (Invariants & enforcement)): the pockets' fixed-point sums, integer adds that come out
+/// The step shader's atomic sites: the pockets' fixed-point sums, integer adds that come out
 /// the same in any thread order, and the tally's cell counts and lowest air
 /// seed (an integer minimum, also order-free). A new site is added here on
 /// purpose.

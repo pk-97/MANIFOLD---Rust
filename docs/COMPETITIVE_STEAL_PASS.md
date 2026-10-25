@@ -12,18 +12,14 @@ This is a survey-and-verdict doc, not a design doc. Each steal gets a rough shap
 
 | Their feature | Where MANIFOLD has it |
 |---|---|
-| Clip grid / media bins (Resolume decks, VDMX pages, Modul8) | `docs/SESSION_MODE_DESIGN.md` — layer×scene grid |
-| Multi-output / advanced output routing | `docs/MULTI_DISPLAY_DESIGN.md` — island atlas, Stage domain |
-| Parameter automation / envelopes | `docs/AUTOMATION_LANES_DESIGN.md` |
-| Body/pose/face input (TD MediaPipe, Notch camera FX) | `docs/ML_NODES_DESIGN.md` |
-| Exposed macros / dashboards (Resolume dashboard, Notch exposed properties) | Component macros → card bindings, `docs/COMPONENT_LIBRARY_DESIGN.md` |
+| Exposed macros / dashboards (Resolume dashboard, Notch exposed properties) | Component macros → card bindings |
 | Node graph authoring (TD, Notch, Smode) | The graph runtime + ~188 primitives |
 | Audio-reactive everything (VDMX data sources, Synesthesia audio uniforms) | manifold-audio features + binding unification + audio triggers |
 | BPM sync, beat quantize (Resolume) | Beats-primary time model — deeper than any of them |
 | DMX/Art-Net out, DMX-in triggers | manifold-led + multi-display tech rider decisions |
 | User shader surface (Resolume Wire-ish, TD GLSL TOP) | `wgsl_compute` — a real live-show surface |
 
-Where MANIFOLD is already ahead of the field (positioning, not work): a real beats/bars **arrangement timeline** (no VJ tool has one), **.als show import** (`docs/ABLETON_SHOW_SYNC_DESIGN.md`), the **understudy crash watchdog** (`docs/GIG_RESILIENCE_DESIGN.md` — nobody ships this), and **AI-native authoring** (`docs/MCP_INTERFACE_DESIGN.md`). Notch's remaining moat is simulation content quality (fluids, high-end particles) — a content-roadmap item, not a UX steal.
+Where MANIFOLD is already ahead of the field (positioning, not work): a real beats/bars **arrangement timeline** (no VJ tool has one), **.als show import**, the **understudy crash watchdog** (nobody ships this), and **AI-native authoring**. Notch's remaining moat is simulation content quality (fluids, high-end particles) — a content-roadmap item, not a UX steal.
 
 ---
 
@@ -37,7 +33,7 @@ Where MANIFOLD is already ahead of the field (positioning, not work): a real bea
 
 What it is: per-projector output transforms — corner-pin homography, bezier/mesh warp for curved surfaces, feathered gamma-correct edge blend between overlapping projectors, polygon masks, and slices (stage region → warped output region, many-to-many). With this, the instrument plays *the room* — booth fronts, ceilings, set pieces — not just rectangles.
 
-What exists: `docs/MULTI_DISPLAY_DESIGN.md` gives displays-as-islands with zero gap pixels and venue profiles keyed by display UUID. Mapping extends both: warp meshes / blend curves / masks are **venue-profile data** (same show, different room), and GPU-wise the warp pass is one textured-mesh draw per output — cheap.
+What exists: displays-as-islands with zero gap pixels and venue profiles keyed by display UUID. Mapping extends both: warp meshes / blend curves / masks are **venue-profile data** (same show, different room), and GPU-wise the warp pass is one textured-mesh draw per output — cheap.
 
 The design question for #11 (not answered here): projector islands need **overlapping** stage samples for blend zones, so a projector's island is a stage *region* (overlap allowed, atlas grows), followed by an island→framebuffer warp pass. That must be reconciled with the current zero-gap island model, plus the calibration UX (on-output test grids, live control-point nudge, per-venue save).
 
@@ -65,7 +61,7 @@ Launching a slot crossfades from the currently playing clip over N beats (or sna
 **From:** Resolume autopilot, Ableton follow actions.
 **Verdict: steal — pull forward from session mode's deferred list.**
 
-Slot finishes → auto-fire next / random / back to arrangement. Explicitly deferred in `docs/SESSION_MODE_DESIGN.md` non-goals; this pass promotes it to the session-mode v2 backlog. Gives unattended sections (doors music, breaks) and generative set flow.
+Slot finishes → auto-fire next / random / back to arrangement. Explicitly deferred in the session mode non-goals; this pass promotes it to the session-mode v2 backlog. Gives unattended sections (doors music, breaks) and generative set flow.
 
 ### S6 · Ableton Link + Link Audio
 **From:** the entire Link ecosystem; Link Audio shipped in Live 12.4 (May 2026).
@@ -99,7 +95,7 @@ Every primitive ships a tiny working example graph, openable from the node brows
 
 ## 3. Rejects — logged so they stay rejected
 
-- **R1 · Build-your-own modular UI everything (VDMX).** The whole app as movable panels. Take the layout layer only (S2); reject the toolkit. MANIFOLD's fixed editor + arrangeable perform surface is the right split — DIY workspaces tax every user to serve power users. *Revised 2026-07-03 (PERFORM_SURFACE_DESIGN.md D8): the DIY UI **toolkit** stays rejected; **workspace arrangement of purpose-built panels** (Ableton/Blender-style) is now an approved future layer. Fixed editor remains the default.*
+- **R1 · Build-your-own modular UI everything (VDMX).** The whole app as movable panels. Take the layout layer only (S2); reject the toolkit. MANIFOLD's fixed editor + arrangeable perform surface is the right split — DIY workspaces tax every user to serve power users. *Revised 2026-07-03: the DIY UI **toolkit** stays rejected; **workspace arrangement of purpose-built panels** (Ableton/Blender-style) is now an approved future layer. Fixed editor remains the default.*
 - **R2 · Theater cue stacks with GO button (Millumin).** MANIFOLD shows are Ableton-driven; cues + show-sync + trigger clips cover it. A parallel cue-stack entity re-introduces the trigger-lane concept already rejected in show-sync D1.
 - **R3 · Media-server block export (Notch → disguise/d3).** Exporting MANIFOLD content to run inside other servers is a different product. Components + macros give the same authoring concept in-app.
 - **R4 · SMPTE timecode chase.** Already closed — timecode locks the score, never scrubs the render; Art-Net in for lighting-desk integration. See decision log / multi-display tech rider.
@@ -111,8 +107,8 @@ Every primitive ships a tiny working example graph, openable from the node brows
 | Item | Home | Effort tier |
 |---|---|---|
 | S1 mapping | **New design doc — queue #11, next Fable session** | Fable design → Sonnet phases |
-| S2 perform surface builder | **DONE — docs/PERFORM_SURFACE_DESIGN.md** (widget substrate P1; builder itself = deferred layer) | Small-medium |
-| S3 cue/preview bus | Spec'd enough here; PERFORM_SURFACE_DESIGN section 7.3 widget | Small |
+| S2 perform surface builder | **DONE** (widget substrate P1; builder itself = deferred layer) | Small-medium |
+| S3 cue/preview bus | Spec'd enough here; a widget | Small |
 | S4 clip transitions | Session mode backlog, spec'd enough here | Small |
 | S5 follow actions | Session mode v2 backlog | Small |
 | S6 Link + Link Audio | manifold-audio + clock; **gated on licence (Peter requesting)** | Medium |

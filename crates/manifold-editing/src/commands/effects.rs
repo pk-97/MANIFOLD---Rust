@@ -655,7 +655,7 @@ pub fn generate_user_param_id(
 /// after undo is symmetric (deterministic id generation, idempotent
 /// against the live binding state).
 ///
-/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7.6.
+///
 #[derive(Debug)]
 pub struct ToggleEffectParamExposeCommand {
     effect_id: EffectId,
@@ -1052,8 +1052,7 @@ pub struct BindingMappingEdit {
     /// `offset = 0.0` is identity.
     pub scale: Option<f32>,
     pub offset: Option<f32>,
-    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2
-    /// D5). Outer `Option` = "this edit touches the field" (the usual
+    /// Card-bundling section name. Outer `Option` = "this edit touches the field" (the usual
     /// `BindingMappingEdit` convention); inner `Option<String>` = the new
     /// value, where `None` clears the row back to unsectioned. Manifest-only
     /// (BOUNDARIES D4) — applied by [`Self::apply_to_manifest_spec`] like
@@ -1067,7 +1066,7 @@ impl BindingMappingEdit {
     /// (PARAM_STORAGE_DESIGN.md D6). Returns the PRE-edit values for undo.
     ///
     /// PARAM_STORAGE_BOUNDARIES_DESIGN.md D4: the graph's `preset_metadata
-    /// .params` (`meta.params`) is a save-time-derived shadow now, not a
+    /// params` (`meta.params`) is a save-time-derived shadow now, not a
     /// second live target — this method never touches it. Writing these
     /// fields onto both the manifest AND `meta.params` was exactly the
     /// dual-write P2 deletes (two owners of one fact).
@@ -1855,7 +1854,7 @@ pub(crate) mod tests {
 
     #[test]
     fn edit_mapping_writes_and_undoes_section() {
-        // D5 (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2): the calibration
+        // D5: the calibration
         // popover's section edit — manifest-only (BOUNDARIES D4), same
         // one-shot execute/undo shape as every other reshape field here.
         let (mut project, effect_id, binding_id) = project_with_one_user_binding();

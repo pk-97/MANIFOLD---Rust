@@ -286,8 +286,8 @@ not authority.
   silence = pause; playing: nudge every message (<0.5s) else seek; stopped:
   seek beyond 0.05s. **Currently starved — no subscription wires the receiver
   to `on_timecode_received` (section 13.1).**
-- **AbletonOSC transport (ABLETON_TRANSPORT_SYNC_DESIGN.md
-  is the authority):** closed-loop pending-expectation state machine
+- **AbletonOSC transport
+  is the authority:** closed-loop pending-expectation state machine
   (`transport_sync.rs`, pure/testable). Commands (play/stop/seek) create
   expectations; inbound `is_playing` + `current_song_time` listener values
   ack them by value-matching; unacked commands retransmit at 2×measured-RTT
@@ -303,7 +303,7 @@ not authority.
   play carries the beat, stop is `/transport 0`, seeks fire on >0.5-beat
   divergence from dead-reckoned position; 3× redundant sends + 0.3s confirm
   window; echo suppressed via `suppress_next_transport`. Deletion is a
-  deferred cleanup (ABLETON_TRANSPORT_SYNC_DESIGN section 8).
+  deferred cleanup.
 - **Ableton bridge** additionally: session discovery (tracks/racks/macros),
   macro listeners → replace-mode param writes each frame (flagged so the UI
   snapshot follows), cue points + PLAY-group arrangement for the perform HUD.
@@ -478,7 +478,7 @@ Every magic number on the timing paths, in one place:
     `COMBINED_PREWARM_MAX` are unused. First MIDI fire of a cold video clip
     rides only the 0.02s recently-started gate — black-frame risk on stage.
 11. ~~AbletonOSC inbound transport relay is disabled~~ **FIXED**
-    (ABLETON_TRANSPORT_SYNC_DESIGN): relay re-enabled through the closed-loop
+    relay re-enabled through the closed-loop
     state machine — own commands are value-matched acks, not relayable
     echoes; CLK keeps priority, OSC is the fallback authority tier.
 12. ~~`suppress_next_transport` staleness~~ **FIXED for the AbletonOSC path**: the bridge no longer consumes the flag (value-matching

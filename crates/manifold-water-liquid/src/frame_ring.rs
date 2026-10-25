@@ -1,5 +1,5 @@
 //! The A/B frame ring of the particle-frame seam
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.1, amendment 1): after
+//!After
 //! each simulated tick the new frame becomes B and the previous B becomes A;
 //! the display blends between them one tick behind. A restart or a regrown
 //! ring collapses A onto the new frame.

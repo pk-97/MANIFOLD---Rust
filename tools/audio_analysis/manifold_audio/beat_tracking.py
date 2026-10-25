@@ -1,8 +1,7 @@
 """Beat This! (CPJKU) beat/downbeat tracking.
 
 Replaces madmom's DBNBeatTrackingProcessor + DBNDownBeatTrackingProcessor +
-tempo-hypothesis scoring for beats, downbeats, and BPM
-(docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md D1/D2, P2).
+tempo-hypothesis scoring for beats, downbeats, and BPM.
 
 License verification (2026-07-17, read directly from the source repo, not
 inferred): github.com/CPJKU/beat_this `LICENSE` file is MIT

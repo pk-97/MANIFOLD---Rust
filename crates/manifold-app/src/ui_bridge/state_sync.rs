@@ -1,6 +1,5 @@
 //! Per-frame state push: `push_state` drains engine/project state into the UI
 //! tree, delegating each domain to its projection module (P-P,
-//! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 use manifold_core::Beats;
@@ -183,7 +182,7 @@ pub fn drain_events(
     project: &Project,
     content_state: &crate::content_state::ContentState,
 ) {
-    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
+    // Undo/redo toast — real command
     // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
     // handlers used to show directly (`app_render.rs`). Keyed on
     // `data_version` (bumped by every
@@ -455,8 +454,7 @@ pub fn push_chrome(
                     color::TEXT_DIMMED_C32,
                 );
             } else if content_state.osc_sync_mode == OscSyncMode::AbletonOsc {
-                // Closed-loop sync health (ABLETON_TRANSPORT_SYNC_DESIGN
-                // D9/D10): amber while a command awaits its ack or while
+                // Closed-loop sync health: amber while a command awaits its ack or while
                 // running position on OSC alone (MIDI clock absent), red
                 // after a command exhausted its retries.
                 use manifold_playback::transport_sync::TransportSyncStatus;
@@ -502,7 +500,7 @@ pub fn push_chrome(
         let can_clear = project.tempo_map.point_count() > 1;
         ui.transport.set_bpm_clear_active(can_clear);
 
-        // Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md section 4/section 5/section 7):
+        // Automation globals:
         // ARM mirrors the runtime arm flag; BACK lights red exactly when any
         // lane override latch is active (Live's Back to Arrangement).
         ui.transport.set_automation_state(
@@ -598,7 +596,7 @@ pub fn push_chrome(
             ui.layer_headers.set_solo_state(tree, i, layer.is_solo);
             // routes_to_led (not the raw flag): an LED-type layer always feeds
             // the strips, so its (indicator, non-toggle) L chip stays truthfully
-            // on — blit_to_led is inert on LED layers (LED_STRIPS_DESIGN.md D11).
+            // on — blit_to_led is inert on LED layers.
             ui.layer_headers
                 .set_led_state(tree, i, layer.routes_to_led());
             ui.layer_headers

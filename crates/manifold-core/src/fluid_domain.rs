@@ -24,7 +24,7 @@ pub struct FluidDomainLayout {
 }
 
 /// The scene box and uniform cells of a liquid domain, shared by every
-/// liquid solver so they agree on cell size (GPU_MPM_SOLVER_DESIGN.md D17).
+/// liquid solver so they agree on cell size.
 /// `domain` is the authored axis-aligned box (scale = full size); without
 /// one, a `domain_size` cube centred in X/Z with its floor at Y = 0.
 pub fn domain_layout(

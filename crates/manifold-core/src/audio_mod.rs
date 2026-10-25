@@ -7,8 +7,7 @@
 //! and shapes it into a control signal via [`AudioModShape`].
 //!
 //! Evaluation lives in `manifold-playback` (the modulation pipeline); this
-//! module owns the model and the pure shaping math. See
-//! `docs/AUDIO_MODULATION_DESIGN.md` section 7–section 8.
+//! module owns the model and the pure shaping math.
 
 use serde::{Deserialize, Serialize};
 
@@ -52,8 +51,7 @@ impl HopClock {
 }
 
 /// Runtime-only per-hop values of one update, so a simulation can read the
-/// value at each of its ticks (LIQUID_SOLVER_SEAM_DESIGN.md P8 (forces and
-/// impulses for GPU liquids)). Cleared, never reallocated, per update.
+/// value at each of its ticks. Cleared, never reallocated, per update.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HopTimeline {
     pub values: Vec<HopValue>,
@@ -131,7 +129,7 @@ pub enum AudioFeatureKind {
     /// the selected `band`.
     Snare,
     /// Tracked pitch of the band's dominant object, normalized to the band's
-    /// bin range (P4, docs/AUDIO_OBJECT_TRACKING_DESIGN.md). HOLDS on dropout
+    /// bin range. HOLDS on dropout
     /// — gate with `Presence`, never read a held value as "low pitch".
     Pitch,
     /// Confidence the band's tracked pitch is a real object (0..1) — the D6

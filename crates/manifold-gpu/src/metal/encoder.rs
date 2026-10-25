@@ -372,7 +372,7 @@ pub struct DepthMsaaPassDesc<'a> {
     /// produces exactly the pre-D3 single-color-attachment pass.
     pub aux_color: &'a [AuxColorAttachment<'a>],
     pub depth_stencil_state: &'a GpuDepthStencilState,
-    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: an optional second draw group,
+    /// An optional second draw group,
     /// run immediately after `draws` within the SAME render pass — no
     /// second clear, no new pass, just a `setDepthStencilState` switch
     /// before the second group's draw calls. Used for the sorted
@@ -1609,7 +1609,7 @@ impl GpuEncoder {
             );
         }
 
-        // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the sorted transparent group,
+        // The sorted transparent group,
         // drawn into the SAME pass right after the opaque group — no second
         // clear, so the opaque pass's on-tile MSAA depth is still resolved
         // against (occlusion by opaque geometry works for free), just with
@@ -1644,7 +1644,7 @@ impl GpuEncoder {
 
     /// Draw a batch of meshes into ONE single-sample colour+depth pass with
     /// independently controlled load actions per attachment
-    /// (`GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E2a). The non-MSAA sibling of
+    /// The non-MSAA sibling of
     /// [`Self::draw_instanced_depth_msaa_batch_desc`]: no memoryless
     /// multisample scratch, no resolve — `target`/`depth_target` are real,
     /// already-populated single-sample textures. `Load` on both lets the
@@ -2647,7 +2647,7 @@ impl GpuEncoder {
     /// another. Offsets and size are multiples of 4 (Metal's rule on macOS);
     /// both ranges are asserted in bounds, as in `copy_buffer_to_buffer`.
     /// Inside a replaying span the copy is a word-copy dispatch instead
-    /// (docs/ENCODE_REPLAY_DESIGN.md D9).
+    ///
     pub fn copy_buffer_range(
         &mut self,
         src: &GpuBuffer,

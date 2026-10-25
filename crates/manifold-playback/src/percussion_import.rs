@@ -515,7 +515,6 @@ impl Default for PercussionImportService {
 /// trims to the clip window), so `start_beat_offset` stays zero. Per-instrument
 /// `target_layer` (set by the inspector dropdown) is carried onto each binding
 /// and honoured at apply time; `None` routes by trigger name (the default).
-/// See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
 pub fn build_clip_detection_options(
     project: &Project,
     pipeline_settings: Option<&PercussionPipelineSettings>,

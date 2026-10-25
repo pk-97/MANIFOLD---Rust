@@ -1,4 +1,4 @@
-//! SCENE_MODIFIER_RT_DESIGN.md P0 (BUG-e3p6.4) — deterministic ray-query
+//! Deterministic ray-query
 //! witnesses for dynamic RT geometry. A0's harness rules: the debug ray
 //! query uses the production candidate-hit walk/source tables/descriptors/
 //! AS; the CPU oracle is Möller–Trumbore over final GPU geometry bytes
@@ -366,7 +366,7 @@ mod rt_dynamic_oracle {
 }
 
 /// P3 acceptance probes (A2: same-frame command order and lifetime —
-/// SCENE_MODIFIER_RT_ACCEPTANCE.md). The caller-ordered seam
+/// The caller-ordered seam
 /// (plan/prepare/encode) is what makes these properties expressible: the
 /// geometry write, the accel update and the ray query all ride ONE caller
 /// command buffer per frame, and the only lifetime guarantee between a

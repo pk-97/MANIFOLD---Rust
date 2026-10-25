@@ -123,7 +123,7 @@ pub enum LayerType {
     Audio = 3,
     /// A direct-drive DMX/LED layer: renders its generator like any layer but
     /// routes ONLY to the LED composite — screen-invisible by construction.
-    /// See `docs/LED_STRIPS_DESIGN.md` section 5b (D10/D11/D14, D15 rename).
+    ///
     Dmx = 4,
     /// A non-rendering child lane whose clips provide independent trigger timing.
     Trigger = 5,
@@ -1090,7 +1090,7 @@ mod tests {
         }
     }
 
-    /// MVP-P3b wire-form pin (LED_STRIPS_DESIGN.md section 5b D15): the int is
+    /// MVP-P3b wire-form pin: the int is
     /// the only form ever written; "Led" stays accepted on load from hand-built
     /// JSON; an unknown value must keep falling back to Video, never panic.
     #[test]

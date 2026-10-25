@@ -1,5 +1,4 @@
-//! The gain-stepper widget's gesture contract (UI_WIDGET_UNIFICATION_DESIGN.md
-//! P2). A `[−]value[＋]` control — `audio_setup_panel.rs`'s per-send gain row
+//! The gain-stepper widget's gesture contract. A `[−]value[＋]` control — `audio_setup_panel.rs`'s per-send gain row
 //! is the sole instance today, and its stepper buttons and the D7
 //! overlay-drag calibration both drive the SAME underlying gain value, so
 //! there is exactly one live gesture to contract: right-click anywhere on the
@@ -37,10 +36,8 @@ pub enum StepperIntent {
     /// one drag (D4) — the panel replays its `*DragBegin/*DragChanged(0.0)/
     /// *DragCommit` trio, mirroring `PanelAction::slider_reset`.
     ResetToDefault,
-    /// Open the type-in box (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8's
-    /// contract-table amendment: `(Value, DoubleClick) -> EditValue`, the
-    /// stepper's last dead stop falling — same shape as
-    /// UI_WIDGET_UNIFICATION_DESIGN P5d's canvas `EditValue` landing).
+    /// Open the type-in box. Contract-table amendment: `(Value, DoubleClick) -> EditValue`,
+    /// the stepper's last dead stop falling, same shape as the canvas `EditValue` landing.
     EditValue,
 }
 

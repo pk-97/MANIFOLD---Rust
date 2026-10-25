@@ -149,7 +149,7 @@ mod tests {
                 "Texture Size",
                 "Track Persist",
                 "Track Regions",
-                // `node.transform_3d` (P1, SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md):
+                // `node.transform_3d`:
                 // this literal enumeration wasn't updated when the atom
                 // landed — a pre-existing gap from that phase, not this one.
                 "Transform 3D",

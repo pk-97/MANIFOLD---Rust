@@ -1,6 +1,6 @@
 //! `AutomationAction` — the transport-agnostic core the agent drives MANIFOLD
-//! through. `docs/UI_AUTOMATION_DESIGN.md` section 3/section 4: one `AutomationAction`
-//! enum, resolved against the tree dump's data (the selector "DOM", section 3) and
+//! through. One `AutomationAction`
+//! enum, resolved against the tree dump's data (the selector "DOM") and
 //! acted on by synthesizing input through the production path (D4). Both
 //! transports (the headless `--script` runner, P2; the dev-only live door,
 //! P3) reach the types and the resolver in this module — neither depends on
@@ -20,7 +20,7 @@ use crate::tree::UITree;
 
 /// One automation request. Transport-agnostic: the ui-snap script driver
 /// (headless) and the dev TCP server (live, P3) both compile scripts down to
-/// this. `UI_AUTOMATION_DESIGN.md` section 4 — committed shape, transcribed exactly.
+/// this. Committed shape, transcribed exactly.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AutomationAction {
     /// Resolve `target` against the current build, synthesize the gesture
@@ -62,7 +62,7 @@ pub enum AutomationAction {
     /// gesture drives) — never a bespoke offset write — and converges by
     /// observing the target's rect move each step (direction auto-detected, so
     /// it works for either container regardless of wheel-sign convention).
-    /// Deep converged card rows (`WIDGET_TREE_DESIGN.md` section 5/section 6) are why this
+    /// Deep converged card rows are why this
     /// exists: a fixed `Scroll { delta }` is fixture-fragile; this is not.
     ScrollTo {
         target: AutomationTarget,

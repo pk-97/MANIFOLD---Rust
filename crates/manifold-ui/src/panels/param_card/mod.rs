@@ -13,8 +13,7 @@
 //! kind-tagged or optional fields (effect-only: `enabled`, badges,
 //! `has_graph_mod`; generator-only: `string_params`). `is_toggle`/
 //! `is_trigger` apply to both kinds (section 8.4 P3b gave effect cards the same
-//! toggle/trigger row rendering generators already had — see
-//! `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` section 8). Readers branch on
+//! toggle/trigger row rendering generators already had — see the trigger row docs). Readers branch on
 //! [`ParamCardKind`] or ignore the field that doesn't apply to them.
 
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
@@ -80,7 +79,7 @@ const MAP_CHEVRON_W: f32 = 14.0;
 /// A row's label/slider/chevron-lane geometry for a given available content
 /// width — the single source both `build_effect_sliders` and
 /// `build_generator` consume instead of each doing their own lane arithmetic
-/// inline (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D2: "one
+/// inline ("one
 /// row-geometry helper... no builder does lane arithmetic inline"). The
 /// chevron lane is reserved only in `CardContext::Author`, where the glyph
 /// can actually draw (BUG-160 follow-up: reserving it in `Perform` too, per
@@ -124,7 +123,7 @@ const CONFIG_BTN_FONT_SIZE: u16 = color::FONT_CAPTION;
 const CHANGE_BTN_W: f32 = 60.0;
 const CHANGE_BTN_H: f32 = 16.0;
 
-// ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D22-D24) ──
+// ── LED composite preview band ──
 // The send path's own 8×120 readback (row = LED position, col = strip index)
 // displayed at the top of the DMX lane's generator card in the rig's physical
 // orientation: 8 vertical strips, native 8×120 bitmap (no transpose), LED 0 at
@@ -143,7 +142,7 @@ pub const LED_BAND_BITMAP_INDEX: usize = 1003;
 pub const LED_BAND_NODE_NAME: &str = "dmx.led_preview_band";
 
 /// The LED composite preview payload for a DMX lane's generator card
-/// (LED_STRIPS_DESIGN MVP-P4, D24). The app-side `LedPreview` mapped across
+/// The app-side `LedPreview` mapped across
 /// the projection boundary: `Frame` carries the send path's own readback
 /// buffer (shared via `Arc` — no clone), `Black` is the send path's blackout
 /// or disabled state. `None` (no payload) renders no band at all.
@@ -178,7 +177,7 @@ pub use state::{
 /// generator: Change button + toggle/trigger/string rows + flat parenting)
 /// while the per-parameter row core — slider + trim/target/range handles + D/E
 /// buttons + driver/envelope/Ableton drawers — is shared verbatim via
-/// [`build_param_row`] / `row_action` (P2, `docs/WIDGET_TREE_DESIGN.md`). The drag-move and
+/// [`build_param_row`] / `row_action`. The drag-move and
 /// drag-end dispatch are shared too, branching on `kind` only at the
 /// [`PanelAction`] emission points.
 pub struct ParamCardPanel {
@@ -200,7 +199,7 @@ pub struct ParamCardPanel {
     // ── Configuration ──
     enabled: bool,
     is_collapsed: bool,
-    /// P2 "card collapse" (`UI_CRAFT_AND_MOTION_PLAN.md` D17) — eases the
+    /// "card collapse" — eases the
     /// card's body height between 0 (collapsed) and 1 (expanded) instead of
     /// snapping, so cards below reflow smoothly (same "AnimF32 drives
     /// `compute_height`" technique as `drawer_height_anim`, one level up:
@@ -265,7 +264,7 @@ pub struct ParamCardPanel {
     // ── Node IDs — generator shell ──
     change_btn_id: Option<NodeId>,
 
-    // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4) ──
+    // ── LED composite preview band ──
     /// The preview payload last pushed by the app. Presence is structural:
     /// `build_generator` only mints the band's chrome node when this is
     /// `Some`, so a non-DMX lane's card (or no-controller `None`) renders
@@ -322,15 +321,15 @@ pub struct ParamCardPanel {
     /// (configure resizes without clobbering existing entries). `resolve_active_tab`
     /// clamps a stale choice to an active one at build time.
     mod_active_tab: Vec<ModTab>,
-    /// Per-param drawer open/close height tween (`UI_CRAFT_AND_MOTION_PLAN.md`
-    /// P1). Eases toward `row_drawer_height(i)` so arming/disarming a modulator
+    /// Per-param drawer open/close height tween
+    /// Eases toward `row_drawer_height(i)` so arming/disarming a modulator
     /// grows/shrinks the drawer and reflows content below. UI-only state, preserved
     /// across rebuilds like `mod_active_tab` (configure resizes without clobbering,
     /// so a forced per-frame rebuild mid-tween doesn't reset it). Ticked only for
     /// `Perform` (inspector) cards; `Author` (graph-editor) cards snap, since
     /// nothing drives their tick — see `configure`.
     drawer_height_anim: Vec<AnimF32>,
-    /// D1 "tab-ink slide" (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — per-param x-position
+    /// "tab-ink slide" — per-param x-position
     /// tween for the sliding underline beneath the mod-config tab strip
     /// (`Trigger`/`LFO`/`Audio`/`Ableton`). Preserved across rebuilds like
     /// `mod_active_tab`/`drawer_height_anim`; ticked by the same `tick_drawers`
@@ -357,8 +356,7 @@ pub struct ParamCardPanel {
     // Per-param OSC addresses (for click-to-copy). Indexed by param index.
     osc_addresses: Vec<Option<String>>,
 
-    /// D5 card-section fold state (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-    /// section 2), keyed by section name. Missing entry = unfolded. On a
+    /// Card-section fold state, keyed by section name. Missing entry = unfolded. On a
     /// scene card it mirrors the instance's saved fold choices
     /// (`set_scene_sections`); elsewhere it is UI-local and resets on
     /// restart.
@@ -376,7 +374,7 @@ pub struct ParamCardPanel {
     /// Range cache — per-param (min, max) pairs, so range edits reach built cards live.
     /// Stored as flat pairs for cache locality: [min₀, max₀, min₁, max₁, ...]
     range_cache: Vec<f32>,
-    /// P2 "value-change flash" (`UI_CRAFT_AND_MOTION_PLAN.md` section 4) — per-param
+    /// "value-change flash" — per-param
     /// one-shot fired when `sync_values` sees a genuine value change (not the
     /// post-`configure()` NaN resync, and not while this card's slider is being
     /// dragged — the drag itself is the feedback). Ticked alongside
@@ -838,7 +836,7 @@ impl ParamCardPanel {
         self.layer_id.as_ref()
     }
 
-    // ── LED composite preview band (LED_STRIPS_DESIGN MVP-P4, D24) ──
+    // ── LED composite preview band ──
 
     /// Structural configure: whether this card carries the band, and its
     /// initial content. Called by the inspector on the (re)build sync; the
@@ -1454,7 +1452,7 @@ pub(super) mod tests {
         assert!(panel.row_host.audio_btn_ids[3].is_some());
     }
 
-    /// `WIDGET_TREE_DESIGN.md` section 5 dump-queryability: every converged card row
+    /// Dump-queryability: every converged card row
     /// carries a param-id-derived automation name on its row-root and drivable
     /// controls, so a `--script` flow can find and drive it directly. This is
     /// the wire VD-035 needed — a modifier param row past its value cell is
@@ -3737,7 +3735,7 @@ pub(super) mod tests {
         ));
     }
 
-    /// D5 card sections (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2): Speed +
+    /// card sections: Speed +
     /// Invert sectioned under "Leaf" (a contiguous run), Scale unsectioned.
     fn gen_config_with_sections() -> ParamSurface {
         let mut c = gen_config();
@@ -3937,7 +3935,7 @@ pub(super) mod tests {
         assert!((expanded_h - base_h - audio_h - DRAWER_BOTTOM_GAP).abs() < 0.1);
     }
 
-    // ── P2 dispatch-family coverage (`docs/WIDGET_TREE_DESIGN.md` section 6/P2) —
+    // ── P2 dispatch-family coverage —
     // roles the pre-existing suite above didn't already regression-pin
     // (DriverBtn/AudioBtn/ToggleBtn/MappingChevron/SectionHeader/ModTab were
     // covered before this lane and stayed green through the RowIndex swap;
@@ -4054,7 +4052,7 @@ pub(super) mod tests {
 
     #[test]
     fn row_identity_survives_an_earlier_row_arming_a_drawer() {
-        // D4 (`docs/WIDGET_TREE_DESIGN.md`): arming a modulator on row 0
+        // Arming a modulator on row 0
         // inserts its config-drawer nodes as SIBLINGS ahead of row 1's own
         // controls (build_effect_sliders parents every row flat to the
         // card's inner-bg) — before P2 this renumbered row 1's auto-salted

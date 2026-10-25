@@ -1,6 +1,6 @@
 //! CPU statements of the whitewater emitter atoms' contracts, line for line
 //! with their WGSL bodies, for the GPU value proofs
-//! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.7). Each threshold test also
+//!Each threshold test also
 //! reports how close the value came to its threshold, so a proof can allow
 //! the GPU to fall the other way on a hair's-breadth decision.
 //!

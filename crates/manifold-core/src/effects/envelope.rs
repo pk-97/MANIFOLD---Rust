@@ -148,8 +148,7 @@ impl ParamEnvelope {
 
 // Custom `Deserialize` accepting both V1.1 (`targetParamIndex: i32`)
 // and V1.2+ (`paramId: "amount"`) project file shapes. Mirrors the
-// `ParameterDriver` impl above. See
-// `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 9.
+// `ParameterDriver` impl above.
 impl<'de> Deserialize<'de> for ParamEnvelope {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

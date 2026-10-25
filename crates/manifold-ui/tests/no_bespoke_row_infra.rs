@@ -1,4 +1,4 @@
-//! INV-8 enforcement (`docs/WIDGET_TREE_DESIGN.md` section 5b/section 6, Peter's standing
+//! INV-8 enforcement (Peter's standing
 //! directive): "Agents must never create their own infra for basic things
 //! like rows, sliders, drawers, etc ever again during implementation."
 //!
@@ -14,15 +14,14 @@
 //! manifest-backed parameters cannot bypass the parameter surface.
 //!
 //! This pins "no NEW bespoke row infra" — it does not (and cannot) prove the
-//! EXISTING allowlisted infra is itself minimal; that is `docs/
-//! WIDGET_TREE_DESIGN.md`'s job, reviewed at each phase landing.
+//! EXISTING allowlisted infra is itself minimal; that is the widget tree work's job, reviewed at each phase landing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Files sanctioned to construct `BitmapSlider` directly — each is either the
 /// widget's OWN home, a shared row-builder that assembles the widget-tree row
-/// model's slider bundle (`docs/WIDGET_TREE_DESIGN.md` section 5b's "the one entry
+/// model's slider bundle ("the one entry
 /// point"), or a plain chrome-slider host predating the row model (D9's scope
 /// fence — chrome settings sliders are explicitly out of this design's
 /// scope, and never grow families).
@@ -34,8 +33,7 @@ const BITMAP_SLIDER_ALLOWLIST: &[&str] = &[
     // shaping sliders) — THE sanctioned entry point for manifest-backed rows.
     // (`param_slider_shared/builders.rs` since the P-S1 directory-module split.)
     "builders.rs",
-    // The generic declarative-drawer API (`docs/AUDIO_MODULATION_DESIGN.md`
-    // section 10.2) — `DrawerRow::Slider` materialises through the SAME widget, one
+    // The generic declarative-drawer API — `DrawerRow::Slider` materialises through the SAME widget, one
     // call site, shared by every drawer kind.
     "drawer.rs",
     // A single gain slider in the layer chrome header — predates the row
@@ -67,7 +65,7 @@ const NODE_ID_HOARD_ALLOWLIST: &[&str] = &[
     // non-`ParamRow` surface (D9 scope fence).
     "clip_chrome.rs",
     // The scene panel — explicitly OUT of this design's scope
-    // (`docs/WIDGET_TREE_DESIGN.md` section 8: "Scene convergence... nothing in
+    // ("Scene convergence... nothing in
     // P1–P4 touches scene files"). Its own migration is a separate design.
     "scene_setup_panel.rs",
 ];
@@ -140,7 +138,7 @@ fn no_bespoke_bitmap_slider_construction_outside_the_allowlist() {
     assert!(
         violations.is_empty(),
         "bespoke BitmapSlider construction outside the sanctioned row-model \
-         entry points (`docs/WIDGET_TREE_DESIGN.md` section 5b) — agents must never \
+         entry points — agents must never \
          build their own slider infra; use `build_param_row`/the row model's \
          shared builders instead. Violating files: {violations:?}"
     );
@@ -165,7 +163,7 @@ fn no_bespoke_node_id_row_hoard_outside_the_allowlist() {
     assert!(
         violations.is_empty(),
         "a new `Vec<Option<NodeId>>` row-id hoard outside the sanctioned \
-         allowlist (`docs/WIDGET_TREE_DESIGN.md` section 5b/INV-8) — this is the \
+         allowlist — this is the \
          id-hoard-as-routing shape the widget-tree layer exists to kill; \
          route through `RowIndex` + `row_action` instead. Violating files: \
          {violations:?}"
@@ -255,7 +253,7 @@ fn parameter_hosts_delegate_registration_and_gestures_to_row_host() {
     }
 }
 
-/// Shared scene cards (PHYSICS_ENGINE_BOUNDARY_DESIGN.md P3, BUG-9rai8):
+/// Shared scene cards:
 /// a card draws a labelled param as a pick list or switch through its host.
 /// Production code never forces a slider with a literal, only the Scene
 /// tab's own surfaces (always a scene surface) pass a literal scene fact,

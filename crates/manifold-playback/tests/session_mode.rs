@@ -1,5 +1,5 @@
 //! Engine-level integration tests for Session Mode P2
-//! (`docs/SESSION_MODE_DESIGN.md`): proves the wiring through the real
+//!Proves the wiring through the real
 //! `PlaybackEngine` — arrangement suppression (section 6), the launch-from-stopped
 //! path (section 4), and scene launch/stop (section 5) — on top of the pure resolution-math
 //! unit tests in `src/session_state.rs`. Headless: `StubRenderer`, no GPU.

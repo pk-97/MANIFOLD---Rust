@@ -1456,7 +1456,7 @@ fn prewarm_pipelines_populates_the_shared_render_cache() {
     );
 }
 
-// --- G-P3 anisotropic filtering (GLB_CONFORMANCE_DESIGN.md D7) -----
+// --- Anisotropic filtering -----
 //
 // Both proofs sample the SAME horizontally-striped texture (constant
 // along U, alternating bands along V — no detail in U at all) with the
@@ -1688,7 +1688,7 @@ fn sample_grazing_row(
         .collect()
 }
 
-/// D7 invariant (`docs/GLB_CONFORMANCE_DESIGN.md` section 4): `max_anisotropy:
+/// Invariant: `max_anisotropy:
 /// 1` must be byte-identical to pre-field behavior. Every call site that
 /// predates the field builds its `GpuSamplerDesc` via `..Default::
 /// default()` and never mentions the field at all — that shape, and a
@@ -1729,8 +1729,7 @@ fn sampler_aniso_one_is_byte_identical() {
     }
 }
 
-/// G-P3 gate proof (`docs/GLB_CONFORMANCE_DESIGN.md`, the F-P3 numeric-
-/// not-look style): aniso 8 must sharpen grazing minification relative
+/// Gate proof (numeric, not-look style): aniso 8 must sharpen grazing minification relative
 /// to aniso 1. High-frequency energy (total variation — sum of absolute
 /// consecutive-sample deltas along the sampled row) is high when the
 /// alternating bands stay resolved and collapses toward zero as they
@@ -1861,7 +1860,7 @@ fn rt_denoise_feed_param_exists_with_correct_default() {
     assert_eq!(param.ty, manifold_node_engine::parameters::ParamType::Bool);
 }
 
-/// RT_QUALITY_SETTINGS_DESIGN.md I3: a ray-resolution change reallocates
+/// A ray-resolution change reallocates
 /// the RT targets and reports the reset — temporal history never survives
 /// a trace-dims change, and a canvas change with truncating-equal trace
 /// dims still reallocates the full-res targets.

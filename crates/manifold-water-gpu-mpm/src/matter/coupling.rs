@@ -1,5 +1,4 @@
-//! MPM's side of Box3D coupling (`docs/GPU_MPM_SOLVER_DESIGN.md` section 5,
-//! D12): the reaction words' decoding and the body term of the substep rule.
+//! MPM's side of Box3D coupling: the reaction words' decoding and the body term of the substep rule.
 //! The owner that steps Box3D is shared: `liquid::coupling`.
 
 use manifold_physics::BodyImpulse;

@@ -1,6 +1,5 @@
 //! The shapes a scene thing declares for the viewport gizmo, by the param
-//! ids that place it (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One
-//! scene-object model)). Where a param lives on the card is the (kind,
+//! ids that place it. Where a param lives on the card is the (kind,
 //! property) table in `manifold_core::scene_schema`; this file holds only the
 //! gizmo declarations. The ids are property names: the scene VM joins an
 //! item's id onto them to find the manifest param.

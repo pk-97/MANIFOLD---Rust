@@ -1,4 +1,4 @@
-//! Projection layer (UI_FUNNEL_DECOMPOSITION_DESIGN.md D1/D2): per-domain
+//! Projection layer: per-domain
 //! `&Project` -> view-model modules, split from the former state_sync.rs god
 //! file. Reads only; projection never sends commands (INV-G5).
 pub(crate) mod cards;

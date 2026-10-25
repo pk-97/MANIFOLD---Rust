@@ -1,5 +1,5 @@
 // node.matter_stats — per-tick statistics of a matter domain
-// (GPU_MPM_SOLVER_DESIGN.md D14, section 3.1). Three passes with one shared
+//Three passes with one shared
 // uniform (same size at binding 0 across entry points):
 //   points_main — each workgroup folds a fixed block of points, then a fixed
 //                 workgroup-memory tree;

@@ -27,7 +27,7 @@ _MIDI_TO_TYPE = {
 # Per-class thresholds. Order matches LABELS_5: kick, snare, tom, hihat, cymbal.
 #
 # kick/snare/hihat+cymbal updated 2026-07-18 to the P4 precision-pass ACCEPTED
-# values (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md P4; orchestrator heldout
+# values (orchestrator heldout
 # acceptance read, eval/scoreboard/p4_heldout_acceptance.json) --
 # threshold_factor 1.15 (kick), 1.3 (snare), 0.5 (hat, applied to BOTH the
 # hihat and cymbal entries below since manifold's "hat" event type is fed by
@@ -63,8 +63,7 @@ def resolve_thresholds(thresholds: Optional[Dict[str, float]] = None) -> List[fl
 def _run_adtof_inference(audio_path: str, fps: int = 100, device: str = "cpu"):
     """Shared model-load + inference helper. Returns the raw (time_steps, 5)
     class-activation array (LABELS_5 order: kick, snare, tom, hihat, cymbal),
-    before any peak-picking. Factored out of detect_drums_adtof (P4,
-    docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §4.2/D6) so the precision
+    before any peak-picking. Factored out of detect_drums_adtof so the precision
     post-processing module (manifold_audio.precision_postprocessing) can
     operate on the same raw activations detect_drums_adtof already computed
     internally, without duplicating the model-load/inference path — both

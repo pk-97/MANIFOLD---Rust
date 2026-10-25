@@ -181,7 +181,7 @@ impl TimelineViewportPanel {
     }
 
     /// One [`AutomationLaneScreen`] per visible lane (P4,
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7); empty whenever
+    /// Empty whenever
     /// `set_automation_lanes` last got no data. Every mutator of an input read
     /// here (lanes, lane heights, tracks, layout rect, scroll, zoom, beats per
     /// bar) calls this, so the cache is never stale. May allocate; reads never do.

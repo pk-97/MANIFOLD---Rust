@@ -1,4 +1,4 @@
-//! SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1c: render-level proof for
+//! Render-level proof for
 //! BUG-237 ("Camera/World/Light params do nothing" — Peter's live report).
 //! The dispatch-level half is proven by
 //! `inspector.rs::scene_card_convergence_tests::light_intensity_commit_writes_the_layer_instance_def_at_root_scope`

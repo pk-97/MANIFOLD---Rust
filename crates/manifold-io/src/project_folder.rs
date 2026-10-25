@@ -1,4 +1,4 @@
-//! Project-folder save semantics (docs/PROJECT_FOLDERS_DESIGN.md D3, section 3.2).
+//! Project-folder save semantics.
 //!
 //! A project is a folder containing at least one `.manifold` file (D1) — the
 //! file itself is the identity, there is no separate marker. [`resolve_save_target`]

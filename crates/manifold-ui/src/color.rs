@@ -329,7 +329,7 @@ pub const SELECTED_BORDER: Color32 = BLUE_BASE;
 /// selection can't be a fill: a tint (`lighten`) vanishes against the colour, and
 /// a blue ring vanishes on a blue layer. A bright near-white ring reads on every
 /// hue and pairs with a small lift — the one distinct "this layer is selected"
-/// signal on a coloured header. See `docs/TIMELINE_UI_REDESIGN.md` section H.
+/// signal on a coloured header.
 pub const SELECTED_LAYER_RING: Color32 = Color32::new(232, 240, 255, 255);
 
 // ── Trim handles (viewport clip edges) ─────────────────────────────
@@ -733,7 +733,7 @@ pub const COLLAPSED_TRACK_HEIGHT: f32 = 58.0;
 /// tall mode; the preset exists so the height vocabulary is complete.
 pub const TALL_TRACK_HEIGHT: f32 = 200.0;
 
-// ── Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) ──────
+// ── Automation lane strips ──────
 // Engaging automation mode grows a content track by one strip per enabled
 // lane — `CoordinateMapper::layer_height` is the single place this height
 // actually applies (never re-derived elsewhere).
@@ -850,7 +850,7 @@ pub const MENU_ITEM_RADIUS: f32 = 4.0;
 pub const HAIRLINE_RADIUS: f32 = 1.0;
 
 // ── Motion ────────────────────────────────────────────────────────────
-// The whole motion vocabulary (`UI_CRAFT_AND_MOTION_PLAN.md` D1/D15): three
+// The whole motion vocabulary: three
 // durations + one overshoot magnitude. `crate::anim::AnimF32` reads these;
 // no widget picks a bespoke duration — three tokens or the system rots.
 /// Hover/press feedback — the fastest, most-felt tween in the kit.

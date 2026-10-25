@@ -599,7 +599,7 @@ struct LifecycleParams {
 
 // node.spawn_whitewater — fusable BUFFER body, GATHER only. One thread per
 // spawn slot j, FLIP's _emitDiffuseParticles (diffuseparticlesimulation.cpp
-// :1912) for one new particle:
+// 1912) for one new particle:
 //   the frame emits total = offsets[emitters − 1]; slot j < min(total,
 //   capacity) takes emission m = j, or ⌊j · total / capacity⌋ past capacity
 //   (a uniform subset), and m's emitter e is the first with offsets[e] > m;
@@ -942,7 +942,7 @@ fn ww_phase_type(
 // liquid velocity is FLIP's MAC trilinear at the old position (0 outside
 // the grid), the solid its node lattice read trilinearly (a node past the
 // lattice reads 0). FLIP's near-solid early-out is dropped
-// (GPU_WHITEWATER_DESIGN.md section 3.9); its range check stays. Slots with
+//Its range check stays. Slots with
 // kind 3 is empty; kind 4 is dust, with FLIP's ID-dependent buoyancy and drag.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.

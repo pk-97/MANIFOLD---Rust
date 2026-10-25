@@ -4,8 +4,8 @@
 //! instead of (or alongside) the procedural `node.bake_environment` studio.
 //!
 //! Shaped identically to `node.gltf_texture_source`
-//! (GLB_CONFORMANCE_DESIGN.md D6/section 3: "copy `gltf_texture_source.rs` wholesale
-//! as the shape") — background decode thread → `Rgba16Float` upload →
+//! (copy `gltf_texture_source.rs` wholesale
+//! as the shape) — background decode thread → `Rgba16Float` upload →
 //! stretch-blit into the chain-allocated `out` slot → mipmapped output
 //! (IMPORT_FIDELITY F-P6's mip contract: `render_scene` samples `envmap`
 //! under heavy minification during IBL prefilter/irradiance convolution, so
@@ -50,7 +50,7 @@ struct HdriBlitUniforms {
 /// the caller's thread — this function is only ever invoked from inside a
 /// `std::thread::spawn` closure (`run()` step 2 below), never on the content
 /// thread, per the `node.hdri_source never blocks the content thread`
-/// invariant (GLB_CONFORMANCE_DESIGN.md section 4).
+/// invariant.
 ///
 /// `image::open` dispatches on the file's magic number (the `exr` feature
 /// registers OpenEXR's), so this accepts any `.exr` regardless of extension
@@ -143,7 +143,7 @@ manifold_node_engine::primitive! {
     ],
     // depth_rule: zero-input IO bridge loading an externally-authored .exr — same reasoning as gltf_texture_source
     depth_rule: Inherit,
-    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.gltf_texture_source's `path`. Wire `out` into node.render_scene's `envmap` input directly (D6: the bake/prefilter path is unchanged — render_scene already consumes any equirect texture on that port) or through node.switch_texture alongside a node.bake_environment output to let a card enum (Softbox vs HDRI) pick between them live. width/height set the output resolution — the decoded EXR is stretched to fill it every frame; the default 2048x1024 keeps the split-sum IBL prefilter's per-frame convolution cost bounded (GLB_CONFORMANCE_DESIGN.md G-P6's cost measurement).",
+    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.gltf_texture_source's `path`. Wire `out` into node.render_scene's `envmap` input directly (D6: the bake/prefilter path is unchanged — render_scene already consumes any equirect texture on that port) or through node.switch_texture alongside a node.bake_environment output to let a card enum (Softbox vs HDRI) pick between them live. width/height set the output resolution — the decoded EXR is stretched to fill it every frame; the default 2048x1024 keeps the split-sum IBL prefilter's per-frame convolution cost bounded.",
     examples: [],
     picker: { label: "HDRI Source", category: Atom },
     summary: "Loads a linear-HDR .exr environment map from disk as a texture, so a real-world HDRI capture flows into node.render_scene's envmap input like any other texture source.",

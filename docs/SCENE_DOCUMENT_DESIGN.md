@@ -7,8 +7,8 @@
 **Status:** APPROVED · waves 1 and 2 built on `wave/scene-document` (df95dd7ce); fix lanes F1, F2 and L6 running · epic BUG-elwvu (Scene document: scenes are the source of truth, the graph is the compiled backend). Lane beads are children of that epic, listed in section 11.
 
 **Document type:** Design and plan. A fresh session builds from this doc alone.
-**Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) section 5 (Phase briefs); [CLAUDE.md](../CLAUDE.md) for seats, briefs and gates.
-**Supersedes:** [SCENE_SETUP_PROGRAMME.md](SCENE_SETUP_PROGRAMME.md); [PHYSICS_ENGINE_BOUNDARY_DESIGN.md](PHYSICS_ENGINE_BOUNDARY_DESIGN.md) section 5.2 (One scene-object model) and section 5.5 (Copy groups); [SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md); the card, exposure and starter sections of [SCENE_SURFACES_DESIGN.md](SCENE_SURFACES_DESIGN.md) and [SCENE_SETUP_PANEL_DESIGN.md](SCENE_SETUP_PANEL_DESIGN.md); the fluid-role model of the water family; the open compound-model lanes G2b to G7.
+**Execution contract:** [CLAUDE.md](../CLAUDE.md) for seats, briefs and gates.
+**Supersedes:** the card, exposure and starter sections of [SCENE_SURFACES_DESIGN.md](SCENE_SURFACES_DESIGN.md); the fluid-role model of the water family; the open compound-model lanes G2b to G7.
 **Judged by:** Peter in the app. No card render sets are made or kept.
 
 Binding constraints:
@@ -34,7 +34,7 @@ These decide the design. Where a source note disagrees, the ruling wins.
 9. **Physics:** one setting, None, Collider or Body. The card shows Mass, Bounce and Friction, with no Advanced section. One `CollisionShape` service gives automatic shapes: the exact mesh for static colliders in Box3D, a spatial split into hulls with automatic detail for bodies, and a distance lattice for water. Its cache key includes scale and water cell size. Water reads Colliders and Bodies whose bounds touch its domain. No kinematic setting. Speed clamps and never errors. A body whose shape is still being built joins when it is ready, and the world never pauses for it. The `CollisionShape` service and the physics install are the one gate into Box3D: nothing non-finite or degenerate ever reaches the solver, and a Box3D assert never aborts the app in the show build (section 7.8).
 10. **Pixel clicking.** The renderer's selection mask pass is extended into an item-id buffer, so a click picks exactly what is drawn. Gizmo handles remain only for things with no pixels (lights, forces, water domains, sources). One selection store, shared by tree, viewport and preview, and it works with gizmos hidden.
 11. **Cameras are repeatable.** A scene layer picks the camera it renders with a live Camera row on the World card: mappable, a cut lands on its frame, no recompile. Removing the picked camera falls back to the first camera in the same undo step. A pick per output or display (multi-display rigs) means rendering the scene once per camera and compositing per display; it needs its own design: BUG-lz538 (per-display camera pick).
-12. **Cards by kind:** one table keyed by (kind, property), rows through the param surface recipe. No preset rows, sections, labels or `cardVisible`. The Lighting section stays, with every light and the environment together in one card. The HDRI file picker is always present in HDRI mode. Bake size and force detail are automatic. What is hidden, what is disabled and what toasts follows section 4. The cards are exactly what section 8 lists; no other layout, styling or naming change. The recipe: [WIDGET_TREE_DESIGN.md](WIDGET_TREE_DESIGN.md) section 5b (Agent contract and enforcement).
+12. **Cards by kind:** one table keyed by (kind, property), rows through the param surface recipe. No preset rows, sections, labels or `cardVisible`. The Lighting section stays, with every light and the environment together in one card. The HDRI file picker is always present in HDRI mode. Bake size and force detail are automatic. What is hidden, what is disabled and what toasts follows section 4. The cards are exactly what section 8 lists; no other layout, styling or naming change.
 13. **Base scene:** camera, sun, environment (sky by default, HDRI one click away), World, one cube with its own Material (default, pending Peter). "Scene" is the first entry in the browser. No starters ship: only the base Scene; Peter builds scenes in the panel and saves them. A saved scene is a file in a closed format (`deny_unknown_fields`). The old scene presets are deleted, Lantern included.
 14. **Testing:** the goal is that nothing Peter opens crashes, freezes or loses his work. One run-everything crash test for scenes, plus the short promise list in section 10. No tests of shape, digests or half-built features; no UI flows; no card render sets.
 15. **Base:** the branch carries G1 (renderer instance space) and G2a (transform parent chain). Their task beads stay open until the branch lands.
@@ -286,7 +286,7 @@ Section 5 lists what carries over.
 - Every Transform section has a link toggle beside Scale X, Y and Z, on by default (Unity's constrain-proportions link; Cinema 4D and Figma proportion locks).
 - Linked: dragging or typing any one axis scales all three in proportion, live during the drag, and the values stay on release; one undo step. Unlinked: each axis is free.
 - It is a card editing helper over the existing three params (default, pending Peter). It adds no param, so modulation, MIDI and OSC still target each axis. The link state is a card setting and is not mapped.
-- Built through the param surface recipe in WIDGET_TREE_DESIGN.md section 5b (Agent contract and enforcement), with no bespoke row infrastructure.
+- Built through the param surface recipe, with no bespoke row infrastructure.
 
 ### 7.18 Fit with the water end game
 
@@ -720,7 +720,7 @@ Files: `scene_compile/copies.rs`, `scene_schema/copies.rs`, Modifier type entrie
 4. Copies of a group take any number of parts (ruling 23): `MAX_GROUP_PARTS` goes.
 
 **L21 (Opus): the scene-wide modifiers: Scene Loop, Math View, Scene Mirror.**
-Files: `scene_compile/scene_loop.rs`, `math_view.rs` and `scene_mirror.rs` (new), `scene_schema/scene_wide.rs` (new; their rows), their Modifier type entries in `scene_doc.rs`, the Loop rig in `scene_schema/camera.rs` and `scene_compile/camera.rs`. Reads docs/SCENE_LOOP_DESIGN, docs/SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN and docs/SCENE_MIRROR_DESIGN first. Joins: after L15 (the Modifier kind and the scene's bounds) and L8 (camera files and the camera pick).
+Files: `scene_compile/scene_loop.rs`, `math_view.rs` and `scene_mirror.rs` (new), `scene_schema/scene_wide.rs` (new; their rows), their Modifier type entries in `scene_doc.rs`, the Loop rig in `scene_schema/camera.rs` and `scene_compile/camera.rs`. Reads docs/SCENE_LOOP_DESIGN and docs/SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN first. Joins: after L15 (the Modifier kind and the scene's bounds) and L8 (camera files and the camera pick).
 1. Scene Loop, Math View and Scene Mirror are Modifier types. They always act on the whole scene, and their card has no Targets row.
 2. A scene holds at most one Scene Loop and one Math View; a second Add is disabled with that reason.
 3. Scene Loop tiles every item into a corridor, and every camera sees it.

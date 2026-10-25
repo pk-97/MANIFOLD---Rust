@@ -652,7 +652,7 @@ fn expire_stale_effect_pending(now: std::time::Instant) {
 }
 
 // ===========================================================================
-// Cross-card chain fusion (docs/CHAIN_FUSION_DESIGN.md).
+// Cross-card chain fusion.
 //
 // A chain is already ONE runtime graph; fusion just ran per card def, so every
 // card seam paid a full-canvas round-trip. A SEGMENT is a maximal run of ≥2

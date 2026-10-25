@@ -294,7 +294,7 @@ impl EditingService {
 
     /// Description of the command `undo()` would act on next. Read this
     /// BEFORE calling `undo()` — see `UndoRedoManager::peek_undo_description`.
-    /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
+    /// D11 undo/redo toast.
     pub fn peek_undo_description(&self) -> Option<&str> {
         self.undo_manager.peek_undo_description()
     }
@@ -632,8 +632,7 @@ impl EditingService {
                 }
             };
 
-            // Never creates a typed lane to make an entry fit (D9,
-            // docs/TIMELINE_INGEST_DESIGN.md section 2).
+            // Never creates a typed lane to make an entry fit.
             if !layer.layer_type.accepts_clips_from(entry.source_layer_type) {
                 skipped += 1;
                 continue;
@@ -1583,7 +1582,7 @@ mod stamp_tests {
 
 #[cfg(test)]
 mod paste_type_guard_tests {
-    // D9 (docs/TIMELINE_INGEST_DESIGN.md section 2): an audio clip pastes only onto
+    // D9: an audio clip pastes only onto
     // an existing audio layer, symmetric with the pre-existing generator/
     // video mismatch guard in `paste_clips`.
     use super::*;

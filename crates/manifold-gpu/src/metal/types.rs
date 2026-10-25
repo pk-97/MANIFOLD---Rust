@@ -141,7 +141,7 @@ impl GpuTexture {
     /// mip-mapped texture to a compute pass that writes per-level content
     /// the hardware `GpuEncoder::generate_mipmaps` blit (box filter) cannot
     /// express — e.g. GGX-importance-convolved specular prefiltering
-    /// (IMPORT_FIDELITY_DESIGN.md D2/F-P1's prefiltered specular chain).
+    /// (the prefiltered specular chain).
     ///
     /// `self` must have been created with `mip_levels > level` and with
     /// `SHADER_WRITE` usage (the view inherits the parent's usage bits —

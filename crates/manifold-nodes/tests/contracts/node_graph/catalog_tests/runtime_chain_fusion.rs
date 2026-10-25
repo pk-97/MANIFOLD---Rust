@@ -1,4 +1,4 @@
-//! Cross-card chain fusion integration (docs/CHAIN_FUSION_DESIGN.md):
+//! Cross-card chain fusion integration:
 //! the per-card build and the fused-segment build of the SAME two-card
 //! chain must render within the pointwise fusion budget of each other,
 //! and the cards' `param_values` must keep driving the fused chain
@@ -381,7 +381,7 @@ fn fused_segment_inner_override_reaches_live_kernel() {
     );
 }
 
-/// State harvest (docs/CHAIN_FUSION_DESIGN.md section 5): rebuilding a chain
+/// State harvest: rebuilding a chain
 /// with the prior runtime as donor must carry a feedback trail across the
 /// rebuild — the rebuilt chain continues exactly like a chain that never
 /// rebuilt. A rebuild WITHOUT the donor must visibly reset (sensitivity

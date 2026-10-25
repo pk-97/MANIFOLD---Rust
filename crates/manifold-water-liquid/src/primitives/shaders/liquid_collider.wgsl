@@ -1,5 +1,4 @@
-// Collider sampling for the GPU liquid atoms (LIQUID_SOLVER_SEAM_DESIGN.md
-// section 3.6), declared through `wgsl_includes` after liquid_pose.wgsl. A
+// Collider sampling for the GPU liquid atoms, declared through `wgsl_includes` after liquid_pose.wgsl. A
 // shape's distance lattice lives in the caller's gathered atlas, so every
 // including body defines the one accessor
 //   fn liquid_atlas_half(index: u32) -> f32
@@ -94,7 +93,7 @@ fn liquid_lattice_gradient(
     return liquid_rotate(rotation, local / scale);
 }
 
-// Node velocity v at world x after one body (GPU_MPM_SOLVER_DESIGN.md D11):
+// Node velocity v at world x after one body:
 // inside the body (φ < 0) and moving into it, v_rel · n < 0 with
 // v_rel = v − v_body(x), v_rel loses its normal part and keeps
 // t̂·max(0, |t| + v_n·friction) of the tangential part; v = v_body + v_rel'.

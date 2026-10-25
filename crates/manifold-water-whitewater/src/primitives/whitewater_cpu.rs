@@ -1,6 +1,5 @@
 //! CPU statements of the whitewater grid atoms' contracts, line for line
 //! with their WGSL bodies, for the GPU value proofs and the O1 tests
-//! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.7).
 //!
 //! Ported from FLIP Fluids diffuseparticlesimulation.cpp, particlelevelset.cpp and gridutils.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 

@@ -410,8 +410,7 @@ impl MidiClockSyncController {
     /// Drain this tick's clock events in order, then forward transport and
     /// position to MANIFOLD.
     ///
-    /// `suppress_clock_plane`: caller-computed gate (ABLETON_TRANSPORT_SYNC_DESIGN
-    /// D5): seek-cooldown (M4L path) OR an unacknowledged AbletonOSC transport
+    /// `suppress_clock_plane`: caller-computed gate: seek-cooldown (M4L path) OR an unacknowledged AbletonOSC transport
     /// command in flight. While true, MIDI Clock must not drive the engine —
     /// position OR transport — because everything Ableton emits is known-stale
     /// until the command plane confirms.

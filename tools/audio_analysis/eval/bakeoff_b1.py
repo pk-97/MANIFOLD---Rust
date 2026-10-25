@@ -1,5 +1,4 @@
-"""ADTOF bake-off phase B1 -- first scoreboard (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md
-2026-07-18 addendum): Stage-1 DSP-only cluster-and-label detector
+"""ADTOF bake-off phase B1 -- first scoreboard: Stage-1 DSP-only cluster-and-label detector
 (manifold_audio.stage1_dsp_detection) vs post-P4 ADTOF, side by side, per
 class, on IDENTICAL dev fixtures, under the identical scoring mechanism.
 

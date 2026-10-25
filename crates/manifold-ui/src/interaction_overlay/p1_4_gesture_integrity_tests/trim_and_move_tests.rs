@@ -1,6 +1,6 @@
 use super::*;
 
-// `docs/UI_WIDGET_UNIFICATION_DESIGN.md` P7.4: prove trim-left/trim-right
+// Prove trim-left/trim-right
 // fan-over (incl. locked-clip skip) and region-select extents survive the
 // fold of the grabbed-clip-id/geometry fields and the fan-over Vec onto
 // `TimelineDrag::TrimLeft(TrimDrag)`/`TrimRight(TrimDrag)`, and the grab

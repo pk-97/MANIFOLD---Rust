@@ -395,7 +395,7 @@ bitflags! {
         const CLIPS_CHILDREN = 1 << 7;
         /// A region (`UITree::begin_region`) opts out of the automatic
         /// `CLIPS_CHILDREN` its construction would otherwise carry —
-        /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D3. Legitimate use is the
+        /// Legitimate use is the
         /// `Ghost` tier (drag ghosts, which must follow the cursor across
         /// region boundaries); any other use must name why in a comment,
         /// same rule as `#[allow(dead_code)]` (CLAUDE.md).

@@ -1,5 +1,5 @@
 //! Drive interaction through the REAL input host, then the caller re-syncs and
-//! re-renders. `select:<layer>` is sugar (`UI_AUTOMATION_DESIGN.md` section 6) for a
+//! re-renders. `select:<layer>` is sugar for a
 //! one-step `AutomationAction::Pointer { target: Query{text}, gesture: Click }`
 //! compiled to the section 4 core (`super::script::click_by_text`): resolve the
 //! target header's rect from the built tree, synthesize a real pointer
@@ -357,7 +357,7 @@ fn drag_readout(ui: &mut UIRoot, data: &mut SceneData, rest: &str) -> Result<Str
     ))
 }
 
-/// P4 Unit A evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` section 7):
+/// Unit A evidence-gathering verb:
 /// `automation_add:<layer_id>:<param_id>:<beat>` adds a breakpoint at
 /// `beat` with value = the param range's midpoint, directly on `data.
 /// project` — same "drive the data field directly, the level under test is
@@ -438,7 +438,7 @@ fn automation_move_point(data: &mut SceneData, rest: &str) -> Result<String, Str
     ))
 }
 
-/// P4 Unit B evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` section 7):
+/// Unit B evidence-gathering verb:
 /// `automation_bend:<layer_id>:<param_id>:<point_index>:<bend>` sets the
 /// point at `point_index`'s shape to `Curved(bend)`, directly on `data.
 /// project` — same "drive the data field, prove the RENDER reacts" level as
@@ -671,7 +671,7 @@ fn lane_param_range(data: &SceneData, layer_id: &str, param_id: &str) -> Option<
 /// routed through the generic `UIEvent::Scroll` → `pending_events` →
 /// `drain_and_dispatch` pipeline `Gesture::Scroll` synthesizes into — that
 /// pipeline is real for the dropdown/timeline, but a no-op here (found while
-/// building `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`'s BUG-060 gate scene: 15
+/// building the BUG-060 gate scene: 15
 /// chained `Gesture::Scroll`s at the inspector moved content ~13px total,
 /// clamped, and stayed there — the event was never reaching
 /// `try_inspector_scroll` at all). `cursor_x` is the inspector rect's
@@ -714,7 +714,7 @@ fn collapse_layer(data: &mut SceneData, target: &str) -> Result<String, String> 
     ))
 }
 
-/// P2 "caret rotate" evidence verb (`docs/UI_CRAFT_AND_MOTION_PLAN.md` P2):
+/// "caret rotate" evidence verb:
 /// `collapse_effect:<layer-id>` toggles `.collapsed` on `target`'s FIRST
 /// effect, both on the model (data field, same "drive the model directly"
 /// convention as `collapse_layer` above) AND directly on the already-built

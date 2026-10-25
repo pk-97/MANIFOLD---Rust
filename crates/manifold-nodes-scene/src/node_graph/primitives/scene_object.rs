@@ -2,7 +2,7 @@
 //! maps, instances, and optional live instance count into a single
 //! [`SceneObject`] wire.
 //!
-//! Per `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D1/D3: an object today is
+//! An object today is
 //! "whatever named group happens to wrap the wires feeding `mesh_k`" — a
 //! convention `SceneVm` reverse-engineers. This primitive makes the object a
 //! typed graph fact instead: it consumes the same wires `render_scene`'s
@@ -36,7 +36,7 @@ use manifold_node_engine::scene::scene_object::{InstanceSpace, SceneObject};
 manifold_node_engine::primitive! {
     name: SceneObjectNode,
     type_id: "node.scene_object",
-    purpose: "Binds one scene object's mesh vertices, transform, material, nineteen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / diffuse transmission / diffuse transmission colour / volume thickness), instances, and an optional live instance count into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
+    purpose: "Binds one scene object's mesh vertices, transform, material, nineteen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / diffuse transmission / diffuse transmission colour / volume thickness), instances, and an optional live instance count into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input. `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
     inputs: {
         vertices: Array(MeshVertex) optional,
         indices: Array(u32) optional,
@@ -233,7 +233,7 @@ impl Primitive for SceneObjectNode {
         ctx.outputs.set_object("object", object);
     }
 
-    /// SCENE_OBJECT_AND_PANEL_V2_DESIGN D2: this node forwards mesh/map/
+    /// This node forwards mesh/map/
     /// instance `Slot`s inside the emitted `SceneObject` struct — resources
     /// referenced through a struct field are invisible to the planner's
     /// normal wire-based lifetime tracking. `carries_resources` is the seam

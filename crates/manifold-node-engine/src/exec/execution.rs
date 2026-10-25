@@ -81,7 +81,7 @@ pub(crate) fn resolve_dims(
 /// stabilises after the first frame: slots allocated for frame 0's peak
 /// intermediates are reused for every subsequent frame at the same graph
 /// topology.
-/// SCENE_MODIFIER_RT_DESIGN.md §3.2 — one recorded dependency snapshot
+/// One recorded dependency snapshot
 /// entry: `(input resource, watched aspect, value seen at the output's
 /// last commit)`.
 type MeshDepSnapshot = (ResourceId, crate::scene::mesh_change::MeshAspect, u64);
@@ -225,7 +225,7 @@ pub struct Executor {
     /// Render slots the viewport outlines (D-102); a new pass takes them.
     scene_viewport_selection: Vec<u32>,
     scene_viewport_gizmo_depth: bool,
-    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values from
+    /// Resolved per-frame values from
     /// the active quality column (realtime vs export). Default = live constants
     /// so tests and non-RT graphs run unchanged. Set per frame via
     /// [`set_rt_quality`]; consumed by `render_scene` through the context.
@@ -315,7 +315,7 @@ pub struct Executor {
     /// Copies of overwritten arrays, taken as their producer finishes.
     /// Reused across consecutive dump frames and dropped when dumping stops.
     dump_array_snapshots: ahash::AHashMap<ResourceId, manifold_gpu::GpuBuffer>,
-    /// Encode replay for outermost substep regions (docs/ENCODE_REPLAY_DESIGN.md),
+    /// Encode replay for outermost substep regions,
     /// on unless a caller turns it off. Off under `dump_all` regardless.
     encode_replay: bool,
     /// One recording cache per outermost region, keyed by its boundary.
@@ -397,33 +397,33 @@ pub struct Executor {
     /// stopping the declaration returns the slot to ready. Read side:
     /// [`crate::node_graph::bindings::NodeInputs::slot_content_ready`].
     slot_pending: Vec<bool>,
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-LOGICAL-resource mesh
+    /// Per-LOGICAL-resource mesh
     /// revisions, indexed by `ResourceId`, sized to the plan's resource
     /// count at the plan-shape reset below. This is the authority; the
     /// per-slot `slot_mesh_revisions` is only its published snapshot, so
     /// pool reuse can never hand one logical resource another's revision
     /// (a recycled slot gets whatever its NEW resource publishes).
     mesh_revisions: Vec<crate::scene::mesh_change::MeshRevision>,
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-resource mesh pending
+    /// Per-resource mesh pending
     /// flags, indexed by `ResourceId`: the producing step's declared
     /// pending OR any readiness input's pending, so a pending source remains
     /// pending through deformers, fusion, and scene bundles and no AS
     /// work may consume it.
     mesh_pending: Vec<bool>,
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-resource dependency
+    /// Per-resource dependency
     /// snapshots for `Dependencies` rules, indexed by `ResourceId`:
     /// the `(input resource, watched aspect, last-seen value)` triples
     /// recorded at the output's last commit. A missing snapshot (first
     /// commit) counts as changed — a fresh token is issued.
     mesh_dep_snapshots: Vec<Option<Box<[MeshDepSnapshot]>>>,
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — the executor's single
+    /// The executor's single
     /// monotonically increasing mesh revision counter. Tokens are unique
     /// within this executor's `rebuild_epoch`; a new epoch (new
     /// `Executor`) starts its own counter, and consumers already fold
     /// the epoch into any cross-executor comparison (the
     /// `slot_generations` precedent).
     mesh_revision_counter: u64,
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-physical-slot published
+    /// Per-physical-slot published
     /// mesh revision snapshot, indexed by `Slot.0`. Written at the same
     /// choke point as `slot_generations` from the logical
     /// `mesh_revisions`. Read side:
@@ -572,7 +572,7 @@ pub struct StepProfile {
 impl Executor {
     /// Mark a persistent resource as already initialized, so the first-frame
     /// clear-to-black at acquisition is skipped. Called by the state harvest
-    /// (docs/CHAIN_FUSION_DESIGN.md section 5) after installing a carried-over
+    /// after installing a carried-over
     /// texture into the resource's slot — without this, the rebuilt
     /// executor's fresh `initialized_persistent` set would wipe the migrated
     /// trail on its first frame.
@@ -974,7 +974,7 @@ impl Executor {
         self.preview_target = node;
     }
 
-    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set the per-frame RT quality values
+    /// Set the per-frame RT quality values
     /// (samples per pixel for each RT term and ray resolution). Call once per
     /// frame before `execute_frame_*` with the resolved values from the active
     /// project column (realtime vs export). Cheap — stores by value, no allocation.
@@ -1749,7 +1749,7 @@ impl Executor {
             self.alias_propagation_state.clear();
             self.alias_propagation_state
                 .resize_with(plan.steps().len(), || None);
-            // SCENE_MODIFIER_RT_DESIGN.md §3.2: (re)size mesh revision
+            // (Re)size mesh revision
             // state to the plan's resources. Zeroed revisions are
             // conservative: no stored comparison can match, so the first
             // commit after a reshape always issues fresh tokens.
@@ -1880,7 +1880,7 @@ impl Executor {
         let mut idx = 0;
         while idx < plan.steps().len() {
             // A substep region is one contiguous block, boundary first
-            // (`docs/GPU_MPM_SOLVER_DESIGN.md` D7); its driver runs the whole
+            // its driver runs the whole
             // block. A physics sample never advances a simulation region.
             let flow = if let Some(region) = plan
                 .substep_regions()
@@ -2840,7 +2840,7 @@ impl Executor {
                 }
             }
 
-            // SCENE_MODIFIER_RT_DESIGN.md §3.2: commit mesh revisions at
+            // Commit mesh revisions at
             // the same choke point. Token issuance honors the same skip
             // condition (`node_declared_unchanged` retains revisions);
             // the slot snapshot publish runs either way so pool rebinds
@@ -5381,7 +5381,7 @@ mod tests {
         );
     }
 
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — executor mesh revision and
+    /// Executor mesh revision and
     /// pending semantics over `Array(MeshVertex)` resources, proven
     /// without a GPU. The fixture drives per-frame declarations through
     /// shared flags, the same shape the production gated sources

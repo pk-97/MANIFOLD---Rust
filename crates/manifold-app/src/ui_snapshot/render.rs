@@ -53,7 +53,7 @@ const ATLAS_FORMAT: GpuTextureFormat = UI_FORMAT;
 /// #2. Harmless to callers: every caller already held `ui` behind a `mut`
 /// binding (it was built via `sync_build(&mut ui, ...)` moments earlier).
 /// Construct the headless panel-bitmap instance and upload the LED composite
-/// preview band if the current build carries one (LED_STRIPS_DESIGN MVP-P4).
+/// preview band if the current build carries one.
 /// Shared by `render_ui_to_png` and the script `Runner`'s `write_png` — both
 /// assemble their own `MainUiPassInputs`, and the seam only draws quads whose
 /// texture was uploaded. The upload re-reads the band buffer regardless of
@@ -341,13 +341,13 @@ pub fn render_graph_editor_to_png(
     tex_h: u32,
     scale: f32,
     path: &str,
-    // UI_AUTOMATION_DESIGN.md P1: when `Some`, write the extended tree dump
+    // When `Some`, write the extended tree dump
     // (`super::dump::dump_tree_ex`) here — the real card-lane/inspector tree
     // (`ui_root.tree`, widget/name-bearing) plus the graph canvas'
     // `HitTargets` enumeration as a `custom_surfaces` entry. `None` skips the
     // dump entirely (unchanged PNG-only behavior).
     dump_path: Option<&std::path::Path>,
-    // D6 verification (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2):
+    // Verification:
     // force these node ids collapsed regardless of the harness's usual
     // "expand everything" default, so a group-face "N params" chip can be
     // captured next to (or instead of) its expanded rows. Empty for every
@@ -655,7 +655,7 @@ pub fn render_transform_proof_to_png(path: &str) {
     tree.set_text_measure(Box::new(
         manifold_ui_paint::native_text::CachedTextMeasure::new(),
     ));
-    // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4: a standalone scratch tree
+    // A standalone scratch tree
     // local to this function, same reasoning as the sidebar wrap above —
     // still a real `UITree`, still subject to `mint`'s debug assertion.
     let proof_region = tree.begin_region(

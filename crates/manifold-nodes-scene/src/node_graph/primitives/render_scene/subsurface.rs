@@ -1,4 +1,4 @@
-//! Optional geometry-based subsurface pass; see SUBSURFACE_MATERIAL_DESIGN.md.
+//! Optional geometry-based subsurface pass; .
 use super::*;
 use manifold_gpu::raytrace::{SubsurfaceMaterial, SubsurfaceParams};
 use manifold_node_engine::scene::material::SubsurfaceMode;

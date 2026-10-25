@@ -1,4 +1,4 @@
-//! GPU_MPM_SOLVER_DESIGN.md section 12 (Invariants), the coupling row's
+//! The coupling row's
 //! presentation: the Live Matter liquid and a Box3D body are drawn at the same
 //! instant, run end to end through `WaterFloatingBoxMatter.json` offline. The
 //! coupling physics (momentum, draft, lift, free flight, export, one Box3D

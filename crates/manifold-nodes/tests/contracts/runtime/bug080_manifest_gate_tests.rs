@@ -1,4 +1,4 @@
-//! PARAM_MANIFEST_GATE_DESIGN.md P1, INV-1: a provisional manifest
+//! INV-1: a provisional manifest
 //! (built against an incomplete registry, `pending_wire` still `Some`)
 //! must never reach `PresetRuntime::try_build` silently.
 use manifold_core::effects::PresetInstance;

@@ -530,7 +530,7 @@ fn build_viewport() -> TimelineViewportPanel {
 }
 
 // ── P7.3 automation-fold pinning ────────────────────────────────────
-// `docs/UI_WIDGET_UNIFICATION_DESIGN.md` P7.3: prove the six automation
+// Prove the six automation
 // gestures' begin→track→commit behavior is byte-identical now that their
 // state lives on `TimelineDrag`'s payload instead of six parallel
 // `Option<...State>` fields. One real lane ("Mirror: amount") with two

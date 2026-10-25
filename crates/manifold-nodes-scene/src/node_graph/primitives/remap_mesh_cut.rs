@@ -53,7 +53,7 @@ impl Primitive for RemapMeshCut {
             .flatten()
     }
 
-    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1):
+    /// Mesh revision declaration:
     /// output record `idx` is a barycentric gather of the source
     /// triangle named by the coincident map record's `w`
     /// (`shaders/remap_mesh_cut_body.wgsl`), and output capacity follows

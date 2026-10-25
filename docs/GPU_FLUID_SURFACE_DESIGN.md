@@ -3,7 +3,6 @@
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
 **Status:** BUILDING · P1–P3 (both passes), P5, P6–P6c, P6e, P6g and Sim Rate built and GPU-proven; P4 dropped; P6d and P6f measured; GPU water follows the FLIP Fluids engine (audit below). Owed: P7–P8, optional-A fusion (BUG-adcx (unwired gather blocks fusion)), surface kernel cost (BUG-l24y (GPU liquid surface kernels cost)) and the capped live clock (BUG-g75v.11 (capped live clock rework) in BUG-g75v (GPU water campaign)). See [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Product boundary (2026-10-07):** the show uses GPU FLIP. CPU FLIP scene stepping is proof-only. D1 live-CPU clauses, D3, D9 and P4 do not apply to product playback. Shared seams, atoms and interpolation remain.
 
 Historical CPU measurements motivating this surface work: At resolution 64 the
@@ -28,8 +27,7 @@ reopened. D7 onward are this design's calls.
 
 Companions: [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md) (current CPU FLIP
 contract; its historical GPU proposal is mined only for surface ideas);
-[FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md) (worker, coupling,
-takes, bake workflow); [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) and
+[DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) and
 [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (atom rules, codegen mandate);
 [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) (residency, retirement,
 temporary arrays).
@@ -653,7 +651,7 @@ pose wiring), `WaterDamBreak.json` (whitewater instances and counts), `FluidSim3
 | Lattice box as scalars | **New, two users** — `node.transform_components` | CPU atom, the inverse of `node.transform_3d`. Buffer codegen binds params and arrays only, and a `Transform` wire into a GPU atom is a fusion cut, so the seam keeps `grid_bounds: Transform` and the surface and MLS-MPM atoms read its centre and size as scalars. |
 | MC emit | **New** — `node.volume_surface_mesh` | D16. `capacity` param (vertices, multiple of 3); `scan` and level set are `BufferGather`; `total` input drives the error. Writes the attributes (retired with CPU FLIP; in git history) writes. |
 | Mesh consumer | **Exists** | `node.scene_object.vertices` → `node.render_scene`, unchanged. |
-| Whitewater to instances | **Built under GPU_MPM_SOLVER_DESIGN.md P1 (Water kernel, look gates and the cost probe)** — `node.particles_to_copies` | Pointwise `FluidParticle` → `InstanceTransform` (`pos_scale` = position, radius), with a `live_count` input that turns slots past the producer's count into holes. `node.copy_positions` goes the other way. |
+| Whitewater to instances | **Built in the GPU MPM solver's P1 (Water kernel, look gates and the cost probe)** — `node.particles_to_copies` | Pointwise `FluidParticle` → `InstanceTransform` (`pos_scale` = position, radius), with a `live_count` input that turns slots past the producer's count into holes. `node.copy_positions` goes the other way. |
 | One `gpu_fluid_mesher` node | **Forbidden** | DECOMPOSING_GENERATORS.md section 1.1 (No fused single-effect or single-generator monoliths). |
 
 Every atom that reads the lattice takes its box as centre and size scalars and its
@@ -704,8 +702,7 @@ coupled rigid pose. Per tick, the worker loses CPU meshing and gains one capture
 
 **Consequences, stated honestly:**
 - One solver tick of added latency on everything fluid, export included (D10).
-- Events quantize to the solver tick: 33 ms at 30 Hz. The quantization rule is
-  FLUID_ENGINE_INTEGRATION_PLAN.md section 5 (Timing, events and lifecycle).
+- Events quantize to the solver tick: 33 ms at 30 Hz.
 - A deforming 60 fps mesh changes RT acceleration structures and volume-optics inputs
   every display frame instead of every published tick. P6 measures and reports this; it
   is outside the surface gate.
@@ -740,8 +737,7 @@ uses `try_recv` ((retired with CPU FLIP; in git history)) — but rigid bodies m
 lands, jump up to `BATCH = 4` ticks per reply ((retired with CPU FLIP; in git history)) and freeze between
 replies. Offline, `advance(true)` blocks on the worker ((retired with CPU FLIP; in git history)), as
 expected. The integration plan chose this ("a coupled scene presents at its slowest
-required solver's accepted time" —
-FLUID_ENGINE_INTEGRATION_PLAN.md section 3 (Architecture and ownership)). This design
+required solver's accepted time"). This design
 keeps it; display-time interpolation removes the visible stepping when the worker keeps
 up.
 
@@ -777,7 +773,7 @@ nextest). New renderer tests carry a `fluid_` prefix so that filter selects them
 Verify once, at the end of the phase.
 
 **Build order after Peter's pivot (2026-09-29, relayed by the lead).** The live solver is
-the GPU MLS-MPM of GPU_MPM_SOLVER_DESIGN.md, writing the particle-frame seam at 60 Hz.
+the GPU MLS-MPM solver, writing the particle-frame seam at 60 Hz.
 FLIP stays the bake engine and becomes a test feed for this surface. So: P1 is cut to the
 capture the test feed needs; P2 builds the seam as specified; P3 is deferred (section 11);
 P4 is dropped; P5 and P6 build the surface. Every atom downstream of the seam reads
@@ -1483,8 +1479,8 @@ available here.
 
 ### P7 — Add Fluid authors the GPU surface
 
-- **Entry state:** P6 merged. Add Water is now the Water scene template (`gpu_flip_family_template`) inserted by `InsertSceneTemplateCommand` in `scene_template.rs`; `AddSceneFluidCommand` is deleted (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.1 (Shared edit and insertion API)).
-- **Read-back:** D9, D12, D13; FLUID_ENGINE_INTEGRATION_PLAN.md section 4 (Scene Panel and creative workflow); GROUPING_GRAPHS.md.
+- **Entry state:** P6 merged. Add Water is now the Water scene template (`gpu_flip_family_template`) inserted by `InsertSceneTemplateCommand` in `scene_template.rs`; `AddSceneFluidCommand` is deleted.
+- **Read-back:** D9, D12, D13; GROUPING_GRAPHS.md.
 - **Deliverables:** the Water template inserts the Liquid Surface group between `node.fluid_surface` and the water object, at 30 Hz, with Surface Detail mapped as in P6. Existing scenes are not migrated. Test `scene_physics_add_fluid_gpu_surface_undo_reload`. UI flow `scripts/ui-flows/scene-fluid-gpu-surface.json`: add fluid → play → raise Surface Detail → undo/redo → save/reload → play again, asserting the group exists and the water object's `vertices` producer is `node.volume_surface_mesh`.
 - **Gate:** the test, the new flow and every `scene-fluid-*` flow on disk pass (count them); focused editing/app/renderer clippy clean.
 - **Demo:** the flow. L3. Hand Peter the worktree launch command.

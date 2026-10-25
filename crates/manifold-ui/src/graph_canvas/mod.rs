@@ -583,7 +583,7 @@ pub struct GraphCanvas {
     /// pattern as `enum_dropdown` / `vec_editor`.
     pub(crate) table_editor: Option<TableEditor>,
 
-    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17) ──────────────────
+    // ── P2 motion ──────────────────
     // No per-frame tick existed anywhere in this module before these three —
     // `GraphCanvas::tick` (below) is the one new per-frame seam, called from
     // `app_render.rs` right next to the existing `canvas.set_snapshot(..)`
@@ -837,7 +837,7 @@ impl GraphCanvas {
     /// exists for verification surfaces (the headless snapshot harness) that
     /// need to show a specific node collapsed regardless of the canvas-wide
     /// default, e.g. proving D6's "N params" chip
-    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2) on a group box next
+    /// on a group box next
     /// to an expanded sibling in the same capture.
     pub fn set_collapsed(&mut self, node_id: u32, collapsed: bool) {
         self.collapsed.insert(node_id, collapsed);
@@ -910,7 +910,7 @@ impl Rect {
 /// app-level input plumbing, same path as the row scrub + expose checkbox.
 // Single-host by design (UI_WIDGET_UNIFICATION D17): the chrome "twin" this
 // once shared a contract with (a sidebar enum picker) was deleted by
-// GRAPH_EDITOR_REDESIGN Phase 6 — chrome cards never render enum dropdowns
+// Chrome cards never render enum dropdowns
 // anymore (enum params render as labeled sliders there). Do not build a
 // shared option-list abstraction between this and `dropdown.rs` — D17 names
 // and rejects that as an adapter trap around a misfit.

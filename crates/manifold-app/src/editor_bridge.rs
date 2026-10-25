@@ -2148,8 +2148,7 @@ impl Application {
 
         // Right lane = the whole main-window inspector column, this window's
         // own `ws.ui_root.inspector` instance, configured in the main tick in
-        // lockstep with the main window's (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md
-        // Change 3). The tree build is shared with the ui-snap script runner
+        // lockstep with the main window's. The tree build is shared with the ui-snap script runner
         // (`editor_frame.rs`, BUG-12iyh (UI runner drives editor window,
         // perform mode and text input)).
         let editor_active_idx = self

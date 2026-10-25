@@ -539,7 +539,7 @@ fn unwired_ao_mask_stays_inert_color_output_matches_within_epsilon() {
 // Built as the FLATTENED atom equivalent of the group rather than an
 // authored `node.group` — same atoms, same wires, same params, just without
 // the group wrapper (the brief's own suggested simplification; groups
-// flatten to this exact shape at load per `docs/NODE_GROUPS_DESIGN.md`, so
+// flatten to this exact shape at load, so
 // this is not a shortcut on the proof, only on how the JSON is authored):
 // `ssao_gtao -> bilateral_blur(H) -> bilateral_blur(V) -> node.mix(Multiply)
 // -> node.masked_mix`. Wires mirror `gltf_import/scene.rs` exactly: `camera`

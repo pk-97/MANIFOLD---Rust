@@ -1,6 +1,5 @@
 //! v1.19.0 → v1.20.0: GPU FLIP Step reads the rigid bodies' touching contacts
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 2.1 (Body handoff amendment),
-//! D16). A saved generator layer carries its own graph snapshot, so a project
+//! A saved generator layer carries its own graph snapshot, so a project
 //! saved before the port has no `domain.contacts → step.contacts` wire. Without
 //! it the step sees no supports, treats a box resting on the floor as free to
 //! sink, and the water drains under it (BUG-beblk (water drains under a box3d)).

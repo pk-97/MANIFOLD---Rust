@@ -1,5 +1,4 @@
-//! Executor repeat on the GPU (`docs/GPU_MPM_SOLVER_DESIGN.md` D7, phase
-//! P0b): per-iteration uniforms reach every dispatch, and a frozen (fused)
+//! Executor repeat on the GPU: per-iteration uniforms reach every dispatch, and a frozen (fused)
 //! region body runs exactly like the unfused one.
 //!
 //! The graph: `seed → boundary`; body `boundary.out → mover_a (speed ←

@@ -207,7 +207,7 @@ pub struct InspectorCompositePanel {
     card_context: CardContext,
 
     /// LED composite preview for the DMX lane's generator card
-    /// (LED_STRIPS_DESIGN MVP-P4, D24). Same storage pattern as
+    /// Same storage pattern as
     /// `card_context`: stored here so a freshly-built card picks it up, and
     /// pushed to the live card when one exists. `None` = no band (non-DMX
     /// lane, or no LED controller).
@@ -311,7 +311,7 @@ pub struct InspectorCompositePanel {
     card_drag_ghost_id: Option<NodeId>,
     card_drag_indicator_id: Option<NodeId>,
     card_drag_label: String,
-    /// The `Ghost`-tier region (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1–D3)
+    /// The `Ghost`-tier region
     /// wrapping the ghost + indicator, in the tree's ghost region; names the
     /// root [`card_drag_ghost_root`](Self::card_drag_ghost_root) reports.
     card_drag_region_root: Option<NodeId>,
@@ -1379,7 +1379,7 @@ impl Panel for InspectorCompositePanel {
     /// sub-panels. Right-clicks now resolve through intent dispatch (with
     /// fold-up over dead zones) instead of `route_right_click`'s exact-id
     /// matching. (clip_chrome has no right-click affordance, so nothing to
-    /// register.) See `docs/NODE_INTENT_DISPATCH.md`.
+    /// register.)
     fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         // Only the active scope built nodes this frame; an inactive scope's cards
         // hold stale ids that now belong to the active content, so registering
@@ -1710,7 +1710,7 @@ mod tests {
         name: &str,
         n: usize,
     ) -> ParamSurface {
-        // Unique id per row (D4, `docs/WIDGET_TREE_DESIGN.md`): a real
+        // Unique id per row: a real
         // manifest never repeats a `ParamId` within one card, and P2 keys
         // every row widget off it — the old `["a","b","c","d"][i % 4]` cycle
         // synthesized a duplicate-id collision no real card can produce, once
@@ -2013,7 +2013,7 @@ mod tests {
         );
     }
 
-    /// `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D5 (superseded by the
+    /// (superseded by the
     /// BUG-160 follow-up): the same fixture built into a Perform-context and
     /// an Author-context panel at the SAME rect must place its param LABEL
     /// identically — only the chevron lane, and therefore the slider track
@@ -2110,7 +2110,7 @@ mod tests {
         );
     }
 
-    /// BUG-108 class-kill (I3, docs/UI_LAYOUT_INVARIANT_LINTS_PROPOSAL.md): the
+    /// BUG-108 class-kill: the
     /// "+ Add Effect" button must never overlap a sectioned layer effect card's
     /// last row. This is the exact defect Peter hit on the rig — a glTF-scene
     /// effect card's SCENE_BUILD P3 section headers (QS1694/Material.001/
@@ -2303,7 +2303,7 @@ mod tests {
         );
     }
 
-    /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 stopgap decision (section "The
+    /// Stopgap decision ("The
     /// stopgap removal"): the bespoke, root-parented `content_clip_id`
     /// (`ClipRegion` at `(rect.x, columns_y, rect.width, columns_h)`) is
     /// gone — decided empirically, not by reading. With the outer
@@ -3040,7 +3040,7 @@ mod tests {
         }
     }
 
-    /// INV-3 regression pin (WIDGET_TREE_DESIGN section 6/section 7 P3): the drag
+    /// INV-3 regression pin: the drag
     /// interaction path reads no geometry snapshot — it follows the live
     /// tree end to end, from a post-scroll cursor position through to the
     /// emitted `PanelAction`. The `drag_hit_test_uses_live_bounds_after_in_

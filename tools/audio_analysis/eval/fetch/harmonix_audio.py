@@ -2,7 +2,7 @@
 
 `eval/fetch/harmonix.py` (P1) pulled only the annotation subtree (beats,
 downbeats, segments, metadata.csv, youtube_urls.csv). Harmonix does not
-redistribute audio; per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §3, matching
+redistribute audio; matching
 real audio to annotated tracks is P3's job, done incrementally and
 best-effort, logging unmatched tracks rather than failing the run. Per the
 design doc's domain directive, the ELECTRONIC slice (Genre == "Dance/Electronic"

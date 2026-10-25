@@ -185,7 +185,7 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
             send.source.layers.clear();
             Some(scene)
         }
-        // RT Quality panel flows (RT_QUALITY_SETTINGS_DESIGN.md P3) — plain
+        // RT Quality panel flows — plain
         // timeline content; the panel itself is pre-opened in script.rs.
         "rtquality" => Some(timeline_scene()),
         "empty" => Some(empty_scene()),
@@ -249,8 +249,8 @@ fn project_scene(path: &str) -> Option<SceneData> {
     })
 }
 
-/// `gltfscene`: a fresh glTF import (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-/// P3's demo vehicle), driven through the REAL production path — the same
+/// `gltfscene`: a fresh glTF import
+/// (demo vehicle), driven through the REAL production path — the same
 /// `assemble_import_graph` + `ImportModelLayerCommand` sequence
 /// `Application::import_model_file` runs on a real drop — so the resulting
 /// card carries genuine importer-seeded `section`s (D9/D5), not a hand-built
@@ -572,7 +572,7 @@ fn scroll_shrink_scene() -> SceneData {
     }
 }
 
-/// P4a evidence scene (`docs/AUTOMATION_LANES_DESIGN.md` section 7): the same layer
+/// evidence scene: the same layer
 /// set as `timeline_scene`, but with the automation transport globals LIVE —
 /// Automation Arm on, lane strips visible — so the transport bar's ARM/BACK/
 /// LANES buttons render their lit state, AND the FLOWERS layer carries two
@@ -695,7 +695,7 @@ fn automation_enum_scene() -> SceneData {
     data
 }
 
-/// P5 (`docs/AUTOMATION_LANES_DESIGN.md` section 7 addendum) evidence scene: proves
+/// evidence scene: proves
 /// the "first-draw path" end to end — a param the user has chosen but never
 /// automated renders as a flat line with NO dot (not `automation_scene`'s
 /// already-real Mirror/Bloom lanes, which would make the two states
@@ -937,7 +937,7 @@ fn selection_clips_scene() -> SceneData {
 /// `automation_latched_params` — its card shows the gray (overridden) dot.
 /// Mirrors `automation_scene`'s Mirror-live / Bloom-overridden pairing.
 ///
-/// section 9 evidence (`LIVE_AUDIO_TRIGGERS_DESIGN.md` U-P2): Strobe carries an
+/// Strobe carries an
 /// armed trigger-gate audio mod (`clip_trigger`, mode Transient) and Plasma
 /// carries one too (mode Both) — both reach the STANDARD audio-mod drawer
 /// (Source/Feature/Band/Inv/Delta/Amount/Attack/Release) plus its trailing
@@ -1119,7 +1119,7 @@ fn inspector_scene() -> SceneData {
     }
 }
 
-/// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 gate scene: BUG-060 (inspector
+/// BUG-060 (inspector
 /// painting over the footer). Reuses `inspector_scene`'s Mirror/Bloom/Strobe
 /// chain (Strobe's trigger-gate drawer already open, per its own doc comment)
 /// and stacks SEVEN more Bloom-shaped effects, each with its own armed audio
@@ -1314,7 +1314,7 @@ fn bug060heavy_scene() -> SceneData {
     }
 }
 
-/// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 gate scene: BUG-047 (Audio Setup
+/// BUG-047 (Audio Setup
 /// panel content spilling past the panel edge with ≥18 rows). 20 sends, each
 /// carrying a source layer and one enabled trigger route, so both the
 /// Inputs and Consumers sections of the Audio Setup modal (opened via
@@ -1517,7 +1517,7 @@ fn envelope_modulation_scene() -> SceneData {
     }
 }
 
-/// LED_STRIPS_DESIGN MVP-P3c L3 evidence scene (`scripts/ui-flows/led-
+/// LED evidence scene (`scripts/ui-flows/led-
 /// browser-scoped-open.json`): one plain video lane so the timeline split
 /// reads as a real session, plus one SELECTED DMX layer as the subject —
 /// built exactly like `AddLayerCommand`'s Dmx arm (`manifold-editing`'s

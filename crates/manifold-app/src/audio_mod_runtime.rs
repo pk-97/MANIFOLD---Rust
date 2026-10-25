@@ -3,7 +3,7 @@
 //! Owns the always-on audio capture device + downmix worker for audio
 //! modulation, and feeds the playback engine a fresh per-send feature snapshot
 //! each tick. Lives on the content thread (which owns the engine and, through
-//! it, the project). Step 3 of `docs/AUDIO_MODULATION_DESIGN.md`.
+//! it, the project). Step 3 of the audio modulation path.
 //!
 //! ## One analyzer per send
 //!

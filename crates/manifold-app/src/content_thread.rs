@@ -163,7 +163,7 @@ pub struct ContentThread {
     // ── LED output ──
     /// LED/ArtNet output controller. None when not initialized.
     pub led_controller: Option<manifold_led::LedOutputController>,
-    /// Cached LED composite preview state (LED_STRIPS_DESIGN D24 state table),
+    /// Cached LED composite preview state,
     /// published on every tick's `ContentState`. `None` = no controller or
     /// never enabled; `Black` = blackout/disabled (cached frame cleared);
     /// `Frame` = latest completed readback. Updated in the LED send block.
@@ -233,7 +233,7 @@ pub struct ContentThread {
     /// passes.
     pub reactions: crate::content_reactions::ReactionState,
 
-    /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — set by
+    /// undo/redo toast — set by
     /// `handle_command`'s `Undo`/`Redo` arms (peeked from
     /// `EditingService::peek_undo_description`/`peek_redo_description` BEFORE
     /// the command moves stacks), consumed by `.take()` at the next
@@ -1659,8 +1659,7 @@ impl ContentThread {
         let authority = {
             // MIDI Clock is the timing plane and outranks everything. In
             // AbletonOSC mode the bridge's transport channel claims OSC
-            // authority as the FALLBACK tier (ABLETON_TRANSPORT_SYNC_DESIGN
-            // D10): the ladder below puts CLK first, so this only takes
+            // authority as the FALLBACK tier. The ladder below puts CLK first, so this only takes
             // effect when the clock plane is absent or dies mid-set —
             // degraded-but-moving beats frozen. In M4L mode, timecode
             // claims OSC authority as before.
@@ -1740,7 +1739,7 @@ impl ContentThread {
         // Snapshot SyncTarget state before passing &mut engine as SyncArbiterTarget.
         // The clock plane is suppressed while a user seek's round trip is in
         // flight (cooldown, M4L path) OR while an AbletonOSC transport
-        // command awaits its ack (ABLETON_TRANSPORT_SYNC_DESIGN D5) — in
+        // command awaits its ack — in
         // both cases what Ableton emits is known-stale.
         let suppress_clock_plane = self.sync_arbiter.is_seek_cooldown_active(now)
             || self.ableton_bridge.transport_sync_pending();
@@ -1845,7 +1844,7 @@ impl ContentThread {
         }
 
         // AbletonOSC inbound transport relay — closed-loop via the transport
-        // state machine (ABLETON_TRANSPORT_SYNC_DESIGN D10). The machine
+        // state machine. The machine
         // only emits actions for genuine external changes (its own commands
         // are consumed as value-matched acks, which is what killed the
         // 2026-era play/pause oscillation that had this path amputated).
@@ -2055,7 +2054,7 @@ impl ContentThread {
             ClockAuthority::MidiClock => {
                 // Suppressed during the seek cooldown (user scrub, M4L path)
                 // AND while an AbletonOSC transport command awaits its ack
-                // (ABLETON_TRANSPORT_SYNC_DESIGN D5): what Ableton's clock
+                // What Ableton's clock
                 // reports then is the old position.
                 if !self
                     .sync_arbiter

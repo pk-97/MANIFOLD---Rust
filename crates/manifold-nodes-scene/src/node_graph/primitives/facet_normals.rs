@@ -80,7 +80,7 @@ impl Primitive for FacetNormals {
             .map(|(_, n)| *n)
     }
 
-    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): the
+    /// Mesh revision declaration: the
     /// kernel writes normals only — output record `idx` keeps its input
     /// position and uv (`shaders/facet_normals_body.wgsl`) — so topology
     /// tracks input `in` topology and positions track input `in`

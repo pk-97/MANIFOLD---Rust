@@ -316,7 +316,7 @@ impl Application {
         saved
     }
 
-    /// Collect All and Save (PROJECT_FOLDERS_DESIGN D6): copy every external
+    /// Collect All and Save: copy every external
     /// asset into the project folder's `Media/` family subfolders, re-point the
     /// stored paths to the in-folder files, and save. Runs on the UI thread
     /// against `local_project` — the same replica manual save serializes — so
@@ -1644,7 +1644,7 @@ impl Application {
         // The window-free half of the open, shared with the ui-snap script
         // runner (`editor_frame.rs`): the workspace, the canvas and the
         // inspector column projected from the same snapshot the main window
-        // reads (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md).
+        // reads.
         let active_idx = self
             .active_layer_id
             .as_ref()

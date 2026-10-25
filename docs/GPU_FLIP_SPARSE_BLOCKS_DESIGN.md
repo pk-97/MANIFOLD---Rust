@@ -2,11 +2,11 @@
 
 <!-- index: Design for BUG-jyot (GPU FLIP at 128 for 60 fps), Option C: the GPU FLIP step classifies 8^3 tiles on the GPU each tick (ring distance from particle-holding tiles), runs the dense lattice passes and later the multigrid pressure solve over tile lists by indirect dispatch, keeps every skipped buffer at the dense pass's value, and proves bitwise equality against the dense path on the 64 Dam Break. -->
 
-**Status:** IN PROGRESS · BUG-jyot (GPU FLIP at 128 for 60 fps), Option C. Sparse tile/cell/solve/body passes built; owed: all_tiles-forced run and Phase 2 measurement. BUG-lxxl (coarse solve): standalone stage-2 component pressures and stage-3 scatter/local projection built, both GPU value proofs pass. Solve Level paths unchanged; stages 4–6 remain open. Contract: no size/quality caps, one step per frame, GPU-owned block lists, defined skipped buffers, explicit capped-solve stats, all GPU through `manifold-gpu`, no new shared state, dense-equivalent sparse output. See section 11.1 (Lentine port) and GPU_FLIP_STRUCTURAL_OPTIONS.md section 6 (Option C — sparse tiles).
+**Status:** IN PROGRESS · BUG-jyot (GPU FLIP at 128 for 60 fps), Option C. Sparse tile/cell/solve/body passes built; owed: all_tiles-forced run and Phase 2 measurement. BUG-lxxl (coarse solve): standalone stage-2 component pressures and stage-3 scatter/local projection built, both GPU value proofs pass. Solve Level paths unchanged; stages 4–6 remain open. Contract: no size/quality caps, one step per frame, GPU-owned block lists, defined skipped buffers, explicit capped-solve stats, all GPU through `manifold-gpu`, no new shared state, dense-equivalent sparse output. See section 11.1 (Lentine port) and Option C (sparse tiles).
 
 The occupied-block rule in the contract comes from BUG-l2h3 (SWASH to a live instrument) item .10, closed 2026-10-02 as deferred to BUG-jyot.
 
-Companions: GPU_FLIP_PRESSURE_SOLVE.md (the solver as built), GPU_WHITEWATER_DESIGN.md (reads the step's faces), DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes).
+Companions: DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes).
 
 ## 0. The finding that shaped this design
 
@@ -170,7 +170,7 @@ Stats proof: word 16 at frame 0 of `dam_break(64)` equals the CPU count's halo1 
 
 ### Phase 1 — tile table + lattice passes
 
-**Entry state:** branch `feat/solver-occupied-blocks` at 955e47752; this doc and GPU_FLIP_STRUCTURAL_OPTIONS.md committed.
+**Entry state:** branch `feat/solver-occupied-blocks` at 955e47752; this doc committed.
 **Read-back:** sections 3–6 of this doc, `gpu_flip_step.rs` `encode` :526 and `extend` :326, the pocket-gate indirect dispatch :378, `gpu_flip_step.wgsl` :1213–1676, `extent.rs:1202`, ADDING_PRIMITIVES.md (stage-node exemption).
 **Deliverables:** `TileTable` and the four kernels; the cell passes over C (the extend stays dense, D-4); `all_tiles` behind `gpu-proofs`; `tiles.retire`; stats word 16 with every call site; the four proofs of section 6; `gpu_scope.py` unchanged unless a new file falls outside its prefixes.
 **Gate, positive:** all section 6 proofs green through `scripts/gpu_queue.py -- cargo test --manifest-path ".claude/worktrees/slot-5/Cargo.toml" -p manifold-nodes --features gpu-proofs gpu_flip`; CPU extent proofs green before any GPU run; `cargo clippy -p manifold-nodes -- -D warnings` clean.
@@ -189,7 +189,7 @@ Opened on Phase 1's measure (the solve was 62% of the tick at 64). Phase 2a, the
 - **Frontier-only extend** (sweep only records at the current layer's frontier, every source included): the only sparse extend that can be bitwise, because the dense extend's sources are the walls and the gravity-written far field as well as the liquid (D-4) — a tile-ringed layer with a canonical read cap misses the wall shells. A different algorithm with its own proof; after Phase 2's measure, and only if the extend's ~1.2 ms at 64 is then worth it.
 - **Workgroup scan for `tiles.lists`** if the 1-thread builder measures over 0.3 ms at 256³.
 - **Solids, pockets, forces, `subtract_pressure`, `constrain_solid_faces`, `faces_to_particles` over tile sets:** after Phase 2's measure says what is left.
-- **Whitewater grid atoms over the same lists:** GPU_WHITEWATER_DESIGN.md's call once the table exists.
+- **Whitewater grid atoms over the same lists:** the call is made once the table exists.
 
 ## 10. Decided
 
@@ -206,7 +206,7 @@ Opened on Phase 1's measure (the solve was 62% of the tick at 64). Phase 2a, the
 
 ## 11. Solve Level — the pressure solve one level down (built; ruling 2026-10-03: (a) Rᵀ, (b) Pᵀ B P, (c) the pocket label coarsened)
 
-The cut the node table points at (section 7, the node measure): the step is 71% of the 64 frame and 69% at 128, and inside the step the solve is 37% and the solve plus the body passes 51% of the stamped dispatch time (the 2c per-dispatch table at 64: `gpu_flip.pressure.*` 9.22 ms, `gpu_flip.bodies.*` 3.59 ms, the rest of the step 12.42 ms). The form is `GPU_FLIP_STRUCTURAL_OPTIONS.md` section 7 (Option D — coarse-grid projection), Lentine, Zheng and Fedkiw 2010, without its local velocity correction; the FLIP Fluids engine has no coarse solve to port.
+The cut the node table points at (section 7, the node measure): the step is 71% of the 64 frame and 69% at 128, and inside the step the solve is 37% and the solve plus the body passes 51% of the stamped dispatch time (the 2c per-dispatch table at 64: `gpu_flip.pressure.*` 9.22 ms, `gpu_flip.bodies.*` 3.59 ms, the rest of the step 12.42 ms). The form is Option D (coarse-grid projection), Lentine, Zheng and Fedkiw 2010, without its local velocity correction; the FLIP Fluids engine has no coarse solve to port.
 
 **The param.** `solve_level` (label Solve Level, Int, default 0, range 0 to 4) on GPU FLIP Domain, next to Resolution, published to every step with the lattice. 0 is today's solve on the fine lattice. `k` runs the conjugate gradient on V-cycle level `k` (every side halved `k` times, rounding up): the pressure has `2^k` fine cells a side per unknown, the particles, transfers, advection, extend, surface and whitewater keep the fine lattice. A `k` past the coarsest level is a node error (`levels − 1` is the most the lattice has), never clamped. Live, like Resolution: a change restarts nothing, the next tick solves at the new level. Default unchanged is the whole quality story: the audience never sees the coarse pressure unless Peter turns it.
 

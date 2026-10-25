@@ -3,7 +3,7 @@
 //! an [`EffectGraphDef`] (the nodes + wires visible at the current editor
 //! scope).
 //!
-//! See `docs/NODE_GROUPS_UI_DESIGN.md`. Three operations:
+//! Three operations:
 //!
 //! - [`infer_interface`] — given a selection, work out which wires cross its
 //!   boundary and therefore which input/output ports the group needs. This is

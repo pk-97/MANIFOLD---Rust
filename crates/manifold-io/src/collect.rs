@@ -1,4 +1,4 @@
-//! The asset-path inventory (PROJECT_FOLDERS_DESIGN.md D4).
+//! The asset-path inventory.
 //!
 //! [`collect_asset_paths`] is THE enumeration of every external file a project
 //! references — video library clips, audio clips, layer video folders, image
@@ -454,7 +454,7 @@ fn kind_of(load: NodeFileLoad, path: &str) -> AssetKind {
 
 // ── Collect All and Save (D6) ──────────────────────────────────────
 
-/// What one Collect All and Save pass did (PROJECT_FOLDERS_DESIGN.md D6).
+/// What one Collect All and Save pass did.
 /// `copied` counts unique files or asset directories physically written
 /// (file/bundle content deduped by full SHA-256), `already_local` counts refs already inside the project
 /// folder, `re_pointed` counts refs whose stored path was rewritten to the
@@ -1823,7 +1823,7 @@ mod tests {
         }));
     }
 
-    /// BUG-bbg5 pin (LED_STRIPS_DESIGN.md section 5b D16): the string-param
+    /// BUG-bbg5 pin: the string-param
     /// walk gates on `hosts_generator()` (Generator + Dmx), not
     /// `== Generator`. A Dmx lane hosts a generator and its file-path string
     /// params must collect — pre-widening the walk silently skipped them and
@@ -1901,7 +1901,7 @@ mod tests {
         assert!(!unflagged_json.contains("file_path"), "{unflagged_json}");
     }
 
-    // ── P4 gate (PROJECT_FOLDERS_DESIGN.md): Collect All and Save round trip ──
+    // ── P4 gate: Collect All and Save round trip ──
     //
     // Synthetic project referencing fixture files in a temp dir — video + audio
     // + a GLB carried as a binding-driven string param (no flag) whose value
@@ -2244,7 +2244,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    // ── P5 (PROJECT_FOLDERS_DESIGN.md) ─────────────────────────────
+    // ── P5 ─────────────────────────────
 
     /// `node.image_folder` string param → folder-valued ref enumerates Images,
     /// Collect copies the tree into `Media/Images/`, and the per-clip override
@@ -2692,7 +2692,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Coverage guard (PROJECT_FOLDERS_DESIGN P5 enforcement): source-scans the
+    /// Coverage guard: source-scans the
     /// manifold-core model files for `pub …path…: String` / `Option<String>`
     /// field declarations and asserts each field name is named in this test's
     /// known-covered list. A NEW path field in the model must fail this test

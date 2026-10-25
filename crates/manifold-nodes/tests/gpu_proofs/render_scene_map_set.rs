@@ -1,5 +1,5 @@
-//! `node.render_scene` per-object map-set proof (IMPORT_FIDELITY_DESIGN.md
-//! D3/D4, F-P2). Numeric, no image judgment — same discipline as
+//! `node.render_scene` per-object map-set proof.
+//! Numeric, no image judgment — same discipline as
 //! `render_scene_ibl.rs`.
 //!
 //! Test texture recipe: `node.linear_gradient` -> `node.gradient_map` with

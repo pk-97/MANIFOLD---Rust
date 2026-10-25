@@ -8,18 +8,9 @@ doc to read before touching fusion, and the doc a bug hunt attacks. It
 supersedes the *status* sections of the older design docs (which record how we
 got here, not where we are):
 
-- `GRAPH_FREEZE_COMPILER_DESIGN.md` — the original design + adversarial review.
-  Still correct on philosophy (section 0, section 7, section 8); its section 12 status ends at "ColorGrade
-  only" and its perf-gate plan (section 12.3 step 6) describes a mechanism that was
-  later **deleted** (see section 6 below).
-- `CHAIN_FUSION_DESIGN.md` — segment design. Correct except every mention of a
-  "per-region gate on every cross-card region": the fuse decision is structural
-  now, there is no measurement.
 - `BUFFER_CHAIN_FUSION_DESIGN.md (deleted)` — written before derived-uniform fusion
   shipped. Its blocker table is resolved; FluidSim buffer regions fuse today
   (`fluidsim_buffer_fusion_renders_like_unfused`).
-- `GRAPH_COMPILER.md` — a walked-back 2026-05 brainstorm (`for_each_n`).
-  Historical only; nothing in it is the shipped compiler.
 
 `freeze/classify.rs`'s `Gather` /
 `BufferGather` / `Source` doc comments no longer claim a gather input or a
@@ -486,7 +477,7 @@ invariant a fused def must respect:
     A pending `temporal_upscale` change must not resize the render beneath
     existing attachments, in either direction. Merely checking that outputs
     exist is insufficient; native and reduced attachments can both be present.
-12. **Substep regions** (`docs/GPU_MPM_SOLVER_DESIGN.md` D7) — the executor
+12. **Substep regions** — the executor
     runs a boundary once, then its contracted body N times per frame through
     the same step evaluator the frame pass uses, capturing after each
     iteration. Fused body kernels run per iteration and read that iteration's
@@ -512,7 +503,7 @@ invariant a fused def must respect:
   loose floor so coverage can't silently collapse).
 - **First tool for "why didn't X fuse":** `graph-tool fusion <file.json>` —
   per-node class, region membership and cut reasons for one def. The
-  library-wide refusal census is `docs/fusion_census.md`; its header names the
+  library-wide refusal census is a generated file; its header names the
   regenerate command.
 - **Dump a fused kernel:** the fused def's nodes carry `wgsl_source` inline —
   print it from any test, or read the def out of `fused_view_for`.

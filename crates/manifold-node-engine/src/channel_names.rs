@@ -182,7 +182,7 @@ pub mod well_known {
         DEPTH = "depth";
 
         // ─── Liquid particle frames, surface records and matter
-        // (GPU_FLUID_SURFACE_DESIGN.md, GPU_MPM_SOLVER_DESIGN.md) — named so
+        // Named so
         // generated kernels keep them ─
         POSITION_RADIUS = "position_radius";
         CENTER_RADIUS = "center_radius";
@@ -211,16 +211,16 @@ pub mod well_known {
         ATLAS_OFFSET      = "atlas_offset";
         SCALE_MIN         = "scale_min";
 
-        // ─── Liquid face grid (GPU_FLIP_PRESSURE_SOLVE.md): the three face
+        // ─── Liquid face grid: the three face
         // velocities a padded cell owns
         FACE_VELOCITY = "face_velocity";
         FACE_WEIGHT = "face_weight";
-        // GPU_WHITEWATER_DESIGN.md section 3.3: a cell's nearest surface
+        // A cell's nearest surface
         // crossing and the level at its centre; a value still to extrapolate
         CROSSING = "crossing";
         LEVEL = "level";
         KNOWN = "known";
-        // GPU_WHITEWATER_DESIGN.md section 3.4: a spawn record for the lifecycle
+        // A spawn record for the lifecycle
         POSITION_LIFETIME = "position_lifetime";
         KIND = "kind";
         INFLUENCE = "influence";
@@ -245,7 +245,7 @@ pub mod well_known {
 ///    well-known set's few-dozen entries.
 /// 2. Runtime overflow map populated via [`register_runtime_name`] —
 ///    covers names introduced by `wgsl_compute` shader field parsing
-///    (per `docs/CHANNEL_TYPE_SYSTEM.md` section 8.4). Bounded by the
+///    Bounded by the
 ///    distinct field-name set across all `wgsl_compute` shaders
 ///    loaded in a session; in practice tiny.
 ///

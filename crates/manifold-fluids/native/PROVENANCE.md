@@ -188,5 +188,4 @@ force/impulse response error below 7.9e-9. A same-grid old-velocity control drif
 also completes one second at both intervals: maximum drift is 0.00320/0.00377 m
 and hydrostatic force error is 1.23% at dx 0.05 m. Neither fixture establishes
 long-term energy bounds, viscous settling or moving-contact/render alignment. App worker ownership,
-authored density and production memory/performance qualification remain required in
-[`FLUID_ENGINE_INTEGRATION_PLAN.md`](../../../docs/FLUID_ENGINE_INTEGRATION_PLAN.md).
+authored density and production memory/performance qualification remain required.

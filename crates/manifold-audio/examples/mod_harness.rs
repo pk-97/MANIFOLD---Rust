@@ -33,8 +33,7 @@
 //! (the constant-pitch case), and `notes` — a 140 BPM 8th-note bassline
 //! re-attacking 150 Hz on every note but for one octave-jump note in bar 2 —
 //! must show presence surviving the re-attacks and the tracked pitch jumping
-//! to 300 Hz and back (the D6 unified-stability real-clip case,
-//! `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2c). `notes` always renders with
+//! to 300 Hz and back. `notes` always renders with
 //! its own 140 BPM gridlines even without `--bpm`, proving the known-BPM
 //! path. The spectrogram is drawn with the scope shader's exact display
 //! transform and jet colormap (ported from `spectrogram.wgsl`), so it reads
@@ -64,8 +63,7 @@
 //! scenario's own known f0 curve (dive = the exponential glide formula,
 //! wobble/growl = constant 150.0) or `NaN` where there is no single tracked
 //! fundamental (kicks, busymix, riser) or for file inputs (unknown ground
-//! truth). `salience_f0_hz` is the P1 harmonic-sum salience peak (Full window
-//! only, `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` D1) converted to Hz, or `NaN`
+//! truth). `salience_f0_hz` is the P1 harmonic-sum salience peak converted to Hz, or `NaN`
 //! on a fully-floored column. `tracked_f0_hz` is the P2 D5 Full-tracker's
 //! `pitch_hz`, `NaN` until the Full tracker has acquired at least once
 //! (`pitch_confidence` still exactly 0). `<band>_pitch`/`<band>_presence` are
@@ -98,11 +96,11 @@ const FEATURE_NAMES: [&str; 7] = [
     "PRESENCE",
 ];
 /// Index of `PITCH`/`PRESENCE` in [`FEATURE_NAMES`] — the P2 D5 tracker
-/// outputs, appended below the original five (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2).
+/// outputs, appended below the original five.
 const PITCH_IDX: usize = 5;
 const PRESENCE_IDX: usize = 6;
 /// Index of `TRANSIENTS` in [`FEATURE_NAMES`] — the P3 fire-count instrument
-/// reads this directly (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3).
+/// reads this directly.
 const TRANSIENTS_IDX: usize = 4;
 /// The doc's display rule (D6): the PITCH lane only draws where the SAME
 /// band's presence has cleared this bar — a low-confidence pitch reading is a
@@ -470,12 +468,12 @@ fn analyze_and_render(
 
     // ── P1 report: naive argmax (no harmonic sum) vs salience argmax,
     //    percentage of hops (after warm-up) within ±2 bins of the scenario's
-    //    own known f0 — the numeric gate from
-    //    docs/AUDIO_OBJECT_TRACKING_DESIGN.md P1. dive/growl only: they carry
+    //    own known f0 — the numeric gate.
+    //    dive/growl only: they carry
     //    a real ground-truth curve; wobble/kicks/busymix/riser and file jobs
-    //    don't (no gate at P1 — see the doc's P1 section).
+    //    don't (no gate for these).
     if args.selftest && (label == "dive" || label == "growl") {
-        // P1 gate, as amended 2026-07-06 (see AUDIO_OBJECT_TRACKING_DESIGN P1):
+        // P1 gate, as amended 2026-07-06:
         // per-hop argmax is "trackable", not near-perfect — the dive's 7-voice
         // beating genuinely cancels the fundamental for ~4-hop stretches, which
         // no memoryless estimator can beat; the D5 tracker's hold (38 hops)
@@ -527,7 +525,7 @@ fn analyze_and_render(
     // the line only apply to the synth scenarios.
     print_p3_fires(label, &records);
 
-    // ── P2 gates (docs/AUDIO_OBJECT_TRACKING_DESIGN.md P2): the D5 tracker's
+    // ── P2 gates: the D5 tracker's
     // numeric acceptance bar, one line per metric, selftest only.
     if args.selftest {
         print_p2_gates(label, &records, dt, ground_truth);
@@ -571,7 +569,7 @@ fn semitones_vs(f_hz: f32, ref_hz: f32) -> f32 {
     12.0 * (f_hz / ref_hz.max(1e-6)).log2()
 }
 
-/// P3 sweep instrument (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3, BUG-041):
+/// P3 sweep instrument:
 /// counts hops (after warm-up) where a band's `Transients` feature hit its
 /// fired value (`> 0.999` — the same threshold `update_trackers` reads to
 /// treat a hop as "this band's onset fired this hop", not the decayed tail).
@@ -617,8 +615,7 @@ fn print_p3_fires(label: &str, records: &[HopRecord]) {
     println!("P3 {label}: kick_hops={kick_hops:?}");
 }
 
-/// P2 numeric gates (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2's phase-report
-/// bar), one `P2 <scenario>: <metric>=<value> (gate <op> <bound>) PASS|FAIL`
+/// P2 numeric gates, one `P2 <scenario>: <metric>=<value> (gate <op> <bound>) PASS|FAIL`
 /// line per metric, per selftest scenario. Reads only `HopRecord::raw`
 /// (RAW, unshaped values — the ground-truth-comparison surface, same
 /// convention as the CSV) and `tracked_f0_hz`.
@@ -822,8 +819,7 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
     }
 }
 
-/// D6 presence-recalibration gates (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` D6,
-/// the task that closed P2's "finding 2" — presence mis-scale). These are
+/// D6 presence-recalibration gates. These are
 /// Peter's acceptance criteria read directly off `selftest_dive.png`:
 /// presence must clear the `PITCH_DISPLAY_PRESENCE` display bar for a
 /// genuinely tracked object, and must NOT clear it for a near-empty band
@@ -934,9 +930,7 @@ fn print_p2b_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gr
     }
 }
 
-/// P2c gates (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2c — the D6 unified-
-/// stability real-clip finding: presence never accumulated on NOTE-based
-/// material because every legitimate re-attack reset trust to 0). `notes`
+/// P2c gates. `notes`
 /// is the note-attack regression the six original tones (all continuous
 /// tones) never exercised. One `P2c notes: <metric>=<value> (gate <op>
 /// <bound>) PASS|FAIL` line per criterion, plus the octave note's own
@@ -1116,7 +1110,7 @@ type GroundTruthFn = fn(f32) -> f32;
 /// the constant-pitch-moving-timbre case (approximated formant motion).
 /// `notes` — 150 Hz saw 8th notes on a 140 BPM grid, re-attacking the SAME
 /// pitch every note except one octave jump in bar 2; the real-clip case
-/// (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2c) the other six never
+/// the other six never
 /// exercise — presence must survive the re-attacks, and the tracked pitch
 /// must jump to 300 Hz and back for the one jump note. Carries its own known
 /// 140 BPM (task 3) so its PNG always shows gridlines, proving the path.

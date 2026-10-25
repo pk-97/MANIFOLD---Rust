@@ -1,7 +1,6 @@
 //! `render-import` — headless render of ONE glb/gltf file through the
 //! PRODUCTION import path (`import_model` into the compiled scene), for look-dev and as the
-//! conformance harness's oracle binary (D2, `docs/GLB_CONFORMANCE_DESIGN.md`
-//! section 3). Shaped like `render_generator_preset.rs`: parse → build →
+//! conformance harness's oracle binary. Shaped like `render_generator_preset.rs`: parse → build →
 //! converged-readback → PNG, sharing the SAME output transform
 //! (`headless_readback::readback_to_srgb_png`) every headless render tool in
 //! this crate uses — never a local tonemap (D2).
@@ -24,7 +23,7 @@
 //! `render-generator-preset` uses — the import graph's own
 //! `preset_metadata.params`, e.g. `cam_dist`, `7_intensity`, `1_intensity`).
 //! The SAME flag also accepts a `preset_metadata.string_params` id (e.g.
-//! `hdri_file` — GLB_CONFORMANCE_DESIGN.md G-P6): whether `id` names a
+//! `hdri_file`: whether `id` names a
 //! numeric card param or a string param is resolved AFTER the import graph
 //! is assembled (only then do we know which `string_params`/`params` ids
 //! exist), so `--param 1_mode=2 --param hdri_file=/path/to.exr` (the bake's Mode = HDRI,

@@ -1,5 +1,5 @@
 //! The live presentation cursor for `node.liquid_frame`
-//! (`docs/GPU_FLIP_DISPLAY_HISTORY_DESIGN.md` section 3.4 (Cursor)). Live
+//! Live
 //! uncoupled water presents a little behind the requested time, so a
 //! finished snapshot lies on each side and the picture interpolates instead
 //! of holding at the newest one. The lag is the observed retirement deficit

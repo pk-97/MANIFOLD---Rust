@@ -15,7 +15,7 @@ pub const EXACT_F32_COUNT: u32 = 1 << 24;
 /// `Array` is the storage-buffer wire type used by particle, mesh, line, and
 /// audio primitives — the underlying `MTLBuffer` carries `count` items of a
 /// fixed-layout struct, accessed by index. Connection validation matches on
-/// the wire's Channels signature (per `docs/CHANNEL_TYPE_SYSTEM.md`); the
+/// the wire's Channels signature; the
 /// shader owns the per-byte interpretation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortType {
@@ -24,15 +24,14 @@ pub enum PortType {
     /// the texture rely on prose `composition_notes` to know the layout.
     /// Connects to any other [`Texture2D`](PortType::Texture2D) or
     /// [`Texture2DTyped`](PortType::Texture2DTyped) endpoint (the
-    /// migration valve — see `docs/CHANNEL_TYPE_SYSTEM.md` section 17).
+    /// migration valve).
     Texture2D,
     /// Texture2D decorated with a four-slot named-channel signature
     /// (one [`ChannelName`] per RGBA slot). The validator enforces
     /// exact-match between two typed endpoints and surfaces a per-slot
     /// diff on mismatch; an untyped consumer / producer on the other
     /// side connects through the back-compat valve. See
-    /// `docs/CHANNEL_TYPE_SYSTEM.md` section 17 for the texture-channel
-    /// extension to the Channel type system.
+    /// The texture-channel extension to the Channel type system.
     Texture2DTyped(TextureChannels),
     Texture3D,
     Scalar(ScalarType),
@@ -94,8 +93,7 @@ pub enum PortType {
     /// CPU-only struct wire carrying a
     /// [`SceneObject`](crate::node_graph::scene_object::SceneObject) — the
     /// bundle of transform + material + mesh/map/instance [`Slot`](crate::node_graph::bindings::Slot)s
-    /// that together make up one scene object (SCENE_OBJECT_AND_PANEL_V2_DESIGN
-    /// D1–D3). Produced exclusively by `node.scene_object`; consumed
+    /// that together make up one scene object. Produced exclusively by `node.scene_object`; consumed
     /// exclusively by `render_scene`'s `object_k` ports.
     ///
     /// **Single-hop invariant: `Object` wires never chain.** `node.scene_object`
@@ -127,7 +125,7 @@ impl PortType {
 /// rest ignored, etc.) so [`TextureChannels`] carries only names. The
 /// names interned through the same FNV-1a-64 const-hash mechanism as
 /// [`ChannelSpec::name`] and resolved against the shared `well_known`
-/// channel-name registry. See `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
+/// channel-name registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureChannels {
     /// Channel names in R, G, B, A order.
@@ -160,8 +158,7 @@ pub enum ScalarType {
 // identity is now carried entirely by the [`ArrayType::specs`] slice
 // (a list of named typed [`ChannelSpec`]s); the legacy
 // `(item_size, item_align, item_kind)` triple collapses to just the
-// (size, align) pair plus the specs. See
-// `docs/CHANNEL_TYPE_SYSTEM.md` section 5.
+// (size, align) pair plus the specs.
 
 /// Compile-time descriptor for an item type that flows through an
 /// [`ArrayType`] wire. Every canonical item struct in the primitive
@@ -177,15 +174,14 @@ pub enum ScalarType {
 /// describing the same byte layout.
 pub trait KnownItem: bytemuck::Pod {
     /// Named typed channels per sample, in std430 order. See
-    /// `docs/CHANNEL_TYPE_SYSTEM.md` section 6 for the per-typed-family
-    /// signatures.
+    /// The per-typed-family signatures.
     const SPECS: &'static [ChannelSpec] = &[];
 }
 
 impl KnownItem for u32 {
     // Single-channel `value: U32` — the canonical convention for
     // bare scalar arrays (scatter accumulators, grid indices, ID
-    // streams) per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.8.
+    // streams).
     const SPECS: &'static [ChannelSpec] = &[ChannelSpec {
         name: ChannelName::from_str("value"),
         ty: ChannelElementType::U32,
@@ -200,8 +196,7 @@ impl KnownItem for f32 {
 }
 
 impl KnownItem for i32 {
-    // Signed fixed-point accumulators (the MPM grid, GPU_MPM_SOLVER_DESIGN.md
-    // D5): integer atomics are order-independent, so sums are deterministic.
+    // Signed fixed-point accumulators (the MPM grid): integer atomics are order-independent, so sums are deterministic.
     const SPECS: &'static [ChannelSpec] = &[ChannelSpec {
         name: ChannelName::from_str("value"),
         ty: ChannelElementType::I32,
@@ -259,7 +254,6 @@ impl KnownItem for [f32; 3] {
 /// bind site but are not part of the type identity beyond what specs
 /// already encodes.
 ///
-/// See `docs/CHANNEL_TYPE_SYSTEM.md` for the type-system contract.
 ///
 /// The shader on either side owns the per-byte interpretation —
 /// canonical struct layouts live in
@@ -276,7 +270,6 @@ pub struct ArrayType {
     pub item_align: u32,
     /// Named typed channels per sample, in std430 order. Drives the
     /// validator's [`channels_compatible`] check. See
-    /// `docs/CHANNEL_TYPE_SYSTEM.md` section 4-section 5.
     pub specs: &'static [ChannelSpec],
     /// Wire-validator matching policy. Default [`MatchMode::Exact`];
     /// [`MatchMode::Permissive`] is the opt-in for generic transform
@@ -325,7 +318,7 @@ impl ArrayType {
     /// channel specs. `item_size` and `item_align` are derived from
     /// the specs via std430 layout rules. The canonical constructor
     /// for ad-hoc signatures declared via inline `Channels[name: Type, …]`
-    /// macro syntax (per `docs/CHANNEL_TYPE_SYSTEM.md` section 12.1).
+    /// macro syntax.
     pub const fn of_channels(specs: &'static [ChannelSpec], match_mode: MatchMode) -> Self {
         let (item_size, item_align) = std430_stride_and_align(specs);
         Self {
@@ -337,7 +330,7 @@ impl ArrayType {
     }
 }
 
-// ─── Channel type system (per docs/CHANNEL_TYPE_SYSTEM.md section 4) ─────────
+// ─── Channel type system ─────────
 
 /// A channel's name, interned at compile time via const FNV-1a-64
 /// hashing of the source string. Comparison is u64 equality; the
@@ -347,7 +340,7 @@ impl ArrayType {
 /// Hashing happens in `const` context so port type declarations stay
 /// `const` — the `primitive!` macro can declare `Channels[x: F32, y: F32]`
 /// in a `static` port array with no runtime allocation. See
-/// `docs/CHANNEL_TYPE_SYSTEM.md` section 4.2 for the collision analysis
+/// The collision analysis
 /// (~2.7e-14 probability across the expected name set; gated by the
 /// `well_known_channels!`-emitted collision test).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -395,7 +388,6 @@ const fn const_fnv1a_64(bytes: &[u8]) -> u64 {
 /// calculator, the WGSL emitter (future fusion compiler), the macro
 /// type-keyword recognizer, and the test matrix. Each new type is a
 /// deliberate decision, not a generic-over-T extension. See
-/// `docs/CHANNEL_TYPE_SYSTEM.md` section 4.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChannelElementType {
     F32,
@@ -453,7 +445,7 @@ pub enum MatchMode {
 
 /// Per-channel byte offsets and total sample stride for a Channels
 /// signature, computed per WGSL std430 rules. Pure function of the
-/// specs slice. See `docs/CHANNEL_TYPE_SYSTEM.md` section 4.4.
+/// specs slice.
 ///
 /// Returns `(per_channel_offsets, sample_stride_bytes, sample_alignment)`.
 pub fn std430_layout(specs: &[ChannelSpec]) -> (Vec<u32>, u32, u32) {

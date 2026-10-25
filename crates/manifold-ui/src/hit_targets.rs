@@ -3,7 +3,7 @@
 //! `UITree::hit_test` cannot see inside the graph canvas, a timeline lane's
 //! clip body, or an automation lane's strip — those surfaces run their own
 //! hit-testing (`graph_canvas/hit.rs`, `clip_hit_tester.rs`,
-//! `automation_hit_tester.rs`). The rule (`UI_AUTOMATION_DESIGN.md` D5):
+//! `automation_hit_tester.rs`). The rule:
 //! whatever a surface can hit-test, it must enumerate here, so the automation
 //! dump (section 3) can address it by identity instead of raw coordinates.
 //!
@@ -16,7 +16,7 @@ use crate::node::Rect;
 /// Implemented by every surface that answers its own hit-testing. The
 /// enumeration is the automation-visible mirror of `hit_test`: every kind of
 /// thing `hit_test` can return appears here with its current rect and a
-/// stable label. Committed shape — `UI_AUTOMATION_DESIGN.md` section 5.
+/// stable label. Committed shape.
 pub trait HitTargets {
     fn surface_id(&self) -> &'static str;
     fn enumerate(&self, out: &mut Vec<HitTargetEntry>);

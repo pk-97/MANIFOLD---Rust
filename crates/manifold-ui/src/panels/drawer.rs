@@ -12,7 +12,6 @@
 //! [`DrawerIds`] retaining each control and its bound action. The same
 //! retained intents power central dispatch and direct panel click routing.
 //!
-//! See `docs/AUDIO_MODULATION_DESIGN.md` section 10.2.
 
 use std::cell::Cell;
 
@@ -440,7 +439,7 @@ fn uniform_widths(n: usize, content_w: f32) -> Vec<f32> {
 /// Build a drawer's `UITree` nodes under `parent` at `(x, y)` spanning width
 /// `w`. Returns the created ids + the height consumed.
 ///
-/// `key`, when `Some` (D4, `docs/WIDGET_TREE_DESIGN.md`), pins the
+/// `key`, when `Some`, pins the
 /// container's own `WidgetId` — the ONE node this function mints directly
 /// under the caller's (possibly flat, possibly shared) `parent`. Every button
 /// and slider a drawer builds nests under `container`, so once it's stable

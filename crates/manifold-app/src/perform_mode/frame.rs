@@ -36,7 +36,7 @@ const MACRO_DISPLAY_LIMIT: usize = 12;
 
 /// Entry once an output window exists: quiesce in-flight UI state so nothing
 /// is left dangling when normal mode resumes, force Show gizmos off (no
-/// editor chrome is armed over a show, SCENE_SETUP_PROGRAMME D6), then switch
+/// editor chrome is armed over a show, then switch
 /// the main window to the perform screen. `held_pointer` is the cursor and
 /// clock of a mouse button still down, released here.
 pub(crate) fn enter(
@@ -107,7 +107,7 @@ pub(crate) fn takes_keys(perform: &PerformModeState) -> bool {
 }
 
 /// The exit button as a hit-test surface the automation dump can address
-/// (`UI_AUTOMATION_DESIGN.md` D5). It is drawn immediate-mode, outside any tree.
+/// It is drawn immediate-mode, outside any tree.
 /// The ui-snap runner is its one reader.
 #[cfg(feature = "ui-snapshot")]
 pub(crate) struct PerformHitTargets(pub Rect);

@@ -492,7 +492,7 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// new executor's low generation numbers. `0` on the legacy [`Self::new`]
     /// constructor (no executor lifetime concept — test/standalone paths).
     pub rebuild_epoch: u64,
-    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values
+    /// Resolved per-frame values
     /// from the active column (realtime vs export). Plain value, not
     /// Option: the executor always provides it (live defaults when
     /// unset). Primitives consuming RT (render_scene) read from here.
@@ -1029,7 +1029,7 @@ pub trait EffectNode: Send + AsAny {
     /// to the planner's normal wire-based lifetime tracking, which only
     /// walks `Texture2D`/`Array` typed wires.
     ///
-    /// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D2: `node.scene_object` forwards
+    /// `node.scene_object` forwards
     /// mesh/map/instance `Slot`s inside the [`SceneObject`](crate::node_graph::scene_object::SceneObject)
     /// it emits. Without this declaration, the planner would see only the
     /// wire into `node.scene_object` and free those resource slots after
@@ -1493,7 +1493,7 @@ pub trait EffectNode: Send + AsAny {
     /// toward convergence while any decode is pending, because a source
     /// emitting stable black during a multi-second decode (a 74 MB 4k EXR)
     /// is indistinguishable from a settled frame by readback alone (G-P6
-    /// gate-review fix, GLB_CONFORMANCE_DESIGN.md). Default `false` —
+    /// Default `false` —
     /// pure-GPU nodes never have IO in flight.
     fn io_pending(&self) -> bool {
         false
@@ -2107,7 +2107,7 @@ pub trait EffectNode: Send + AsAny {
     }
 
     /// Mesh revision rule for the named output port, per design
-    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.1. The RT executor queries
+    /// The RT executor queries
     /// this once at plan compilation to decide when acceleration
     /// structures may refit versus must rebuild.
     ///
@@ -2126,7 +2126,7 @@ pub trait EffectNode: Send + AsAny {
     }
 
     /// Install compiler-provided prepared mesh-output rules (design
-    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) — the fused-graph sidecar
+    /// The fused-graph sidecar
     /// for outputs whose authored declaration can't describe the fused
     /// kernel's revision behaviour. The default rejects a nonempty
     /// override: only node types that can validate the rules against

@@ -1,5 +1,4 @@
-"""P3 full-pack baseline scoreboard, per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md
-§5 P3: "baseline scoreboard for EVERY existing detector on the full available
+"""P3 full-pack baseline scoreboard: "baseline scoreboard for EVERY existing detector on the full available
 pack" — ADTOF drums (per-class kick/snare/hat/perc, the reference number the
 future ADTOF-replacement bake-off (Deferred #1) must beat), basic_pitch
 (bass/synth), beat/downbeat/tempo (Beat This, post-P2). Per-domain,

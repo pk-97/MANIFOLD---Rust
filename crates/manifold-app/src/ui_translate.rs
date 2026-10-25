@@ -246,7 +246,7 @@ pub fn layers_to_ui(layers: &[Layer]) -> Vec<UiLayer> {
 /// Same as [`layers_to_ui`], but also resolves `automation_lane_count` — the
 /// one field that feeds `CoordinateMapper::layer_height`'s Y-layout, so the
 /// header column and viewport tracks grow together when automation mode is on
-/// (`docs/AUTOMATION_LANES_DESIGN.md` section 7). Callers that only need the
+/// Callers that only need the
 /// selection-shape fields (hit-testing, region math) should keep using the
 /// plain `layers_to_ui` — computing lane counts there would be wasted work
 /// and (more importantly) would NOT be the value `rebuild_mapper_layout` used,
@@ -286,7 +286,7 @@ pub fn layers_to_ui_for_layout_with_view(
 /// its effects chain plus its generator params, if any (mirrors the walk
 /// shape of `manifold_playback::automation::evaluate_all_automation`). Only
 /// `enabled` lanes produce a strip (Ableton: a deactivated lane draws
-/// nothing). See `docs/AUTOMATION_LANES_DESIGN.md` section 7.
+/// nothing).
 ///
 /// `chosen` (P5, section 7 addendum): the param the user last touched/chose on this
 /// layer, if any — appended as a placeholder flat-line strip (no dot, no
@@ -597,7 +597,7 @@ pub fn selection_region_to_core(r: &UiSelectionRegion) -> SelectionRegion {
 
 // ── Editor graph snapshot (renderer → UI view-model) ─────────────────────────
 //
-// Phase 8 of `docs/UI_ARCHITECTURE_OVERHAUL.md`: the graph canvas lives in
+// The graph canvas lives in
 // `manifold-ui` and reads `manifold_ui::graph_view`, so the app translates the
 // renderer's `GraphSnapshot` at the boundary — the same pattern as the layer /
 // marker view-models above. The node catalog stays renderer-side: the node

@@ -31,7 +31,7 @@ mod overlay;
 /// The top-level overlays, in bottom→top z-order. The single registry the
 /// overlay driver (build / draw / input) iterates — adding an overlay means a
 /// field, an `overlay_mut` arm, and a `Z_ORDER` entry, and the exhaustive match
-/// then forces the wiring. See `docs/OVERLAY_SYSTEM_DESIGN.md`.
+/// then forces the wiring.
 ///
 /// `pub(crate)`: `text_input::TextSessionOwner` (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
 /// section 3, D2) tags a text session with the id of the overlay hosting it, so the
@@ -58,7 +58,7 @@ impl OverlayId {
     /// another overlay (e.g. the Audio Setup modal's device/channel pickers), so
     /// it must render above whatever spawned it. Export progress covers all
     /// authoring overlays until the content thread finishes the run. The toast (D11,
-    /// `UI_CRAFT_AND_MOTION_PLAN.md` P2) sits topmost of all — a status message
+    /// sits topmost of all — a status message
     /// must stay legible over an open modal/dropdown, not be hidden by one.
     const Z_ORDER: [OverlayId; 8] = [
         OverlayId::PerfHud,
@@ -146,7 +146,7 @@ pub struct UIRoot {
     /// resolved by folding a hit node up its parent chain. Repopulated from
     /// panel-stored node ids only when the tree structurally changes (gated on
     /// `intents_structure_version`) — never per-frame, so no hot-path
-    /// allocation. See `docs/NODE_INTENT_DISPATCH.md`.
+    /// allocation.
     intents: manifold_ui::intent::IntentRegistry,
     /// Tree `structure_version` the intent registry was last built against.
     /// `u64::MAX` forces a repopulate on the first `process_events`.
@@ -170,7 +170,7 @@ pub struct UIRoot {
     pub rt_quality_panel: manifold_ui::panels::rt_quality_panel::RtQualityPanel,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
     pub export_progress: manifold_ui::panels::export_progress::ExportProgressPanel,
-    /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2). Fired by
+    /// undo/redo toast. Fired by
     /// `Application` on `M::Undo`/`M::Redo` (see `app_render.rs`); ticked every
     /// frame in `update()`.
     pub toast: manifold_ui::panels::toast::ToastPanel,
@@ -948,7 +948,7 @@ impl UIRoot {
     ///
     /// Every main region builds into its own arena, in `MainRegion` order
     /// (UI_INVALIDATION_DESIGN.md D7), under a region root that clips it and
-    /// carries its stacking tier (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D2).
+    /// carries its stacking tier.
     /// A region rebuilds alone through [`build_region`](Self::build_region)
     /// after its arena is cleared.
     pub fn build(&mut self) {
@@ -1221,7 +1221,7 @@ impl UIRoot {
     /// Build just the inspector column into `region`'s arena at an explicit
     /// `rect`, which the caller has cleared. The graph-editor window hosts the
     /// same inspector column in its card lane this way
-    /// (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md). The card-drag ghost is
+    /// The card-drag ghost is
     /// the Ghosts arena's, settled by the window's frame.
     pub fn build_inspector_in(&mut self, region: u8, rect: Rect) {
         let token = self.tree.begin_region_in(
@@ -1421,7 +1421,7 @@ impl UIRoot {
     // ── Overlay driver ──────────────────────────────────────────────
     // One enumeration of the top-level overlays for build, draw, and input.
     // The exhaustive `overlay_mut` match is what makes "built but never drawn"
-    // unrepresentable. See docs/OVERLAY_SYSTEM_DESIGN.md.
+    // unrepresentable.
 
     /// Take a new window size. The layout follows at once; the region rects
     /// it moves are frame-plan inputs, so the planner rebuilds what changed
@@ -1703,7 +1703,7 @@ impl UIRoot {
     /// Advance the inspector's per-frame motion (drawer-height tweens,
     /// value-flash, dying-card collapse, tab-ink slide — everything
     /// `InspectorCompositePanel::update` drives). Extracted
-    /// (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D4) so the graph
+    /// so the graph
     /// editor's `UIRoot` — which never sets `built` and so never runs the
     /// rest of `update()` — can still tick its own inspector instance every
     /// frame it presents. Calling this directly bypasses the `!self.built`
@@ -1763,7 +1763,7 @@ impl UIRoot {
         self.tick_inspector();
         self.viewport.update(&mut self.tree);
         self.perf_hud.update(&mut self.tree);
-        // D11 toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2): repaints its own alpha
+        // Toast: repaints its own alpha
         // in place while showing; a no-op once idle. Runs every frame like the
         // panels above it, not gated on anything overlay-specific.
         self.toast.update(&mut self.tree);
@@ -1771,7 +1771,7 @@ impl UIRoot {
         // `DropdownPanel::update`'s own guard) — cheap to call unconditionally.
         self.dropdown.update(&mut self.tree);
         // Same D17 enter, mirrored to the other three popups (P2 batch 2 —
-        // `UI_CRAFT_AND_MOTION_PLAN.md` section 5 item 4: "universal popup enter").
+        // "universal popup enter").
         self.ableton_picker.update(&mut self.tree);
         self.settings_popup.update(&mut self.tree);
         self.rt_quality_panel.update(&mut self.tree);
@@ -1889,7 +1889,7 @@ fn trace_kind(event: &UIEvent) -> &'static str {
 
 #[cfg(test)]
 mod region_structural_tests {
-    //! `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D4, second enforcement leg,
+    //! second enforcement leg,
     //! asserted against the REAL `UIRoot::build()` — the strongest available
     //! proof P1's migration is complete: not a synthetic fixture, the actual
     //! tree the app renders every frame. `mint`'s debug assertion (the first
@@ -1965,7 +1965,7 @@ mod region_structural_tests {
     }
 }
 
-/// `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4 (BUG-160), D4's tick-
+/// tick-
 /// parity check: the graph editor's own `UIRoot` never sets `built`, so its
 /// `update()` early-returns and — before `tick_inspector` was extracted and
 /// wired into `present_graph_editor_window` — nothing ever advanced its

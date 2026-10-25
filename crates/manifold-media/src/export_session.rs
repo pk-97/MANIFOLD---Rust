@@ -38,8 +38,7 @@ pub enum ExportError {
     Cancelled,
     /// Platform not supported for native encoding.
     // Unconstructed on every platform today — MetalEncoder is the only encoder
-    // this crate has; a non-macOS encoder path is unbuilt (parked, see
-    // docs/MEDIA_BACKEND_DESIGN.md P1). Un-suppresses when that path returns this.
+    // this crate has; a non-macOS encoder path is unbuilt. Un-suppresses when that path returns this.
     #[allow(dead_code)]
     UnsupportedPlatform,
 }

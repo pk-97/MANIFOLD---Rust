@@ -3,7 +3,7 @@
 //! Sibling of `node.switch_value` and `node.switch_texture` for `Array<f32>`
 //! ports. Picks one of `in_0..in_7` based on the `selector` input and
 //! routes its contents into `out`. Completes the mux family planned in
-//! `docs/GENERATOR_DECOMPOSITION_PLAN.md` D2; first user is NestedCubes
+//! First user is NestedCubes
 //! where it gates the `target_angles` source between the pose cycler
 //! and the envelope-mode accumulator.
 //!

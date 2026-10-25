@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Six-step spp ladder, shared by all RT features (RT_QUALITY_SETTINGS_DESIGN.md D3).
+/// Six-step spp ladder, shared by all RT features.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RtQualityTier {
@@ -51,7 +51,7 @@ impl RtQualityTier {
     ];
 }
 
-/// RT dispatch resolution relative to native canvas (RT_QUALITY_SETTINGS_DESIGN.md D4).
+/// RT dispatch resolution relative to native canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RtRayResolution {

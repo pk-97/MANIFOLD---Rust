@@ -11,8 +11,7 @@ pub enum PointerAction {
 
 /// Keyboard modifier flags.
 ///
-/// `#[serde(default)]`: an `AutomationAction` script (`UI_AUTOMATION_DESIGN.md`
-/// section 4/section 6) names a `Gesture::Click { modifiers }` far more often with no
+/// `#[serde(default)]`: an `AutomationAction` script names a `Gesture::Click { modifiers }` far more often with no
 /// modifiers held than with — every omitted field defaults to `false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -631,7 +630,6 @@ impl UIInputSystem {
     /// and intent fold-up get their shot — historically a miss was dropped
     /// silently here, which is why right-click "sometimes" did nothing on any
     /// pixel not covered by an interactive node. See
-    /// `docs/NODE_INTENT_DISPATCH.md`.
     pub fn process_right_click(&mut self, tree: &UITree, pos: Vec2) {
         let hit_id = tree.hit_test(pos);
         self.pending_events.push(UIEvent::RightClick {

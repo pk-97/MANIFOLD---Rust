@@ -122,7 +122,7 @@ pub(super) fn validate_mask_groups(
 }
 
 /// Splice one effect card's def into the chain graph, its mesh-rule
-/// sidecar traveling with the def (SCENE_MODIFIER_RT_DESIGN.md section 3.3):
+/// sidecar traveling with the def:
 /// a fused card's sidecar is keyed by the fused def's generated node ids;
 /// an unfused/edited def has none (empty map is correct only when fusion
 /// did not occur). When the divergent (edited/fused) def fails to splice,

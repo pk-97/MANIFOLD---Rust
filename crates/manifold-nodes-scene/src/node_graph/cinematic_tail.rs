@@ -1,5 +1,4 @@
-//! Shared cinematic tail for native and imported scenes (CINEMATIC_SCENE_TAIL_DESIGN.md D1 /
-//! section 3 (chain topology)): the DoF chain (`coc_from_depth` →
+//! Shared cinematic tail for native and imported scenes: the DoF chain (`coc_from_depth` →
 //! `bokeh_gather`) plus the velocity-directed `motion_blur`,
 //! templated node-for-node on the CinematicScene reference preset.
 //! Reinstated after the 2026-07-12 SSAO-only carve-out once BUG-136 (motion

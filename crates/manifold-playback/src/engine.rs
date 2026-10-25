@@ -231,8 +231,7 @@ pub struct PlaybackEngine {
     // Live clip manager (MIDI phantom clips)
     live_clip_manager: Option<LiveClipManager>,
 
-    // Session mode runtime (P2). Never serialized, never undo-wrapped — see
-    // docs/SESSION_MODE_DESIGN.md section 4. Sibling of `live_clip_manager`; always
+    // Session mode runtime (P2). Never serialized, never undo-wrapped. Sibling of `live_clip_manager`; always
     // present (unlike the live-clip manager, it holds no platform resources).
     session_runtime: SessionRuntime,
 
@@ -321,8 +320,7 @@ pub struct PlaybackEngine {
     /// Automation-lane override latch: params a live hand has touched since
     /// the last Back to Arrangement. Runtime-only, owned by the playback
     /// side (never the `Project`), never serialized, survives play/stop
-    /// within a session. See `crate::automation` and
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 4.
+    /// within a session. See `crate::automation`.
     automation_latches: crate::automation::AutomationLatches,
     /// Global Automation Arm (section 5): while on, a live touch on an automated
     /// param (while playing) records into its lane instead of latching an
@@ -1549,7 +1547,7 @@ impl PlaybackEngine {
         //     (tick_playing only — export drives the transport in Playing
         //     state too, so export sampling falls out for free; when stopped,
         //     tick_non_playing never calls this, so lanes don't write and
-        //     params hold). See docs/AUTOMATION_LANES_DESIGN.md section 1, section 3.
+        //     params hold).
         //     While `automation_armed`, a touched param records into its
         //     lane instead of latching (section 5); `pending_gesture_commits`
         //     carries one `CommitRecordedGestureCommand` per gesture that

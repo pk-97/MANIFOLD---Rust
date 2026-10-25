@@ -98,7 +98,7 @@ pub struct TimelineViewportPanel {
     /// drag-preview writes (`preview.rs`).
     clip_index: ahash::AHashMap<ClipId, (usize, usize)>,
 
-    // Automation lane data (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) — single
+    // Automation lane data — single
     // storage bucketed by layer index, mirroring `clips_by_layer`. Populated
     // by `set_automation_lanes` only when automation mode is visible (the
     // translator gates it); empty otherwise, so this panel never needs to
@@ -240,7 +240,7 @@ pub struct TimelineViewportPanel {
     /// wording, not a full zoom history.
     zoom_back: Option<(f32, Beats, f32)>,
 
-    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "timeline marquee
+    // ── Timeline marquee
     // fade") ──────────────────────────────────────────────────────────
     /// Eases the region/marquee highlight's alpha in/out. Targets 1.0
     /// whenever `selection_region` is `Some` (whether still being dragged
@@ -587,7 +587,6 @@ impl TimelineViewportPanel {
     /// `set_clips`'s clear-and-refill so repeated calls don't reallocate the
     /// inner `Vec`s. Called with an empty `lanes` whenever automation mode is
     /// off (the translator gates population, not this panel) — see
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7.
     pub fn set_automation_lanes(&mut self, lanes: Vec<ViewportAutomationLane>) {
         for v in &mut self.automation_lanes_by_layer {
             v.clear();
@@ -974,8 +973,7 @@ impl TimelineViewportPanel {
         TimelineOverlays { region, cursor }
     }
 
-    /// Screen-space geometry for every visible automation lane strip (P4,
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7): one [`AutomationLaneScreen`] per
+    /// Screen-space geometry for every visible automation lane strip: one [`AutomationLaneScreen`] per
     /// lane, in the same "geometry here, GPU draw in manifold-nodes" split
     /// as [`Self::visible_clip_rects`] / [`Self::timeline_overlays`]. Empty
     /// whenever `set_automation_lanes` was last called with no data (i.e.
@@ -1624,7 +1622,7 @@ mod tests {
     // ── B14 zoom-back ──
 
     // ── P7.6 viewport-drag-fold pinning ─────────────────────────────────
-    // `docs/UI_WIDGET_UNIFICATION_DESIGN.md` P7.6: prove ruler-scrub,
+    // Prove ruler-scrub,
     // overview-scrub, marker-drag, and horizontal-scrollbar-drag survive the
     // fold of `ViewportDragMode` + `marker_drag_id`/`marker_drag_start_beat`
     // + `scrollbar_grab_dx` onto `DragController<ViewportDrag>`, driven
@@ -2557,7 +2555,7 @@ mod tests {
         assert_eq!(locked, color::CLIP_LOCKED);
     }
 
-    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "timeline marquee fade") ──
+    // ── Timeline marquee fade ──
 
     #[test]
     fn region_highlight_fades_in_when_a_region_appears() {

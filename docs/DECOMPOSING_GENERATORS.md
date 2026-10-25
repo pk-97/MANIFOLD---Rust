@@ -4,14 +4,12 @@
 
 **Status:** Living guide. Originally written 2026-05-21 after the Plasma + Lissajous generator decomposition; updated 2026-05-26 after the post-migration inventory revealed the fused-bundle failure mode and the no-fused-monolith rule landed. Read before starting **any** decomposition — generator, effect, or in-place audit of an existing primitive that looks like a fused bundle.
 
-> **Update 2026-05-28:** The `Array<T>` references throughout this guide (in primitive type signatures, stride conventions, decomposition recipes) describe wire topology that survives the Channel type system migration ([CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md)) byte-identical — but the canonical macro syntax is now `Channels<T>` (for the seven typed families with a `KnownItem::SPECS` impl) or `Channels[name: Type, ...]` (for ad-hoc signatures). Read `Array<Particle>` here as `Channels<Particle>`; `Array<u32>` becomes `Channels<u32>` (`[value: U32]` signature); `Array<f32>` with stride conventions becomes `Channels[name: F32, ...]` with named channels. The "stride conventions in `composition_notes`" anti-pattern section 6 (Migration map — every typed array → its Channels signature) used to warn about is now structurally impossible — channel names live on the wire.
+> **Update 2026-05-28:** The `Array<T>` references throughout this guide (in primitive type signatures, stride conventions, decomposition recipes) describe wire topology that survives the Channel type system migration byte-identical — but the canonical macro syntax is now `Channels<T>` (for the seven typed families with a `KnownItem::SPECS` impl) or `Channels[name: Type, ...]` (for ad-hoc signatures). Read `Array<Particle>` here as `Channels<Particle>`; `Array<u32>` becomes `Channels<u32>` (`[value: U32]` signature); `Array<f32>` with stride conventions becomes `Channels[name: F32, ...]` with named channels. The "stride conventions in `composition_notes`" anti-pattern section 6 (Migration map — every typed array → its Channels signature) used to warn about is now structurally impossible — channel names live on the wire.
 
 This guide is the *how-to-think*, not the *how-to-add-a-primitive*. Companion docs:
 
-- [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) — wire-type identity, Channels syntax, the post-2026-05-28 source of truth for what a port "is."
 - [NODE_CATALOG.md](NODE_CATALOG.md) — the settled spec for atoms / effects. Source of truth for type IDs and what exists.
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — mechanics of writing a new primitive (`primitive!` macro, parity test pattern).
-- [GENERATOR_DECOMPOSITION_PLAN.md](GENERATOR_DECOMPOSITION_PLAN.md) — historical record of the original generator migration (closed; 0 Rust generators remain).
 - [AUDIT_GRAPH_GENERATOR_HOT_PATH.md](AUDIT_GRAPH_GENERATOR_HOT_PATH.md) — the bug classes the system used to have. Everything 🔴/🟠 is closed; read it to know what *not* to reintroduce.
 
 ---
@@ -86,7 +84,7 @@ Use as few stages as the user boundaries require, with free fusion inside. Compl
 
 **What a stage keeps.** One extent rule per stage type, whose inner sizes come from the same `pub(crate)` sizing functions the node dispatches with (`node.sort_particles_into_cells` is the precedent). A dispatch label per internal pass, so the profiler still splits the stage. The atomic-free conformance check covers its hand-written shaders. Sizes that follow a param are buffers the node provides, resized on change, not a graph rebuild (`liquid_state`'s faces buffer is the precedent).
 
-The worked example is GPU_FLIP_PRESSURE_SOLVE.md section 1.1 (stage map). MPM's `matter_*` nodes are already stage-shaped: MLS-MPM is three dispatches.
+The worked example is the GPU FLIP pressure solve's stage map. MPM's `matter_*` nodes are already stage-shaped: MLS-MPM is three dispatches.
 
 ## 2. The mental model
 

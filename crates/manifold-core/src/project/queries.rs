@@ -195,8 +195,7 @@ impl Project {
     /// modulates). Cheap — most instances carry no audio mods, short-circuiting
     /// on the `Option`.
     /// Send ids with at least one ENABLED audio mod reading `Pitch` or
-    /// `Presence` — the D7 activation set (docs/AUDIO_OBJECT_TRACKING_DESIGN.md
-    /// P4). The audio-mod runtime recomputes this only on a data-version
+    /// `Presence` — the D7 activation set. The audio-mod runtime recomputes this only on a data-version
     /// change and switches each send analyzer's ridge tracker on/off with it,
     /// so projects that never bind pitch pay nothing (the tracker path is
     /// byte-identical when off — tested in manifold-audio).

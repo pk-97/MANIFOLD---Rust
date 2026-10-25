@@ -466,7 +466,7 @@ impl InspectorCompositePanel {
             if let Some(collapsed) = preserved_collapse {
                 panel.set_collapsed(collapsed);
             }
-            // The LED composite preview (LED_STRIPS_DESIGN MVP-P4) rides the
+            // The LED composite preview rides the
             // same card lifecycle as `card_context` — applied to the reused
             // or freshly-built card either way.
             panel.set_led_preview(self.led_preview.clone());
@@ -517,7 +517,7 @@ impl InspectorCompositePanel {
         self.pending_card_flash = Some((layer, param));
     }
 
-    // ── LED composite preview (LED_STRIPS_DESIGN MVP-P4, D24) ──
+    // ── LED composite preview ──
 
     /// Structural configure from the projection: whether the DMX lane's card
     /// carries the composite band, and its initial content. Stored on the
@@ -848,7 +848,7 @@ impl InspectorCompositePanel {
             Rect::ZERO
         };
 
-        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 stopgap removal: this used to
+        // This used to
         // be a bespoke, root-parented `ClipRegion` (`content_clip_id`) — the
         // BUG-060 hand-clip the design forbids by name — covering
         // `(rect.x, columns_y, rect.width, columns_h)` so no card content

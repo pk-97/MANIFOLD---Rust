@@ -3,7 +3,6 @@
 **Status: NORMATIVE working guide · 2026-07-06 · Fable.** The operating manual for
 `mod_harness`, the offline grading loop every audio-analysis change (salience,
 tracker, presence, transients) must pass through before touching the live path.
-Design context: [AUDIO_OBJECT_TRACKING_DESIGN.md](AUDIO_OBJECT_TRACKING_DESIGN.md).
 Written so a session with NO prior context can run, read, and judge results.
 
 ## 0. Trained detectors — what holds

@@ -1,5 +1,4 @@
-//! `node.matter_fill` — seed a matter domain's points (`docs/GPU_MPM_SOLVER_DESIGN.md`
-//! section 4.2 (Seeding), D9): a pool of the lowest authored cells plus one
+//! `node.matter_fill` — seed a matter domain's points: a pool of the lowest authored cells plus one
 //! box, in lattice order. Mesh fills join in P3b.
 
 use std::borrow::Cow;

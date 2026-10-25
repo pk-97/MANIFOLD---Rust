@@ -21,7 +21,7 @@
 //      blended per light.
 //
 // Shadows (P2) via the caster table + PCF below; atmosphere/fog (P3).
-// Per-object surface textures (IMPORT_FIDELITY_DESIGN.md D3/F-P2):
+// Per-object surface textures:
 // base_color_map (M6 addendum) plus normal_map (tangent-space, D4
 // cotangent-frame reconstruction), mr_map (glTF-packed roughness/metallic),
 // occlusion_map, and emissive_map — each gated by a texture_flags/
@@ -51,8 +51,8 @@ struct Vertex {
 // vec4s; stale as "272"/"320"/"448"/"464"/"480" in older comments — grew
 // with the P3 atmosphere fields, the P2 prev_view_proj/prev_model pair, the
 // VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field,
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2's texture_flags2, and
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1's five-vec4 material-extension
+// texture_flags2, and
+// the five-vec4 material-extension
 // block at the end;
 // `RenderSceneUniforms`'s `size_of` assert in render_scene.rs is the
 // authoritative check).
@@ -72,7 +72,7 @@ struct Uniforms {
     // strength multiplier (defaults to 1.0, so existing materials are unchanged).
     emission: vec4<f32>,
     // x: metallic [0,1], y: roughness [0.01,1]. z/w were permanently-zero
-    // reserved slots until GLB_CONFORMANCE_DESIGN.md G-P4/D5 repurposed
+    // reserved slots until they were repurposed
     // them: z = ior (KHR_materials_ior, default 1.5), w = specular_factor
     // (KHR_materials_specular, default 1.0) — both feed fs_pbr's
     // dielectric F0 term below. Defaults collapse the formula to the
@@ -80,13 +80,13 @@ struct Uniforms {
     pbr_metallic_roughness: vec4<f32>,
     // Retired legacy lighting slot, kept reserved for uniform ABI stability.
     specular: vec4<f32>,
-    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular's
+    // KHR_materials_specular's
     // specularColorFactor (rgb, default [1,1,1]). w: GLTF_MATERIAL_
     // EXTENSIONS_DESIGN.md E6 bitmask (see specular_family_flags()) —
     // bit0=specular_map, bit1=specular_color_map, bit2=transmission_map,
     // bit3=volume_thickness_map present.
     pbr_specular_tint: vec4<f32>,
-    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: per-map KHR_texture_transform,
+    // Per-map KHR_texture_transform,
     // one folded 2×3 affine per map family. *_uv_m = linear part
     // (m00, m01, m10, m11) s.t. uv' = (m00*u + m01*v + tx, m10*u +
     // m11*v + ty), default identity (1,0,0,1); *_uv_t = translation
@@ -113,7 +113,7 @@ struct Uniforms {
     // dedicated mr_map + texture_flags2.x below), z: base_color_map_n wired
     // (M6 addendum, matches resolve_albedo's gate).
     texture_flags: vec4<f32>,
-    // IMPORT_FIDELITY_DESIGN.md D3/F-P2: texture_flags is full (see above),
+    // texture_flags is full (see above),
     // so the three remaining new per-object maps get their own vec4.
     // x: mr_map_n wired (glTF packing: G=roughness, B=metallic — a
     // DEDICATED resolve function, not a channel-select mode on the old
@@ -124,7 +124,7 @@ struct Uniforms {
     texture_flags2: vec4<f32>,
     // x: alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), y: alpha_cutoff.
     // z/w were permanently-zero reserved slots until
-    // GLB_CONFORMANCE_DESIGN.md G-P5/D5 repurposed them: z = clearcoat
+    // Repurposed as z = clearcoat
     // (KHR_materials_clearcoat's clearcoatFactor, default 0.0), w =
     // clearcoat_roughness (clearcoatRoughnessFactor, default 0.0) — both
     // feed fs_pbr's second GGX lobe below. Default 0.0 makes the energy-
@@ -166,7 +166,7 @@ struct Uniforms {
     // approximately — see RenderScene::evaluate.
     prev_view_proj: mat4x4<f32>,
     prev_model: mat4x4<f32>,
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: single aligned block, grown
+    // Single aligned block, grown
     // ONCE, sized for ALL FIVE families the design's phases add (sheen,
     // iridescence, anisotropy, dispersion, transmission+volume) — see
     // `RenderSceneUniforms`'s matching field doc comments in render_scene.rs
@@ -193,7 +193,7 @@ struct Uniforms {
     // reserved.
     transmission_volume_params: vec4<f32>,
     // KHR_materials_volume's attenuationColor (xyz, default [1,1,1] —
-    // neutral). w: GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 bitmask (see
+    // neutral). w: bitmask (see
     // clearcoat_family_flags()) — bit0=clearcoat_map, bit1=
     // clearcoat_roughness_map, bit2=clearcoat_normal_map present.
     volume_attenuation_color: vec4<f32>,
@@ -371,7 +371,7 @@ struct Instance {
 };
 @group(0) @binding(15) var<storage, read> instances: array<Instance>;
 
-// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Always bound (same
+// Split-sum IBL. Always bound (same
 // always-bind ABI-stub discipline as bindings 4/5/7/10-14 above) —
 // `render_scene.rs::ensure_ibl_resources` guarantees all three exist
 // regardless of whether `envmap` is wired; `fs_pbr` only actually samples
@@ -392,7 +392,7 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 @group(0) @binding(17) var irradiance_map: texture_2d<f32>;
 @group(0) @binding(18) var brdf_lut: texture_2d<f32>;
 
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2: the three NEW per-object maps (normal
+// The three NEW per-object maps (normal
 // reuses binding(4) above). Always bound (same always-bind ABI-stub
 // discipline as bindings 4/5/7/10-14) — unwired binds the 1×1 dummy,
 // gated off by texture_flags2's presence bits.
@@ -400,7 +400,7 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 @group(0) @binding(20) var occlusion_map: texture_2d<f32>;
 @group(0) @binding(21) var emissive_map: texture_2d<f32>;
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the opaque-scene-color snapshot
+// The opaque-scene-color snapshot
 // (Pass A's fully-shaded opaque result, blitted between Pass A and Pass B) a
 // transmissive fragment will sample for screen-space refraction — E2b's
 // work. Declared here now so the pipeline layout is correct and stable
@@ -410,8 +410,7 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 @group(0) @binding(27) var opaque_scene_color: texture_2d<f32>;
 @group(0) @binding(28) var opaque_scene_color_sampler: sampler;
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised — full spec
-// surface per family): sheen/iridescence/anisotropy extension textures.
+// Sheen/iridescence/anisotropy extension textures.
 // Always bound (same always-bind ABI-stub discipline as bindings 19-21),
 // gated by the presence flags packed into texture_flags/texture_flags2/
 // anisotropy_dispersion_params/transmission_volume_params's reserved `w`/
@@ -424,8 +423,7 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 @group(0) @binding(32) var iridescence_thickness_map: texture_2d<f32>;
 @group(0) @binding(33) var anisotropy_map: texture_2d<f32>;
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-completion
-// sweep): clearcoat/specular/transmission/volume-thickness extension
+// Texture completion: clearcoat/specular/transmission/volume-thickness extension
 // textures. Same always-bind ABI-stub discipline + shared-sampler
 // simplification as 29-33 above. Every reserved single-flag `w` slot the
 // E1 migration left was already spent by E3/E4/E5 (see the struct's
@@ -1036,7 +1034,7 @@ fn appearance_discard(weight: f32) -> bool {
     return u.appearance.x * weight <= 0.0;
 }
 
-// IMPORT_FIDELITY_DESIGN.md D4/F-P2: tangent-space (glTF-convention) normal
+// Tangent-space (glTF-convention) normal
 // mapping. The FALLBACK frame is the screen-space cotangent frame
 // (Mikkelsen's derivation, the technique three.js/filament use when no
 // vertex tangents exist) — used when the mesh carries no authored TANGENT
@@ -1106,7 +1104,7 @@ fn resolve_normal(uv: vec4<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>,
     return normalize(vertex_normal);
 }
 
-// GLB_CONFORMANCE_DESIGN.md G-P4/D5: apply the base-color
+// Apply the base-color
 // KHR_texture_transform's folded affine — `uv' = M*uv + t`, folded ONCE at
 // import time (gltf_load::fold_uv_transform), never per frame. Identity
 // (m=(1,0,0,1), t=(0,0)) reduces to `uv` exactly (no branch needed: 1*u +
@@ -1127,7 +1125,7 @@ fn resolve_albedo(uv: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
     return u.base_color * color;
 }
 
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2: glTF metallic-roughness packing
+// glTF metallic-roughness packing
 // (G = roughness, B = metallic) in ONE dedicated texture — NOT a
 // channel-select mode on the (now-dead) roughness_map/metallic_map
 // bindings, per D3's explicit rejection of that shape. Returns
@@ -1155,7 +1153,7 @@ fn resolve_mr(uv: vec4<f32>) -> vec2<f32> {
     return vec2<f32>(max(roughness, 0.01), clamp(metallic, 0.0, 1.0));
 }
 
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2: R-channel ambient occlusion. Unwired
+// R-channel ambient occlusion. Unwired
 // = 1.0 (no darkening) — used ONLY to darken fs_pbr's diffuse IBL term
 // (never direct lighting, never specular IBL), per the design's Invariants
 // table.
@@ -1167,7 +1165,7 @@ fn resolve_occlusion(uv: vec4<f32>) -> f32 {
     return 1.0;
 }
 
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2: sRGB emissive map, multiplied by the
+// sRGB emissive map, multiplied by the
 // material's own (already premultiplied-with-intensity) emission factor and the
 // per-object `emission.w` skin strength multiplier. Unwired = the material's
 // emission factor scaled by `emission.w` (byte-identical to before this port
@@ -1184,7 +1182,7 @@ fn resolve_emissive(uv: vec4<f32>) -> vec3<f32> {
     return u.emission.rgb * strength;
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3 (D1 revised): `KHR_materials_sheen`
+// `KHR_materials_sheen`
 // factors + optional textures. `sheenColorTexture` is sRGB (tinted by
 // `sheenColorFactor`), `sheenRoughnessTexture`'s ALPHA channel carries
 // roughness (tinted by `sheenRoughnessFactor`) per the spec. v1
@@ -1204,7 +1202,7 @@ fn resolve_sheen(uv: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(color, roughness);
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4 (D1 revised): `KHR_materials_
+// `KHR_materials_
 // iridescence` factors + optional textures. `iridescenceTexture`'s R
 // channel scales `iridescenceFactor`; `iridescenceThicknessTexture`'s G
 // channel lerps between `iridescenceThicknessMinimum`/`Maximum` — both per
@@ -1223,7 +1221,7 @@ fn resolve_iridescence(uv: vec4<f32>) -> vec3<f32> {
     return vec3<f32>(factor, u.iridescence_params.y, thickness);
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5 (D1 revised): `KHR_materials_
+// `KHR_materials_
 // anisotropy` factors + optional texture. `anisotropyTexture`'s RG encodes
 // a per-texel rotation (cos/sin, remapped from [0,1] to [-1,1]) that
 // ROTATES the factor's own `anisotropyRotation`, and its B channel scales
@@ -1242,8 +1240,7 @@ fn resolve_anisotropy(uv: vec4<f32>) -> vec2<f32> {
     return vec2<f32>(strength, rotation);
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-completion
-// sweep): `KHR_materials_clearcoat`'s two factor-scaling textures.
+// `KHR_materials_clearcoat`'s two factor-scaling textures.
 // clearcoatTexture's R channel scales clearcoatFactor; clearcoatRoughness
 // Texture's G channel scales clearcoatRoughnessFactor — both per spec.
 // Returns (clearcoat_factor, clearcoat_roughness).
@@ -1276,8 +1273,7 @@ fn resolve_clearcoat_normal(uv: vec4<f32>, n: vec3<f32>, world_pos: vec3<f32>, t
     return n;
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-completion
-// sweep): `KHR_materials_specular`'s two factor-scaling textures.
+// `KHR_materials_specular`'s two factor-scaling textures.
 // specularTexture's ALPHA channel scales specularFactor; specularColor
 // Texture (sRGB) tints specularColorFactor — both per spec. Returns
 // (specular_factor, specular_tint.rgb).
@@ -1294,8 +1290,7 @@ fn resolve_specular(uv: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(tint, factor);
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-completion
-// sweep): `KHR_materials_transmission`'s `transmissionTexture` — R channel
+// `KHR_materials_transmission`'s `transmissionTexture` — R channel
 // scales `transmissionFactor` per spec.
 fn resolve_transmission_factor(uv: vec4<f32>) -> f32 {
     var factor = u.transmission_volume_params.x;
@@ -1305,8 +1300,7 @@ fn resolve_transmission_factor(uv: vec4<f32>) -> f32 {
     return factor;
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-completion
-// sweep): `KHR_materials_volume`'s `thicknessTexture` — G channel scales
+// `KHR_materials_volume`'s `thicknessTexture` — G channel scales
 // `thicknessFactor` per spec.
 fn resolve_volume_thickness(uv: vec4<f32>) -> f32 {
     var thickness = u.transmission_volume_params.y;
@@ -1331,7 +1325,7 @@ fn resolve_diffuse_transmission(uv: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(color, clamp(factor, 0.0, 1.0));
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: KHR_materials_transmission +
+// KHR_materials_transmission +
 // KHR_materials_volume screen-space refraction — the real glass pass that
 // REPLACES the D8/F-P5 alpha-blend approximation (D3 explicitly rejects
 // keeping that approximation once real refraction ships; see fs_pbr's call
@@ -1433,7 +1427,7 @@ fn transmission_diffuse(
 
     var transmitted: vec3<f32>;
     if dispersion > 0.0 {
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6/D3: `KHR_materials_
+        // `KHR_materials_
         // dispersion` — per-channel IOR spread around the base IOR
         // (Khronos glTF-Sample-Viewer reference constant: half-spread =
         // (ior - 1) * 0.025 * dispersion), each channel refracted and
@@ -1540,7 +1534,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     return apply_appearance(rgb, albedo.a, in.appearance_weight);
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: `KHR_materials_sheen`'s Charlie
+// `KHR_materials_sheen`'s Charlie
 // (velvet) NDF — the glTF spec's own reference distribution.
 fn D_Charlie(sheen_roughness: f32, n_dot_h: f32) -> f32 {
     let alpha = max(sheen_roughness * sheen_roughness, 0.0001);
@@ -1560,7 +1554,7 @@ fn V_Ashikhmin(n_dot_v: f32, n_dot_l: f32) -> f32 {
     return 1.0 / max(4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v), 0.0001);
 }
 
-// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: `KHR_materials_iridescence`'s
+// `KHR_materials_iridescence`'s
 // thin-film interference — the glTF spec's own reference "Airy summation"
 // algorithm (Belcour/Barla 2017, mirrored verbatim across every glTF
 // engine that implements this extension: the Khronos glTF-Sample-Viewer's
@@ -1703,7 +1697,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let mr = resolve_mr(in.uv);
     let roughness = mr.x;
     let metallic = mr.y;
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: resolved once per fragment —
+    // Resolved once per fragment —
     // (sheenColor.rgb, sheenRoughness). Default (0,0,0,0) makes every
     // term below exactly zero (D_Charlie's alpha floor keeps it finite,
     // but `sheen_color == 0` zeroes the tinted result regardless),
@@ -1715,7 +1709,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let translucency = resolve_diffuse_transmission(in.uv);
 
     let n_dot_v = max(dot(N, V), 0.001);
-    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior →
+    // KHR_materials_specular + ior →
     // F0 scale. Verified against the Khronos KHR_materials_specular
     // extension README (not the design doc's own draft formula, which
     // omitted specularFactor and carried a spurious 0.16 constant — see
@@ -1727,8 +1721,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // dielectric baseline. The same specular factor controls the dielectric
     // grazing reflectance; metals retain the physical F90 = 1.
     let ior = u.pbr_metallic_roughness.z;
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-    // completion sweep): specularTexture/specularColorTexture now scale
+    // specularTexture/specularColorTexture now scale
     // the factor/tint (see `resolve_specular`) — unwired is byte-identical
     // to the pre-E6 direct uniform read.
     let specular_resolved = resolve_specular(in.uv);
@@ -1738,7 +1731,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let dielectric_f0 = min(dielectric_reflectance * specular_tint, vec3<f32>(1.0)) * specular_factor;
     let base_f0 = mix(dielectric_f0, albedo.rgb, metallic);
     let base_f90 = mix(vec3<f32>(specular_factor), vec3<f32>(1.0), vec3<f32>(metallic));
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: direct lights evaluate the
+    // Direct lights evaluate the
     // thin-film reflectance at each light's V·H. IBL evaluates view
     // reflectance once, then converts it to the Schlick-equivalent F0 the
     // split-sum LUT expects.
@@ -1747,7 +1740,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let a = roughness * roughness;
     let a2 = a * a;
 
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: `KHR_materials_anisotropy` —
+    // `KHR_materials_anisotropy` —
     // tangent-space GGX stretch. Tangent basis: authored when the mesh
     // carries TANGENT (BUG-wfxe), the same cotangent_frame fallback
     // `resolve_normal` uses otherwise — anisotropy's T and the normal
@@ -1774,14 +1767,13 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         at = mix(a, 1.0, anisotropy_strength * anisotropy_strength);
     }
 
-    // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat — a
+    // KHR_materials_clearcoat — a
     // second, always-dielectric GGX lobe layered on top of the base BRDF.
     // Reuses the exact D_GGX/G_Smith/F_Schlick shape above with its own
     // roughness and a FIXED F0 = 0.04 (the Khronos extension's committed
     // constant — "the clearcoat employs a fixed F0 of 0.04, corresponding
     // to an IOR of 1.5"), never the dielectric_f0/metal F0 the base layer
-    // uses. GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-    // completion sweep): clearcoatTexture/clearcoatRoughnessTexture now
+    // uses. clearcoatTexture/clearcoatRoughnessTexture now
     // scale the factors (`resolve_clearcoat`), and clearcoatNormalTexture
     // now perturbs its own shading normal `Nc` (`resolve_clearcoat_normal`)
     // — unwired falls back to the oriented geometric normal, as required by
@@ -1816,7 +1808,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // and never substituted into `direct` itself, so this cannot perturb
     // `direct`'s bit-for-bit value for any material (glass or not).
     var direct_diffuse = vec3<f32>(0.0);
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: accumulated in parallel with
+    // Accumulated in parallel with
     // `direct`, same shape as `direct_coat` — never read unless
     // `sheen_color` is nonzero (see the composition below), so this cannot
     // perturb `direct`/`direct_coat`'s bit-for-bit value for any material.
@@ -1899,7 +1891,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
         // Coat lobe: same D_GGX/G_Smith shape at clearcoat_roughness,
         // fixed F0 = 0.04, no diffuse term (a clear lacquer has none).
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6: uses `Nc` (defaults to
+        // Uses `Nc` (defaults to
         // `N` when clearcoatNormalTexture is absent, making cc_n_dot_l/
         // cc_n_dot_h/cc_n_dot_v == n_dot_l/n_dot_h/n_dot_v exactly — same
         // byte-identical-when-unwired contract as everywhere else in this
@@ -1935,7 +1927,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered
+    // Split-sum IBL: prefiltered
     // specular reflection (mip selected by roughness) combined with the
     // BRDF LUT's scale/bias, plus cosine-convolved diffuse irradiance —
     // replaces the old single lod-0 envmap sample + roughness-fade
@@ -2005,7 +1997,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     }
     let ibl_f0 = schlick_equivalent_f0(f_view, base_f90, n_dot_v);
     var specular_ibl = prefiltered * (ibl_f0 * env_brdf.x + base_f90 * env_brdf.y);
-    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: anisotropic IBL via the
+    // Anisotropic IBL via the
     // well-known "bent normal" trick (Filament, Kaplanyan 2016) — bend the
     // reflection vector toward the anisotropic tangent's cross-normal
     // before the environment lookup, since a true anisotropic env
@@ -2040,9 +2032,9 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         specular_ibl = aniso_spec * (ibl_f0 * env_brdf.x + base_f90 * env_brdf.y);
     }
 
-    // GLB_CONFORMANCE_DESIGN.md G-P5/D5: coat IBL — same split-sum
-    // resample at clearcoat_roughness. GLTF_MATERIAL_EXTENSIONS_DESIGN.md
-    // E6: reflection vector and view-angle term now use `Nc` — byte-
+    // Coat IBL — same split-sum
+    // resample at clearcoat_roughness.
+    // Reflection vector and view-angle term now use `Nc` — byte-
     // identical to the pre-E6 `N`-based resample when `Nc == N` (no
     // clearcoatNormalTexture).
     var coat_ibl = vec3<f32>(0.0);
@@ -2072,7 +2064,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // diffuse energy in the other channels.
     let f_view_max = max(f_view.r, max(f_view.g, f_view.b));
     let kd_ibl = (1.0 - f_view_max) * (1.0 - metallic);
-    // IMPORT_FIDELITY_DESIGN.md D3/F-P2: occlusion darkens the diffuse IBL
+    // Occlusion darkens the diffuse IBL
     // term ONLY — never direct lighting (the `direct` accumulator above),
     // never specular IBL (`specular_ibl`) — per the design's Invariants
     // table. Unwired = 1.0 (no darkening), byte-identical to before this

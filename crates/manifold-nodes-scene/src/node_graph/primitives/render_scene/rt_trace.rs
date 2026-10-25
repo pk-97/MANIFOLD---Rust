@@ -134,7 +134,7 @@ impl RenderScene {
             // lighting trace size (shadow native while lighting stays
             // half). Otherwise fold shadow back into the lighting
             // dispatch — one dispatch, monolithic perf.
-            // RT_QUALITY_SETTINGS_DESIGN.md D4: one ray-resolution
+            // One ray-resolution
             // fraction for both dispatches (the per-term native split
             // went out with MANIFOLD_RT_NATIVE_TERMS) — the split below
             // is structurally unreachable and always fuses today.
@@ -218,7 +218,7 @@ impl RenderScene {
             } else {
                 0
             };
-            // RT_QUALITY_SETTINGS_DESIGN.md D5: per-frame spp from the
+            // Per-frame spp from the
             // quality column, gated on the per-term toggles — off → 0
             // (kernel skips the gather). I2: a tier is never 0.
             let ao_spp = if rt_ao_enabled { rtq.ao_spp } else { 0 };

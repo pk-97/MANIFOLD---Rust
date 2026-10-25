@@ -1,6 +1,6 @@
 //! The setup check: every liquid's setup shapes against its domain, read
 //! from the declared shapes at the authored values the knob shows
-//! (SCENE_SETUP_PROGRAMME.md section 3 B3, BUG-gm927 part 1). One list per
+//! One list per
 //! scene, built with the `SceneVm`; the card's warning line and the red
 //! outline in the viewport both read it, and the rule is
 //! `manifold_core::liquid_setup`, the same fit the solvers fill from. A

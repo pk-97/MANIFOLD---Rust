@@ -1,4 +1,4 @@
-// Shared by the whitewater grid atoms (GPU_WHITEWATER_DESIGN.md section 3.3).
+// Shared by the whitewater grid atoms.
 // The grid is the solid lattice read as cells: cells = nodes − 1 a side, cell
 // c at c.x + cells.x·(c.y + cells.y·c.z), its corners the solid nodes c..c+1.
 
@@ -45,7 +45,7 @@ fn ww_grid_position(p: vec3<f32>, center: vec3<f32>, size: vec3<f32>, cells: vec
     return (p - (center - 0.5 * size)) * vec3<f32>(cells) / size;
 }
 
-// Stateless randomness (GPU_WHITEWATER_DESIGN.md D10): a 32-bit mix, and a
+// Stateless randomness: a 32-bit mix, and a
 // uniform number in [0, 1) per (slot, seed, epoch, stream).
 fn ww_hash(x: u32) -> u32 {
     var h = x;

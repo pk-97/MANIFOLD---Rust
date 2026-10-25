@@ -1,5 +1,5 @@
 //! `node.matter_move_bodies` — each body's pose at the end of the current
-//! substep (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1 step 2). Prescribed
+//! substep. Prescribed
 //! bodies follow their tick's motion exactly; dynamic coupled bodies step
 //! from their tick-start state with their accelerations and the liquid's
 //! reaction so far.

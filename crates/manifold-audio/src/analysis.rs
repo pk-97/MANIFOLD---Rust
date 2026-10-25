@@ -1,7 +1,7 @@
 //! Audio feature analysis — the off-RT worker that turns captured samples
 //! into per-send **feature frames** for audio modulation.
 //!
-//! See `docs/AUDIO_MODULATION_DESIGN.md`. This is step 1 of the build order:
+//! This is step 1 of the build order:
 //! the isolated, unit-testable analysis core. It depends on nothing in the
 //! workspace except [`crate::capture`] — no `manifold-core`, no app, no GPU.
 //!
@@ -280,7 +280,7 @@ struct SendState {
     features: SendFeatures,
     /// D1 harmonic-sum salience scratch, `num_bins` long — computed ONCE per
     /// hop from the untilted, floored column, shared read-only by all four
-    /// window trackers below (D4, `docs/AUDIO_OBJECT_TRACKING_DESIGN.md`).
+    /// window trackers below.
     salience: Vec<f32>,
     /// Apex-masked column scratch for `salience_into` (BUG-043), `num_bins`
     /// long — pre-allocated here so the hot path stays allocation-free.
@@ -506,8 +506,7 @@ fn form_tilted_column(
 
 /// How far the ODF must exceed its adaptive baseline (the rolling MEDIAN) to fire.
 /// THE sensitivity knob — lower catches softer onsets, higher is stricter.
-/// Raised 2.0 → 7.0 by the P3 sweep (2026-07-06,
-/// `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3, BUG-041): at 2.0 the dive/riser/
+/// Raised 2.0 → 7.0 by the P3 sweep: at 2.0 the dive/riser/
 /// growl scenarios false-fired continuously (their timbre/tilt motion reads as
 /// broadband dB flux even after the frequency max-filter); 7.0 is the minimal
 /// value (paired with `SUPERFLUX_DELTA` 48.0) that silences all three while
@@ -627,7 +626,6 @@ fn band_edges(
 /// Public so `examples/mod_harness.rs` can form the exact tilted column from
 /// the (floored, untilted) scope column it drains, without duplicating this
 /// formula — see the harness's per-hop salience overlay
-/// (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P1).
 pub fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) -> Vec<f32> {
     let nb = num_bins.max(1);
     let fmin = cfg.fmin.max(1.0);
@@ -641,7 +639,7 @@ pub fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) 
         .collect()
 }
 
-// ── Salience — D1, docs/AUDIO_OBJECT_TRACKING_DESIGN.md ─────────────────────
+// ── Salience ─────────────────────
 //
 // "Which peak is the perceptual fundamental" over the exact tilted, floored
 // VQT column the scope draws and the bands reduce (P1's whole point: no
@@ -818,7 +816,7 @@ fn strongest_peak(peaks: &[(f32, f32)]) -> Option<(f32, f32)> {
     })
 }
 
-// ── Tracker — D5, docs/AUDIO_OBJECT_TRACKING_DESIGN.md ──────────────────────
+// ── Tracker ──────────────────────
 //
 // Bounded slew, challenger hysteresis, hold-then-release. One `RidgeTracker`
 // per window (Full/Low/Mid/High, D4) runs over the ONE shared salience column
@@ -895,12 +893,7 @@ struct RidgeTracker {
     /// Position stability 0..1 from the last matched hop: unified distance
     /// law `1 − |Δpos|/MAX_SLEW` (clamped 0..1), `Δpos` = new pos − previous
     /// pos, applied on EVERY hop that moves `pos` — continuation, takeover,
-    /// AND onset re-acquire alike (unified 2026-07-06, real-clip finding,
-    /// `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` D6/P2c: a bassline re-attacking
-    /// the SAME note on a fresh onset is the SAME tracked object, not a new
-    /// one, so it must keep trust, not reset it — the old unconditional 0 on
-    /// onset re-acquire meant presence never accumulated on real note
-    /// material, only on the synthetics' continuous tones). Acquisition from
+    /// AND onset re-acquire alike. Acquisition from
     /// `!active` is the one exception, unconditionally 0 — there is no prior
     /// `pos` to be near. The unified law still crushes takeover trust in
     /// practice (a takeover challenger is by construction > `SLEW_RADIUS`,
@@ -1228,8 +1221,7 @@ impl RidgeTracker {
     }
 }
 
-/// D6 presence recalibration (docs/AUDIO_OBJECT_TRACKING_DESIGN.md D6,
-/// "finding 2" of the P2 shipped-status paragraph, closed by this task).
+/// D6 presence recalibration.
 /// `window_energy` (raw magnitude energy, summed over the whole window) was
 /// the wrong denominator on two counts, both measured against
 /// `selftest_dive.png` 2026-07-06: (1) it mixes scales — the numerator is a
@@ -2158,7 +2150,7 @@ impl StreamingSendAnalyzer {
             // ramp never reads as a transient (matches the live worker).
             state.has_prev = state.window.len() >= n_fft;
 
-            // D5 tracker (docs/AUDIO_OBJECT_TRACKING_DESIGN.md P2): salience is
+            // D5 tracker: salience is
             // computed ONCE per hop from the untilted, floored column (D1 as
             // amended), then each of the four windows' trackers update from
             // that one shared array (D4). Gated on `pitch_tracking` (D7,

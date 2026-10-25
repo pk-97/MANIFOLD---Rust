@@ -1,6 +1,6 @@
 // node.whitewater_step — the pool passes the codegen atoms cannot be: the
 // seed, the append, the compaction and the split into populations
-// (GPU_WHITEWATER_DESIGN.md section 3.9). Atomic-free: every scatter writes
+//Atomic-free: every scatter writes
 // slots no other thread writes, placed by an inclusive scan in `scan`.
 //
 // The pool is `capacity` WhitewaterParticle slots, live ones first; `state`

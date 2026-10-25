@@ -8,7 +8,7 @@
 //! Matter" group of its Matter scenes, kept as `assets/matter_solver.json`)
 //! with the same display: the surface from the push-out particles, the water
 //! object and Physics View's dots. MPM has no whitewater yet: that waits on a
-//! whitewater stage that reads any solver (LIQUID_SOLVER_SEAM_DESIGN.md P10).
+//! whitewater stage that reads any solver.
 //! Particles draws the push-out particles as small spheres in place of the
 //! surface, as main's Particle View did.
 

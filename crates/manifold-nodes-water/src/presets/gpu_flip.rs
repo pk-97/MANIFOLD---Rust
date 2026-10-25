@@ -1,8 +1,8 @@
 //! Uses the PIC/FLIP ratio (0.95 FLIP) and the Dam Break scene values from FLIP Fluids fluidsimulation.h `_ratioPICFLIP` and the Dam Break preset (MIT); see THIRD_PARTY_NOTICES.md.
 //! Checked against FLIP Fluids the engine's Dam Break scene (WaterDamBreak.json) (MIT); see THIRD_PARTY_NOTICES.md.
-//! GPU FLIP, the GPU water solver (docs/GPU_FLIP_PRESSURE_SOLVE.md), as
+//! GPU FLIP, the GPU water solver, as
 //! graphs built for any lattice. `water_def` is a running liquid on the
-//! liquid seam (docs/LIQUID_SOLVER_SEAM_DESIGN.md P7a): node.gpu_flip_domain's clock runs
+//! liquid seam: node.gpu_flip_domain's clock runs
 //! node.liquid_state's tick region, whose body is one Sim Rate tick of
 //! one node.gpu_flip_step of [`STEPS_PER_TICK`] substeps, then
 //! node.liquid_stats; node.liquid_frame publishes each tick to the liquid
@@ -1422,7 +1422,7 @@ fn padded_lattice(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
     params
 }
 
-/// The tick's water (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)):
+/// The tick's water:
 /// one node.gpu_flip_step of `scene.steps` substeps on the domain's lattice, gravity,
 /// fields and bodies, and the state's tick index. The caller wires its
 /// particles and count.

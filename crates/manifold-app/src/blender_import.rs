@@ -1,7 +1,7 @@
 //! FBX/.obj/.dae drag-and-drop, converted through the user's installed
 //! Blender as a subprocess.
 //!
-//! `docs/IMPORT_ANYTHING_WAVE_DESIGN.md` Lane W3 (decided, don't reopen):
+//! Decided, don't reopen:
 //! MANIFOLD stays glTF-only internally. FBX is a closed format (Mixamo rigs
 //! and most store assets ship it); rather than write our own FBX importer or
 //! port Blender's GPL importer into Rust, we shell out to the user's own

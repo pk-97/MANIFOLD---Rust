@@ -1,6 +1,5 @@
 //! Uses the particle id limit (256) from FLIP Fluids diffuseparticlesimulation.h `_diffuseParticleIDLimit` (MIT); see THIRD_PARTY_NOTICES.md.
-//! The whitewater grid and its records (`docs/GPU_WHITEWATER_DESIGN.md`
-//! section 3.1 (Grids), section 3.3 (Atoms)). The grid is the frame's solid
+//! The whitewater grid and its records. The grid is the frame's solid
 //! lattice read as cells: `nodes − 1` cells a side from the solid lattice's
 //! first node, so the solid sits on the cell corners and the refined level
 //! set on s nodes per cell. Every grid atom takes the solid lattice's node
@@ -91,8 +90,7 @@ impl KnownItem for KnownValue {
     const SPECS: &'static [ChannelSpec] = KNOWN_VALUE_SPECS;
 }
 
-/// One slot of the GPU whitewater pool (`docs/GPU_WHITEWATER_DESIGN.md`
-/// section 3.9): a spawn record plus the id FLIP keeps per particle. A slot
+/// One slot of the GPU whitewater pool: a spawn record plus the id FLIP keeps per particle. A slot
 /// of kind [`WHITEWATER_EMPTY`] holds no particle; one with lifetime ≤ 0 holds
 /// a dead particle, still counted and retyped until the tick's removal, as
 /// in FLIP.
@@ -162,7 +160,7 @@ pub const MAX_CAPACITY: u32 = 250_000;
 
 /// The `step` of each node.nearest_crossing pass, in order. A first pass at
 /// 2 then two at 1 find the nearest stored crossing wherever three passes at
-/// 1 settle on a neighbour's (GPU_WHITEWATER_DESIGN.md D4).
+/// 1 settle on a neighbour's.
 pub const SPREAD_STEPS: [f32; 3] = [2.0, 1.0, 1.0];
 
 /// Grid cells past every real crossing: the coordinate of "none".

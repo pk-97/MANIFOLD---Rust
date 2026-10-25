@@ -1,5 +1,5 @@
 //! `node.whitewater_lifecycle` — FLIP's own whitewater lifecycle for any GPU
-//! liquid (`docs/GPU_WHITEWATER_DESIGN.md` D1, D6–D8, D10–D12, section 3.5).
+//! liquid.
 //! Each frame with ticks it snapshots the spawns and fields on the GPU; a
 //! later frame, once that one retired, loans them to the lifecycle's own
 //! thread, which runs the vendored `DiffuseParticleSimulation` and writes

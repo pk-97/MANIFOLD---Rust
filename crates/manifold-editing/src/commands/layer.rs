@@ -151,8 +151,7 @@ impl Command for AddLayerCommand {
             let mut new_layer = if self.layer_type == LayerType::Generator {
                 Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0)
             } else if self.layer_type == LayerType::Dmx {
-                // An LED layer is generator-driven (LED_STRIPS_DESIGN.md section
-                // 5b D12): seeded exactly like a generator layer so the standard
+                // An LED layer is generator-driven: seeded exactly like a generator layer so the standard
                 // clip workflow plays the LED preset out of the box.
                 // `Layer::new_generator` hardcodes `LayerType::Generator` and
                 // `gen_params` has no public setter, so the type is flipped here.
@@ -324,7 +323,7 @@ impl Command for ImportModelLayerCommand {
 /// If the deleted layer is a group, its children's parent_layer_id is cleared
 /// (matching Unity's behavior where children become root layers).
 ///
-/// Grid integrity (`docs/SESSION_MODE_DESIGN.md` section 7): a `LayerId` with no
+/// Grid integrity: a `LayerId` with no
 /// resolving layer must never be left behind in `Project.session.slots` —
 /// deleting a layer removes that layer's session slots in the same command,
 /// restored on undo.
@@ -1262,7 +1261,7 @@ mod tests {
         Layer::new(name.to_string(), LayerType::Video, index)
     }
 
-    /// MVP-P1b default-preset contract (LED_STRIPS_DESIGN.md section 5b D12):
+    /// MVP-P1b default-preset contract:
     /// creating an LED layer seeds `gen_params` with the bundled LED Fill
     /// preset id — the id is the contract; MVP-P2 grows the graph underneath
     /// it. A missing gen_params here is the "cleared generator" black-render
@@ -1339,7 +1338,7 @@ mod tests {
         assert_eq!(audio_layer_routing(2).1, None);
     }
 
-    // ── MVP-P3a: gen-carrying predicate (LED_STRIPS_DESIGN.md section 5b D16) ──
+    // ── MVP-P3a: gen-carrying predicate ──
 
     const TEST_LED_GEN_A: PresetTypeId = PresetTypeId::new("TestLedGenA");
     const TEST_LED_GEN_B: PresetTypeId = PresetTypeId::new("TestLedGenB");
@@ -1367,7 +1366,7 @@ mod tests {
         }
     }
 
-    /// BUG-ev8u characterization (LED_STRIPS_DESIGN.md section 5b D16): the
+    /// BUG-ev8u characterization: the
     /// generator picker's Change button was a silent no-op on LED lanes
     /// because `change_generator_type` gated on `!= LayerType::Generator`.
     /// Post-fix the change lands on the LED lane; undo restores the previous

@@ -51,7 +51,7 @@ pub struct StringParamDef {
     /// If true, the inspector shows a dropdown selector instead of text input.
     pub use_dropdown: bool,
     /// If true, this string param holds a file path on disk. Superseded by
-    /// binding-driven collection (PROJECT_FOLDERS_DESIGN P5): collection no
+    /// binding-driven collection: collection no
     /// longer reads this flag — a string param whose `stringBinding` targets
     /// a file-loading node type is collected regardless
     /// ([`crate::file_loader::file_loader_kind`]). Kept for serde compat.
@@ -354,7 +354,7 @@ pub fn try_get(type_id: &PresetTypeId) -> Option<Arc<PresetDef>> {
 /// instance-construction time, not a live hand gesture, so it must not mark
 /// the fresh slots `touched`. A brand-new effect would otherwise start every
 /// param pre-latched as "overridden" for the automation-lane override latch
-/// (`docs/AUTOMATION_LANES_DESIGN.md` section 4) before any lane or hand ever
+/// before any lane or hand ever
 /// touched it.
 pub fn create_default(type_id: &PresetTypeId) -> crate::effects::PresetInstance {
     let def = get(type_id);

@@ -1,6 +1,6 @@
 //! The GPU storage a liquid domain provides for its bodies: the body rows and
 //! their contact normals, the source and drain region rows, the shapes and the half-precision
-//! distance atlas (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D2). Shapes and the
+//! distance atlas. Shapes and the
 //! atlas are rebuilt into fresh buffers, so a buffer the GPU may still read is
 //! never written; body and region rows are written in encoder order each frame.
 

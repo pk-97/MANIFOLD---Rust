@@ -6,11 +6,10 @@
 CPU references, shader/codegen validation, focused lifecycle/seam tests and the
 8/16-resolution preset extent check pass. The GPU gate's `--build-only` compiles
 the library and `gpu_proofs` binaries with `--features gpu-proofs --no-run`.
-**Prerequisites:** GPU_FLIP_PRESSURE_SOLVE.md and the liquid particle-frame seam on main `4aab34f86`.
-**Execution contract:** read DESIGN_DOC_STANDARD.md sections 5–6 before each stage.
+**Prerequisites:** the liquid particle-frame seam on main `4aab34f86`.
 
 Peter: “It's a step param, default off, and off stays bit-identical.”
-This implements option B of GPU_FLIP_STRUCTURAL_OPTIONS.md section 5.
+This implements option B.
 The stage owns its numerical method; no new catalog primitive is needed
 (DECOMPOSING_GENERATORS.md section 1.2). Pressure remains the existing operator.
 The cost saving is particle work; it does not reduce pressure unknowns.
@@ -19,9 +18,7 @@ Reference: F. Ferstl, R. Ando, C. Wojtan, R. Westermann and N. Thuerey,
 [Narrow Band FLIP for Liquid Simulations](https://doi.org/10.1111/cgf.12825),
 Computer Graphics Forum 35(2), 225–232, 2016. The
 [author manuscript](https://www.cs.cit.tum.de/fileadmin/w00cfj/cg/Research/Publications/2016/NBFlip/nbflip.pdf)
-is the numerical reference. Companion contracts: GPU_FLIP_PRESSURE_SOLVE.md
-(unchanged projection), LIQUID_SOLVER_SEAM_DESIGN.md (publication),
-GPU_FLIP_STRUCTURAL_OPTIONS.md (approved scope).
+is the numerical reference.
 
 ## 1. Audit — what exists (verified 2026-10-03)
 

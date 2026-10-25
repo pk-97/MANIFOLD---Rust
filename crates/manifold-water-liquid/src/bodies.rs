@@ -1,5 +1,4 @@
-//! A GPU liquid's bodies (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.6;
-//! GPU_MPM_SOLVER_DESIGN.md D11): the coupled Physics World's bodies become
+//! A GPU liquid's bodies: the coupled Physics World's bodies become
 //! one [`LiquidBody`] row per body per tick, Inflow and Outflow roles one
 //! region row per role per tick from their authored motion, and every
 //! shape's distance lattice one packed atlas with a [`LiquidShape`] each.
@@ -134,7 +133,7 @@ pub const SUPPORT_VEC4S: usize = SUPPORT_POINT_VEC4S * MAX_SUPPORT_POINTS;
 pub const MOBILITY_BYTES: u64 = 96;
 
 /// A coupled body's touching support points at a tick's start
-/// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16), five vec4 a point: the lever
+///Five vec4 a point: the lever
 /// arm xyz and friction; the normal xyz out of the support and the patch;
 /// the support's velocity xyz and its spin about the normal; the patch
 /// centre's lever xyz; the support's velocity xyz there. The points run from

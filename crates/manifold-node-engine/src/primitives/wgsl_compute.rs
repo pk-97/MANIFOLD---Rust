@@ -190,7 +190,7 @@ pub struct WgslCompute {
     source_pure: bool,
 
     /// Compiler-installed prepared mesh-output rules (design
-    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) — the fused-graph sidecar
+    /// The fused-graph sidecar
     /// for MeshVertex outputs whose revision behaviour the fused kernel
     /// owns but the authored declaration can't describe. Validated
     /// against the parsed port layout at installation; cleared by
@@ -1221,7 +1221,7 @@ fn element_to_array_type(
 /// Walk a WGSL storage-array struct's members and emit a Channels
 /// signature.
 ///
-/// Per `docs/CHANNEL_TYPE_SYSTEM.md` section 8.2 / section 14.9:
+/// Per the channel type rules:
 /// - Fields the author tagged with a preceding `// @channel_skip`
 ///   marker are SKIPPED. The skip set is the per-struct lookup in
 ///   `skip_map`, built by [`extract_channel_skip`] from the original
@@ -1320,7 +1320,7 @@ type ChannelSkipMap = AHashMap<String, AHashSet<String>>;
 /// array struct fields. Returns a map from struct name → set of field
 /// names to skip when emitting the Channels signature.
 ///
-/// Per `docs/CHANNEL_TYPE_SYSTEM.md` section 8.2 / section 14.9 — the explicit marker
+/// The explicit marker
 /// is the only mechanism for skipping fields (the old `_pad*` name-
 /// prefix heuristic was retired alongside this preprocessor's landing).
 ///

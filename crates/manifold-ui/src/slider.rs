@@ -115,7 +115,7 @@ impl Slider {
     }
 }
 
-// ── The gesture contract (UI_WIDGET_UNIFICATION_DESIGN.md section 3) ──────────
+// ── The gesture contract ──────────
 //
 // Zone geometry + gesture→intent mapping, in widget language. Hosts
 // translate an intent into their own action type (chrome → `PanelAction` at
@@ -323,7 +323,7 @@ impl BitmapSlider {
     /// `key` is `None` for every caller outside the widget-tree row model
     /// (chrome sliders, macros, the graph canvas's own draw path never calls
     /// this at all) — unchanged, auto-salted by sibling index. Param-card row
-    /// builders pass `Some(base)` (D4, `docs/WIDGET_TREE_DESIGN.md`): the
+    /// builders pass `Some(base)`: the
     /// label/track/value-cell are the only three of this widget's five nodes
     /// parented flat alongside the row's OTHER controls (fill/thumb nest
     /// under the track and inherit its stability automatically), so only

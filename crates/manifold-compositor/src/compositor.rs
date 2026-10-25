@@ -303,7 +303,7 @@ pub trait Compositor: Send {
     /// for compositors without effect chains.
     fn set_profiling(&mut self, _on: bool) {}
 
-    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set per-frame RT quality values.
+    /// Set per-frame RT quality values.
     /// Default no-op for compositors without RT chains.
     fn set_rt_quality(&mut self, _q: manifold_node_engine::exec::effect_node::RtQuality) {}
 

@@ -1,5 +1,4 @@
-"""E-GMD truth extraction for the ADTOF bake-off (phase B1,
-docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md 2026-07-18 addendum). Thin wrapper
+"""E-GMD truth extraction for the ADTOF bake-off (phase B1). Thin wrapper
 around the manifest eval/fetch/egmd.py already wrote: E-GMD audio IS ALREADY
 an isolated drum-kit recording (no demucs separation needed -- there is no
 other instrument in the mix to remove), paired with an aligned MIDI capture

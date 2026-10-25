@@ -1,6 +1,6 @@
 //! The one motion law a body coupled to a liquid follows inside a tick, and
 //! its response to the liquid's pressure while it stays on its supports
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D15, D16). The liquid places the body
+//!The liquid places the body
 //! by the law while it solves; Box3D, handed the liquid's reaction as a
 //! steady force over the step (D17), ends the tick on it exactly when no
 //! contact, damping, motion lock or speed cap acts. `liquid_pose.wgsl` is the

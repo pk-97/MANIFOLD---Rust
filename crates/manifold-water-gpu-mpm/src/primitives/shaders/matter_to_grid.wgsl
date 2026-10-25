@@ -1,5 +1,4 @@
-// node.matter_to_grid — MLS-MPM particle-to-grid (GPU_MPM_SOLVER_DESIGN.md
-// section 4.1 step 3, D5, D6). Hand WGSL under exclusion 1 of ADDING_PRIMITIVES.md
+// node.matter_to_grid — MLS-MPM particle-to-grid. Hand WGSL under exclusion 1 of ADDING_PRIMITIVES.md
 // (workgroup memory and barriers). Each live point adds to the 27 lattice nodes
 // of its quadratic B-spline stencil:
 //   mass     += w · m_p

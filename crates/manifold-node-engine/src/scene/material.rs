@@ -149,9 +149,8 @@ pub enum MaterialKind {
 /// (cutout), so foliage cards and decals punch holes instead of rendering
 /// as opaque rectangles. [`Blend`](AlphaMode::Blend): the object draws in a
 /// second, sorted, depth-write-off pass in `render_scene` — glTF `BLEND` and
-/// `KHR_materials_transmission` materials import as this (IMPORT_FIDELITY_DESIGN.md
-/// D8/F-P5, superseding MATERIAL M6-D3's "out of scope" call). `render_mesh`
-/// and `render_copies` use the same colour pass through their single-object
+/// `KHR_materials_transmission` materials import as `Blend`.
+/// `render_mesh` and `render_copies` use the same colour pass through their single-object
 /// adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AlphaMode {
@@ -221,7 +220,7 @@ pub struct Material {
     /// Cutout threshold in `[0, 1]`, used only when `alpha_mode == Mask`.
     pub alpha_cutoff: f32,
 
-    // ---- PBR dielectric F0 (GLB_CONFORMANCE_DESIGN.md G-P4/D5). Inert
+    // ---- PBR dielectric F0. Inert
     // when `kind != Pbr` — same "unread by other kinds" pattern as
     // `metallic`/`roughness` above. Defaults reproduce the pre-G-P4
     // hardcoded F0 = 0.04 exactly: `((1.5-1)/(1.5+1))^2 * 1.0 * [1,1,1] =
@@ -236,7 +235,7 @@ pub struct Material {
     /// `[1,1,1]`) — tints the dielectric F0 term.
     pub specular_tint: [f32; 3],
 
-    // ---- Per-map UV transforms (GLB_CONFORMANCE_DESIGN.md G-P4/D5).
+    // ---- Per-map UV transforms.
     // `KHR_texture_transform`, one folded 2×3 affine per map family —
     // `[m00, m01, m10, m11, tx, ty]` s.t. `uv' = (m00*u + m01*v + tx,
     // m10*u + m11*v + ty)`, folded ONCE at import (never per frame).
@@ -256,8 +255,7 @@ pub struct Material {
     /// serialized compatibility.
     pub core_tex_coords: [u32; 5],
 
-    // ---- Clearcoat second specular lobe (GLB_CONFORMANCE_DESIGN.md
-    // G-P5/D5). Inert when `kind != Pbr` — same "unread by other kinds"
+    // ---- Clearcoat second specular lobe. Inert when `kind != Pbr` — same "unread by other kinds"
     // pattern as `metallic`/`roughness`. Both default to `0.0`, which is
     // glTF `KHR_materials_clearcoat`'s own implicit default AND makes the
     // shader's energy-compensation weight `Fc = clearcoat * fresnel` exactly
@@ -275,7 +273,7 @@ pub struct Material {
     pub clearcoat_roughness: f32,
 
     // ---- Sheen / iridescence / anisotropy / dispersion / transmission +
-    // volume (GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1). Inert when
+    // volume. Inert when
     // `kind != Pbr`, same pattern as clearcoat above. Every field defaults
     // to glTF's own implicit default (0.0/[0,0,0] factors are inert;
     // iridescence_ior/thickness and volume_attenuation_color default to
@@ -317,7 +315,7 @@ pub struct Material {
     pub diffuse_transmission_color: [f32; 3],
     /// `KHR_materials_transmission`'s `transmissionFactor` (default `0.0`,
     /// inert). Already imported and folded into `alpha_mode`/`base_color.a`
-    /// at import time (IMPORT_FIDELITY_DESIGN.md D8); this is the SAME
+    /// at import time; this is the SAME
     /// factor carried through to the uniform for E2's real refraction pass
     /// to read directly, rather than reverse-engineering it from alpha.
     pub transmission_factor: f32,
@@ -514,7 +512,7 @@ fn premultiply_emission(rgb: [f32; 3], intensity: f32) -> [f32; 4] {
     ]
 }
 
-/// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: finite stand-in for
+/// Finite stand-in for
 /// `KHR_materials_volume`'s `attenuationDistance` spec default of
 /// `+infinity` ("no attenuation beneath the surface"). Chosen large
 /// enough that Beer-Lambert transmittance

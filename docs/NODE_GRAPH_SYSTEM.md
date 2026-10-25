@@ -122,7 +122,7 @@ Effect cards present a flat list of named, typed parameters. MIDI/OSC mapping, m
 
 ### 7.2 Bindings — unified (May 2026)
 
-A card-slider write resolves through a single `Vec<ResolvedBinding>` on each effect slot. The binding can target an inner-node param, a control-wire scalar source, a composite-Rust handle, or a custom slot. See [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) (the closed historical record) and section 7.11 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md).
+A card-slider write resolves through a single `Vec<ResolvedBinding>` on each effect slot. The binding can target an inner-node param, a control-wire scalar source, a composite-Rust handle, or a custom slot.
 
 The bug class that motivated unification — passing `&[]` for the user-bindings slice — is now structurally unrepresentable. Wire format carries `ParamId` directly; no `pi: usize → ParamId` translation layer remains.
 
@@ -216,7 +216,6 @@ Real ones, parked. Not the "(none yet)" placeholder from V0.
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — authoring a new primitive
 - [ADDING_EFFECTS_AND_GENERATORS.md](ADDING_EFFECTS_AND_GENERATORS.md) — authoring a new preset (JSON workflow)
 - [NODE_CATALOG.md](NODE_CATALOG.md) — naming + categorisation spec
-- [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) — runtime design, bindings, skip-passthrough, IR
 - [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) — historical record of Phases 1–5
 - [EFFECT_CHAIN_LIFECYCLE.md](EFFECT_CHAIN_LIFECYCLE.md) — chain pool, state-cache eviction, feedback bleed-through
 - [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) — Metal backend, texture formats, uniform layout

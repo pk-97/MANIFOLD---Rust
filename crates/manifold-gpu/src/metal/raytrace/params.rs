@@ -129,7 +129,7 @@ pub struct ShadowRayParams {
     pub refl_spp: u32,
     pub refl_max_roughness: f32,
     pub refl_rough_band: f32,
-    /// SCENE_MODIFIER_RT_DESIGN.md §5.1 (P4a): the CPU-authoritative emissive
+    /// The CPU-authoritative emissive
     /// stats (`emissive_table_mean_power`/`_count`/`_total_area` and
     /// `emissive_entries_are_local`) are DELETED — the trace and firefly
     /// kernels read the GPU-written 16-byte `EmissiveTableStats` buffer
@@ -458,7 +458,7 @@ pub struct RtNormalSource {
     /// 8-byte alignment at offset 112 — an earlier slot would push the
     /// struct past 120 bytes (the MSL mirror declares the same order).
     pub instance_addr: u64,
-    /// SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): bindless address of the
+    /// Bindless address of the
     /// per-vertex appearance-weight buffer (`f32` per vertex, vertex-index
     /// addressed), or 0 when unwired (weight = 1). The kernel evaluates
     /// `level = gain * weight`, `coverage = clamp(level, 0, 1)`,

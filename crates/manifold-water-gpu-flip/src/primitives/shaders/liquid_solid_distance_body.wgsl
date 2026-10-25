@@ -1,5 +1,4 @@
-// node.liquid_solid_distance — fusable BUFFER body, GATHER (GPU_MPM_SOLVER_DESIGN.md
-// D11, section 3.2). One thread per lattice node, x fastest: the seam's solid
+// node.liquid_solid_distance — fusable BUFFER body, GATHER. One thread per lattice node, x fastest: the seam's solid
 // lattice, positive in free space and negative inside a solid. It is the
 // smaller of the distance to the nearest closed wall, wall_inset nodes in
 // from the lattice edge (native FLIP supplies 1.5 + 5e-5/h; MPM supplies 3), and every enabled body's signed distance, sampled from its

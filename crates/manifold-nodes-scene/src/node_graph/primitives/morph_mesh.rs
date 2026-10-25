@@ -122,7 +122,7 @@ impl Primitive for MorphMesh {
         }
     }
 
-    /// Mesh revision declaration (SCENE_MODIFIER_RT_DESIGN.md §3.1): a
+    /// Mesh revision declaration: a
     /// coincident two-input lerp — output record `idx` mixes input
     /// records `idx` of both meshes (`shaders/morph_mesh_body.wgsl`) and
     /// output capacity is `min(in, b)` (see `array_output_capacity`

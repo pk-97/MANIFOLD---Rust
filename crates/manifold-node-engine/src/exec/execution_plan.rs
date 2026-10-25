@@ -185,20 +185,19 @@ pub struct ExecutionPlan {
     late_capture_steps: Vec<usize>,
     /// Ordered node-pair participants in final execution-step order.
     node_pairs: Vec<NodePairSteps>,
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: plan-compiled mesh revision
+    /// Plan-compiled mesh revision
     /// rules, indexed by `ResourceId`, parallel to `resource_types`.
     /// `Some` only for outputs with the `MeshVertex` channel layout —
     /// no general array is assumed to be a triangle mesh. Dependency
     /// port names are resolved to `ResourceId`s here at compile time,
     /// so the executor's per-frame commit does no name lookups.
     mesh_rules: Vec<Option<CompiledMeshOutputRule>>,
-    /// Substep repeat regions (`docs/GPU_MPM_SOLVER_DESIGN.md` D7), one per
+    /// Substep repeat regions, one per
     /// boundary node. Empty for every graph without one.
     substep_regions: Vec<crate::exec::substeps::SubstepRegion>,
 }
 
-/// SCENE_MODIFIER_RT_DESIGN.md §3.2: a
-/// [`crate::node_graph::mesh_change::MeshRevisionRule`] with its named
+/// A [`crate::node_graph::mesh_change::MeshRevisionRule`] with its named
 /// input dependencies resolved to plan `ResourceId`s. An aspect whose
 /// declaration could not be resolved honestly (unwired or back-edge
 /// input) degrades to `Written` here at compile time — conservative,
@@ -215,7 +214,7 @@ pub enum CompiledMeshRevisionRule {
     Dependencies(Vec<(ResourceId, crate::scene::mesh_change::MeshAspect)>),
 }
 
-/// SCENE_MODIFIER_RT_DESIGN.md §3.2: the two structural rules for one
+/// The two structural rules for one
 /// mesh output, compiled. Content always revises on an actual write and
 /// needs no compiled rule.
 #[derive(Debug, Clone)]
@@ -233,7 +232,7 @@ impl ExecutionPlan {
         self.resource_types.len()
     }
 
-    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: the compiled mesh revision rule
+    /// The compiled mesh revision rule
     /// for a resource, or `None` when the resource is not a
     /// `MeshVertex`-layout output.
     pub fn mesh_rule(&self, id: ResourceId) -> Option<&CompiledMeshOutputRule> {
@@ -613,7 +612,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 external_resources.push(id);
             }
             resource_types.push(output_port.ty);
-            // SCENE_MODIFIER_RT_DESIGN.md §3.1/3.2: compile the producer's
+            // Compile the producer's
             // mesh revision rule for MeshVertex-layout outputs only; every
             // other resource gets None.
             mesh_rules.push(compile_mesh_rule(
@@ -976,7 +975,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             continue;
         }
 
-        // `carries_resources` (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D2): a
+        // `carries_resources`: a
         // node whose output forwards resource `Slot`s inside a CPU struct
         // field (`node.scene_object`'s `SceneObject`) needs the same
         // lifetime extension the mux branch above gives its aliased
@@ -1269,7 +1268,7 @@ fn array_passthrough_steps(
         .collect()
 }
 
-/// SCENE_MODIFIER_RT_DESIGN.md §3.1/3.2: compile one output port's mesh
+/// Compile one output port's mesh
 /// revision rule. `None` unless the output carries the `MeshVertex`
 /// channel layout — "no general array is assumed to be a triangle mesh."
 fn compile_mesh_rule(

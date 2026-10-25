@@ -1,4 +1,4 @@
-//! Liquid seam P7a demo (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a (GPU FLIP on
+//! Liquid seam P7a demo (GPU FLIP on
 //! the contract)): the shipped GPU FLIP Dam Break through the production export
 //! at 60 and 30 fps. The frame at 5 s is the same pixels at both rates, and a
 //! paused live transport keeps showing the same frame. Writes both videos,

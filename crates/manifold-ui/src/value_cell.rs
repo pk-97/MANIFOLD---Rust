@@ -1,9 +1,9 @@
 //! The numeric value-cell gesture contract
-//! (`docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8, P4) — the one gesture table
+//! The one gesture table
 //! every numeric value cell in the app's docks now speaks: drag to scrub
 //! (Shift for fine), double-click to type, right-click to reset. Same shape
 //! as `slider.rs`'s/`stepper.rs`'s contract (D2/D3 of
-//! `UI_WIDGET_UNIFICATION_DESIGN.md`): a pure, host-agnostic `intent_for` fn;
+//! ): a pure, host-agnostic `intent_for` fn;
 //! hosts translate the intent into their own action type at build/input time.
 //!
 //! Drags don't route through the discrete [`crate::intent::Gesture`]

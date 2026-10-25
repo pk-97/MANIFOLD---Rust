@@ -398,7 +398,7 @@ fn memory_dir(action: DialogAction, dir: &Path) -> PathBuf {
 /// The folder a dialog opens in. Pure, so the fallback rules are testable.
 ///
 /// Save As on a saved project starts in that project's folder, so it saves a
-/// new version there (docs/PROJECT_FOLDERS_DESIGN.md D3); an untitled project
+/// new version there; an untitled project
 /// starts where the last new project was put.
 fn start_dir(
     action: DialogAction,

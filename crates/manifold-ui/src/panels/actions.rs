@@ -1,5 +1,5 @@
 //! Per-domain intent enums — the FLAT sum decomposition of the god-enum
-//! [`super::PanelAction`] (UI_FUNNEL_DECOMPOSITION_DESIGN.md D5, P-D / D-D1).
+//! [`super::PanelAction`].
 //!
 //! Each of the 12 enums below holds a disjoint slice of the original
 //! `PanelAction` variants, moved VERBATIM (name, fields, doc comments, attrs).
@@ -393,8 +393,7 @@ pub enum ParamsAction {
     /// rebuild so the drawer repaints with the newly-selected config; carries no
     /// payload and mutates no model.
     ModConfigTabChanged,
-    /// A card section header was clicked (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-    /// section 2 D5) — the card already flipped its own UI-only `section_folded`
+    /// A card section header was clicked — the card already flipped its own UI-only `section_folded`
     /// entry in `handle_click`. Routes to a structural rebuild so the folded/
     /// unfolded rows repaint; carries no payload and mutates no model (fold
     /// state is workspace-local, never serialized).
@@ -611,7 +610,7 @@ pub enum ModulationAction {
     /// Arm/disarm audio modulation on a param. Arming assigns the project's
     /// first audio send with a default feature; re-clicking toggles enabled.
     /// No-op when no sends exist (the audio button is inert until the Audio
-    /// Setup defines one). See `docs/AUDIO_MODULATION_DESIGN.md`.
+    /// Setup defines one).
     AudioModToggle(GraphParamTarget, ParamId),
     /// Set an audio modulation's source: which send + which feature.
     AudioModSetSource(GraphParamTarget, ParamId, AudioSendId, AudioFeature),
@@ -787,12 +786,12 @@ pub enum RootAction {
     /// Open (toggle) the Audio Setup panel — the central place to route audio
     /// in and define named sends. Header button; also bound to ⌘⇧A.
     OpenAudioSetup,
-    /// Open (toggle) the Scene Setup panel (`SCENE_SETUP_PANEL_DESIGN.md` D2)
+    /// Open (toggle) the Scene Setup panel
     /// — mutually exclusive with [`Self::OpenAudioSetup`] (the app dispatch
     /// closes the other dock, same either/or toggle policy as that pair).
     /// Header button.
     OpenSceneSetup,
-    /// Open the RT Quality panel (RT_QUALITY_SETTINGS_DESIGN.md) — per-project
+    /// Open the RT Quality panel — per-project
     /// raytracing sample tiers + ray resolution, real-time and export columns.
     /// Opened from the Settings popup; a floating overlay, not a dock.
     OpenRtQuality,
@@ -827,7 +826,7 @@ pub enum RootAction {
         field: String,
         extensions: Vec<String>,
     },
-    /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8): double-click on a dock
+    /// double-click on a dock
     /// numeric value cell opens its type-in box. Carries the row's write
     /// address (mirroring `SceneSetupParamChanged`'s tuple shape), the
     SelectInspectorTab(InspectorTab),
@@ -942,7 +941,7 @@ pub enum RootAction {
     // deleted with the channel picker — capture-fed sends are always stereo.
     /// Begin inline editing of a send's label (clicked its name).
     AudioSendLabelClicked(AudioSendId),
-    /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8, audio-dock sibling):
+    /// Audio-dock sibling:
     /// double-click on the gain value cell opens its type-in box. Carries
     /// the send id, the current gain (dB) to prefill, and the cell's own
     /// node id (the app resolves its screen rect at open time — same
@@ -988,8 +987,7 @@ pub enum RootAction {
         binding_id: String,
         label: String,
     },
-    /// Set the binding's card section (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-    /// section 2 D5). One-shot edit; `None` clears the row back to unsectioned.
+    /// Set the binding's card section. One-shot edit; `None` clears the row back to unsectioned.
     /// Manifest-only per BOUNDARIES D4 — see `BindingMappingEdit::section`.
     EffectMappingSection {
         target: crate::view::UiGraphTarget,

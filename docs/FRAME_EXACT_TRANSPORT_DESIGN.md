@@ -2,7 +2,6 @@
 
 **Status:** IN PROGRESS · 2026-10-14 · P1, P2 and P3 on main (P3 landed 2d64b50e1: tempo-trim follower, catch-up window, measured output latency, learned source offsets). Owed: Peter's rig test (section 6 (Phasing), P3 demo), constants tuned from the rig log, P4. Bead: BUG-l0pnn (Frame-exact transport: rig test, constant tuning, P4 video locking); origin BUG-gqhep (live-transport-nondeterministic-frame-clock), closed.
 **Prerequisites:** none.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
 <!-- index: Frame-exact transport clock (BUG-gqhep): impact map of every transport time/beat reader and writer, dt consumer, integrator, external sync source, export and harness; the integer frame-index clock shared with export on the song-time-0 grid, the content-tick grid, on-frame edge sampling, external sync as a tempo-trim clock follower (PI loop, trim cap, trim or seek, tempo-change catch-up window) over timestamped sources read at the screen instant with measured output latency and learned per-source offsets, latched clip start times for video, hand-back without a time jump, the MIDI clock tick filter with refit and the latched Link tempo guard, Ableton live-tempo following, phases P1–P4 and the fail-first proof plan. -->
 
@@ -18,7 +17,6 @@ Companions:
 - [CORE_ENGINE_MAP.md](CORE_ENGINE_MAP.md) — the current transport map; its section 4 (Time model & tempo) and section 7 (External sync) change when this lands.
 - [VSYNC_AND_FRAME_PACING.md](VSYNC_AND_FRAME_PACING.md) — the content-thread timer this design re-anchors.
 - [LIVE_SIM_CLOCK_DESIGN.md](LIVE_SIM_CLOCK_DESIGN.md) — the physics clock reads transport seconds and keeps its own wall-load cap.
-- [ENCODE_REPLAY_DESIGN.md](ENCODE_REPLAY_DESIGN.md) — GPU dispatch caching; it never reads time (audit item 1.7).
 
 ## 1. Audit — what exists (verified 2026-10-13 on 09a44cb4c)
 
@@ -210,10 +208,10 @@ Audit items 1.1–1.9 cite the pre-P2 base. These anchors are current. P3's work
 | Link is already read at the tick's deadline. Its tempo is the session tempo | `link_sync.rs:95-114`; `content_thread.rs:589`, `:1785` | Kept; the read instant gains the output latency (D19). |
 | Link offset: from the last poll against the engine's time, cached only on MANIFOLD's Play and Seek, NaN after Stop and load. A Link-initiated play never caches it | `content_thread.rs:2020-2034`; `content_commands.rs:913`, `:937`, `:959`, `:971`, `:1425`; `link_sync.rs:153-155` | BUG-0u1al (Link-initiated Play never caches the Link beat offset). D15. |
 | Live tempo is set only while Link has peers or CLK receives, and is cleared only when there is no project. Under Internal it can only be stale, and `apply_resolved_tempo` writes it into the beat-0 point | `content_thread.rs:1784-1828`, `:2080-2083`, `:2131-2151` | BUG-wfs20 (Stale Link tempo after peers vanish writes beat-0 tempo point). D21. |
-| Link tempo already outranks the CLK estimate as the live tempo | `content_thread.rs:1819-1827` | ABLETON_TRANSPORT_SYNC_DESIGN.md calls Link the tempo plane (its lines 59-63). D21 keeps that for the follower's base tempo. |
+| Link tempo already outranks the CLK estimate as the live tempo | `content_thread.rs:1819-1827` | Link is the tempo plane. D21 keeps that for the follower's base tempo. |
 | AbletonOSC values are caught on the receive thread into a latest-only slot and stamped with the frame's time when drained. Several reports in one frame collapse to one | `ableton_bridge.rs:641-662`, `:907-910`, `:2458-2459` | Up to one frame of stamp error: about 8 ms of mean lag in the D7 noise model. D7. |
 | The AbletonOSC relay has a tempo listener, used only for dead reckoning | `transport_sync.rs:326-331` | D8's "no live tempo channel" was wrong. D8 now follows it. |
-| The timecode sender is LiveMTC, a third-party Max for Live device, not in this repo. Peter ruled the M4L path unused on 2026-07-07 | `osc_sync.rs:4`, `:14-15`; ABLETON_TRANSPORT_SYNC_DESIGN.md lines 65-67 and 476-479 | P3 cannot change the sender (D7, and the Deferred table). |
+| The timecode sender is LiveMTC, a third-party Max for Live device, not in this repo. Peter ruled the M4L path unused on 2026-07-07 | `osc_sync.rs:4`, `:14-15` | P3 cannot change the sender (D7, and the Deferred table). |
 | The timecode receiver takes one float of song seconds, but every OSC argument becomes `f32` | `osc_sync.rs:314`; `osc_receiver.rs:197-200` | `f32` seconds are 0.24 ms coarse at one hour. D7 keeps doubles. |
 | Timecode and OSC messages are stamped when the frame drains them, not when the packet arrives | `osc_receiver.rs:161-186`; `content_thread.rs:1877` | D7 stamps on the receive thread. |
 | The backward-move guard is beat-based | `engine.rs:1815-1824` | Only a backward seek reaches it after P3; the trim never moves the beat backward (D6). |
@@ -471,7 +469,7 @@ Consequence: the clock has no origin (D1). `begin_export(fps)` and `end_export(f
   - Live on Link plays at Link's tempo exactly, so 0.2% is wide for real agreement and tight enough to reject a Link session Live is not part of. Simulated: sessions at 125, 127, 127.5 and 127.8 BPM against Live at 128 never caused a seek (at a 1% threshold, 127 latched and seeked six times in two minutes). With Live on Link, every tempo jump kept the latch (peaks 0.2–0.9 ms).
   - One log line on each latch and unlatch says why.
   - As built (C8): the guard watches whenever Link and a comparable source are both live, not only under that source's authority, so it is already latched when the source takes over (`external_sync.rs`, `LinkTempoGuard`). A session 0.16% off (127.8 against Live at 128) is inside 0.2% and latches; test 13 shows 1.8 ms of phase and no seek, which is the plan's bound for it.
-- Why Link first. Link knows a tempo change at the instant it happens; MIDI clock reveals it only through later ticks. The live tempo already ranks Link first (`content_thread.rs:1819-1827`), and ABLETON_TRANSPORT_SYNC_DESIGN.md names Link the tempo plane of Peter's rig.
+- Why Link first. Link knows a tempo change at the instant it happens; MIDI clock reveals it only through later ticks. The live tempo already ranks Link first (`content_thread.rs:1819-1827`), and Link is the tempo plane of Peter's rig.
 - Live external tempo (the BPM readout, `get_bpm_at_beat`, clip rates) is cleared at the start of every `tick_sync_controllers` and set only by a source that delivered a tempo this tick. It reports `base_bpm`, never the trimmed rate: the trim is a correction, not a tempo.
 - `apply_resolved_tempo`'s Internal-authority branch, which writes the live tempo into the beat-0 tempo point (`content_thread.rs:2131-2151`), is deleted. Under Internal the map is the truth (D8). With live tempo lasting one tick, that branch could only write a stale value. Tempo recording is unchanged. This fixes BUG-wfs20 (Stale Link tempo after peers vanish writes beat-0 tempo point). It does not depend on the follower: under the stopgap the index already sits at the map time of Link's beat, so deleting the write moves nothing, and it lands early (C1).
 
@@ -981,7 +979,7 @@ P1 and P2 land together as one merge. That merge keeps today's external-sync beh
 - CORE_ENGINE_MAP.md section 4 (Time model & tempo), section 7 (External sync) and section 11 (The threshold table).
 - The two stale CORE_ENGINE_MAP items in audit item 1.9.
 - VSYNC_AND_FRAME_PACING.md, "Content Thread Pacing": add the grid deadline.
-- P3 only: CORE_ENGINE_MAP.md section 13 (Honest edges), item 5 (live external tempo) and item 6 (f32 seams in the beat plumbing) for what D20 and D21 settle; ABLETON_TRANSPORT_SYNC_DESIGN.md wherever it names `NudgeBeats`; close BUG-0u1al (Link-initiated Play never caches the Link beat offset), its audit-pilot duplicate and BUG-wfs20 (Stale Link tempo after peers vanish writes beat-0 tempo point).
+- P3 only: CORE_ENGINE_MAP.md section 13 (Honest edges), item 5 (live external tempo) and item 6 (f32 seams in the beat plumbing) for what D20 and D21 settle; close BUG-0u1al (Link-initiated Play never caches the Link beat offset), its audit-pilot duplicate and BUG-wfs20 (Stale Link tempo after peers vanish writes beat-0 tempo point).
 - Run `scripts/gen_docs_index.py`.
 
 Total estimate: P1 and P2 landed. P3 is about 650 lines changed plus 550 of tests and source models, down from the first revision's 900 plus 900: snaps, the adaptive estimator, the visible latency field and the separate extraction commit are gone. P4 is about 150 plus 100.

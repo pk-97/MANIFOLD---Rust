@@ -1,9 +1,8 @@
 //! Grid-editing commands for Session Mode (P3): scene CRUD, slot set/clear,
-//! and timeline<->session conversion (capture/paste). See
-//! `docs/SESSION_MODE_DESIGN.md` section 7. Normal undoable `Command`s — launches
+//! and timeline<->session conversion (capture/paste). Normal undoable `Command`s — launches
 //! (`ContentCommand::SessionLaunch*`, P2) are a separate, non-undoable path.
 //!
-//! Reuse, not reimplementation, per section 7/DESIGN_DOC_STANDARD section 6:
+//! Reuse, not reimplementation:
 //! - Capture's head/tail trim (including the `in_point` advance for video
 //!   clips) goes through `EditingService::trim_clip_to_region`
 //!   (`crates/manifold-editing/src/service.rs`), the same pure helper the
@@ -293,7 +292,7 @@ impl Command for SetSlotCommand {
 
 /// Find the nearest marker at or before `beat`, returning its name if it has
 /// one. `None` (no marker, or an unnamed one) means the caller falls back to
-/// "Scene N" — see `docs/SESSION_MODE_DESIGN.md` section 7.
+/// "Scene N" —
 fn nearest_marker_name_at_or_before(project: &Project, beat: Beats) -> Option<String> {
     project
         .timeline

@@ -1,4 +1,4 @@
-//! GPU proofs (SCENE_SETUP_PROGRAMME.md E1, D2). node.swarm_forces lays a
+//! GPU proofs. node.swarm_forces lays a
 //! moving vortex in a wind onto the shared force lattice tick by tick, through its
 //! clock, the history replay and the staged upload, and node.move_swarm moves
 //! 100k particles with it. At 30 fps every frame runs two ticks on two

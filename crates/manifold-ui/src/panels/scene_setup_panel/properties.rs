@@ -693,7 +693,7 @@ impl ScenePanel {
 
     /// Route a resolved `(row, role)` hit on the properties card to its
     /// `PanelAction` by delegating to the shared [`RowHost::row_action`] —
-    /// the same core `ParamCardPanel` uses (WIDGET_TREE_DESIGN section 4/5b).
+    /// the same core `ParamCardPanel` uses.
     pub(super) fn properties_row_action(
         &mut self,
         tree: &UITree,

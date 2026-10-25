@@ -1252,7 +1252,7 @@ impl PhysicsWorld {
     /// Queue a liquid's reaction for the next step as a steady force J/dt and
     /// torque L/dt at each centre of mass, keeping the body awake through
     /// that step: sleep would zero the velocity the liquid's law predicted
-    /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D17). Box3D clears forces after
+    ///Box3D clears forces after
     /// every step, so a tick split into several steps queues before each and
     /// still delivers J and L in all. Validated as [`Self::apply_impulses`].
     pub fn queue_reaction_over_step(
@@ -1268,7 +1268,7 @@ impl PhysicsWorld {
     }
 
     /// `body`'s touching contact points with static and kinematic bodies
-    /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16), up to `out`'s length and
+    ///Up to `out`'s length and
     /// [`MAX_SUPPORT_POINTS`]. A full `out` still holds a point of every
     /// support: the bridge takes every contact's first touching point before
     /// any second.

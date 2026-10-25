@@ -2,7 +2,7 @@
 //! that expands embedded node groups into a flat document the runtime already
 //! knows how to load.
 //!
-//! See `docs/NODE_GROUPS_DESIGN.md`. The short version: a **group** is a node
+//! The short version: a **group** is a node
 //! ([`EffectGraphNode::group`] is `Some`) wrapping a sub-graph plus a declared
 //! interface. [`flatten_groups`] replaces every group node with its inlined
 //! body — inner handles prefixed with the group instance's handle

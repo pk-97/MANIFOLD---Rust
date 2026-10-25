@@ -1,5 +1,5 @@
 //! Node-boundary proof for `node.whitewater_step`
-//! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.9): frame after frame, what the
+//!Frame after frame, what the
 //! node publishes is the CPU statements of its passes composed in the node's
 //! order — grid fields, emitter, append, then per tick advect, retype, age,
 //! remove and compact, then the split into foam, bubbles and spray. The

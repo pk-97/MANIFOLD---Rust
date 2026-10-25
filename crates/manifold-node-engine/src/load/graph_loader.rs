@@ -148,8 +148,8 @@ pub enum GraphBuildError {
     /// A node group failed to flatten into a flat document before
     /// instantiation. See [`manifold_core::flatten::FlattenError`].
     Flatten(manifold_core::flatten::FlattenError),
-    /// A prepared mesh-rule sidecar entry (design
-    /// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) could not be installed:
+    /// A prepared mesh-rule sidecar entry
+    /// could not be installed:
     /// the stable node id matched no document node (`reason` says
     /// "unknown"), matched more than one ("duplicate"), or the live node
     /// refused the rules ("uninstalled", carrying the node's message).
@@ -289,7 +289,7 @@ fn migrate_def_type_ids(
                 // `GraphBuildError::UnknownParam` below and hard-fail the
                 // load of every pre-rename project/preset that still
                 // carries it. Drop params the successor doesn't declare —
-                // per the round-trip gate (DESIGN_DOC_STANDARD section 5), a
+                // per the round-trip gate, a
                 // migrated load must succeed, not merely a fresh save.
                 if let Some(new_node) = registry.construct(new_id) {
                     let known: ahash::AHashSet<&str> = new_node
@@ -1015,8 +1015,7 @@ pub fn instantiate_def(
     })
 }
 
-/// Install a prepared mesh-rule sidecar (design
-/// `docs/SCENE_MODIFIER_RT_DESIGN.md` §3.3) onto the live nodes of a
+/// Install a prepared mesh-rule sidecar onto the live nodes of a
 /// graph built from `def`. Each sidecar entry is keyed by the stable
 /// document [`manifold_core::NodeId`]; resolution uses the same
 /// `node_id`-then-handle rule as the instantiation pass above, and the

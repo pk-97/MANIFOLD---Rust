@@ -1,5 +1,4 @@
-// node.grid_to_matter — fusable BUFFER body (GPU_MPM_SOLVER_DESIGN.md section
-// 4.1 step 6). One thread per material point gathers its 27-node stencil from
+// node.grid_to_matter — fusable BUFFER body. One thread per material point gathers its 27-node stencil from
 // the resolved grid (`buf_grid`, Element2 = MatterGridNode):
 //   v_pic = Σ w·v_i
 //   v_p  ← β·(v_p + Σ w·(v_i − v_before_i)) + (1 − β)·v_pic     (β = Liveliness)

@@ -3,7 +3,7 @@
 //! a terse stdout summary, so UI work is reasoned on values, not eyeballed.
 //! See `docs/HEADLESS_UI_HARNESS.md` section 1.
 //!
-//! Extended (`UI_AUTOMATION_DESIGN.md` section 3, additive): each node gains
+//! Extended (additive): each node gains
 //! `widget` (the durable `WidgetId`, interactive nodes only) and `name` (the
 //! static component name, when registered — D8). A sibling top-level
 //! `custom_surfaces` key carries the [`HitTargets`] enumeration (section 5) for
@@ -93,7 +93,7 @@ pub fn dump_tree_ex(tree: &UITree, surfaces: &[&dyn HitTargets]) -> Value {
 }
 
 /// D9 widget catalog as JSON — the enumeration view over the surface layer
-/// (`docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md` D9). Reuses the tree dump's own
+/// Reuses the tree dump's own
 /// field encodings verbatim: `widget` is the SAME `{:016x}` durable `WidgetId`
 /// hex [`dump_tree_ex`] emits, `name` the SAME `name_of` string. This is not a
 /// new protocol — it only regroups those durable facts per panel → per card →

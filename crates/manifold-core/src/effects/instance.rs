@@ -28,7 +28,7 @@ use super::*;
 ///
 /// In-memory storage stays positional (`Vec<ParamSlot>`) — the hot
 /// path reads/writes by index. The Map form only exists on the wire.
-/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 12.
+///
 #[derive(Debug, Clone)]
 pub struct PresetInstance {
     /// Whether this instance is an effect (transforms an input) or a
@@ -85,12 +85,11 @@ pub struct PresetInstance {
     /// Per-instance audio modulations, keyed by `param_id`. The fourth
     /// modulation source, parallel to `drivers`/`envelopes`/`ableton_mappings`:
     /// drives a param from a named audio send. `None` when unused. See
-    /// `docs/AUDIO_MODULATION_DESIGN.md`.
     pub audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
     /// Per-instance timeline automation, keyed by `param_id` — a lane is a
     /// beat-indexed base writer sampled each tick (a tier-1 "hand"), riding
     /// on top of the same modulation pipeline audio_mods/drivers/envelopes
-    /// feed. `None` when unused. See `docs/AUTOMATION_LANES_DESIGN.md`.
+    /// feed. `None` when unused.
     pub automation_lanes: Option<Vec<AutomationLane>>,
     pub group_id: Option<EffectGroupId>,
 
@@ -437,7 +436,7 @@ impl PresetInstance {
     /// build, cleared by [`Self::reconcile_manifest`] once a real template
     /// resolves. A provisional manifest reaching a runtime seam (chain build,
     /// UI row translation) means a load/ingest path skipped the reconcile
-    /// call; see `docs/PARAM_MANIFEST_GATE_DESIGN.md` D1.
+    /// call.
     pub fn manifest_provisional(&self) -> bool {
         self.pending_wire.is_some()
     }
@@ -569,7 +568,7 @@ impl PresetInstance {
     /// Set the user-intended base value of param `id`. **The single funnel**
     /// every live hand (UI slider, Ableton macro, OSC, macro bank, editing
     /// commands) writes through — marks the param `touched` so the
-    /// automation-lane override latch (`docs/AUTOMATION_LANES_DESIGN.md` section 4) can
+    /// automation-lane override latch can
     /// detect it. Returns whether `id` resolved. System-level seeding that is
     /// NOT a live gesture uses [`Self::write_base_param`] /
     /// [`Self::set_base_param_from_automation`] (no `touched`).
@@ -586,7 +585,7 @@ impl PresetInstance {
     /// Automation-lane-only sibling of [`Self::set_base_param`]: writes
     /// `base`/`value` identically but does **not** set `touched` (using
     /// `set_base_param` from the automation evaluator would self-latch the lane
-    /// as overridden the next frame). See `docs/AUTOMATION_LANES_DESIGN.md` section 4.
+    /// as overridden the next frame).
     pub fn set_base_param_from_automation(&mut self, id: &str, value: f32) {
         self.write_base_param(id, value);
     }
@@ -1487,8 +1486,7 @@ impl PresetInstance {
 
     /// The instance's automation-lane list, auto-created on first access.
     /// Sibling of [`Self::drivers_mut`] / [`Self::envelopes_mut`] /
-    /// [`Self::audio_mods_mut`] — same per-param-id-row pattern. See
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 2.
+    /// [`Self::audio_mods_mut`] — same per-param-id-row pattern.
     pub fn automation_lanes_mut(&mut self) -> &mut Vec<AutomationLane> {
         if self.automation_lanes.is_none() {
             self.automation_lanes = Some(Vec::new());
@@ -1868,14 +1866,14 @@ mod tests {
     }
 
     /// Regression for PARAM_STORAGE_BOUNDARIES_DESIGN.md P2 (D12): `graph
-    /// .preset_metadata.params` is derived from the live manifest ONLY at
+    /// preset_metadata.params` is derived from the live manifest ONLY at
     /// serialize time — `EditParamMappingCommand` no longer dual-writes it,
     /// so the sole way a calibrated range can reach the wire is
     /// `GraphWithDerivedParams`. This builds an instance whose graph carries
     /// a STALE (template) `amount` spec that nothing in this test ever
     /// touches again, calibrates ONLY the manifest (mirroring what the
     /// command does post-P2), and proves the serialized `graph.presetMetadata
-    /// .params` entry reflects the calibration, not the stale shadow — with
+    /// params` entry reflects the calibration, not the stale shadow — with
     /// a byte-comparison against the manifest's own spec.
     #[test]
     fn calibrated_param_derives_meta_params_on_save_not_the_stale_shadow() {

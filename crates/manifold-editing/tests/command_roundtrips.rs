@@ -1948,7 +1948,7 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
 }
 
 // ─── Session Commands (P3) ───
-// docs/SESSION_MODE_DESIGN.md section 7 — grid editing + timeline<->session capture/paste.
+// Grid editing + timeline<->session capture/paste.
 
 fn make_session_test_project() -> Project {
     let mut project = Project::default();

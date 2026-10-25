@@ -1,7 +1,6 @@
 //! `node.liquid_solid_distance` — a liquid domain's solid lattice for the
 //! particle-frame seam: walls and bodies as one signed distance per lattice
-//! node (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.1, amendment 3;
-//! GPU_MPM_SOLVER_DESIGN.md D11).
+//! node.
 
 use std::borrow::Cow;
 

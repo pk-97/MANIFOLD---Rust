@@ -1,5 +1,5 @@
 //! `node.preserve_foam` — FLIP's foam preservation: foam in crowded cells
-//! lives longer (`docs/GPU_WHITEWATER_DESIGN.md` section 3.9, phase L3). A
+//! lives longer. A
 //! per-element gather on the codegen path, over the bins of a
 //! `node.sort_particles_into_cells` of the same pool.
 //!

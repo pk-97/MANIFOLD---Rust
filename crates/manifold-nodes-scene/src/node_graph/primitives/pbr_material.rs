@@ -71,18 +71,18 @@ manifold_node_engine::primitive! {
         emission_b: ScalarF32 optional,
         emission_intensity: ScalarF32 optional,
         alpha_cutoff: ScalarF32 optional,
-        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior.
+        // KHR_materials_specular + ior.
         specular: ScalarF32 optional,
         specular_tint_r: ScalarF32 optional,
         specular_tint_g: ScalarF32 optional,
         specular_tint_b: ScalarF32 optional,
         ior: ScalarF32 optional,
-        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat —
+        // KHR_materials_clearcoat —
         // second GGX specular lobe. Factor-only v1 (D5); textures stay
         // report lines.
         clearcoat: ScalarF32 optional,
         clearcoat_roughness: ScalarF32 optional,
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // Sheen, iridescence,
         // anisotropy, dispersion, transmission+volume. Factor-only v1,
         // same doctrine as clearcoat above — no shading math reads these
         // yet (E2-E6), this phase only carries the values through.
@@ -128,7 +128,7 @@ manifold_node_engine::primitive! {
         subsurface_color_g: ScalarF32 optional,
         subsurface_color_b: ScalarF32 optional,
         subsurface_anisotropy: ScalarF32 optional,
-        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
+        // KHR_texture_transform,
         // per-map — one folded 2×3 affine
         // `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)` per map family
         // (`uv_*` = base color, `nrm_uv_*` = normal, `mr_uv_*` =
@@ -355,7 +355,7 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // Sheen, iridescence,
         // anisotropy, dispersion, transmission+volume. Every default is
         // glTF's own implicit default (see `Material`'s field doc
         // comments) — a material that never sets these is byte-identical
@@ -1277,18 +1277,17 @@ impl Primitive for PbrMaterial {
         };
         let alpha_cutoff = ctx.scalar_or_param("alpha_cutoff", 0.5);
 
-        // GLB_CONFORMANCE_DESIGN.md G-P4/D5.
         let specular = ctx.scalar_or_param("specular", 1.0);
         let specular_tint_r = ctx.scalar_or_param("specular_tint_r", 1.0);
         let specular_tint_g = ctx.scalar_or_param("specular_tint_g", 1.0);
         let specular_tint_b = ctx.scalar_or_param("specular_tint_b", 1.0);
         let ior = ctx.scalar_or_param("ior", 1.5);
-        // GLB_CONFORMANCE_DESIGN.md G-P5/D5. clearcoat_roughness clamps to
+        // clearcoat_roughness clamps to
         // the same 0.01 floor as the base `roughness` above — zero is a
         // GGX landmine in the coat lobe's own D/G terms too.
         let mut clearcoat = ctx.scalar_or_param("clearcoat", 0.0).clamp(0.0, 1.0);
         let clearcoat_roughness = ctx.scalar_or_param("clearcoat_roughness", 0.0).max(0.01);
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // Sheen, iridescence,
         // anisotropy, dispersion, transmission+volume — read straight
         // through, no clamping beyond each param's own declared range
         // (no shading math consumes these yet).

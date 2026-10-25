@@ -12,7 +12,7 @@ check progress — no").
 
 P1 ships the cache-safe skeleton; the actual grid/random search over
 post-processing params (rolling-median window, threshold k, refractory
-windows) is P4's deliverable (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md P4).
+windows) is P4's deliverable.
 """
 
 from __future__ import annotations

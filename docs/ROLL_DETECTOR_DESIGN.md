@@ -2,7 +2,6 @@
 
 **Status:** PROPOSED · awaiting Peter (section 15, open decisions) · 2026-10-12 · Fable
 **Prerequisites:** DETECTOR_LAB_DESIGN.md P6 and DETECTOR_RUNTIME_DESIGN.md P4 (both shipped on main at df8030ca6); the roll census, section 8 (Data), says the exam needs more real roll songs before P3.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
 <!-- index: A plug-in detector pair (kick_roll, snare_roll) built in the Detector Lab and run by the generic runtime: a roll is a state (on, rate, off) not a hit; labels from MIDI note density; never touches the kick and snare models. -->
 

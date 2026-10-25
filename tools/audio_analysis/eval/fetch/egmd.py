@@ -1,6 +1,5 @@
 """Fetch a REPRESENTATIVE SUBSET of the Expanded Groove MIDI Dataset (E-GMD),
-per the 2026-07-18 ADTOF bake-off addendum (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md,
-Deferred #1 §7.1, phase B1): "E-GMD is ~110GB full — fetch a REPRESENTATIVE
+per the 2026-07-18 ADTOF bake-off addendum: "E-GMD is ~110GB full — fetch a REPRESENTATIVE
 subset only (<=8GB: sample across drummers/kits/tempi; document the sampling
 rule), license VERIFY-AT-FETCH."
 

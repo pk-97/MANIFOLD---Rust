@@ -1,4 +1,4 @@
-//! First-frame current-geometry dispatch proof for SCENE_MODIFIER_RT_DESIGN P5.
+//! First-frame current-geometry dispatch proof.
 //!
 //! A tiny generated mesh is rendered through the production `PresetRuntime`
 //! path, and the test requires both a complete frame status and a real RT

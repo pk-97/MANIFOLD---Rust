@@ -100,7 +100,7 @@ pub struct Application {
     /// Frame count when suppress_snapshot_until was set (for timeout).
     pub(crate) suppress_snapshot_set_at: u64,
 
-    /// Debounced background autosave (GIG_RESILIENCE_DESIGN section 6). Ticked from
+    /// Debounced background autosave. Ticked from
     /// `tick_and_render` after the state drain, editor mode only — perform
     /// mode returns before the tick, which parks the timer (D5).
     pub(crate) autosave: crate::autosave::AutosaveState,
@@ -138,8 +138,7 @@ pub struct Application {
     /// Model file facts by path, read on a worker (`crate::scene_models`).
     pub(crate) model_store: crate::scene_models::ModelStore,
 
-    /// Gig-resilience breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1), phase
-    /// P2. Cadence gate — pure logic, ticked from the content-state drain in
+    /// Gig-resilience breadcrumb sidecar, phase P2. Cadence gate — pure logic, ticked from the content-state drain in
     /// both editor and perform mode (unlike autosave, NOT parked in perform
     /// mode: the breadcrumb is exactly what a live show needs).
     pub(crate) breadcrumb_cadence: crate::breadcrumb::BreadcrumbCadence,
@@ -167,7 +166,7 @@ pub struct Application {
     /// `active` slot.
     pub(crate) scrub: crate::ui_bridge::ScrubState,
 
-    /// D4 (docs/TIMELINE_INGEST_DESIGN.md): the general pasteboard's
+    /// The general pasteboard's
     /// `changeCount` at the moment the app last copied clips internally.
     /// `None` until the first internal copy — the D4 arbitration treats
     /// that the same as "internal clipboard empty" (Finder file always
@@ -401,7 +400,7 @@ pub struct Application {
     pub(crate) node_preview_normalize: bool,
     // The editor's right lane is now the WHOLE inspector column
     // (`Workspace.ui_root.inspector`), not a single watched card. See
-    // `docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` (Change 3). The former
+    // The former
     // `editor_card` / `editor_card_intents` / `editor_card_config_hash` fields
     // were deleted with that swap.
     /// Node-intent dispatch for the editor's right-sidebar inspector
@@ -1827,7 +1826,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             .set_preview_navigating(self.ws.preview_navigation.active());
         crate::ui_bridge::sync_audio_dock(&mut self.ws.ui_root, &self.local_project);
 
-        // `--resume` boot fast path (GIG_RESILIENCE_DESIGN section 5.2): content
+        // `--resume` boot fast path: content
         // thread + GPU are up, so this is the earliest point that can load a
         // project and seek/play it. Output-window creation + perform-mode
         // entry happen on the next `about_to_wait` via the flag this sets
@@ -2159,8 +2158,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // 3D models → a new generator layer whose graph renders the
                     // model, plus a default clip so it plays immediately.
                     // FBX/.obj/.dae route through `import_model_file`'s
-                    // Blender-conversion seam first (IMPORT_ANYTHING_WAVE_DESIGN.md
-                    // Lane W3) — MANIFOLD is glTF-only internally.
+                    // Blender-conversion seam first — MANIFOLD is glTF-only internally.
                     // Resolve the drop beat and target layer from the live
                     // drag position when available (drag_interpose), falling
                     // back to the last tracked cursor position (winit's

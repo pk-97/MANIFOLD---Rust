@@ -443,7 +443,7 @@ impl SettingsPopup {
         ));
         cy += ROW_H + ROW_GAP;
 
-        // RT Quality… opens the floating RT tier panel (RT_QUALITY_SETTINGS_DESIGN.md).
+        // RT Quality… opens the floating RT tier panel.
         self.row_label(tree, inner_x, cy, "RT Quality");
         let rt_id = tree.add_button(
             Some(self.bg_id),

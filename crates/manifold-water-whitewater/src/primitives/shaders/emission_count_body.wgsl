@@ -1,6 +1,6 @@
 // node.emission_count — fusable BUFFER body, COINCIDENT. FLIP's whitewater
 // count per emitter (diffuseparticlesimulation.cpp:1989, :1918) for one
-// tick, times the frame's ticks (GPU_WHITEWATER_DESIGN.md D5): each tick
+// tick, times the frame's ticks: each tick
 // rounds rate · Ie · Iwc · dt · 8/points_per_cell to the nearest whole
 // number on its own (export supplies dt = 1/60). 0 for a slot at or past live_count, a slot with radius
 // 0, a velocity under 1e-3 m/s, Ie under 1e-6 or Iwc of 0.

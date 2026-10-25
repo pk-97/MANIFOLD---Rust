@@ -332,8 +332,7 @@ mod hash_tests {
 // Custom `Deserialize` accepting both V1.1 (`paramIndex: i32`) and V1.2+
 // (`paramId: "amount"`) project file shapes. The runtime always reads
 // `param_id`; legacy projects park the index in `legacy_param_index`
-// for the post-load resolver to translate. See
-// `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 8.
+// for the post-load resolver to translate.
 impl<'de> Deserialize<'de> for ParameterDriver {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

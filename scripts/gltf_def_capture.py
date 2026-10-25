@@ -7,7 +7,7 @@ production entry point (`assemble_import_graph`). This script drives that mode
 over a fixture list and writes one dump per fixture plus a `manifest.json`
 mapping each fixture's relative path to its dump's sha256.
 
-The equivalence proof (RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md INV-R8): dump
+The equivalence proof: dump
 every fixture at the pre-change commit, apply a table-ization slice, re-dump,
 byte-diff the two capture dirs. A pure catalog->table refactor MUST leave every
 dump byte-identical (importer output is deterministic — BTreeMap params, counter

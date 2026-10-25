@@ -370,8 +370,7 @@ impl BrowserPopupPanel {
     }
 
     /// The active category chip, if any (`None` = "All"). Read-side mirror
-    /// of [`Self::set_category`] — lane-scoped opens (LED_STRIPS_DESIGN
-    /// MVP-P3c) and tests assert through it.
+    /// of [`Self::set_category`] — lane-scoped opens and tests assert through it.
     pub fn active_category(&self) -> Option<&str> {
         self.session
             .as_ref()
@@ -379,8 +378,7 @@ impl BrowserPopupPanel {
     }
 
     /// Read-only reach to the session's picker — the item list, the chip
-    /// set, and the active chips. App-side tests (LED_STRIPS_DESIGN
-    /// MVP-P3c) and overlay drivers introspect through this; `None` when
+    /// set, and the active chips. App-side tests and overlay drivers introspect through this; `None` when
     /// the popup is closed.
     pub fn picker(&self) -> Option<&PickerCore> {
         self.session.as_ref().map(|s| &s.picker)
@@ -1402,7 +1400,7 @@ fn category_color(category: &str) -> Color32 {
         "Pattern" => CAT_PATTERN,
         "Sim" => CAT_SIM,
         "Text & Media" => CAT_TEXT_MEDIA,
-        // LED generator presets (LED_STRIPS_DESIGN MVP-P3c) — the same
+        // LED generator presets — the same
         // green the rest of the UI accents LED state with.
         "LED" => color::LED_COLOR,
         _ => TEXT_DIM,

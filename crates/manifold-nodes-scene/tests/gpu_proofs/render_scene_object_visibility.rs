@@ -1,5 +1,5 @@
 //! `node.scene_object`'s `visible` port-shadow proof
-//! (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4/P2 gate: "an invisible object
+//! (gate: "an invisible object
 //! leaves no shadow").
 //!
 //! Ground plane (object 0, always visible) + an occluder plane (object 1,

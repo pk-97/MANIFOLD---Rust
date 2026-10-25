@@ -264,7 +264,7 @@ pub struct LayerInfo {
     /// True for `LayerType::Dmx`. The lane's L chip is then an LED state
     /// indicator, not the mirror toggle: rendered permanently on and
     /// non-interactive (`blit_to_led` is inert on LED layers —
-    /// LED_STRIPS_DESIGN.md section 5b D11).
+    /// LED layers.)
     pub is_led_layer: bool,
     pub parent_layer_id: Option<String>,
     pub blend_mode: String,
@@ -649,8 +649,8 @@ fn compute_layer_row(
         let mode_x = right_edge - MODE_TOGGLE_W;
 
         // Generator-name line (generators, and LED layers — an LED layer is
-        // generator-driven with no source folder, LED_STRIPS_DESIGN.md section
-        // 5b D12) occupies the exact row/height budget FOLDER would use for a
+        // generator-driven with no source folder, LED layer
+        // occupies the exact row/height budget FOLDER would use for a
         // video layer. Decided by the gen label, not the layer type: any lane
         // carrying a generator preset shows its name.
         if has_gen_label {
@@ -914,7 +914,7 @@ pub struct LayerHeaderPanel {
     cached_selected: Vec<bool>,
     cached_colors: Vec<Color32>,
 
-    // ── Mute chip motion (UI_CRAFT_AND_MOTION_PLAN.md P1 demonstration) ──
+    // ── Mute chip motion ──
     // Background hover/press colour tween for the Mute chip, one per row.
     // Colour-only per Peter's rule (2026-07-14, BUG-150): animations never
     // move hit geometry, only how a node looks.
@@ -1021,7 +1021,7 @@ impl LayerHeaderPanel {
     /// The last-synced layer snapshot (state_sync → `set_layers`), id-keyed
     /// lookups included. This is the UiRoot-side reach a layer's type
     /// (`is_led_layer` = `LayerType::Dmx`) without a project reference —
-    /// e.g. the DMX-lane scoped browser open (LED_STRIPS_DESIGN MVP-P3c).
+    /// e.g. the DMX-lane scoped browser open.
     pub fn layers(&self) -> &[LayerInfo] {
         &self.layers
     }
@@ -1165,7 +1165,7 @@ impl LayerHeaderPanel {
     }
 
     /// Kit-chip hover/press tween for the Mute chip
-    /// (`UI_CRAFT_AND_MOTION_PLAN.md` P1's "kit chip hover/press" demonstration
+    /// ("kit chip hover/press" demonstration
     /// surface): background blends smoothly toward hover/press instead of the
     /// renderer's instant flag-driven jump, and the chip drops 1px while held.
     /// Rides the same per-frame `update()` tick as `tick_record_pulse` above —
@@ -2292,7 +2292,7 @@ impl LayerHeaderPanel {
                     )
                 }
             };
-            // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3, high-value points only):
+            // Naming pass (high-value points only):
             // row identity comes from the selector's `under_text` ancestor query,
             // not a per-row name string — every mute/solo chip across every layer
             // shares the same static name.
@@ -2394,7 +2394,7 @@ impl LayerHeaderPanel {
     /// shared scroll-clip node, so there's no single container to fold up to),
     /// which reproduces the old whole-row positional behaviour through the
     /// registry — and the hit test now scopes it to this panel for free, so the
-    /// former manual X-bounds guard is gone. See `docs/NODE_INTENT_DISPATCH.md`.
+    /// former manual X-bounds guard is gone.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         for (i, row) in self.rows.iter().enumerate() {
             let Some(lid) = self.layer_id_at(i) else {

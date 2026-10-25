@@ -1,7 +1,7 @@
 //! `SceneObject` — the CPU struct carried on [`PortType::Object`](crate::node_graph::ports::PortType::Object)
 //! wires.
 //!
-//! SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D2: an object today is "whatever named
+//! An object today is "whatever named
 //! group happens to wrap the wires feeding `mesh_k`" — a UI-side convention
 //! `SceneVm` reverse-engineers. This struct makes it a typed fact instead:
 //! `node.scene_object` binds mesh + transform + material + maps + instances
@@ -78,8 +78,7 @@ pub struct SceneObject {
     pub occlusion_map: Option<Slot>,
     /// `Texture2D` slot — emissive map.
     pub emissive_map: Option<Slot>,
-    /// `Texture2D` slot — sheen color map (GLTF_MATERIAL_EXTENSIONS_DESIGN
-    /// E3/E4/E5).
+    /// `Texture2D` slot — sheen color map.
     pub sheen_color_map: Option<Slot>,
     /// `Texture2D` slot — sheen roughness map.
     pub sheen_roughness_map: Option<Slot>,
@@ -89,7 +88,7 @@ pub struct SceneObject {
     pub iridescence_thickness_map: Option<Slot>,
     /// `Texture2D` slot — anisotropy map.
     pub anisotropy_map: Option<Slot>,
-    /// `Texture2D` slot — clearcoat map (GLTF_MATERIAL_EXTENSIONS_DESIGN E6).
+    /// `Texture2D` slot — clearcoat map.
     pub clearcoat_map: Option<Slot>,
     /// `Texture2D` slot — clearcoat roughness map.
     pub clearcoat_roughness_map: Option<Slot>,
@@ -153,7 +152,7 @@ impl InstanceSpace {
     }
 }
 
-// Invariant (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md section 4): `SceneObject` stays
+// Invariant: `SceneObject` stays
 // `Copy` — hot-path legal by construction, no per-frame allocation. A type
 // that stops being `Copy` fails this assertion at compile time instead of
 // silently degrading the hot path.

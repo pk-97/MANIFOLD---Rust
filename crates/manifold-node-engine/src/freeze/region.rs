@@ -290,7 +290,7 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
         .map(|w| (w.from_node, w.to_node))
         .collect();
     // A substep region repeats its body inside one frame
-    // (`docs/GPU_MPM_SOLVER_DESIGN.md` D7). A kernel spanning its border would
+    // A kernel spanning its border would
     // repeat outside work per iteration or leak a body intermediate, so nodes
     // on different sides never union.
     let substep_side = substep_sides(def, registry, &forward);
@@ -1386,7 +1386,7 @@ pub(crate) fn classify_node(
     // member's derived fields every frame via
     // `derived_uniform_registry::recompute` (`primitives/wgsl_compute.rs`).
     //
-    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P1: `Object` joins the `Camera`
+    // `Object` joins the `Camera`
     // line above — same CPU-struct-wire reasoning (`is_texture_port`
     // excludes `PortType::Object` too, so an Object port was never a
     // texture/buffer binding). No fusable atom declares `derived_uniforms`

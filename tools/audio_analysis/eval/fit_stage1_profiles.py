@@ -1,5 +1,4 @@
-"""Fit Stage-1 class-signature profiles from DEV truth ONLY (B2 lever 2,
-docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md 2026-07-18 addendum's B2 round-1
+"""Fit Stage-1 class-signature profiles from DEV truth ONLY (B2 lever 2, round-1
 orchestrator note: "Replace hand-tuned signature thresholds with dev-fitted
 ones ... supervised calibration of thresholds is fair game in the tuning
 loop, it is NOT model training").

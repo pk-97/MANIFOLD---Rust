@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 // Timeline arrangement automation — a tier-1 "hand" sampled from the
 // arrangement each tick (`manifold-playback::automation`), riding on top of
 // the same base/value slot every other hand writes through. See
-// `docs/AUTOMATION_LANES_DESIGN.md`.
 
 /// Per-param timeline automation, keyed by `param_id` — the exact pattern of
 /// the sibling per-param automation rows (`drivers` / `envelopes` /

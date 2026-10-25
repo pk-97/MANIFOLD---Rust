@@ -288,7 +288,7 @@ pub enum ArrayMatchMode {
 pub enum PortKindSnapshot {
     Texture2D,
     /// Texture2D decorated with a four-slot named-channel signature
-    /// (per `docs/CHANNEL_TYPE_SYSTEM.md` section 17). The `slots` array
+    /// The `slots` array
     /// carries the channel name strings in R, G, B, A order so the
     /// editor's hover-tooltip can render the per-port texture-channel
     /// layout directly.

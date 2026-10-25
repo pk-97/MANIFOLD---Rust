@@ -1,7 +1,6 @@
 //! GPU value proofs for the whitewater grid atoms against their CPU
 //! statements (`whitewater_cpu`), and the one fused pair the chain holds:
 //! the last node.nearest_crossing pass with node.crossing_distance
-//! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.7).
 
 use super::crossing_distance::CrossingDistance;
 use super::extend_lattice::ExtendLattice;

@@ -70,7 +70,7 @@ pub struct ParamCardStringInfo {
 
 /// One param row's driver/envelope/automation modulation facts — carried as
 /// `ParamRow::modulation`. Collapses the former fourteen parallel per-param
-/// vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one struct per row.
+/// vecs into one struct per row.
 #[derive(Debug, Clone)]
 pub struct RowMod {
     /// Driver exists and is enabled.
@@ -228,8 +228,7 @@ impl ParamCardPanel {
     /// collapse toggle (`PanelAction::EffectCollapseToggle`) round-trips
     /// through. Effect cards ease once already configured once (mirrors
     /// `drawer_height_anim`'s "don't slide in on first appearance" rule,
-    /// and — since `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4 (D4) —
-    /// identically in both contexts, now that the editor ticks its
+    /// and identically in both contexts, now that the editor ticks its
     /// inspector every frame); every other case (first-ever configure, or a
     /// Generator card whose `build_generator` can't render a partial-height
     /// body) snaps instantly so `compute_height`/`build` never disagree.

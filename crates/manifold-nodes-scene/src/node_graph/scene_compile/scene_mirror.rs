@@ -1,10 +1,9 @@
-//! Scene Mirror (SCENE_DOCUMENT_DESIGN.md ruling 21; SCENE_MIRROR_DESIGN.md):
+//! Scene Mirror:
 //! the whole scene reflected across a plane. Each drawn object's instances
 //! pass through `node.reflect_array`, so every object gets its mirrored copy
 //! from the stock `SceneMirror` recipe in its place in the chain: after the
 //! Scene Loop it mirrors the whole corridor, after Spatial Echoes every echo.
 //! The plane starts at the scene's floor, the bottom of its rest-pose box
-//! (SCENE_MIRROR_DESIGN.md D8).
 
 use manifold_core::NodeId;
 use manifold_core::scene_doc::{Item, ModifierFields, param_id};

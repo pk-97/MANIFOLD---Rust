@@ -1,6 +1,6 @@
 //! Undoable commands for the project's [`StageLayout`] — the physical
 //! multi-display / totem arrangement. Edits route through `EditingService`
-//! like every other project mutation. See `docs/MULTI_DISPLAY_DESIGN.md`.
+//! like every other project mutation.
 //!
 //! Placements are addressed by [`OutputId`] (stable identity), not index, so
 //! a command stays correct even if the placement list is reordered between

@@ -105,7 +105,7 @@ fn object_port_name(index: usize) -> &'static str {
     }
 }
 
-/// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D4: `render_scene`'s per-object
+/// `render_scene`'s per-object
 /// surface is one `Object` wire now, not a family of parallel ports. Mint
 /// one `node.scene_object` for object `index`, wire its `object` output
 /// into `render`'s `object_{index}` port, and hand back the scene_object's
@@ -121,7 +121,7 @@ fn add_scene_object(g: &mut Graph, render: NodeInstanceId, index: usize) -> Node
 /// Add a `node.transform_3d` node, set its `pos_x` param, and wire its
 /// `transform` output into `scene_object`'s `transform` input. Test helper
 /// replacing the retired `render_scene` per-object `pos_x_{index}` param
-/// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3 — TRS lives on
+/// TRS lives on
 /// `node.scene_object`'s `transform` input now, fed by `node.transform_3d`).
 fn wire_pos_x(g: &mut Graph, scene_object: NodeInstanceId, pos_x: f32) {
     let t = g.add_node(Box::new(Transform3D::new()));

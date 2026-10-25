@@ -1,4 +1,4 @@
-//! SCENE_OBJECT_AND_PANEL_V2_DESIGN.md's single-hop invariant, enforced
+//! The single-hop invariant, enforced
 //! registry-wide: `Object` wires never chain — `node.scene_object` is the
 //! sole producer (takes no `Object` input); every legal consumer is a
 //! renderer boundary node (`render_scene` from P2 on — extend
@@ -30,7 +30,7 @@ fn object_port_single_hop() {
             !has_object_input || ALLOWED_OBJECT_CONSUMERS.contains(&factory.type_id),
             "{} declares an Object input but isn't in ALLOWED_OBJECT_CONSUMERS \
                  — a second Object consumer is a design escalation, not a \
-                 mechanical addition (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md section 8)",
+                 mechanical addition",
             factory.type_id,
         );
     }

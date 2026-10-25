@@ -1,4 +1,4 @@
-"""P2 beat/downbeat scoring against real ground truth (AUDIO_ANALYSIS_ACCURACY_DESIGN.md
+"""P2 beat/downbeat scoring against real ground truth
 P2 gate: "beat F1 + downbeat F1 >= madmom baseline - noise floor on dev AND
 heldout").
 

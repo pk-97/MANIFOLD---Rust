@@ -72,8 +72,7 @@ mod frame_plan;
 mod frame_timer;
 mod gesture_preview;
 mod layer_notices;
-// The graph canvas + its mapping popover moved into `manifold-ui` (Phase 8 of
-// `docs/UI_ARCHITECTURE_OVERHAUL.md`). Re-export under the historic `crate::`
+// The graph canvas + its mapping popover moved into `manifold-ui`. Re-export under the historic `crate::`
 // paths so the editor-window glue keeps resolving `crate::graph_canvas::*` and
 // `crate::mapping_popover::*` unchanged.
 pub(crate) use manifold_ui::graph_canvas;
@@ -114,7 +113,7 @@ mod macos_pasteboard;
 mod menu;
 mod offline_audio_mod;
 mod scene_import;
-// P3 release-journey harness (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md):
+// Release-journey harness:
 // headless end-to-end export proofs. Feature-gated, macOS-only (same
 // constraint as `run_export` itself — native Metal, no wgpu).
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
@@ -300,7 +299,7 @@ fn main() {
     // Only the live GUI opens real devices. Every headless subcommand has
     // branched off above, and tests never reach `main`.
     manifold_core::device_guard::allow_real_devices();
-    // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN section 5.2) ---
+    // --- `--resume <breadcrumb-path>` ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing
     // exists in this binary — see `crash_log_tests` module for the closest
@@ -324,7 +323,7 @@ fn main() {
                 .unwrap_or_default();
             d.as_secs()
         };
-        // Score-address the crash report (GIG_RESILIENCE_DESIGN section 5.1): the
+        // Score-address the crash report: the
         // content-state drain publishes the latest known beat to a single
         // atomic every UI frame (`breadcrumb::publish_beat_for_crash_log`);
         // read it here since a panic hook has no `&Application` to call
@@ -365,7 +364,7 @@ fn main() {
     sync_rig_log::start();
     log::info!("MANIFOLD starting...");
 
-    // --- Unclean-exit detection (GIG_RESILIENCE_DESIGN section 6, G10) ---
+    // --- Unclean-exit detection ---
     // A sentinel file lives for the duration of a session and is removed on
     // clean exit. Finding it at startup means the last session ended in a
     // panic-abort, kill, or power loss — surface one quiet notice so the
@@ -407,7 +406,7 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
-// `--resume` CLI parsing (GIG_RESILIENCE_DESIGN section 5.2 / PROJECT_FOLDERS D7)
+// `--resume` CLI parsing
 // ---------------------------------------------------------------------------
 
 /// What `--resume` asked for, before any prefs resolution.
@@ -418,7 +417,7 @@ enum ResumeArg {
     /// `--resume <breadcrumb-path>` — explicit path.
     Explicit(std::path::PathBuf),
     /// `--resume` with no following path — resolve the last-opened project's
-    /// breadcrumb from prefs (docs/PROJECT_FOLDERS_DESIGN.md D7).
+    /// breadcrumb from prefs.
     Auto,
 }
 
@@ -469,7 +468,7 @@ fn resolve_resume_breadcrumb_from_prefs() -> Option<std::path::PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Crash-log rotation + session sentinel (GIG_RESILIENCE_DESIGN section 6 / G10)
+// Crash-log rotation + session sentinel
 // ---------------------------------------------------------------------------
 
 /// How many timestamped crash logs to keep.

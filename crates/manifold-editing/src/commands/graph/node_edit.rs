@@ -870,7 +870,7 @@ impl SetGraphNodeParamCommand {
     /// Seed `previous_value` explicitly instead of letting `execute()`
     /// self-capture it off whatever's in the graph at execute time.
     ///
-    /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D4): self-capture is
+    /// Self-capture is
     /// correct only when `execute()` runs exactly once, before any other
     /// write has touched the same key — true for every existing call site
     /// (one edit, one command). It is WRONG for a drag-cadence commit built

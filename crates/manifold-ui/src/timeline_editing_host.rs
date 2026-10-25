@@ -276,7 +276,7 @@ pub trait TimelineEditingHost {
     /// Returns 0 if unavailable. Unity: GetMaxDurationBeats (InteractionOverlay line 960-971).
     fn get_max_duration_beats(&self, clip_id: &str) -> Beats;
 
-    // ── Automation lane editing (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) ──
+    // ── Automation lane editing ──
     //
     // Mirrors the clip-drag shape above: a single click/double-click action
     // executes + sends immediately (like `create_clip_at_position`); a drag
@@ -355,7 +355,7 @@ pub trait TimelineEditingHost {
     );
 
     // ── Automation lane editing — segment gestures (P4 Unit B,
-    // `docs/AUTOMATION_LANES_DESIGN.md` section 7's "drag a segment" / "modifier-drag
+    // "drag a segment" / "modifier-drag
     // a segment") ────────────────────────────────────────────────────────
 
     /// Live-preview an Alt-drag curve bend: directly sets the point at

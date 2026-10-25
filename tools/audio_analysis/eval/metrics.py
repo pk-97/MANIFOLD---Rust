@@ -1,6 +1,6 @@
-"""D10 metric definitions — FROZEN at P1.
+"""Metric definitions — FROZEN at P1.
 
-docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md D10: "Every metric change after P1 is a
+"Every metric change after P1 is a
 Peter escalation, because it invalidates all recorded baselines." Do not add,
 remove, or redefine a metric here without that escalation — extend with a new
 function under a new name instead of changing an existing one's semantics.

@@ -40,7 +40,7 @@ pub struct MarkerId(Arc<str>);
 /// the node is grouped, ungrouped, moved between levels, or flattened. This is
 /// the identity that param bindings target, so a card slider keeps driving its
 /// inner node no matter how the graph is reorganized. The node's `handle` is a
-/// display/search name with no addressing role. See `docs/NODE_ID_TARGETING.md`.
+/// display/search name with no addressing role.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId(Arc<str>);
@@ -50,7 +50,6 @@ pub struct NodeId(Arc<str>);
 /// send**: relabeling or re-routing the send does not change it. This is the
 /// identity an `AudioModSource` on a slider stores, so a slider keeps tracking
 /// its send regardless of label or channel changes. See
-/// `docs/AUDIO_MODULATION_DESIGN.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AudioSendId(Arc<str>);
@@ -58,7 +57,7 @@ pub struct AudioSendId(Arc<str>);
 /// Session-grid scene (row) identifier — wraps a short UUID string. Minted
 /// when a scene is created and stable for its lifetime; scenes reorder
 /// (`SessionGrid::scenes` row order), so `SessionSlot`/`Scene` reference this
-/// identity, never a row index. See `docs/SESSION_MODE_DESIGN.md`.
+/// identity, never a row index.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SceneId(Arc<str>);

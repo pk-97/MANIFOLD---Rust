@@ -1,8 +1,8 @@
 """Fetch MUSDB18 (compressed edition, ~4.4GB) — true stems (vocals/drums/
-bass/other) for vocal-region ground truth (D13) and demucs/gating eval.
+bass/other) for vocal-region ground truth and demucs/gating eval.
 
-Per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §3: license is research/NC —
-eval-only per D8 ("internal evaluation and parameter tuning against
+License is research/NC —
+eval-only ("internal evaluation and parameter tuning against
 NC-licensed datasets is acceptable ... never redistribute dataset audio,
 never train shipped model weights on NC data"). Zenodo record 1117372,
 license verified 2026-07-17 ('other-nc').

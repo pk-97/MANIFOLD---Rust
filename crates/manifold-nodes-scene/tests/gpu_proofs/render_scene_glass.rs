@@ -1,5 +1,4 @@
-//! `node.render_scene` sorted transparent-pass proof (IMPORT_FIDELITY_DESIGN.md
-//! D8, F-P5). Numeric, no image judgment — same discipline as
+//! `node.render_scene` sorted transparent-pass proof. Numeric, no image judgment — same discipline as
 //! `render_scene_ibl.rs` / `render_scene_map_set.rs`.
 //!
 //! Scene shape shared by every test: a top-down `node.orbit_camera` over

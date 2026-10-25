@@ -3,7 +3,6 @@
 **Status:** the modifier card is gone (BUG-nn1ty: it never worked). Render mode is the `render_mode` param on `render_scene` (Rendered, Solid, Wireframe, Points), a row in the Scene panel header; a `RenderMode` value wired into the `render_mode` port still wins. The recipe `RenderMode.json`, its catalog entry and the `SceneEndpoint::RenderMode` endpoint are deleted. D2/D5/D6 and INV-R1..R5 remain the contract; D1, D3 and the card-row sections describe the deleted modifier.
 **Prerequisites:** none.
 Lifecycle: contract — D2/D5/D6, INV-R1..R5 are cited by `render_mode.rs`, the `node.render_mode` atom, and `render_scene`'s mode match.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 Render modes — Blender's viewport shading modes (wireframe, solid, points) —
 as a **scene modifier card**: applied like an effect, tuned from the inspector,
@@ -22,7 +21,7 @@ Peter's directives, verbatim:
 
 Companions: `SCENE_MODIFIER_FRAMEWORK_DESIGN.md` (the card/descriptor
 contract this rides — D5 gate-family enable, D4 card home),
-`SCENE_MODIFIER_PRESET_ARCHITECTURE.md` (file-authored recipes; **no new Rust
+(file-authored recipes; **no new Rust
 registrations**), `REALTIME_3D_DESIGN.md` D5 (the atmosphere port precedent),
 `ADDING_PRIMITIVES.md` (the one new atom).
 

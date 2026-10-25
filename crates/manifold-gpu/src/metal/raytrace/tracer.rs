@@ -251,7 +251,7 @@ pub trait ShadowRayTracer {
     type Accel;
 
     /// CPU-only sizing for one scene's acceleration state
-    /// (SCENE_MODIFIER_RT_DESIGN.md §4.1): descriptor-based sizes plus the
+    /// Descriptor-based sizes plus the
     /// admission byte count ([`RtAccelPlan::additional_peak_bytes`]), which
     /// the renderer hands to `admit_candidate_bytes` before
     /// [`Self::prepare_accel`]. Never inspects vertex contents, allocates,
@@ -325,7 +325,7 @@ pub trait ShadowRayTracer {
         encoder: &mut GpuEncoder,
         device: &GpuDevice,
         accel: &Self::Accel,
-        // P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): the GPU-written 16-byte
+        // The GPU-written 16-byte
         // emissive stats buffer — the table's when one exists, the tracer's
         // zero-stats buffer otherwise. Immediately after `accel`, per the
         // design's signature amendment.
@@ -630,7 +630,7 @@ impl TracePass {
     }
 }
 
-/// SCENE_MODIFIER_RT_DESIGN.md P0/A0: one caller-supplied world-space ray
+/// One caller-supplied world-space ray
 /// for [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
 /// `DebugRayQueryRay` (packed_float3 pairs + two scalars).
 #[repr(C)]
@@ -646,7 +646,7 @@ const _: () = assert!(std::mem::size_of::<DebugRayQueryRay>() == 32);
 /// ID sentinel written for a miss (MSL `DEBUG_RAY_INVALID`).
 pub const DEBUG_RAY_INVALID: u32 = u32::MAX;
 
-/// SCENE_MODIFIER_RT_DESIGN.md P0/A0: one committed-hit record from
+/// One committed-hit record from
 /// [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
 /// `DebugRayQueryHit` exactly. P4b (§5.2): `coverage`/`brightness` report
 /// the accepted hit's appearance evaluation (`clamp(gain*weight, 0, 1)` /
@@ -707,12 +707,12 @@ pub struct MetalShadowRayTracer {
     /// Always compiled (tiny kernel, negligible cost); never dispatched by
     /// the production `render_scene.rs` path.
     debug_atrous_post_pipeline: GpuComputePipeline,
-    /// SCENE_MODIFIER_RT_DESIGN.md P0 value-test-only surface
+    /// Value-test-only surface
     /// (`debug_ray_query`'s only caller) — see the MSL `debug_ray_query`
     /// kernel's doc comment. Always compiled (tiny kernel, negligible
     /// cost); never dispatched by the production `render_scene.rs` path.
     debug_ray_query_pipeline: GpuComputePipeline,
-    /// SCENE_MODIFIER_RT_DESIGN.md §4.1: cached TLAS-sizing probe — a
+    /// Cached TLAS-sizing probe — a
     /// 1-triangle BLAS structure allocated lazily on first `plan_accel`,
     /// never built (sizing needs handles, not contents; no GPU command).
     tlas_probe: std::sync::OnceLock<ProbeBlas>,
@@ -761,7 +761,7 @@ pub struct RtPipelines {
     pub debug_firefly_clamp_pipeline: GpuComputePipeline,
     pub atrous_post_pipeline: GpuComputePipeline,
     pub debug_atrous_post_pipeline: GpuComputePipeline,
-    /// SCENE_MODIFIER_RT_DESIGN.md P0 value-test-only surface
+    /// Value-test-only surface
     /// (`debug_ray_query`'s only caller) — traces caller-supplied rays
     /// through the production AS and candidate-hit walk for gpu_proofs.
     /// Never dispatched by the production `render_scene.rs` path.
@@ -770,7 +770,7 @@ pub struct RtPipelines {
     /// dispatched ahead of the TLAS build/refit on the same command buffer
     /// in instanced mode (never on the D7 fast path).
     pub descriptor_build_pipeline: GpuComputePipeline,
-    /// P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): the GPU emissive-preparation
+    /// The GPU emissive-preparation
     /// kernel set — enumerate → radix hist/scan/scatter → gather → stats →
     /// alias, dispatched by `encode_emissive_table` on the shared AS update
     /// path only.
@@ -1138,7 +1138,7 @@ impl RtPipelines {
             ]),
         );
 
-        // SCENE_MODIFIER_RT_DESIGN.md P0: deterministic ray query — accel at
+        // Deterministic ray query — accel at
         // buffer(0), rays buffer(1), hits buffer(2), normal sources
         // buffer(3), params buffer(4), material-texture argument table at
         // texture(0..MAX_RT_MATERIAL_TEXTURES). Signatures and slot maps
@@ -1750,7 +1750,7 @@ impl MetalShadowRayTracer {
         result
     }
 
-    /// SCENE_MODIFIER_RT_DESIGN.md P0/A0 (BUG-e3p6.4) value-test-only entry
+    /// Value-test-only entry
     /// point — traces caller-supplied world-space rays through the SAME
     /// acceleration structure, slot-row indexing and candidate-hit walk the
     /// production kernels use, writing one [`DebugRayQueryHit`] per ray.
@@ -2278,7 +2278,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         encoder: &mut GpuEncoder,
         device: &GpuDevice,
         accel: &Self::Accel,
-        // P4a (SCENE_MODIFIER_RT_DESIGN.md §5.1): the GPU-written 16-byte
+        // The GPU-written 16-byte
         // emissive stats buffer — the table's when one exists, the tracer's
         // zero-stats buffer otherwise. Immediately after `accel`, per the
         // design's signature amendment.
@@ -3570,8 +3570,7 @@ mod tests {
         assert_eq!(result, [0.0, 1.0, 0.0, 1.0]);
     }
 
-    /// I-TL6 (RAYTRACING_DESIGN.md section 16.5) + SCENE_MODIFIER_RT_DESIGN.md
-    /// §5.2 (P4b): BLAS opacity tracks the descriptor-nonopaque property —
+    /// I-TL6. BLAS opacity tracks the descriptor-nonopaque property —
     /// alpha mask OR translucency OR wired appearance weights OR nonunit
     /// gain. The hardware fast path is kept only for objects the kernel's
     /// candidate walks never need to see; a fractional-to-fractional gain

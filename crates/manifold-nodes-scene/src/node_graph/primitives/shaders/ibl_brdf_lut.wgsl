@@ -1,5 +1,5 @@
 // node.render_scene internal pass — split-sum BRDF LUT (Karis 2013, "Real
-// Shading in Unreal Engine 4"), IMPORT_FIDELITY_DESIGN.md D2/F-P1. PARTIAL:
+// Shading in Unreal Engine 4"). PARTIAL:
 // prepends `pbr_brdf.wgsl` at pipeline-creation time (pbr_hammersley /
 // pbr_importance_sample_ggx / pbr_g_schlick_ggx_k all live there) — does
 // not validate standalone, see `wgsl_validation.rs`'s composed validator.

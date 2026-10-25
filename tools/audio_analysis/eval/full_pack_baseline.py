@@ -1,5 +1,5 @@
 """P3 deliverable 5 — baseline scoreboard for EVERY existing detector on the
-full available fixture pack (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §5, P3).
+full available fixture pack.
 
 This is a MEASUREMENT-ONLY module: no detector parameter, threshold, or
 model config is tuned here (P3's own forbidden list). It reuses eval/run.py's

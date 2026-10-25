@@ -172,7 +172,7 @@ impl RenderScene {
             d.indices_content.hash(&mut content_hasher);
         }
         let content_key = content_hasher.finish();
-        // SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): appearance state —
+        // Appearance state —
         // weights, gain, material values and logical texture content.
         // Hit shading
         // reads these LIVE through the normal-source table (rebuilt
@@ -575,7 +575,7 @@ impl RenderScene {
                         } else {
                             1
                         },
-                        // SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): appearance
+                        // Appearance
                         // reaches RT — per-vertex weights (bindless, pinned in
                         // the accel's geometry set) + the per-object gain. A
                         // wired buffer's float count was checked against the

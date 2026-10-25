@@ -59,8 +59,7 @@ pub struct GpuFft {
     /// Never changes after the build.
     execution: Retained<MPSGraphExecutableExecutionDescriptor>,
     /// Tensor data for the buffer pairs encoded last, newest first. Making
-    /// it cost about 4 µs a call (docs/ENCODE_REPLAY_DESIGN.md section 8
-    /// (Deferred), path (a)). The command-buffer wrapper is still made on
+    /// it cost about 4 µs a call. The command-buffer wrapper is still made on
     /// every call: one kept between calls outlives its command buffer, and
     /// MPS then encodes into the committed one.
     bound: Mutex<Vec<BoundPair>>,

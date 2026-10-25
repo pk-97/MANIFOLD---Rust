@@ -1,5 +1,5 @@
 // node.render_scene internal pass — GGX-importance-convolved specular
-// prefilter mip (IMPORT_FIDELITY_DESIGN.md D2/F-P1). PARTIAL: prepends
+// prefilter mip. PARTIAL: prepends
 // `pbr_brdf.wgsl` at pipeline-creation time (pbr_hammersley /
 // pbr_importance_sample_ggx / pbr_dir_from_equirect_uv / pbr_equirect_uv /
 // PBR_PI all live there) — does not validate standalone, see
@@ -10,7 +10,7 @@
 // - 1)` (mip 0 = perfect mirror, the last mip = fully rough), writing into
 // a single-mip VIEW of the destination chain
 // (`GpuTexture::mip_level_view`). 256 importance samples per texel — the
-// F-P1 committed default (IMPORT_FIDELITY_DESIGN.md section 5, "change only if
+// Committed default ("change only if
 // the cost measurement exceeds 10ms").
 
 struct PrefilterUniforms {

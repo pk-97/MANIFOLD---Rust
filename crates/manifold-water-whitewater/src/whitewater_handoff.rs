@@ -1,5 +1,4 @@
-//! The whitewater lifecycle's handoff (`docs/GPU_WHITEWATER_DESIGN.md` D6,
-//! D7, D11, section 3.5). A snapshot slot takes one frame's GPU copies of the
+//! The whitewater lifecycle's handoff. A snapshot slot takes one frame's GPU copies of the
 //! lifecycle's inputs; once that frame retired, the slot is loaned to the
 //! lifecycle worker, which loads and steps it. An output slot is loaned to
 //! the worker once every frame that read it retired; the worker writes the

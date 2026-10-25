@@ -13,7 +13,7 @@
 //!
 //! The live `param_card` rewrite-and-delete is the first task of Phase 2b (it
 //! needs a runtime visual pass); this proves the foundation is correct on the
-//! hardest real card shape first. See `docs/CHROME_API_DESIGN.md`.
+//! hardest real card shape first.
 
 use manifold_foundation::ParamId;
 use manifold_ui::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, validate};
@@ -187,7 +187,7 @@ impl ProofCard {
     fn build(&mut self, tree: &mut UITree, rect: Rect) {
         let v = self.view();
         // D4: the host mints a root-parented card subtree, so build it inside a
-        // region bracket (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4). The region
+        // region bracket. The region
         // container is minted directly on the tree — NOT through the host — so
         // `host.node_id`/`node_count` and the DFS indices these tests assert on
         // are unaffected (the host bases off `tree.count()` at build start). The

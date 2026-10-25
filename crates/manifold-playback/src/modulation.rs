@@ -2180,7 +2180,7 @@ mod tests {
         assert!(!evaluate_all_envelopes_fixture(&mut project, &timing));
     }
 
-    /// BUG-p3rq characterization (LED_STRIPS_DESIGN.md section 5b D16): an
+    /// BUG-p3rq characterization: an
     /// LED lane hosts a generator, so its modulated params must reset to base
     /// each tick like any generator layer's. Pre-fix the reset gate keyed on
     /// `layer_type == Generator`, the envelope offset stacked frame over

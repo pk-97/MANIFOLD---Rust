@@ -782,8 +782,7 @@ pub const TEXT_INPUT_BLINK_PERIOD: f64 = 0.5;
 /// head, so a value typed with a trailing unit or stray character (e.g. an
 /// angle "45°") still commits instead of silently no-op'ing. Pure — factored
 /// out of the commit match arms so the parse itself is unit-testable without
-/// constructing a whole `Application` (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md`
-/// P4's BUG-198 note: type-in gates at L2 + unit, never a faked L3).
+/// constructing a whole `Application` (type-in gates at L2 + unit, never a faked L3).
 pub fn parse_lenient_numeric(text: &str) -> Option<f32> {
     let cleaned: String = text
         .trim()

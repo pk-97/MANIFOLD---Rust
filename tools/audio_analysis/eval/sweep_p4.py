@@ -1,5 +1,5 @@
 """P4 §2 — round-1 (+ round-2 correction) knob sweep, DEV FIXTURES ONLY
-(docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md P4 brief: "sweep round 1 (dev
+("sweep round 1 (dev
 fixtures ONLY: babyslakh + self_render + liveshow dev songs)"). HELDOUT IS
 FORBIDDEN in every sweep run this module performs -- there is no parameter
 anywhere in this file that accepts a heldout fixture id or the liveshow

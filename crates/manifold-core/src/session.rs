@@ -1,5 +1,5 @@
 //! Session mode data model — authored, persistent launch slots for the
-//! Ableton-style scene/clip grid. See `docs/SESSION_MODE_DESIGN.md`.
+//! Ableton-style scene/clip grid.
 //!
 //! This module is P1 of that design: the model, `Project.session`, and serde
 //! only. Runtime playback state (`SessionRuntime`) is a separate,
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 /// grid. `clips[].start_beat` is RELATIVE to the sequence start (beat 0 =
 /// sequence start), non-overlapping, sorted — mirrors a `Layer`'s lane but
 /// scoped to one slot. The degenerate case (one clip at beat 0) is a plain
-/// launchable clip; no special type. See `docs/SESSION_MODE_DESIGN.md` section 3.
+/// launchable clip; no special type.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipSequence {
@@ -70,8 +70,7 @@ pub struct Scene {
 /// Pure authored data — this type holds no playback state. Runtime state
 /// (`SessionRuntime`: which slot is playing per layer, pending quantized
 /// launches, session-override set) is owned by `PlaybackEngine` on the
-/// content thread, never serialized and never undo-wrapped. See
-/// `docs/SESSION_MODE_DESIGN.md` section 4.
+/// content thread, never serialized and never undo-wrapped.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionGrid {
@@ -120,7 +119,7 @@ impl SessionGrid {
     /// `SessionSlot` docs). A plain linear scan: grids are small (a handful
     /// of layers x scenes) and P3's `slot_lookup` cache has no writer yet in
     /// P2, so scanning `slots` directly is simpler than reasoning about
-    /// cache staleness. `docs/SESSION_MODE_DESIGN.md` section 5/section 6.
+    /// cache staleness.
     pub fn get_slot(&self, layer_id: &LayerId, scene_id: &SceneId) -> Option<&SessionSlot> {
         self.slots
             .iter()

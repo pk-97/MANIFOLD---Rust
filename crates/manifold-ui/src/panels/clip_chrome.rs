@@ -353,7 +353,7 @@ impl ClipChromePanel {
         children.push(Self::section_label("Source"));
         // The filename row is a button: click opens a file dialog and replaces
         // the clip's audio source (ReplaceAudioFileCommand), keeping the clip,
-        // its lane, and its detection config/routing. See TIMELINE_INGEST_DESIGN D6/D7.
+        // its lane, and its detection config/routing.
         children.push(
             View::button(self.cached_source_name.as_str())
                 .fill_w()

@@ -1,5 +1,4 @@
 //! `node.gpu_flip_domain` — the scene-facing CPU bridge of a GPU FLIP liquid
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a, `docs/GPU_FLIP_PRESSURE_SOLVE.md`):
 //! it speaks the shared liquid scene contract (names, types, meanings)
 //! and turns it into the fixed-tick clock, the fill's sites, gravity, the
 //! coupled bodies as body rows, shapes and a distance atlas, and the padded
@@ -8,7 +7,7 @@
 //! forces and impulses reach the water through the shared field lattices of
 //! `liquid::fields` (seam P8), sampled over the face grid's box. Paired with
 //! a physics world, the scene's Box3D bodies join the water two ways
-//! (LIQUID_SOLVER_SEAM_DESIGN.md section 3.3 (Two-way Box3D coupling)): the
+//! The
 //! domain owns the rigid world in-thread and steps it one settled tick at a
 //! time with the steps' reaction. Every lattice atom reads the lattice from
 //! its wires, so Resolution applies on change. Exempt from the codegen

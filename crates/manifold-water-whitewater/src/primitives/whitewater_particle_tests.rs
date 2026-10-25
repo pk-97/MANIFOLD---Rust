@@ -1,7 +1,6 @@
 //! GPU value proofs for the whitewater emitter atoms against their CPU
 //! statements (`whitewater_particle_cpu`), I7, and the chain folded into one
-//! kernel against the atoms run one by one (`docs/GPU_WHITEWATER_DESIGN.md`
-//! section 3.7).
+//! kernel against the atoms run one by one.
 
 use super::emission_count::EmissionCount;
 use super::energy_potential::EnergyPotential;

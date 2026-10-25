@@ -1,5 +1,5 @@
 //! The ONE shared HDR→PNG output transform for headless render tooling
-//! (D2, `docs/GLB_CONFORMANCE_DESIGN.md`). Extracted from
+//! Extracted from
 //! `preset_thumbnail.rs`'s established Reinhard-tonemap-and-composite
 //! convention — the in-repo precedent `generate_preset_thumbnails.rs`
 //! already used — so `render_import`, `generate-preset-thumbnails`, and the

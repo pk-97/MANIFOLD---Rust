@@ -120,7 +120,6 @@ pub struct EffectGraphNode {
     /// bindings target, so a card slider keeps driving its inner node no
     /// matter how the graph is reorganized. Empty only on a pre-migration
     /// document; the load migration stamps one before anything resolves.
-    /// See `docs/NODE_ID_TARGETING.md`.
     #[serde(default, skip_serializing_if = "NodeId::is_empty")]
     pub node_id: NodeId,
     pub type_id: String,
@@ -571,9 +570,7 @@ pub struct PresetMetadata {
     /// Its presence requires graph schema v3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene_modifier: Option<crate::scene_modifier_preset::SceneModifierRecipe>,
-    /// A scene-modifier preset's extent and handles, by its card param ids
-    /// (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object
-    /// model)).
+    /// A scene-modifier preset's extent and handles, by its card param ids.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<manifold_foundation::scene_surface::SceneShapeDecl>,
 }
@@ -654,8 +651,7 @@ pub struct ParamSpecDef {
     /// false so every existing preset/project stays byte-identical on disk.
     #[serde(default, skip_serializing_if = "is_false")]
     pub wraps: bool,
-    /// Card-bundling group name (D5,
-    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): contiguous runs of
+    /// Card-bundling group name: contiguous runs of
     /// specs sharing the same `section` render under one collapsible header
     /// on the card. `None` renders exactly as today (a flat slider). Seeded
     /// two ways — at expose, from the innermost enclosing group's display
@@ -672,7 +668,7 @@ pub struct ParamSpecDef {
     /// generator/effect outer CARD. The scene panel's own section query
     /// (`sections_for_doc_ids`) reads exposure metadata independently of this
     /// flag and always keeps every stamped param — this only gates the CARD
-    /// row builder (`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`).
+    /// row builder.
     /// `true` by default (every hand-curated card param stays visible);
     /// scene-vocabulary stamping (from the scene table's role) is the
     /// one place that sets this `false` for the params a card shouldn't
@@ -985,7 +981,7 @@ pub struct StringParamSpecDef {
     /// `is_file_picker` in practice.
     #[serde(default)]
     pub use_dropdown: bool,
-    /// Superseded by binding-driven collection (PROJECT_FOLDERS_DESIGN P5):
+    /// Superseded by binding-driven collection:
     /// a string param whose `stringBinding` targets a file-loading node type
     /// is collected regardless of this flag ([`crate::file_loader`]). Kept
     /// for serde compatibility — the JSON `"file_path": true` marker still
@@ -1250,7 +1246,7 @@ mod tests {
 
     #[test]
     fn param_spec_no_section_skipped_on_serialize() {
-        // SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D5: `section: None` (every
+        // `section: None` (every
         // existing preset, and any spec expose/importer never touched) must
         // not appear on the wire, so a no-section preset stays byte-identical
         // to the on-disk source (the `is_angle`/`curve` precedent above).

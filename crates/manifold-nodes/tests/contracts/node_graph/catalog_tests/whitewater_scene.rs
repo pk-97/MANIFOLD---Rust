@@ -1,5 +1,5 @@
-//! The Whitewater chain on GPU FLIP's Dam Break (docs/GPU_WHITEWATER_DESIGN.md
-//! P5, P6). Until the chain moves into the GPU FLIP Dam Break preset
+//! The Whitewater chain on GPU FLIP's Dam Break
+//! Until the chain moves into the GPU FLIP Dam Break preset
 //! (BUG-imy3.4 (whitewater P5 preset remainder)) it is wired straight to its
 //! atoms on the Rust scene builder and drawn by the engine preset's own foam,
 //! bubble and spray objects. `gpu_flip_builder_whitewater_emits` runs it as the
@@ -1766,7 +1766,7 @@ const HISTORY_PROBES: [&str; 9] = [
 /// The probes that describe the selected pair.
 const PAIR: std::ops::Range<usize> = 0..7;
 
-/// GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 4 (Conviction tests): a live
+/// A live
 /// frame held until its publication retired shows what export shows at that
 /// frame: the same endpoints and identities, A and B bytes, blend, span and
 /// pixels. Export commit-waits each publication; live retires it on a later

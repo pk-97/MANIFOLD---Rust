@@ -89,7 +89,7 @@ fn archive_project_json(path: &std::path::Path) -> serde_json::Value {
 /// existing id exactly as it was read: re-keying would break the references
 /// between clips, layers and effects.
 ///
-/// Session mode (P1, `docs/SESSION_MODE_DESIGN.md`) added `Project.session:
+/// Session mode added `Project.session:
 /// SessionGrid`, skipped on serialize when empty. This fixture predates
 /// session mode, so re-saving it must emit no `"session"` key at all — not an
 /// empty one — and a project lacking the field on disk defaults it cleanly.

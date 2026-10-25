@@ -1,7 +1,6 @@
 //! Which graph nodes are liquid domains. The scene layer asks this one
 //! predicate instead of comparing type ids, so every liquid solver is found by
-//! the same walk (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.5 (Scene
-//! recognition)). No other file writes a domain type-id literal.
+//! the same walk. No other file writes a domain type-id literal.
 
 use std::collections::BTreeSet;
 
@@ -14,7 +13,7 @@ pub const FLIP_DOMAIN_TYPE_ID: &str = "node.fluid_surface";
 /// The GPU MLS-MPM liquid domain.
 pub const MATTER_DOMAIN_TYPE_ID: &str = "node.matter_domain";
 /// The GPU FLIP liquid domain: PIC/FLIP particles on a face grid with a
-/// multigrid-preconditioned pressure solve (`docs/GPU_FLIP_PRESSURE_SOLVE.md`).
+/// multigrid-preconditioned pressure solve.
 pub const GPU_FLIP_DOMAIN_TYPE_ID: &str = "node.gpu_flip_domain";
 
 /// Every liquid domain type.
@@ -63,7 +62,7 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
 }
 
 /// Water-panel params for product GPU liquid domains, under FLIP's names where
-/// the meaning is shared (`docs/GPU_MPM_SOLVER_DESIGN.md` D17). The retired
+/// the meaning is shared. The retired
 /// CPU FLIP node remains recognised above for saved graphs and reference
 /// proofs, but it no longer contributes product controls.
 pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[

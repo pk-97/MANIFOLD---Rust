@@ -1,5 +1,4 @@
-//! Breadcrumb sidecar + `--resume` supporting types — GIG_RESILIENCE_DESIGN
-//! section 5.1 (breadcrumb) / section 5.2 (boot fast path), phase P2.
+//! Breadcrumb sidecar + `--resume` supporting types
 //!
 //! The breadcrumb is a small atomically-written JSON sidecar
 //! (`<project>.manifold.breadcrumb`, sibling of the project archive) the UI

@@ -1,7 +1,7 @@
 """Fetch Harmonix Set annotations (github.com/urinieto/harmonixset) — beats,
 downbeats, and functional segment labels for 912 pop/EDM tracks.
 
-Per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §3: annotations are tiny (git);
+Annotations are tiny (git);
 audio is NOT redistributed by Harmonix and must be user-matched per track,
 incrementally — that matching is P3's job (`youtube_alignment_scores.csv` /
 `youtube_urls.csv`, already part of the annotation pull below, are the

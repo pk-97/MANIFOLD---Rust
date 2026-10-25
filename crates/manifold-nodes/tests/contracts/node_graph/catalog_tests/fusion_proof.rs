@@ -135,7 +135,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     );
 }
 
-/// CHAIN FUSION CHECKPOINT (docs/CHAIN_FUSION_DESIGN.md section 8) — the fail-fast
+/// CHAIN FUSION CHECKPOINT — the fail-fast
 /// gate before any cross-card generalization. Two pointwise cards are rendered
 /// the way the chain renders them today (card A's graph to a texture, that
 /// texture fed into card B's graph — the full-canvas seam round-trip), and

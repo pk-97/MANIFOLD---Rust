@@ -1,4 +1,4 @@
-//! The queryable param-surface model — `docs/WIDGET_TREE_DESIGN.md` D1–D3.
+//! The queryable param-surface model.
 //!
 //! One `ParamSurface` describes one manifest-backed card (effect, generator,
 //! editor card, scene section): identity + descriptor + state per row, built
@@ -18,7 +18,7 @@
 //!
 //! Anything that can't be expressed this way is an escalation, by definition
 //! of the layer. Building row/slider/drawer machinery anywhere else is
-//! forbidden (WIDGET_TREE_DESIGN section 5b, Peter's standing rule, INV-8).
+//! forbidden (Peter's standing rule, INV-8).
 
 use crate::panels::GraphParamTarget;
 use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RowMod};
@@ -452,7 +452,7 @@ pub struct ParamSurface {
 }
 
 /// Every interactive element class a row can build — the vocabulary the
-/// gesture router speaks (WIDGET_TREE_DESIGN D5). One enum, both card kinds.
+/// gesture router speaks. One enum, both card kinds.
 /// Extend HERE (recipe step 1) — never as a new id-hoard field or a new
 /// id-match chain in a `handle_*` body.
 ///

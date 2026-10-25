@@ -297,7 +297,7 @@ pub(crate) fn trigger_source_chips(current: crate::types::AudioFeature) -> Vec<S
 }
 
 /// One param row's audio-modulation display state. Collapses the former fifteen parallel
-/// per-param vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one struct per
+/// per-param vecs into one struct per
 /// row.
 #[derive(Debug, Clone)]
 pub struct AudioRowState {
@@ -750,7 +750,6 @@ pub(crate) struct ParamRowIds {
     /// param's right-click menu intent so a right-click on the value cell, the
     /// gaps, or anywhere on the row that isn't the track folds to the param
     /// menu — instead of each narrow widget being its own lottery target.
-    /// See `docs/NODE_INTENT_DISPATCH.md`.
     pub(crate) row_catcher: NodeId,
     pub(crate) slider: Option<SliderNodeIds>,
     /// The main slider's right-click reset action — always constructed

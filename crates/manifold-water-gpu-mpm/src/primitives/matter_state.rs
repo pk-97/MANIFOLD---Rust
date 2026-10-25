@@ -1,5 +1,5 @@
 //! `node.matter_state` — the substep boundary of a matter domain
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` D7, D8, D14). It holds the point state
+//!It holds the point state
 //! across frames, provides the grid arrays, and has the executor repeat its
 //! region over each accepted interval's subdivisions with six iteration scalars.
 //! A non-finite tick (read back one frame late through a fenced ring) halts

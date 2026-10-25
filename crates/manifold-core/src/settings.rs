@@ -79,7 +79,7 @@ pub struct ProjectSettings {
     /// canvas at `output_width`/`output_height`, today's behavior,
     /// byte-identical). Skipped on serialize when empty so projects that
     /// never configured a stage layout round-trip byte-identically, matching
-    /// `audio_setup`'s convention. See `docs/MULTI_DISPLAY_DESIGN.md`.
+    /// `audio_setup`'s convention.
     #[serde(default, skip_serializing_if = "crate::stage::StageLayout::is_empty")]
     pub stage_layout: crate::stage::StageLayout,
 

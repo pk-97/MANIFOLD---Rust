@@ -1,5 +1,5 @@
 //! `node.matter_domain` — the scene-facing CPU bridge of a matter domain
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` D17): it speaks the shared liquid
+//!It speaks the shared liquid
 //! scene contract (names, types, meanings) and turns it into the lattice,
 //! fill boxes, the fixed-tick clock (D8) and the per-tick substep count and
 //! material dials (D3, D4) the matter atoms read as wires. P1 carries the

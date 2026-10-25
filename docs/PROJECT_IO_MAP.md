@@ -188,7 +188,7 @@ this crate.
   `save_v2_archive` fsyncs the parent directory after rename but never
   `sync_all()` on the temp file itself; `zip.finish()` flushes userspace
   buffers only. On power loss (the gig scenario: venue power is not
-  laptop-battery-guaranteed — see GIG_RESILIENCE_DESIGN) the rename can be
+  laptop-battery-guaranteed) the rename can be
   durable while the file's data blocks aren't: a valid-looking `.manifold`
   containing garbage, having already replaced the good save. One-line fix.
 - **E4 — 24-bit content hash for dedup and snapshot identity (BUG-065 (save-dedup-history-identity-key-6-hex-chars), LOW

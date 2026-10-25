@@ -1,4 +1,4 @@
-//! Matter bodies on the GPU (`docs/GPU_MPM_SOLVER_DESIGN.md` P2a): the
+//! Matter bodies on the GPU: the
 //! prescribed pose each substep, the collider projection in the grid update,
 //! and the solid lattice, each against CPU-computed values.
 
@@ -1170,7 +1170,7 @@ fn matter_collider_penetration_bounded() {
     assert!(worst >= -0.5 * dx, "a point sits {worst} m inside the box");
 }
 
-/// SCENE_SETUP_PROGRAMME.md D8 (open meshes are solids): a column of liquid
+/// Open meshes are solids: a column of liquid
 /// falls onto an open, one-sided plane spanning the domain wall to wall. The
 /// plane is a shell, so the liquid lands on it and spreads; no point ever
 /// gets past the shell's far face.

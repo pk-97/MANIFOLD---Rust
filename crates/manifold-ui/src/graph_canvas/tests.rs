@@ -2603,7 +2603,7 @@ fn connecting_a_wire_end_to_end_fires_the_flow_pulse_with_real_port_geometry() {
     assert!((canvas.wire_flow_pulse_to.1 - in_sy).abs() < 0.01);
 }
 
-// ── HitTargets (UI_AUTOMATION_DESIGN.md P1) ──────────────────────
+// ── HitTargets ──────────────────────
 
 #[test]
 fn graph_canvas_targets_enumerates_nodes_ports_and_wires_with_payload_ids() {
@@ -2644,7 +2644,7 @@ fn graph_canvas_targets_enumerates_nodes_ports_and_wires_with_payload_ids() {
     assert_eq!(wires[0].payload, "scope=/from=0:out/to=2:in");
 }
 
-// ─── D6: group-face param rows (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN section 2) ─────
+// ─── D6: group-face param rows ─────
 //
 // A group box mirrors, as live rows, every already-exposed card param whose
 // binding target resolves to a node inside it (transitively through nested

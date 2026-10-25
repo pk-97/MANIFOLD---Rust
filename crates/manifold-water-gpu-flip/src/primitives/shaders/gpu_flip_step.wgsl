@@ -1,5 +1,4 @@
-// GPU FLIP's water step (gpu_flip_step.rs, docs/GPU_FLIP_PRESSURE_SOLVE.md
-// section 1 (the step)): every pass of one step but the sort, the solid
+// GPU FLIP's water step: every pass of one step but the sort, the solid
 // distance and the pressure solve, each a separate entry point. Included
 // after liquid_pose.wgsl, liquid_collider.wgsl and force_lattice.wgsl.
 // Narrow-band transport, sharp coupling and lifecycle integration follow
@@ -775,7 +774,7 @@ fn wall_distance(x: vec3<f32>) -> f32 {
 }
 
 // A body of this tick, `b` counted from its first row, posed at this step's
-// end (LIQUID_SOLVER_SEAM_DESIGN.md D15): a dynamic body by the coupled motion
+// end: a dynamic body by the coupled motion
 // law from its tick-start row, the reaction the water put on it before this
 // step and its support points; any other at its own velocity. With the pose,
 // the body's response to this step's pressure while it stays on the supports
@@ -2246,7 +2245,7 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
     return q1;
 }
 
-// Water is never deleted at a solid (LIQUID_SOLVER_SEAM_DESIGN.md D19). A
+// Water is never deleted at a solid. A
 // particle a move leaves inside one (a body swept over it, or it sat still
 // under a body) climbs the distance's gradient to SOLID_BUFFER cells
 // outside, the engine's own push-out (FluidSimulation::

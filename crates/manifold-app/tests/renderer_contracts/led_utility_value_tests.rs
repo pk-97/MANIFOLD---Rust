@@ -1,4 +1,4 @@
-//! MVP-P2 utility-family value gates (LED_STRIPS_DESIGN.md section 5b.4):
+//! utility-family value gates:
 //! per-preset value tests driving the production render path — bundled preset
 //! JSON → PresetRuntime (the compositor's own def→MetalBackend constructor) →
 //! clip texture on a LayerType::Dmx layer → LayerCompositor LED composite at

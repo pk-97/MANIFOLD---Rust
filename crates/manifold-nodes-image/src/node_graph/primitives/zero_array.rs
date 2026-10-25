@@ -1,6 +1,6 @@
 //! `node.zero_array` — clear a signed-integer array in place. Resets the
 //! matter grid's fixed-point accumulator before each substep's scatter
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1 (One substep) step 1).
+//! (one substep, step 1).
 
 use manifold_gpu::GpuBinding;
 

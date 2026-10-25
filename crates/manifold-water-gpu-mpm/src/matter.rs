@@ -1,4 +1,4 @@
-//! MLS-MPM matter (`docs/GPU_MPM_SOLVER_DESIGN.md`): the point and grid
+//! MLS-MPM matter: the point and grid
 //! records the matter atoms share, the water constants, the block sort of
 //! the lattice, the fixed-point encoding of grid accumulation (D5) and the
 //! substep rule (D4). The clock, lattice, bodies and rigid owner are every

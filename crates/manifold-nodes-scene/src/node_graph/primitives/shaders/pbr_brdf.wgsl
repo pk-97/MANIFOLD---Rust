@@ -79,7 +79,7 @@ fn pbr_equirect_uv(dir: vec3<f32>) -> vec2<f32> {
 
 // Inverse of `pbr_equirect_uv`: reconstruct the unit direction a given
 // equirect texel UV represents. Used by the IBL convolution passes
-// (IMPORT_FIDELITY_DESIGN.md D2/F-P1) to turn a destination texel's UV
+// to turn a destination texel's UV
 // into the N (irradiance) or R (prefilter) direction being baked.
 fn pbr_dir_from_equirect_uv(uv: vec2<f32>) -> vec3<f32> {
     let azimuth = (uv.x - 0.5) * 2.0 * PBR_PI;
@@ -88,7 +88,7 @@ fn pbr_dir_from_equirect_uv(uv: vec2<f32>) -> vec3<f32> {
     return vec3<f32>(ce * cos(azimuth), sin(elevation), ce * sin(azimuth));
 }
 
-// ===== Split-sum IBL helpers (IMPORT_FIDELITY_DESIGN.md D2/F-P1) =====
+// ===== Split-sum IBL helpers =====
 // Shared by the prefiltered-specular, diffuse-irradiance, and BRDF-LUT
 // convolution passes (`shaders/ibl_prefilter_specular.wgsl`,
 // `shaders/ibl_irradiance.wgsl`, `shaders/ibl_brdf_lut.wgsl`) — prepended

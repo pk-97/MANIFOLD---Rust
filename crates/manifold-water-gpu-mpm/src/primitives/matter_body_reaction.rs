@@ -1,6 +1,5 @@
 //! `node.matter_body_reaction` — gather what the grid's collider projection
 //! took from the liquid into each dynamic body's reaction words
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1 step 5, D4).
 
 use std::borrow::Cow;
 

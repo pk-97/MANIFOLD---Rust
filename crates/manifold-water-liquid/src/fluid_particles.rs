@@ -79,7 +79,7 @@ impl KnownItem for CellRange {
 }
 
 /// The three lower faces of one cell of the GPU FLIP face grid
-/// (docs/GPU_FLIP_PRESSURE_SOLVE.md). A lattice of n cells per axis stores
+///A lattice of n cells per axis stores
 /// (n + 1)³ of these, padded cell (i, j, k) at i + (nx + 1)·(j + (ny + 1)·k):
 /// the x face at (i, j + ½, k + ½)·h, the y face at (i + ½, j, k + ½)·h, the
 /// z face at (i + ½, j + ½, k)·h from the lattice minimum. A face whose
@@ -138,7 +138,7 @@ const _: () = {
 };
 
 /// Std430: position_lifetime Vec4F at 0, velocity Vec3F at 16, kind U32 at
-/// 28; stride 32 (GPU_WHITEWATER_DESIGN.md section 3.4).
+/// 28; stride 32.
 pub const WHITEWATER_SPAWN_SPECS: &[ChannelSpec] = &[
     ChannelSpec {
         name: well_known::POSITION_LIFETIME,

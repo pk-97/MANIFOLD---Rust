@@ -1,6 +1,5 @@
 //! f64 CPU reference of one water substep, the oracle the GPU matter atoms
-//! are proven against (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1 (One
-//! substep) and section 12 (Invariants and enforcement)). Built for unit
+//! are proven against. Built for unit
 //! tests and the `gpu-proofs` binary only.
 //! Accumulation is continuous, or with `fixed_point` rounds every grid word
 //! exactly as the GPU does (D5: scales, hashed unbiased rounding).

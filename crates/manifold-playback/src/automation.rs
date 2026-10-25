@@ -6,7 +6,7 @@
 //! the same `ParamSlot { base, value }` every other hand (UI slider, Ableton
 //! macro, OSC, macro bank) writes through — the modulation pipeline (LFO
 //! drivers, envelopes, audio mods) is untouched, no new phase, no fifth
-//! silo. See `docs/AUTOMATION_LANES_DESIGN.md`.
+//! silo.
 //!
 //! The playback walk follows `modulation::evaluate_all_audio_mods`: master
 //! effects + layer effects + generator params, skip disabled instances,
@@ -769,7 +769,7 @@ fn evaluate_instance_automation(
         |p: &manifold_core::params::Param| p.touched || (recording && write.held(target, p.id()));
     // Nothing to do unless there's an existing lane to sample/latch/continue
     // recording, or (armed) a hand that might be starting a brand new
-    // gesture — see docs/AUTOMATION_LANES_DESIGN.md section 5 "arm creates a lane".
+    // gesture —
     if !(has_lanes || (recording && fx.params.iter().any(writing))) {
         return false;
     }
@@ -839,9 +839,7 @@ fn evaluate_instance_automation(
 
     // Pass 2 (mutable): clear the touched flag + latch for params that were
     // just touched, then write sampled values via the non-touching
-    // automation write path (using `set_base_param` here would set
-    // `touched` on our own write and self-latch the very next frame — see
-    // `docs/AUTOMATION_LANES_DESIGN.md` section 4), then feed recording gestures.
+    // automation write path, then feed recording gestures.
     for param_id in to_latch {
         if let Some(p) = fx.params.get_mut(param_id.as_ref()) {
             p.touched = false;

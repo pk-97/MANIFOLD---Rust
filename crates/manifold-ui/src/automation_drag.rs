@@ -1,5 +1,5 @@
 //! The one drag resolver for pointer-driven automation moves
-//! (`docs/AUTOMATION_LANES_DESIGN.md` section 10 (Phasing), P6, D-P6.2): single
+//! Single
 //! point, tail (beat locked), segment and group drags all resolve through
 //! [`DragResolver::resolve`]; the overlay keeps only the plumbing.
 //!

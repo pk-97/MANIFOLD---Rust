@@ -17,8 +17,7 @@ use crate::content_command::ContentCommand;
 
 /// Apply an edit to a clip's `DetectionConfig` and re-place its triggers from the
 /// cached analysis. Reads the current config (or default), mutates it, records the
-/// config change (local + content thread), then asks the orchestrator to re-plan
-/// — instant, no backend run. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
+/// config change (local + content thread), then asks the orchestrator to re-plan. Instant, no backend run.
 fn apply_detection_edit(
     project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
@@ -85,7 +84,7 @@ pub(crate) fn dispatch_clip(
             DispatchResult::handled()
         }
         ClipAction::ClipReplaceAudioClicked => {
-            // Replace the clip's source file (TIMELINE_INGEST_DESIGN D6/D7): a
+            // Replace the clip's source file: a
             // native file dialog picks the new file, `ReplaceAudioFileCommand`
             // swaps path/duration/in_point/BPM and clears the cached analysis
             // while keeping the detection config, and every clip this audio clip

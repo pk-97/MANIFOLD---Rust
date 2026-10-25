@@ -15,7 +15,7 @@ The Rust codebase is the only reference. `/Users/peterkiemann/MANIFOLD - Render 
 2. On his go, give a worker an exact `file:line` spec and the scoped test command. Say in one line that it's running.
 3. Read the diff and test output yourself, then report in a few lines what changed for him.
 
-If the scope grows, stop and tell him. Investigation is lead work, workers execute specs. Edit directly only when it's tiny. These rules override the harness's "when in doubt, don't spawn."
+If the scope grows, stop and tell him. Between those points stay quiet: no report per worker, speak when the job is done or a decision is needed. Investigation is lead work, workers execute specs. Edit directly only when it's tiny. These rules override the harness's "when in doubt, don't spawn."
 
 Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `sonnet` for a self-contained module or shader whose math you give it. In OpenCode, `opencode-go/beam-free`. Parallel workers get separate files in the main checkout. Never invent process rituals (worktree slots, audit swarms, review committees).
 
@@ -44,7 +44,7 @@ Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `son
 ## Code and tests
 - Comments explain current behaviour and why. No history, dates, bug IDs or chat quotes, git has those.
 - Tests check real behaviour or math on small inputs and finish in under 2 seconds. No source scanners, line-count ratchets, long soaks or `#[ignore]`.
-- Delete design docs once shipped. Don't create audit or report files in `docs/`.
+- `docs/` holds maps of the current code, guides, and designs for work in progress. Delete a design doc when its work ships. Unbuilt ideas go in `docs/IDEAS.md` as a short paragraph each. No audit, report or log files.
 - Beads (`bd`) hold epics and real bugs or features only.
 
 ## Docs (read when your task touches them)

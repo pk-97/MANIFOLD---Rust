@@ -1,4 +1,4 @@
-//! Encode replay, the backend-neutral half (`docs/ENCODE_REPLAY_DESIGN.md`):
+//! Encode replay, the backend-neutral half:
 //! the recorded command list, the comparison every dispatch in a span runs
 //! against it, and the stats. The backend store keeps the GPU side (Metal:
 //! indirect command buffers). A recording is only ever a cache of what

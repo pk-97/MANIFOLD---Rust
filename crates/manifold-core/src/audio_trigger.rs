@@ -6,7 +6,7 @@
 //! detector on one frequency band and fires a fixed-length one-shot clip on a
 //! target layer when an onset crosses its threshold. No lookahead, no analysis
 //! backend — it reads the same `SendFeatures` the audio-modulation pipeline
-//! already produces every analysis block. See `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`.
+//! already produces every analysis block.
 //!
 //! This module owns the **model** and the **pure threshold math**. The stateful
 //! arm/fire/re-arm edge detection lives in the evaluator (`manifold-playback`),
@@ -365,7 +365,7 @@ mod fire_meter_tests {
         assert_eq!(cap.get(MAX_FIRE_METERS as u64 + 1), None);
     }
 
-    /// Content-thread work gate (DESIGN_DOC_STANDARD section 5/BUG-035) — the two
+    /// Content-thread work gate — the two
     /// live evaluators (`manifold-playback::modulation`,
     /// `manifold-playback::live_trigger`) run inside `PlaybackEngine::tick`,
     /// which `MANIFOLD_RENDER_TRACE`'s spike-triggered breakdown does NOT

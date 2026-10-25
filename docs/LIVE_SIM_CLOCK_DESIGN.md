@@ -8,7 +8,7 @@ Peter's ruling, 2026-10-04: live sims follow the real-time sim and fluid-tool mo
 
 The current campaign scope is **real-time GPU FLIP**. Shared clock and rigid/liquid coupling changes support its accepted intervals; this is not an independent Matter, CPU FLIP or particle-effect upgrade. The broader consumer audit below is historical. The binding constraints are timing correctness, no per-frame allocation or blocking readback, and existing content-thread ownership. This groundwork adds no serialized project state, commands, identities, locks, threads or channels.
 
-Companions: [LIQUID_SOLVER_SEAM_DESIGN.md](LIQUID_SOLVER_SEAM_DESIGN.md) owns the present coupling seam; [GPU_WHITEWATER_DESIGN.md](GPU_WHITEWATER_DESIGN.md) owns the pool; [CORE_ENGINE_MAP.md](CORE_ENGINE_MAP.md) owns beats and transport; [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) owns native Metal access. Section 9 records the runtime migration and its remaining verification.
+Companions: [CORE_ENGINE_MAP.md](CORE_ENGINE_MAP.md) owns beats and transport; [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) owns native Metal access. Section 9 records the runtime migration and its remaining verification.
 
 ## 1. Audit — what exists (verified 2026-10-03)
 
@@ -40,7 +40,7 @@ Initial P1 snapshot: slot-1, `feat/live-sim-clock`, base `cbb4be66f`. Execution 
 | Existing HUD | repo `crates/manifold-app/src/content_state.rs:133`, `crates/manifold-app/src/app_render.rs:3201`, `:3209`, `crates/manifold-ui/src/panels/perf_hud.rs:42`, `:186`, `:237` | Exists. Snapshot/PerfMetrics have physics_backlog_seconds; row displays seconds. Extend coverage and display “sim behind by X ms”. BUG-az3 records that the editor's own HUD never ticks. |
 | CPU specification | `live_sim_clock_reference.rs` (Clock, Frame, Step, cfl_step) | Genuinely new, test-only. Reuses typed Seconds and compares unaffected behaviour against LiquidClock; no runtime alternate path. |
 
-Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_time|display_time|ticks_done|accumulator' crates/manifold-nodes-water/src/{liquid,primitives,physics.rs}` and follow GPU FLIP dependencies. Use `rg -n 'LiquidClock|TickSamples|PendingTick'` for callers. P2 must freeze the post-BUG-gjys caller inventory before editing; new/missing consumers stop the brief for lead review. Integration planning here is conformance-level under DESIGN_DOC_STANDARD section 9: pending upstream signatures are explicitly not executable migration instructions.
+Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_time|display_time|ticks_done|accumulator' crates/manifold-nodes-water/src/{liquid,primitives,physics.rs}` and follow GPU FLIP dependencies. Use `rg -n 'LiquidClock|TickSamples|PendingTick'` for callers. P2 must freeze the post-BUG-gjys caller inventory before editing; new/missing consumers stop the brief for lead review. Integration planning here is conformance-level: pending upstream signatures are explicitly not executable migration instructions.
 
 ## 2. Decisions
 

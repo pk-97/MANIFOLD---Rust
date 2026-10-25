@@ -260,7 +260,6 @@ pub trait Panel {
     /// and drop the matching arms from `handle_event`; un-migrated panels keep
     /// the default no-op and their existing `handle_event` matching.
     ///
-    /// See `docs/NODE_INTENT_DISPATCH.md`.
     fn register_intents(&self, _intents: &mut crate::intent::IntentRegistry) {}
 
     /// First node index in the tree. Returns usize::MAX if not built.

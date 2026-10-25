@@ -1,7 +1,6 @@
 //! GPU value proofs for the whitewater pool atoms against their CPU
 //! statements (`whitewater_pool_cpu`), and each atom folded by the codegen
-//! against its standalone kernel (`docs/GPU_WHITEWATER_DESIGN.md` section
-//! 3.9).
+//! against its standalone kernel.
 
 use super::advect_whitewater::AdvectWhitewater;
 use super::age_whitewater::AgeWhitewater;

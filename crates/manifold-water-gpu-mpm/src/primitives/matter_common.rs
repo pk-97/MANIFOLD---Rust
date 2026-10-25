@@ -1,14 +1,11 @@
-//! What the matter atoms share at run time (`docs/GPU_MPM_SOLVER_DESIGN.md`
-//! section 3.2 (Atoms and ports)): the walls shader. The lattice itself is
+//! What the matter atoms share at run time: the walls shader. The lattice itself is
 //! every liquid's (`liquid::lattice::LiquidLattice::from_wires`).
 
 /// The lattice's closed walls, three padding nodes deep.
 pub(super) const MATTER_WALLS: &str = include_str!("shaders/matter_walls.wgsl");
 
 /// Fused codegen does not namespace member helpers, so helpers shared by
-/// several matter bodies are copied with an atom prefix
-/// (GPU_MPM_SOLVER_DESIGN.md section 9 (Section 2.5 audit and codegen
-/// classification)). These tests keep the copies identical.
+/// several matter bodies are copied with an atom prefix. These tests keep the copies identical.
 #[cfg(test)]
 mod tests {
     const P2G: &str = include_str!("shaders/matter_to_grid.wgsl");

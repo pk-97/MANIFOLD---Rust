@@ -48,7 +48,7 @@ impl RenderScene {
         let preparing = ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         let rt_enabled = rt_enabled || preparing;
         let has_subsurface = draws.iter().any(|draw| draw.subsurface_binding[0] > 0.0);
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek color format BEFORE the gpu_encoder block below borrows ctx.
+        // Peek color format BEFORE the gpu_encoder block below borrows ctx.
         let opaque_scene_color_target_format = has_transmission
             .then(|| ctx.outputs.texture_2d("color").map(|t| t.format))
             .flatten();
@@ -187,7 +187,7 @@ impl RenderScene {
             }
             self.ensure_dummy_texture(gpu.device);
             self.ensure_dummy_emissive_buffer(gpu.device);
-            // IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL resources —
+            // Split-sum IBL resources —
             // always ensured (fixed size, allocated once) so
             // `@binding(16..18)` always has something valid, regardless of
             // whether `envmap` is wired this frame.
@@ -226,7 +226,7 @@ impl RenderScene {
                 self.ensure_shadow_pass(gpu.device);
                 self.ensure_shadow_maps(gpu.device, casters);
             } else if has_transmission || rt_enabled || has_subsurface {
-                // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the transmissive
+                // The transmissive
                 // opaque-depth prepass below reuses `shadow_pipeline` (a
                 // depth-only pipeline fed the camera's `view_proj` instead
                 // of a light's) even when there are zero shadow casters.
@@ -949,7 +949,7 @@ impl RenderScene {
         self.shaft_depth_internal_height = height;
     }
 
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a/E2b: (re)allocate the opaque-
+    /// (Re)allocate the opaque-
     /// scene color snapshot when size or format changed. `SHADER_READ` only
     /// — it is populated by a blit (`copy_texture_to_texture`, level 0 only)
     /// then mip-generated (`GpuEncoder::generate_mipmaps`, the same hardware
@@ -1159,7 +1159,7 @@ impl RenderScene {
         self.opaque_depth_snapshot_height = height;
     }
 
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: allocate the single-sample
+    /// Allocate the single-sample
     /// depth attachment used to find each transmissive mesh's nearest visible
     /// surface. It is reused for every sorted layer in the frame.
     pub(super) fn ensure_transmissive_depth_scratch(
@@ -1850,7 +1850,7 @@ impl RenderScene {
         }
     }
 
-    /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: ensure the three split-sum IBL
+    /// Ensure the three split-sum IBL
     /// GPU resources exist — the prefiltered specular mip chain, the
     /// diffuse irradiance map, and the BRDF LUT — plus their three compute
     /// pipelines. All three are FIXED size (never resized, so this only

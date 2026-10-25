@@ -172,7 +172,7 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
 }
 
 /// Give saved GPU FLIP frames the presentation cursor
-/// (GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 3.4 (Cursor)), after
+/// (the Cursor), after
 /// flattening. The frame's clock is the node feeding its `epoch`, never the
 /// first incoming wire; only a GPU FLIP domain there gets `display_cursor`
 /// and `dropped_seconds` wired into the frame's unwired inputs. Authored
@@ -221,7 +221,7 @@ pub(crate) fn wire_liquid_frame_cursor(def: &mut EffectGraphDef) -> bool {
 }
 
 /// Move saved whitewater interpolators onto the frame's retained class copies
-/// (GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 3.6 (Whitewater)), after
+/// (the Whitewater), after
 /// flattening. Matches only an interpolator whose `particles_b` is a
 /// `node.liquid_state` class output and whose `blend` and `span` both come
 /// from one `node.liquid_frame` reading that same state. The class wire goes

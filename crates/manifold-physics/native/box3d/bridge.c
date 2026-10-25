@@ -1075,7 +1075,7 @@ int manifold_box3d_body_apply_impulse(
 }
 
 // The liquid's reaction spread over the step as a steady force and torque
-// (LIQUID_SOLVER_SEAM_DESIGN.md D17). Box3D clears both after each step. A
+//Box3D clears both after each step. A
 // body handed one cannot sleep through the step: sleep zeroes the velocity
 // the liquid's law predicted. `paused_out` is 1 when this call turned the
 // body's sleep off; manifold_box3d_body_allow_sleep turns it back on.
@@ -1140,7 +1140,7 @@ void manifold_box3d_body_allow_sleep( uint64_t body_value )
 
 // The body's touching contact points with static and kinematic bodies, and
 // with a dynamic body it rests on (a point within the linear slop),
-// LIQUID_SOLVER_SEAM_DESIGN.md D16. A dynamic body counts only where the
+// A dynamic body counts only where the
 // normal into this body points against gravity: the body below is a moving
 // support at its current velocity, never the body above, as shock propagation
 // orders a stack (Guendelman, Bridson and Fedkiw 2003). The lever

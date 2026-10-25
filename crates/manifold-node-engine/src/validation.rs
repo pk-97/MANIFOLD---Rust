@@ -38,8 +38,7 @@ pub enum GraphError {
     /// (`specs` non-empty on producer and consumer) and the signatures
     /// disagree. The boxed payload carries the specific divergence
     /// (count / name / type) so the validator error message can point
-    /// at exactly the channel that mismatched. See
-    /// `docs/CHANNEL_TYPE_SYSTEM.md` section 5.3.
+    /// at exactly the channel that mismatched.
     ///
     /// Boxed to keep `GraphError` small (clippy `result_large_err`).
     ///
@@ -54,8 +53,7 @@ pub enum GraphError {
     /// the Array case — the boxed payload carries the specific slot
     /// (R / G / B / A) at which producer and consumer diverged so
     /// the validator error message can point at exactly the mis-
-    /// labelled texel component. See `docs/CHANNEL_TYPE_SYSTEM.md`
-    /// section 17 for the texture-channel extension.
+    /// labelled texel component. See the texture-channel extension.
     ///
     /// Untyped [`PortType::Texture2D`] on either side is the migration
     /// back-compat valve and accepts any typed counterparty without
@@ -106,7 +104,7 @@ pub enum GraphError {
         missing_input: String,
     },
     /// A substep region failed derivation or validation at plan compile time
-    /// (`docs/GPU_MPM_SOLVER_DESIGN.md` D7). Names the boundary and the
+    /// Names the boundary and the
     /// offending node; `reason` names the broken rule. Never a fallback to
     /// ordinary traversal.
     MalformedSubstepRegion {
@@ -437,7 +435,7 @@ pub(super) fn validate_wire_endpoints(
     // OR (b) the consumer is Permissive (generic transform operators
     // accept any Channels producer regardless of their own specs).
     // Surfaces a structured `ChannelMismatch` on disagreement per
-    // `docs/CHANNEL_TYPE_SYSTEM.md` section 5. Wires that match neither
+    // Wires that match neither
     // condition fall through to `port_types_compatible` (raw-byte
     // size+align match) below.
     if let (PortType::Array(producer), PortType::Array(consumer)) = (from_port.ty, to_port.ty)
@@ -462,8 +460,7 @@ pub(super) fn validate_wire_endpoints(
     {
         // Typed-vs-typed Texture2D: enforce exact per-slot match. An
         // untyped Texture2D on either side is the back-compat valve
-        // and routes through `port_types_compatible` below. See
-        // `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
+        // and routes through `port_types_compatible` below.
         if let Err(reason) = texture_channels_compatible(producer, consumer) {
             return Err(GraphError::TextureChannelMismatch(Box::new(
                 TextureChannelMismatchInfo {
@@ -500,8 +497,7 @@ pub(super) fn validate_wire_endpoints(
 }
 
 /// The primitives that may declare a `Channels[permissive]` input
-/// (`docs/CHANNEL_TYPE_SYSTEM.md` section 11.4 (Per-port match-mode
-/// discipline)). A test walks the registry against it; adding a row is a
+/// (Per-port match-mode discipline). A test walks the registry against it; adding a row is a
 /// reviewed change to the type system.
 #[cfg(test)]
 pub const PERMISSIVE_PRIMITIVE_ALLOWLIST: &[&str] = &[
@@ -525,8 +521,6 @@ pub const PERMISSIVE_PRIMITIVE_ALLOWLIST: &[&str] = &[
 ///   must be identical in length, names, types, and order.
 /// - [`MatchMode::Permissive`] (opt-in for generic transform
 ///   operators): accept any producer signature.
-///
-/// See `docs/CHANNEL_TYPE_SYSTEM.md` section 5.2.
 pub fn channels_compatible(
     producer: ArrayType,
     consumer: ArrayType,
@@ -572,7 +566,6 @@ pub fn channels_compatible(
 /// No `MatchMode` distinction (unlike the Array path) — typed texture
 /// ports always match exactly. The back-compat valve for untyped
 /// [`PortType::Texture2D`] runs in `port_types_compatible` instead.
-/// See `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
 pub fn texture_channels_compatible(
     producer: TextureChannels,
     consumer: TextureChannels,

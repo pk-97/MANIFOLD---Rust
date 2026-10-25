@@ -25,7 +25,6 @@ impl PortView {
             // Typed Texture2D shares the texture-port colour — the
             // four-slot channel signature is a tooltip-level detail,
             // not a separate port category. See
-            // `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
             PortKindSnapshot::Texture2DTyped { .. } => PORT_TEXTURE2D_COLOR,
             PortKindSnapshot::Texture3D => PORT_TEXTURE3D_COLOR,
             PortKindSnapshot::Scalar => PORT_SCALAR_COLOR,
@@ -435,7 +434,7 @@ pub(crate) fn compute_node_rows(
 
 /// Group `wires` by their `(from_node, to_node)` pair, preserving first-seen
 /// order — the pure shape behind D8's same-pair ribbon collapse
-/// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2). A pair with ≥2
+/// A pair with ≥2
 /// members ribbons in `draw_wire_tier`; a pair with exactly 1 draws
 /// normally. Pure over its input (no rendering, no `Painter`), so it's
 /// unit-tested directly.
@@ -546,8 +545,7 @@ pub(crate) struct ParamView {
     /// reclaim control if moved. `None` for un-routed params. Wire-driven wins
     /// when both apply. Recomputed per snapshot from `outer_routings`. (Phase 5.)
     pub(crate) outer_driver: Option<String>,
-    /// `Some(outer_param_id)` for a **group-face mirror row** (D6,
-    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): this `ParamView`
+    /// `Some(outer_param_id)` for a **group-face mirror row**: this `ParamView`
     /// isn't an inner node's own param row, it's a group box's live copy of an
     /// already-exposed card param whose binding target resolves inside the
     /// group. `None` for every ordinary node-face row. Drives the scrub/click
@@ -761,8 +759,7 @@ fn find_node_by_handle<'a>(
     None
 }
 
-/// Build a group `NodeView`'s on-face param rows (D6,
-/// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): one [`ParamView`] per
+/// Build a group `NodeView`'s on-face param rows: one [`ParamView`] per
 /// `outer_routings` entry whose binding target (`node_handle`, `inner_param`)
 /// resolves to a node inside `body`, transitively through nested groups —
 /// the same join the canvas already computes for the "↳ outer-driven" hint

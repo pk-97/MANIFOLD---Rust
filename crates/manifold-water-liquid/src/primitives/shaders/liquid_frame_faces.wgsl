@@ -1,6 +1,6 @@
 // A liquid frame's face grid (liquid::grid::PublishedFaces, used by
 // node.liquid_frame and node.matter_frame): publish one axis of a tick's
-// faces (LIQUID_SOLVER_SEAM_DESIGN.md section 3.2), one thread per face. A
+// faces, one thread per face. A
 // tick whose stats flag a non-finite record (word 0) or narrow-band capacity
 // shortage (when this producer supplies the extended stats) is never
 // published: the faces keep the previous tick's,

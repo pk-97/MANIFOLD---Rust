@@ -523,7 +523,7 @@ impl ProjectIOService {
             dialog_path.set_extension("manifold");
         }
 
-        // D3 (docs/PROJECT_FOLDERS_DESIGN.md section 3.2): the dialog only
+        // The dialog only
         // picked a location + name. resolve_save_target is the ONE decision
         // site for version-vs-new-project. For NewProject, create the folder
         // then save into it; for Version, the file is a sibling of the
@@ -1081,7 +1081,7 @@ mod tests {
         );
     }
 
-    // ── PROJECT_FOLDERS_DESIGN.md P3 — save semantics + folder layout ──
+    // ── Save semantics + folder layout ──
     //
     // `save_project_as` itself is not scriptable (rfd dialog); the tested
     // surface is `save_project_as_to_path`, the non-dialog half that carries

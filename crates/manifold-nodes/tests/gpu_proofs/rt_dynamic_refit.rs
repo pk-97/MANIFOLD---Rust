@@ -1,4 +1,4 @@
-//! SCENE_MODIFIER_RT_DESIGN.md P6/A3 — selective BLAS refit witnesses.
+//! Selective BLAS refit witnesses.
 //!
 //! The fixture keeps one resident BLAS while its vertex bytes move through
 //! expansion, collapse and revival. Every update is compared with a fresh

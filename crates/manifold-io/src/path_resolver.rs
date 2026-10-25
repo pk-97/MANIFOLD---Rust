@@ -29,7 +29,7 @@ impl PathResolver {
     /// Port of C# PathResolver.ResolveAll (lines 18-161).
     ///
     /// The asset families come from [`collect_asset_paths`] — the single
-    /// inventory (PROJECT_FOLDERS_DESIGN D4). Every family gets the same
+    /// inventory. Every family gets the same
     /// re-link chain: stored relative → filename+size search → known dirs.
     /// Video clips, layer video folders, and audio clips re-point their own
     /// field + relative sibling; flagged string params (GLB/HDRI paths) write

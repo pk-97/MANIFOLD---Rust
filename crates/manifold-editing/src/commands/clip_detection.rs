@@ -7,7 +7,6 @@ use manifold_core::project::Project;
 /// Set an audio clip's detection config (the inspector's knobs). Preserves any
 /// cached analysis on the clip — only the settings change, so the host can
 /// re-plan from the existing events without re-running the backend.
-/// See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
 #[derive(Debug)]
 pub struct SetClipDetectionConfigCommand {
     clip_id: ClipId,

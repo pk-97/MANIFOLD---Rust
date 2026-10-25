@@ -1,6 +1,6 @@
 //! Undoable commands for the project's [`AudioSetup`] — the audio-modulation
 //! input routing. Edits route through `EditingService` like every other
-//! project mutation. See `docs/AUDIO_MODULATION_DESIGN.md`.
+//! project mutation.
 //!
 //! Sends are addressed by [`AudioSendId`] (stable identity), not by index, so a
 //! command stays correct even if the send list is reordered between capture and

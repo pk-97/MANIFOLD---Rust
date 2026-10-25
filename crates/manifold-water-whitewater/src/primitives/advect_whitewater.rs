@@ -1,6 +1,6 @@
 //! `node.advect_whitewater` — one FLIP tick of every live whitewater
 //! particle by its type, with FLIP's collision march against the solid
-//! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.9, phase L1). A per-element
+//!A per-element
 //! atom on the codegen path.
 //!
 //! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.

@@ -1,7 +1,7 @@
 use crate::node::*;
 use crate::text::{HeuristicTextMeasure, TextMeasure};
 
-/// Stacking tier for a region root — `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D2.
+/// Stacking tier for a region root.
 /// Paint order is `(tier, region rank, local insertion)`: a lower tier paints
 /// first (further back). So a `Chrome` region (the transport/header/footer
 /// frame) always wins over a `Base` region (timeline/viewport/inspector)
@@ -75,7 +75,7 @@ struct RegionArena {
     /// sibling salt, so the same logical widget gets the same id on every
     /// rebuild of a structurally stable build.
     widget_ids: Vec<WidgetId>,
-    /// Durable component name per slot (`UI_AUTOMATION_DESIGN.md` D8);
+    /// Durable component name per slot;
     /// `None` for most nodes.
     names: Vec<Option<Box<str>>>,
     /// Per-slot count of children added so far: the auto sibling salt for
@@ -330,8 +330,7 @@ impl UITree {
         // D4 — the only sanctioned way to root a top-level (parent: None)
         // subtree is inside an open `begin_region`/`end_region` bracket
         // (`open_regions > 0`). A `None`-parented node minted with no region
-        // open is the per-panel hand-clip bug class
-        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1 exists to kill.
+        // open is the per-panel hand-clip bug class that regions exist to kill.
         //
         // `cfg(not(test))`: `manifold-ui`'s own unit tests build panels on a
         // bare `UITree::new()`; the D4 structural test (`all_roots_are_regions`)
@@ -340,7 +339,7 @@ impl UITree {
         debug_assert!(
             parent_id.is_some() || self.open_regions > 0,
             "root-parented node minted outside an open UITree::begin_region — \
-             UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1/D4. Wrap this subtree's build \
+             Wrap this subtree's build \
              in begin_region(...)/end_region(...) instead of rooting it at the tree."
         );
         // `gen_counter` never yields 0 (reserved for PLACEHOLDER); skip it on
@@ -715,7 +714,7 @@ impl UITree {
         }
     }
 
-    // ── Regions (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1–D4, D7) ────────
+    // ── Regions ────────
 
     /// Open a sub-region of the arena being built ([`DEFAULT_REGION`] outside
     /// any build): a container node at `rect` carrying `CLIPS_CHILDREN` by
@@ -1088,8 +1087,7 @@ impl UITree {
 
     /// Walk the tree in paint order and call the visitor for each visible
     /// node, with push/pop clip signals: every sub-region of every arena by
-    /// (tier, region rank, local insertion) — `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
-    /// D2, UI_INVALIDATION_DESIGN.md D7.
+    /// (tier, region rank, local insertion).
     pub fn traverse<F>(&self, mut visitor: F)
     where
         F: FnMut(TraversalEvent),

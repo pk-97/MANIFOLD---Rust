@@ -1,6 +1,5 @@
 //! Checked against FLIP Fluids the engine's coupled tank (gravity tests) (MIT); see THIRD_PARTY_NOTICES.md.
-//! The liquid conformance table (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`
-//! section 3.8 (Committed signatures), I2 and I10): one row per liquid domain
+//! The liquid conformance table One row per liquid domain
 //! type with its scenes, the setup changes it refuses by name, the checks it
 //! is exempt from, each with its reason, and the named misses a logged bug
 //! keeps red in checks it still runs. The GPU checks read this table

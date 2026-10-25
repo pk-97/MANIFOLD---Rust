@@ -161,8 +161,7 @@ pub enum DragMode {
     TrimLeft,
     TrimRight,
     RegionSelect,
-    /// Dragging an existing automation breakpoint (P4 Unit A,
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7). State lives in
+    /// Dragging an existing automation breakpoint. State lives in
     /// `TimelineDrag::AutomationPoint`'s payload (P7.3).
     AutomationPoint,
     /// Alt-dragging a segment into a curve bend (P4 Unit B, section 7's
@@ -189,7 +188,7 @@ pub enum DragMode {
 }
 
 // ── AutomationDragState ─────────────────────────────────────────
-// P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` section 7): grabbed-dot geometry for
+// Unit A: grabbed-dot geometry for
 // a `DragMode::AutomationPoint` drag. `last_beat`/`last_value` track where
 // the point currently sits (recomputed fresh from screen each frame, not
 // incrementally) so `TimelineEditingHost::set_automation_point_preview`'s
@@ -218,7 +217,7 @@ struct AutomationDragState {
 }
 
 // ── AutomationSegmentBendState / AutomationSegmentDragState ────────
-// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` section 7): grabbed-segment geometry
+// Unit B: grabbed-segment geometry
 // for the two segment gestures. Both re-derive their live value from the
 // ORIGINAL grab geometry each frame (never incrementally), matching every
 // other drag state in this file.
@@ -264,7 +263,7 @@ struct AutomationSegmentDragState {
 }
 
 // ── AutomationGroupDragState / AutomationDrawState ──────────────────────
-// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` section 7): group move of the
+// Unit B: group move of the
 // marquee-selected set, and pencil/draw mode. The marquee's own state
 // (P7.3, D9-style) is just the drag controller session's `start` — no
 // separate `AutomationMarqueeState` struct.
@@ -816,7 +815,7 @@ pub struct InteractionOverlay {
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
     modifiers: Modifiers,
 
-    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17) ──────────────
+    // ── P2 motion ──────────────
     // Purely visual drag feedback — the model already moves/snaps instantly
     // (D15: data first, visual follows); these only change what the render
     // loop draws for the dragged clip set. Shared scalars, not per-clip:
@@ -1185,7 +1184,7 @@ impl InteractionOverlay {
         }
     }
 
-    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17) ──────────────
+    // ── P2 motion ──────────────
 
     /// Per-frame tween tick for the overlay's drag-visual pieces (grab lift,
     /// duplicate ghost, grid settle, landing-line flash, error shake). Call
@@ -1701,7 +1700,7 @@ impl InteractionOverlay {
                 return;
             }
         }
-        // P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` section 7): a click inside an
+        // Unit A: a click inside an
         // automation lane strip is handled entirely here — click-on-line adds
         // a breakpoint and click-on-dot selects it. It never falls through
         // to clip/region logic below.
@@ -1861,7 +1860,7 @@ impl InteractionOverlay {
     }
 
     // ────────────────────────────────────────────────────────────
-    // AUTOMATION LANE EDITING (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` section 7)
+    // AUTOMATION LANE EDITING
     // ────────────────────────────────────────────────────────────
 
     /// Handle a click/double-click that lands inside an automation lane
@@ -3749,7 +3748,7 @@ impl InteractionOverlay {
         // commit is the new discrete moment. Fires once, only when a move
         // actually landed somewhere new (a click-without-move stays dark).
         // Move only — a trim reshapes in place, there is no "landing".
-        // Feel sign-off owed to Peter (UI_CRAFT_AND_MOTION_PLAN.md D15 gate).
+        // Feel sign-off owed to Peter.
         if let Some((beat, lo, hi)) = landed {
             self.landing_flash_beat = beat;
             self.landing_flash_layers = (lo, hi);
@@ -4490,7 +4489,7 @@ mod b4_group_move_tests;
 #[cfg(test)]
 mod p1_4_gesture_integrity_tests;
 
-// ── P2 motion tests (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17) ────────────────
+// ── P2 motion tests ────────────────
 // `InteractionOverlay` has no existing test harness (every other method here
 // takes `&mut dyn TimelineEditingHost`, which would need a full mock to
 // exercise) — these drive the new drag-visual state machine directly via

@@ -1,6 +1,6 @@
-"""Metamorphic invariant suite — label-free, runs on any audio (§3).
+"""Metamorphic invariant suite — label-free, runs on any audio .
 
-Four checks, per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §3:
+Four checks:
     gain            +-6 dB          -> event times/counts unchanged
     time_stretch    +-5%            -> event times scale, grid BPM scales
     stem_injection  known stem @ known offset -> events appear there

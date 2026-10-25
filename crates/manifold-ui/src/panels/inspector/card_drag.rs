@@ -283,8 +283,8 @@ impl InspectorCompositePanel {
         // Create ghost + indicator nodes — scoped to the correct column
         // Single full-width active column — both tabs drag within it.
         //
-        // Ghost tier + ALLOW_OVERFLOW (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
-        // D1–D3): the ghost tracks the cursor for the drag's whole
+        // Ghost tier + ALLOW_OVERFLOW (
+        // ): the ghost tracks the cursor for the drag's whole
         // lifetime (`update_card_drag` below), so it must be able to
         // paint outside whatever rect it starts at and outside the
         // inspector's own region clip — the region mechanism's one

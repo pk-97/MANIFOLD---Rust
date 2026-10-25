@@ -87,7 +87,7 @@ impl RenderScene {
         } else {
             target
         };
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: `opaque_scene_color` was
+        // `opaque_scene_color` was
         // already (re)allocated above, sized to this exact `target`'s
         // format — see `opaque_scene_color_target_format`'s doc comment for
         // why that ensure call has to happen before this point.
@@ -170,7 +170,7 @@ impl RenderScene {
         let prefiltered_specular = self.prefiltered_specular.as_ref().expect("ensured");
         let irradiance_map = self.irradiance_map.as_ref().expect("ensured");
         let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: `None` whenever
+        // `None` whenever
         // `has_transmission` is false — nothing below reads it in that case
         // (`draw.is_transmissive` can only be true when `has_transmission`
         // is), but the option lets the same closure serve both cases
@@ -245,8 +245,7 @@ impl RenderScene {
                         binding: 3,
                         sampler,
                     },
-                    // IMPORT_FIDELITY_DESIGN.md D3/F-P2: normal_map_n (D4
-                    // cotangent-frame tangent-space reconstruction).
+                    // normal_map_n (cotangent-frame tangent-space reconstruction).
                     GpuBinding::Texture {
                         binding: 4,
                         texture: draw.normal_map.unwrap_or(dummy),
@@ -297,7 +296,7 @@ impl RenderScene {
                         buffer: draw.instances.unwrap_or(identity_stub),
                         offset: 0,
                     },
-                    // IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL.
+                    // Split-sum IBL.
                     // Always bound (same always-bind ABI-stub discipline as
                     // bindings 4/5/7/10-14 above) — `ensure_ibl_resources`
                     // guarantees these three exist regardless of whether
@@ -316,7 +315,7 @@ impl RenderScene {
                         binding: 18,
                         texture: brdf_lut,
                     },
-                    // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the three NEW
+                    // The three NEW
                     // per-object maps (normal_map_n reuses binding(4) above).
                     // Same always-bind ABI-stub discipline.
                     GpuBinding::Texture {
@@ -355,7 +354,7 @@ impl RenderScene {
                         binding: 26,
                         sampler: sampler_for(draw.sampler_descs[4]), // emissive
                     },
-                    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: opaque-scene-
+                    // Opaque-scene-
                     // color snapshot — bound for real only on the object
                     // that will actually sample it (E2b), the 1×1 dummy for
                     // everything else. Declared in the WGSL (pipeline-layout
@@ -374,8 +373,7 @@ impl RenderScene {
                         binding: 28,
                         sampler: self.refraction_sampler.as_ref().expect("ensured"),
                     },
-                    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1
-                    // revised): sheen/iridescence/anisotropy extension
+                    // Sheen/iridescence/anisotropy extension
                     // textures. Same always-bind ABI-stub discipline as
                     // 19-21; sampled with the existing base_color_sampler
                     // (binding 22, sRGB colour maps) / mr_sampler (binding
@@ -404,8 +402,7 @@ impl RenderScene {
                         binding: 33,
                         texture: draw.anisotropy_map.unwrap_or(dummy),
                     },
-                    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised —
-                    // texture-completion sweep): clearcoat/specular/
+                    // Texture completion: clearcoat/specular/
                     // transmission/volume-thickness extension textures,
                     // same always-bind ABI-stub discipline + shared-sampler
                     // simplification as 29-33 above.
@@ -503,7 +500,7 @@ impl RenderScene {
                 ]
             })
             .collect();
-        // IMPORT_FIDELITY_DESIGN.md D8/F-P5: split into the existing
+        // Split into the existing
         // opaque/mask group (order unchanged — a zero-Blend scene produces
         // byte-identical `draw_calls` to before this phase) and the sorted
         // transparent group, drawn as `second_pass` in the SAME encoder pass
@@ -550,7 +547,7 @@ impl RenderScene {
         } else {
             blend_entries.iter().map(|(_, _, call)| *call).collect()
         };
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: when the scene has a
+        // When the scene has a
         // transmissive object, the Blend group is pulled OUT of Pass A
         // entirely and drawn as a separate Pass B below (after the opaque-
         // color snapshot blit) instead of as Pass A's in-pass `second_pass`
@@ -773,15 +770,14 @@ impl RenderScene {
             self.gizmo_depth_ready = true;
         }
 
-        // ---- GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the snapshot + Pass B
+        // ---- The snapshot + Pass B
         // seam. Pass A above just resolved the fully-shaded opaque scene
         // into `target`; blit it into `opaque_scene_color` (the texture an
         // E2b transmissive shader will sample), then draw the Blend group
         // as its own single-sample pass, loading (not clearing) both
         // `target`'s color and `opaque_depth_snapshot`'s depth so it
         // composites onto Pass A's result and depth-tests against it. No
-        // MSAA on this pass (`docs/GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E2a
-        // brief D3/E2a note: memoryless MSAA color can't be re-loaded across
+        // MSAA on this pass: memoryless MSAA color can't be re-loaded across
         // a pass boundary, and a non-memoryless MSAA target would cost real
         // VRAM gated only on this — see the confessed-shortcuts field in
         // this phase's landing report for why single-sample was chosen).

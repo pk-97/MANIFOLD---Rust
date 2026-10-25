@@ -1,5 +1,5 @@
 //! `node.matter_to_grid` — the MLS-MPM particle-to-grid transfer
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1 step 3, D5, D6). Hand WGSL under
+//!Hand WGSL under
 //! exclusion 1 (workgroup memory and barriers): with `order` and `ranges` from
 //! the tick's cell sort, one workgroup per 4³ block of stencil base nodes
 //! accumulates into a workgroup tile; unwired, one thread per point adds with

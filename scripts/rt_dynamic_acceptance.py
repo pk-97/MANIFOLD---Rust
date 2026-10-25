@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scene-modifier RT acceptance runner (SCENE_MODIFIER_RT_ACCEPTANCE.md A0/A10).
+"""Scene-modifier RT acceptance runner.
 
 Dispatches the acceptance modes of the dynamic-RT-on-modified-meshes campaign
 and writes one evidence report per run. This script is a dispatcher, not a
@@ -303,7 +303,7 @@ def gpu_report_section(gpu_family: str | None) -> dict:
     return {
         "gpuFamily": gpu_family,
         "settings": {
-            "source": "SCENE_MODIFIER_RT_ACCEPTANCE.md A9 (RtQualityColumn::default())",
+            "source": "RtQualityColumn::default()",
             "resolution": "1280x720",
             "shadows": "UltraLow (1 sample)",
             "ao": "Medium (4 samples)",

@@ -885,7 +885,7 @@
     "asset": "AnimationPointerUVs.glb",
     "checks": [],
     "status": "xfail:BUG-170",
-    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility, extended 2026-07-16 during GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6"
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility, extended 2026-07-16 during E6"
   },
   {
     "asset": "AnisotropyBarnLamp.glb",
@@ -953,7 +953,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: thicker glass along the Thickness Factor row attenuates more (Beer-Lambert distance-dependent darkening) -- a per-instance thickness gradient the old material-level alpha formula (thickness-independent) could not produce"
+    "note": "E2b: thicker glass along the Thickness Factor row attenuates more (Beer-Lambert distance-dependent darkening) -- a per-instance thickness gradient the old material-level alpha formula (thickness-independent) could not produce"
   },
   {
     "asset": "CarConcept.glb",
@@ -1091,7 +1091,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: real screen-space refraction (D3) -- the glass-bowl region carries measurably more image detail (rim + decal + refracted checkerboard) than a plain-background patch, which the old alpha-blend approximation (near-zero alpha for fully transmissive glass) could not produce"
+    "note": "E2b: real screen-space refraction (D3) -- the glass-bowl region carries measurably more image detail (rim + decal + refracted checkerboard) than a plain-background patch, which the old alpha-blend approximation (near-zero alpha for fully transmissive glass) could not produce"
   },
   {
     "asset": "CompareVolume.glb",
@@ -1108,25 +1108,25 @@
       }
     ],
     "status": "expect_pass",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: KHR_materials_volume Beer-Lambert attenuation -- the volume-attenuated bowl reads distinctly green (attenuationColor), a color shift the old code (which never read attenuationColor/attenuationDistance) could not produce. BUG-185 re-baseline (2026-07-17, eyeballed render): E6's thicknessTexture honoring made the tint follow the thickness map, so the old upper-interior region went legitimately thin/clear; region moved to the bowl's thick lower interior (measured G-R 10.13 there, ~0 with volume off), floor 8 -> 6 for margin on both sides"
+    "note": "E2b: KHR_materials_volume Beer-Lambert attenuation -- the volume-attenuated bowl reads distinctly green (attenuationColor), a color shift the old code (which never read attenuationColor/attenuationDistance) could not produce. BUG-185 re-baseline (2026-07-17, eyeballed render): E6's thicknessTexture honoring made the tint follow the thickness map, so the old upper-interior region went legitimately thin/clear; region moved to the bowl's thick lower interior (measured G-R 10.13 there, ~0 with volume off), floor 8 -> 6 for margin on both sides"
   },
   {
     "asset": "DiffuseTransmissionPlant.glb",
     "checks": [],
     "status": "xfail:diffuse-transmission-deferred",
-    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md \u00a75 \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
   },
   {
     "asset": "DiffuseTransmissionTeacup.glb",
     "checks": [],
     "status": "xfail:diffuse-transmission-deferred",
-    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md \u00a75 \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
   },
   {
     "asset": "DiffuseTransmissionTest.glb",
     "checks": [],
     "status": "xfail:diffuse-transmission-deferred",
-    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md \u00a75 \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
   },
   {
     "asset": "DispersionTest.glb",
@@ -1277,13 +1277,13 @@
     "asset": "PotOfCoalsAnimationPointer.glb",
     "checks": [],
     "status": "xfail:BUG-170",
-    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility, extended 2026-07-16 during GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6"
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility, extended 2026-07-16 during E6"
   },
   {
     "asset": "ScatteringSkull.glb",
     "checks": [],
     "status": "xfail:diffuse-transmission-deferred",
-    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md \u00a75 \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
   },
   {
     "asset": "SheenChair.glb",
@@ -1449,7 +1449,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-166 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2): import_glb() replaces gltf::import() with a slice-based parse gated on MANIFOLD's own extensionsRequired allowlist (includes KHR_materials_clearcoat) instead of the crate's feature-flag veto; clearcoat render mapping was already shipped by GLB_CONFORMANCE_DESIGN"
+    "note": "BUG-166 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2): import_glb() replaces gltf::import() with a slice-based parse gated on MANIFOLD's own extensionsRequired allowlist (includes KHR_materials_clearcoat) instead of the crate's feature-flag veto; clearcoat render mapping was already shipped"
   },
   {
     "asset": "UnlitTest.glb",

@@ -1,6 +1,5 @@
 //! `node.nearest_crossing` — spread each whitewater cell's nearest surface
-//! crossing one cell further (`docs/GPU_WHITEWATER_DESIGN.md` D4, section
-//! 3.3). A per-element gather on the codegen path.
+//! crossing one cell further. A per-element gather on the codegen path.
 
 use std::borrow::Cow;
 

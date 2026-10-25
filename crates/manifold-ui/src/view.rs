@@ -97,7 +97,7 @@ pub struct UiLayer {
     /// reserve room for (0 when automation mode is off, the layer is
     /// collapsed, or it carries no enabled lanes). `CoordinateMapper::
     /// layer_height` is the single place this count turns into pixels — see
-    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7. Computed by
+    /// Computed by
     /// `ui_translate::layers_to_ui_for_layout`, never by the plain
     /// `layers_to_ui` (which defaults this to 0 for callers that only need
     /// selection-shape fields, not the Y-layout).
@@ -185,7 +185,7 @@ impl UiMarker {
     }
 }
 
-// ── Automation lanes (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) ────────────
+// ── Automation lanes ────────────
 //
 // UI-local mirror of `manifold_core::effects::{AutomationLane, AutomationPoint,
 // SegmentShape}`. Built once per structural sync by `ui_translate::
@@ -362,8 +362,8 @@ pub struct UiAutomationLane {
     pub param_min: f32,
     pub param_max: f32,
     /// Whether the param is integral (registry `whole_numbers`/`value_labels`,
-    /// or an integral user-binding conversion) — `docs/AUTOMATION_LANES_DESIGN.md`
-    /// section 8: "Enum/int-backed params: author with Hold segments." Newly-clicked
+    /// or an integral user-binding conversion)
+    /// "Enum/int-backed params: author with Hold segments." Newly-clicked
     /// points on such a param default to `Hold` instead of `Linear` — see
     /// [`Self::new_point_shape`].
     pub whole_numbers: bool,
@@ -450,7 +450,6 @@ impl UiAutomationLane {
 /// actually samples on the content thread. `pub(crate)`: also used by
 /// `automation_hit_tester.rs` to compute the exact on-screen segment Y a
 /// segment-drag/curve-bend hit-test must agree with (P4 Unit B,
-/// `docs/AUTOMATION_LANES_DESIGN.md` section 7).
 pub(crate) fn automation_segment_bend(t: f32, bend: f32) -> f32 {
     let bend = bend.clamp(-1.0, 1.0);
     if bend == 0.0 {

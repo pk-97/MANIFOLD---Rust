@@ -10,7 +10,6 @@
 //! data handed in via [`AudioSetupPanel::configure`] and maps a clicked node
 //! id back to a [`PanelAction`] (the project-level audio-setup actions,
 //! already routed through `ui_bridge`). See
-//! `docs/AUDIO_MODULATION_DESIGN.md` section 10.1.
 //!
 //! Capture-fed sends are always stereo (the per-send channel picker is gone),
 //! so a send row shows a static "Stereo" / routing label rather than a channel
@@ -252,8 +251,7 @@ enum CalibrationDrag {
     Gain {
         start_x: f32,
         start_db: f32,
-        /// Shift held at drag-start (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
-        /// P4, D8's audio-dock sibling): the applied per-pixel delta is
+        /// Shift held at drag-start: the applied per-pixel delta is
         /// multiplied by 0.1 for the life of the drag.
         fine: bool,
     },
@@ -2053,8 +2051,7 @@ impl AudioSetupPanel {
                     (false, Vec::new())
                 }
             }
-            // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8's audio-dock
-            // sibling, `stepper.rs`'s contract-table amendment): double-click
+            // Audio-dock sibling, `stepper.rs`'s contract-table amendment: double-click
             // on the gain value cell opens its type-in box. The gain row IS
             // this crate's one live `Stepper` instance (stepper.rs's own
             // module doc), so its contract — not `value_cell.rs`'s — is the

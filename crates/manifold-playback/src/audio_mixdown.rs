@@ -1,9 +1,7 @@
 //! Offline audio mixdown for export.
 //!
 //! Renders every audio-layer clip in the export range into a stereo master
-//! (plus, per D3, a mono downmix and per-layer mono taps for the offline
-//! audio-reactive analysis driver — see
-//! `docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md`). The stereo master is what
+//! The stereo master is what
 //! the export muxer muxes onto the encoded video. This is the export
 //! counterpart to [`crate::audio_layer_playback::AudioLayerPlayback`] (live
 //! playback): it must produce the SAME audio you hear, so the placement, warp,

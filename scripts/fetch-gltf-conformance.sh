@@ -5,7 +5,7 @@
 # Downloads the Khronos glTF-Sample-Assets fixtures named in
 # tests/fixtures/gltf/khronos/manifest.json, from ONE PINNED commit of the
 # suite — never the manifest's own network resolution, never vendored into
-# git (D1, docs/GLB_CONFORMANCE_DESIGN.md). Re-running is a safe no-op: an
+# git. Re-running is a safe no-op: an
 # asset already present at the right size is left alone.
 #
 # tests/fixtures/gltf/khronos/ is gitignored (except manifest.json itself);
@@ -29,7 +29,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUT_DIR="${REPO_ROOT}/tests/fixtures/gltf/khronos"
 mkdir -p "${OUT_DIR}"
 
-# GLB_CONFORMANCE_DESIGN.md G-P7: every asset in the pinned Khronos commit
+# G-P7: every asset in the pinned Khronos commit
 # that has a glTF-Binary variant (118 as of the pin below), EXCEPT
 # TextureTransformTest — fetched separately below via its established
 # gltf+sidecar handling (G-P4), since the pin ships it only as a multi-file
@@ -181,7 +181,7 @@ done
 
 # TextureTransformTest — the pinned commit ships it ONLY as a multi-file
 # `glTF` variant (JSON + side-car .bin + textures; no glTF-Binary folder at
-# all, confirmed against the GitHub API at pin time). GLB_CONFORMANCE_DESIGN.md
+# all, confirmed against the GitHub API at pin time).
 # G-P4: fetch the whole `Models/TextureTransformTest/glTF/` directory into
 # its own subfolder — `gltf::import(path)` (the production loader) natively
 # resolves the .gltf's sidecar .bin/textures relative to the .gltf's own

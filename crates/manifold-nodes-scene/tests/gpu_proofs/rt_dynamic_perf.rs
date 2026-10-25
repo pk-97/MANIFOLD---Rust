@@ -1,4 +1,4 @@
-//! SCENE_MODIFIER_RT_ACCEPTANCE.md A9/P8 — one bounded RT maintenance
+//! One bounded RT maintenance
 //! measurement. The harness intentionally measures the real Metal BLAS/TLAS
 //! commands on a deterministic 65,536-triangle grid. It records the actual
 //! update and trace timings, operation counters, memory snapshots, and idle

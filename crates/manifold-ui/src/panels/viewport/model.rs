@@ -241,7 +241,7 @@ pub struct TrackInfo {
 }
 
 /// One automation lane bucketed to its track row — mirrors `ViewportClip`'s
-/// `layer_index` bucketing pattern (`docs/AUTOMATION_LANES_DESIGN.md` section 7).
+/// `layer_index` bucketing pattern.
 #[derive(Debug, Clone)]
 pub struct ViewportAutomationLane {
     pub layer_index: usize,
@@ -255,7 +255,7 @@ pub struct ViewportAutomationLane {
 /// UITree nodes, the same "GPU rects computed here, drawn there" split as
 /// [`ClipScreenRect`] / [`TimelineOverlays`]. `InteractionOverlay`'s
 /// automation hit-testing/editing also reads this same geometry (per
-/// `docs/AUTOMATION_LANES_DESIGN.md` section 7's "click on the line adds a
+/// "click on the line adds a
 /// breakpoint" vocabulary) — one source for both the draw and the click, so
 /// they cannot disagree, the same discipline `ClipScreenRect` already keeps
 /// for clip bodies.
@@ -296,7 +296,7 @@ pub struct AutomationLaneScreen {
     pub param_min: f32,
     pub param_max: f32,
     /// Whether this param is integral — new points click-added on it default
-    /// to `Hold` instead of `Linear` (`docs/AUTOMATION_LANES_DESIGN.md` section 8).
+    /// to `Hold` instead of `Linear`.
     pub whole_numbers: bool,
     /// The param's current value in param units when this is a placeholder
     /// lane (no breakpoints yet). The first click lands here, not at the

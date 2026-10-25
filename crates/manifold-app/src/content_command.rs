@@ -94,7 +94,7 @@ pub enum ContentCommand {
     SetMidiClockDevice(i32),
     ResetBpm,
 
-    // ── Session mode (P2, docs/SESSION_MODE_DESIGN.md section 5) ───────────
+    // ── Session mode ───────────
     // No producer yet — the grid panel is P4. The variants + content-thread
     // plumbing (PlaybackEngine::session_* methods) are ready to wire up, same
     // as `ReplanClip`/`CancelExport` above.
@@ -140,7 +140,7 @@ pub enum ContentCommand {
         beats: Beats,
     },
 
-    // ── Automation lanes (P1/P4, docs/AUTOMATION_LANES_DESIGN.md section 4/section 6/section 7) ──
+    // ── Automation lanes ──
     /// Automation lanes' "Back to Arrangement": clears every override latch
     /// (one global action, not per-layer — lights up red in the transport
     /// bar when any latch is set), resuming every automated param's lane.

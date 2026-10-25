@@ -427,7 +427,6 @@ impl RgbChannel {
 pub type ParamTriple = [Cow<'static, str>; 3];
 
 /// A scene object's extent and handles, by the param ids that place it
-/// (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model)).
 /// Handles, the out-of-domain check and the card all read this one
 /// declaration; no kind has handle code of its own.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

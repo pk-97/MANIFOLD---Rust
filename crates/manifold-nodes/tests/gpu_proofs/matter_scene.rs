@@ -1,5 +1,5 @@
-//! The whole Live Matter graph on the GPU (`docs/GPU_MPM_SOLVER_DESIGN.md`
-//! section 3.2): domain → fill → state and its substep region → frame. The
+//! The whole Live Matter graph on the GPU:
+//! domain → fill → state and its substep region → frame. The
 //! harness drives one fixed tick per frame and reads the point state, the
 //! per-tick stats and the published frames back.
 

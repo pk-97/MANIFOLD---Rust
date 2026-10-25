@@ -1,6 +1,6 @@
 """P2 listen-list: renders a click at each Beat This-detected beat, mixed
 over the original audio, so Peter can listen and judge grid quality by ear
-(AUDIO_ANALYSIS_ACCURACY_DESIGN.md P2 deliverable — 10 tracks, beat click
+(10 tracks, beat click
 renders). Downbeats get a louder/lower click so the bar structure is
 audible too. Output is gitignored (eval/data/ — see eval/.gitignore).
 

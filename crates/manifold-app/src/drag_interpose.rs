@@ -30,7 +30,7 @@
 //! the delegate responds to it (`respondsToSelector:` is checked per-message,
 //! not cached at registration time). This is documented AppKit behavior but
 //! only a live drag proves it — see the P1 gate in
-//! `docs/TIMELINE_INGEST_DESIGN.md`. If forwarding doesn't happen, every
+//! If forwarding doesn't happen, every
 //! caller here degrades to `None`, and drop arms fall back to the pre-existing
 //! (stale) `cursor_pos` behavior via `.unwrap_or(self.cursor_pos)`.
 

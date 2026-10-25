@@ -85,8 +85,8 @@ impl ParamCardPanel {
         }
 
         // Every remaining row-shaped click resolves through the index built
-        // as this row's controls were minted (D5, `docs/WIDGET_TREE_DESIGN.md`
-        // P2) — the ONLY sanctioned way this function identifies a row
+        // as this row's controls were minted
+        // The ONLY sanctioned way this function identifies a row
         // element.
         let widget = tree.widget_of(id);
         if let Some((row, role)) = self.row_host.row_index.get(widget) {
@@ -214,7 +214,7 @@ impl ParamCardPanel {
     /// (reset) and label (perform mapping) win, and the card root claims its
     /// whole area so a right-click on any dead zone — slider fill/thumb/value
     /// cell, row gaps, padding — folds up to the card context menu instead of
-    /// being silently swallowed. See `docs/NODE_INTENT_DISPATCH.md`.
+    /// being silently swallowed.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         if !self.is_live() {
             return;

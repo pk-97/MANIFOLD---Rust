@@ -1,8 +1,7 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: IN PROGRESS** — on main: P0–P6 (materials, `node.render_scene`, shadows + fog, cameras, viewport — mechanics in the `viewport_*` module docs — gizmos), P8 instancing, P9 PCSS, section 9 (spawn-from-mesh). Remaining: P7 (starter preset + polish, section 5 (Phasing)). Amendments: D3/D8 per `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 8 (Amendments to REALTIME_3D); `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead budget (D4); transforms ride `node.transform_3d` — P1's "not port-shadowed" deviation retired. · designed 2026-07-03
-**Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (its contract unchanged; this design consumes its extension points).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.**
+**Status: IN PROGRESS** — on main: P0–P6 (materials, `node.render_scene`, shadows + fog, cameras, viewport — mechanics in the `viewport_*` module docs — gizmos), P8 instancing, P9 PCSS, section 9 (spawn-from-mesh). Remaining: P7 (starter preset + polish, section 5 (Phasing)). Amendments: D3/D8; `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead budget (D4); transforms ride `node.transform_3d` — P1's "not port-shadowed" deviation retired. · designed 2026-07-03
+**Prerequisites: the material system M1–M5 (its contract unchanged; this design consumes its extension points).**
 
 Water integration is specified in [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md)
 section 7: optional water surface inputs, opaque snapshot reuse and scene-depth writes.
@@ -17,9 +16,7 @@ important."** Viewport controls: "industry standard is best," refine later. Queu
 after this: realtime simulations (Houdini/Nuke tier — separate discussion; the
 vertex-cache import path in section 8 is the cheap bridge).
 
-Companions: `MATERIAL_SYSTEM_DESIGN.md` (surface shading — required reading),
-`CAPABILITY_ROADMAP.md` section 4 (the original gap analysis), `GRAPH_EDITOR_REDESIGN.md`
-(the editor the viewport lives in).
+Companions: `CAPABILITY_ROADMAP.md` section 4 (the original gap analysis).
 
 ---
 
@@ -29,7 +26,7 @@ Companions: `MATERIAL_SYSTEM_DESIGN.md` (surface shading — required reading),
 |---|---|---|
 | `Light` struct — Sun/Point, PCF softness (3×3/5×5/7×7), `cast_shadows`, `shadow_bias`, `shadow_resolution`, `shadow_view()` | `node_graph/light.rs` | **Shadow-ready.** Only renderer-side consumption (depth pass + PCF) is missing |
 | `Camera` struct — pos/basis/view, Perspective/Ortho, orbit builder | `node_graph/camera.rs` | Solid; doc comment already anticipates "free-look / Euler variants" |
-| Material port + 4 atoms (unlit/phong/pbr/cel), per-kind pipelines | `MATERIAL_SYSTEM_DESIGN.md` | Designed, now un-held. Multi-light + shadows are its section 7 (Extension points (forward-looking)) extension points — consumed here, not reopened |
+| Material port + 4 atoms (unlit/phong/pbr/cel), per-kind pipelines | Material system | Designed, now un-held. Multi-light + shadows are its forward-looking extension points, consumed here, not reopened |
 | Single-object renderers | `primitives/render_3d_mesh.rs`, `render_instanced_3d_mesh.rs` (→ `node.render_mesh` / `node.render_copies` post-vocab) | Each renders ONE object into its OWN depth buffer. Two objects cannot occlude each other today |
 | Dynamic ports | `EffectNode::reconfigure` hook; first adopter `node.mux_texture` | Proven. Dynamic nodes are hand-written `EffectNode` impls (no `primitive!` macro) |
 | Procedural meshes | cube/grid/platonic/hypercube atoms, `arrange_copies`, `push_mesh`, `make_triangles` | The v1 content source. No splines/extrude/import |
@@ -55,7 +52,7 @@ between this doc and execution.
   path; existing presets untouched.
 - **D3 — Object port group = `mesh_n` (Array(MeshVertex)) + `transform_n` (TRS params,
   port-shadowed) + `material_n` (Material).**
-  **[AMENDED 2026-07-06 — SCENE_BUILD_AND_GROUP_PARAMS_DESIGN section 8: the transform member
+  **[AMENDED 2026-07-06: the transform member
   is `transform_n: Transform` (CPU-struct port fed by `node.transform_3d`, whose own
   scalar params are port-shadowed); render_scene carries no per-object params.]**
   **[AMENDED 2026-07-10 (F2) — the "8 objects, 4 lights" caps in the original draft
@@ -112,7 +109,6 @@ between this doc and execution.
     A sampled grid force and a rigid-only scene's bodies draw nothing: neither
     has a positioned runtime shape. The frame never carries declared shapes.
   - *Handles of the selected item* come from its shape declaration
-    (PHYSICS_ENGINE_BOUNDARY_DESIGN.md section 5.2 (One scene-object model))
     over `SceneVm` built from the content thread's own project, at the authored
     values the knob shows. The UI sends the selection and the handle mode, never
     lines: the content thread builds all chrome and handles in the frame that
@@ -417,7 +413,7 @@ use focused tests per the scope rule.
 
 ## 8. Deferred (with triggers)
 
-- **glTF/.glb import** — **designed: `docs/IMPORT_DESIGN.md`** (scenes,
+- **glTF/.glb import** — **designed** (scenes,
   Principled→pbr_material, rigid animation with the beat-retimed playhead,
   MDD/PC2 vertex caches, texture-set drops, TD + Resolume migration funnels);
   skeletal stays deferred there.

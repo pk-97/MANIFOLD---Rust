@@ -236,7 +236,7 @@ impl RenderScene {
         }
     }
 
-    /// IMPORT_FIDELITY_DESIGN.md D8: classic straight-alpha "over" blend —
+    /// Classic straight-alpha "over" blend —
     /// `src_alpha / one_minus_src_alpha` on colour, and the matching
     /// straight-alpha formula on the output alpha channel (`src.a + dst.a *
     /// (1 - src.a)`). Never premultiplied (alpha-standardisation: this
@@ -252,7 +252,7 @@ impl RenderScene {
         }
     }
 
-    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: `blend` selects the Blend-material
+    /// `blend` selects the Blend-material
     /// pipeline variant — real alpha blending, no alpha-to-coverage (which
     /// would double up with the blend state). Same shader source and entry
     /// points as the opaque/mask variant; only the pipeline's fixed-function
@@ -426,7 +426,7 @@ impl RenderScene {
                 MaterialKind::Pbr => "fs_pbr",
                 MaterialKind::Cel => "fs_cel",
             };
-            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the Blend-material pipeline
+            // The Blend-material pipeline
             // variants (BUG-037 discipline — a live project's first glass
             // draw must be a cache hit, not a first-use compile stall).
             // RAYTRACING_DESIGN.md section 12 AM1 adds the ao_mask aux

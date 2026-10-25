@@ -3,7 +3,7 @@
 //! Three positioning regimes (sources on the left, transport+tempo centred,
 //! file+render right) as a `Stack` of three `Fill` rows, plus the thin group
 //! dividers folded into the section gaps as cross-centred fixed cells. See the
-//! footer/header for the integration pattern and `docs/CHROME_API_DESIGN.md`.
+//! footer/header for the integration pattern.
 
 use super::{Panel, PanelAction};
 use crate::TransportAction;
@@ -42,7 +42,7 @@ const BPM_FIELD_W: f32 = 60.0;
 const BPM_RESET_W: f32 = 24.0;
 const BPM_CLEAR_W: f32 = 32.0;
 
-// Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md section 7) — right-aligned
+// Automation globals — right-aligned
 // group, mirroring the removed file-ops group's old slot.
 const AUTO_ARM_BUTTON_W: f32 = 48.0;
 const AUTO_BACK_BUTTON_W: f32 = 92.0;
@@ -530,7 +530,7 @@ impl TransportPanel {
     /// stage distance silently writes automation into the show. So ARM gets
     /// its own idle/armed pair, distinct from every red in this row: idle
     /// matches its neutral siblings (BACK/LANES), armed is amber, never red.
-    /// See BUG-048, `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5.
+    /// See BUG-048.
     fn automation_group(&self) -> View {
         let arm_bg = if self.automation_armed {
             color::STATUS_WARNING

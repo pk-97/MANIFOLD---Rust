@@ -1,5 +1,5 @@
 """Fetch the Slakh2100 **test split only** (aligned MIDI + true stems, flac)
-from the redux archive, per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §3/P3.
+from the redux archive.
 
 Zenodo record 4599666 ships exactly ONE file: `slakh2100_flac_redux.tar.gz`
 (104.3 GB, CC-BY 4.0, md5 f4b71b6c45ac9b506f59788456b3f0c4) — there is no

@@ -96,7 +96,7 @@ pub struct Layer {
     /// Set ONLY on a Detect-and-Group **group** layer: the source audio lane this
     /// set was built for. Drives lane-keyed reuse — re-detecting any clip on that
     /// lane reuses this group's stem lanes + sends instead of making a second set.
-    /// `None` on every other layer. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md` section 8.3.
+    /// `None` on every other layer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detect_group_source: Option<LayerId>,
     /// Set on a Detect-and-Group **stem lane**: which of the four demucs stems
@@ -105,7 +105,7 @@ pub struct Layer {
     /// stem lanes. `None` on every other layer, and on stem lanes created
     /// before this field existed — those fall back to the legacy name match,
     /// which stamps this field on first touch (lazy migration, no load pass).
-    /// See `docs/TIMELINE_INGEST_DESIGN.md` section 5 P5 / D8.
+    ///
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detect_stem_role: Option<DetectStemRole>,
     #[serde(default, skip_serializing_if = "crate::has_no_items")]
@@ -250,7 +250,7 @@ impl Layer {
     }
 
     /// Model-side LED routing predicate — the single model derivation point
-    /// for "feeds the LED composite" (LED_STRIPS_DESIGN.md section 5b D11):
+    /// for "feeds the LED composite":
     /// the persisted mirror flag routes Mirror, the LED layer type routes
     /// Direct. The render path carries `LedRoute` built at descriptor time;
     /// this predicate is for model scans (warmup, render-skip filtering)
@@ -265,8 +265,7 @@ impl Layer {
     }
 
     /// Gen-carrying predicate — the single "this layer hosts a generator"
-    /// test every generator-mutation guard reads (LED_STRIPS_DESIGN.md
-    /// section 5b D16). A layer that hosts a generator owns its instance from
+    /// test every generator-mutation guard reads. A layer that hosts a generator owns its instance from
     /// creation and load on (`Layer::new`, `Project::on_after_deserialize`),
     /// so no edit ever creates one.
     #[inline]

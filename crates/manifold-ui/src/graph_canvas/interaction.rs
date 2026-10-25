@@ -7,8 +7,8 @@
 use super::*;
 
 /// The canvas's one drag-lifecycle payload (P7.2,
-/// `docs/UI_WIDGET_UNIFICATION_DESIGN.md` D8/D9). Was `DragMode` — renamed so
-/// the compiler-driven sweep touched every site (D9). Session geometry
+/// Was `DragMode` — renamed so
+/// the compiler-driven sweep touched every site. Session geometry
 /// replaces the per-variant position fields: `press_origin_x` is
 /// `session.start.x`; `Marquee`'s `origin_screen` is `session.start`; `Pan`'s
 /// `drag_anchor` is `session.start` with `drag_pan_start` captured at grab as

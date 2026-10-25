@@ -1,5 +1,5 @@
 //! GPU value proofs for the face grid producers
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.2 (Grid outputs), I16):
+//! (grid outputs, I16):
 //! each solver's lattice, filled with a velocity field at its own sample
 //! positions, comes out of its component atom as that field at the seam's
 //! face positions (`liquid::grid::face_position`).

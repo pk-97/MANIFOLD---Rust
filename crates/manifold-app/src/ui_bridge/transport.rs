@@ -114,7 +114,7 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
 
-        // ── Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md section 4/section 5) ──
+        // ── Automation globals ──
         // Runtime-only latch/arm state, not a project mutation — no undo entry,
         // same shape as `SessionBackToArrangement`/session quantize.
         TransportAction::ToggleAutomationArm => {

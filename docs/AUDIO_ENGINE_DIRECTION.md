@@ -2,16 +2,14 @@
 
 Staged path toward live shows needing no Ableton: stems + mixer + built-in DSP first, AU instrument hosting decided later with data, full production DAW never.
 
-**Status:** DIRECTION (2026-07-07, Fable) — not a design doc, deliberately does not
-satisfy DESIGN_DOC_STANDARD.md. This captures a strategic conversation with Peter so
+**Status:** DIRECTION (2026-07-07, Fable) — not a design doc. This captures a strategic conversation with Peter so
 the framing survives the Fable handoff. A design session (Opus) turns Stage 1 into a
 real doc when the time comes. Post-release direction — nothing here touches the ~Aug
 authoring/export push.
 
 **The idea (Peter's):** grow MANIFOLD toward standard DAW features — MIDI, VST/AU
 hosting, EQs, compressors, saturators — so that a live show needs no Ableton at all:
-visuals *and* audio from one process. Ties into the deck A/B DJ workflow
-(`DJ_PERFORMANCE_DESIGN.md`).
+visuals *and* audio from one process. Ties into the deck A/B DJ workflow.
 
 ## 1. The load-bearing split
 

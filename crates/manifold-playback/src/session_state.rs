@@ -1,7 +1,7 @@
 //! Session mode runtime state — Ableton-style scene/clip launch tracking.
 //!
-//! P2 of `docs/SESSION_MODE_DESIGN.md`. Runtime-only: never serialized, never
-//! undo-wrapped (section 4). Owned by `PlaybackEngine`, sibling of `LiveClipManager`.
+//! Runtime-only: never serialized, never
+//! undo-wrapped. Owned by `PlaybackEngine`, sibling of `LiveClipManager`.
 //!
 //! [`SessionRuntime`] is the THIRD reference source into
 //! `PlaybackEngine::sync_clips_to_time` — an input to the sole playback
@@ -56,8 +56,7 @@ struct PendingSlotLaunch {
 /// Default global launch quantize: 1 bar at 4/4 (section 4).
 const DEFAULT_QUANTIZE_BEATS: f64 = 4.0;
 
-/// Runtime session-playback state. See module docs and
-/// `docs/SESSION_MODE_DESIGN.md` section 4.
+/// Runtime session-playback state. See module docs.
 pub struct SessionRuntime {
     playing: AHashMap<LayerId, PlayingSlot>,
     pending: Vec<PendingSlotLaunch>,

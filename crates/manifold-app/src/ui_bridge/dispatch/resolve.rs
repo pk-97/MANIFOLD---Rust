@@ -165,7 +165,7 @@ pub(crate) fn resolve_graph_target(
 /// synthesized id to the real exposed param bound to its inner node,
 /// materializing the exposure on first arm if needed — scene rows now carry
 /// real exposed param ids directly (P2 slice 2b,
-/// `SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`), so that re-resolution is
+/// so that re-resolution is
 /// gone and this is exactly `resolve_graph_target` plus the unchanged
 /// `param_id`. `_ui`/`_content_tx`/`_materialize` stay in the signature so
 /// the ~20 call sites this funnel serves don't need touching if a future row

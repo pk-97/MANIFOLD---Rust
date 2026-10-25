@@ -1,5 +1,5 @@
 //! `node.liquid_state` — the tick boundary of a particle liquid
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D10): it holds the particles across
+//!It holds the particles across
 //! frames and has the executor run its region once per liquid tick the
 //! domain's clock is due. The region body is one whole tick. A non-finite
 //! tick (read back through a fenced ring) reports an error and reseeds water

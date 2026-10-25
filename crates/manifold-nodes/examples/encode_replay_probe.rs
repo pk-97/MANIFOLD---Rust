@@ -1,4 +1,4 @@
-//! Frame CPU and GPU ms for the bundled Dam Break, encode replay off against on (`docs/ENCODE_REPLAY_DESIGN.md`),
+//! Frame CPU and GPU ms for the bundled Dam Break, encode replay off against on,
 //! alternating runs so drift hits both sides, and the CPU of the frame whose region recorded first.
 //!
 //! A report, not a gate: the byte and conservation parity of replay are the `encode_replay` GPU proofs. Run it

@@ -943,7 +943,7 @@ impl ContentThread {
         // (warp / gain / solo); see manifold_playback::audio_mixdown. Aligned to
         // the export start, so audio_start_beat = start_beat → mux offset 0.
         //
-        // P2 (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md): the same render
+        // The same render
         // also produces the mono buffers the offline audio-mod driver
         // analyzes — "one render, two consumers, no drift between what is
         // heard and what is analyzed" (design seam brief). `tapped_layers` is
@@ -1305,7 +1305,7 @@ impl ContentThread {
         // output frame.
         let ctx =
             PlaybackEngine::export_frame_context(frame_idx, Seconds(frame_idx as f64 * frame_dt));
-        // P2 (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md): feed this frame's
+        // Feed this frame's
         // export-rendered audio through the analyzer chain and write the
         // resulting features into the engine's audio snapshot BEFORE the
         // tick that consumes them for param modulation, param triggers, and
@@ -1378,7 +1378,7 @@ impl ContentThread {
             // the frame is encoded.
             self.content_pipeline.flush_all_background_work();
 
-            // SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the frame must be
+            // The frame must be
             // Complete before its texture is selected and encoded. Pending at
             // this boundary is an error, never permission to tick again — the
             // export loop must not rerun the graph to settle RT.

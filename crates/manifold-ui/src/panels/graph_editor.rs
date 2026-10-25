@@ -1,6 +1,6 @@
 //! [`GraphEditorPanel`] — the graph-editor window's **node-output inspector**.
 //!
-//! Post on-node-params migration (`docs/GRAPH_EDITOR_REDESIGN.md` Phase 6), this
+//! Post on-node-params migration, this
 //! panel no longer authors parameters — every param control (scrub, expose,
 //! enum / bool / trigger, colour / vec, string / path / table / WGSL, and the
 //! wire / outer driver hints) now lives **on the node face in the canvas**. What
@@ -147,7 +147,7 @@ impl GraphEditorPanel {
             checkbox_style(self.normalize_preview, true),
             if self.normalize_preview { "✓" } else { "" },
         );
-        // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): graph-editor chrome.
+        // Naming pass: graph-editor chrome.
         tree.set_name(cb_id, "graph_editor.smart_preview_toggle");
         let label_x = region.x + CHECKBOX_W + CHECKBOX_GAP;
         tree.add_label(

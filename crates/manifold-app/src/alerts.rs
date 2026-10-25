@@ -1,7 +1,7 @@
 //! Native alert dialogs for project-file failures, crash notices and the
 //! quit prompt.
 //!
-//! GIG_RESILIENCE_DESIGN section 6 (G4): save and load failures were log-only — the
+//! Save and load failures were log-only — the
 //! worst failure mode is believing you saved when you didn't. These are
 //! blocking native dialogs on the UI thread, following the existing pattern
 //! (`app_render.rs` `confirm_remove_node_orphans`): fine for authoring-time
@@ -9,7 +9,7 @@
 //! has no dialogs on any path but one: quitting with unsaved edits asks there
 //! too ([`save_changes`]), because losing the set is worse than a dialog.
 //!
-//! When the perform-surface chrome work lands (PERFORM_SURFACE_DESIGN), the
+//! When the perform-surface chrome work lands, the
 //! non-blocking variants of these (autosave failure strip, crash banner)
 //! become chrome widgets; the call sites here stay the same.
 
