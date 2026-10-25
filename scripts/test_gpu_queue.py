@@ -429,32 +429,16 @@ class GpuQueueTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].returncode, 0)
 
-    def test_raw_heavy_run_cannot_create_reusable_receipt(self):
-        passed = MagicMock()
-        passed.reused.return_value = False
-        child = type("Child", (), {"wait": lambda self: 0,
+    def test_queued_cargo_test_prebuilds_then_runs_under_the_lock(self):
+        child = type("Child", (), {"wait": lambda self: 3,
                                     "send_signal": lambda self, sig: None})()
-        with patch("gate_passes.queued_proof", return_value=passed), \
-                patch.object(gpu_queue, "_run_build", return_value=0), \
+        with patch.object(gpu_queue, "_run_build", return_value=0) as build, \
                 patch.object(gpu_queue, "_ancestor_holds", return_value=False), \
                 patch.object(gpu_queue, "hold", side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                patch.object(gpu_queue.subprocess, "Popen", return_value=child), \
-                patch.object(gpu_queue.time, "monotonic", side_effect=[0, 90]):
-            self.assertEqual(gpu_queue.run_queued(["cargo", "test"]), 0)
-        passed.save.assert_not_called()
-
-    def test_changed_inputs_while_queued_never_start_gpu_process(self):
-        passed = MagicMock()
-        passed.reused.return_value = False
-        with patch('gate_passes.queued_proof', return_value=passed), \
-                patch('gate_passes.changed_passes', side_effect=[[], ['gpu-proofs']]), \
-                patch.object(gpu_queue, '_run_build', return_value=0), \
-                patch.object(gpu_queue, '_ancestor_holds', return_value=False), \
-                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                patch.object(gpu_queue.subprocess, 'Popen') as process:
-            self.assertEqual(gpu_queue.run_queued(['cargo', 'test']), 2)
-        process.assert_not_called()
-        passed.save.assert_not_called()
+                patch.object(gpu_queue.subprocess, "Popen", return_value=child) as process:
+            self.assertEqual(gpu_queue.run_queued(["cargo", "test", "-p", "x"]), 3)
+        self.assertIn("--no-run", build.call_args[0][0])
+        process.assert_called_once_with(["cargo", "test", "-p", "x"])
 
     def test_nightly_waits_for_live_landing_then_acquires(self):
         acquired = threading.Event()

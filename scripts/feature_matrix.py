@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """Nightly compile/lint coverage for every non-default Cargo feature."""
 import argparse
+import json
 import os
 from pathlib import Path
 import subprocess
 import time
 
 import gpu_queue
-from gate_workspace import Workspace
 
 REPO = Path(__file__).resolve().parent.parent
 
 
 def workspace_features():
-    return Workspace(REPO).feature_matrix()
-
-
-def check_coverage():
-    Workspace(REPO)  # Failure is red; there is no partial matrix.
-    return []
+    """Every (package, feature) pair in the workspace except `default`."""
+    metadata = json.loads(subprocess.run(
+        ['cargo', 'metadata', '--no-deps', '--format-version', '1',
+         '--manifest-path', str(REPO / 'Cargo.toml')],
+        check=True, capture_output=True, text=True).stdout)
+    members = set(metadata['workspace_members'])
+    return sorted((p['name'], feature) for p in metadata['packages'] if p['id'] in members
+                  for feature in p['features'] if feature != 'default')
 
 
 def main():

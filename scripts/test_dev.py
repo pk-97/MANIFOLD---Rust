@@ -10,25 +10,6 @@ import dev
 
 
 class InventoryTests(unittest.TestCase):
-    def test_every_registered_target_declares_a_valid_cost(self):
-        scripts = {t for _, _, t, _ in dev.VERBS if isinstance(t, str)} | dev.INTERNAL
-        binaries = {dev.target_name(t) for _, _, t, _ in dev.VERBS if isinstance(t, list)}
-        self.assertEqual(set(dev.COST_CLASSES), scripts | binaries)
-        self.assertLessEqual(set(dev.COST_CLASSES.values()), {"unit", "focused", "broad"})
-        for path in dev.SCRIPTS.glob("test_*.py"):
-            with self.subTest(path=path.name):
-                self.assertEqual(dev.script_cost(path), dev.COST_CLASSES.get(path.name, "unit"))
-
-    def test_cost_defaults_and_nightly_override(self):
-        self.assertEqual(dev.script_cost("scripts/test_gpu_proofs_gate.py"), "unit")
-        self.assertEqual(dev.script_cost("scripts/test_landing_gate.py"), "unit")
-        self.assertEqual(dev.script_cost("scripts/unregistered.py"), "broad")
-        self.assertEqual(dev.script_cost("scripts/unregistered.sh"), "broad")
-        self.assertEqual(dev.script_cost("crate-move-drafts/snapshot_stage.py"), "unit")
-        self.assertEqual(dev.script_cost("drafts/trunk_health.py"), "broad")
-        self.assertEqual(dev.script_cost("scripts/gpu_proofs_gate.py"), "focused")
-        self.assertEqual(dev.script_cost("scripts/gpu_proofs_gate.py", ["--all"]), "broad")
-
     def test_every_script_is_a_verb_or_named_internal(self):
         all_scripts = {p.name for p in dev.SCRIPTS.iterdir() if p.suffix in {".py", ".sh"}}
         on_disk = {name for name in all_scripts if not name.startswith("test_")}
@@ -74,8 +55,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIn("--help", err.getvalue())
 
     def test_commands_resolve_to_absolute_scripts_or_queued_cargo(self):
-        self.assertEqual(dev.command_for("gate", ["--repo", "x"]),
-                         [str(dev.SCRIPTS / "landing_gate.py"), "--repo", "x"])
+        self.assertEqual(dev.command_for("flows", ["--all"]),
+                         [str(dev.SCRIPTS / "run_ui_flows.py"), "--all"])
         capture = dev.command_for("capture", ["out"])
         self.assertEqual(capture[:2], [str(dev.SCRIPTS / "gpu_queue.py"), "--"])
         self.assertEqual(capture[-3:], ["fluid_capture", "--", "out"])

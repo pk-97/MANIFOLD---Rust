@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Run the UI-flow suite against its manifest-declared scenes (S8).
+"""Run the UI-flow suite against its manifest-declared scenes.
 
 Reads scripts/ui-flows/manifest.json and runs the selected flows through one
 `<manifold binary> ui-snap batch <scene> <script> ...` process (the binary
 `cargo xtask` would run, built once up front). Each flow reports exactly what
 `ui-snap <scene> --script scripts/ui-flows/<flow>.json` would, and anything
-the batch can't vouch for reruns that way, solo; scripts/ui_flows_batch_proof.py
-is the oracle that the two modes agree. The manifest
-is the single source of the flow->scene mapping, so a flow can never be run under
-the wrong scene by lore (the P-P landing's false FAIL) and no flow file can be
-silently skipped (the BUG-252 count-match gate, made mechanical here).
+the batch can't vouch for reruns that way, solo. The manifest is the single
+source of the flow->scene mapping, so a flow never runs under the wrong scene
+and no flow file is silently skipped.
 
 Manifest sections:
   flows          — flow -> scene. Every one MUST pass; a FAIL is a regression.
@@ -31,25 +29,23 @@ the build lock:
 
 GPU: the build runs with no lock held; the flow loop then holds the
 machine-wide GPU lock (scripts/gpu_queue.py) once, and every flow process
-(batch or solo) inherits it. Without the outer hold each flow re-queued on its own and other
-lanes' GPU jobs slotted in between flows (BUG-i3hc (flow gate re-queues the
-GPU lock per flow)). Every line is flushed so a caller's timeout keeps the
-transcript so far.
+(batch or solo) inherits it, so no other GPU job slots in between flows.
+Every line is flushed so a caller's timeout keeps the transcript so far.
 
-Selection: a bare run behaves as `--touched origin/main...HEAD` (the landing
-gate's set); `--all` runs the whole suite; flow-name substrings pick a subset:
+Selection: a bare run behaves as `--touched origin/main` (everything changed
+since origin/main, committed or not); `--all` runs the whole suite; flow-name
+substrings pick a subset:
   scripts/run_ui_flows.py scene-setup audio
-Work flows (`work-*`, docs/UI_INVALIDATION_DESIGN.md D10) count UI work between
-`ResetWork` and `AssertWork` steps against scripts/ui-flows/work_ceilings.json;
-re-record those ceilings (the only writer) with:
+Work flows (`work-*`) count UI work between `ResetWork` and `AssertWork` steps
+against scripts/ui-flows/work_ceilings.json; re-record those ceilings (the only
+writer) with:
   scripts/run_ui_flows.py --record-work work-
-Landing flow gate (BUG-313 postmortem — the drag flow that caught the bug was
-red on main and nothing ran it): derive the filters from a git range via the
+`--touched <ref or range>` derives the filters from a git diff via the
 manifest's `path_triggers` (path prefix -> filter list; a touched
-scripts/ui-flows/<flow>.json always runs that flow):
-  scripts/run_ui_flows.py --touched origin/main...HEAD
-No trigger matches the diff -> exits 0 without building anything.
-`--all` is the only way to run every flow.
+scripts/ui-flows/<flow>.json always runs that flow). A bare ref compares the
+working tree, a `a..b` or `a...b` range compares commits. No trigger matches
+the diff -> exits 0 without building anything. `--all` is the only way to run
+every flow.
 """
 import collections
 import functools
@@ -72,11 +68,11 @@ BUILD_CMD = ["cargo", "build", "--quiet", "-p", "manifold-app",
              "--features", "ui-snapshot,perf-soak",
              "--message-format=json-render-diagnostics"]
 BIN_NAME = "manifold"
-# A bare run selects what the branch touched, never the whole suite by accident.
-DEFAULT_TOUCHED = "origin/main...HEAD"
+# A bare run selects what the working tree changed, never the whole suite by accident.
+DEFAULT_TOUCHED = "origin/main"
 # `--record-work`: each flow's `AssertWork` steps write the counts they observe
-# into scripts/ui-flows/work_ceilings.json instead of checking them — the only
-# writer of that file (docs/UI_INVALIDATION_DESIGN.md D11). Review the diff.
+# into scripts/ui-flows/work_ceilings.json instead of checking them, the only
+# writer of that file. Review the diff.
 RECORD_ARGS = []
 
 say = functools.partial(print, flush=True)
@@ -187,21 +183,30 @@ def run_batch(binary, jobs, report, fell_back=None):
         pending = [job for i, job in enumerate(pending) if i not in done]
 
 
+def touched_paths(range_spec):
+    """Paths a git ref or range touched, docs excluded. A bare ref compares the
+    working tree and also counts untracked files."""
+    def git(*args):
+        result = subprocess.run(["git", "-C", ROOT, *args], capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        return result.stdout.splitlines()
+
+    if ".." in range_spec:
+        paths = git("diff", "--name-only", "--no-renames", range_spec)
+    else:
+        paths = (git("diff", "--name-only", "--no-renames", range_spec)
+                 + git("ls-files", "--others", "--exclude-standard"))
+    return sorted(p for p in set(paths) if not p.endswith((".md", ".txt")))
+
+
 def filters_for_touched(range_spec, manifest):
-    """Map a git diff range to flow-name filters via manifest `path_triggers`.
-    Returns (filters, hits) — hits is {touched_path: [matched prefixes/flows]}
-    for the gate's own output. A touched flow file runs itself (exact-name
+    """Map a git ref or range to flow-name filters via manifest `path_triggers`.
+    Returns (filters, hits): hits is {touched_path: [matched prefixes/flows]}
+    for the selection report. A touched flow file runs itself (exact-name
     filter). Raises SystemExit(2) if the diff itself fails."""
-    import diff_scope
     try:
-        if "..." in range_spec:
-            base, head = range_spec.split("...", 1)
-            base = diff_scope.git(ROOT, "merge-base", base, head).strip()
-        elif ".." in range_spec:
-            base, head = range_spec.split("..", 1)
-        else:
-            base, head = range_spec, None
-        paths, _ = diff_scope.effective_paths(ROOT, base, head)
+        paths = touched_paths(range_spec)
     except RuntimeError as error:
         print(f"flow gate: {error}", file=sys.stderr)
         raise SystemExit(2)

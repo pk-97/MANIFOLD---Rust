@@ -248,7 +248,7 @@ class RunnerTests(unittest.TestCase):
             code, events, _ = self.exercise({"flow-a": "timeline"}, argv=["--build-only"])
         self.assertEqual(code, 0)
         self.assertEqual(events, [])
-        touched.assert_called_once_with("origin/main...HEAD", unittest.mock.ANY)
+        touched.assert_called_once_with("origin/main", unittest.mock.ANY)
         with patch.object(run_ui_flows, "filters_for_touched") as touched:
             code, events, _ = self.exercise({"flow-a": "timeline"}, argv=["--all"])
         self.assertEqual(code, 0)
@@ -315,10 +315,8 @@ class PathTriggerTests(unittest.TestCase):
         self.assertEqual(self.select("crates/manifold-app/src/ui_bridge/project.rs"), [])
 
     def test_non_app_paths_select_nothing(self):
-        # BUG-vqpbi (flow gate builds for no-app landings): the lane/rule-drift diff.
         paths = (
-            ".claude/GIT_TREE_DISCIPLINE.md", ".claude/hooks/preToolUseBash.py",
-            ".claude/hooks/context-nudges/test-scope.md",
+            ".claude/GIT_TREE_DISCIPLINE.md",
             "CLAUDE.md", "docs/AGENT_ROUTING.md", "scripts/TOOLS.md", "scripts/dev.py",
             "scripts/fleet_health.py", "scripts/land_branch.py", "scripts/run_ui_flows.py",
             "scripts/ui-flows/manifest.json", "scripts/ui-flows/work_ceilings.json",

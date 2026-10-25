@@ -7,7 +7,7 @@ listed here gets rebuilt. Every `scripts/*.py|*.sh` is either a verb below or
 named in INTERNAL (a module other tools import, or a retired probe kept for
 its numbers); scripts/test_dev.py enforces that, so a new script is listed or
 the suite is red. A verb's own `--help` is the tool's usage. Cargo verbs run
-from the repo root this file lives in (a worktree runs its own tree).
+from the repo root this file lives in.
 """
 import os
 import subprocess
@@ -19,53 +19,25 @@ SCRIPTS = ROOT / "scripts"
 
 # (group, verb, target, one line). A str target is a script under scripts/;
 # a list is a command run from ROOT, with the verb's arguments appended.
-# GPU targets go through gpu_queue so they wait their turn like every lane.
+# GPU targets go through gpu_queue so they wait their turn.
 GPU = ["scripts/gpu_queue.py", "--"]
 VERBS = [
-    ("Landing and gates",
-     "gate", "landing_gate.py",
-     "landing gate: collect cheap reds before flows/proofs; --keep-going diagnoses all legs"),
-    ("Landing and gates",
-     "land", "land_branch.py",
-     "the whole landing ceremony: fetch, merge main in, gate, no-ff merge, push, bead close"),
-    ("Landing and gates",
-     "watch-land", "watch_land.py", "watch a gate or landing: --pid PID --log PATH [--kind land]; exit on red, hang or end"),
-    ("Landing and gates",
-     "gpu-proofs", "gpu_proofs_gate.py",
-     "GPU proof tests scoped to the branch diff; --filter <test> runs one; --all is nightly"),
-    ("Landing and gates",
-     "gpu-scope", "gpu_scope.py", "dry run: which GPU proofs these paths select (args: paths)"),
-    ("Landing and gates",
+    ("Checks",
      "flows", "run_ui_flows.py",
-     "UI flow suite; bare = flows the branch touched (the gate set), <name> runs one flow, --all runs everything"),
-    ("Landing and gates",
-     "flows-batch-proof", "ui_flows_batch_proof.py", "proof that batched flows report what solo runs report"),
-    ("Landing and gates",
-     "trunk-health", "trunk_health.py", "nightly workspace sweep on main; files beads on red"),
-    ("Landing and gates",
-     "landing-metrics", "landing_metrics.py",
-     "the landing loop measured over N days: runs per landing, red share, GPU reuse, queue wait"),
-    ("Landing and gates",
+     "UI flow suite; bare = flows touched since origin/main, <name> runs one flow, --all runs everything"),
+    ("Checks",
      "feature-matrix", "feature_matrix.py", "build every non-default feature so none rots"),
-    ("Landing and gates",
-     "rt-noise", "rt_noise_gate.py", "RT temporal-stability gate on a paused scene (--record to re-baseline)"),
-    ("Landing and gates",
-     "bridge-probe", "bridge_probe_gate.py", "presentation tear regression gate"),
-    ("Landing and gates",
-     "docs-cited-paths", "docs_cited_paths.py", "report dead repo paths cited in live docs (nightly report, never a gate)"),
-    ("Landing and gates",
+    ("Checks",
+     "rt-noise", "rt_noise_gate.py", "RT temporal-stability check on a paused scene (--record to re-baseline)"),
+    ("Checks",
+     "bridge-probe", "bridge_probe_gate.py", "presentation tear regression check"),
+    ("Checks",
      "glb-status", "gen_glb_conformance_status.py", "regenerate the glTF conformance status doc"),
-    ("Landing and gates",
-     "gate-runner", "gate_runner.py", "machine-written verdict trail for lane gates"),
 
-    ("Machine: GPU, worktrees, disk",
+    ("Machine",
      "gpu-queue", "gpu_queue.py",
      "GPU lock: `-- <cmd>` (waits for the MANIFOLD app to quit, else NOT RUN), `status`; campaign `reserve --owner NAME --reason TEXT --seconds N`, `clear`"),
-    ("Machine: GPU, worktrees, disk",
-     "worktree", "agent-worktree.py", "the slot ring: acquire <task> <branch>, release, retire, list, reclaim"),
-    ("Machine: GPU, worktrees, disk",
-     "storage", "storage_budget.py", "Cargo target inventory and admission; what reclaim would free"),
-    ("Machine: GPU, worktrees, disk",
+    ("Machine",
      "claude-pane", "claude-pane.sh", "launch a Claude Code session in a new tmux pane without stealing focus"),
 
     ("Render and measure",
@@ -167,157 +139,21 @@ VERBS = [
     ("Live UI (opt-in connection to a running app)",
      "live-ui-safety-demo", "live_ui_safety_demo.py", "rollback when a live client disconnects mid-gesture"),
 
-    ("Process, beads, usage",
-     "fleet-health", "fleet_health.py", "orphaned slot edits, disk, GPU lock, nightly (the lead's cron)"),
-    ("Process, beads, usage",
-     "status", "status.py", "one screen: lanes, GPU holder, worktree slots, running gate with ETA"),
-    ("Process, beads, usage",
-     "stale-beads", "stale_beads.py", "open beads untouched past threshold"),
-    ("Process, beads, usage",
-     "hook-census", "hook_census.py", "which hooks fire, how often, from telemetry"),
-    ("Process, beads, usage",
-     "token-report", "token_report.py", "Claude Code token spend from local transcripts"),
-    ("Process, beads, usage",
-     "codex-regressions", "codex_regressions.py", "named regression evidence and the focused command per bead"),
-    ("Process, beads, usage",
-     "fix-bare-ids", "fix_bare_ids.py", "attach names to bare bead and section IDs in prose"),
-    ("Process, beads, usage",
+    ("Setup",
      "fetch-gltf", "fetch-gltf-conformance.sh", "fetch the Khronos glTF sample set"),
-    ("Process, beads, usage",
+    ("Setup",
      "ableton-patch", "install-abletonosc-patch.sh", "install the AbletonOSC patch (uninstall-abletonosc-patch.sh reverts)"),
 ]
 
-# Importable modules, self-tests and retired probes: not verbs, still accounted for.
+# Importable modules and retired probes: not verbs, still accounted for.
 INTERNAL = {
-    "gate_readiness.py", "gate_workspace.py", "gate_policy.py", "gate_cancellation.py", "dev.py", "cpu_scope.py", "diff_scope.py", "gate_passes.py", "codex_checks.py",
-    "gate_runner_selftest.sh", "uninstall-abletonosc-patch.sh",
+    "dev.py", "uninstall-abletonosc-patch.sh",
     "narrow_band_reference.py", "narrow_band_grid_reference.py",
 }
 
 
-# Execution cost is declared, never inferred from render/snapshot words.
-# unit: cheap local work; focused: bounded checks/required landing orchestration;
-# broad: sweeps, app renders and GPU probes.
-# Explicit entries override test_*.py. Compiled targets
-# share the table so dev verbs and direct cargo runs agree.
-COST_CLASSES = {
-    "agent-worktree.py": "unit",
-    "blob_v2_native_bench.py": "focused",
-    "bridge_probe_gate.py": "broad",
-    "claude-pane.sh": "unit",
-    "clay_region_probe.py": "unit",
-    "codex_checks.py": "unit",
-    "codex_regressions.py": "unit",
-    "cpu_scope.py": "unit",
-    "dev.py": "unit",
-    "diff_scope.py": "unit",
-    "feature_matrix.py": "broad",
-    "fetch-gltf-conformance.sh": "focused",
-    "fix_bare_ids.py": "unit",
-    "fleet_health.py": "unit",
-    "gate_cancellation.py": "unit",
-    "gate_passes.py": "unit",
-    "gate_policy.py": "unit",
-    "gate_readiness.py": "unit",
-    "gate_runner.py": "focused",
-    "gate_runner_selftest.sh": "unit",
-    "gate_workspace.py": "unit",
-    "docs_cited_paths.py": "unit",
-    "gen_glb_conformance_status.py": "unit",
-    "gltf_def_capture.py": "focused",
-    "gpu_proofs_gate.py": "focused",
-    "gpu_queue.py": "unit",
-    "gpu_scope.py": "unit",
-    "hook_census.py": "unit",
-    "install-abletonosc-patch.sh": "unit",
-    "kick_label_extract.py": "focused",
-    "release.py": "broad",
-    "registry.py": "focused",
-    "review_project.py": "focused",
-    "audit.py": "focused",
-    "test_lab.py": "focused",
-    "offsets.py": "focused",
-    "run.py": "broad",
-    "score.py": "focused",
-    "compare.py": "broad",
-    "overnight.py": "broad",
-    "preflight.py": "focused",
-    "land_branch.py": "focused",
-    "landing_gate.py": "focused",
-    "landing_metrics.py": "unit",
-    "launch_live_ui.py": "broad",
-    "lentine_reference.py": "unit",
-    "live_ui.py": "focused",
-    "live_ui_generator_demo.py": "broad",
-    "live_ui_safety_demo.py": "broad",
-    "mgpcg_reference.py": "unit",
-    "narrow_band_grid_reference.py": "unit",
-    "narrow_band_reference.py": "unit",
-    "pick_probe_regions.py": "unit",
-    "points_pixel_probe.py": "unit",
-    "repair_audio_fixture.py": "focused",
-    "rt_dynamic_acceptance.py": "broad",
-    "rt_noise_gate.py": "broad",
-    "rt_quality_matrix.py": "broad",
-    "rt_region_probe.py": "unit",
-    "rt_toggle_matrix.py": "broad",
-    "run_ui_flows.py": "broad",
-    "stale_beads.py": "unit",
-    "status.py": "unit",
-    "storage_budget.py": "unit",
-    "sync_rig_report.py": "unit",
-    "token_report.py": "unit",
-    "trunk_health.py": "broad",
-    "ui_flows_batch_proof.py": "broad",
-    "uninstall-abletonosc-patch.sh": "unit",
-    "watch_land.py": "unit",
-    "fluid_capture": "broad",
-    "render-generator-preset": "broad",
-    "render-import": "broad",
-    "generate-preset-thumbnails": "broad",
-    "freeze-profile": "broad",
-    "graph-tool": "focused",
-    "check-presets": "focused",
-    "gen_node_catalog": "focused",
-    "project_tool": "focused",
-}
-
-
-def script_cost(path, args=()):
-    """Unknown repository scripts fail closed; outside drafts default to unit.
-
-    Known names retain their cost outside scripts/. This does not inspect
-    subprocesses. Pass a resolved path when the working directory is known.
-    """
-    path = Path(path)
-    name = path.name
-    if name == "gpu_proofs_gate.py" and "--all" in args:
-        return "broad"
-    if name in COST_CLASSES:
-        return COST_CLASSES[name]
-    if name.startswith("test_") and path.suffix == ".py":
-        return "unit"
-    return "broad" if "scripts" in path.parts or path.parent == Path(".") else "unit"
-
-
-def target_name(command):
-    """Compiled target of a cargo verb (possibly behind gpu_queue), or the file
-    name of a repo script that lives outside scripts/ (e.g. tools/)."""
-    for flag in ("--bin", "--example"):
-        if flag in command:
-            return command[command.index(flag) + 1]
-    if repo_script(command):
-        return Path(command[0]).name
-    raise ValueError("cargo verb needs an explicit --bin or --example")
-
-
 def repo_script(command):
     return command[0].endswith((".py", ".sh")) and not command[0].startswith("scripts/")
-
-
-def verb_cost(target):
-    return (script_cost(SCRIPTS / target) if isinstance(target, str)
-            else COST_CLASSES[target_name(target)])
 
 
 INDEX = SCRIPTS / "TOOLS.md"
@@ -331,8 +167,6 @@ def catalog():
              "",
              "Generated by `scripts/dev.py --write-index`; `scripts/dev.py --help` prints the same.",
              "`scripts/dev.py <verb> [args]` runs the command in brackets; `<verb> --help` is its usage.",
-             "Cost: unit = cheap local work; focused = bounded checks; broad = sweeps, app renders and GPU probes.",
-             "Script self-tests (`test_*.py`) are unit unless explicitly declared otherwise; gpu-proofs --all is broad.",
              ""]
     group = None
     for g, verb, target, line in VERBS:
@@ -340,7 +174,7 @@ def catalog():
             group = g
             lines += ["", f"{g}:"]
         behind = f"scripts/{target}" if isinstance(target, str) else " ".join(target)
-        lines.append(f"  {verb:<{width}}  {line}  [{behind}]  (cost: {verb_cost(target)})")
+        lines.append(f"  {verb:<{width}}  {line}  [{behind}]")
     return "\n".join(lines) + "\n"
 
 

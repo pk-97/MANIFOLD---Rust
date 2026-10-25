@@ -60,8 +60,6 @@ import sys
 import time
 from pathlib import Path
 
-from gate_policy import SLOW_THRESHOLD_S
-
 POLL_SECONDS = 0.25
 REPORT_SECONDS = 30.0
 HOLDER_ENV = "MANIFOLD_GPU_LOCK_HOLDER"
@@ -856,13 +854,6 @@ def run_queued(command, label=None, **kwargs):
     except UnsupportedCargoInvocation as err:
         print(f"gpu_queue: {err}", file=sys.stderr)
         return 2
-    import gate_passes
-    passed = gate_passes.queued_proof(command, Path.cwd()) if kind == 'test' else None
-    if kind == 'test' and any('gpu-proofs' in arg for arg in command) and not passed and not _cargo_has_no_run(command):
-        print('[NO REUSE] gpu-proofs: command is outside the canonical serial proof grammar',
-              flush=True)
-    if passed and passed.reused():
-        return 0
     if build_command is not None and (_held_depth or _ancestor_holds(kwargs.get("directory"))):
         print("gpu_queue: cannot prebuild Cargo while the GPU lock is already held",
               file=sys.stderr)
@@ -873,22 +864,11 @@ def run_queued(command, label=None, **kwargs):
             return build_code
         if kind == "build" or (kind in {"test", "nextest-run"} and _cargo_has_no_run(command)):
             return 0
-    if passed and gate_passes.changed_passes([passed]):
-        # The binary was planned and built against an earlier content
-        # snapshot. Never admit that stale plan to the GPU; the caller must
-        # replan and rebuild against the changed inputs.
-        print("[NO REUSE] gpu-proofs: inputs changed after build planning; "
-              "refusing stale GPU admission", flush=True)
-        return 2
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(hold(label, **kwargs))
         except AppStillOpen:
             return NOT_RUN_EXIT
-        if passed and gate_passes.changed_passes([passed]):
-            print('[NO REUSE] gpu-proofs: inputs changed while waiting for the GPU', flush=True)
-            return 2
-        started = time.monotonic()
         try:
             child = subprocess.Popen(command)
         except OSError as err:
@@ -902,20 +882,7 @@ def run_queued(command, label=None, **kwargs):
         previous = {s: signal.signal(s, forward)
                     for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
         try:
-            code = child.wait()
-            if passed:
-                seconds = time.monotonic() - started
-                if code == 0 and seconds > SLOW_THRESHOLD_S:
-                    # Raw cargo has no per-test watchdog/timings. A total
-                    # over the heavy-test threshold cannot earn a reusable
-                    # receipt without the instrumented timing proof.
-                    print('[NO REUSE] gpu-proofs: raw cargo duration cannot establish '
-                          'per-test hang allowances or reviewed heavy-test timing; '
-                          'use gpu_proofs_gate.py', flush=True)
-                else:
-                    if passed.save(code, seconds) is False:
-                        return 2
-            return code
+            return child.wait()
         finally:
             for sig, handler in previous.items():
                 signal.signal(sig, handler)

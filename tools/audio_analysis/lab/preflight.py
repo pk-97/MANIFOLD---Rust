@@ -5,7 +5,7 @@ writes nothing.
 
   1  tools/audio_analysis has no uncommitted change (release.py refuses a dirty tree)
   2  torch reports MPS here (run.py refuses to train a net on the CPU)
-  3  the home volume has the build free-space reserve (storage_budget.MAINTENANCE_GOAL_BYTES) free
+  3  the home volume has the build free-space reserve (MIN_FREE_BYTES) free
   4  every config in a run, compare or release step resolves: run.py --plan prints its run id
   5  every snare-family config: its exam and holdout songs are in the kick verdict store (lab/kick_verdict.py)
   6  every --exam-of RUN_ID has a meta.json with an exam list
@@ -35,7 +35,8 @@ LAB = ROOT / 'tools/audio_analysis/lab'
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'scripts'))
 
-from storage_budget import GIB, MAINTENANCE_GOAL_BYTES as MIN_FREE_BYTES  # noqa: E402
+GIB = 2 ** 30
+MIN_FREE_BYTES = 30 * GIB  # free space a build needs on the home volume
 SHOWN = 12   # misses listed under a failed check
 
 
