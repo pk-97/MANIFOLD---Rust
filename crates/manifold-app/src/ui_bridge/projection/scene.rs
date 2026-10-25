@@ -651,7 +651,7 @@ mod tests {
         );
 
         // If the user deletes the Loop Camera, Add Loop Camera is offered again and restores it.
-        let mut rm = crate::scene_edit::remove(&project, &layer, &[active_cam.clone()])
+        let mut rm = crate::scene_edit::remove(&project, &layer, std::slice::from_ref(active_cam))
             .expect("remove loop camera");
         rm.command.execute(&mut project);
         let without_cam = loop_card(&project);

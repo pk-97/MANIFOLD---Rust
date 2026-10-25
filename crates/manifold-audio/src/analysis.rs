@@ -1042,8 +1042,7 @@ impl RidgeTracker {
         // (nothing freezes: rejected shape 2's fatal flaw), and the jump
         // happens on position evidence alone: SETTLE_STREAK consecutive
         // apex-consistent hops, however weak the apex still is relative to
-        // the old peak. Both rejected shapes are recorded in BUG_BACKLOG
-        // (now Fixed) / the design doc P2c record — do not resurrect them.
+        // the old peak. Do not resurrect either rejected shape.
         if transient_fired && apex.is_some() {
             self.reacquire_hops = CHALLENGE_HOPS;
             self.settle_streak = 0;

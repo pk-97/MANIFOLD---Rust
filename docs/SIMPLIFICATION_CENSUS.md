@@ -281,7 +281,7 @@ Run at most four sweeps at once; review attention is the throttle, not the CPU. 
 
 ## 6. Review
 
-One Opus reviewer per two sweeps, read-only, with a budget and a half-budget partial report (`docs/AGENT_ROUTING.md` section Reviews and the consult seat). For each sweep:
+One Opus reviewer per two sweeps, read-only, with a budget and a half-budget partial report (`CLAUDE.md`). For each sweep:
 
 - **Always re-run in full:** every `stage` and `prep` row; every row in 3.4 (macro trap), 3.5, 3.6, 3.7 (string and corpus traps), 3.8 (data in the wild) and 3.10 (dynamic dispatch and inventory); every grade A delete over 200 lines.
 - **Sample:** 20 percent of the remaining rows, at least five per sweep, picked at random (`shuf -n`).

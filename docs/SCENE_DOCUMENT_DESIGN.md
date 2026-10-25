@@ -7,7 +7,7 @@
 **Status:** APPROVED · waves 1 and 2 built on `wave/scene-document` (df95dd7ce); fix lanes F1, F2 and L6 running · epic BUG-elwvu (Scene document: scenes are the source of truth, the graph is the compiled backend). Lane beads are children of that epic, listed in section 11.
 
 **Document type:** Design and plan. A fresh session builds from this doc alone.
-**Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) section 5 (Phase briefs); [AGENT_ROUTING.md](AGENT_ROUTING.md) for seats, briefs and gates.
+**Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) section 5 (Phase briefs); [CLAUDE.md](../CLAUDE.md) for seats, briefs and gates.
 **Supersedes:** [SCENE_SETUP_PROGRAMME.md](SCENE_SETUP_PROGRAMME.md); [PHYSICS_ENGINE_BOUNDARY_DESIGN.md](PHYSICS_ENGINE_BOUNDARY_DESIGN.md) section 5.2 (One scene-object model) and section 5.5 (Copy groups); [SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md); the card, exposure and starter sections of [SCENE_SURFACES_DESIGN.md](SCENE_SURFACES_DESIGN.md) and [SCENE_SETUP_PANEL_DESIGN.md](SCENE_SETUP_PANEL_DESIGN.md); the fluid-role model of the water family; the open compound-model lanes G2b to G7.
 **Judged by:** Peter in the app. No card render sets are made or kept.
 

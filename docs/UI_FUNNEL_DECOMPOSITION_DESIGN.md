@@ -12,7 +12,7 @@ Stage translation: none of this changes pixels. It changes how fast and how safe
 
 **Binding constraints** (DESIGN_AUTHORING section 1): *Hot path* — `push_state`/`sync_card_values` run per-frame; the split must not move structural work onto the per-frame path (INV-W4). *Thread residency* — untouched: UI thread owns everything here; mutations stay `PanelAction` → dispatch → `ContentCommand`. *Time model* — untouched. *Persistence* — none of the moved types serialize; the fixture round-trip gate is a belt-and-braces net. *Performance surface* — every dispatch path IS the live-control path; the flow suite + `undo_baseline` family are the behavior oracle.
 
-Companion docs: `WIDGET_TREE_DESIGN.md` (the layer vocabulary this extends; its section 10 (Deferred — TOMBSTONE (closed 2026-07-22; absorbed by UI_FUNNEL_DECOMPOSITION per Peter's no-deferred-with-triggers directive)) Deferred is absorbed and closed by this doc), `ARCHITECTURE_DEBT.md (deleted)` (campaign register), `AGENT_ROUTING.md` (orchestration), `.claude/GIT_TREE_DISCIPLINE.md` (landing mechanics).
+Companion docs: `WIDGET_TREE_DESIGN.md` (the layer vocabulary this extends; its section 10 (Deferred — TOMBSTONE (closed 2026-07-22; absorbed by UI_FUNNEL_DECOMPOSITION per Peter's no-deferred-with-triggers directive)) Deferred is absorbed and closed by this doc), `ARCHITECTURE_DEBT.md (deleted)` (campaign register), `CLAUDE.md` (orchestration), `.claude/GIT_TREE_DISCIPLINE.md` (landing mechanics).
 
 ---
 

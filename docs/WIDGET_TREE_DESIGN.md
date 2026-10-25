@@ -254,7 +254,7 @@ Phased by **layer**, never by family (DESIGN_AUTHORING section 7): P1 swaps the 
 - **Gate:** existing card/golden/undo suites green untouched; negative: `rg 'driver_active|trim_min|target_norm|env_decay' crates/manifold-ui` → 0 (the vec names are gone).
 - **Demo:** none — **L1**, honestly (interior refactor pinned by untouched suites).
 
-**P1b — swap to `ParamSurface` + the one projection (vertical slice; Fable-grade per AGENT_ROUTING — this is the judgment phase).**
+**P1b — swap to `ParamSurface` + the one projection (vertical slice; Fable-grade, this is the judgment phase).**
 
 - **Entry:** P1a landed; `rg -n 'fn preset_to_config' crates/manifold-app/src/ui_bridge/state_sync.rs` hits; re-anchor (Wave-2 lands in parallel).
 - **Read-back:** this doc section 2–section 3, `param_card.rs` config/build heads, `state_sync.rs:3043–3299`, PARAM_STORAGE_BOUNDARIES D4/D12. Restate D1/D2/D3/D7, forbidden moves, entry findings.

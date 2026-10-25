@@ -6,7 +6,7 @@
 
 ## 1. Workflow
 
-- **Warm-tree execution.** All tasks run directly in the main checkout against the shared warm `target/` directory on strictly disjoint file sets (`CLAUDE.md`, `docs/AGENT_ROUTING.md`). No worktrees or slot reservations.
+- **Warm-tree execution.** All tasks run directly in the main checkout against the shared warm `target/` directory on strictly disjoint file sets (`CLAUDE.md`). No worktrees or slot reservations.
 - **Pre-chew, then delegate down.** The lead pins down exact `file:line` anchors and formulas before spawning a worker, then delegates to `haiku` / `opencode-go/beam-free` (mechanical splits, deletions, includes, wiring) or `sonnet` (self-contained shaders/modules with provided formulas).
 - **Clean cut & no magic numbers (D14, D15).** Delete replaced code/nodes/params/tests in the same change (`rg` across `crates scripts tools assets docs`). Every constant is either physical in real units (cited), derived (one-line comment), or a single named constant citing the paper/prototype.
 - **Verification.** Run `cargo nextest run -p <touched_crate> <filter>` and `cargo clippy -p <touched_crate> --tests -- -D warnings`. GPU tests run one at a time via `scripts/gpu_queue.py`. The lead verifies `git diff` directly after each task—no planted-fault rituals or multi-stage audit swarms.

@@ -11,7 +11,7 @@ Design the queryable widget/param layer at the UI↔engine boundary — the stru
 - Method: the deliverable conforms to `docs/DESIGN_DOC_STANDARD.md`.
 - Design only — no implementation, no lanes, until Peter approves the doc. Decomposition of the god files FOLLOWS this design; splitting before killing the duplication spreads the mess.
 - The testing doctrine is a hard constraint: the layer must make state-level testing (hit-test geometry as math, click→command dispatch, display-value resolution) the natural default. Pixels are for looking, not asserting.
-- An Opus review agent is available at a genuine design fork, a Fable consult only if it is very complex (`docs/AGENT_ROUTING.md` section Reviews and the consult seat).
+- An Opus review agent is available at a genuine design fork, a Fable consult only if it is very complex (`CLAUDE.md`).
 
 ## Must-reads, in order
 

@@ -1874,7 +1874,7 @@ fn automation_point_shift_drag_is_fine_and_empty_click_only_deselects() {
 /// a right-click on an automation lane's dot opens the lane's
 /// context menu (via `on_automation_lane_right_click`) instead of falling
 /// through to `handle_automation_click`'s point-delete/select logic —
-/// the panel/dispatch layer (BUG_BACKLOG.md's fix note) is only reachable
+/// the panel/dispatch layer is only reachable
 /// if this routing decision is made correctly first.
 #[test]
 fn right_click_on_automation_dot_opens_lane_context_menu_not_point_logic() {

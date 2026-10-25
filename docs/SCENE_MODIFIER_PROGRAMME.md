@@ -45,7 +45,7 @@ Upgrade path: wrap the same motion group as an EachObject/Instances stage in the
 
 Pilot acceptance: graph compilation, binding and save/reload checks; independent GPU numeric and standalone/fused parity; exact Amount=0 and inactive-copy preservation; no same-frame GPU-to-CPU field readback; bounded rendered previews of the three wrappers. Existing required landing checks still apply. Full modifier stacking, universal scan/object targets and RT performance qualification are not implied by this pilot.
 
-The lead owns interfaces, review and landing, and staffs lanes per `docs/AGENT_ROUTING.md`. Select checks through `scripts/codex_checks.py`, with the lead narrowing worker filters and preserving the landing gate.
+The lead owns interfaces, review and landing, and staffs lanes per `CLAUDE.md`. Select checks through `scripts/codex_checks.py`, with the lead narrowing worker filters and preserving the landing gate.
 
 **Pilot implementation:** `WaveGrid`, `WaveRing` and `WaveSpiral` are factory generators in `crates/manifold-nodes/assets/generator-presets/`, using the existing `.json` v2 format. They contain 1,000, 256 and 512 cube instances respectively. Play transport for beat-driven motion; Amplitude controls vertical displacement, Rate is cycles per beat, Frequency sets spatial repetition, Phase offsets the cycle, and Size changes copy scale. Camera Distance and Camera Tilt adjust the parked view. They use ordinary preset bindings, so existing modulation and persistence infrastructure applies. The outer `amplitude` ID denotes displacement in scene units; the reserved `amount`/`mix` IDs denote normalised wet/dry controls and are not used for it.
 
@@ -119,7 +119,7 @@ Source geometry remains available as a reference. Current upstream data supplies
 
 ## 4. Ownership and boundaries
 
-The lead owns architecture, diagnosis, proof review and landing. Staff bounded implementation lanes per `docs/AGENT_ROUTING.md` at high effort; each names owned paths, fixed interfaces, reuse targets, acceptance and exact checks. Workers neither delegate nor land. Schema, expansion and binding dependencies run in order; parallelise independent fixture/catalog work only once interfaces are pinned. Avoid two lanes editing the same seam, repeated broad checks or speculative design. Land each coherent phase before widening scope.
+The lead owns architecture, diagnosis, proof review and landing. Staff bounded implementation lanes per `CLAUDE.md` at high effort; each names owned paths, fixed interfaces, reuse targets, acceptance and exact checks. Workers neither delegate nor land. Schema, expansion and binding dependencies run in order; parallelise independent fixture/catalog work only once interfaces are pinned. Avoid two lanes editing the same seam, repeated broad checks or speculative design. Land each coherent phase before widening scope.
 
 The documents alone do not authorise the entire programme. Peter has approved the unified direction and requested these documents as the foundation for the next bulk of work. Peter subsequently authorised implementation of F0/F1–F8 in this task. It is underway in the leased worktree; later geometry families remain separately bounded. Use the slot ring, focused checks and `scripts/land_branch.py` rather than creating another planning document.
 

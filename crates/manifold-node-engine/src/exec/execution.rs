@@ -5658,7 +5658,6 @@ mod tests {
 
     #[test]
     fn compute_live_steps_prunes_non_in_input_producers_for_skip_passthrough() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         let log = Arc::new(Mutex::new(Vec::new()));
         let evals = Arc::new(Mutex::new(0u32));
         let mut g = Graph::new();

@@ -492,7 +492,7 @@ sparse salience made necessary (riser regression, fixed same session): dominance
 (S[pos]/window-max) and apex position-consistency (argmax within MAX_SLEW of last
 hop's argmax; band-noise wanders 10–20 bins/hop, real objects <0.3). Dead ends
 measured and recorded in the backlog Fixed entry: dominance², kernel-normalized
-mound width. Full trail: BUG_BACKLOG.md Fixed → BUG-043.
+mound width.
 
 **BUG-042 record (2026-07-06, same day, after the BUG-043 record above):** the
 third fix shape SHIPPED and the bug is closed. Onset re-acquire is now a

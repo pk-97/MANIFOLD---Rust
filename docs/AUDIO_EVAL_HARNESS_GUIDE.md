@@ -153,4 +153,4 @@ never tune the floor to fix one feature without re-running the full scan.
    a gate, THEN fix.
 4. Tuning constants: bounded candidates justified by mechanism, plateau demonstrated,
    or don't ship it (the 2026-07-06 presence formula history is the worked example).
-5. Bugs found and not fixed in-session go to BUG_BACKLOG with their oracle named.
+5. Bugs found and not fixed in-session go to beads (`bd`) with their oracle named.

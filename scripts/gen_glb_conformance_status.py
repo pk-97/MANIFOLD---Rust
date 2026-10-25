@@ -15,7 +15,7 @@ MANIFEST = os.path.join(REPO_ROOT, "tests/fixtures/gltf/khronos/manifest.json")
 OUT = os.path.join(REPO_ROOT, "docs/GLB_CONFORMANCE_STATUS.md")
 
 # Gap descriptions for each xfail reason tag, kept in sync by hand with
-# docs/GLB_CONFORMANCE_DESIGN.md §7 (Deferred) and docs/BUG_BACKLOG.md.
+# docs/GLB_CONFORMANCE_DESIGN.md §7 (Deferred).
 GAP_TEXT = {
     "deferred-3": "unsupported material extension (sheen / iridescence / "
                    "volume / transmission-family / anisotropy-the-extension) "

@@ -2552,7 +2552,7 @@ pub(crate) struct GltfAnimationInfo {
     /// non-LINEAR interpolation, morph-weight targets, or an unreadable
     /// target (e.g. `KHR_animation_pointer`, which the pinned `gltf-json`
     /// 1.4.1 can't even deserialize when the extension omits
-    /// `target.node` — see BUG_BACKLOG.md). Never silent.
+    /// `target.node`). Never silent.
     pub skipped_channels: Vec<String>,
 }
 }

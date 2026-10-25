@@ -291,7 +291,7 @@ fn project_contains_retired_cpu_flip_content(project: &Project) -> bool {
     if project.embedded_presets.iter().any(|preset| {
         preset
             .id()
-            .is_some_and(|id| manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(id))
+            .is_some_and(manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset)
             || manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(&preset.def)
     }) {
         return true;
@@ -379,7 +379,7 @@ fn migrate_phong_graphs(project: &mut Project) {
     let migrate = |graph: &mut manifold_core::effect_graph_def::EffectGraphDef,
                    generator_type: Option<&manifold_core::PresetTypeId>| {
         let is_retired = generator_type
-            .is_some_and(|id| manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(id))
+            .is_some_and(manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset)
             || manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(graph);
         if !is_retired {
             manifold_core::phong_migration::migrate_phong_to_pbr(graph);

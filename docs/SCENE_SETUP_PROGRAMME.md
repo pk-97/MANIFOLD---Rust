@@ -7,7 +7,7 @@
 **Superseded by [SCENE_DOCUMENT_DESIGN.md](SCENE_DOCUMENT_DESIGN.md)** for the scene, card and starter model (2026-10-22).
 
 **Document type:** Programme brief. Each workstream gets its phase brief from this doc; the designs it amends are named per workstream. No separate design doc unless a workstream's audit finds a decision this doc does not make.
-**Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) section 5 (Phase briefs) and section 6 (Seam briefs) per phase; [AGENT_ROUTING.md](AGENT_ROUTING.md) for seats, briefs, gates and the unattended-run rules.
+**Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) section 5 (Phase briefs) and section 6 (Seam briefs) per phase; [CLAUDE.md](../CLAUDE.md) for seats, briefs, gates and the unattended-run rules.
 
 Peter's direction, 2026-10-20: configure complex 3D scenes with photoscans in the main window, not the graph editor. Choose where water flows in, the domain size (not always square), see the resolution grid, place forces and see where they act, choose which objects have physics, make N physics copies of an object, run thousands of force-only instances as swarms. Standard Blender, Unity and Unreal transform gizmos on the output preview. Open a clean scene or a picker preset and go. Simple end-game architecture: no parallel systems, no fallbacks to replaced paths, no dead code, no over-testing.
 

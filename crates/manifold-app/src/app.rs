@@ -1523,7 +1523,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // shared IOSurface, not a triple-buffer bridge: the atlas is
                 // persistent, slowly-changing data with no "stale frame" to solve,
                 // and the old ring's periodic publish-with-clear was itself the bug
-                // (BUG_BACKLOG.md BUG-119 — it could clear the surface the UI thread
+                // (it could clear the surface the UI thread
                 // was concurrently sampling).
                 let clip_atlas_surface = Arc::new(crate::shared_texture::SharedAtlasSurface::new(
                     crate::content_pipeline::CLIP_ATLAS_W,

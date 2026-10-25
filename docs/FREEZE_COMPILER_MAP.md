@@ -525,8 +525,7 @@ invariant a fused def must respect:
 
 ## 11. Honest edges (the bug hunt starts here)
 
-An adversarial hunt confirmed 7 + 2 split-verdict findings, all documented as
-**BUG-006 (param-edits-undo-fused-away-nodes-silently-no) … BUG-014 (parked) in [BUG_BACKLOG.md](BUG_BACKLOG.md)** — including a likely mechanism
+An adversarial hunt confirmed 7 + 2 split-verdict findings, including a likely mechanism
 for edge #2 below (unchecked Metal command-buffer status, BUG-013 (commit-wait-completed-never-checks-command-buffe…)). The completeness
 critic's round-2 lens list (what got shallow coverage): the executor itself
 (`execution.rs`/`execution_plan.rs`, esp. the section 9.9 specialization-vs-memoizer question),

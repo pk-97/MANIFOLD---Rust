@@ -21,8 +21,8 @@ gltf = { version = "1", features = ["import"] }
 glam = "0.29"
 png = "0.18"
 # Path dep, not a workspace member (see [workspace] above) — reused for
-# device/queue setup and the MetalFX spatial scaler (docs/AGENT_ROUTING.md-
-# style reuse-over-reimplementation). Raw MSL raytracing compile + the
+# device/queue setup and the MetalFX spatial scaler (reuse over reimplementation).
+# Raw MSL raytracing compile + the
 # acceleration-structure API have no manifold-gpu equivalent (WGSL-only,
 # no raytracing support), so those stay hand-rolled via objc2-metal below.
 manifold-gpu = { path = "../../crates/manifold-gpu" }
