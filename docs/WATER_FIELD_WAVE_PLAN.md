@@ -22,7 +22,7 @@ Two jobs run at once only when neither can break the other's build. Builds share
 
 ### The 2026-10-24 start
 
-The wave was started on 2026-10-24 under the old worktree workflow, then stopped. S0 (`lane/water-s0`, 554a4ae50) and R0 (`lane/water-r0`, 3d426ca8d) were finished there but are 33 commits behind main and conflict with it (`cargo fmt`, the render pass of f8084ab59). Both are redone fresh on main, using those commits as the file layout to copy. Uncommitted half-work in `.claude/worktrees/slot-7` (R1a, 58 files), `slot-1` (S1, 20) and `slot-5` (R4, 13) is reference only. The old `lane/water-*`, `merge/water-wave` and `wave/water-field` branches and the slot worktrees are deleted once Peter agrees.
+The wave was started on 2026-10-24 under the old worktree workflow, then stopped. S0 (554a4ae50) and R0 (3d426ca8d) were finished there but conflict with today's main (`cargo fmt`, the render pass of f8084ab59). Both are redone fresh on main, using those commits as the file layout to copy; branch `archive/water-wave-2026-10-24` keeps them. The half-work is reference only, one commit each on `archive/worktrees/2026-10-26/slot-7-lane-water-r1a` (R1a, 58 files), `…/slot-1-lane-water-s1` (S1, 20) and `…/slot-5-lane-water-r4` (R4, 13). It was never built or tested.
 
 ## 2. Implementation rulings (the lead's, binding on every job)
 
@@ -113,7 +113,7 @@ Files:
 - `crates/manifold-water-surface/src/primitives/shape_particle_blobs.rs` (Stretch `:31`, `:52`, `:70`);
 - new weight primitives in `manifold-water-liquid/src/primitives/`, with their shaders, tests and `mod.rs` entries.
 Anchors above are (f8084ab59). Keep `marching_cubes_common.wgsl`: `redistance_lattice.rs:63` uses it.
-Reference: the prototype, `/Users/peterkiemann/MANIFOLD - Prototypes/levelset_proto/src/weighted.rs`, and design doc D2 (the field build). The half-done 2026-10-24 attempt in `.claude/worktrees/slot-7` is reference only.
+Reference: the prototype, `/Users/peterkiemann/MANIFOLD - Prototypes/levelset_proto/src/weighted.rs`, and design doc D2 (the field build). The half-done 2026-10-24 attempt on `archive/worktrees/2026-10-26/slot-7-lane-water-r1a` is reference only.
 1. Re-distance depth in cells, derived: the smoothing's reach plus the leash, rounded up (4 cells at the prototype's settings). The band moves from metres to cells.
 2. Neighbour weights, in cells:
    - each particle counts its neighbours within the blob search radius (1.5 cells; FLIP Fluids' 1.5 radii, a named constant citing the prototype);
