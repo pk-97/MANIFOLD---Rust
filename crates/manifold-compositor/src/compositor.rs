@@ -158,9 +158,6 @@ pub trait Compositor: Send {
     /// Get current output dimensions.
     fn dimensions(&self) -> (u32, u32);
 
-    /// Pre-tonemap HDR output texture.
-    fn pre_tonemap_output(&self) -> &manifold_gpu::GpuTexture;
-
     /// The final compositor output texture (post-tonemap, post-effects).
     fn output_texture(&self) -> &manifold_gpu::GpuTexture;
 

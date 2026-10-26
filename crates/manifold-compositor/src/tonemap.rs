@@ -42,6 +42,15 @@ pub struct TonemapSettings {
     pub curve: TonemapCurve,
 }
 
+impl TonemapSettings {
+    /// True when `apply` would copy the source unchanged: SceneLinear at unit
+    /// exposure stores `rgb * 1.0` and the source alpha. The compositor then
+    /// skips the pass and blends straight into the output.
+    pub fn is_identity(&self) -> bool {
+        self.mode == TonemapMode::SceneLinear && self.exposure == 1.0
+    }
+}
+
 impl Default for TonemapSettings {
     fn default() -> Self {
         Self {
@@ -75,8 +84,9 @@ struct TonemapUniforms {
 pub struct TonemapPipeline {
     pipeline: manifold_gpu::GpuComputePipeline,
     sampler: manifold_gpu::GpuSampler,
-    /// Tonemap output buffer. Matches Unity's tonemappedOutput RenderTexture.
-    /// Separate from the compositor's main buffer so PreTonemapOutput survives.
+    /// The compositor's final image. Matches Unity's tonemappedOutput RenderTexture.
+    /// Written by `apply`, or by the last layer blend when the tonemap is an
+    /// identity copy (see `TonemapSettings::is_identity`).
     pub output: RenderTarget,
 }
 

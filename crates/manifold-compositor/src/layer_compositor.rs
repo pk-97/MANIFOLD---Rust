@@ -63,6 +63,12 @@ const BLEND_WGSL: &str = include_str!("generators/shaders/compositor_blend_compu
 /// Number of blend modes (Normal=0 through Darken=12).
 const BLEND_MODE_COUNT: u32 = 13;
 
+/// Base texel read in `BLEND_WGSL`; the over-black variant swaps it for a constant.
+const BLEND_BASE_SAMPLE: &str = "textureSampleLevel(t_base, samp, uv, 0.0)";
+
+/// The compositor's starting base: opaque black.
+const OPAQUE_BLACK_WGSL: &str = "vec4<f32>(0.0, 0.0, 0.0, 1.0)";
+
 /// GPU resources for blend operations using native Metal compute.
 ///
 /// One specialized pipeline per blend mode — the Metal compiler dead-code
@@ -71,6 +77,9 @@ const BLEND_MODE_COUNT: u32 = 13;
 struct BlendResources {
     /// Specialized pipelines indexed by blend mode.
     pipelines: AHashMap<u32, manifold_gpu::GpuComputePipeline>,
+    /// Normal blend with the base fixed to opaque black instead of sampled:
+    /// the same formula as `pipelines[Normal]`, for the first layer of a frame.
+    normal_over_black: manifold_gpu::GpuComputePipeline,
     sampler: manifold_gpu::GpuSampler,
     /// Compositor width/height — needed for dispatch_workgroups.
     width: u32,
@@ -91,6 +100,15 @@ impl BlendResources {
             );
             pipelines.insert(mode, pipeline);
         }
+        let normal_over_black = device.create_specialized_compute_pipeline(
+            BLEND_WGSL,
+            "cs_main",
+            &[
+                ("u.blend_mode", "0u"),
+                (BLEND_BASE_SAMPLE, OPAQUE_BLACK_WGSL),
+            ],
+            "Blend Normal Over Black",
+        );
 
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             min_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -105,6 +123,7 @@ impl BlendResources {
 
         Self {
             pipelines,
+            normal_over_black,
             sampler,
             width,
             height,
@@ -125,7 +144,51 @@ impl BlendResources {
             .get(&uniforms.blend_mode)
             .or_else(|| self.pipelines.get(&0))
             .unwrap();
+        self.dispatch(
+            pipeline,
+            gpu,
+            source_texture,
+            blend_texture,
+            target_texture,
+            uniforms,
+        );
+    }
 
+    /// Normal blend over an opaque black base. `size_texture` only supplies the
+    /// dispatch size (the shader never samples it), so its contents are free.
+    fn blend_normal_over_black(
+        &self,
+        gpu: &mut GpuEncoder,
+        size_texture: &GpuTexture,
+        blend_texture: &GpuTexture,
+        target_texture: &GpuTexture,
+        opacity: f32,
+    ) {
+        let uniforms = BlendUniforms {
+            blend_mode: BlendMode::Normal as u32,
+            opacity,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        self.dispatch(
+            &self.normal_over_black,
+            gpu,
+            size_texture,
+            blend_texture,
+            target_texture,
+            &uniforms,
+        );
+    }
+
+    fn dispatch(
+        &self,
+        pipeline: &manifold_gpu::GpuComputePipeline,
+        gpu: &mut GpuEncoder,
+        source_texture: &GpuTexture,
+        blend_texture: &GpuTexture,
+        target_texture: &GpuTexture,
+        uniforms: &BlendUniforms,
+    ) {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -2414,7 +2477,7 @@ impl LayerCompositor {
     }
     }
 
-    /// Phase B: Blend all layer outputs into main in order.
+    /// Phase B: Blend all layer outputs over opaque black, in order.
     ///
     /// Layers are blended bottom-to-top (order preserved from generate_layers).
     /// This pass is always serial — each blend reads the previous blend's result.
@@ -2423,33 +2486,81 @@ impl LayerCompositor {
     /// fully-opaque layer above them: their blend dispatch is skipped because
     /// the opaque blend overwrites every pixel anyway. Strictly an elision of
     /// redundant math — the layers themselves rendered normally upstream.
+    ///
+    /// The first visible blend starts from the black base without a cleared
+    /// buffer: Normal runs its black-base pipeline and a full-opacity Opaque
+    /// never samples the base. Any other first blend reads a cleared `main`.
+    ///
+    /// `to_output` sends the last visible blend straight into
+    /// `tonemap.output` (the compositor output) instead of `main`; the scene
+    /// is then complete there and `main` is left without it.
     fn blend_layers(
         &mut self,
         gpu: &mut GpuEncoder,
         layer_outputs: &[LayerOutput],
         occluded_layers: &[i32],
+        to_output: bool,
     ) {
-        // Clear main to opaque black
-        self.main.clear_source(gpu, true);
+        let is_visible = |output: &LayerOutput| !occluded_layers.contains(&output.layer_index);
+        let (Some(first), Some(last)) = (
+            layer_outputs.iter().position(is_visible),
+            layer_outputs.iter().rposition(is_visible),
+        ) else {
+            let black = if to_output {
+                &self.tonemap.output.texture
+            } else {
+                self.main.source_texture()
+            };
+            gpu.clear_texture(black, 0.0, 0.0, 0.0, 1.0);
+            return;
+        };
 
-        for output in layer_outputs {
-            if occluded_layers.contains(&output.layer_index) {
+        let first_output = &layer_outputs[first];
+        let first_reads_base = match first_output.blend_mode {
+            BlendMode::Normal => false,
+            BlendMode::Opaque => first_output.opacity < 1.0,
+            _ => true,
+        };
+        if first_reads_base {
+            self.main.clear_source(gpu, true);
+        }
+
+        for (index, output) in layer_outputs.iter().enumerate().skip(first) {
+            if !is_visible(output) {
                 continue;
             }
-            let uniforms = BlendUniforms {
-                blend_mode: output.blend_mode as u32,
-                opacity: output.opacity,
-                _pad0: 0,
-                _pad1: 0,
+            let into_output = to_output && index == last;
+            let target = if into_output {
+                &self.tonemap.output.texture
+            } else {
+                self.main.target_texture()
             };
-            self.blend.blend_pass(
-                gpu,
-                self.main.source_texture(),
-                output.texture(),
-                self.main.target_texture(),
-                &uniforms,
-            );
-            self.main.swap();
+            if index == first && first_output.blend_mode == BlendMode::Normal {
+                self.blend.blend_normal_over_black(
+                    gpu,
+                    self.main.source_texture(),
+                    output.texture(),
+                    target,
+                    output.opacity,
+                );
+            } else {
+                let uniforms = BlendUniforms {
+                    blend_mode: output.blend_mode as u32,
+                    opacity: output.opacity,
+                    _pad0: 0,
+                    _pad1: 0,
+                };
+                self.blend.blend_pass(
+                    gpu,
+                    self.main.source_texture(),
+                    output.texture(),
+                    target,
+                    &uniforms,
+                );
+            }
+            if !into_output {
+                self.main.swap();
+            }
         }
     }
 
@@ -3040,7 +3151,12 @@ impl LayerCompositor {
         let outputs_ptr = self.layer_outputs_scratch.as_ptr();
         let outputs_len = self.layer_outputs_scratch.len();
         let outputs = unsafe { std::slice::from_raw_parts(outputs_ptr, outputs_len) };
-        self.blend_layers(gpu, outputs, frame.occluded_layers);
+        self.blend_layers(
+            gpu,
+            outputs,
+            frame.occluded_layers,
+            frame.tonemap.is_identity(),
+        );
     }
 }
 
@@ -3445,9 +3561,8 @@ impl Compositor for LayerCompositor {
             self.layer_skin_registry.clear();
             self.source_outputs_scratch.clear();
             // Unity: CompositorStack.cs returns immediately for empty playback.
-            // Clear to black + return tonemap output (already cleared from previous frame).
-            // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
-            gpu.clear_texture(self.main.source_texture(), 0.0, 0.0, 0.0, 1.0);
+            // Clear the output to black and return it.
+            // Skips ALL master effects, tonemap, and LED tap.
             self.tonemap.clear(gpu);
             // No layers active — advance frame counter so chains age
             // toward CHAIN_GRACE_FRAMES, then trim stale entries.
@@ -3480,8 +3595,12 @@ impl Compositor for LayerCompositor {
 
         // Keep the compositor output SceneLinear. Display adaptation, including
         // any selected SDR curve, happens after master effects per destination.
-        self.tonemap
-            .apply(gpu, self.main.source_texture(), &frame.tonemap);
+        // An identity tonemap needs no pass: `composite_serial` already blended
+        // the scene into tonemap.output.
+        if !frame.tonemap.is_identity() {
+            self.tonemap
+                .apply(gpu, self.main.source_texture(), &frame.tonemap);
+        }
 
         // Apply master effects once to the shared image. In SceneLinear mode
         // their HDR contribution survives until each destination is mapped.
@@ -3751,10 +3870,6 @@ impl Compositor for LayerCompositor {
         (self.main.width(), self.main.height())
     }
 
-    fn pre_tonemap_output(&self) -> &GpuTexture {
-        self.main.source_texture()
-    }
-
     fn output_texture(&self) -> &GpuTexture {
         &self.tonemap.output.texture
     }
@@ -3982,8 +4097,7 @@ mod led_composite_pixel_tests {
     /// blend_layers_to_led → fold_groups → blend_layers → tonemap) with the
     /// given layer stack. `occluded` is the frame's occluded-layer list —
     /// the D14 marking the content pipeline adds for LED-type layers.
-    /// Returns (LED composite bytes at the native grid, screen pre-tonemap
-    /// bytes).
+    /// Returns (LED composite bytes at the native grid, screen output bytes).
     fn render_layers(
         comp: &mut LayerCompositor,
         device: &manifold_gpu::testkit::TestDevice,
@@ -4046,7 +4160,10 @@ mod led_composite_pixel_tests {
             master_effects: &[],
             master_effect_groups: &[],
             master_trigger_count: 0,
-            tonemap: crate::tonemap::TonemapSettings::default(),
+            tonemap: crate::tonemap::TonemapSettings {
+                mode: crate::tonemap::TonemapMode::SceneLinear,
+                ..crate::tonemap::TonemapSettings::default()
+            },
             led_exit_index: -1,
             led_composite_size: (LED_W, LED_H),
             output_width: COMP_W,
@@ -4063,7 +4180,7 @@ mod led_composite_pixel_tests {
         let led = comp
             .led_composite_texture()
             .map(|t| readback_raw_halves(device, t, LED_W, LED_H));
-        let screen = readback_raw_halves(device, comp.pre_tonemap_output(), COMP_W, COMP_H);
+        let screen = readback_raw_halves(device, comp.output_texture(), COMP_W, COMP_H);
         (led, screen)
     }
 
@@ -4410,5 +4527,373 @@ mod led_composite_pixel_tests {
             GREEN,
             "screen composite — the LED child must never leak through the group fold",
         );
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod blend_bypass_tests {
+    //! The first-layer and output-direct blend paths must match, byte for
+    //! byte, the plain sequence they replace: clear to opaque black, blend
+    //! every visible layer through the generic pipelines, then tonemap.
+
+    use super::*;
+    use crate::tonemap::{TonemapMode, TonemapSettings};
+    use half::f16;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
+
+    // Not multiples of the 16x16 workgroup, so edge workgroups are partial.
+    const W: u32 = 83;
+    const H: u32 = 51;
+
+    struct Layer {
+        texture: GpuTexture,
+        blend_mode: BlendMode,
+        opacity: f32,
+        /// A muted clip keeps its layer but contributes no output.
+        visible: bool,
+    }
+
+    /// Noisy RGBA16F layer: negative and HDR values, exact -0.0 and +0.0,
+    /// alpha runs of exactly 0 and 1. Edge cases the blend formulas can
+    /// treat differently if a fast path drops an operation.
+    fn noisy_layer(
+        device: &manifold_gpu::testkit::TestDevice,
+        seed: u32,
+        blend_mode: BlendMode,
+        opacity: f32,
+        visible: bool,
+    ) -> Layer {
+        let mut state = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        let unit = |bits: u32| (bits >> 8) as f32 / (1u32 << 24) as f32;
+        let mut bytes = Vec::with_capacity((W * H * 8) as usize);
+        for _ in 0..W * H {
+            for channel in 0..4 {
+                let bits = next();
+                let value = if channel == 3 {
+                    match bits & 7 {
+                        0 => 0.0,
+                        1 => 1.0,
+                        _ => unit(bits),
+                    }
+                } else {
+                    match bits & 15 {
+                        0 => -0.0,
+                        1 => 0.0,
+                        2 => 3.0,
+                        _ => unit(bits) * 3.5 - 0.5,
+                    }
+                };
+                bytes.extend_from_slice(&f16::from_f32(value).to_bits().to_le_bytes());
+            }
+        }
+        let texture = device.create_texture(&GpuTextureDesc {
+            width: W,
+            height: H,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
+            label: "blend-bypass-layer",
+            mip_levels: 1,
+        });
+        let mut enc = device.create_encoder("blend-bypass-upload");
+        enc.upload_texture(&texture, W, H, 1, &bytes);
+        enc.commit_and_wait_completed();
+        Layer {
+            texture,
+            blend_mode,
+            opacity,
+            visible,
+        }
+    }
+
+    /// Render `layers` (bottom to top) through `LayerCompositor::render` and
+    /// read the compositor output. `occluded` holds positions in `layers`.
+    fn render(
+        comp: &mut LayerCompositor,
+        device: &manifold_gpu::testkit::TestDevice,
+        layers: &[Layer],
+        occluded: &[usize],
+        tonemap: TonemapSettings,
+    ) -> Vec<u8> {
+        draw(comp, device, layers, occluded, tonemap);
+        readback_raw_halves(device, comp.output_texture(), W, H)
+    }
+
+    fn draw(
+        comp: &mut LayerCompositor,
+        device: &manifold_gpu::testkit::TestDevice,
+        layers: &[Layer],
+        occluded: &[usize],
+        tonemap: TonemapSettings,
+    ) {
+        // Bottom layer gets the highest layer_index: clips arrive sorted
+        // descending, so the bottom layer blends first.
+        let index_of = |position: usize| (layers.len() - 1 - position) as i32;
+        let ids: Vec<LayerId> = (0..layers.len())
+            .map(|position| LayerId::from(format!("bypass{position}").as_str()))
+            .collect();
+        let descriptors: Vec<CompositeLayerDescriptor> = layers
+            .iter()
+            .enumerate()
+            .map(|(position, layer)| CompositeLayerDescriptor {
+                layer_index: index_of(position),
+                layer_id: &ids[position],
+                blend_mode: layer.blend_mode,
+                opacity: layer.opacity,
+                hidden: false,
+                blit_to_led: false,
+                layer_type: manifold_core::LayerType::Video,
+                effects: &[],
+                effect_groups: &[],
+                parent_layer_id: None,
+                is_group: false,
+                trigger_count: 0,
+            })
+            .collect();
+        let mut clips: Vec<CompositeClipDescriptor> = layers
+            .iter()
+            .enumerate()
+            .map(|(position, layer)| CompositeClipDescriptor {
+                clip_id: "c0",
+                texture: &layer.texture,
+                layer_index: index_of(position),
+                blend_mode: BlendMode::Normal,
+                opacity: 1.0,
+                is_muted: !layer.visible,
+                effects: &[],
+                effect_groups: &[],
+            })
+            .collect();
+        clips.sort_unstable_by(|a, b| b.layer_index.cmp(&a.layer_index));
+        let occluded: Vec<i32> = occluded
+            .iter()
+            .map(|&position| index_of(position))
+            .collect();
+        let frame = CompositorFrame {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            project_tempo: None,
+            frame_count: 1,
+            compositor_dirty: true,
+            clips: &clips,
+            layers: &descriptors,
+            master_effects: &[],
+            master_effect_groups: &[],
+            master_trigger_count: 0,
+            tonemap,
+            led_exit_index: -1,
+            led_composite_size: (8, 120),
+            output_width: W,
+            output_height: H,
+            occluded_layers: &occluded,
+            render_skip: &[],
+        };
+        let mut enc = device.create_encoder("blend-bypass-render");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, device);
+            comp.render(&mut gpu, &frame);
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    /// The sequence the fast paths replace, built from the same pipelines.
+    fn reference(
+        comp: &mut LayerCompositor,
+        device: &manifold_gpu::testkit::TestDevice,
+        layers: &[Layer],
+        occluded: &[usize],
+        tonemap: &TonemapSettings,
+    ) -> Vec<u8> {
+        let mut enc = device.create_encoder("blend-bypass-reference");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, device);
+            comp.main.clear_source(&mut gpu, true);
+            for (position, layer) in layers.iter().enumerate() {
+                if !layer.visible || occluded.contains(&position) {
+                    continue;
+                }
+                let uniforms = BlendUniforms {
+                    blend_mode: layer.blend_mode as u32,
+                    opacity: layer.opacity,
+                    _pad0: 0,
+                    _pad1: 0,
+                };
+                comp.blend.blend_pass(
+                    &mut gpu,
+                    comp.main.source_texture(),
+                    &layer.texture,
+                    comp.main.target_texture(),
+                    &uniforms,
+                );
+                comp.main.swap();
+            }
+            comp.tonemap
+                .apply(&mut gpu, comp.main.source_texture(), tonemap);
+        }
+        enc.commit_and_wait_completed();
+        readback_raw_halves(device, &comp.tonemap.output.texture, W, H)
+    }
+
+    fn assert_same_bytes(fast: &[u8], expected: &[u8], what: &str) {
+        assert_eq!(fast.len(), expected.len(), "{what}: readback size");
+        if let Some(at) = fast.iter().zip(expected).position(|(a, b)| a != b) {
+            let pixel = at / 8;
+            let differing = fast
+                .chunks_exact(8)
+                .zip(expected.chunks_exact(8))
+                .filter(|(a, b)| a != b)
+                .count();
+            panic!(
+                "{what}: {differing} pixels differ, first at ({}, {}): {:02x?} vs {:02x?}",
+                pixel as u32 % W,
+                pixel as u32 / W,
+                &fast[pixel * 8..pixel * 8 + 8],
+                &expected[pixel * 8..pixel * 8 + 8],
+            );
+        }
+    }
+
+    #[test]
+    fn fast_paths_match_clear_blend_tonemap() {
+        let device = manifold_gpu::testkit::test_device();
+        let identity = TonemapSettings {
+            mode: TonemapMode::SceneLinear,
+            ..TonemapSettings::default()
+        };
+        assert!(identity.is_identity());
+        let exposed = TonemapSettings {
+            exposure: 1.5,
+            ..identity
+        };
+        let sdr = TonemapSettings::default();
+        assert!(!exposed.is_identity() && !sdr.is_identity());
+
+        use BlendMode::*;
+        // (name, layers bottom to top as (mode, opacity, visible), occluded positions)
+        type Scene = (&'static str, Vec<(BlendMode, f32, bool)>, Vec<usize>);
+        let scenes: Vec<Scene> = vec![
+            ("normal alone", vec![(Normal, 1.0, true)], vec![]),
+            (
+                "normal alone, partial opacity",
+                vec![(Normal, 0.37, true)],
+                vec![],
+            ),
+            ("opaque alone", vec![(Opaque, 1.0, true)], vec![]),
+            (
+                "opaque alone, partial opacity",
+                vec![(Opaque, 0.5, true)],
+                vec![],
+            ),
+            ("additive alone", vec![(Additive, 1.0, true)], vec![]),
+            ("stencil alone", vec![(Stencil, 0.8, true)], vec![]),
+            (
+                "normal under multiply and screen",
+                vec![
+                    (Normal, 1.0, true),
+                    (Multiply, 0.8, true),
+                    (Screen, 0.6, true),
+                ],
+                vec![],
+            ),
+            (
+                "additive under normal and difference",
+                vec![
+                    (Additive, 0.9, true),
+                    (Normal, 0.7, true),
+                    (Difference, 1.0, true),
+                ],
+                vec![],
+            ),
+            (
+                "opaque under overlay and normal",
+                vec![
+                    (Opaque, 1.0, true),
+                    (Overlay, 0.75, true),
+                    (Normal, 0.4, true),
+                ],
+                vec![],
+            ),
+            (
+                "occluded bottom layers under an opaque top",
+                vec![
+                    (Additive, 1.0, true),
+                    (Normal, 1.0, true),
+                    (Opaque, 1.0, true),
+                ],
+                vec![0, 1],
+            ),
+            (
+                "occluded bottom layer, normal first visible",
+                vec![
+                    (Multiply, 1.0, true),
+                    (Normal, 0.5, true),
+                    (Opaque, 1.0, true),
+                    (Normal, 0.9, true),
+                ],
+                vec![0, 1],
+            ),
+            ("every clip muted", vec![(Normal, 1.0, false)], vec![]),
+            (
+                "muted bottom layer",
+                vec![(Normal, 1.0, false), (Additive, 0.6, true)],
+                vec![],
+            ),
+        ];
+        let settings = [("identity", identity), ("exposed", exposed), ("sdr", sdr)];
+
+        let mut comp = LayerCompositor::new(&device, W, H);
+        let poison: Vec<Layer> = (0..3)
+            .map(|k| noisy_layer(&device, 900 + k, Additive, 1.0, true))
+            .collect();
+        for (scene_number, (name, specs, occluded)) in scenes.iter().enumerate() {
+            let layers: Vec<Layer> = specs
+                .iter()
+                .enumerate()
+                .map(|(position, &(mode, opacity, visible))| {
+                    let seed = (scene_number * 10 + position + 1) as u32;
+                    noisy_layer(&device, seed, mode, opacity, visible)
+                })
+                .collect();
+            for (settings_name, tonemap) in &settings {
+                // Leave noise in the ping-pong so a fast path that wrongly
+                // reads `main` as black shows up.
+                draw(&mut comp, &device, &poison, &[], sdr);
+
+                let fast = render(&mut comp, &device, &layers, occluded, *tonemap);
+                let expected = reference(&mut comp, &device, &layers, occluded, tonemap);
+                assert_same_bytes(&fast, &expected, &format!("{name} [{settings_name}]"));
+            }
+        }
+    }
+
+    #[test]
+    fn identity_output_stays_one_handle() {
+        let device = manifold_gpu::testkit::test_device();
+        let identity = TonemapSettings {
+            mode: TonemapMode::SceneLinear,
+            ..TonemapSettings::default()
+        };
+        let mut comp = LayerCompositor::new(&device, W, H);
+        let handle = comp.output_texture().clone();
+        let layers = [
+            noisy_layer(&device, 1, BlendMode::Normal, 1.0, true),
+            noisy_layer(&device, 2, BlendMode::Additive, 0.5, true),
+        ];
+        for _ in 0..3 {
+            let bytes = render(&mut comp, &device, &layers, &[], identity);
+            assert_eq!(
+                bytes,
+                readback_raw_halves(&device, &handle, W, H),
+                "the handle taken before rendering must hold the final image",
+            );
+        }
     }
 }
