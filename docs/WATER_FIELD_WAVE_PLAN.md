@@ -85,7 +85,7 @@ Track: **R** is the render track (`manifold-nodes-scene` only), **W** the water 
 10. SP, then S4.1 to S4.5, then S4b, then S5.
 11. Final check (section 5).
 
-The water track is the long pole. One night realistically reaches step 6 or 7; S3 onward is a second night.
+The water track is the long pole. The run keeps going through step 11 with no stop at the end of a night; every piece up to S5 is in scope. While Peter has MANIFOLD open, GPU tests wait, and A jobs wait for other sessions to commit.
 
 ## 4. Task Specs
 
