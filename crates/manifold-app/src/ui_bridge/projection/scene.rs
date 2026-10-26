@@ -4,7 +4,6 @@
 //! to names, and the Material it draws with. Reads only.
 
 use crate::ui_root::UIRoot;
-use manifold_core::LayerId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
@@ -21,6 +20,7 @@ use manifold_core::scene_schema::{
 };
 use manifold_core::scene_surface::FieldPick;
 use manifold_core::types::LayerType;
+use manifold_core::{GraphTarget, LayerId};
 use manifold_ui::panels::scene_setup_panel::{
     AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, SceneItemVm,
     SceneSetupState, SceneSetupVm,
@@ -513,9 +513,15 @@ fn control(
 /// Per-frame VALUE sync for the Scene tab's rows — the scene-row sibling of
 /// `sync_card_values`: push each built row's current value from the layer's
 /// manifest onto the already-built panel (rows and outliner eyes), so rows
-/// track OSC, command and other-window writes between structural syncs.
-/// No-op while the panel is closed or not Live.
-pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
+/// track OSC, command and other-window writes between structural syncs. Rows
+/// draw the same way as cards: the drag in progress, else the live value, else
+/// your value. No-op while the panel is closed or not Live.
+pub fn sync_scene_row_values(
+    ui: &mut UIRoot,
+    project: &Project,
+    live: Option<&crate::content_state::ModulationSnapshot>,
+    drag: Option<&crate::ui_bridge::scrub::ResolvedScrub>,
+) {
     if !ui.scene_setup_panel.is_open() {
         return;
     }
@@ -528,10 +534,17 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     // The panel joins by id (BUG-313): a manifest param the current
     // selection isn't showing simply misses the join and is ignored.
     if let Some(gp) = layer.gen_params() {
-        crate::ui_translate::with_param_slots(&gp.params, |slots| {
-            ui.scene_setup_panel
-                .sync_properties_values(&mut ui.tree, slots)
-        });
+        let owner = GraphTarget::Generator(layer.layer_id.clone());
+        let values = live.and_then(|s| s.values_of(&owner, gp.params.topology()));
+        crate::ui_translate::with_param_slots(
+            gp,
+            values,
+            |id| drag.and_then(|d| d.live_param(&owner, id)),
+            |slots| {
+                ui.scene_setup_panel
+                    .sync_properties_values(&mut ui.tree, slots)
+            },
+        );
     }
 }
 

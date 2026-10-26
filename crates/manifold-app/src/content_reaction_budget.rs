@@ -388,40 +388,50 @@ fn shapes_fields_reach_consumers() {
     .clone();
     let mut covered: Vec<&str> = Vec::new();
 
-    // One tick after the write; returns the published modulation snapshot
-    // applied onto a copy of the project the tick rendered.
-    let tick_and_capture =
-        |b: &mut Bench, touches, f: Box<dyn FnOnce(&mut Project) + Send>| -> Project {
-            b.send(vec![ContentCommand::mutate(touches, f)]);
-            b.content.tick_frame(&b.state_tx);
-            let snap = b
-                .state_rx
-                .try_iter()
-                .filter_map(|s| s.modulation_snapshot)
-                .last();
-            let mut seen = b.content.engine.project().unwrap().clone();
-            if let Some(s) = snap {
-                s.apply(&mut seen);
-            }
-            seen
-        };
+    // One tick after the write; returns the project the tick rendered and the
+    // last modulation snapshot published during it.
+    let tick_and_capture = |b: &mut Bench,
+                            touches,
+                            f: Box<dyn FnOnce(&mut Project) + Send>|
+     -> (
+        Project,
+        Option<std::sync::Arc<crate::content_state::ModulationSnapshot>>,
+    ) {
+        b.send(vec![ContentCommand::mutate(touches, f)]);
+        b.content.tick_frame(&b.state_tx);
+        let snap = b
+            .state_rx
+            .try_iter()
+            .filter_map(|s| s.modulation_snapshot)
+            .last();
+        (b.content.engine.project().unwrap().clone(), snap)
+    };
 
     // Values, captured for the UI and rendered fresh.
     let pid = mirror_pid.clone();
-    let seen = tick_and_capture(
+    let (seen, snap) = tick_and_capture(
         &mut bench,
         touch::VALUES,
         Box::new(move |p| {
             glow(p).effects.as_mut().unwrap()[2].set_base_param_by_id(&pid, 0.37);
         }),
     );
-    assert_eq!(
-        seen.timeline.layers[0].effects.as_ref().unwrap()[2].get_param(&mirror_pid),
-        0.37
-    );
+    let mirror = &seen.timeline.layers[0].effects.as_ref().unwrap()[2];
+    let index = mirror
+        .params
+        .index_of(&mirror_pid)
+        .expect("mirror param in its manifest");
+    let snap = snap.expect("the tick publishes a modulation snapshot");
+    let live = snap
+        .values_of(
+            &manifold_core::GraphTarget::Effect(mirror.id.clone()),
+            mirror.params.topology(),
+        )
+        .expect("the mirror effect's block is in the snapshot");
+    assert_eq!(live[index], 0.37);
     covered.push("param base and value");
 
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::VALUES,
         Box::new(|p| {
@@ -438,7 +448,7 @@ fn shapes_fields_reach_consumers() {
     );
     covered.push("layer and master opacity");
 
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::VALUES,
         Box::new(|p| p.settings.macro_bank.slots[0].value = 0.61),
@@ -446,7 +456,7 @@ fn shapes_fields_reach_consumers() {
     assert_eq!(seen.settings.macro_bank.slots[0].value, 0.61);
     covered.push("macro values");
 
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::VALUES,
         Box::new(|p| {
@@ -463,7 +473,7 @@ fn shapes_fields_reach_consumers() {
     // Shapes. A driver trimmed to a point holds the modulated value still:
     // the modulation pass read the new shape on the very next tick.
     let pid = lfo_pid.clone();
-    let first = tick_and_capture(
+    let (first, _) = tick_and_capture(
         &mut bench,
         touch::SHAPES,
         Box::new(move |p| {
@@ -476,7 +486,7 @@ fn shapes_fields_reach_consumers() {
             d.trim_max = 0.8;
         }),
     );
-    let second = tick_and_capture(&mut bench, touch::VALUES, Box::new(|_| {}));
+    let (second, _) = tick_and_capture(&mut bench, touch::VALUES, Box::new(|_| {}));
     let v = |p: &Project| p.timeline.layers[0].effects.as_ref().unwrap()[0].get_param(&lfo_pid);
     assert_eq!(
         v(&first),
@@ -485,7 +495,7 @@ fn shapes_fields_reach_consumers() {
     );
     covered.push("driver, envelope and audio-mod shapes");
 
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::SHAPES,
         Box::new(|p| glow(p).clip_triggers[0].shape.sensitivity = 0.42),
@@ -497,7 +507,7 @@ fn shapes_fields_reach_consumers() {
     covered.push("clip-trigger shape");
 
     let pid = lfo_pid.clone();
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::SHAPES,
         Box::new(move |p| {
@@ -540,7 +550,7 @@ fn shapes_fields_reach_consumers() {
         .expect("Bloom's graph has a float node param");
     let written = manifold_core::effect_graph_def::SerializedParamValue::Float { value: 0.123 };
     let (w, nm) = (written.clone(), name.clone());
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::OVERRIDES_SHAPES,
         Box::new(move |p| {
@@ -572,7 +582,7 @@ fn shapes_fields_reach_consumers() {
     );
     covered.push("unbound graph node param values");
 
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::SHAPES,
         Box::new(|p| glow(p).audio_gain_db = -9.0),
@@ -581,7 +591,7 @@ fn shapes_fields_reach_consumers() {
     covered.push("layer.audio_gain_db");
 
     let before = bench.content.audio_mod_runtime.send_gain_syncs.get();
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::SHAPES,
         Box::new(|p| p.audio_setup.sends[0].gain_db = -4.0),
@@ -593,7 +603,7 @@ fn shapes_fields_reach_consumers() {
     );
     covered.push("audio send gain_db");
 
-    let seen = tick_and_capture(
+    let (seen, _) = tick_and_capture(
         &mut bench,
         touch::SHAPES,
         Box::new(|p| {

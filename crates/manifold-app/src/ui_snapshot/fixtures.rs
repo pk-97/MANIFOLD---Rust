@@ -77,6 +77,15 @@ pub fn build(scene: &str) -> Option<SceneData> {
 
 /// [`build`], reusing `cache`'s assembled GLBs.
 pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> {
+    let mut data = scene_data(scene, cache)?;
+    // The fixture's live values are what the content thread would have captured.
+    let mut live = crate::content_state::ModulationSnapshot::empty();
+    live.capture_into(&data.project);
+    data.content.modulation_snapshot = Some(std::sync::Arc::new(live));
+    Some(data)
+}
+
+fn scene_data(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> {
     if let Some(path) = scene.strip_prefix("project:") {
         return project_scene(path);
     }

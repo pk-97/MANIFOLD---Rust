@@ -384,6 +384,8 @@ pub(crate) struct PushInputs<'a> {
     pub is_dirty: bool,
     pub project_path: Option<&'a std::path::Path>,
     pub transport_cache: &'a mut crate::ui_bridge::TransportDisplayCache,
+    /// The scrub gesture in flight, drawn over live values.
+    pub drag: Option<&'a crate::ui_bridge::scrub::ResolvedScrub>,
 }
 
 /// This frame's planner inputs (D6), read from the UI's own state.
@@ -640,11 +642,16 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
             || projections.contains(Projection::LiveRanges),
     };
     if live.any() {
-        crate::ui_bridge::push_live(ui_root, project, push.content_state, idx, live);
+        crate::ui_bridge::push_live(ui_root, project, push.content_state, idx, live, push.drag);
     }
     // The inspector projection already built the eyes from the project.
     if projections.contains(Projection::SceneEyes) && !inspector_sync {
-        crate::ui_bridge::sync_scene_row_values(ui_root, project);
+        crate::ui_bridge::sync_scene_row_values(
+            ui_root,
+            project,
+            push.content_state.modulation_snapshot.as_deref(),
+            push.drag,
+        );
     }
     if driver_periods_moved {
         crate::ui_bridge::sync_driver_readouts(ui_root, project, idx);

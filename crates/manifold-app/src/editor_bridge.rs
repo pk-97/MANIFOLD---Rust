@@ -1858,18 +1858,29 @@ impl Application {
         // Resolve the open popover's live value before borrowing the editor
         // window state mutably. Its owner may differ from the watched graph.
         let popover_live_value = if self.editor_mapping_popover.is_open() {
-            self.editor_mapping_popover
-                .target()
-                .and_then(|target| {
-                    self.local_project
-                        .graph_target_owner(&crate::editing_host::to_graph_target(target))
-                })
-                .and_then(|instance| {
-                    instance
-                        .params
-                        .get(self.editor_mapping_popover.binding_id())
-                })
-                .map(|param| param.value)
+            self.editor_mapping_popover.target().and_then(|target| {
+                let owner = crate::editing_host::to_graph_target(target);
+                let instance = self.local_project.graph_target_owner(&owner)?;
+                let id = self.editor_mapping_popover.binding_id();
+                let param = instance.params.get(id)?;
+                let live = self
+                    .content_state
+                    .modulation_snapshot
+                    .as_deref()
+                    .and_then(|s| s.values_of(&owner, instance.params.topology()))
+                    .and_then(|values| {
+                        instance
+                            .params
+                            .iter()
+                            .position(|p| p.id() == id)
+                            .and_then(|i| values.get(i).copied())
+                    });
+                Some(live.unwrap_or(if instance.base_tracked {
+                    param.base
+                } else {
+                    param.value
+                }))
+            })
         } else {
             None
         };
@@ -2166,6 +2177,7 @@ impl Application {
                 live: self.frame_planner.last.live(),
                 dt,
                 show_image,
+                drag: self.scrub.active.as_ref(),
             },
             false,
         );
@@ -2832,6 +2844,7 @@ mod binding_reroute_tests {
                         live,
                         dt: 1.0 / 60.0,
                         show_image: false,
+                        drag: None,
                     },
                     false,
                 );

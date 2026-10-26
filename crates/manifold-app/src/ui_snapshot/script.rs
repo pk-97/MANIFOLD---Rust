@@ -325,6 +325,7 @@ fn run_flow(
     runner.work.flow = stem.to_string();
     // The fixture's values are what the content thread captured last.
     runner.values_capture.capture_into(&data.project);
+    data.content.modulation_snapshot = Some(runner.mod_published.publish(&runner.values_capture));
     // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
     // when `Runner.active_layer` is None, silently mutating the wrong layer's
     // effect chain for structural PanelActions dispatched before any
@@ -593,6 +594,9 @@ struct Runner {
     /// so the tick's writes reach the widgets through the live push, as the
     /// App's value snapshot does.
     values_capture: crate::content_state::ModulationSnapshot,
+    /// The published copies of `values_capture`, shared with the content
+    /// state the widgets read.
+    mod_published: crate::content_state::ModSnapshotPool,
     work: WorkWindow,
     /// The headless stand-in for the graph editor's viewport: the layer it
     /// shows and its navigation camera, moved by `ViewportOrbit`.
@@ -723,6 +727,7 @@ impl Runner {
             last_gesture_points: Vec::new(),
             modulation_engine,
             values_capture: crate::content_state::ModulationSnapshot::empty(),
+            mod_published: Default::default(),
             work: WorkWindow::default(),
             viewport: None,
             editor: None,
@@ -923,6 +928,7 @@ impl Runner {
                 live: self.planner.last.live(),
                 dt: DT,
                 show_image: false,
+                drag: self.scrub.active.as_ref(),
             },
             fresh,
         )
@@ -1028,9 +1034,6 @@ impl Runner {
                     // delivery queue that this harness never renders.
                     self.modulation_engine.with_trigger_pulses(|_, _, _| ());
                     assert!(self.modulation_engine.swap_project(&mut data.project), "initialized engine");
-                    if self.values_capture.capture_into(&data.project) {
-                        data.content.values_seq += 1;
-                    }
                     // The live App ticks the engine on the content thread.
                     let engine_work = manifold_core::work_count::thread_work_snapshot().since(&engine_work);
                     self.work.excluded = self.work.excluded.plus(&engine_work);
@@ -1402,6 +1405,12 @@ impl Runner {
         );
         data.content.active_graph_target = target;
         data.content.active_graph_snapshot = snapshot;
+        // The live values, captured as the content thread captures them every tick.
+        if self.values_capture.capture_into(&data.project) {
+            data.content.values_seq += 1;
+            data.content.modulation_snapshot =
+                Some(self.mod_published.publish(&self.values_capture));
+        }
         self.gizmo.report(ui, data);
         let content_work = manifold_core::work_count::thread_work_snapshot().since(&before);
         self.work.excluded = self.work.excluded.plus(&content_work);
@@ -1461,6 +1470,7 @@ impl Runner {
                 is_dirty: false,
                 project_path: None,
                 transport_cache: &mut self.transport_cache,
+                drag: self.scrub.active.as_ref(),
             },
             &mut self.edits,
             |_, _, _, _, _, _| {

@@ -76,6 +76,15 @@ pub(crate) struct BoundNodeParamDrag {
 }
 
 impl BoundNodeParamDrag {
+    /// The outer card param's in-flight value, when this drag is on `target`'s `param_id`.
+    pub(crate) fn live_card_value(
+        &self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+    ) -> Option<f32> {
+        (self.target == *target && self.outer_param_id == param_id).then_some(self.current_value)
+    }
+
     /// Re-apply the in-flight card value after snapshot acceptance — the
     /// same write the live scrub path uses (`with_preset_graph_mut` +
     /// `set_base_param` on `outer_param_id`), mirroring
@@ -201,16 +210,6 @@ impl Application {
                 }
             }
         }
-        // Apply lightweight modulation snapshot (param_values only)
-        // to local_project — no full Project clone needed.
-        if !suppressed && let Some(ref mod_snap) = state.modulation_snapshot {
-            mod_snap.apply(self.local_project.intake());
-            // Restore the one actively-dragged gesture so modulation
-            // doesn't overwrite the value the user is manipulating —
-            // every family, panel-wired and frame-resident (BUG-281's
-            // bound-node-param card scrub included, now in `active`).
-            self.scrub.restore_dragged(self.local_project.intake());
-        }
         // The columns accumulate until the render path draws (clears)
         // them; `content_state` keeps only the newest state. Perform mode
         // draws no scope, so it keeps none.
@@ -227,8 +226,11 @@ impl Application {
             );
         }
         self.content_state = ContentState {
-            project_snapshot: None,              // consumed above
-            modulation_snapshot: None,           // consumed above
+            project_snapshot: None, // consumed above
+            // The newest live values stay until a newer capture arrives.
+            modulation_snapshot: state
+                .modulation_snapshot
+                .or_else(|| self.content_state.modulation_snapshot.take()),
             spectrogram_columns: Vec::new(),     // accumulated above
             spectrogram_col_scalars: Vec::new(), // accumulated above
             ..state
@@ -2191,6 +2193,7 @@ impl Application {
                 is_dirty: content_state.editing_is_dirty,
                 project_path: self.current_project_path.as_deref(),
                 transport_cache: &mut self.transport_cache,
+                drag: self.scrub.active.as_ref(),
             },
             &mut self.ui_edits,
             |ui_root, project, selection, active_layer, redraw, ui_edits| {

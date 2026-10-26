@@ -925,6 +925,7 @@ fn reconcile_state(ui: &mut UIRoot, data: &fixtures::SceneData) {
         false,
         None,
         &mut tcache,
+        None,
     );
     ui.update();
 }

@@ -147,6 +147,7 @@ fn push(ui: &mut UIRoot, data: &SceneData, which: Projection) {
                 values: true,
                 shapes: false,
             },
+            None,
         ),
         Projection::LiveShapes => crate::ui_bridge::push_live(
             ui,
@@ -157,8 +158,14 @@ fn push(ui: &mut UIRoot, data: &SceneData, which: Projection) {
                 values: false,
                 shapes: true,
             },
+            None,
         ),
-        Projection::SceneEyes => crate::ui_bridge::sync_scene_row_values(ui, &data.project),
+        Projection::SceneEyes => crate::ui_bridge::sync_scene_row_values(
+            ui,
+            &data.project,
+            data.content.modulation_snapshot.as_deref(),
+            None,
+        ),
         other => unreachable!("{other:?} is not a push"),
     }
 }

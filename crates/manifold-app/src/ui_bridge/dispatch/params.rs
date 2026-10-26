@@ -271,7 +271,12 @@ pub(crate) fn dispatch_params(
         ParamsAction::MacroReset(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
-                let old = ctx.project.settings.macro_bank.slots[idx].value;
+                let old = ctx
+                    .content_state
+                    .modulation_snapshot
+                    .as_deref()
+                    .and_then(|s| s.macros().get(idx).copied())
+                    .unwrap_or(ctx.project.settings.macro_bank.slots[idx].value);
                 if old.abs() > f32::EPSILON {
                     ctx.execute(Box::new(ChangeMacroCommand::new(idx, old, 0.0)));
                 }

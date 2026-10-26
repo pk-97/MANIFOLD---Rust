@@ -4,6 +4,7 @@
 //! state_sync.rs (P-P).
 
 use crate::ui_root::UIRoot;
+use manifold_core::GraphTarget;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_ui::panels::param_card::{
@@ -46,11 +47,15 @@ pub(crate) enum SurfaceVisibility {
 /// and the graph-editor window's present path calls it on its own
 /// `ed.ui_root` with the same `local_project`/`active_layer`, so card sliders
 /// track drivers / mappings / envelopes in both windows instead of freezing
-/// between structural syncs. No drag guard needed here: the actively-dragged
-/// field is restored into `local_project` upstream of every call
-/// (`app_render.rs`'s snapshot-drain `drag.apply`), so this writes the user's
-/// own value straight back — user-owned in both windows.
-pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option<usize>) {
+/// between structural syncs. Each slider draws the drag in progress, else the
+/// live value, else your value (see `with_param_slots`).
+pub fn sync_card_values(
+    ui: &mut UIRoot,
+    project: &Project,
+    active_layer: Option<usize>,
+    live: Option<&crate::content_state::ModulationSnapshot>,
+    drag: Option<&crate::ui_bridge::scrub::ResolvedScrub>,
+) {
     let tree = &mut ui.tree;
     // Master effects
     for (i, effect) in project.settings.master_effects.iter().enumerate() {
@@ -60,9 +65,14 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
                 manifold_core::preset_type_registry::display_name(effect.effect_type()),
             );
             card.sync_enabled(tree, effect.enabled);
-            crate::ui_translate::with_param_slots(&effect.params, |slots| {
-                card.sync_values(tree, slots)
-            });
+            let owner = GraphTarget::Effect(effect.id.clone());
+            let values = live.and_then(|s| s.values_of(&owner, effect.params.topology()));
+            crate::ui_translate::with_param_slots(
+                effect,
+                values,
+                |id| drag.and_then(|d| d.live_param(&owner, id)),
+                |slots| card.sync_values(tree, slots),
+            );
         }
     }
 
@@ -78,9 +88,14 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
                     manifold_core::preset_type_registry::display_name(effect.effect_type()),
                 );
                 card.sync_enabled(tree, effect.enabled);
-                crate::ui_translate::with_param_slots(&effect.params, |slots| {
-                    card.sync_values(tree, slots)
-                });
+                let owner = GraphTarget::Effect(effect.id.clone());
+                let values = live.and_then(|s| s.values_of(&owner, effect.params.topology()));
+                crate::ui_translate::with_param_slots(
+                    effect,
+                    values,
+                    |id| drag.and_then(|d| d.live_param(&owner, id)),
+                    |slots| card.sync_values(tree, slots),
+                );
             }
         }
     }
@@ -95,9 +110,14 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
             tree,
             manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
         );
-        crate::ui_translate::with_param_slots(&gp_state.params, |slots| {
-            gp.sync_values(tree, slots)
-        });
+        let owner = GraphTarget::Generator(layer.layer_id.clone());
+        let values = live.and_then(|s| s.values_of(&owner, gp_state.params.topology()));
+        crate::ui_translate::with_param_slots(
+            gp_state,
+            values,
+            |id| drag.and_then(|d| d.live_param(&owner, id)),
+            |slots| gp.sync_values(tree, slots),
+        );
     }
 }
 
@@ -926,8 +946,11 @@ mod sync_card_values_tests {
     use super::super::inspector::sync_inspector_data;
     use super::*;
     use crate::app::SelectionState;
+    use crate::content_state::ModulationSnapshot;
+    use crate::ui_bridge::scrub::ResolvedScrub;
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::effects::ParamId;
     use manifold_core::params::{Param, ParamManifest};
 
     fn user_spec(id: &str, name: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
@@ -965,7 +988,7 @@ mod sync_card_values_tests {
     }
 
     #[test]
-    fn project_param_change_reaches_card_value_text_via_sync_card_values() {
+    fn live_value_from_the_snapshot_reaches_the_built_card() {
         let mut project = Project::default();
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
         fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec(
@@ -985,22 +1008,90 @@ mod sync_card_values_tests {
             "baseline: the configured card must show the pre-change value"
         );
 
-        // A modulation-style write to the local project, then ONLY the
-        // value-sync call — no configure, no rebuild.
-        project.settings.master_effects[0]
+        // The content thread captured the param at 0.75: a modulation-style
+        // write on its copy of the project. The UI's own project stays put.
+        let mut captured = project.clone();
+        captured.settings.master_effects[0]
             .params
             .get_mut("user_glow")
             .expect("user_glow param")
             .value = 0.75;
-        sync_card_values(&mut ui, &project, None);
+        let mut live = ModulationSnapshot::empty();
+        live.capture_into(&captured);
+
+        // ONLY the value-sync call — no configure, no rebuild.
+        sync_card_values(&mut ui, &project, None, Some(&live), None);
 
         assert!(
             tree_has_text(&ui, "0.75"),
-            "sync_card_values must push the new value onto the already-built card"
+            "sync_card_values must push the live value onto the already-built card"
         );
         // No "stale text is gone" assertion: "0.50" legitimately appears on
         // other widgets (e.g. mapping trim fields seeded from the same
         // default), so disappearance is not a sound oracle here.
+    }
+
+    #[test]
+    fn dragged_param_draws_its_drag_value_over_the_live_value() {
+        let mut project = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec(
+            "user_glow",
+            "Glow Amount",
+        ))]);
+        project.settings.master_effects.push(fx);
+
+        let mut ui = UIRoot::new();
+        let selection = SelectionState::default();
+        sync_inspector_data(&mut ui, &project, None, &selection, &[], None);
+        ui.build_inspector_in_rect(manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0));
+
+        let mut captured = project.clone();
+        captured.settings.master_effects[0]
+            .params
+            .get_mut("user_glow")
+            .expect("user_glow param")
+            .value = 0.75;
+        let mut live = ModulationSnapshot::empty();
+        live.capture_into(&captured);
+
+        // The pointer is at 0.9 on a gesture that began at 0.5.
+        let drag = ResolvedScrub::Param {
+            target: GraphTarget::Effect(project.settings.master_effects[0].id.clone()),
+            param_id: ParamId::Borrowed("user_glow"),
+            baseline: 0.5,
+            live: 0.9,
+        };
+        sync_card_values(&mut ui, &project, None, Some(&live), Some(&drag));
+
+        assert!(
+            tree_has_text(&ui, "0.90"),
+            "the slider must draw the drag value, not the live 0.75"
+        );
+    }
+
+    #[test]
+    fn without_a_live_value_the_card_draws_your_value() {
+        let mut project = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec(
+            "user_glow",
+            "Glow Amount",
+        ))]);
+        project.settings.master_effects.push(fx);
+
+        let mut ui = UIRoot::new();
+        let selection = SelectionState::default();
+        sync_inspector_data(&mut ui, &project, None, &selection, &[], None);
+        ui.build_inspector_in_rect(manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0));
+
+        project.settings.master_effects[0].set_base_param("user_glow", 0.6);
+        sync_card_values(&mut ui, &project, None, None, None);
+
+        assert!(
+            tree_has_text(&ui, "0.60"),
+            "with no snapshot and no drag, the card draws the project's own value"
+        );
     }
 
     #[test]
@@ -1034,7 +1125,7 @@ mod sync_card_values_tests {
         };
 
         // Only the value-sync call — no configure, no rebuild.
-        sync_card_values(&mut ui, &project, None);
+        sync_card_values(&mut ui, &project, None, None, None);
 
         // Verify the built card's row spec reflects the new range.
         // This is the real oracle: the stored spec.min/max drive the slider's

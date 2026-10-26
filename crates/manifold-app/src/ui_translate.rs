@@ -36,7 +36,7 @@ use manifold_core::effects::{ParamConvert, PresetInstance, SegmentShape};
 use manifold_core::layer::Layer;
 use manifold_core::macro_bank::MacroCurve;
 use manifold_core::marker::TimelineMarker;
-use manifold_core::params::{Param, ParamManifest};
+use manifold_core::params::Param;
 use manifold_core::selection::SelectionRegion;
 use manifold_core::types::{LayerType, MarkerColor, MidiTriggerMode, TonemapCurve};
 
@@ -568,6 +568,11 @@ pub fn param_slot_to_ui(p: &Param) -> UiParamSlot {
 /// former thread-local slot scratch existed only to hand out a `&[UiParamSlot]`
 /// slice; an iterator makes even that unnecessary).
 ///
+/// Each slot's `value` is what the slider draws: the drag in progress, else the
+/// live value the content thread captured (`live`, this owner's block of the
+/// `ModulationSnapshot`), else your value (`base` when the instance tracks
+/// base, else `value`, as `PresetInstance::get_base_param` reads it).
+///
 /// No visibility filter lives here on purpose: the sync side is visibility-
 /// agnostic by construction. A manifest id with no matching built row (a
 /// `card_visible: false` param the curated card skipped, or a scene section
@@ -575,10 +580,19 @@ pub fn param_slot_to_ui(p: &Param) -> UiParamSlot {
 /// there is no filter to keep mirrored, so none can drift (the class BUG-313
 /// removed).
 pub fn with_param_slots<'p, R>(
-    params: &'p ParamManifest,
+    inst: &'p PresetInstance,
+    live: Option<&[f32]>,
+    dragged: impl Fn(&str) -> Option<f32>,
     f: impl FnOnce(&mut dyn Iterator<Item = (&'p str, UiParamSlot)>) -> R,
 ) -> R {
-    let mut it = params.iter().map(|p| (p.id(), param_slot_to_ui(p)));
+    let mut it = inst.params.iter().enumerate().map(|(i, p)| {
+        let mut slot = param_slot_to_ui(p);
+        let yours = if inst.base_tracked { p.base } else { p.value };
+        slot.value = dragged(p.id())
+            .or_else(|| live.and_then(|values| values.get(i).copied()))
+            .unwrap_or(yours);
+        (p.id(), slot)
+    });
     f(&mut it)
 }
 
@@ -864,6 +878,7 @@ mod feature_kind_parity {
 #[cfg(test)]
 mod placeholder_lane_owner {
     use super::*;
+    use manifold_core::params::ParamManifest;
 
     fn gen_layer(name: &str, order: i32) -> Layer {
         let spec = serde_json::from_value(serde_json::json!({
@@ -913,6 +928,7 @@ mod placeholder_lane_owner {
 #[cfg(test)]
 mod lane_label_section {
     use super::*;
+    use manifold_core::params::ParamManifest;
 
     fn pinned_label(layer: &Layer, param: &str) -> String {
         let key: AutomationLaneKey = (

@@ -146,6 +146,7 @@ pub fn push_state(
     is_dirty: bool,
     project_path: Option<&std::path::Path>,
     transport_cache: &mut TransportDisplayCache,
+    drag: Option<&crate::ui_bridge::scrub::ResolvedScrub>,
 ) {
     intake_overlay_state(ui, content_state);
     drain_events(ui, project, content_state);
@@ -171,6 +172,7 @@ pub fn push_state(
             values: true,
             shapes: true,
         },
+        drag,
     );
 }
 
@@ -829,10 +831,11 @@ pub fn push_live(
     content_state: &crate::content_state::ContentState,
     active_layer: Option<usize>,
     groups: LiveGroups,
+    drag: Option<&crate::ui_bridge::scrub::ResolvedScrub>,
 ) {
     manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ValuePush);
     if groups.values {
-        push_live_values(ui, project, content_state, active_layer);
+        push_live_values(ui, project, content_state, active_layer, drag);
     }
     if groups.shapes {
         crate::ui_bridge::projection::live_shapes::sync_live_shapes(ui, project, active_layer);
@@ -876,8 +879,10 @@ fn push_live_values(
     project: &Project,
     content_state: &crate::content_state::ContentState,
     active_layer: Option<usize>,
+    drag: Option<&crate::ui_bridge::scrub::ResolvedScrub>,
 ) {
     let tree = &mut ui.tree;
+    let live = content_state.modulation_snapshot.as_deref();
 
     // Macro slider values and labels, and the labels and mapping
     // descriptions the context menus read. Every string is rewritten in
@@ -887,7 +892,10 @@ fn push_live_values(
     let mut macro_vals = [0.0; manifold_core::MACRO_COUNT];
     let abl_displays = ui.inspector.macros_panel_mut().ableton_displays_mut();
     for (i, slot) in slots.iter().take(shown).enumerate() {
-        macro_vals[i] = slot.value;
+        macro_vals[i] = drag
+            .and_then(|d| d.live_macro(i))
+            .or_else(|| live.and_then(|s| s.macros().get(i).copied()))
+            .unwrap_or(slot.value);
         // The slider label carries the [ABL] suffix; `macro_labels` keeps
         // the raw label for the menus.
         let label = &mut ui.macro_display_labels[i];
@@ -947,10 +955,10 @@ fn push_live_values(
         .sync_exit_path(tree, &ui.led_exit_label);
 
     // Sync effect card values (master, layer, clip)
-    sync_card_values(ui, project, active_layer);
+    sync_card_values(ui, project, active_layer, live, drag);
 
     // Sync Scene Setup row values (same per-frame value plane, dock rows)
-    sync_scene_row_values(ui, project);
+    sync_scene_row_values(ui, project, live, drag);
 }
 
 #[cfg(test)]

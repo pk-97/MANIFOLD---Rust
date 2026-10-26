@@ -316,6 +316,8 @@ pub(crate) struct EditorFrameInputs<'a> {
     /// The node monitor shows an image this frame (the selected node has one,
     /// or the 3D viewport is displaying a frame).
     pub show_image: bool,
+    /// The scrub gesture in flight, drawn over live values.
+    pub drag: Option<&'a crate::ui_bridge::scrub::ResolvedScrub>,
 }
 
 /// One editor frame's tree work: tick the column's tweens and fire meters,
@@ -423,6 +425,7 @@ pub(crate) fn run_editor_frame(
             frame.content_state,
             frame.active_layer,
             live,
+            frame.drag,
         );
     }
     ui_root.tick_editor_perf_hud();
@@ -1011,6 +1014,7 @@ mod tests {
                 live: LiveInputs::default(),
                 dt: 1.0 / 60.0,
                 show_image: false,
+                drag: None,
             };
             run_editor_frame(ui, &mut state, &panel, None, &layout, inputs, false).redraw
         };

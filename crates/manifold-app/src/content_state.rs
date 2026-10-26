@@ -7,7 +7,7 @@
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, LayerType, OscSyncMode};
-use manifold_core::{Beats, EffectId, LayerId, Seconds};
+use manifold_core::{Beats, EffectId, GraphTarget, LayerId, Seconds};
 use std::sync::Arc;
 
 /// Live state of the editor's node-output preview, pushed each frame so the
@@ -290,10 +290,9 @@ pub struct ContentState {
     /// undo/redo) — never on modulation-only frames.
     pub project_snapshot: Option<Arc<Project>>,
 
-    /// Lightweight modulation delta — just the param_values that
-    /// drivers/envelopes wrote this frame. Applied in-place to the UI's
-    /// local_project without a full Project clone. Shared from the content
-    /// thread's [`ModSnapshotPool`], so a publish copies without allocating.
+    /// Live param and macro values the content thread captured, shared from
+    /// its [`ModSnapshotPool`]. The UI keeps the newest until a newer one
+    /// arrives and reads it when drawing.
     pub modulation_snapshot: Option<Arc<ModulationSnapshot>>,
 
     /// Live snapshot of the first graph-backed effect's internal node
@@ -375,12 +374,11 @@ pub type ChainFailures = Arc<[(Option<LayerId>, Arc<str>)]>;
 ///
 /// All float values are packed into a single flat buffer (`values`).
 /// A parallel `block_lens` array records the length of each param block.
-/// Each block also carries its owner id (`block_owners`), so `apply`
-/// routes every block by IDENTITY — layer/effect insertion, removal, or
-/// reorder between capture and apply can no longer misroute or silently
-/// starve a block. The `topology` stamp still guards a found-by-id block
-/// against a same-frame manifest reshape (skipped for exactly one frame —
-/// the next capture re-keys).
+/// Each block also carries its owner id (`block_owners`), so readers find a
+/// block by IDENTITY — layer/effect insertion, removal, or reorder between
+/// capture and read cannot misroute or starve a block. The `topology` stamp
+/// makes a found-by-id block miss against a same-frame manifest reshape (the
+/// next capture re-keys).
 #[derive(Clone)]
 pub struct ModulationSnapshot {
     /// All param values concatenated in block order.
@@ -388,14 +386,13 @@ pub struct ModulationSnapshot {
     /// Length of each param block in `values`, in the same order.
     block_lens: Vec<u16>,
     /// `ParamManifest::topology` for each block at capture time, parallel to
-    /// `block_lens` (D8). Apply skips any block whose live manifest topology no
-    /// longer matches the captured stamp — this catches same-length param
-    /// reorders, which a `len == len` check silently misroutes. The macro block
-    /// has no manifest; its slot holds a sentinel `0` and is guarded per-slot
-    /// instead.
+    /// `block_lens`. A read misses when the live manifest topology no longer
+    /// matches the captured stamp, which catches same-length param reorders. The
+    /// macro block has no manifest; its slot holds a sentinel `0` that is never
+    /// consulted.
     block_topos: Vec<u32>,
     /// Owner of each block, parallel to `block_lens`, captured at capture time.
-    /// Apply resolves the destination by this id, never by walk position.
+    /// Readers find a block by this id, never by walk position.
     block_owners: Vec<BlockOwner>,
 }
 
@@ -414,7 +411,7 @@ pub struct RuntimeSeqs {
 }
 
 /// Identifies the owner of one param block in a [`ModulationSnapshot`], so
-/// `apply` can find the destination manifest by stable id.
+/// readers can find the block by stable id.
 #[derive(Clone, PartialEq)]
 enum BlockOwner {
     /// The macro bank — no per-slot ids, routed by slot index.
@@ -449,8 +446,8 @@ impl ModulationSnapshot {
             changed: false,
         };
 
-        // Macros — no ParamManifest; guarded per-slot on apply, so its
-        // topology slot is a sentinel that's never consulted.
+        // Macros — no ParamManifest, so its topology slot is a sentinel
+        // that's never consulted.
         for slot in &project.settings.macro_bank.slots {
             w.value(slot.value);
         }
@@ -505,72 +502,37 @@ impl ModulationSnapshot {
         w.finish()
     }
 
-    /// Apply modulated values to a project in-place. Overwrites only
-    /// `param_values` — no structural changes, no allocations.
-    ///
-    /// Routing is by owner id, never by position: a layer or effect added,
-    /// removed, or reordered between capture and apply can no longer misroute
-    /// values or starve later blocks. The per-block topology stamp still skips
-    /// a found-by-id block whose manifest was reshaped mid-flight (a one-frame
-    /// skip; the next capture re-keys). A block whose owner id no longer
-    /// resolves (deleted since capture) is skipped with a loud log — the old
-    /// positional walk dropped this silently.
-    pub fn apply(&self, project: &mut Project) {
-        let mut cursor = 0usize; // position in values
+    /// Live macro values in slot order; empty before the first capture.
+    pub fn macros(&self) -> &[f32] {
+        self.block_of(|owner| matches!(owner, BlockOwner::Macros))
+            .map_or(&[][..], |(values, _)| values)
+    }
 
+    /// Live values of `owner`'s params in manifest order: an effect
+    /// (`GraphTarget::Effect`) or a layer's generator (`GraphTarget::Generator`).
+    /// `None` when no block was captured for that owner under `topology`, so a
+    /// param added, removed or reordered since the capture never reads a
+    /// neighbour's value.
+    pub fn values_of(&self, owner: &GraphTarget, topology: u32) -> Option<&[f32]> {
+        let (values, stamp) = self.block_of(|block| match (block, owner) {
+            (BlockOwner::Effect(id), GraphTarget::Effect(want)) => id == want,
+            (BlockOwner::GenParams(id), GraphTarget::Generator(want)) => id == want,
+            _ => false,
+        })?;
+        (stamp == topology).then_some(values)
+    }
+
+    /// The first block whose owner matches, with its topology stamp.
+    fn block_of(&self, is_owner: impl Fn(&BlockOwner) -> bool) -> Option<(&[f32], u32)> {
+        let mut start = 0usize;
         for (block, owner) in self.block_owners.iter().enumerate() {
-            let len = self.block_lens.get(block).copied().unwrap_or(0) as usize;
-            let stamp = self.block_topos.get(block).copied().unwrap_or(u32::MAX);
-            let slice = &self.values[cursor..cursor + len];
-            match owner {
-                BlockOwner::Macros => {
-                    for (i, &v) in slice.iter().enumerate() {
-                        if let Some(slot) = project.settings.macro_bank.slots.get_mut(i) {
-                            slot.value = v;
-                        }
-                    }
-                }
-                // Write only `.value` per slot; the `.exposed` flag is
-                // host-state, not modulation-state.
-                BlockOwner::Effect(id) => {
-                    match project.find_effect_by_id_mut(id) {
-                        Some(fx) if fx.params.topology() == stamp => {
-                            for (slot, &v) in fx.params.iter_mut().zip(slice) {
-                                slot.value = v;
-                            }
-                        }
-                        Some(_) => { /* manifest reshaped mid-flight — one-frame skip */ }
-                        None => {
-                            log::warn!(
-                                "[ModulationSnapshot] effect {id} not found at apply — \
-                                 deleted since capture; block skipped"
-                            );
-                        }
-                    }
-                }
-                BlockOwner::GenParams(layer_id) => {
-                    let gp = project
-                        .timeline
-                        .find_layer_by_id_mut(layer_id.as_str())
-                        .and_then(|(_, layer)| layer.gen_params_mut());
-                    match gp {
-                        Some(gp) if gp.params.topology() == stamp => {
-                            for (slot, &v) in gp.params.iter_mut().zip(slice) {
-                                slot.value = v;
-                            }
-                        }
-                        Some(_) => { /* manifest reshaped mid-flight — one-frame skip */ }
-                        None => {
-                            log::warn!(
-                                "[ModulationSnapshot] gen params for layer {layer_id} not found \
-                                 at apply — deleted since capture; block skipped"
-                            );
-                        }
-                    }
-                }
+            let len = self.block_lens[block] as usize;
+            if is_owner(owner) {
+                return Some((&self.values[start..start + len], self.block_topos[block]));
             }
-            cursor += len;
+            start += len;
         }
+        None
     }
 
     /// Overwrite this snapshot with `src`, reusing every buffer's allocation.
@@ -583,8 +545,8 @@ impl ModulationSnapshot {
     }
 }
 
-/// The published copies of the content thread's capture. The UI drops a copy
-/// once it has applied it, so the next publish reuses that buffer. One copy
+/// The published copies of the content thread's capture. The UI drops its copy
+/// when a newer one arrives, so the next publish reuses that buffer. One copy
 /// can wait in the handoff slot and one be in the UI's hands while a third is
 /// written, so three buffers cover every frame; past that a publish allocates.
 #[derive(Default)]
@@ -1019,12 +981,13 @@ mod modulation_topology_guard_tests {
         layer
     }
 
-    /// D8 — the exact case the old `len == len` guard missed: a same-length
-    /// reorder between capture and apply must invalidate the block, so stale
-    /// captured modulation values are NOT written onto the reordered slots.
+    /// D8 — a same-length reorder between capture and read must miss: the
+    /// manifest's topology changed, so no captured value is offered for the
+    /// reordered slots.
     #[test]
-    fn apply_skips_block_on_same_length_reorder() {
+    fn values_of_misses_after_a_same_length_reorder() {
         let mut project = project_with_master(manifest(&[("a", 0.10), ("b", 0.20)]));
+        let id = project.settings.master_effects[0].id.clone();
 
         let mut snap = ModulationSnapshot::empty();
         snap.capture_into(&project);
@@ -1033,26 +996,21 @@ mod modulation_topology_guard_tests {
         let m = &mut project.settings.master_effects[0].params;
         let a = m.remove("a").unwrap();
         m.push(a); // order is now [b, a], same length
-        // Live values also advanced (as modulation/edits would).
-        m.get_mut("a").unwrap().value = 0.90;
-        m.get_mut("b").unwrap().value = 0.80;
+        let reordered = m.topology();
 
-        snap.apply(&mut project);
-
-        let m = &project.settings.master_effects[0].params;
-        assert_eq!(
-            m.get("a").unwrap().value,
-            0.90,
-            "reordered block must be skipped, not overwritten with stale capture"
+        assert!(
+            snap.values_of(&GraphTarget::Effect(id), reordered)
+                .is_none(),
+            "reordered block must miss, not offer stale captured values"
         );
-        assert_eq!(m.get("b").unwrap().value, 0.80);
     }
 
-    /// Control — with no structural change the topology matches and the block
-    /// applies normally, overwriting live drift with captured values.
+    /// Control — with no structural change the topology matches and the
+    /// captured block is offered in manifest order.
     #[test]
-    fn apply_writes_block_when_topology_unchanged() {
+    fn values_of_returns_the_captured_block_when_topology_unchanged() {
         let mut project = project_with_master(manifest(&[("a", 0.10), ("b", 0.20)]));
+        let id = project.settings.master_effects[0].id.clone();
 
         let mut snap = ModulationSnapshot::empty();
         snap.capture_into(&project);
@@ -1062,24 +1020,20 @@ mod modulation_topology_guard_tests {
             .get_mut("a")
             .unwrap()
             .value = 0.99;
+        let topology = project.settings.master_effects[0].params.topology();
 
-        snap.apply(&mut project);
-
-        let m = &project.settings.master_effects[0].params;
         assert_eq!(
-            m.get("a").unwrap().value,
-            0.10,
-            "unchanged topology must apply the captured value"
+            snap.values_of(&GraphTarget::Effect(id), topology),
+            Some(&[0.10, 0.20][..]),
+            "unchanged topology must offer the captured values, not live drift"
         );
-        assert_eq!(m.get("b").unwrap().value, 0.20);
     }
 
-    /// Id-keyed routing (a): a layer INSERTED between capture and apply must
-    /// not shift the routing of the layers after it. The old positional walk
-    /// routed by layer index, so every block after the insertion landed on the
-    /// wrong layer's effects; the id-keyed apply resolves by LayerId/EffectId.
+    /// Id-keyed lookup (a): a layer INSERTED between capture and read must not
+    /// shift the lookup of the layers after it. Each effect's captured block
+    /// is found by its own id.
     #[test]
-    fn apply_routes_by_id_when_layer_inserted() {
+    fn values_of_finds_blocks_by_id_after_a_layer_insert() {
         let mut project = Project::default();
         let layer_a = layer_with_effect("A", 0, &[("p", 0.10)]);
         let layer_b = layer_with_effect("B", 1, &[("q", 0.20)]);
@@ -1091,68 +1045,28 @@ mod modulation_topology_guard_tests {
         let mut snap = ModulationSnapshot::empty();
         snap.capture_into(&project);
 
-        // UI side drifts (as modulation would), then a structural insert lands
-        // before this snapshot is applied.
-        project
-            .find_effect_by_id_mut(&fx_a)
-            .unwrap()
-            .params
-            .get_mut("p")
-            .unwrap()
-            .value = 0.90;
-        project
-            .find_effect_by_id_mut(&fx_b)
-            .unwrap()
-            .params
-            .get_mut("q")
-            .unwrap()
-            .value = 0.80;
         let inserted = layer_with_effect("NEW", 2, &[("z", 0.50)]);
-        let fx_new = inserted.effects.as_ref().unwrap()[0].id.clone();
         project.timeline.layers.insert(0, inserted);
 
-        snap.apply(&mut project);
-
+        let topo = |project: &Project, id: &EffectId| {
+            project.find_effect_by_id(id).unwrap().params.topology()
+        };
         assert_eq!(
-            project
-                .find_effect_by_id(&fx_a)
-                .unwrap()
-                .params
-                .get("p")
-                .unwrap()
-                .value,
-            0.10,
-            "layer A's effect must receive ITS captured value despite the insert"
+            snap.values_of(&GraphTarget::Effect(fx_a.clone()), topo(&project, &fx_a)),
+            Some(&[0.10][..]),
+            "layer A's effect must find ITS captured block despite the insert"
         );
         assert_eq!(
-            project
-                .find_effect_by_id(&fx_b)
-                .unwrap()
-                .params
-                .get("q")
-                .unwrap()
-                .value,
-            0.20,
-            "layer B's effect must receive ITS captured value despite the insert"
-        );
-        assert_eq!(
-            project
-                .find_effect_by_id(&fx_new)
-                .unwrap()
-                .params
-                .get("z")
-                .unwrap()
-                .value,
-            0.50,
-            "the inserted layer is not in the snapshot — must stay untouched"
+            snap.values_of(&GraphTarget::Effect(fx_b.clone()), topo(&project, &fx_b)),
+            Some(&[0.20][..]),
+            "layer B's effect must find ITS captured block despite the insert"
         );
     }
 
-    /// Id-keyed routing (b): effects REORDERED between capture and apply must
-    /// still receive their own captured values. The old positional walk wrote
-    /// effect 0's values into effect 1 and vice versa; id routing can't.
+    /// Id-keyed lookup (b): effects REORDERED between capture and read must
+    /// still find their own captured blocks.
     #[test]
-    fn apply_routes_by_id_when_effects_reordered() {
+    fn values_of_finds_blocks_by_id_after_effects_reorder() {
         let mut project = Project::default();
         let fx_x = effect(&[("p", 0.10)]);
         let fx_y = effect(&[("q", 0.20)]);
@@ -1164,38 +1078,33 @@ mod modulation_topology_guard_tests {
         let mut snap = ModulationSnapshot::empty();
         snap.capture_into(&project);
 
-        // Reorder + drift.
         project.settings.master_effects.swap(0, 1);
-        for fx in &mut project.settings.master_effects {
-            for p in fx.params.iter_mut() {
-                p.value = 0.99;
-            }
-        }
 
-        snap.apply(&mut project);
-
+        let topo = |project: &Project, id: &EffectId| {
+            project.find_effect_by_id(id).unwrap().params.topology()
+        };
         assert_eq!(
-            project
-                .find_effect_by_id(&id_x)
-                .unwrap()
-                .params
-                .get("p")
-                .unwrap()
-                .value,
-            0.10,
-            "effect X must get X's captured value after reorder"
+            snap.values_of(&GraphTarget::Effect(id_x.clone()), topo(&project, &id_x)),
+            Some(&[0.10][..]),
+            "effect X must find X's captured block after reorder"
         );
         assert_eq!(
-            project
-                .find_effect_by_id(&id_y)
-                .unwrap()
-                .params
-                .get("q")
-                .unwrap()
-                .value,
-            0.20,
-            "effect Y must get Y's captured value after reorder"
+            snap.values_of(&GraphTarget::Effect(id_y.clone()), topo(&project, &id_y)),
+            Some(&[0.20][..]),
+            "effect Y must find Y's captured block after reorder"
         );
+    }
+
+    #[test]
+    fn macros_reads_slot_values() {
+        let mut project = Project::default();
+        project.settings.macro_bank.slots[0].value = 0.3;
+        project.settings.macro_bank.slots[1].value = 0.6;
+
+        let mut snap = ModulationSnapshot::empty();
+        snap.capture_into(&project);
+
+        assert_eq!(&snap.macros()[..2], &[0.3, 0.6]);
     }
 
     /// Always-send contract (c): capture must produce a complete snapshot from

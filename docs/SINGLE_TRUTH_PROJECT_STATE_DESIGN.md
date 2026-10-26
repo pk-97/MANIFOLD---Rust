@@ -259,14 +259,49 @@ Report each failure with its output. Don't loosen a test to make it pass.
 
 ## Sprint 2: the scene panel uses the shared card
 
-`ScenePanel` keeps its own copy of card state (`SceneCardState`) with its own value sync, live shapes and LFO rate sync, and no meter feed. That's why scene drawer meters never move.
+Scene rows are already built by the shared row core (`build_param_row`, `RowHost`). What's copied is the per-frame row behaviour. `ParamCardPanel` and `ScenePanel` each have their own `sync_live_shapes` and `sync_driver_frame_rates`, and only the card has `update_fire_meters` and the open fire-drawer send and band. That's why scene drawer meters never move, and why an open scene fire drawer doesn't steer the audio scope. The scene panel's layout (item blocks, control-group sections, the inline material block, outliner eyes) genuinely differs from a card and stays its own.
 
-- `crates/manifold-ui/src/panels/scene_setup_panel.rs` and `scene_setup_panel/`: host a `ParamCardPanel` with rows filtered by the selected scene item, instead of `SceneCardState`.
-- Delete `SceneCardState`, `scene_setup_panel/value_sync.rs` and `ui_bridge/projection/scene.rs::sync_scene_row_values`. The scene card joins `sync_card_values` and `UIRoot::update_fire_meters`.
-- Check while writing specs: the audio side produces meter levels for scene params under the generator's id.
-- New test: a scene drawer meter receives a level.
-- Workers: 1 Sonnet for the panel, 1 Haiku for the deletions and app wiring.
-- Tests: `cargo nextest run -p manifold-ui scene_setup`, `cargo nextest run -p manifold-app scene`, flows `scene-` and `material-inspector-textures`.
+- The four per-frame row behaviours move onto `RowHost`, written once. Both panels call them, and both copies are deleted.
+- `UIRoot` feeds the scene panel's meters and asks it for its open fire drawer, after the inspector.
+- The audio side already keys meter levels by `(owner instance id, param id)`. Scene rows are the generator's params, and `ScenePanel.full_params.effect_id` is that owner.
+- Workers: 1 Haiku.
+
+### Sprint 2, worker 1 (Haiku, medium): one set of per-frame row behaviours
+
+Files you own:
+- `crates/manifold-ui/src/panels/param_slider_shared/row_host.rs`
+- `crates/manifold-ui/src/panels/param_card/mod.rs`
+- `crates/manifold-ui/src/panels/scene_setup_panel/value_sync.rs`
+- `crates/manifold-ui/src/panels/scene_setup_panel/tests.rs`
+- `crates/manifold-app/src/ui_root/mod.rs`
+
+1. `row_host.rs`, in `impl RowHost`, add four methods, moved from `ParamCardPanel` (`param_card/mod.rs`):
+   - `update_fire_meters(&self, tree, rows: &[ParamRow], owner: &str, fire_level: &dyn Fn(u64) -> Option<f32>, dt: f32)`: the body of `ParamCardPanel::update_fire_meters` (line 629), with `self.row_host` becoming `self`, `self.rows` becoming `rows`, and the owner taken from the parameter.
+   - `open_fire_mode_drawer_send(&self, rows: &[ParamRow], mod_state: &ParamModState) -> Option<AudioSendId>` and `open_fire_mode_drawer_band(...) -> Option<AudioBand>`: the bodies at lines 671 and 685, with the private `open_fire_mode_drawer_row(&self, rows)` from line 658.
+   - `sync_live_shapes(&mut self, tree, mod_state: &mut ParamModState, rows: &mut [ParamRow], shapes_of)`: the loop from `ScenePanel::sync_live_shapes` (`value_sync.rs:122`), which skips rows with an `affordance`. Only scene rows have one, so cards behave the same.
+   - `sync_driver_frame_rates(&mut self, tree, mod_state: &mut ParamModState, rows: &mut [ParamRow], rate_of)`: the loop from either copy (they're identical).
+   - Keep the doc comments, trimmed to current behaviour. Keep `ParamCardPanel::update_fire_meters`'s doc (minus history) on the new `update_fire_meters`.
+2. `param_card/mod.rs`:
+   - `ParamCardPanel::update_fire_meters`, `open_fire_mode_drawer_send`, `open_fire_mode_drawer_band`, `sync_live_shapes` (line 886) and `sync_driver_frame_rates` (line 860) each become a one-line call to the `RowHost` method, passing `&self.rows`, `&self.state.mod_state` and `self.effect_id.as_str()` as needed.
+   - Delete `ParamCardPanel::open_fire_mode_drawer_row`.
+3. `value_sync.rs`:
+   - `ScenePanel::sync_live_shapes` (keep its `if !self.open` guard) and `sync_driver_frame_rates` become calls to the `RowHost` methods with `self.properties_card`'s `row_host`, `mod_state` and `rows`.
+   - Add `ScenePanel::update_fire_meters(&self, tree, fire_level, dt)`, which returns when the panel is closed or `full_params` is `None`, else calls `row_host.update_fire_meters` with owner `full_params.effect_id`.
+   - Add `open_fire_mode_drawer_send` and `open_fire_mode_drawer_band`, `None` when closed.
+4. `manifold-app/src/ui_root/mod.rs`:
+   - `update_fire_meters` (line 1796) also calls `self.scene_setup_panel.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt)`.
+   - `open_fire_mode_drawer_send` and `open_fire_mode_drawer_band` return the inspector's answer, else the scene panel's (`.or_else(...)`).
+5. Test in `scene_setup_panel/tests.rs`: `scene_fire_drawer_meter_shows_its_level`.
+   - Build a live panel (`live_panel_with`) whose `full_params` surface has `effect_id` `"gen"` and one fire row, shaped like `param_card/mod.rs`'s `effect_config_with_fire` (`is_trigger: true`, `audio.trigger_mode_idx = 1`). The cube's `parameter_ids` lists that row's id.
+   - Call `panel.update_fire_meters(&mut tree, &|key| (key == fire_meter_key_for_param("gen", <row id>)).then_some(0.8), 1.0 / 60.0)`.
+   - Assert the row's drawer meter shows the level, read the way `drawer.rs`'s meter tests read a fill.
+   - Assert `open_fire_mode_drawer_send()` is the row's send.
+
+Test:
+- `cargo nextest run -p manifold-ui scene_setup param_card fire`
+- then `cargo nextest run -p manifold-app fire_meter`
+- then `cargo clippy -p manifold-ui -p manifold-app --tests -- -D warnings`
+- then `scripts/dev.py flows scene- material-inspector-textures audio-clip-trigger-add`
 
 ## Sprint 3: controls carry their own target
 

@@ -314,6 +314,45 @@ pub enum ResolvedScrub {
 }
 
 impl ResolvedScrub {
+    /// The in-flight value of card param `param_id` on `target` while this
+    /// gesture drags it. Drawing reads this before live values and the
+    /// project, so a dragged slider shows where the pointer put it.
+    pub(crate) fn live_param(&self, target: &GraphTarget, param_id: &str) -> Option<f32> {
+        match self {
+            ResolvedScrub::Param {
+                target: t,
+                param_id: p,
+                live,
+                ..
+            } if t == target && p.as_ref() == param_id => Some(*live),
+            ResolvedScrub::ParamRgb {
+                target: t,
+                param_ids,
+                live,
+                ..
+            } if t == target => param_ids
+                .iter()
+                .position(|p| p.as_ref() == param_id)
+                .map(|i| live[i]),
+            ResolvedScrub::ParamGroup {
+                target: t, cards, ..
+            } if t == target => cards
+                .iter()
+                .find(|c| c.id.as_ref() == param_id)
+                .map(|c| c.live),
+            ResolvedScrub::BoundNodeParam(drag) => drag.live_card_value(target, param_id),
+            _ => None,
+        }
+    }
+
+    /// The in-flight value of macro `idx` while this gesture drags it.
+    pub(crate) fn live_macro(&self, idx: usize) -> Option<f32> {
+        match self {
+            ResolvedScrub::Macro { idx: i, live, .. } if *i == idx => Some(*live),
+            _ => None,
+        }
+    }
+
     /// Re-stamp the in-flight value through the SAME write the family's live
     /// `Move` uses, so a mid-drag snapshot swap can't revert it (the
     /// `ActiveInspectorDrag::apply` precedent, generalized).
@@ -1009,7 +1048,12 @@ pub(crate) fn dispatch_scrub(
             match phase {
                 ScrubPhase::Begin => {
                     if idx < manifold_core::macro_bank::MACRO_COUNT {
-                        let value = ctx.project.settings.macro_bank.slots[idx].value;
+                        let value = ctx
+                            .content_state
+                            .modulation_snapshot
+                            .as_deref()
+                            .and_then(|s| s.macros().get(idx).copied())
+                            .unwrap_or(ctx.project.settings.macro_bank.slots[idx].value);
                         ctx.scrub.active = Some(ResolvedScrub::Macro {
                             idx,
                             baseline: value,
@@ -2495,4 +2539,56 @@ fn dispatch_rgb_scrub(
         }
     }
     DispatchResult::handled()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::{EffectId, PresetTypeId};
+
+    #[test]
+    fn live_param_reads_only_the_dragged_param() {
+        let target = GraphTarget::Effect(EffectId::new("fx"));
+        let scrub = ResolvedScrub::Param {
+            target: target.clone(),
+            param_id: ParamId::Borrowed("amount"),
+            baseline: 0.1,
+            live: 0.9,
+        };
+        assert_eq!(scrub.live_param(&target, "amount"), Some(0.9));
+        assert_eq!(scrub.live_param(&target, "other"), None);
+        assert_eq!(
+            scrub.live_param(&GraphTarget::Effect(EffectId::new("other")), "amount"),
+            None
+        );
+    }
+
+    #[test]
+    fn live_param_rgb_returns_the_dragged_channel() {
+        let target = GraphTarget::Effect(EffectId::new("fx"));
+        let scrub = ResolvedScrub::ParamRgb {
+            target: target.clone(),
+            param_ids: [
+                ParamId::Borrowed("r"),
+                ParamId::Borrowed("g"),
+                ParamId::Borrowed("b"),
+            ],
+            preset: PresetTypeId::new("test.preset"),
+            baseline: [0.1, 0.2, 0.3],
+            live: [0.4, 0.5, 0.6],
+        };
+        assert_eq!(scrub.live_param(&target, "g"), Some(0.5));
+        assert_eq!(scrub.live_param(&target, "missing"), None);
+    }
+
+    #[test]
+    fn live_macro_reads_only_the_dragged_slot() {
+        let scrub = ResolvedScrub::Macro {
+            idx: 2,
+            baseline: 0.1,
+            live: 0.7,
+        };
+        assert_eq!(scrub.live_macro(2), Some(0.7));
+        assert_eq!(scrub.live_macro(1), None);
+    }
 }

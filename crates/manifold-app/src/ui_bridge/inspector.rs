@@ -596,55 +596,6 @@ mod scene_card_convergence_tests {
         );
     }
 
-    /// Undo-race repro (param-feed regression, 2026-07-18): since
-    /// `ac96c65c` the content thread ships a `ModulationSnapshot` EVERY
-    /// tick and `app_render.rs` applies it to `local_project`
-    /// unconditionally (only overlay drags gate it). At the time the restore
-    /// guard had no Macro variant, so a stale snapshot landing mid-drag stomped
-    /// the in-flight value back to pre-drag and the commit handler saw
-    /// old == new and emitted NO undo command. The guard is now
-    /// `ScrubState.active` (`ResolvedScrub::Macro`); this proves it holds.
-    #[test]
-    fn macro_drag_survives_a_mid_gesture_modulation_snapshot() {
-        let mut project = Project::default();
-        project.settings.macro_bank.slots[0].value = 0.2;
-
-        // The content thread's view is still pre-drag when it captures.
-        let mut stale = crate::content_state::ModulationSnapshot::empty();
-        stale.capture_into(&project);
-
-        let mut h = Harness::new(None);
-        h.dispatch(
-            &PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Begin),
-            &mut project,
-        );
-        h.dispatch(
-            &PanelAction::Scrub(
-                ValueRef::Macro(0),
-                ScrubPhase::Move(ScrubValue::Scalar(0.8)),
-            ),
-            &mut project,
-        );
-        h.drain();
-
-        // What the UI frame drain now does every tick (app_render.rs ~line
-        // 868): apply the snapshot, then restore the guarded gesture (the macro
-        // rides the P-I `active` gesture now, restored via `restore_dragged`).
-        stale.apply(&mut project);
-        h.scrub.restore_dragged(&mut project);
-
-        h.dispatch(
-            &PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Commit),
-            &mut project,
-        );
-        let cmds = h.drain();
-        assert!(
-            cmds.iter().any(|c| matches!(c, ContentCommand::Execute(_))),
-            "a completed macro drag must produce an undo-tracked command; got {} commands",
-            cmds.len()
-        );
-    }
-
     /// BUG-246 (trim family): while a modulation trim handle is dragged with
     /// playback running, a full snapshot is accepted every frame
     /// (`app_render.rs` ~808 replaces `local_project`, then the unguarded
