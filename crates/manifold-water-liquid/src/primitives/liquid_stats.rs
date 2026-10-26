@@ -38,26 +38,21 @@ pub(crate) fn partial_bytes(count: u32) -> u64 {
 /// open box face, the face's open fraction bits, axis * 2 + 1 on the high
 /// side, the neighbour's phi bits and its particle count), 26 its floor cells
 /// reading dry with water on every in-box side (8-26 are 0 without a `capped`
-/// input). Word 27 is the narrow-band reseed capacity shortage, 28 the
-/// particles inflows added this tick, 29 the ones they wanted to add but
-/// the pool had no free slot for, and 30 the sheet births the pool had no
-/// free slot for. Floats are stored as bits.
+/// input). Word 27 is the particles inflows added this tick, 28 the ones they
+/// wanted to add but the pool had no free slot for, and 29 the sheet births
+/// the pool had no free slot for. Floats are stored as bits.
 /// The first solver word in the published stats array.
 pub const SOLVER_STATS_START: u32 = 10;
-/// The published stats word containing narrow-band reseed shortages.
-pub const NARROW_BAND_SHORTAGE_WORD: u32 = 27;
 /// The published stats word counting this tick's inflow births.
-pub const INFLOW_BIRTHS_WORD: u32 = 28;
+pub const INFLOW_BIRTHS_WORD: u32 = 27;
 /// The published stats word counting inflow births a full pool refused.
-pub const INFLOW_REFUSED_WORD: u32 = 29;
+pub const INFLOW_REFUSED_WORD: u32 = 28;
 /// The published stats word counting sheet births a full pool refused.
-pub const SHEET_REFUSED_WORD: u32 = 30;
+pub const SHEET_REFUSED_WORD: u32 = 29;
 /// The number of words in the stats array.
 pub const LIQUID_STATS_WORDS: u32 = SHEET_REFUSED_WORD + 1;
 /// The number of solver words copied from the capped counters.
 pub const SOLVER_WORDS: u32 = LIQUID_STATS_WORDS - SOLVER_STATS_START;
-/// The narrow-band shortage's offset within the solver tail.
-pub const NARROW_BAND_SHORTAGE_TAIL: u32 = NARROW_BAND_SHORTAGE_WORD - SOLVER_STATS_START;
 /// The inflow births' offset within the solver tail.
 pub const INFLOW_BIRTHS_TAIL: u32 = INFLOW_BIRTHS_WORD - SOLVER_STATS_START;
 /// The refused inflow births' offset within the solver tail.
@@ -104,9 +99,6 @@ pub struct LiquidTickStats {
     /// The last substep's floor cells reading dry with water on every
     /// in-box side: holes under the water.
     pub dry_floor_cells: u32,
-    /// Narrow-band reseed sites that could not fit in the particle pool this
-    /// tick. A nonzero value faults the liquid and blocks publication.
-    pub narrow_band_shortage: u32,
     /// Particles inflows added this tick, every substep.
     pub inflow_births: u32,
     /// Particles inflows wanted to add this tick but the pool had no free
@@ -138,7 +130,6 @@ impl LiquidTickStats {
             pocket_cells: [w[17], w[18], w[19]],
             first_air_seed: [w[20], w[21], w[22], w[23], w[24], w[25]],
             dry_floor_cells: w[26],
-            narrow_band_shortage: w[NARROW_BAND_SHORTAGE_WORD as usize],
             inflow_births: w[INFLOW_BIRTHS_WORD as usize],
             inflow_refused: w[INFLOW_REFUSED_WORD as usize],
             sheet_refused: w[SHEET_REFUSED_WORD as usize],
@@ -152,7 +143,7 @@ impl LiquidTickStats {
 /// writers on one source of truth.
 pub fn with_stats_layout(source: &str) -> String {
     format!(
-        "const SOLVER_STATS_START: u32 = {SOLVER_STATS_START}u;\nconst SOLVER_WORDS: u32 = {SOLVER_WORDS}u;\nconst NARROW_BAND_SHORTAGE_WORD: u32 = {NARROW_BAND_SHORTAGE_WORD}u;\nconst NARROW_BAND_SHORTAGE_TAIL: u32 = {NARROW_BAND_SHORTAGE_TAIL}u;\nconst INFLOW_BIRTHS_TAIL: u32 = {INFLOW_BIRTHS_TAIL}u;\nconst INFLOW_REFUSED_TAIL: u32 = {INFLOW_REFUSED_TAIL}u;\nconst SHEET_REFUSED_TAIL: u32 = {SHEET_REFUSED_TAIL}u;\n\n{source}"
+        "const SOLVER_STATS_START: u32 = {SOLVER_STATS_START}u;\nconst SOLVER_WORDS: u32 = {SOLVER_WORDS}u;\nconst INFLOW_BIRTHS_TAIL: u32 = {INFLOW_BIRTHS_TAIL}u;\nconst INFLOW_REFUSED_TAIL: u32 = {INFLOW_REFUSED_TAIL}u;\nconst SHEET_REFUSED_TAIL: u32 = {SHEET_REFUSED_TAIL}u;\n\n{source}"
     )
 }
 
@@ -404,7 +395,6 @@ mod tests {
             9,
             2,
         ]);
-        words[NARROW_BAND_SHORTAGE_WORD as usize] = 11;
         words[INFLOW_BIRTHS_WORD as usize] = 640;
         words[INFLOW_REFUSED_WORD as usize] = 64;
         words[SHEET_REFUSED_WORD as usize] = 7;
@@ -430,7 +420,6 @@ mod tests {
                 pocket_cells: [3, 4, 5],
                 first_air_seed: [6, 7, 0.75f32.to_bits(), 3, 0.5f32.to_bits(), 9],
                 dry_floor_cells: 2,
-                narrow_band_shortage: 11,
                 inflow_births: 640,
                 inflow_refused: 64,
                 sheet_refused: 7,

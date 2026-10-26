@@ -382,8 +382,6 @@ fn cases(rng: &mut Rng) -> Vec<Case> {
             let gate = cases.len() as u32;
             let mut stats = [0u32; LIQUID_STATS_WORDS as usize];
             stats[0] = u32::from(gate % 5 == 1);
-            stats[manifold_water_liquid::primitives::liquid_stats::NARROW_BAND_SHORTAGE_WORD
-                as usize] = u32::from(gate % 5 == 2);
             let identity = [rng.next(), rng.next(), rng.next(), u32::from(gate % 5 == 3)];
             cases.push(Case {
                 label: label.to_owned(),

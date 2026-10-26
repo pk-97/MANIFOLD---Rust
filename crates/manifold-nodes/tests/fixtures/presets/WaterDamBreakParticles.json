@@ -1931,12 +1931,6 @@
             "toPort": "region_count"
           },
           {
-            "fromNode": 0,
-            "fromPort": "epoch",
-            "toNode": 4,
-            "toPort": "epoch"
-          },
-          {
             "fromNode": 4,
             "fromPort": "out",
             "toNode": 5,
@@ -1983,12 +1977,6 @@
             "fromPort": "faces",
             "toNode": 3,
             "toPort": "faces_in"
-          },
-          {
-            "fromNode": 4,
-            "fromPort": "interior",
-            "toNode": 3,
-            "toPort": "interior_in"
           },
           {
             "fromNode": 0,
@@ -2193,12 +2181,6 @@
             "fromPort": "identity",
             "toNode": 8,
             "toPort": "identity"
-          },
-          {
-            "fromNode": 3,
-            "fromPort": "interior",
-            "toNode": 8,
-            "toPort": "interior"
           },
           {
             "fromNode": 6,

@@ -38,21 +38,6 @@ pub fn closed_faces(params: &ParamValues) -> u32 {
     })
 }
 
-/// The optional cell-centred interior field identifies its physical grid by
-/// exact length. Native FLIP fills all surface cells (nodes − 1); authored
-/// fields from MPM and saved graphs retain their padded-grid counts. The
-/// products are strictly ordered, so no valid length is ambiguous.
-pub fn interior_cells(nodes: [u32; 3], values: u64) -> Option<[u32; 3]> {
-    [1, SURFACE_EXTRA_NODES, 1 + 2 * PADDING_NODES]
-        .into_iter()
-        .find_map(|extra| {
-            let cells = nodes.map(|n| n.saturating_sub(extra));
-            (cells.iter().all(|&n| n > 0)
-                && cells.into_iter().map(u64::from).product::<u64>() == values)
-                .then_some(cells)
-        })
-}
-
 /// Native FLIP boundary shrinks the engine box by 3h + 1e-4 total.
 /// AABB::expand divides that by two on each side; epsilon is in metres.
 pub(crate) const FLIP_WALL_EPSILON: f32 = 5.0e-5;
@@ -323,10 +308,6 @@ mod tests {
                     * std::mem::size_of::<crate::fluid_particles::FaceSample>() as u64
             );
             assert_eq!(
-                interior_cells(solver.nodes(), u64::from(resolution + 3).pow(3)),
-                Some(solver.cells())
-            );
-            assert_eq!(
                 crate::whitewater::face_offset(solver.nodes(), solver.cells()).unwrap(),
                 [0; 3]
             );
@@ -410,19 +391,6 @@ mod tests {
             assert_eq!((a, b), (-0.5 * layout.cell_size, 0.5 * layout.cell_size));
             let crossing = f64::from(mesh.min()[1]) + (1.0 - a / (b - a)) * layout.cell_size;
             assert_eq!(crossing, f64::from(layout.min[1]));
-        }
-    }
-
-    #[test]
-    fn interior_grid_counts_identify_padding_and_reject_short_fields() {
-        for cells in [[8u32; 3], [32, 16, 8], [64; 3]] {
-            let values = cells.into_iter().map(u64::from).product::<u64>();
-            for extra in [4, 7] {
-                let nodes = cells.map(|n| n + extra);
-                assert_eq!(interior_cells(nodes, values), Some(cells));
-                assert_eq!(interior_cells(nodes, values - 1), None);
-                assert_eq!(interior_cells(nodes, 0), None);
-            }
         }
     }
 

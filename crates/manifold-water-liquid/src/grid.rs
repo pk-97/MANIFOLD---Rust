@@ -2,16 +2,11 @@
 //! the domain's cells, one f32 array per axis in m/s, scene space. Every
 //! solver resamples its own lattice into this layout; no consumer sees a
 //! native one.
-//!
-//! The cell-centred narrow-band distance and its disabled positive sentinel
-//! follow the reseeding seam described by Ferstl et al. (2016).
 
 use crate::fluid_particles::FaceSample;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
-use crate::primitives::liquid_stats::{
-    LIQUID_STATS_WORDS, NARROW_BAND_SHORTAGE_WORD, with_stats_layout,
-};
+use crate::primitives::liquid_stats::with_stats_layout;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
 const PUBLISH_SHADER_SOURCE: &str = include_str!("primitives/shaders/liquid_frame_faces.wgsl");
@@ -22,7 +17,7 @@ struct FaceParams {
     len: u32,
     _pad0: u32,
     _pad1: u32,
-    has_shortage: u32,
+    _pad2: u32,
 }
 
 /// The frame ports that carry the grid: one array per axis, the cells per
@@ -68,21 +63,6 @@ pub fn face_bytes(cells: [u32; 3]) -> u64 {
 }
 }
 
-/// Number of cell-centred interior distance records. The field has one f32
-/// per physical cell; its storage extent is exact, with no metadata record.
-pub fn interior_len(cells: [u32; 3]) -> u64 {
-    cells.iter().map(|&n| u64::from(n)).product()
-}
-
-/// Bytes of a cell-centred interior distance field.
-pub fn interior_bytes(cells: [u32; 3]) -> u64 {
-    interior_len(cells) * 4
-}
-
-fn stats_has_shortage(stats_bytes: u64) -> bool {
-    stats_bytes >= u64::from(LIQUID_STATS_WORDS) * 4
-}
-
 /// Index of face `f` in `axis`'s array, x fastest.
 pub fn face_index(cells: [u32; 3], axis: usize, f: [u32; 3]) -> usize {
     let d = face_dims(cells, axis).map(|n| n as usize);
@@ -105,87 +85,6 @@ pub fn face_position(min: [f32; 3], cell_size: f32, axis: usize, f: [u32; 3]) ->
     })
 }
 
-/// Installed copy and sentinel-clear kernels shared by the face and interior
-/// publication paths.
-#[derive(Default)]
-pub struct InteriorOps {
-    copy_pipeline: Option<GpuComputePipeline>,
-    clear_pipeline: Option<GpuComputePipeline>,
-}
-
-impl InteriorOps {
-    /// Install both kernels with the node, following Ferstl et al. (2016)'s
-    /// narrow-band storage rule: the disabled field is a positive sentinel.
-    pub fn prepare(&mut self, device: &manifold_gpu::GpuDevice) {
-        let shader = with_stats_layout(PUBLISH_SHADER_SOURCE);
-        self.prepare_copy(device, &shader);
-        if self.clear_pipeline.is_none() {
-            self.prepare_clear_with_shader(device, &shader);
-        }
-    }
-
-    pub fn prepare_clear(&mut self, device: &manifold_gpu::GpuDevice) {
-        if self.clear_pipeline.is_none() {
-            let shader = with_stats_layout(PUBLISH_SHADER_SOURCE);
-            self.prepare_clear_with_shader(device, &shader);
-        }
-    }
-
-    fn prepare_clear_with_shader(&mut self, device: &manifold_gpu::GpuDevice, shader: &str) {
-        self.clear_pipeline =
-            Some(device.create_compute_pipeline(shader, "interior_clear", "liquid.clear_interior"));
-    }
-
-    fn prepare_copy(&mut self, device: &manifold_gpu::GpuDevice, shader: &str) {
-        if self.copy_pipeline.is_none() {
-            self.copy_pipeline =
-                Some(device.create_compute_pipeline(shader, "cs_main", "liquid.publish_faces"));
-        }
-    }
-
-    pub fn clear(&self, gpu: &mut GpuEncoder<'_>, target: &GpuBuffer) -> Result<(), String> {
-        if target.size == 0 || !target.size.is_multiple_of(4) {
-            return Err(format!(
-                "interior distance buffer has invalid extent {} bytes",
-                target.size
-            ));
-        }
-        let len = u32::try_from(target.size / 4).map_err(|_| {
-            format!(
-                "interior distance buffer has {} records, past 32-bit GPU indexing",
-                target.size / 4
-            )
-        })?;
-        let pipeline = self
-            .clear_pipeline
-            .as_ref()
-            .expect("liquid interior pipeline prepared at install");
-        let params = FaceParams {
-            len,
-            _pad0: 0,
-            _pad1: 0,
-            has_shortage: 0,
-        };
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&params),
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: target,
-                    offset: 0,
-                },
-            ],
-            [len.div_ceil(256), 1, 1],
-            "liquid.clear_interior",
-        );
-        Ok(())
-    }
-}
-
 /// A frame node's published face grid, frame B's only: storage per wired
 /// axis over the domain's cells, written when the frame publishes a tick and
 /// never from a tick whose stats flag a non-finite record. Every liquid frame
@@ -194,23 +93,22 @@ impl InteriorOps {
 #[derive(Default)]
 pub struct PublishedFaces {
     faces: [Option<GpuBuffer>; 3],
-    ops: InteriorOps,
+    copy_pipeline: Option<GpuComputePipeline>,
 }
 
 /// A tick cannot be published when its particle reduction found non-finite
-/// records or when narrow-band reseeding ran out of particle slots.
+/// records.
 pub fn stats_failed(stats: &[u32]) -> bool {
     stats.first().copied().unwrap_or(1) != 0
-        || stats
-            .get(NARROW_BAND_SHORTAGE_WORD as usize)
-            .copied()
-            .unwrap_or(1)
-            != 0
 }
 
 impl PublishedFaces {
     pub fn prepare(&mut self, device: &manifold_gpu::GpuDevice) {
-        self.ops.prepare(device);
+        if self.copy_pipeline.is_none() {
+            let shader = with_stats_layout(PUBLISH_SHADER_SOURCE);
+            self.copy_pipeline =
+                Some(device.create_compute_pipeline(&shader, "cs_main", "liquid.publish_faces"));
+        }
     }
 
     /// Whether `port` is one of the grid's arrays.
@@ -235,9 +133,8 @@ impl PublishedFaces {
     /// wired axis gets storage, zero until written and fresh per lattice (the
     /// old one retires with its fence), and is written when `ticked` or when
     /// its storage is new, since a new lattice's old faces never stand in for
-    /// it. `stats` word 0 and the named shortage word are the tick's failure
-    /// counts; the kernel skips a tick that has either. Returns a refusal
-    /// naming what the device could not
+    /// it. `stats` word 0 is the tick's non-finite count; the kernel skips a
+    /// tick that has any. Returns a refusal naming what the device could not
     /// give.
     pub fn publish(
         &mut self,
@@ -293,16 +190,14 @@ impl PublishedFaces {
                 continue;
             }
             let pipeline = self
-                .ops
                 .copy_pipeline
                 .as_ref()
                 .expect("liquid face pipeline prepared at install");
-            let has_shortage = u32::from(stats_has_shortage(stats.size));
             let params = FaceParams {
                 len,
                 _pad0: 0,
                 _pad1: 0,
-                has_shortage,
+                _pad2: 0,
             };
             gpu.native_enc.dispatch_compute(
                 pipeline,
@@ -374,23 +269,14 @@ mod tests {
             face_position([-2.0, 0.0, 1.0], 0.5, 1, [1, 2, 3]),
             [-1.25, 1.0, 2.75]
         );
-        assert_eq!(interior_len(n), 6 * 5 * 4);
-        assert_eq!(interior_bytes(n), 6 * 5 * 4 * 4);
     }
 
     #[test]
-    fn failed_stats_include_narrow_band_capacity_shortage() {
-        assert!(!stats_failed(&[0; LIQUID_STATS_WORDS as usize]));
-        let mut words = [0; LIQUID_STATS_WORDS as usize];
-        words[NARROW_BAND_SHORTAGE_WORD as usize] = 1;
-        assert!(stats_failed(&words));
+    fn failed_stats_follow_the_nonfinite_word() {
+        assert!(!stats_failed(
+            &[0; crate::primitives::liquid_stats::LIQUID_STATS_WORDS as usize]
+        ));
         assert!(stats_failed(&[1]));
-    }
-
-    #[test]
-    fn short_stats_never_enable_shortage_word_read() {
-        assert!(!stats_has_shortage(4));
-        assert!(!stats_has_shortage(u64::from(LIQUID_STATS_WORDS - 1) * 4));
-        assert!(stats_has_shortage(u64::from(LIQUID_STATS_WORDS) * 4));
+        assert!(stats_failed(&[]));
     }
 }

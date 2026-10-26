@@ -4,7 +4,7 @@
 
 **Status:** DIRECTION captured 2026-10-21 · Fable + Peter · D2 look settled by the 2026-10-23 prototype (D2, prototype findings) · not designed to STANDARD, not built; the full design spec and implementation plan graduate from here. Epic: BUG-l2h3 (GPU FLIP live instrument), rewritten as the umbrella; sub-epics under it.
 **Prerequisites:** none for D2, D15 and the memory track. The solver speed lanes wait on two runs on a quiet machine (D10).
-**Companion docs:** [GPU_FLIP_SPARSE_BLOCKS_DESIGN.md](GPU_FLIP_SPARSE_BLOCKS_DESIGN.md) (sparse tiles as built), [GPU_FLIP_NARROW_BAND_DESIGN.md](GPU_FLIP_NARROW_BAND_DESIGN.md), [VULKAN_BACKEND_DESIGN.md](VULKAN_BACKEND_DESIGN.md) (D9), [RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) (the tracer D2 extends).
+**Companion docs:** [GPU_FLIP_SPARSE_BLOCKS_DESIGN.md](GPU_FLIP_SPARSE_BLOCKS_DESIGN.md) (sparse tiles as built), [VULKAN_BACKEND_DESIGN.md](VULKAN_BACKEND_DESIGN.md) (D9), [RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) (the tracer D2 extends).
 
 ## The claim
 

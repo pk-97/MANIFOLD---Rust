@@ -1,14 +1,10 @@
 //! `node.liquid_frame` — publish a particle liquid on the particle-frame seam
 //!Every frame that ends
-//! on a new tick publishes it, with the solid lattice, the face grid, the
-//! interior distance and the whitewater classes when wired, into a retained
-//! history slot of its own.
+//! on a new tick publishes it, with the solid lattice, the face grid and the
+//! whitewater classes when wired, into a retained history slot of its own.
 //! Frames A and B are the retired pair bracketing the display time. Exempt
 //! from the codegen mandate as cross-frame state (ADDING_PRIMITIVES.md
 //! exclusion 2): it owns the publication history.
-//!
-//! Its optional interior distance carries the Ferstl et al. (2016)
-//! narrow-band field beside the particle frames.
 
 use manifold_gpu::GpuBuffer;
 
@@ -18,9 +14,9 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::display_cursor::{CursorFrame, DisplayCursor};
 use manifold_water_liquid::frame_history::{
-    FIELD_FACES, FIELD_INTERIOR, FIELD_SOLID, FIELD_WHITEWATER, FIELDS, FrameHistory, Layout,
+    FIELD_FACES, FIELD_SOLID, FIELD_WHITEWATER, FIELDS, FrameHistory, Layout,
 };
-use manifold_water_liquid::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len, interior_bytes};
+use manifold_water_liquid::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_water_liquid::primitives::particle_publication::{ParticlePublication, Publication};
@@ -36,12 +32,10 @@ thread_local! {
 }
 
 /// Every provided array output, in [`LiquidFrame`]'s binding table order.
-const PROVIDED_PORTS: usize = 13;
+const PROVIDED_PORTS: usize = 11;
 const PROVIDED: [&str; PROVIDED_PORTS] = [
     "particles_a",
     "particles_b",
-    "interior_a",
-    "interior_b",
     "solid_a",
     "solid_b",
     "face_u",
@@ -56,12 +50,11 @@ const PROVIDED: [&str; PROVIDED_PORTS] = [
 manifold_node_engine::primitive! {
     name: LiquidFrame,
     type_id: "node.liquid_frame",
-    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: every frame that ends on a new simulated tick publishes a compact copy sorted by persistent nonzero birth id into a retained history slot, with the retired live count and a cleared tail; frames A and B are the retired pair bracketing the display time, with its blend and span. Publishes the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is kept beside its frame and published for frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. An optional cell-centred `interior` distance is kept per frame as interior_a/b, and the whitewater classes foam_in, bubble_in, spray_in and dust_in per frame as frame B's foam_b, bubble_b, spray_b and dust_b. A tick whose stats flag a non-finite record or narrow-band capacity shortage is never shown.",
+    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: every frame that ends on a new simulated tick publishes a compact copy sorted by persistent nonzero birth id into a retained history slot, with the retired live count and a cleared tail; frames A and B are the retired pair bracketing the display time, with its blend and span. Publishes the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is kept beside its frame and published for frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. The whitewater classes foam_in, bubble_in, spray_in and dust_in per frame as frame B's foam_b, bubble_b, spray_b and dust_b. A tick whose stats flag a non-finite record is never shown.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
         identity: Array(u32) required,
-        interior: Array(f32) optional,
         solid: Array(f32) optional,
         face_u_in: Array(f32) optional, face_v_in: Array(f32) optional, face_w_in: Array(f32) optional,
         foam_in: Array(FluidParticle) optional, bubble_in: Array(FluidParticle) optional,
@@ -79,7 +72,6 @@ manifold_node_engine::primitive! {
     },
     outputs: {
         particles_a: Array(FluidParticle), particles_b: Array(FluidParticle),
-        interior_a: Array(f32), interior_b: Array(f32),
         count_a: ScalarF32, count_b: ScalarF32, identity_a: ScalarF32, identity_b: ScalarF32,
         solid_a: Array(f32), solid_b: Array(f32), grid_bounds: Transform,
         grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
@@ -122,8 +114,6 @@ impl LiquidFrame {
         match port {
             "particles_a" => pin.and_then(|p| self.history.slot(p.a).particles.as_ref()),
             "particles_b" => pin.and_then(|p| self.history.slot(p.b).particles.as_ref()),
-            "interior_a" => self.pinned_field(FIELD_INTERIOR, false),
-            "interior_b" => self.pinned_field(FIELD_INTERIOR, true),
             "solid_a" if self.wired[FIELD_SOLID] => self.pinned_field(FIELD_SOLID, false),
             "solid_b" if self.wired[FIELD_SOLID] => self.pinned_field(FIELD_SOLID, true),
             "solid_a" | "solid_b" => self.solid.as_ref(),
@@ -195,10 +185,8 @@ impl Primitive for LiquidFrame {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(
-            port,
-            "particles_a" | "particles_b" | "interior_a" | "interior_b" | "solid_a" | "solid_b"
-        ) || FACE_GRID_PORTS[..3].contains(&port)
+        matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b")
+            || FACE_GRID_PORTS[..3].contains(&port)
             || WHITEWATER_OUTPUTS.contains(&port)
     }
 
@@ -254,7 +242,6 @@ impl Primitive for LiquidFrame {
         let particles = ctx.inputs.array("particles");
         let stats = ctx.inputs.array("stats");
         let identity = ctx.inputs.array("identity");
-        let interior = ctx.inputs.array("interior");
         let solid_in = ctx.inputs.array("solid");
         if let Some(solid) = solid_in
             && solid.size != surface.solid_bytes()
@@ -275,22 +262,6 @@ impl Primitive for LiquidFrame {
         let mut fields_ready = true;
         if solid_in.is_some() {
             fields[FIELD_SOLID] = surface.solid_bytes().max(4);
-        }
-        let interior_size = interior_bytes(cells);
-        if let Some(field) = interior {
-            if interior_size == 0 {
-                refused = Some("Liquid Frame: interior distance has zero cells".to_string());
-                fields_ready = false;
-            } else if field.size != interior_size {
-                refused = Some(format!(
-                    "Liquid Frame: interior distance holds {} bytes; the lattice needs exactly {interior_size} bytes ({})",
-                    field.size,
-                    cells.iter().product::<u32>()
-                ));
-                fields_ready = false;
-            } else {
-                fields[FIELD_INTERIOR] = interior_size;
-            }
         }
         for (axis, input) in faces_in.iter().enumerate() {
             let Some(input) = input else { continue };
@@ -335,8 +306,6 @@ impl Primitive for LiquidFrame {
         let sizes = [
             particle_bytes,
             particle_bytes,
-            field(FIELD_INTERIOR),
-            field(FIELD_INTERIOR),
             surface
                 .solid_bytes()
                 .max(self.history.field_capacity(FIELD_SOLID)),
@@ -434,7 +403,6 @@ impl Primitive for LiquidFrame {
                         // a rejected tick's slot is never shown, so nothing is gated.
                         let sources: [Option<&GpuBuffer>; FIELDS] = [
                             solid_in,
-                            interior,
                             faces_in[0],
                             faces_in[1],
                             faces_in[2],
@@ -513,86 +481,6 @@ impl Primitive for LiquidFrame {
         }
         if let Some(error) = refused {
             ctx.error(error);
-        }
-    }
-}
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    use super::{LIQUID_STATS_WORDS, ParticlePublication, Publication};
-    use manifold_gpu::GpuBuffer;
-    use manifold_node_engine::particles::FluidParticle;
-    use manifold_node_engine::testkit::array_harness::read;
-    use manifold_water_liquid::primitives::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
-
-    fn shared<T: bytemuck::Pod>(
-        device: &manifold_gpu::testkit::TestDevice,
-        values: &[T],
-    ) -> GpuBuffer {
-        let buffer = device.create_buffer_shared((std::mem::size_of_val(values) as u64).max(16));
-        buffer.zero_fill();
-        if !values.is_empty() {
-            // SAFETY: shared buffer is sized for `values`; no work is in flight.
-            unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
-        }
-        buffer
-    }
-
-    #[test]
-    fn gpu_flip_narrow_band_publication_repeats_failed_ticks() {
-        let device = manifold_gpu::testkit::test_device();
-        let state = [
-            FluidParticle {
-                position_radius: [1.0, 2.0, 3.0, 0.5],
-                velocity: [4.0, 5.0, 6.0],
-                id: 1,
-            },
-            FluidParticle {
-                position_radius: [7.0, 8.0, 9.0, 0.5],
-                velocity: [1.0, 2.0, 3.0],
-                id: 2,
-            },
-        ];
-        for shortage in [false, true] {
-            let state_buffer = shared(&device, &state);
-            let stats = shared(&device, &[0u32; LIQUID_STATS_WORDS as usize]);
-            if shortage {
-                unsafe {
-                    stats.write(
-                        u64::from(NARROW_BAND_SHORTAGE_WORD) * 4,
-                        &1u32.to_ne_bytes(),
-                    )
-                };
-            }
-            let frame = shared(&device, &[FluidParticle::default(); 2]);
-            let identity = shared(&device, &[3u32, 7, 0, 0]);
-            let metadata = shared(&device, &[0u32; 4]);
-            let mut publisher = ParticlePublication::default();
-            publisher.prepare(&device);
-            let mut encoder = device.create_encoder("liquid-frame-particle-proof");
-            publisher
-                .encode(
-                    &device,
-                    &mut encoder,
-                    Publication {
-                        source: &state_buffer,
-                        target: &frame,
-                        identity: &identity,
-                        stats: &stats,
-                        metadata: &metadata,
-                        count: 2,
-                    },
-                )
-                .unwrap();
-            encoder.commit_and_wait_completed();
-            let words: Vec<u32> = read(&metadata, 4);
-            assert_eq!(words, [2, 7, u32::from(!shortage), 0]);
-            if !shortage {
-                // A rejected tick's slot is never shown, so only an accepted
-                // one is read.
-                let got: Vec<FluidParticle> = read(&frame, 2);
-                assert_eq!(got, state, "particle publication");
-            }
         }
     }
 }

@@ -1115,7 +1115,7 @@ fn coupling_collision(check: Check) {
 }
 
 /// The lowest and highest authored Sim Rates exercise the production scope,
-/// clock, CFL scheduler, narrow-band history and renderer output sampling
+/// clock, CFL scheduler, history and renderer output sampling
 /// without output-rate retuning; the rates between run the same path.
 #[test]
 fn liquid_export_matches_live_project_schedule() {
@@ -1126,48 +1126,38 @@ fn liquid_export_matches_live_project_schedule() {
     let rates = manifold_physics::SimRate::ALL;
     for rate in [rates[0], rates[rates.len() - 1]] {
         let project_fps = f64::from(rate.hz());
-        for narrow in [false, true] {
-            let make = |fps: f64, live| {
-                let mut def = scene(row, Fixture::FaceGrid);
-                set_type_param(
-                    &mut def,
-                    GPU_FLIP_DOMAIN_TYPE_ID,
-                    "resolution",
-                    SerializedParamValue::Int { value: 4 },
-                );
-                set_type_param(
-                    &mut def,
-                    "node.gpu_flip_step",
-                    "narrow_band",
-                    SerializedParamValue::Float {
-                        value: if narrow { 1.0 } else { 0.0 },
-                    },
-                );
-                if live {
-                    without_display_delay(&mut def);
-                }
-                LiquidRun::on_project_rate(row, def, 60.0 / fps, live, false, None, project_fps)
-            };
-            let mut live = make(60.0, true);
-            live.steps(30);
-            // A live frame never waits: it publishes a tick once the tick's
-            // fence retires, on a later frame. A paused frame retires the
-            // 0.5 s publication without accepting more work.
-            live.hold();
-            let expected = live.particles("particles_b");
-            for export_fps in [20.0, 24.0, 30.0, 60.0] {
-                let mut export = make(export_fps, false);
-                // Use the same half-second span at every output cadence.
-                // Capture only at a shared endpoint; presentation delay is separate.
-                export.steps(export_fps as u32 / 2);
-                assert_eq!(
-                    bytemuck::cast_slice::<_, u32>(&export.particles("particles_b")),
-                    bytemuck::cast_slice::<_, u32>(&expected),
-                    "project {project_fps}, export {export_fps}, narrow {narrow}"
-                );
+        let make = |fps: f64, live| {
+            let mut def = scene(row, Fixture::FaceGrid);
+            set_type_param(
+                &mut def,
+                GPU_FLIP_DOMAIN_TYPE_ID,
+                "resolution",
+                SerializedParamValue::Int { value: 4 },
+            );
+            if live {
+                without_display_delay(&mut def);
             }
-            assert!(!expected.is_empty());
+            LiquidRun::on_project_rate(row, def, 60.0 / fps, live, false, None, project_fps)
+        };
+        let mut live = make(60.0, true);
+        live.steps(30);
+        // A live frame never waits: it publishes a tick once the tick's
+        // fence retires, on a later frame. A paused frame retires the
+        // 0.5 s publication without accepting more work.
+        live.hold();
+        let expected = live.particles("particles_b");
+        for export_fps in [20.0, 24.0, 30.0, 60.0] {
+            let mut export = make(export_fps, false);
+            // Use the same half-second span at every output cadence.
+            // Capture only at a shared endpoint; presentation delay is separate.
+            export.steps(export_fps as u32 / 2);
+            assert_eq!(
+                bytemuck::cast_slice::<_, u32>(&export.particles("particles_b")),
+                bytemuck::cast_slice::<_, u32>(&expected),
+                "project {project_fps}, export {export_fps}"
+            );
         }
+        assert!(!expected.is_empty());
     }
 }
 

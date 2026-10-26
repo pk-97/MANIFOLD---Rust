@@ -548,17 +548,16 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     assert!(before == snapshot(&stage), "an inactive slot wrote");
 }
 
-/// Rate 0 is off, and any rate with Narrow Band, or outside 0 to 1, is a
-/// named refusal.
+/// Rate 0 is off, and any rate outside 0 to 1 is a named refusal.
 #[test]
 fn gpu_flip_sheeting_rate_is_validated() {
     use super::gpu_flip_step::read_sheet_fill_rate;
-    assert_eq!(read_sheet_fill_rate(0.0, true), Ok(0.0));
-    assert_eq!(read_sheet_fill_rate(0.5, false), Ok(0.5));
+    assert_eq!(read_sheet_fill_rate(0.0), Ok(0.0));
+    assert_eq!(read_sheet_fill_rate(0.5), Ok(0.5));
+    assert_eq!(read_sheet_fill_rate(1.0), Ok(1.0));
     for bad in [-0.1, 1.5, f32::NAN, f32::INFINITY] {
-        assert!(read_sheet_fill_rate(bad, false).is_err(), "{bad}");
+        assert!(read_sheet_fill_rate(bad).is_err(), "{bad}");
     }
-    assert!(read_sheet_fill_rate(1.0, true).is_err());
 }
 
 /// A full pool reports the sheet births it had no slot for: the step's capped

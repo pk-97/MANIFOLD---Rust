@@ -20,7 +20,6 @@ impl StepState {
         self.emit_scan.prepare(device);
         self.solver.prepare_pipelines(device);
         self.bodies.prepare_pipelines(device);
-        self.narrow.prepare(device);
         // Sheet seeding prepares even while its rate is 0: switching it on mid-show
         // must not compile pipelines on the content thread.
         self.sheet_distance.prepare(device);
@@ -36,8 +35,6 @@ impl StepState {
         slots: u64,
         ring_max: u32,
         sources: bool,
-        narrow_enabled: bool,
-        interior_wired: bool,
         sheeting: bool,
     ) -> Result<(), String> {
         if self.zeros.is_none() {
@@ -106,20 +103,6 @@ impl StepState {
         if sources {
             self.emit_scan.buffer(device, emit_sites(cells) as usize)?;
         }
-        if narrow_enabled {
-            let slots = u32::try_from(slots)
-                .map_err(|_| "narrow-band particle capacity exceeds u32".to_string())?;
-            self.narrow.reserve(device, cells, slots)?;
-            for (saved, bytes) in [
-                (&mut self.saved_narrow_phi, cell_bytes(cells)),
-                (&mut self.saved_narrow_faces, face_bytes(cells)),
-                (&mut self.saved_narrow_failure, 4),
-            ] {
-                if saved.as_ref().is_none_or(|buffer| buffer.size != bytes) {
-                    *saved = Some(allocate(device, bytes)?);
-                }
-            }
-        }
         if sheeting {
             let slot_count = u32::try_from(slots)
                 .map_err(|_| "sheeting particle capacity exceeds u32".to_string())?;
@@ -131,18 +114,6 @@ impl StepState {
                 .is_none_or(|buffer| buffer.size < 4 * slots.max(1))
             {
                 self.sheet_order = Some(allocate(device, 4 * slots.max(1))?);
-            }
-        }
-        if !interior_wired {
-            self.interior = None;
-        } else {
-            let bytes = cell_bytes(cells);
-            if self
-                .interior
-                .as_ref()
-                .is_none_or(|buffer| buffer.size != bytes)
-            {
-                self.interior = Some(allocate(device, bytes)?);
             }
         }
         Ok(())
@@ -177,5 +148,4 @@ impl StepState {
         );
         enc.compute_memory_barrier_buffers();
     }
-
 }

@@ -7,8 +7,6 @@
 //! tick's face grid escapes beside the particles into storage this node owns,
 //! sized from the lattice wires before the region runs, so it is whole from
 //! the first frame and holds while the transport is paused.
-//! The optional interior field uses the Ferstl et al. (2016) narrow-band
-//! positive sentinel when it is unwired or reset.
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
@@ -19,7 +17,6 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::face_bytes;
-use manifold_water_liquid::grid::{InteriorOps, interior_bytes};
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use manifold_water_liquid::primitives::particle_identity::{IDENTITY_BYTES, ParticleIdentity};
@@ -81,11 +78,6 @@ const RESULTS: &[SubstepResultPorts] = &[
         optional: true,
     },
     SubstepResultPorts {
-        capture: "interior_in",
-        output: "interior",
-        optional: true,
-    },
-    SubstepResultPorts {
         capture: "identity_in",
         output: "identity",
         optional: true,
@@ -136,10 +128,7 @@ pub struct SyncSample {
 /// A tick's max marker speed, unless its stats make it unusable for the
 /// next tick's CFL decision.
 fn usable_speed(stats: &LiquidTickStats) -> Option<f32> {
-    (stats.nonfinite == 0
-        && stats.narrow_band_shortage == 0
-        && stats.max_speed.is_finite()
-        && stats.max_speed >= 0.0)
+    (stats.nonfinite == 0 && stats.max_speed.is_finite() && stats.max_speed >= 0.0)
         .then_some(stats.max_speed)
 }
 
@@ -183,7 +172,7 @@ fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, Str
 manifold_node_engine::primitive! {
     name: LiquidState,
     type_id: "node.liquid_state",
-    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats, optional interior distance and its last tick's face grid escape with them; a new epoch's faces are zero. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time. Narrow-band capacity shortage halts until Reset; other solver fault handling is unchanged.",
+    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats and its last tick's face grid escape with them; a new epoch's faces are zero. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time.",
     inputs: {
         seed: Array(FluidParticle) required,
         in: Array(FluidParticle) required,
@@ -198,7 +187,6 @@ manifold_node_engine::primitive! {
         bubble_particles_in: Array(FluidParticle) optional,
         spray_particles_in: Array(FluidParticle) optional,
         dust_particles_in: Array(FluidParticle) optional,
-        interior_in: Array(f32) optional,
         count: ScalarF32 optional,
         whitewater_capacity: ScalarF32 optional,
         ticks: ScalarF32 optional,
@@ -223,7 +211,6 @@ manifold_node_engine::primitive! {
         bubble_particles: Array(FluidParticle),
         spray_particles: Array(FluidParticle),
         dust_particles: Array(FluidParticle),
-        interior: Array(f32),
         tick_index: ScalarF32,
         retired_max_speed: ScalarF32,
         live_count: ScalarF32,
@@ -253,7 +240,6 @@ manifold_node_engine::primitive! {
         zero_stats: Option<GpuBuffer> = None,
         readback: Vec<ReadbackSlot> = Vec::new(),
         faulted: bool = false,
-        capacity_faulted: bool = false,
         cap_hit: bool = false,
         clock_nonfinite: bool = false,
         last_stats: Option<LiquidTickStats> = None,
@@ -271,8 +257,6 @@ manifold_node_engine::primitive! {
         spray_particles: Option<GpuBuffer> = None,
         dust_particles: Option<GpuBuffer> = None,
         whitewater_capacity: u32 = 0,
-        interior: Option<GpuBuffer> = None,
-        interior_ops: InteriorOps = InteriorOps::default(),
     },
 }
 
@@ -387,10 +371,10 @@ impl LiquidState {
             let nonfinite = status.is_some_and(|words| words[5] != 0);
             if let Some(status) = status {
                 log::debug!(target: "gpu_flip::schedule",
-                    "retired={} endpoint={} steps={} remaining={} maximum={} cap={cap_hit} nonfinite={nonfinite} live={} bad_particles={} kinetic={} pressure={} density={} unconverged={} pockets={} speed_capped={} push_refused={} narrow_shortage={}",
+                    "retired={} endpoint={} steps={} remaining={} maximum={} cap={cap_hit} nonfinite={nonfinite} live={} bad_particles={} kinetic={} pressure={} density={} unconverged={} pockets={} speed_capped={} push_refused={}",
                     slot.completed_ticks, slot.endpoint, status[6], f32::from_bits(status[2]), stats.max_speed,
                     stats.live, stats.nonfinite, stats.kinetic, stats.pressure_iterations, stats.density_iterations,
-                    stats.unconverged, stats.unresolved_pockets, stats.speed_capped, stats.push_refused, stats.narrow_band_shortage);
+                    stats.unconverged, stats.unresolved_pockets, stats.speed_capped, stats.push_refused);
             }
             if newest.is_none_or(|(stamp, _, _, _, _, _)| slot.stamp >= stamp) {
                 newest = Some((
@@ -427,13 +411,11 @@ impl LiquidState {
     ) -> bool {
         self.cap_hit = cap_hit;
         self.clock_nonfinite = nonfinite;
-        self.capacity_faulted |= stats.narrow_band_shortage > 0;
-        self.faulted =
-            self.capacity_faulted || stats.nonfinite > 0 || (self.faulted && !live_recovery);
+        self.faulted = stats.nonfinite > 0 || (self.faulted && !live_recovery);
         self.completed_time = endpoint;
         self.last_stats = Some(stats);
         self.retired_ticks = (!self.faulted && !nonfinite).then_some(completed_ticks);
-        self.faulted && live_recovery && !self.capacity_faulted
+        self.faulted && live_recovery
     }
 
     fn reset_epoch(&mut self, epoch: u32) {
@@ -442,7 +424,6 @@ impl LiquidState {
         self.epoch = Some(epoch);
         self.ticks_done = 0;
         self.faulted = false;
-        self.capacity_faulted = false;
         self.cap_hit = false;
         self.clock_nonfinite = false;
         self.last_stats = None;
@@ -451,7 +432,7 @@ impl LiquidState {
 
     /// Only a retired sample of this exact incoming tick state is fresh.
     fn retired_speed(&self, iteration: u32) -> f32 {
-        if self.faulted || self.capacity_faulted || self.clock_nonfinite || self.identity_reset {
+        if self.faulted || self.clock_nonfinite || self.identity_reset {
             return -1.0;
         }
         let Some(incoming_tick) = self.ticks_done.checked_add(u64::from(iteration)) else {
@@ -509,7 +490,6 @@ impl LiquidState {
         identity_reset: bool,
     ) -> Option<f32> {
         if self.faulted
-            || self.capacity_faulted
             || self.clock_nonfinite
             || self.identity_reset
             || nonfinite_clock
@@ -530,7 +510,6 @@ impl Primitive for LiquidState {
     }
 
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
-        self.interior_ops.prepare_clear(device);
         self.identity_ops.prepare(device);
     }
 
@@ -548,7 +527,6 @@ impl Primitive for LiquidState {
             "bubble_particles_in",
             "spray_particles_in",
             "dust_particles_in",
-            "interior_in",
         ]
     }
 
@@ -580,7 +558,6 @@ impl Primitive for LiquidState {
                 | "bubble_particles"
                 | "spray_particles"
                 | "dust_particles"
-                | "interior"
         )
     }
 
@@ -595,7 +572,6 @@ impl Primitive for LiquidState {
             "bubble_particles" => self.bubble_particles.as_ref(),
             "spray_particles" => self.spray_particles.as_ref(),
             "dust_particles" => self.dust_particles.as_ref(),
-            "interior" => self.interior.as_ref(),
             _ => None,
         }
     }
@@ -621,8 +597,9 @@ impl Primitive for LiquidState {
             // Provided storage: a one-record hint, sized at run time from the
             // body's faces, which the plan allocates after this node.
             "faces" | "whitewater_pool" | "whitewater_state" | "whitewater_counts"
-            | "foam_particles" | "bubble_particles" | "spray_particles" | "dust_particles"
-            | "interior" => Some(1),
+            | "foam_particles" | "bubble_particles" | "spray_particles" | "dust_particles" => {
+                Some(1)
+            }
             _ => None,
         }
     }
@@ -679,24 +656,6 @@ impl Primitive for LiquidState {
                 .slot(RESULTS[WHITEWATER_RESULT_START + i].capture)
                 .is_some()
         });
-        let interior_grid = if ctx.inputs.slot("interior_in").is_none() {
-            None
-        } else if ["nodes_x", "nodes_y", "nodes_z"]
-            .iter()
-            .any(|port| ctx.inputs.slot(port).is_none())
-        {
-            refused = Some(
-                "Liquid State: interior_in needs the lattice on nodes_x, nodes_y and nodes_z"
-                    .to_string(),
-            );
-            None
-        } else {
-            LiquidLattice::from_wires(ctx, "Liquid State")
-                .map(|lattice| interior_bytes(FlipSolverGrid::from_lattice(lattice).cells()))
-        };
-        if interior_grid == Some(0) {
-            refused = Some("Liquid State: interior distance has zero cells".to_string());
-        }
         let live_recovery = target_time.is_some() && !ctx.sim_step.offline();
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
@@ -753,33 +712,6 @@ impl Primitive for LiquidState {
             Some(_) => {}
         }
 
-        let mut fresh_interior = false;
-        match interior_grid.filter(|&bytes| bytes != 0) {
-            None => self.interior = None,
-            Some(bytes)
-                if self
-                    .interior
-                    .as_ref()
-                    .is_none_or(|field| field.size != bytes) =>
-            {
-                let device = gpu.device;
-                self.interior = manifold_node_engine::load::expand::admit_candidate_bytes(
-                    device.modifier_memory_snapshot(),
-                    bytes,
-                )
-                .map_err(|error| error.to_string())
-                .and_then(|()| device.try_create_buffer_shared(bytes.max(4)))
-                .map_err(|error| {
-                    refused = Some(format!(
-                        "Liquid State: the interior distance needs {bytes} bytes the device cannot give: {error}. Lower Resolution."
-                    ));
-                })
-                .ok();
-                fresh_interior = self.interior.is_some();
-            }
-            Some(_) => {}
-        }
-
         if self.epoch != Some(epoch) || fresh_faces || self.identity_reset {
             // A new epoch's faces are zero until its first tick.
             if let Some(faces) = &self.faces {
@@ -800,12 +732,6 @@ impl Primitive for LiquidState {
         let identity = self
             .identity
             .get_or_insert_with(|| gpu.device.create_buffer_shared(IDENTITY_BYTES));
-        if (epoch_reset || fresh_interior)
-            && let Some(interior) = self.interior.as_ref()
-            && let Err(error) = self.interior_ops.clear(gpu, interior)
-        {
-            refused = Some(format!("Liquid State: {error}"));
-        }
         if epoch_reset {
             if let (Some(seed), Some(out)) = (seed, out) {
                 let bytes = (u64::from(count) * std::mem::size_of::<FluidParticle>() as u64)
@@ -885,12 +811,11 @@ impl Primitive for LiquidState {
             });
         }
 
-        self.pending =
-            if refused.is_some() || self.capacity_faulted || (self.faulted && !live_recovery) {
-                0
-            } else {
-                ticks
-            };
+        self.pending = if refused.is_some() || (self.faulted && !live_recovery) {
+            0
+        } else {
+            ticks
+        };
         self.captures = 0;
         self.sync_sample_tick = None;
         let live = self.last_stats.map_or(count, |s| s.live);
@@ -900,17 +825,12 @@ impl Primitive for LiquidState {
             "fault",
             ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }),
         );
-        if self.faulted {
-            if self.last_stats.is_some_and(|s| s.nonfinite > 0) {
-                ctx.error(if live_recovery {
+        if self.faulted && self.last_stats.is_some_and(|s| s.nonfinite > 0) {
+            ctx.error(if live_recovery {
                 "Liquid State: non-finite values detected; reseeding water while the show continues"
             } else {
                 "Liquid State: a tick produced non-finite values; the liquid is halted until Reset"
             });
-            }
-            if self.last_stats.is_some_and(|s| s.narrow_band_shortage > 0) {
-                ctx.error("Liquid State: narrow-band particle capacity was insufficient for reseeding; the liquid is halted until Reset");
-            }
         }
         if let Some(error) = refused {
             ctx.error(error);
@@ -1013,22 +933,6 @@ impl Primitive for LiquidState {
                 ctx.error(format!(
                     "Liquid State: the tick's faces hold {} bytes; the lattice's face grid is {}",
                     candidate.size, faces.size
-                ));
-            }
-        }
-        if let (Some(candidate), Some(interior)) =
-            (ctx.inputs.array("interior_in"), self.interior.as_ref())
-        {
-            if candidate.size == interior.size {
-                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(
-                    candidate,
-                    interior,
-                    interior.size,
-                );
-            } else {
-                ctx.error(format!(
-                    "Liquid State: the tick's interior distance holds {} bytes; the lattice's cell-centred field is {}",
-                    candidate.size, interior.size
                 ));
             }
         }
@@ -1184,10 +1088,6 @@ mod tests {
                 ..stats
             },
             LiquidTickStats {
-                narrow_band_shortage: 1,
-                ..stats
-            },
-            LiquidTickStats {
                 max_speed: f32::NAN,
                 ..stats
             },
@@ -1229,15 +1129,13 @@ mod tests {
         for speed in [f32::NAN, f32::INFINITY, -0.5] {
             assert_eq!(retired_state(speed).retired_speed(0), -1.0);
         }
-        for fault in 0..6 {
+        for fault in 0..4 {
             let mut state = retired_state(2.0);
             match fault {
                 0 => state.faulted = true,
-                1 => state.capacity_faulted = true,
-                2 => state.clock_nonfinite = true,
-                3 => state.identity_reset = true,
-                4 => state.last_stats.as_mut().unwrap().nonfinite = 1,
-                5 => state.last_stats.as_mut().unwrap().narrow_band_shortage = 1,
+                1 => state.clock_nonfinite = true,
+                2 => state.identity_reset = true,
+                3 => state.last_stats.as_mut().unwrap().nonfinite = 1,
                 _ => unreachable!(),
             }
             assert_eq!(state.retired_speed(0), -1.0, "fault {fault}");

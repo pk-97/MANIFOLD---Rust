@@ -523,6 +523,27 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "surface_wetness.rs",
+        rust_struct: "WetnessUniforms",
+        shader: "shaders/surface_wetness.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "foam_cover.rs",
+        rust_struct: "CoverUniforms",
+        shader: "shaders/foam_cover.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "spray_mist.rs",
+        rust_struct: "MistUniforms",
+        shader: "shaders/spray_mist.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "carry_liquid_into_solids.rs",
         rust_struct: "CarryUniforms",
         shader: "shaders/carry_liquid_into_solids.wgsl",
@@ -565,7 +586,7 @@ pub const CASES: &[CustomAbiCase] = &[
         shader_struct: "Params",
         aliases: &[],
     },
-    // GPU FLIP's live clock, narrow band and Lentine coarse solve, with the
+    // GPU FLIP's live clock and Lentine coarse solve, with the
     // records their value proofs upload.
     CustomAbiCase {
         source: "gpu_flip_clock.rs",
@@ -586,34 +607,6 @@ pub const CASES: &[CustomAbiCase] = &[
         rust_struct: "EventFieldParams",
         shader: "shaders/gpu_flip_clock.wgsl",
         shader_struct: "EventFieldParams",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "gpu_flip_narrow_band.rs",
-        rust_struct: "NbParams",
-        shader: "shaders/gpu_flip_narrow_band.wgsl",
-        shader_struct: "NbParams",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "gpu_flip_narrow_band_tests.rs",
-        rust_struct: "NbFace",
-        shader: "shaders/gpu_flip_narrow_band.wgsl",
-        shader_struct: "NbFace",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "gpu_flip_narrow_band_tests.rs",
-        rust_struct: "NbParticle",
-        shader: "shaders/gpu_flip_narrow_band.wgsl",
-        shader_struct: "NbParticle",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "gpu_flip_narrow_band_tests.rs",
-        rust_struct: "NbRange",
-        shader: "shaders/gpu_flip_narrow_band.wgsl",
-        shader_struct: "NbRange",
         aliases: &[],
     },
     CustomAbiCase {

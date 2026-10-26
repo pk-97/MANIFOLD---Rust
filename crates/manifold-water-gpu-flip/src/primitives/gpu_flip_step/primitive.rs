@@ -11,13 +11,7 @@ impl Primitive for GpuFlipStep {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(
             port,
-            "faces"
-                | "distance"
-                | "interior"
-                | "substep_schedule"
-                | "substep_u"
-                | "substep_v"
-                | "substep_w"
+            "faces" | "distance" | "substep_schedule" | "substep_u" | "substep_v" | "substep_w"
         )
     }
 
@@ -25,7 +19,6 @@ impl Primitive for GpuFlipStep {
         match port {
             "faces" => self.state.faces.as_ref(),
             "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
-            "interior" => self.state.interior.as_ref(),
             "substep_schedule" => self.state.history.schedule.as_ref(),
             "substep_u" | "substep_v" | "substep_w" => self.state.history.faces.as_ref().map(|f| {
                 &f[match port {
@@ -50,8 +43,9 @@ impl Primitive for GpuFlipStep {
                 .find(|(name, _)| *name == "particles")
                 .map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the lattice at run time.
-            "faces" | "distance" | "interior" | "substep_schedule" | "substep_u" | "substep_v"
-            | "substep_w" => Some(1),
+            "faces" | "distance" | "substep_schedule" | "substep_u" | "substep_v" | "substep_w" => {
+                Some(1)
+            }
             "reaction_out" => inputs
                 .iter()
                 .find(|(name, _)| *name == "reaction")
@@ -64,13 +58,6 @@ impl Primitive for GpuFlipStep {
             "identity_out" => Some(4),
             _ => None,
         }
-    }
-
-    fn clear_state(&mut self) {
-        self.state.narrow_history = None;
-        self.state.narrow.initialized = false;
-        self.state.narrow_reset_pending = true;
-        self.state.narrow_full_count = false;
     }
 
     fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
@@ -128,28 +115,13 @@ impl Primitive for GpuFlipStep {
             return;
         };
         let out_slots = (out.size / particle_bytes).min(u64::from(capacity)) as u32;
-        let narrow_enabled = match read_narrow_band(ctx.scalar_or_param("narrow_band", 0.0)) {
-            Ok(enabled) => enabled,
+        let sheet_rate = match read_sheet_fill_rate(ctx.scalar_or_param("sheet_fill_rate", 0.0)) {
+            Ok(rate) => rate,
             Err(error) => {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
         };
-        let sheet_rate =
-            match read_sheet_fill_rate(ctx.scalar_or_param("sheet_fill_rate", 0.0), narrow_enabled)
-            {
-                Ok(rate) => rate,
-                Err(error) => {
-                    ctx.error(format!("{NAME}: {error}"));
-                    return;
-                }
-            };
-        if narrow_enabled && out_slots != capacity {
-            ctx.error(format!(
-                "{NAME}: Narrow Band requires out to hold all {capacity} particle slots"
-            ));
-            return;
-        }
         let tally = 2 * u64::from(capacity) * 4;
         if capped.size < tally + u64::from(SOLVER_WORDS) * 4 {
             ctx.error(format!("{NAME}: the capped array holds fewer than two words a particle slot and {SOLVER_WORDS} solver words"));
@@ -175,17 +147,6 @@ impl Primitive for GpuFlipStep {
         let gravity = [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0)]
             .map(|(name, default)| ctx.scalar_or_param(name, default));
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
-        let epoch = if ctx.inputs.slot("epoch").is_some() {
-            match read_epoch(ctx.scalar_or_param("epoch", 0.0)) {
-                Ok(epoch) => Some(epoch),
-                Err(error) => {
-                    ctx.error(format!("{NAME}: {error}"));
-                    return;
-                }
-            }
-        } else {
-            None
-        };
         let body_count = ctx
             .scalar_or_param("body_count", 0.0)
             .round()
@@ -226,38 +187,12 @@ impl Primitive for GpuFlipStep {
             None => 0,
         };
         let band = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
-        let restore_narrow = self.state.sync_narrow_history(
-            epoch,
-            box_min,
-            h,
-            cells,
-            capacity,
-            tick_index,
-            narrow_enabled,
-        );
-        if (narrow_enabled || restore_narrow || self.state.narrow_full_count)
-            && out_slots != capacity
-        {
-            ctx.error(format!(
-                "{NAME}: Narrow Band history requires out to hold all {capacity} particle slots"
-            ));
-            return;
-        }
-        if (narrow_enabled || restore_narrow || self.state.narrow_full_count)
-            && capacity > EXACT_F32_COUNT
-        {
-            ctx.error(format!("{NAME}: Narrow Band requires at most {EXACT_F32_COUNT} particle slots for exact count addressing"));
-            return;
-        }
-        let interior_wired = ctx.outputs.slot("interior").is_some();
         if let Err(error) = self.state.reserve(
             ctx.gpu_encoder().device,
             cells,
             u64::from(capacity),
             ring_max(band),
             region_count > 0,
-            narrow_enabled,
-            interior_wired,
             sheet_rate > 0.0,
         ) {
             ctx.error(format!(
@@ -404,22 +339,17 @@ impl Primitive for GpuFlipStep {
                     .product::<usize>()
                     .saturating_mul(4)
                     .min(u32::MAX as usize) as u32,
-                narrow_band: u32::from(narrow_enabled),
                 wall_inset: solver.wall_inset(),
                 coupled_h: manifold_physics::coupled_motion::coupled_substep(
                     manifold_physics::Seconds(interval_duration),
                 ),
-                _pad: [0; 2],
+                _pad: [0; 3],
             },
             clock_plan: &zeros,
             particles,
             out,
             capped,
-            count: if restore_narrow || self.state.narrow_full_count {
-                capacity
-            } else {
-                count
-            },
+            count,
             forces: field.forces.unwrap_or(&zeros),
             impulses: field.impulses.unwrap_or(&zeros),
             bodies,
@@ -436,8 +366,6 @@ impl Primitive for GpuFlipStep {
             band,
             ghost,
             density: ctx.scalar_or_param("volume_projection", 0.0) > 0.5,
-            narrow_enabled,
-            restore_narrow,
             sheet_rate,
         };
         let clock_status = ctx.outputs.array("clock_status").cloned();
@@ -462,8 +390,6 @@ impl Primitive for GpuFlipStep {
             && steps == 1.0
             && live_hit_count == 0
             && source_count == 0
-            && !narrow_enabled
-            && !restore_narrow
             && one_step_cfl_safe(
                 ctx.scalar_or_param("retired_max_speed", -1.0),
                 obstacle_speed,
@@ -476,7 +402,7 @@ impl Primitive for GpuFlipStep {
             manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count
         };
         log::debug!(target: "gpu_flip::schedule",
-            "tick={tick_index} slots={history_slots} interval={interval_duration} h={h} marker={} obstacle={obstacle_speed} minimum={steps} hits={live_hit_count} sources={source_count} narrow={narrow_enabled} restore={restore_narrow}",
+            "tick={tick_index} slots={history_slots} interval={interval_duration} h={h} marker={} obstacle={obstacle_speed} minimum={steps} hits={live_hit_count} sources={source_count}",
             ctx.scalar_or_param("retired_max_speed", -1.0));
         ctx.outputs
             .set_scalar("substep_count", ParamValue::Float(history_slots as f32));
@@ -522,14 +448,7 @@ impl Primitive for GpuFlipStep {
             clock.begin_frame(gpu.native_enc, &clock_params);
         }
         for k in 0..encoded_steps as i32 {
-            step.restore_narrow = restore_narrow && k == 0;
-            step.count = if k > 0 {
-                out_slots
-            } else if self.state.narrow_full_count || step.restore_narrow {
-                capacity
-            } else {
-                count
-            };
+            step.count = if k > 0 { out_slots } else { count };
             let particles_for_step = if k > 0 { out } else { particles };
             let params = StepParams {
                 step_in_tick: k,
@@ -613,31 +532,6 @@ impl Primitive for GpuFlipStep {
                         .expect("capped mask prepared"),
                     "gpu_flip.step.mask.capped",
                 );
-                if step.narrow_enabled {
-                    let nb = self
-                        .state
-                        .narrow
-                        .buffers
-                        .as_ref()
-                        .expect("narrow buffers prepared");
-                    for (target, saved) in [
-                        (&nb.phi, self.state.saved_narrow_phi.as_ref()),
-                        (&nb.previous_faces, self.state.saved_narrow_faces.as_ref()),
-                        (&nb.failure, self.state.saved_narrow_failure.as_ref()),
-                    ] {
-                        self.state.commit_mask(
-                            gpu.native_enc,
-                            &plan_buffer,
-                            target,
-                            saved.expect("narrow mask prepared"),
-                            "gpu_flip.step.mask.narrow",
-                        );
-                    }
-                    if let Some(interior) = &self.state.interior {
-                        gpu.native_enc
-                            .copy_buffer_to_buffer(&nb.phi, interior, nb.phi.size);
-                    }
-                }
                 self.state.history.capture(
                     gpu.native_enc,
                     k as u32,

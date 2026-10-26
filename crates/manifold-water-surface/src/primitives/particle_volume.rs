@@ -2,8 +2,7 @@
 //! `node.particle_volume` — the liquid level set: one value per lattice node,
 //! the distance to the nearest spherical kernel in the node's bins
 //! (GPU_FLUID_SURFACE_DESIGN.md D8, D15, D18, P6e). A per-element gather on
-//! the codegen path. The optional interior field follows Ferstl et al.,
-//! "Narrow Band FLIP for Liquid Simulations", CGF 35(2), 2016, Eq. 4.
+//! the codegen path.
 
 use std::borrow::Cow;
 
@@ -19,7 +18,7 @@ use manifold_water_liquid::primitives::liquid_bricks;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{bin_param, read_searched_bins};
 
 /// Codegen uniform layout: params in PARAMS order, then derived `brick_pass`
-/// and `interior_len`, then `dispatch_count` and 16-byte alignment padding.
+/// then `dispatch_count` and 16-byte alignment padding.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct VolumeUniforms {
@@ -39,10 +38,10 @@ struct VolumeUniforms {
     bins_z: i32,
     band_extra: f32,
     brick_pass: u32,
-    interior_len: u32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 manifold_core::testkit_visible! {
@@ -69,7 +68,6 @@ manifold_node_engine::primitive! {
         cell_ranges: Array(CellRange) required,
         solid: Array(f32) required,
         bricks: Array(u32) optional,
-        interior: Array(f32) optional,
         bounds: Array(f32) required,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
@@ -107,7 +105,7 @@ manifold_node_engine::primitive! {
         float_param!("band_extra", "Extra Distance Band", 0.0, 0.0, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blobs from node.shape_particle_blobs and bounds from a node.blob_bounds fed the same blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). Optionally wire the narrow-band solver's cell-centred interior distance, with exactly one value per authored physical cell: the solid lattice has three padding nodes on every side, so the extent is (solid_nodes - 7)^3; an unwired input preserves the dense particle path. resolution_scale sets the field detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. The blobs' particle_scale sets how far the surface sits from the particles. volume_nodes_x/y/z carry the refined lattice to node.redistance_lattice and the field smoothing.",
+    composition_notes: "Wire blobs from node.shape_particle_blobs and bounds from a node.blob_bounds fed the same blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). resolution_scale sets the field detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. The blobs' particle_scale sets how far the surface sits from the particles. volume_nodes_x/y/z carry the refined lattice to node.redistance_lattice and the field smoothing.",
     examples: [],
     picker: { label: "Particle Volume", category: Atom },
     summary: "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
@@ -116,22 +114,10 @@ manifold_node_engine::primitive! {
     aliases: ["level set", "signed distance", "liquid field", "scalar field"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/particle_volume_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    derived_uniforms: ["brick_pass:u32", "interior_len:u32"],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    derived_uniforms: ["brick_pass:u32"],
     wgsl_includes: [liquid_bricks::COMMON],
     buffer_index: "liquid_brick_index",
-}
-
-// Per-frame recompute for a fused region's derived block. An unwired
-// interior is the baseline path; wired extents are checked by the liquid planner.
-inventory::submit! {
-    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
-        type_id: "node.particle_volume",
-        array_ports: &["interior"],
-        recompute: |ctx| {
-            Some(vec![0.0, (ctx.array_len)("interior").unwrap_or(0) as f32])
-        },
-    }
 }
 
 impl Primitive for ParticleVolume {
@@ -189,10 +175,10 @@ impl Primitive for ParticleVolume {
             bins_z: 0,
             band_extra: ctx.scalar_or_param("band_extra", 0.0),
             brick_pass: 0,
-            interior_len: 0,
             dispatch_count: 0,
             _pad0: 0,
             _pad1: 0,
+            _pad2: 0,
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -222,29 +208,6 @@ impl Primitive for ParticleVolume {
             ));
             return;
         }
-        let interior_input = ctx.inputs.array("interior");
-        if interior_input.is_some_and(|buffer| buffer.size == 0) {
-            ctx.error("Particle Volume: interior is wired but has zero extent; omit the wire for the baseline path or provide one f32 per solid cell.");
-            return;
-        }
-        let interior_wired = interior_input;
-        let (interior, interior_len) = if let Some(buffer) = interior_wired {
-            let actual = buffer.size / 4;
-            if !buffer.size.is_multiple_of(4)
-                || manifold_water_liquid::lattice::interior_cells(nodes.map(|n| n as u32), actual)
-                    .is_none()
-            {
-                ctx.error(format!(
-                    "Particle Volume: interior has {actual} f32 values; expected the exact physical cell count for native (nodes minus 4) or solver (nodes minus 7) padding at {}×{}×{} nodes.",
-                    nodes[0], nodes[1], nodes[2]
-                ));
-                return;
-            }
-            (buffer, actual as u32)
-        } else {
-            // Keep the binding ABI total while making the optional input inert.
-            (solid, 0)
-        };
         let bins = match read_searched_bins(ctx, ranges.size, "Particle Volume") {
             Ok(Some(bins)) => bins,
             Ok(None) => return,
@@ -258,7 +221,6 @@ impl Primitive for ParticleVolume {
             bins_x,
             bins_y,
             bins_z,
-            interior_len,
             brick_pass: 0,
             dispatch_count: total as u32,
             ..uniforms
@@ -308,16 +270,11 @@ impl Primitive for ParticleVolume {
                     },
                     GpuBinding::Buffer {
                         binding: 5,
-                        buffer: interior,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 6,
                         buffer: bounds,
                         offset: 0,
                     },
                     GpuBinding::Buffer {
-                        binding: 7,
+                        binding: 6,
                         buffer: levelset,
                         offset: 0,
                     },
@@ -333,72 +290,8 @@ impl Primitive for ParticleVolume {
 
 #[cfg(test)]
 mod cpu_tests {
-    use manifold_water_liquid::testkit::particle_volume::*;
-
     #[test]
-    fn deep_pool_interior_reaches_below_particle_band() {
-        let interior = vec![-3.0; 2 * 2 * 2];
-        let phi = union(0.25, Some(&interior), [1.0; 3], [0.0; 3], [2.0; 3], [9; 3]);
-        assert_eq!(phi, -2.75);
-    }
-
-    #[test]
-    fn native_mesh_interior_samples_simulation_cell_centres() {
-        let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
-        let mesh = manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout).surface();
-        let field: Vec<f32> = (0..8u32.pow(3)).map(|i| (i % 8) as f32 + 0.5).collect();
-        for i in 0..8 {
-            let p = [layout.min[0] + (i as f32 + 0.5) * 0.25, 1.0, 0.0];
-            let value = trilinear_interior(
-                &field,
-                p,
-                mesh.min(),
-                mesh.bounds().scale,
-                mesh.nodes().map(|n| n as usize),
-            );
-            assert_eq!(value, i as f32 + 0.5);
-        }
-    }
-
-    #[test]
-    fn shallow_surface_prefers_particle_distance() {
-        let interior = vec![-0.1; 2 * 2 * 2];
-        let phi = union(-0.2, Some(&interior), [1.0; 3], [0.0; 3], [2.0; 3], [9; 3]);
-        assert_eq!(phi, -0.2);
-    }
-
-    #[test]
-    fn unwired_interior_is_bit_identity() {
-        let p = 0.375;
-        assert_eq!(union(p, None, [0.0; 3], [0.0; 3], [1.0; 3], [2; 3]), p);
-    }
-
-    #[test]
-    fn rectangular_lattice_uses_cell_center_offset_and_physical_spacing() {
-        // Three-by-two-by-one physical cells inside a padded rectangular
-        // solid lattice; spacing is size/(solid_nodes-1) on each axis.
-        let cells = [3, 2, 1];
-        let interior: Vec<f32> = (0..cells.iter().product()).map(|i| i as f32).collect();
-        let sample = trilinear_interior(
-            &interior,
-            [3.0, 3.0, 1.0],
-            [0.0; 3],
-            [6.0, 4.0, 2.0],
-            [10, 9, 8],
-        );
-        assert_eq!(sample, 4.0);
-        let combined = union(
-            10.0,
-            Some(&interior),
-            [3.0, 3.0, 1.0],
-            [0.0; 3],
-            [6.0, 4.0, 2.0],
-            [10, 9, 8],
-        );
-        assert!((combined - 4.2857144).abs() < 1.0e-6);
-    }
-    #[test]
-    fn particle_volume_interior_codegen_validates() {
+    fn particle_volume_codegen_validates() {
         let wgsl =
             manifold_node_engine::freeze::codegen::standalone_for_spec::<super::ParticleVolume>()
                 .expect("particle_volume buffer codegen");
@@ -411,58 +304,20 @@ mod cpu_tests {
         .validate(&module)
         .unwrap_or_else(|error| panic!("{error:?}"));
         assert!(wgsl.contains("buf_bricks: array<u32>"), "{wgsl}");
-        assert!(wgsl.contains("buf_interior: array<f32>"), "{wgsl}");
         assert!(wgsl.contains("brick_pass: u32"), "{wgsl}");
-        assert!(wgsl.contains("interior_len: u32"), "{wgsl}");
-        assert!(
-            wgsl.contains("params.brick_pass, params.interior_len)"),
-            "{wgsl}"
-        );
         assert!(
             wgsl.contains("@group(0) @binding(4) var<storage, read> buf_bricks"),
             "{wgsl}"
         );
         assert!(
-            wgsl.contains("@group(0) @binding(5) var<storage, read> buf_interior"),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("@group(0) @binding(7) var<storage, read_write> buf_levelset"),
+            wgsl.contains("@group(0) @binding(6) var<storage, read_write> buf_levelset"),
             "{wgsl}"
         );
         let clear_guard = wgsl.find("if brick_pass != 2u").expect("brick clear guard");
-        let interior_union = wgsl
-            .find("phi = min(phi, pv_interior")
-            .expect("interior union");
         let solid_constraint = wgsl.find("if pv_solid(").expect("solid constraint");
-        assert!(clear_guard < interior_union && clear_guard < solid_constraint);
+        assert!(clear_guard < solid_constraint);
         assert!(!wgsl.contains("brick_pass == 2u { return band; }"));
         assert_eq!(std::mem::size_of::<super::VolumeUniforms>(), 80);
-    }
-
-    #[test]
-    fn particle_volume_recomputes_derived_uniforms_in_declared_order() {
-        let frame = manifold_node_engine::exec::effect_node::FrameTime {
-            beats: manifold_core::Beats(0.0),
-            seconds: manifold_core::Seconds(0.0),
-            delta: manifold_core::Seconds(0.0),
-            frame_count: 0,
-        };
-        let array_len = |port: &str| (port == "interior").then_some(7);
-        let ctx = manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformContext {
-            frame: &frame,
-            sim_step: Default::default(),
-            sim_metrics: Default::default(),
-            camera: None,
-            array_len: &array_len,
-        };
-        assert_eq!(
-            manifold_node_engine::freeze::derived_uniform_registry::recompute(
-                "node.particle_volume",
-                &ctx,
-            ),
-            Some(vec![0.0, 7.0])
-        );
     }
 }
 

@@ -16,11 +16,6 @@
 //! FLIP Fluids `fluidsimulation.cpp` (MIT, Copyright (C) 2026 Ryan L. Guy &
 //! Dennis Fassbaender; see THIRD_PARTY_NOTICES.md), line refs in the shader.
 //!
-//! The narrow-band transport, distance, and reseeding stages port Ferstl et
-//! al., "Narrow Band FLIP for Liquid Simulations", Computer Graphics Forum
-//! 35(2), 225–232 (2016), doi:10.1111/cgf.12825. FLIP Fluids is credited
-//! above for the engine step policies reused by this stage.
-//!
 //! The density projection is T. Kugelstadt, A. Longva, N. Thuerey and
 //! J. Bender, "Implicit Density Projection for Volume Conserving Liquids",
 //! IEEE TVCG 27(4), 2019: each step solves a second Poisson equation whose
@@ -42,7 +37,6 @@ use super::gpu_flip_bodies::{Bodies, BodyPasses, REACTION_FLOATS, body_refusal};
 use super::gpu_flip_clock::{
     GpuFlipClock, GpuFlipClockInputs, GpuFlipClockParams, flags as clock_flags,
 };
-use super::gpu_flip_narrow_band::{BandPipelines, NarrowBand, NbParams};
 use super::gpu_flip_pressure::{
     MAX_ITERATIONS, PressureSolver, Solve, Stop, Water, lattice_refusal, level_lattices,
 };
@@ -52,7 +46,6 @@ use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
-use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
 use manifold_water_liquid::WATER_DENSITY;
@@ -67,17 +60,15 @@ use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, int_param,
 };
+use read_params::read_iterations;
 pub(crate) use read_params::{
-    read_closed_faces, read_max_iterations, read_narrow_band, read_sheet_fill_rate,
-    read_solve_level,
+    read_closed_faces, read_max_iterations, read_sheet_fill_rate, read_solve_level,
 };
-use read_params::{read_epoch, read_iterations};
 
 mod emit;
 mod encode;
 mod extend;
 mod lattice;
-mod narrow_band;
 mod pipelines;
 mod pockets;
 mod primitive;
@@ -91,7 +82,6 @@ use extend::*;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(crate) use lattice::scratch_bytes;
 use lattice::*;
-use narrow_band::*;
 use pipelines::*;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub use pockets::set_force_indirect_pockets;
@@ -117,7 +107,6 @@ manifold_core::testkit_visible! { pub(crate) const STEP_SHADER: &str = concat!(
     include_str!("shaders/gpu_flip_step/move.wgsl"),
     include_str!("shaders/gpu_flip_step/emit.wgsl"),
     include_str!("shaders/gpu_flip_step/tiles.wgsl"),
-    include_str!("shaders/gpu_flip_step/narrow_band.wgsl"),
     include_str!("shaders/gpu_flip_step/marker_removal.wgsl"),
 ); }
 const MASK_SHADER: &str = include_str!("shaders/gpu_flip_commit_mask.wgsl");
@@ -268,8 +257,6 @@ pub(crate) struct StepParams {
     pub(crate) extension_layers: u32,
     /// [`ring_max`] for this step: the table's extent.
     pub(crate) ring_max: u32,
-    /// Ferstl 2016: 0 dense, 1 full-history initialization, 2 masked band.
-    pub(crate) narrow_band: u32,
     pub(crate) live_impulse_stride: u32,
     /// Cells from the grid's minimum to each wall (`FlipSolverGrid::wall_inset`);
     /// 0 when the walls are the grid's edges.
@@ -277,7 +264,7 @@ pub(crate) struct StepParams {
     /// Box3D's substep over this tick: the coupled motion law's h
     /// (`manifold_physics::coupled_motion::coupled_substep`).
     pub(crate) coupled_h: f32,
-    pub(crate) _pad: [u32; 2],
+    pub(crate) _pad: [u32; 3],
 }
 }
 
@@ -331,9 +318,6 @@ pub(crate) struct StepState {
     saved_particles: Option<GpuBuffer>,
     saved_distance: Option<GpuBuffer>,
     saved_capped: Option<GpuBuffer>,
-    saved_narrow_phi: Option<GpuBuffer>,
-    saved_narrow_faces: Option<GpuBuffer>,
-    saved_narrow_failure: Option<GpuBuffer>,
     zeros: Option<GpuBuffer>,
     /// This tick's bodies posed at the step's end (`pose_bodies`), one row a
     /// body of the tick.
@@ -345,11 +329,6 @@ pub(crate) struct StepState {
     clock: Option<GpuFlipClock>,
     clock_capacities: [u32; 3],
     history: manifold_water_liquid::substep_history::SubstepHistory,
-    narrow: NarrowBand,
-    narrow_history: Option<NarrowHistory>,
-    narrow_reset_pending: bool,
-    narrow_full_count: bool,
-    interior: Option<GpuBuffer>,
     /// Sheet seeding (BUG-j9l9w): the true distance it reads, the stage,
     /// and each sorted slot's input index. Reserved only when the rate is on.
     sheet_distance: super::gpu_flip_sheet_distance::SheetDistance,
@@ -436,8 +415,6 @@ struct Step<'a> {
     ghost: bool,
     /// Run the density projection.
     density: bool,
-    narrow_enabled: bool,
-    restore_narrow: bool,
     /// The sheet fill rate. At 0 no sheeting pass is encoded and no fresh
     /// scratch is reserved; the pipelines still prepare at install (so
     /// switching on mid-show does not hitch) and scratch reserved while it was
@@ -490,9 +467,6 @@ manifold_node_engine::primitive! {
         clock_source_count: ScalarF32 optional,
         live_hits: Array(f32) optional,
         live_hit_count: ScalarF32 optional,
-
-        narrow_band: ScalarF32 optional,
-        epoch: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
@@ -506,7 +480,6 @@ manifold_node_engine::primitive! {
         grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
         face_cells_x: ScalarF32, face_cells_y: ScalarF32, face_cells_z: ScalarF32,
         face_valid_layers: ScalarF32,
-        interior: Array(f32),
         reaction_out: Array(f32),
         capped: Array(u32),
         clock_status: Array(u32),
@@ -542,7 +515,6 @@ manifold_node_engine::primitive! {
         int_param!("volume_projection", "Volume Projection", 0.0, 0.0, 1.0),
         int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
         int_param!("solve_level", "Solve Level", 0.0, 0.0, 4.0),
-        int_param!("narrow_band", "Narrow Band", 0.0, 0.0, 1.0),
         // Shipped presets wire the domain's Sheet Fill Rate into the input, which wins;
         // only standalone graphs and tests reach this param.
         float_param!("sheet_fill_rate", "Sheet Fill Rate", 0.0, 0.0, 1.0),
@@ -581,12 +553,6 @@ impl StepParams {
     pub fn capacity_for_test(&self) -> u32 {
         self.capacity
     }
-    pub fn narrow_band_for_test(&self) -> u32 {
-        self.narrow_band
-    }
-    pub fn cells_for_test(&self) -> [u32; 3] {
-        self.n
-    }
     pub fn step_dt_for_test(&self) -> f32 {
         self.step_dt
     }
@@ -598,12 +564,6 @@ impl StepParams {
         self.n = n;
         self.box_min = min;
         self.cell_size = cell_size;
-        self
-    }
-    pub fn with_gather_for_test(mut self, capacity: u32, narrow_band: u32, step_dt: f32) -> Self {
-        self.capacity = capacity;
-        self.narrow_band = narrow_band;
-        self.step_dt = step_dt;
         self
     }
     pub fn with_tiles_for_test(

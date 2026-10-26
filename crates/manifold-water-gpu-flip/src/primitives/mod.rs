@@ -9,9 +9,6 @@ pub mod gpu_flip_domain;
 #[cfg(test)]
 mod gpu_flip_extension_tests;
 pub mod gpu_flip_lentine;
-pub(crate) mod gpu_flip_narrow_band;
-#[cfg(test)]
-mod gpu_flip_narrow_band_tests;
 pub mod gpu_flip_pressure;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;

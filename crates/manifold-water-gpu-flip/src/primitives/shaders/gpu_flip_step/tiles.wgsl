@@ -13,7 +13,6 @@ fn tile_parity_word() -> u32 {
 // The cell passes run over the cell set C, the first `tile_counts[0]` tiles
 // of `tiles_by_ring`, through the triple at `tile_args[0]`.
 fn c_cell_index(gid: u32) -> u32 {
-    if u.narrow_band != 0u { return select(TS_NONE, gid, gid < ts_cell_count()); }
     return ts_list_cell(tiles_by_ring[gid >> 9u], gid);
 }
 
@@ -21,7 +20,6 @@ fn c_cell_index(gid: u32) -> u32 {
 // past the lattice (p[a] == n[a]) belongs to no cell and is a constant: wall
 // faces closed, the others absent (canonical_face), written by tiles_fill.
 fn c_face_index(gid: u32) -> u32 {
-    if u.narrow_band != 0u { return select(TS_NONE, gid, gid < ts_record_count()); }
     let cell = c_cell_index(gid);
     if cell == TS_NONE {
         return TS_NONE;

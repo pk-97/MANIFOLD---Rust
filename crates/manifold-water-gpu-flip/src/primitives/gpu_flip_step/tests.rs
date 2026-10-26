@@ -83,34 +83,6 @@ fn one_step_bound_requires_a_whole_reference_interval() {
     assert!(!one_step_cfl_safe(0.0, 0.0, 1.0 / 60.0, 0.0));
 }
 
-#[test]
-fn narrow_band_history_restores_once_and_resets_identity() {
-    let mut state = StepState::default();
-    let mut sync = |epoch, tick, enabled| {
-        state.sync_narrow_history(epoch, [0.0; 3], 1.0, [8; 3], 4096, tick, enabled)
-    };
-    assert!(!sync(Some(1), 0, true));
-    assert!(!sync(Some(1), 1, true));
-    assert!(sync(Some(1), 2, false));
-    assert!(!sync(Some(1), 3, false));
-    assert!(!sync(Some(1), 4, true));
-    assert!(!sync(Some(2), 0, false));
-    assert!(!sync(None, 10, true));
-    assert!(!sync(None, 0, false));
-    assert!(state.narrow_reset_pending);
-    assert!(!state.narrow_full_count);
-    assert!(!state.narrow.initialized);
-}
-
-#[test]
-fn narrow_band_mode_refuses_fractional_and_nonfinite_values() {
-    assert_eq!(read_narrow_band(0.0), Ok(false));
-    assert_eq!(read_narrow_band(1.0), Ok(true));
-    for value in [-1.0, 0.5, 2.0, f32::NAN, f32::INFINITY] {
-        assert!(read_narrow_band(value).is_err());
-    }
-}
-
 /// The pocket sums' two-word add with carry (gpu_flip_step/pockets.wgsl
 /// pocket_fixed, pocket_add, pocket_value) gives the exact sum of the
 /// fixed-point values in any order.
@@ -171,56 +143,54 @@ fn step_shader_validates_with_every_entry() {
     )
     .validate(&mask)
     .unwrap_or_else(|e| panic!("{e:?}"));
-    for source in [step_source(), band_source()] {
-        let module = naga::front::wgsl::parse_str(&source)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("{e:?}"));
-        let mut bindings = std::collections::HashSet::new();
-        for (_, global) in module.global_variables.iter() {
-            if let Some(binding) = &global.binding {
-                assert!(
-                    bindings.insert((binding.group, binding.binding)),
-                    "duplicate shader binding {binding:?}"
-                );
-            }
+    let source = step_source();
+    let module = naga::front::wgsl::parse_str(&source)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let mut bindings = std::collections::HashSet::new();
+    for (_, global) in module.global_variables.iter() {
+        if let Some(binding) = &global.binding {
+            assert!(
+                bindings.insert((binding.group, binding.binding)),
+                "duplicate shader binding {binding:?}"
+            );
         }
-        let entries: Vec<&str> = module
-            .entry_points
-            .iter()
-            .map(|e| e.name.as_str())
-            .collect();
-        for entry in [
-            "particles_to_faces",
-            "extend_faces",
-            "face_gravity",
-            "open_fractions",
-            "solid_face_velocity",
-            "phi_into_solids",
-            "water_from_phi",
-            "divergence",
-            "particle_distance",
-            "subtract_pressure",
-            "constrain_solid_faces",
-            "remove_crowded_markers",
-            "density_source",
-            "faces_to_particles",
-            "narrow_move",
-            "tiles_classify",
-            "tiles_rings",
-            "tiles_lists",
-            "tiles_fill",
-            "tiles_retire",
-            "pocket_leader_clear",
-            "pocket_coarsen",
-            "pocket_relabel",
-        ] {
-            assert!(entries.contains(&entry), "missing entry {entry}");
-        }
+    }
+    let entries: Vec<&str> = module
+        .entry_points
+        .iter()
+        .map(|e| e.name.as_str())
+        .collect();
+    for entry in [
+        "particles_to_faces",
+        "extend_faces",
+        "face_gravity",
+        "open_fractions",
+        "solid_face_velocity",
+        "phi_into_solids",
+        "water_from_phi",
+        "divergence",
+        "particle_distance",
+        "subtract_pressure",
+        "constrain_solid_faces",
+        "remove_crowded_markers",
+        "density_source",
+        "faces_to_particles",
+        "tiles_classify",
+        "tiles_rings",
+        "tiles_lists",
+        "tiles_fill",
+        "tiles_retire",
+        "pocket_leader_clear",
+        "pocket_coarsen",
+        "pocket_relabel",
+    ] {
+        assert!(entries.contains(&entry), "missing entry {entry}");
     }
 }
 
@@ -229,8 +199,8 @@ fn step_params_match_the_shader_uniform() {
     assert_eq!(size_of::<StepParams>(), 176);
     assert_eq!(std::mem::offset_of!(StepParams, box_offset), 100);
     assert_eq!(std::mem::offset_of!(StepParams, particles), 108);
-    assert_eq!(std::mem::offset_of!(StepParams, live_impulse_stride), 156);
-    assert_eq!(std::mem::offset_of!(StepParams, wall_inset), 160);
+    assert_eq!(std::mem::offset_of!(StepParams, live_impulse_stride), 152);
+    assert_eq!(std::mem::offset_of!(StepParams, wall_inset), 156);
 }
 
 /// The tile table's bytes, by an independent count: five words a tile

@@ -198,7 +198,7 @@ pub fn gpu_flip_geometry(
     }
     let solve_level = read_solve_level(read("solve_level", 0.0), solver.cells()).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
-    let sheet_fill_rate = read_sheet_fill_rate(read("sheet_fill_rate", 0.0), false).map_err(|reason| format!("GPU FLIP: {reason}"))?;
+    let sheet_fill_rate = read_sheet_fill_rate(read("sheet_fill_rate", 0.0)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let (pool_sites, box_sites, fit) = fill_sites(&layout, read("fill_height", DEFAULT_FILL_HEIGHT), initial_fill)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
     if particles > u64::from(EXACT_F32_COUNT) {
@@ -230,7 +230,7 @@ impl GpuFlipGeometry {
     /// domain within that it flows until the domain is full of water, as FLIP
     /// Fluids' unbounded particle list does; a Drain or an open face frees
     /// slots for it again. A pool that still fills is reported, never silent
-    /// (stats word 29 into the setup check).
+    /// (stats word 28 into the setup check).
     pub fn with_inflow(mut self) -> Self {
         let sites = self
             .layout

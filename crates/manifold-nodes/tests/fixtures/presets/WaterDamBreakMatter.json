@@ -2431,10 +2431,6 @@
             {
               "name": "nodes_z",
               "portType": "Scalar(F32)"
-            },
-            {
-              "name": "interior",
-              "portType": "Array(f32)"
             }
           ],
           "outputs": [
@@ -3068,12 +3064,6 @@
             "fromPort": "bricks",
             "toNode": 7,
             "toPort": "bricks"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "interior",
-            "toNode": 7,
-            "toPort": "interior"
           },
           {
             "fromNode": 32,

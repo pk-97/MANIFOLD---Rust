@@ -11,7 +11,7 @@ pub(super) fn extend(
     clock_plan: &GpuBuffer,
     params: &StepParams,
     face_groups: [u32; 3],
-    table: Option<&TileTable>,
+    table: &TileTable,
     [source, target, scratch]: [&GpuBuffer; 3],
     layers: u32,
     label: &str,
@@ -23,7 +23,7 @@ pub(super) fn extend(
         enc.copy_buffer_to_buffer(source, scratch, source.size.min(scratch.size));
         from = scratch;
     }
-    let gate = table.filter(|_| params.step_in_tick > 0 && indirect_extend());
+    let gate = (params.step_in_tick > 0 && indirect_extend()).then_some(table);
     if let Some(table) = gate {
         debug_assert_eq!(params.extension_layers, layers);
         enc.begin_gated_segment(&table.args, extension_range_index(table.ring_max), layers);

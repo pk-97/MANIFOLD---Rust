@@ -119,9 +119,6 @@ fn mpm(draw: WaterDraw) -> WaterFamily {
     let [domain, frame] = ["domain", "frame"].map(|name| b.id(name));
     let scene = WaterScene::dam_break(64);
     let (surface, _) = surface(&mut b, scene, frame);
-    // The Matter frame publishes no interior; the surface runs without it.
-    b.wires
-        .retain(|wire| !(wire.to_node == surface as u32 && wire.to_port == "interior"));
     let water = display_head(&mut b, frame, surface);
     display_dots(&mut b, frame, surface, water);
     feed_intervals(&b.nodes, &mut b.wires, domain as u32);

@@ -169,7 +169,7 @@ fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
     if k == 0u {
         metadata[0] = live[0];
         metadata[1] = identity[1];
-        metadata[2] = select(0u, 1u, stats[0] == 0u && stats[NARROW_BAND_SHORTAGE_WORD] == 0u && identity[3] == 0u);
+        metadata[2] = select(0u, 1u, stats[0] == 0u && identity[3] == 0u);
         metadata[3] = 0u;
     }
     if k >= p.slots {

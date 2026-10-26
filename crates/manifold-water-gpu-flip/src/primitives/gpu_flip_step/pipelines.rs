@@ -18,13 +18,6 @@ pub(super) struct Pipelines {
     pub(super) constrain: GpuComputePipeline,
     pub(super) density: GpuComputePipeline,
     pub(super) advect: GpuComputePipeline,
-    pub(super) band_distance: GpuComputePipeline,
-    pub(super) band_gather: GpuComputePipeline,
-    pub(super) band_density: GpuComputePipeline,
-    pub(super) narrow_move: GpuComputePipeline,
-    pub(super) narrow_tally: GpuComputePipeline,
-    pub(super) narrow_latch: GpuComputePipeline,
-    pub(super) narrow_disabled: GpuComputePipeline,
     pub(super) pocket_seed: GpuComputePipeline,
     pub(super) pocket_start: GpuComputePipeline,
     pub(super) pocket_round: GpuComputePipeline,
@@ -58,13 +51,6 @@ pub(super) struct Pipelines {
 }
 
 pub(super) fn step_source() -> String {
-    let source = STEP_SHADER.replace("return narrow_mask[index] != 0u;", "return true;");
-    with_stats_layout(&format!(
-        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_STORAGE}\n{source}"
-    ))
-}
-
-pub(super) fn band_source() -> String {
     with_stats_layout(&format!(
         "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_STORAGE}\n{STEP_SHADER}"
     ))
@@ -73,12 +59,8 @@ pub(super) fn band_source() -> String {
 impl Pipelines {
     pub(super) fn new(device: &GpuDevice) -> Self {
         let source = step_source();
-        let band = band_source();
         let pipe =
             |entry: &str| device.create_compute_pipeline(&source, entry, "node.gpu_flip_step");
-        let band_pipe = |entry: &str| {
-            device.create_compute_pipeline(&band, entry, "node.gpu_flip_step.narrow_band")
-        };
         Self {
             gather: pipe("particles_to_faces"),
             extend: pipe("extend_faces"),
@@ -95,13 +77,6 @@ impl Pipelines {
             constrain: pipe("constrain_solid_faces"),
             density: pipe("density_source"),
             advect: pipe("faces_to_particles"),
-            band_distance: band_pipe("particle_distance"),
-            band_gather: band_pipe("particles_to_faces"),
-            band_density: band_pipe("density_source"),
-            narrow_move: band_pipe("narrow_move"),
-            narrow_tally: band_pipe("narrow_tally"),
-            narrow_latch: band_pipe("narrow_latch"),
-            narrow_disabled: band_pipe("narrow_disabled"),
             pocket_seed: pipe("pocket_seed"),
             pocket_start: pipe("pocket_start"),
             pocket_round: pipe("pocket_round"),

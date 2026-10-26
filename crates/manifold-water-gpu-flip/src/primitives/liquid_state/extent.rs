@@ -60,21 +60,6 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.hold(pool);
     }
 
-    let mut interior_check = Ok(());
-    if x.wired("interior_in") {
-        let bytes = manifold_water_liquid::grid::interior_bytes(
-            FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells(),
-        );
-        x.provide("interior", bytes);
-        x.hold(bytes);
-        if x.bytes("interior_in") != Some(bytes) {
-            interior_check = Err(x.uncovered(format!(
-                "interior_in must hold exactly {bytes} bytes for the cell-centred lattice"
-            )));
-        }
-    } else {
-        x.provide("interior", 0);
-    }
     // The faces are the lattice's face grid, sized before the region runs and
     // held only while something reads them. The tick's faces (written later
     // in the plan: the second pass sees them) must be exactly that grid.
@@ -119,7 +104,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.covers("stats", stats)?;
     x.covers("stats_in", stats)?;
-    faces_check.and(whitewater_check).and(interior_check)
+    faces_check.and(whitewater_check)
 }
 inventory::submit! {
     ExtentRule { type_id: "node.liquid_state", check: liquid_state }

@@ -43,9 +43,8 @@ impl StepState {
         let p = step.params;
         let capacity = p.capacity;
         // What reads this slot's activity beyond the passes that always did:
-        // the clock plan, or zeros (always active) for the narrow band, whose
-        // passes are not all clock-aware, and under the test lever.
-        let gated = gating() && !step.narrow_enabled && !step.restore_narrow;
+        // the clock plan, or zeros (always active) under the test lever.
+        let gated = gating();
         let gate_plan = if gated {
             step.clock_plan
         } else {
@@ -63,30 +62,9 @@ impl StepState {
             order: None,
             gate: Some(gate_plan),
         };
-        // Copies of the params, so each Bytes binding borrows a value that
-        // lives across its dispatch.  Narrow mode 1 is the one-time full
-        // history initialization; mode 2 is the masked steady state.
-        let narrow_initial = step.narrow_enabled && !self.narrow.initialized;
-        let base = StepParams {
-            particles: if step.narrow_enabled {
-                capacity
-            } else {
-                p.particles
-            },
-            narrow_band: if step.narrow_enabled {
-                if narrow_initial { 1 } else { 2 }
-            } else {
-                0
-            },
-            ..p
-        };
-        let nb_params = narrow_params(&base, self.narrow.initialized);
-        if self.narrow_reset_pending
-            && let Some(nb) = self.narrow.buffers.as_ref()
-        {
-            enc.clear_buffer(&nb.failure);
-            self.narrow_reset_pending = false;
-        }
+        // A copy of the params, so each Bytes binding borrows a value that
+        // lives across its dispatch.
+        let base = p;
         let corners = cells.map(|n| n + 1);
         // The box walls are in the solid with the bodies, as the engine's
         // inverted domain object is: a body flush with a wall then seals
@@ -139,7 +117,7 @@ impl StepState {
         );
         // Sheet seeding (BUG-j9l9w) reads the markers in input order; off, the
         // sort is exactly as it was.
-        let sheeting = step.sheet_rate > 0.0 && !step.narrow_enabled && !step.restore_narrow;
+        let sheeting = step.sheet_rate > 0.0;
         let sheet_order = if sheeting {
             Some(
                 self.sheet_order
@@ -167,241 +145,6 @@ impl StepState {
         let cells_groups = groups(cell_count);
         let face_groups = groups(face_count);
 
-        if step.narrow_enabled {
-            let nb = self
-                .narrow
-                .buffers
-                .as_ref()
-                .ok_or("narrow-band storage was not reserved")?;
-            let nb_pipes = self
-                .narrow
-                .pipes
-                .as_ref()
-                .ok_or("narrow-band pipelines were not prepared")?;
-            let ranges = self
-                .sorter
-                .ranges()
-                .ok_or("the cell ranges were not reserved")?;
-            if narrow_initial {
-                // Dense narrow-band indexing bypasses the tile list at runtime,
-                // but the compiled shader still requires its buffer binding.
-                enc.dispatch_compute(
-                    &pipes.band_distance,
-                    &[
-                        uniform(&base),
-                        buffer(1, ranges),
-                        buffer(2, sorted),
-                        buffer(5, &l.phi),
-                        buffer(29, &tiles.by_ring),
-                        buffer(45, &nb.mask),
-                        buffer(46, step.clock_plan),
-                    ],
-                    cells_groups,
-                    "gpu_flip.step.narrow.initialize_distance",
-                );
-                enc.dispatch_compute(
-                    &pipes.band_gather,
-                    &[
-                        uniform(&base),
-                        buffer(1, ranges),
-                        buffer(2, sorted),
-                        buffer(4, &l.g),
-                        buffer(29, &tiles.by_ring),
-                        buffer(45, &nb.mask),
-                        buffer(46, step.clock_plan),
-                    ],
-                    face_groups,
-                    "gpu_flip.step.narrow.initialize_gather",
-                );
-                enc.compute_memory_barrier_buffers();
-                extend(
-                    enc,
-                    pipes,
-                    step.clock_plan,
-                    &base,
-                    face_groups,
-                    None,
-                    [&l.g, &nb.previous_faces, &l.b],
-                    step.band,
-                    "gpu_flip.step.narrow.initialize_faces",
-                );
-                narrow_redistance(
-                    enc,
-                    nb_pipes,
-                    &nb_params,
-                    &l.phi,
-                    &nb.previous_phi,
-                    cells,
-                    "gpu_flip.step.narrow.initialize_distance",
-                );
-                enc.copy_buffer_to_buffer(&nb.previous_phi, &l.phi, l.phi.size);
-            } else {
-                enc.copy_buffer_to_buffer(&nb.phi, &nb.previous_phi, nb.phi.size);
-            }
-            enc.compute_memory_barrier_buffers();
-            enc.dispatch_compute(
-                &nb_pipes.advect_phi,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.previous_phi),
-                    buffer(2, &nb.advected_phi),
-                    buffer(3, &nb.previous_faces),
-                ],
-                cells_groups,
-                "gpu_flip.step.narrow.advect_phi",
-            );
-            enc.dispatch_compute(
-                &nb_pipes.advect_faces,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.previous_phi),
-                    buffer(3, &nb.previous_faces),
-                    buffer(4, &nb.advected_faces),
-                ],
-                face_groups,
-                "gpu_flip.step.narrow.advect_faces",
-            );
-            enc.compute_memory_barrier_buffers();
-            enc.dispatch_compute(
-                &pipes.narrow_move,
-                &[
-                    uniform(&base),
-                    buffer(46, step.clock_plan),
-                    buffer(2, sorted),
-                    buffer(3, &nb.previous_faces),
-                    buffer(9, &l.corners),
-                    buffer(17, &nb.previous_faces),
-                    buffer(18, &nb.previous_faces),
-                    buffer(19, &nb.particles),
-                    buffer(22, step.capped),
-                ],
-                groups(u64::from(capacity)),
-                "gpu_flip.step.narrow.move",
-            );
-            enc.compute_memory_barrier_buffers();
-            self.sorter.encode(
-                device,
-                enc,
-                &SortJob {
-                    count: capacity,
-                    ..sort_job(&nb.particles, sorted)
-                },
-                &SORT_LABELS,
-            )?;
-        }
-        let ranges = self
-            .sorter
-            .ranges()
-            .ok_or("the cell ranges were not reserved")?;
-
-        if step.restore_narrow {
-            let nb = self
-                .narrow
-                .buffers
-                .as_ref()
-                .ok_or("narrow-band restore has no storage")?;
-            let nb_pipes = self
-                .narrow
-                .pipes
-                .as_ref()
-                .ok_or("narrow-band pipelines were not prepared")?;
-            let scan_threads = cell_count
-                .checked_mul(8)
-                .ok_or("narrow-band scan extent overflow")?;
-            let scan_words = usize::try_from(scan_threads)
-                .map_err(|_| "narrow-band scan extent cannot be represented".to_string())?;
-            let scan = self.narrow.scan.buffer(device, scan_words)?.clone();
-            enc.copy_buffer_to_buffer(sorted, &nb.particles, nb.particles.size);
-            let restore_params = narrow_params(&base, true);
-            enc.dispatch_compute(
-                &nb_pipes.restore_flags,
-                &[
-                    narrow_uniform(&restore_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.phi),
-                    buffer(6, &l.corners),
-                    buffer(8, &nb.previous_phi),
-                    buffer(9, &nb.particles),
-                    buffer(10, ranges),
-                    buffer(11, &scan),
-                ],
-                cells_groups,
-                "gpu_flip.step.narrow.restore_flags",
-            );
-            enc.compute_memory_barrier_buffers();
-            self.narrow.scan.encode_labelled(
-                enc,
-                scan_words,
-                ScanLabels {
-                    blocks: "gpu_flip.step.narrow.restore_scan.blocks",
-                    add: "gpu_flip.step.narrow.restore_scan.add",
-                },
-            );
-            enc.dispatch_compute(
-                &nb_pipes.status,
-                &[
-                    narrow_uniform(&restore_params),
-                    buffer(46, step.clock_plan),
-                    buffer(10, ranges),
-                    buffer(11, &scan),
-                    buffer(12, &nb.status),
-                ],
-                [1, 1, 1],
-                "gpu_flip.step.narrow.restore_status",
-            );
-            enc.compute_memory_barrier_buffers();
-            enc.dispatch_compute(
-                &pipes.narrow_latch,
-                &[
-                    narrow_uniform(&restore_params),
-                    buffer(46, step.clock_plan),
-                    buffer(43, &nb.status),
-                    buffer(44, &nb.failure),
-                ],
-                [1, 1, 1],
-                "gpu_flip.step.narrow.restore_latch",
-            );
-            enc.compute_memory_barrier_buffers();
-            self.identity_ops.reserve(
-                enc,
-                manifold_water_liquid::primitives::particle_identity::BirthReservation {
-                    particles: &nb.particles,
-                    identity: step.identity,
-                    ranges,
-                    scan: &scan,
-                    plan: step.clock_plan,
-                    params: [capacity, cell_count as u32, scan_threads as u32, 2],
-                },
-            );
-            enc.dispatch_compute(
-                &nb_pipes.write,
-                &[
-                    narrow_uniform(&restore_params),
-                    buffer(46, step.clock_plan),
-                    buffer(47, step.identity),
-                    buffer(3, &nb.previous_faces),
-                    buffer(9, &nb.particles),
-                    buffer(10, ranges),
-                    buffer(11, &scan),
-                    buffer(12, &nb.status),
-                ],
-                groups(scan_threads),
-                "gpu_flip.step.narrow.restore_write",
-            );
-            enc.compute_memory_barrier_buffers();
-            self.sorter.encode(
-                device,
-                enc,
-                &SortJob {
-                    count: capacity,
-                    ..sort_job(&nb.particles, sorted)
-                },
-                &SORT_LABELS,
-            )?;
-            self.narrow_full_count = true;
-        }
         let ranges = self
             .sorter
             .ranges()
@@ -412,19 +155,17 @@ impl StepState {
         // every other tile holds the canonical values (design section 4 (The
         // defined-value rule)): filled once per lattice, restored by the
         // retire when a tile leaves C.
-        if !step.narrow_enabled {
-            encode_tiles(
-                enc,
-                pipes,
-                &base,
-                tiles,
-                ranges,
-                step.capped,
-                step.tally,
-                gate_plan,
-            );
-        }
-        if !step.narrow_enabled && !self.filled {
+        encode_tiles(
+            enc,
+            pipes,
+            &base,
+            tiles,
+            ranges,
+            step.capped,
+            step.tally,
+            gate_plan,
+        );
+        if !self.filled {
             enc.dispatch_compute(
                 &pipes.tiles_fill,
                 &canonical(l, vec![uniform(&base)]),
@@ -433,15 +174,13 @@ impl StepState {
             );
             self.filled = true;
         }
-        if !step.narrow_enabled {
-            enc.dispatch_compute_indirect(
-                &pipes.tiles_retire,
-                &canonical(l, vec![uniform(&base), buffer(32, &tiles.retired)]),
-                &tiles.args,
-                retired_args_offset(tiles.ring_max),
-                "gpu_flip.step.tiles.retire",
-            );
-        }
+        enc.dispatch_compute_indirect(
+            &pipes.tiles_retire,
+            &canonical(l, vec![uniform(&base), buffer(32, &tiles.retired)]),
+            &tiles.args,
+            retired_args_offset(tiles.ring_max),
+            "gpu_flip.step.tiles.retire",
+        );
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         if POISON.load(std::sync::atomic::Ordering::SeqCst) {
             enc.dispatch_compute(
@@ -461,7 +200,6 @@ impl StepState {
         let over_c = |enc: &mut GpuEncoder,
                       pipeline: &GpuComputePipeline,
                       bindings: Vec<GpuBinding<'_>>,
-                      threads: [u32; 3],
                       label: &str| {
             let mut bound = vec![
                 uniform(&base),
@@ -469,183 +207,40 @@ impl StepState {
                 buffer(46, step.clock_plan),
             ];
             bound.extend(bindings);
-            if step.narrow_enabled {
-                enc.dispatch_compute(pipeline, &bound, threads, label);
-            } else {
-                enc.dispatch_compute_indirect(pipeline, &bound, &tiles.args, 0, label);
-            }
+            enc.dispatch_compute_indirect(pipeline, &bound, &tiles.args, 0, label);
         };
         // The water mask is φ < 0, so φ is built every step.
         let bodies = p.body_count > 0;
-        if step.narrow_enabled {
-            let nb = self
-                .narrow
-                .buffers
-                .as_ref()
-                .ok_or("narrow-band storage was not reserved")?;
-            let nb_pipes = self
-                .narrow
-                .pipes
-                .as_ref()
-                .ok_or("narrow-band pipelines were not prepared")?;
-            enc.dispatch_compute(
-                &nb_pipes.distance_support,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.advected_phi),
-                    buffer(6, &l.corners),
-                    buffer(7, &nb.mask),
-                    buffer(10, ranges),
-                ],
-                cells_groups,
-                "gpu_flip.step.narrow.support",
-            );
-            enc.compute_memory_barrier_buffers();
-            over_c(
-                enc,
-                &pipes.band_distance,
-                vec![
-                    buffer(1, ranges),
-                    buffer(2, sorted),
-                    buffer(5, &l.phi),
-                    buffer(45, &nb.mask),
-                ],
-                cells_groups,
-                "gpu_flip.step.narrow.distance",
-            );
-            enc.dispatch_compute(
-                &nb_pipes.union,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.advected_phi),
-                    buffer(2, &nb.union_phi),
-                    buffer(5, &l.phi),
-                ],
-                cells_groups,
-                "gpu_flip.step.narrow.union",
-            );
-            enc.compute_memory_barrier_buffers();
-            narrow_redistance(
-                enc,
-                nb_pipes,
-                &nb_params,
-                &nb.union_phi,
-                &nb.phi,
-                cells,
-                "gpu_flip.step.narrow.redistance",
-            );
-            enc.copy_buffer_to_buffer(&nb.phi, &l.phi, nb.phi.size);
-            enc.compute_memory_barrier_buffers();
-            enc.dispatch_compute(
-                &nb_pipes.mask,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.phi),
-                    buffer(6, &l.corners),
-                    buffer(7, &nb.mask),
-                ],
-                cells_groups,
-                "gpu_flip.step.narrow.mask",
-            );
-            enc.compute_memory_barrier_buffers();
-            over_c(
-                enc,
-                &pipes.band_gather,
-                vec![
-                    buffer(1, ranges),
-                    buffer(2, sorted),
-                    buffer(4, &l.g),
-                    buffer(45, &nb.mask),
-                ],
-                face_groups,
-                "gpu_flip.step.narrow.gather",
-            );
-        } else {
-            over_c(
-                enc,
-                &pipes.distance,
-                vec![buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
-                cells_groups,
-                "gpu_flip.step.distance",
-            );
-            over_c(
-                enc,
-                &pipes.gather,
-                vec![buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g)],
-                face_groups,
-                "gpu_flip.step.particles_to_faces",
-            );
-        }
+        over_c(
+            enc,
+            &pipes.distance,
+            vec![buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
+            "gpu_flip.step.distance",
+        );
+        over_c(
+            enc,
+            &pipes.gather,
+            vec![buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g)],
+            "gpu_flip.step.particles_to_faces",
+        );
         // The saved faces: the particles' own, extended so FLIP's change is
         // measured wherever a particle samples.
-        if step.narrow_enabled {
-            extend(
-                enc,
-                pipes,
-                step.clock_plan,
-                &base,
-                face_groups,
-                None,
-                [&l.g, &l.a, &l.b],
-                step.band,
-                "gpu_flip.step.narrow.extend_old",
-            );
-            let nb = self
-                .narrow
-                .buffers
-                .as_ref()
-                .ok_or("narrow-band storage was not reserved")?;
-            let nb_pipes = self
-                .narrow
-                .pipes
-                .as_ref()
-                .ok_or("narrow-band pipelines were not prepared")?;
-            enc.dispatch_compute(
-                &nb_pipes.combine,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.phi),
-                    buffer(3, &nb.advected_faces),
-                    buffer(4, &l.g),
-                    buffer(6, &l.corners),
-                ],
-                face_groups,
-                "gpu_flip.step.narrow.combine",
-            );
-            extend(
-                enc,
-                pipes,
-                step.clock_plan,
-                &base,
-                face_groups,
-                None,
-                [&l.g, &l.g, &l.b],
-                step.band,
-                "gpu_flip.step.narrow.extend_combined",
-            );
-        } else {
-            extend(
-                enc,
-                pipes,
-                step.clock_plan,
-                &base,
-                face_groups,
-                (!step.narrow_enabled).then_some(tiles),
-                [&l.g, &l.a, &l.b],
-                step.band,
-                "gpu_flip.step.extend_old",
-            );
-        }
-        let force_faces = if step.narrow_enabled { &l.g } else { &l.a };
+        extend(
+            enc,
+            pipes,
+            step.clock_plan,
+            &base,
+            face_groups,
+            tiles,
+            [&l.g, &l.a, &l.b],
+            step.band,
+            "gpu_flip.step.extend_old",
+        );
         enc.dispatch_compute(
             &pipes.gravity,
             &[
                 uniform(&base),
-                buffer(3, force_faces),
+                buffer(3, &l.a),
                 buffer(4, &l.f),
                 buffer(12, step.forces),
                 buffer(13, step.impulses),
@@ -720,14 +315,12 @@ impl StepState {
             enc,
             &pipes.phi_into_solids,
             vec![buffer(9, &l.corners), buffer(5, &l.phi)],
-            cells_groups,
             "gpu_flip.step.phi_into_solids",
         );
         over_c(
             enc,
             &pipes.water_from_phi,
             vec![buffer(7, &l.phi), buffer(5, &l.water)],
-            cells_groups,
             "gpu_flip.step.water_from_phi",
         );
         // Which water reaches air holds every step: the density source reads
@@ -785,7 +378,6 @@ impl StepState {
                 buffer(10, &l.s),
                 buffer(11, &l.v),
             ],
-            cells_groups,
             "gpu_flip.step.divergence",
         );
         encode_pocket_mean(
@@ -922,7 +514,7 @@ impl StepState {
             step.clock_plan,
             &base,
             face_groups,
-            (!step.narrow_enabled).then_some(tiles),
+            tiles,
             [&l.f, out_faces, &l.b],
             step.band,
             "gpu_flip.step.extend_new",
@@ -954,42 +546,18 @@ impl StepState {
         enc.set_profile_tag("gpu_flip.stage.density");
         let spread = if step.density {
             enc.copy_buffer_to_buffer(out_faces, &l.f, out_faces.size);
-            if step.narrow_enabled {
-                let nb = self
-                    .narrow
-                    .buffers
-                    .as_ref()
-                    .ok_or("narrow-band storage was not reserved")?;
-                enc.dispatch_compute(
-                    &pipes.band_density,
-                    &[
-                        uniform(&base),
-                        buffer(1, ranges),
-                        buffer(2, sorted),
-                        buffer(6, &l.water),
-                        buffer(9, &l.corners),
-                        buffer(5, &l.rhs),
-                        buffer(45, &nb.mask),
-                        buffer(46, step.clock_plan),
-                    ],
-                    cells_groups,
-                    "gpu_flip.step.narrow.density_source",
-                );
-            } else {
-                over_c(
-                    enc,
-                    &pipes.density,
-                    vec![
-                        buffer(1, ranges),
-                        buffer(2, sorted),
-                        buffer(6, &l.water),
-                        buffer(9, &l.corners),
-                        buffer(5, &l.rhs),
-                    ],
-                    cells_groups,
-                    "gpu_flip.step.density_source",
-                );
-            }
+            over_c(
+                enc,
+                &pipes.density,
+                vec![
+                    buffer(1, ranges),
+                    buffer(2, sorted),
+                    buffer(6, &l.water),
+                    buffer(9, &l.corners),
+                    buffer(5, &l.rhs),
+                ],
+                "gpu_flip.step.density_source",
+            );
             encode_pocket_mean(
                 enc,
                 pipes,
@@ -1027,7 +595,7 @@ impl StepState {
                 step.clock_plan,
                 &base,
                 face_groups,
-                (!step.narrow_enabled).then_some(tiles),
+                tiles,
                 [&l.f, &l.f, &l.b],
                 step.band,
                 "gpu_flip.step.extend_spread",
@@ -1130,149 +698,6 @@ impl StepState {
             groups(u64::from(base.particles)),
             "gpu_flip.step.move",
         );
-        if step.narrow_enabled {
-            let nb = self
-                .narrow
-                .buffers
-                .as_ref()
-                .ok_or("narrow-band storage was not reserved")?;
-            let nb_pipes = self
-                .narrow
-                .pipes
-                .as_ref()
-                .ok_or("narrow-band pipelines were not prepared")?;
-            enc.dispatch_compute(
-                &nb_pipes.delete,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.phi),
-                    buffer(6, &l.corners),
-                    buffer(9, step.out),
-                ],
-                groups(u64::from(capacity)),
-                "gpu_flip.step.narrow.delete",
-            );
-            enc.compute_memory_barrier_buffers();
-            self.sorter.encode(
-                device,
-                enc,
-                &SortJob {
-                    count: capacity,
-                    ..sort_job(step.out, &nb.particles)
-                },
-                &SORT_LABELS,
-            )?;
-            let ranges = self
-                .sorter
-                .ranges()
-                .ok_or("the cell ranges were not reserved")?;
-            let scan_threads = cell_count
-                .checked_mul(8)
-                .ok_or("narrow-band scan extent overflow")?;
-            let scan_words = usize::try_from(scan_threads)
-                .map_err(|_| "narrow-band scan extent cannot be represented".to_string())?;
-            let scan = self.narrow.scan.buffer(device, scan_words)?.clone();
-            enc.dispatch_compute(
-                &nb_pipes.flags,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(1, &nb.phi),
-                    buffer(6, &l.corners),
-                    buffer(8, &nb.previous_phi),
-                    buffer(9, &nb.particles),
-                    buffer(10, ranges),
-                    buffer(11, &scan),
-                ],
-                cells_groups,
-                "gpu_flip.step.narrow.reseed_flags",
-            );
-            enc.compute_memory_barrier_buffers();
-            self.narrow.scan.encode_labelled(
-                enc,
-                scan_words,
-                ScanLabels {
-                    blocks: "gpu_flip.step.narrow.reseed_scan.blocks",
-                    add: "gpu_flip.step.narrow.reseed_scan.add",
-                },
-            );
-            enc.dispatch_compute(
-                &nb_pipes.status,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(10, ranges),
-                    buffer(11, &scan),
-                    buffer(12, &nb.status),
-                ],
-                [1, 1, 1],
-                "gpu_flip.step.narrow.reseed_status",
-            );
-            enc.compute_memory_barrier_buffers();
-            enc.dispatch_compute(
-                &pipes.narrow_latch,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(43, &nb.status),
-                    buffer(44, &nb.failure),
-                ],
-                [1, 1, 1],
-                "gpu_flip.step.narrow.reseed_latch",
-            );
-            enc.compute_memory_barrier_buffers();
-            self.identity_ops.reserve(
-                enc,
-                manifold_water_liquid::primitives::particle_identity::BirthReservation {
-                    particles: &nb.particles,
-                    identity: step.identity,
-                    ranges,
-                    scan: &scan,
-                    plan: step.clock_plan,
-                    params: [capacity, cell_count as u32, scan_threads as u32, 2],
-                },
-            );
-            enc.dispatch_compute(
-                &nb_pipes.write,
-                &[
-                    narrow_uniform(&nb_params),
-                    buffer(46, step.clock_plan),
-                    buffer(47, step.identity),
-                    buffer(3, out_faces),
-                    buffer(9, &nb.particles),
-                    buffer(10, ranges),
-                    buffer(11, &scan),
-                    buffer(12, &nb.status),
-                ],
-                groups(scan_threads),
-                "gpu_flip.step.narrow.reseed_write",
-            );
-            enc.compute_memory_barrier_buffers();
-            self.sorter.encode(
-                device,
-                enc,
-                &SortJob {
-                    count: capacity,
-                    ..sort_job(&nb.particles, step.out)
-                },
-                &SORT_LABELS,
-            )?;
-            self.narrow_full_count = true;
-            enc.copy_buffer_to_buffer(out_faces, &nb.previous_faces, out_faces.size);
-            self.narrow.initialized = true;
-            self.filled = false;
-            if let Some(interior) = self.interior.as_ref() {
-                enc.copy_buffer_to_buffer(&nb.phi, interior, nb.phi.size);
-            }
-        } else if let Some(interior) = self.interior.as_ref() {
-            enc.dispatch_compute(
-                &pipes.narrow_disabled,
-                &[uniform(&base), buffer(5, interior)],
-                cells_groups,
-                "gpu_flip.step.narrow.disabled",
-            );
-        }
         // Native removal precedes inflow. Stable cell ranks predate speed
         // removal: an extreme marker still consumes a cell quota place.
         enc.compute_memory_barrier_buffers();
@@ -1401,30 +826,6 @@ impl StepState {
             );
         }
         enc.compute_memory_barrier_buffers();
-        // A failure is sticky across narrow enable toggles and is cleared only
-        // by an epoch/lattice reset.  Never-enabled dense steps use the
-        // existing zero storage, so they do not acquire a new scratch word.
-        let status = self
-            .narrow
-            .buffers
-            .as_ref()
-            .map(|buffers| &buffers.failure)
-            .unwrap_or(self.zeros.as_ref().expect("zero storage prepared"));
-        enc.dispatch_compute(
-            &pipes.narrow_tally,
-            &[
-                uniform(&base),
-                GpuBinding::Buffer {
-                    binding: 22,
-                    buffer: step.capped,
-                    offset: step.tally,
-                },
-                buffer(43, status),
-            ],
-            [1, 1, 1],
-            "gpu_flip.step.narrow.tally",
-        );
         Ok(())
     }
-
 }

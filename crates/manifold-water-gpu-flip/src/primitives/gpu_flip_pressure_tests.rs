@@ -154,6 +154,7 @@ fn open_face_records(n: usize) -> Vec<[f32; 8]> {
         .collect()
 }
 
+/// `Params` of `shaders/gpu_flip_pressure.wgsl` as the Lentine flux entry reads it.
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 struct LentineFluxParams {

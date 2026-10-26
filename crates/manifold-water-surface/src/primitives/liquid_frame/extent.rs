@@ -22,21 +22,6 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             x.hold((SLOTS - 1) * face_len(solver.cells(), axis) * 4);
         }
     }
-    let mut interior_check = Ok(());
-    if x.wired("interior") {
-        let bytes = manifold_water_liquid::grid::interior_bytes(solver.cells());
-        if x.bytes("interior") != Some(bytes) {
-            interior_check = Err(x.uncovered(format!(
-                "interior must hold exactly {bytes} bytes for the cell-centred lattice"
-            )));
-        }
-        x.provide("interior_a", bytes);
-        x.provide("interior_b", bytes);
-        x.hold(SLOTS * bytes);
-    } else {
-        x.provide("interior_a", 0);
-        x.provide("interior_b", 0);
-    }
     let valid_layers = x.param("face_valid_layers", 0.0).round().clamp(0.0, 8.0);
     provide_frame_faces(x, solver.cells(), valid_layers);
     let count = x.count("count", 0.0)?;
@@ -83,7 +68,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         }
         x.covers("solid", solid)?;
     }
-    cover_frame_faces(x, solver.cells()).and(interior_check)
+    cover_frame_faces(x, solver.cells())
 }
 inventory::submit! {
     ExtentRule { type_id: "node.liquid_frame", check: liquid_frame }

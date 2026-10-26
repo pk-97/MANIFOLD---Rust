@@ -1,10 +1,8 @@
 // GPU FLIP's water step: every pass of one step but the sort, the solid
 // distance and the pressure solve, each a separate entry point. Included
 // after liquid_pose.wgsl, liquid_collider.wgsl and force_lattice.wgsl.
-// Narrow-band transport, sharp coupling and lifecycle integration follow
-// Ferstl et al., Narrow Band FLIP for Liquid Simulations, CGF 35(2), 2016,
-// doi:10.1111/cgf.12825. FLIP Fluids attribution below covers only the
-// explicitly named baseline transfers, boundaries and source operations.
+// FLIP Fluids attribution below covers the explicitly named baseline
+// transfers, boundaries and source operations.
 //
 // Cells are n per axis from the box minimum, x fastest. A face grid is
 // (n + 1)³ FaceSample records indexed like the cells with m = n + 1: record
@@ -86,7 +84,6 @@ struct Params {
     extension_layers: u32,
     // The farthest ring the table holds; ring_max + 1 means none within it.
     ring_max: u32,
-    narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
     live_impulse_stride: u32,
     // Cells from the grid's minimum to each wall (FlipSolverGrid::wall_inset);
     // 0 when the walls are the grid's edges.
@@ -96,6 +93,7 @@ struct Params {
     coupled_h: f32,
     pad1: u32,
     pad2: u32,
+    pad3: u32,
 };
 
 struct CellRange {

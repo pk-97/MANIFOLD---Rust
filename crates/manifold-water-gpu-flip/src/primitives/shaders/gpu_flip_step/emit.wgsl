@@ -123,7 +123,7 @@ fn birth_tally_reset() {
 
 // One thread, after emit_write: the substep's inflow births and the ones the
 // pool had no free slot for, summed over the tick into the solver tail
-// (stats words 28 and 29). A refusal is how a full pool reaches the setup
+// (stats words 27 and 28). A refusal is how a full pool reaches the setup
 // check.
 @compute @workgroup_size(1)
 fn emit_tally() {

@@ -16,12 +16,11 @@ pub const H_MAX: usize = 16;
 
 /// Per-slot field arrays beside the particles, by index.
 pub const FIELD_SOLID: usize = 0;
-pub const FIELD_INTERIOR: usize = 1;
 /// Face axes x, y, z at `FIELD_FACES + axis`.
-pub const FIELD_FACES: usize = 2;
+pub const FIELD_FACES: usize = 1;
 /// Whitewater classes foam, bubble, spray, dust at `FIELD_WHITEWATER + k`.
-pub const FIELD_WHITEWATER: usize = 5;
-pub const FIELDS: usize = 9;
+pub const FIELD_WHITEWATER: usize = 4;
+pub const FIELDS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlotState {
@@ -806,7 +805,7 @@ mod tests {
         publish_retire(&mut core, 1.0);
         assert!(!core.wants_publication(1.0));
         let mut wider = layout(1);
-        wider.fields[FIELD_INTERIOR] = 64;
+        wider.fields[FIELD_FACES] = 64;
         assert_eq!(core.set_layout(wider), LayoutChange::Generation);
         assert!(
             core.wants_publication(1.0),
@@ -928,7 +927,7 @@ mod tests {
                 };
                 match next(25) {
                     0 => epoch += 1,
-                    1 => fields[FIELD_INTERIOR] = 4 * next(3),
+                    1 => fields[FIELD_FACES] = 4 * next(3),
                     2 => fields[FIELD_WHITEWATER] = 4 * next(2),
                     3 => lattice[4] = 8 + next(2) as u32,
                     _ => {}

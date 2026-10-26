@@ -15,13 +15,6 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let n = ts_cells();
     let p = ts_face_coord(idx);
-    if u.narrow_band == 2u {
-        let cell = clamp(p, vec3<i32>(0), n - vec3<i32>(1));
-        if !narrow_cell(ts_cell_at(cell)) {
-            faces_out[idx] = canonical_face(p, n);
-            return;
-        }
-    }
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     var exists = vec3<bool>(false);
     for (var a = 0; a < 3; a = a + 1) {

@@ -38,10 +38,6 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx == TS_NONE {
         return;
     }
-    if u.narrow_band == 2u && !narrow_cell(idx) {
-        cell_out[idx] = 0.0;
-        return;
-    }
     if !(water[idx] > 0.5) {
         cell_out[idx] = 0.0;
         return;

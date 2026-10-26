@@ -29,36 +29,12 @@ pub(crate) fn read_closed_faces(value: f32) -> Result<u32, String> {
     }
 }
 
-/// The sheet fill rate: the share of sheet seeds kept, 0 (off) to 1. Refused
-/// with Narrow Band, whose resorts the seeding does not follow.
-pub(crate) fn read_sheet_fill_rate(value: f32, narrow_band: bool) -> Result<f32, String> {
+/// The sheet fill rate: the share of sheet seeds kept, 0 (off) to 1.
+pub(crate) fn read_sheet_fill_rate(value: f32) -> Result<f32, String> {
     if !(value.is_finite() && (0.0..=1.0).contains(&value)) {
         return Err(format!("Sheet Fill Rate must be from 0 to 1, not {value}"));
     }
-    if value > 0.0 && narrow_band {
-        return Err("Sheet Fill Rate needs Narrow Band off".into());
-    }
     Ok(value)
-}
-
-/// Narrow-band is a strict binary step option.  Invalid values are refused
-/// so a malformed wire cannot silently select a different numerical method.
-pub(crate) fn read_narrow_band(value: f32) -> Result<bool, String> {
-    match value {
-        0.0 => Ok(false),
-        1.0 => Ok(true),
-        _ => Err(format!("Narrow Band must be exactly 0 or 1, not {value}")),
-    }
-}
-
-pub(super) fn read_epoch(value: f32) -> Result<u32, String> {
-    if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= u32::MAX as f32 {
-        Ok(value as u32)
-    } else {
-        Err(format!(
-            "Epoch must be a finite nonnegative whole number, not {value}"
-        ))
-    }
 }
 
 /// Max Iterations, the cap Auto converges within: refused unless finite and,

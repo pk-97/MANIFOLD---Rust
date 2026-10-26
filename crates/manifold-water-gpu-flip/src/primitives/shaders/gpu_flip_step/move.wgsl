@@ -257,7 +257,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let particle = sorted[idx];
     var out = particle;
-    let first = u.step_in_tick == 0 && u.narrow_band == 0u;
+    let first = u.step_in_tick == 0;
     let push_before = select(capped[2u * idx + 1u], 0u, first);
     // Native RK3 never clips stage velocities; retain the public stats word.
     capped[2u * idx] = 0u;
@@ -278,10 +278,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     // The density projection's move, step_dt · (spread(q) − new(q)): position
     // only, never kept as velocity. Zero rate binds `faces_in` as `spread`.
     let moved = per_cell * (sample(q0, n, 2u) - after);
-    var reached = q0 + moved;
-    if u.narrow_band == 0u {
-        reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + moved;
-    }
+    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + moved;
     var q1 = reached;
     var radius = particle.position_radius.w;
     if finite(q1) {

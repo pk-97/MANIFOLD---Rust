@@ -189,7 +189,6 @@ fn binding(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 /// shader: the oracle every publication proof compares bytes against.
 #[cfg(any(test, feature = "testkit"))]
 pub mod reference {
-    use super::super::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
     use manifold_node_engine::particles::FluidParticle;
 
     /// `radius > 0.0` as that shader's GPU compare evaluated it: subnormals
@@ -243,8 +242,7 @@ pub mod reference {
             }
             std::mem::swap(&mut src, &mut dst);
         }
-        let accepted =
-            stats[0] == 0 && stats[NARROW_BAND_SHORTAGE_WORD as usize] == 0 && identity[3] == 0;
+        let accepted = stats[0] == 0 && identity[3] == 0;
         (src, [scan[slots - 1], identity[1], u32::from(accepted), 0])
     }
 

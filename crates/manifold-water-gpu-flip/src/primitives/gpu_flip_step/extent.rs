@@ -12,9 +12,7 @@ use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::REACTION_FLOATS;
 use manifold_water_liquid::extent::liquid_lattice;
-use manifold_water_liquid::extent::{
-    PARTICLE, body_rows, field_reads, lattice_total, search_fits, whole,
-};
+use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, search_fits, whole};
 use manifold_water_liquid::fluid_particles::bin_total;
 use manifold_water_liquid::grid::face_bytes;
 use manifold_water_liquid::grid::face_len;
@@ -70,17 +68,6 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         whole(x, "clock_obstacle_count", 0.0),
         whole(x, "clock_source_count", 0.0),
     ));
-    let cell_bytes = lattice_total(cells) * 4;
-    if x.feeds("interior") {
-        x.provide("interior", cell_bytes);
-        x.hold(cell_bytes);
-    }
-    if x.scalar("narrow_band", 0.0) != 0.0 {
-        // Four distance arrays, support mask, two face grids, lifecycle
-        // particles/status and PrefixScan storage. Ferstl et al. (2016).
-        x.hold(6 * cell_bytes + 3 * faces + slots * PARTICLE + 16);
-        x.hold(storage_words((lattice_total(cells) * 8) as usize) as u64 * 4);
-    }
     if x.wired("regions") {
         x.hold(
             storage_words(crate::primitives::gpu_flip_step::emit_sites(cells) as usize) as u64 * 4,

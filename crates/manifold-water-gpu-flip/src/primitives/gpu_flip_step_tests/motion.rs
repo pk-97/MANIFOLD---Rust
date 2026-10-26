@@ -525,112 +525,102 @@ pub(super) fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies
         ("fallback clamp", [0.05, y, y], [0.0, 1.0, 0.0], 0.025, true),
         ("nonfinite", [f64::NAN, y, y], [0.0; 3], 0.01, false),
     ];
-    for entry in ["faces_to_particles", "narrow_move"] {
-        for (name, q0, velocity, dt, flat) in cases {
-            let solid = if flat {
-                vec![H; face_len()]
-            } else {
-                wall_solid(N, H)
-            };
-            let particles = [FluidParticle {
-                position_radius: [
-                    MIN[0] + q0[0] as f32 * H,
-                    MIN[1] + q0[1] as f32 * H,
-                    MIN[2] + q0[2] as f32 * H,
-                    0.08,
+    let entry = "faces_to_particles";
+    for (name, q0, velocity, dt, flat) in cases {
+        let solid = if flat {
+            vec![H; face_len()]
+        } else {
+            wall_solid(N, H)
+        };
+        let particles = [FluidParticle {
+            position_radius: [
+                MIN[0] + q0[0] as f32 * H,
+                MIN[1] + q0[1] as f32 * H,
+                MIN[2] + q0[2] as f32 * H,
+                0.08,
+            ],
+            velocity: [0.0; 3],
+            id: 1,
+        }];
+        // The RK3 marker mover must read stored solid velocities even when
+        // their validity flag is zero.
+        let faces = vec![
+            FaceSample {
+                velocity: [
+                    velocity[0] as f32,
+                    velocity[1] as f32,
+                    velocity[2] as f32,
+                    0.0
                 ],
-                velocity: [0.0; 3],
-                id: 1,
-            }];
-            // Both RK3 and the optional RK4 marker mover must read stored solid
-            // velocities even when their validity flag is zero. This does not
-            // validate the separate Narrow Band grid-backtrace sampler.
-            let faces = vec![
-                FaceSample {
-                    velocity: [
-                        velocity[0] as f32,
-                        velocity[1] as f32,
-                        velocity[2] as f32,
-                        0.0
-                    ],
-                    weight: [0.0; 4]
-                };
-                face_len()
-            ];
-            let step = StepParams {
-                step_dt: dt,
-                particles: 1,
-                ..lattice()
+                weight: [0.0; 4]
             };
-            let got: Vec<FluidParticle> = Pass::new()
-                .bind(2, &particles)
-                .bind(3, &faces)
-                .bind(9, &solid)
-                .bind(15, &[LiquidShape::default()])
-                .bind(16, &[0_u32; 4])
-                .bind(17, &faces)
-                .bind(18, &faces)
-                .bind(22, &[0_u32; 2])
-                .bind(36, &[LiquidBody::default()])
-                .run(entry, &step, 19, 1, 1);
-            if name == "nonfinite" {
-                assert!(
-                    !got[0].position_radius[0].is_finite(),
-                    "{entry}: invalid position remains visible"
-                );
-                assert_eq!(
-                    (got[0].position_radius[3], got[0].id),
-                    (particles[0].position_radius[3], particles[0].id)
-                );
-                continue;
-            }
-            // Sampling changes near the current grid edges, so even a constant
-            // stored field is not a constant particle velocity there. Compute the
-            // actual integrator stages before applying the independent collision
-            // oracle; these fixtures keep every stage inside the travel guard.
-            let per_cell = f64::from(dt) / f64::from(H);
-            let at = |fraction: f64, v: [f64; 3]| {
-                cpu_sample(
-                    std::array::from_fn(|a| q0[a] + fraction * per_cell * v[a]),
-                    &faces,
-                )
-            };
-            let k1 = cpu_sample(q0, &faces);
-            let k2 = at(0.5, k1);
-            let reached: [f64; 3] = if entry == "faces_to_particles" {
-                let k3 = at(0.75, k2);
-                std::array::from_fn(|a| {
-                    q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0
-                })
-            } else {
-                let k3 = at(0.5, k2);
-                let k4 = at(1.0, k3);
-                std::array::from_fn(|a| {
-                    q0[a] + per_cell * (k1[a] + 2.0 * k2[a] + 2.0 * k3[a] + k4[a]) / 6.0
-                })
-            };
-            if name.contains("grid escape") {
-                assert!(
-                    reached[0] < 0.0 || reached[0] >= N[0] as f64,
-                    "{entry}/{name}: fixture reaches outside the grid: {reached:?}"
-                );
-            }
-            let want = if flat {
-                native_collision_move(q0, reached, N, f64::from(H), |_| 1.0, |_| [0.0; 3])
-            } else {
-                native_wall_move(q0, reached, N, f64::from(H))
-            };
-            let actual: [f64; 3] = std::array::from_fn(|a| {
-                (f64::from(got[0].position_radius[a]) - f64::from(MIN[a])) / f64::from(H)
-            });
-            for a in 0..3 {
-                assert!(
-                    (actual[a] - want[a]).abs() < 2e-5,
-                    "{entry}/{name} axis {a}: {actual:?} vs {want:?}"
-                );
-            }
-            assert!(got[0].position_radius[3] > 0.0, "{name} remains live");
+            face_len()
+        ];
+        let step = StepParams {
+            step_dt: dt,
+            particles: 1,
+            ..lattice()
+        };
+        let got: Vec<FluidParticle> = Pass::new()
+            .bind(2, &particles)
+            .bind(3, &faces)
+            .bind(9, &solid)
+            .bind(15, &[LiquidShape::default()])
+            .bind(16, &[0_u32; 4])
+            .bind(17, &faces)
+            .bind(18, &faces)
+            .bind(22, &[0_u32; 2])
+            .bind(36, &[LiquidBody::default()])
+            .run(entry, &step, 19, 1, 1);
+        if name == "nonfinite" {
+            assert!(
+                !got[0].position_radius[0].is_finite(),
+                "{entry}: invalid position remains visible"
+            );
+            assert_eq!(
+                (got[0].position_radius[3], got[0].id),
+                (particles[0].position_radius[3], particles[0].id)
+            );
+            continue;
         }
+        // Sampling changes near the current grid edges, so even a constant
+        // stored field is not a constant particle velocity there. Compute the
+        // actual integrator stages before applying the independent collision
+        // oracle; these fixtures keep every stage inside the travel guard.
+        let per_cell = f64::from(dt) / f64::from(H);
+        let at = |fraction: f64, v: [f64; 3]| {
+            cpu_sample(
+                std::array::from_fn(|a| q0[a] + fraction * per_cell * v[a]),
+                &faces,
+            )
+        };
+        let k1 = cpu_sample(q0, &faces);
+        let k2 = at(0.5, k1);
+        let k3 = at(0.75, k2);
+        let reached: [f64; 3] = std::array::from_fn(|a| {
+            q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0
+        });
+        if name.contains("grid escape") {
+            assert!(
+                reached[0] < 0.0 || reached[0] >= N[0] as f64,
+                "{entry}/{name}: fixture reaches outside the grid: {reached:?}"
+            );
+        }
+        let want = if flat {
+            native_collision_move(q0, reached, N, f64::from(H), |_| 1.0, |_| [0.0; 3])
+        } else {
+            native_wall_move(q0, reached, N, f64::from(H))
+        };
+        let actual: [f64; 3] = std::array::from_fn(|a| {
+            (f64::from(got[0].position_radius[a]) - f64::from(MIN[a])) / f64::from(H)
+        });
+        for a in 0..3 {
+            assert!(
+                (actual[a] - want[a]).abs() < 2e-5,
+                "{entry}/{name} axis {a}: {actual:?} vs {want:?}"
+            );
+        }
+        assert!(got[0].position_radius[3] > 0.0, "{name} remains live");
     }
 }
 
@@ -661,43 +651,42 @@ pub(super) fn gpu_flip_collision_keeps_negative_body_phi_and_removes_open_band_p
         },
     ];
     let faces = vec![FaceSample::default(); face_len()];
-    for entry in ["faces_to_particles", "narrow_move"] {
-        for closed_faces in [62, 63] {
-            let step = StepParams {
-                body_count: 1,
-                rows: 1,
-                region_count: 0,
-                closed_faces,
-                particles: 2,
-                ..lattice()
-            };
-            let mut pass = Pass::new();
-            let got: Vec<FluidParticle> = pass
-                .bind(2, &particles)
-                .bind(3, &faces)
-                .bind(9, &solid)
-                .bind(15, &[LiquidShape::default()])
-                .bind(16, &[0_u32; 4])
-                .bind(17, &faces)
-                .bind(18, &faces)
-                .bind(22, &[0_u32; 4])
-                .bind(36, &[LiquidBody::default()])
-                .run(entry, &step, 19, particles.len(), particles.len());
-            assert_eq!(
-                got[0].position_radius, particles[0].position_radius,
-                "{entry}: the particle under the body stays, live"
-            );
-            assert_eq!(
-                pass.bound::<u32>(22, 2)[1],
-                1,
-                "{entry}: its push-out is counted as refused"
-            );
-            assert_eq!(
-                got[1].position_radius[3],
-                if closed_faces == 62 { 0.0 } else { 0.08 },
-                "only the open low-X band removes the second particle"
-            );
-        }
+    let entry = "faces_to_particles";
+    for closed_faces in [62, 63] {
+        let step = StepParams {
+            body_count: 1,
+            rows: 1,
+            region_count: 0,
+            closed_faces,
+            particles: 2,
+            ..lattice()
+        };
+        let mut pass = Pass::new();
+        let got: Vec<FluidParticle> = pass
+            .bind(2, &particles)
+            .bind(3, &faces)
+            .bind(9, &solid)
+            .bind(15, &[LiquidShape::default()])
+            .bind(16, &[0_u32; 4])
+            .bind(17, &faces)
+            .bind(18, &faces)
+            .bind(22, &[0_u32; 4])
+            .bind(36, &[LiquidBody::default()])
+            .run(entry, &step, 19, particles.len(), particles.len());
+        assert_eq!(
+            got[0].position_radius, particles[0].position_radius,
+            "{entry}: the particle under the body stays, live"
+        );
+        assert_eq!(
+            pass.bound::<u32>(22, 2)[1],
+            1,
+            "{entry}: its push-out is counted as refused"
+        );
+        assert_eq!(
+            got[1].position_radius[3],
+            if closed_faces == 62 { 0.0 } else { 0.08 },
+            "only the open low-X band removes the second particle"
+        );
     }
 }
 
@@ -729,32 +718,31 @@ pub(super) fn gpu_flip_collision_refuses_excessive_push_and_keeps_the_particle()
         particles: 1,
         ..lattice()
     };
-    for entry in ["faces_to_particles", "narrow_move"] {
-        let mut pass = Pass::new();
-        let got: Vec<FluidParticle> = pass
-            .bind(2, &[particle])
-            .bind(3, &faces)
-            .bind(9, &solid)
-            .bind(15, &[LiquidShape::default()])
-            .bind(16, &[0_u32; 4])
-            .bind(17, &faces)
-            .bind(18, &faces)
-            .bind(22, &[0_u32; 2])
-            .bind(36, &[LiquidBody::default()])
-            .run(entry, &step, 19, 1, 1);
-        assert_eq!(
-            got[0].position_radius[..3],
-            particle.position_radius[..3],
-            "{entry}: last-position fallback"
-        );
-        assert_eq!(
-            got[0].position_radius[3], particle.position_radius[3],
-            "{entry}: water is never deleted at a solid"
-        );
-        assert_eq!(
-            pass.bound::<u32>(22, 2)[1],
-            1,
-            "{entry}: refused push is counted"
-        );
-    }
+    let entry = "faces_to_particles";
+    let mut pass = Pass::new();
+    let got: Vec<FluidParticle> = pass
+        .bind(2, &[particle])
+        .bind(3, &faces)
+        .bind(9, &solid)
+        .bind(15, &[LiquidShape::default()])
+        .bind(16, &[0_u32; 4])
+        .bind(17, &faces)
+        .bind(18, &faces)
+        .bind(22, &[0_u32; 2])
+        .bind(36, &[LiquidBody::default()])
+        .run(entry, &step, 19, 1, 1);
+    assert_eq!(
+        got[0].position_radius[..3],
+        particle.position_radius[..3],
+        "{entry}: last-position fallback"
+    );
+    assert_eq!(
+        got[0].position_radius[3], particle.position_radius[3],
+        "{entry}: water is never deleted at a solid"
+    );
+    assert_eq!(
+        pass.bound::<u32>(22, 2)[1],
+        1,
+        "{entry}: refused push is counted"
+    );
 }

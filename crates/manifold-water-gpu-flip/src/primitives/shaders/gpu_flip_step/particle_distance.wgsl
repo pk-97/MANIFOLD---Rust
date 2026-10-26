@@ -12,10 +12,6 @@ fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx == TS_NONE {
         return;
     }
-    if u.narrow_band == 2u && !narrow_cell(idx) {
-        cell_out[idx] = 3.0 * u.cell_size;
-        return;
-    }
     let n = ts_cells();
     let p = ts_cell_coord(idx);
     let h = u.cell_size;

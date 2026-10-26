@@ -4,8 +4,7 @@
 //   particles_main — each workgroup folds a fixed block of records, then a
 //                    fixed workgroup-memory tree, into one partial;
 //   finish_main    — one workgroup folds the partials in a fixed order and
-//                    writes the stats words. The final solver word is the
-//                    narrow-band reseed shortage count.
+//                    writes the stats words.
 // Every sum runs in a fixed order with no read-modify-write races, so the
 // words are the same on every run. Non-finite values are found with an exponent-bits test:
 // fast math may fold isfinite().

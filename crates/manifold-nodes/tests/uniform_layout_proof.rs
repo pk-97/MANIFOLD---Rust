@@ -616,6 +616,12 @@ const NON_STANDALONE: &[&str] = &[
     // reflected in uniform_layout_extended.
     "node.surface_weights",
     "node.carry_liquid_into_solids",
+    // Surface wetness and the whitewater splats (foam cover, spray mist):
+    // WetnessUniforms, CoverUniforms and MistUniforms are reflected in
+    // uniform_layout_extended.
+    "node.surface_wetness",
+    "node.foam_cover",
+    "node.spray_mist",
     // The whitewater emitter packer, proven above.
     "node.whitewater_influence",
     "node.turbulence_emission_count",

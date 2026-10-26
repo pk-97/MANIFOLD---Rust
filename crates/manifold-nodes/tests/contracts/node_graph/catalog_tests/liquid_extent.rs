@@ -138,7 +138,7 @@ fn particle_blend_mix_refuses_unequal_capacities() {
 /// resolution its domain admits either refuses by name before any GPU
 /// work, or every buffer covers every dispatch.
 #[test]
-fn narrow_band_preset_small_extent_checked() {
+fn liquid_preset_small_extent_checked() {
     let (id, def) = liquid_presets()
         .into_iter()
         .find(|(id, _)| id.contains("WaterDamBreakGpuFlip"))

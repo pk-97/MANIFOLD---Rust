@@ -305,7 +305,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     );
 
     // The tally: the births and the two the full pool refused, summed over
-    // the tick's substeps into stats words 28 and 29 (the solver tail from
+    // the tick's substeps into stats words 27 and 28 (the solver tail from
     // INFLOW_BIRTHS_TAIL), so a full pool is reported. The step runs
     // birth_tally_reset before the tick's first substep's births, which also
     // clears the sheet refusals.
@@ -316,9 +316,10 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         words[tail..tail + 2].copy_from_slice(&before);
         words[sheet] = 3;
         if first_substep {
-            words = Pass::new()
-                .bind(22, &words)
-                .run("birth_tally_reset", &params, 22, sheet + 1, 1);
+            words =
+                Pass::new()
+                    .bind(22, &words)
+                    .run("birth_tally_reset", &params, 22, sheet + 1, 1);
         }
         let got: Vec<u32> = Pass::new()
             .bind(1, &ranges)
