@@ -495,6 +495,24 @@ const RT_TEMPORAL_RENDER_SCALE_DEN: u32 = 3;
 fn scale_dim(native: u32, num: u32, den: u32) -> u32 {
     (u64::from(native) * u64::from(num) / u64::from(den)).max(1) as u32
 }
+
+/// Whether `temporal_upscale` sizes `port` at render res: depth, velocity and
+/// the AO mask always, the denoiser G-buffer feeds only while `denoise_feed`
+/// is on. The one place that names these ports, shared by `output_canvas_scale`
+/// and `output_canvas_scale_is_live` so the two cannot drift.
+fn follows_temporal_upscale(port: &str, denoise_feed: bool) -> bool {
+    let is_denoise_feed_port = matches!(
+        port,
+        "normals"
+            | "roughness"
+            | "diffuse_albedo"
+            | "specular_albedo"
+            | "specular_hit_distance"
+            | "reactive_mask"
+    );
+    matches!(port, "depth" | "velocity" | "ao_mask") || (denoise_feed && is_denoise_feed_port)
+}
+
 /// RAYTRACING_DESIGN.md section 5.2 P3: world-space glow falloff radius for an
 /// emissive object treated as a volumetric-march point light (the
 /// `shaft_lights`/D5 "emissive-colored volumetric glow" entry) — same
@@ -2600,22 +2618,18 @@ impl EffectNode for RenderScene {
         let temporal_upscale =
             matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
         let denoise_feed = matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
-        let is_denoise_feed_port = port == "normals"
-            || port == "roughness"
-            || port == "diffuse_albedo"
-            || port == "specular_albedo"
-            || port == "specular_hit_distance"
-            || port == "reactive_mask";
-        if temporal_upscale
-            && (port == "depth"
-                || port == "velocity"
-                || port == "ao_mask"
-                || (denoise_feed && is_denoise_feed_port))
-        {
+        if temporal_upscale && follows_temporal_upscale(port, denoise_feed) {
             Some((RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN))
         } else {
             Some((1, 1))
         }
+    }
+
+    /// The ports `output_canvas_scale` can put at render res, whichever way
+    /// `temporal_upscale` and `rt_denoise_feed` are set: both are live toggles,
+    /// so the freeze compiler must not treat these ports' sizes as fixed.
+    fn output_canvas_scale_is_live(&self, port: &str) -> bool {
+        follows_temporal_upscale(port, true)
     }
 
     /// `depth` is `R32Float` (raw device depth,

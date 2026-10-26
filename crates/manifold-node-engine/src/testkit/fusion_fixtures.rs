@@ -155,6 +155,69 @@ pub fn register_fusion_test_nodes(registry: &mut PrimitiveRegistry) {
     registry.register("test.fusion_source", || Box::new(TestFusionSource));
     registry.register("test.fusion_gather", || Box::new(TestFusionGather));
     registry.register("test.fusion_join", || Box::new(TestFusionJoin));
+    registry.register("test.fusion_live_source", || Box::new(TestFusionLiveSource));
+}
+
+const LIVE_OUTPUTS: &[NodeOutput] = &[
+    NodePort {
+        name: Cow::Borrowed("out"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    NodePort {
+        name: Cow::Borrowed("aux"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+];
+const LIVE_PARAMS: &[ParamDef] = &[ParamDef {
+    name: Cow::Borrowed("upscale"),
+    label: "Upscale",
+    ty: ParamType::Bool,
+    default: ParamValue::Bool(false),
+    range: None,
+    enum_values: &[],
+}];
+
+/// Texture producer shaped like `render_scene` under `temporal_upscale`: both
+/// outputs are canvas-sized until the live `upscale` param is on, then 2/3 of
+/// the canvas, and both are declared live.
+pub struct TestFusionLiveSource;
+
+impl PrimitiveSpec for TestFusionLiveSource {
+    const TYPE_ID: &'static str = "test.fusion_live_source";
+    const PURPOSE: &'static str =
+        "TEST FIXTURE ONLY — texture producer whose canvas scale follows a live param.";
+    const INPUTS: &'static [NodeInput] = &[];
+    const OUTPUTS: &'static [NodeOutput] = LIVE_OUTPUTS;
+    const PARAMS: &'static [ParamDef] = LIVE_PARAMS;
+    const FUSION_KIND: FusionKind = FusionKind::Boundary;
+    const BOUNDARY_REASON: Option<BoundaryReason> = Some(BoundaryReason::Blocked);
+    const DEPTH_RULE: crate::scene::depth_rule::DepthRule =
+        crate::scene::depth_rule::DepthRule::Inherit;
+
+    fn cached_type_id() -> &'static EffectNodeType {
+        static CELL: OnceLock<EffectNodeType> = OnceLock::new();
+        CELL.get_or_init(|| EffectNodeType::new(Self::TYPE_ID))
+    }
+}
+
+impl Primitive for TestFusionLiveSource {
+    fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+
+    fn output_canvas_scale(&self, _port: &str, params: &ParamValues) -> Option<(u32, u32)> {
+        if matches!(params.get("upscale"), Some(ParamValue::Bool(true))) {
+            Some((2, 3))
+        } else {
+            Some((1, 1))
+        }
+    }
+
+    fn output_canvas_scale_is_live(&self, _port: &str) -> bool {
+        true
+    }
 }
 
 pub struct TestFusionJoin;

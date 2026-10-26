@@ -499,6 +499,14 @@ pub trait Primitive: PrimitiveSpec {
         None
     }
 
+    /// Mirror of
+    /// [`EffectNode::output_canvas_scale_is_live`](crate::node_graph::effect_node::EffectNode::output_canvas_scale_is_live).
+    /// Default `false`. Override on a primitive whose `output_canvas_scale`
+    /// for a port follows a param that changes at run time.
+    fn output_canvas_scale_is_live(&self, _port: &str) -> bool {
+        false
+    }
+
     /// Mirror of [`EffectNode::output_canvas_max_dim`].
     fn output_canvas_max_dim(
         &self,
@@ -917,6 +925,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         params: &crate::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         Primitive::output_canvas_scale(self, port, params)
+    }
+    fn output_canvas_scale_is_live(&self, port: &str) -> bool {
+        Primitive::output_canvas_scale_is_live(self, port)
     }
     fn output_canvas_max_dim(
         &self,

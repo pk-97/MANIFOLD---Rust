@@ -45,6 +45,40 @@ fn wants_shafts_gate() {
     );
 }
 
+/// The ports `output_canvas_scale` puts at render res are exactly the ports
+/// `output_canvas_scale_is_live` reports, and the denoiser feeds are live even
+/// while `rt_denoise_feed` leaves them at canvas size.
+#[test]
+fn live_scale_ports_are_the_render_res_ports() {
+    let params = |upscale: bool, denoise_feed: bool| {
+        let mut params = ParamValues::default();
+        params.insert("temporal_upscale".into(), ParamValue::Bool(upscale));
+        params.insert("rt_denoise_feed".into(), ParamValue::Bool(denoise_feed));
+        params
+    };
+    let scene = RenderScene::new();
+    let all_on = params(true, true);
+    let upscale_off = params(false, true);
+    for port in scene.outputs() {
+        let name: &str = &port.name;
+        assert_eq!(
+            scene.output_canvas_scale(name, &all_on) != Some((1, 1)),
+            scene.output_canvas_scale_is_live(name),
+            "port `{name}`"
+        );
+        assert_eq!(
+            scene.output_canvas_scale(name, &upscale_off),
+            Some((1, 1)),
+            "port `{name}` stays canvas-sized with temporal_upscale off"
+        );
+    }
+    let no_feed = params(true, false);
+    assert_eq!(scene.output_canvas_scale("depth", &no_feed), Some((2, 3)));
+    assert_eq!(scene.output_canvas_scale("normals", &no_feed), Some((1, 1)));
+    assert!(scene.output_canvas_scale_is_live("normals"));
+    assert!(!scene.output_canvas_scale_is_live("color"));
+}
+
 /// RAYTRACING_DESIGN.md section 16 TL5: the designated-sun slot pick —
 /// first Sun-mode caster, None otherwise.
 /// Tested against the production fn (never a duplicated copy — a copy

@@ -2022,6 +2022,16 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
+    /// Whether `port`'s [`output_canvas_scale`](Self::output_canvas_scale) can
+    /// change while the graph is running (a live toggle rather than an authored
+    /// shape), so the value the plan reads from the def's params is not the one
+    /// the executor will use later. The freeze compiler cannot fuse such an
+    /// output, or anything sized from it, with nodes at a fixed grid: the fused
+    /// kernel's grid is chosen once, from the def. Default `false`.
+    fn output_canvas_scale_is_live(&self, _port: &str) -> bool {
+        false
+    }
+
     /// Longest-side cap for an output whose input is canvas-relative and
     /// whose concrete dimensions cannot be known when the plan is built.
     /// The executor applies the cap to the live canvas size at acquire time.

@@ -2340,11 +2340,15 @@ pub(crate) fn fuse_canonical_def_masked(
         // replaced. A `Scaled` space becomes a def-level `output_canvas_scales`
         // entry (honoured by `node.wgsl_compute`); `Canvas` needs no stamp;
         // `Concrete` has no def-level override and relies on the fused node's
-        // input propagation — all three are verified by `fused_def_builds`
-        // against `expected_spaces`, so a resolution that drifts rejects the
-        // fusion instead of shipping a wrong-grid kernel. In-place regions
-        // (their output rides an aliased input port) are skipped: buffer loops
-        // have no texture grid, and the verify below would mis-read the port.
+        // input propagation; `Live` is never stamped, since a stamp would
+        // freeze a size that a live param changes later — the fused node's
+        // texture inputs are all `Live` of the members' producer, so the
+        // executor sizes its output from them exactly as it sized the members.
+        // All four are verified by `fused_def_builds` against
+        // `expected_spaces`, so a resolution that drifts rejects the fusion
+        // instead of shipping a wrong-grid kernel. In-place regions (their
+        // output rides an aliased input port) are skipped: buffer loops have
+        // no texture grid, and the verify below would mis-read the port.
         let mut output_canvas_scales: std::collections::BTreeMap<String, [u32; 2]> =
             Default::default();
         if let Some(space) = region.space
@@ -2840,6 +2844,54 @@ mod tests {
             fuse_canonical_def_masked(&def, &reg, Some(&[false, false])).is_none(),
             "all regions masked off = fully unfused = None"
         );
+    }
+
+    /// A chain sized from a live-scaled producer fuses into a kernel that is
+    /// expected at the producer's live space and carries no canvas scale
+    /// stamp, so the executor sizes it from its inputs whichever way the live
+    /// param is set. The fused def must resolve back to that same space.
+    #[test]
+    fn live_region_installs_without_a_canvas_scale() {
+        let json = r#"{
+            "version": 1, "name": "live_chain", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_live_source", "nodeId": "live",
+                  "params": { "upscale": { "type": "Bool", "value": true } } },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "first" },
+                { "id": 3, "typeId": "test.fusion_map", "nodeId": "second" },
+                { "id": 4, "typeId": "test.fusion_join", "nodeId": "join" },
+                { "id": 5, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "a" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "b" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let reg = registry();
+        let fused = fuse_canonical_def(&def, &reg).expect("the live chain fuses");
+        assert!(!fused.expected_spaces.is_empty());
+        assert!(
+            fused
+                .expected_spaces
+                .iter()
+                .all(|(_, _, space)| *space == ElementSpace::Live { node: 1 }),
+            "the kernel is expected at the live producer's space"
+        );
+        let kernels: Vec<_> = fused
+            .def
+            .nodes
+            .iter()
+            .filter(|n| n.type_id == "node.wgsl_compute")
+            .collect();
+        assert_eq!(kernels.len(), 1, "first + second fuse; the join stays");
+        assert!(
+            kernels[0].output_canvas_scales.is_empty(),
+            "a live space is never stamped as a fixed scale"
+        );
+        assert!(fused_def_builds(&fused.def, &reg, &fused.expected_spaces));
     }
 
     /// At cap, `LruCache` evicts the single

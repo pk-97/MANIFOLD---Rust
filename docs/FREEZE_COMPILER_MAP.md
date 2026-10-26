@@ -258,7 +258,10 @@ any fusable atom whose `run()` reads `ctx.time` undeclared.
 if: same domain (texture wire, but never *into* a buffer atom — that's a
 gather); coincident-consumed (a gather-consumed wire NEVER unions — the
 gathered producer stays an external the body samples); same element space
-(texture only); and the merge keeps the *collapsed* forward graph acyclic
+(texture only; an output whose canvas scale a live param can change, like
+`render_scene`'s `temporal_upscale` depth, and everything sized only from it, is
+`ElementSpace::Live` of that node and equals only itself); and the merge keeps
+the *collapsed* forward graph acyclic
 (convexity — Watercolor's out-through-a-blur-and-back shape). State-capture
 wires are excluded from the forward graph, matching the planner, or legal
 feedback loops would read as cycles. Both endpoints must also sit in the same

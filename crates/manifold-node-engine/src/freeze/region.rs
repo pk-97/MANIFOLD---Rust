@@ -197,7 +197,8 @@ pub struct Region {
     /// The element space every member ran at in the UNFUSED plan (tier 6).
     /// `Some` for texture regions — the install pass stamps a `Scaled` space
     /// onto the fused node's `output_canvas_scales` so the executor sizes the
-    /// fused output exactly like the member output it replaced, and the
+    /// fused output exactly like the member output it replaced (a `Live` space
+    /// is never stamped: the fused node's inputs carry the live size), and the
     /// build-check verifies the fused def resolves back to this space.
     /// `None` for buffer (Array) regions, which have no texture grid.
     pub space: Option<ElementSpace>,
@@ -3781,6 +3782,90 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2, 3],
             "gain + invert fuse; texture_dimensions stays a boundary producer"
+        );
+    }
+
+    /// A producer whose canvas scale a live param flips (render_scene's
+    /// `temporal_upscale`) after fusion has already run. The plan only sees
+    /// the scale at load, so fusion treats everything sized from the producer
+    /// as one `Live` space: the two-node chain below it still fuses, but the
+    /// canvas-sized join that reads it never joins that kernel, whichever way
+    /// the param is set in the def.
+    #[test]
+    fn live_scaled_chain_fuses_but_not_with_a_canvas_node() {
+        let def = |upscale: bool| -> EffectGraphDef {
+            serde_json::from_value(serde_json::json!({
+                "version": 1, "name": "live_chain", "nodes": [
+                    {"id": 0, "typeId": "system.source", "nodeId": "source"},
+                    {"id": 1, "typeId": "test.fusion_live_source", "nodeId": "live",
+                     "params": {"upscale": {"type": "Bool", "value": upscale}}},
+                    {"id": 2, "typeId": "test.fusion_map", "nodeId": "first"},
+                    {"id": 3, "typeId": "test.fusion_map", "nodeId": "second"},
+                    {"id": 4, "typeId": "test.fusion_join", "nodeId": "join"},
+                    {"id": 5, "typeId": "system.final_output", "nodeId": "final_output"}
+                ], "wires": [
+                    {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in"},
+                    {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"},
+                    {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "a"},
+                    {"fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "b"},
+                    {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
+                ]
+            }))
+            .expect("live chain fixture")
+        };
+        let live = ElementSpace::Live { node: 1 };
+        for upscale in [false, true] {
+            let def = def(upscale);
+            let spaces = resolve_output_spaces(&def, &registry()).expect("fixture builds");
+            let at = |id: u32| {
+                *spaces
+                    .get(&(id, "out".to_string()))
+                    .unwrap_or_else(|| panic!("node {id} resolved a space"))
+            };
+            assert_eq!(at(1), live, "the producer declares itself live");
+            assert_eq!(at(2), live, "first follows the producer");
+            assert_eq!(at(3), live, "second follows first");
+            assert_eq!(
+                at(4),
+                ElementSpace::Canvas,
+                "the join also reads a canvas texture, so it is canvas"
+            );
+
+            let regions = partition_regions(&def, &registry());
+            assert_eq!(regions.len(), 1, "the chain fuses, the join stays alone");
+            assert_eq!(
+                regions[0]
+                    .members
+                    .iter()
+                    .map(|m| m.doc_id)
+                    .collect::<Vec<_>>(),
+                vec![2, 3]
+            );
+            assert_eq!(regions[0].space, Some(live));
+        }
+    }
+
+    /// Two live ports of one producer are one source (the AO history node
+    /// reads render_scene's depth and velocity), so a node reading both is
+    /// live of that producer too.
+    #[test]
+    fn node_reading_two_live_ports_of_one_producer_is_live() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1, "name": "live_ports", "nodes": [
+                {"id": 1, "typeId": "test.fusion_live_source", "nodeId": "live"},
+                {"id": 2, "typeId": "test.fusion_join", "nodeId": "join"},
+                {"id": 3, "typeId": "system.final_output", "nodeId": "final_output"}
+            ], "wires": [
+                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "a"},
+                {"fromNode": 1, "fromPort": "aux", "toNode": 2, "toPort": "b"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"}
+            ]
+        }))
+        .expect("live ports fixture");
+        let spaces = resolve_output_spaces(&def, &registry()).expect("fixture builds");
+        assert_eq!(
+            spaces.get(&(2, "out".to_string())),
+            Some(&ElementSpace::Live { node: 1 })
         );
     }
 
