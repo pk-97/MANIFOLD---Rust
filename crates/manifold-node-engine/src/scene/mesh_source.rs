@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::mesh::{MeshVertex, PLATONIC_SHAPES};
 use crate::platonic::platonic_mesh;
 use crate::scene::curve_sweep::SweptCurve;
+use crate::scene::mesh_bounds::MeshBounds;
 use crate::scene::mesh_selection::MeshSelection;
 
 /// Authored source geometry description for mesh-producing nodes.
@@ -121,6 +122,27 @@ fn with_area(vertices: Vec<MeshVertex>) -> Vec<MeshVertex> {
 }
 
 impl MeshSource {
+    /// The box that contains every vertex the cube, sphere and plane nodes
+    /// write, from their parameters alone. `None` for every other source (its
+    /// extent needs the vertices) and for non-finite parameters.
+    pub fn local_bounds(&self) -> Option<MeshBounds> {
+        match self {
+            Self::Cube { size } => {
+                let half = size.abs() * 0.5;
+                MeshBounds::of_positions([[-half; 3], [half; 3]])
+            }
+            Self::Sphere { radius, .. } => {
+                let radius = radius.abs();
+                MeshBounds::of_positions([[-radius; 3], [radius; 3]])
+            }
+            Self::Plane { width, height } => {
+                let (x, y) = (width.abs() * 0.5, height.abs() * 0.5);
+                MeshBounds::of_positions([[-x, -y, 0.0], [x, y, 0.0]])
+            }
+            _ => None,
+        }
+    }
+
     /// Load the immutable, local-space triangle-list vertices described by this
     /// source.  Selectors are validated here so every geometry consumer uses
     /// the same source contract before applying its own fixed transform.
@@ -490,6 +512,54 @@ mod tests {
             }
             .load_vertices()
             .is_err()
+        );
+    }
+
+    /// The published box holds every vertex the CPU mirror of each analytic
+    /// source lists, and the sources that need their vertices publish none.
+    #[test]
+    fn local_bounds_hold_every_analytic_vertex() {
+        let sources = [
+            MeshSource::Cube { size: 2.5 },
+            MeshSource::Sphere {
+                radius: 1.25,
+                segments: 9,
+                rings: 5,
+            },
+            MeshSource::Plane {
+                width: 3.0,
+                height: 0.4,
+            },
+        ];
+        for source in sources {
+            let bounds = source.local_bounds().expect("analytic source");
+            for vertex in source.load_vertices().unwrap() {
+                for axis in 0..3 {
+                    let p = vertex.position[axis];
+                    assert!(
+                        p >= bounds.min[axis] - 1.0e-6 && p <= bounds.max[axis] + 1.0e-6,
+                        "{source:?} axis {axis}: {p} outside {bounds:?}"
+                    );
+                }
+            }
+        }
+        let plane = MeshSource::Plane {
+            width: 3.0,
+            height: 0.4,
+        }
+        .local_bounds()
+        .unwrap();
+        assert_eq!((plane.min, plane.max), ([-1.5, -0.2, 0.0], [1.5, 0.2, 0.0]));
+        let flipped = MeshSource::Cube { size: -0.75 }.local_bounds().unwrap();
+        assert_eq!((flipped.min, flipped.max), ([-0.375; 3], [0.375; 3]));
+        assert_eq!(MeshSource::Cube { size: f32::NAN }.local_bounds(), None);
+        assert_eq!(
+            MeshSource::Platonic {
+                shape: 0,
+                radius: 1.0
+            }
+            .local_bounds(),
+            None
         );
     }
 

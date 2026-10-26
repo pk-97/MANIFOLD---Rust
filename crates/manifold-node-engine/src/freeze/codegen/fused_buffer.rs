@@ -362,6 +362,12 @@ pub(super) fn generate_fused_buffer(
             }
         }
     }
+    // The live anchor's multiplier: 0 when the anchor has no extent this
+    // frame (`node.wgsl_compute` writes it with the `live_counts` binding).
+    if region.live_anchor.is_some() {
+        struct_body.push_str("    live_per_item: u32,\n");
+        field_count += 1;
+    }
     let pad_words = (4 - (field_count % 4)) % 4;
     for k in 0..pad_words {
         writeln!(struct_body, "    _pad{k}: u32,").unwrap();
@@ -399,6 +405,13 @@ pub(super) fn generate_fused_buffer(
     // buffer has no forward producer to mis-order against). The install pass only
     // sets this when the output genuinely aliases a feedback-loop input.
     let in_place = region.in_place_alias;
+    // A live anchor names an array external; an in-place loop buffer is not
+    // zeroed past the count, so the two never combine.
+    if let Some(anchor) = region.live_anchor
+        && (in_place.is_some() || !matches!(ext_kinds.get(anchor), Some(ExtKind::Array(_))))
+    {
+        return Err(CodegenError::BadInput);
+    }
     // BUG-orm4: a widened output capacity (a MultipleOf member in the region)
     // can only write a FRESH dst sized to the widened count. Writing back
     // IN PLACE over the shorter aliased loop buffer would run off its end —
@@ -495,6 +508,26 @@ pub(super) fn generate_fused_buffer(
             )
             .unwrap();
         }
+        // The anchor array's live count, bound by `node.wgsl_compute` from the
+        // marker's port (its counts word at the extent's byte offset, or any
+        // buffer with `live_per_item == 0` when the anchor has no extent).
+        if let Some(anchor) = region.live_anchor {
+            binding += 1;
+            writeln!(
+                out,
+                "{}",
+                Marker::LiveCounts {
+                    port: format!("src_{anchor}")
+                }
+                .emit()
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "@group(0) @binding({binding}) var<storage, read> live_counts: array<u32>;"
+            )
+            .unwrap();
+        }
     }
     // `@dispatch_count_param` — node.wgsl_compute reads this marker and sizes
     // the dispatch grid from the named uniform field's live value (min'd with
@@ -540,45 +573,71 @@ pub(super) fn generate_fused_buffer(
     out.push_str("@compute @workgroup_size(256)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
     out.push_str("    let idx = gid.x;\n");
-    // Count anchor: the ARRAY externals (slot 0 first in every all-array region,
-    // keeping prior fused WGSL — a pipeline-cache key — byte-identical). Each
-    // is coincident with the output (one output element per input element) and
-    // every one is pre-read at `[idx]` below; a texture slot has no arrayLength,
-    // so skip it. A GATHERED array slot also joins the min — never pre-read, but
-    // its length still bounds the dispatch, exactly matching how
-    // `node.wgsl_compute` sizes the fresh `dst` (min over every wired array
-    // input) so the kernel never writes past its own output. With a SINGLE
-    // array external the count is that external's length exactly (unchanged
-    // text). With MORE THAN ONE, bound by the SHORTEST so a shorter input can't
-    // be read out of bounds (BUG-008) — the unfused atoms clamp to
-    // `min(a, b, …)` for the same reason. Equal-length regions (every shipped
-    // buffer preset) are unaffected: `min` of equal lengths is that length.
-    // BUG-orm4: a region whose output capacity composes to a widened
-    // expression (a MultipleOf member — reflect_array's 2x mirror,
-    // analytic_echo_instances' 8x stride) anchors on THAT instead: the
-    // expression's WGSL rendering (e.g. `2u * arrayLength(&src_0)`), composed
-    // and verified at `build_region`, so the multiplied range is dispatched
-    // and written; the matching `// @fused_output_capacity:` marker (emitted
-    // with the bindings above) sizes the fresh dst to the same count.
-    let array_ext: Vec<usize> = ext_tys
+    // Count anchor: the ARRAY externals read per element (slot 0 first in
+    // every all-array region, keeping prior fused WGSL — a pipeline-cache key —
+    // byte-identical). Each is coincident with the output (one output element
+    // per input element) and is pre-read at `[idx]` below; a texture slot has
+    // no arrayLength, so skip it. With a SINGLE such external the count is that
+    // external's length exactly. With MORE THAN ONE, bound by the SHORTEST so a
+    // shorter input can't be read out of bounds (BUG-008) — the unfused atoms
+    // clamp to `min(a, b, …)` for the same reason. A GATHERED array is indexed
+    // at positions the body computes, so its length does not set the count. A
+    // region whose output capacity composes to an expression (a MultipleOf
+    // member's widened range, a FromInput member's selected input) anchors on
+    // THAT instead: the expression's WGSL rendering (e.g.
+    // `2u * arrayLength(&src_0)`), composed and verified at `build_region`; the
+    // matching `// @fused_output_capacity:` marker (emitted with the bindings
+    // above) sizes the fresh dst to the same count.
+    let all_array_ext: Vec<usize> = ext_tys
         .iter()
         .enumerate()
         .filter_map(|(e, t)| t.is_some().then_some(e))
         .collect();
+    // Only arrays read per element bound the count: a gathered array is
+    // indexed at positions the body computes, and its length says nothing
+    // about how many elements the region writes. A region that reads every
+    // array by gather has no per-element array; it keeps all of them.
+    let (array_ext, gathers_left_out): (Vec<usize>, bool) = {
+        let coincident: Vec<usize> = all_array_ext
+            .iter()
+            .copied()
+            .filter(|&e| ext_coincident[e])
+            .collect();
+        if coincident.is_empty() {
+            (all_array_ext, false)
+        } else {
+            let left_out = coincident.len() < all_array_ext.len();
+            (coincident, left_out)
+        }
+    };
     let count_anchor = *array_ext.first().ok_or(CodegenError::BadInput)?;
     let anchor_expr = match &region.output_capacity {
         Some(expr) => expr.to_wgsl(),
-        None if array_ext.len() == 1 => format!("arrayLength(&src_{count_anchor})"),
         None => {
             let mut expr = format!("arrayLength(&src_{count_anchor})");
             for &e in &array_ext[1..] {
                 expr = format!("min({expr}, arrayLength(&src_{e}))");
+            }
+            // Without a capacity marker `node.wgsl_compute` sizes the fresh
+            // dst from every wired array, gathered ones included: a gathered
+            // array outside the count still caps it there.
+            if in_place.is_none() && gathers_left_out {
+                expr = format!("min({expr}, arrayLength(&dst))");
             }
             expr
         }
     };
     writeln!(out, "    let count = {anchor_expr};").unwrap();
     out.push_str("    if idx >= count {\n        return;\n    }\n");
+    // Past the anchor's live count: write the zero element and return before
+    // any read. No extent (`live_per_item == 0`) leaves the whole count live.
+    if region.live_anchor.is_some() {
+        writeln!(
+            out,
+            "    if params.live_per_item != 0u && idx >= min(count, live_counts[0] * params.live_per_item) {{\n        dst[idx] = {out_ty}();\n        return;\n    }}"
+        )
+        .unwrap();
+    }
     // Live-count cap (in-place loop regions): early-return past the members'
     // shared `active_count`, leaving the pool tail untouched exactly like the
     // standalone integrators. The marker (emitted with the bindings above —

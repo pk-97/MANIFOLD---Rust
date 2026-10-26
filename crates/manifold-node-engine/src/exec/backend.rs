@@ -281,6 +281,10 @@ pub trait Backend: Send {
     /// by the executor, same shape as [`Backend::set_mesh_source`].
     fn set_live_extent(&mut self, _slot: Slot, _value: crate::scene::live_extent::LiveExtent) {}
 
+    /// Drop an array slot's live extent. Extents persist across frames, so an
+    /// output whose source stopped having one clears it explicitly.
+    fn clear_live_extent(&mut self, _slot: Slot) {}
+
     /// [`SceneObject`] value bound to a slot. Mirrors `atmosphere` for the
     /// [`PortType::Object`] wire shape — CPU-only struct payload set by
     /// `node.scene_object`'s evaluate and drained by the executor before

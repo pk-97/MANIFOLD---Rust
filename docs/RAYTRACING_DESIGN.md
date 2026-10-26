@@ -1778,12 +1778,15 @@ so the glow can breathe with the music like every other material param.
   object whose `GiMaterial.translucency > 0` → `tint *= translucency *
   albedo_at_hit`, continue; accepted hit otherwise → block (unchanged).
   Bounded: `RT_TRANSMISSION_MAX_HITS = 8` (named constant, range 4–16) and an
-  early-out when `luma(tint) < 1/256`. Called from exactly two sites: the sv
-  caster loop (`raytrace.rs:1341`) and `sun_bounce_at_hit` (`:1014`). AO, GI,
+  early-out when `luma(tint) < 1/256`. Called from three sites: the sv caster
+  loop, `rt_direct_lights` and `sun_bounce_at_hit`. These queries accept any
+  intersection and leave opacity to the BLAS: translucent and masked objects
+  are non-opaque there, so they reach the walker as candidates, while plain
+  opaque geometry commits in hardware and ends the walk as blocked. AO, GI,
   reflection, and primary-visibility rays keep the binary walk — a leaf still
   occludes bounce light and mirrors; transmitting those would be paying
   walk-extension cost on every ray class for an effect order-of-magnitude
-  below the direct-light one. Machine check: I-TL4 pins the call-site count.
+  below the direct-light one.
   The albedo sample at an accepted translucent hit reuses the alpha walk's
   base-color texture (same texture, same UV — cache-hot for Mask foliage,
   which already samples it for alpha).
@@ -1908,8 +1911,9 @@ number is in TL-B's gate.
   one read site in `render_scene.wgsl` (the forward term) plus its population.
 - **I-TL3 — `out_svt` has exactly one consumer.** `rg -c` — declaration plus
   exactly one `textureLoad` in `render_scene.wgsl` (I-R3's shape).
-- **I-TL4 — geometry rays never transmit.** `rg` — `walk_with_transmission`
-  called from exactly two sites (sv loop, `sun_bounce_at_hit`);
+- **I-TL4 — geometry rays never transmit.** `walk_with_transmission` is
+  called only from the three shadow-class sites (sv loop, `rt_direct_lights`,
+  `sun_bounce_at_hit`);
   `walk_with_alpha_test` keeps its remaining call sites (AO, GI, reflection,
   primary) untouched.
 - **I-TL5 — one temporal-reset path.** Negative `rg` — zero additional

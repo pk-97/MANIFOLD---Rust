@@ -63,6 +63,7 @@ pub fn fused_into<T: bytemuck::Pod + KnownItem>(
         virtual_chains: vec![],
         sampled_externals: vec![],
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: Some(CapacityExpr::Slot(0)),
     };
     let generated = generate_fused(&region).unwrap();

@@ -74,6 +74,7 @@ fn fused_texture_region_carries_and_dedups_wgsl_includes() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("coc_from_depth + Gain region fuses");
@@ -158,6 +159,7 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
         }],
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("virtual-chain region fuses");
@@ -254,6 +256,7 @@ fn fused_gather_binds_sampler_and_passes_texture() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("gather region fuses");
@@ -351,6 +354,7 @@ fn fused_fanout_emits_two_dst_bindings() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("fan-out region fuses");

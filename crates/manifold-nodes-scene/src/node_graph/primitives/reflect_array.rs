@@ -1126,6 +1126,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: Some(CapacityExpr::Mul(2, Box::new(CapacityExpr::Slot(0)))),
         };
         let g = generate_fused(&region).expect("widened reflect region fuses");

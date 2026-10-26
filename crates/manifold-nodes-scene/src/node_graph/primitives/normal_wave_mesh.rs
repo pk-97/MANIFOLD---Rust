@@ -102,20 +102,7 @@ impl Primitive for NormalWaveMesh {
     /// output capacity follows `in` — so topology tracks input `in`
     /// topology and positions are Written.
     fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
-        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
-        if port == "out" {
-            return MeshOutputRule {
-                topology: MeshRevisionRule::Dependencies(&[MeshDependency {
-                    input: Cow::Borrowed("in"),
-                    aspect: MeshAspect::Topology,
-                }]),
-                positions: MeshRevisionRule::Written,
-            };
-        }
-        MeshOutputRule {
-            topology: MeshRevisionRule::Written,
-            positions: MeshRevisionRule::Written,
-        }
+        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(port, manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_IN)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -383,6 +370,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: None,
         };
         let g = generate_fused(&region).expect("the triangle-gather kernel fuses");

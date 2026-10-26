@@ -249,6 +249,7 @@ fn structured_modifier_echo_indexed_capacity_widens_the_fused_count() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         // What `build_region` composes for a region whose output member
         // declares MultipleOf { instances, ECHO_CAPACITY }.
         output_capacity: Some(manifold_node_engine::freeze::classify::CapacityExpr::Mul(

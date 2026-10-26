@@ -16,9 +16,22 @@ fn wants_shafts_gate() {
     );
     let hot = Atmosphere {
         shaft_intensity: 1.0,
+        fog_density: 0.05,
         ..Atmosphere::default()
     };
-    assert!(wants_shafts(&hot), "shaft_intensity > 0 must want shafts");
+    assert!(
+        wants_shafts(&hot),
+        "shaft_intensity > 0 in fog must want shafts"
+    );
+    let no_fog = Atmosphere {
+        shaft_intensity: 1.0,
+        fog_density: 0.0,
+        ..Atmosphere::default()
+    };
+    assert!(
+        !wants_shafts(&no_fog),
+        "fog_density 0 makes every inscatter term exactly 0: no march"
+    );
     let still_off = Atmosphere {
         shaft_intensity: 0.0,
         ..Atmosphere::default()
@@ -369,6 +382,248 @@ fn render_scene_wgsl_parses_and_carries_tangent() {
         src.contains("tangent: vec4<f32>") && src.contains("fn tbn_for"),
         "the authored-tangent path (BUG-wfxe) must be present in the kernel"
     );
+}
+
+/// The solid-surface variants are text edits of the shader, so a shader edit
+/// that stops matching a pattern would silently keep the discards (and the
+/// tile-based hidden-surface removal they defeat). Every variant — plain and
+/// each aux combination — must lose all `discard;` statements and still
+/// naga-validate.
+#[test]
+fn opaque_fast_variants_have_no_discard_and_validate() {
+    let base = include_str!("../shaders/render_scene.wgsl");
+    for (emit_velocity, emit_ao_mask, emit_denoise_feed) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, false, true),
+        (true, false, true),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        let mut src = base.to_string();
+        if let Some((specs, _, _)) =
+            RenderScene::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed)
+        {
+            for &(pattern, replacement) in specs {
+                src = src.replace(pattern, replacement);
+            }
+        }
+        for &(pattern, replacement) in RenderScene::OPAQUE_FAST_SPECIALIZATIONS {
+            src = src.replace(pattern, replacement);
+        }
+        assert!(
+            !src.contains("discard;"),
+            "velocity={emit_velocity} ao_mask={emit_ao_mask} denoise={emit_denoise_feed}: a discard survived"
+        );
+        let module = naga::front::wgsl::parse_str(&src).expect("opaque_fast variant must parse");
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!(
+                "velocity={emit_velocity} ao_mask={emit_ao_mask} denoise={emit_denoise_feed}: opaque_fast variant failed validation:\n{}",
+                e.emit_to_string(&src)
+            );
+        }
+    }
+}
+
+/// Every velocity-writing variant is a text edit of the shader, and its
+/// vertex stage reads last frame's vertex positions from `@binding(56)`; the
+/// copy kernel that fills that buffer is its own shader. A shader edit that
+/// broke either would otherwise surface at the first draw of a deforming mesh.
+#[test]
+fn velocity_variants_read_prev_positions_and_the_pack_kernel_validates() {
+    use naga::valid::GlobalUse;
+
+    let validate = |src: &str| {
+        let module = naga::front::wgsl::parse_str(src).expect("shader must parse");
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        let info = validator
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("shader failed validation:\n{}", e.emit_to_string(src)));
+        (module, info)
+    };
+
+    let base = include_str!("../shaders/render_scene.wgsl");
+    for (emit_ao_mask, emit_denoise_feed) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let (specs, _, _) = RenderScene::aux_variant(true, emit_ao_mask, emit_denoise_feed)
+            .expect("a velocity variant has specializations");
+        let mut src = base.to_string();
+        for &(pattern, replacement) in specs {
+            src = src.replace(pattern, replacement);
+        }
+        let (module, info) = validate(&src);
+        let (handle, prev) = module
+            .global_variables
+            .iter()
+            .find(|(_, global)| global.name.as_deref() == Some("prev_positions"))
+            .expect("the shader declares prev_positions");
+        assert_eq!(
+            prev.binding,
+            Some(naga::ResourceBinding {
+                group: 0,
+                binding: 56
+            })
+        );
+        for entry in ["vs_main", "vs_points", "fs_unlit", "fs_pbr", "fs_cel"] {
+            assert!(
+                module.entry_points.iter().any(|ep| ep.name == entry),
+                "ao_mask={emit_ao_mask} denoise={emit_denoise_feed}: lost entry point {entry}"
+            );
+        }
+        let vs_main = module
+            .entry_points
+            .iter()
+            .position(|ep| ep.name == "vs_main")
+            .expect("vs_main");
+        assert!(
+            info.get_entry_point(vs_main)[handle].contains(GlobalUse::READ),
+            "ao_mask={emit_ao_mask} denoise={emit_denoise_feed}: vs_main must read prev_positions"
+        );
+    }
+
+    let (module, _) = validate(include_str!("../shaders/pack_prev_positions.wgsl"));
+    let kernel = module
+        .entry_points
+        .iter()
+        .find(|ep| ep.name == "cs_main")
+        .expect("the pack kernel keeps cs_main");
+    assert_eq!(kernel.stage, naga::ShaderStage::Compute);
+    assert_eq!(kernel.workgroup_size, [256, 1, 1]);
+}
+
+/// The solid-surface pipeline has no `discard` and no alpha-to-coverage, so a
+/// draw may use it only when every removed shader test is provably false and
+/// the output alpha is exactly 1.
+#[test]
+fn solid_surface_needs_every_removed_test_dead() {
+    use manifold_node_engine::scene::material::AlphaMode;
+    let cam = Camera::default_perspective();
+    let uniforms = |material: &Material, gain: f32, weights_wired: bool| {
+        build_uniforms(
+            [[0.0; 4]; 4],
+            [[0.0; 4]; 4],
+            &cam,
+            material,
+            0.0,
+            0.0,
+            &Atmosphere::default(),
+            [[0.0; 4]; 4],
+            [[0.0; 4]; 4],
+            gain,
+            weights_wired,
+            1.0,
+        )
+    };
+    let opaque = Material::default_unlit_white();
+    assert!(solid_surface(&uniforms(&opaque, 1.0, false)));
+    assert!(
+        solid_surface(&uniforms(&opaque, 2.5, false)),
+        "gain above one only brightens; alpha stays 1"
+    );
+    for gain in [0.99, 0.0, -1.0, f32::NAN] {
+        assert!(
+            !solid_surface(&uniforms(&opaque, gain, false)),
+            "gain {gain} can fade or hide the surface"
+        );
+    }
+    assert!(
+        !solid_surface(&uniforms(&opaque, 1.0, true)),
+        "per-vertex weights can fade a fragment to nothing"
+    );
+    for mode in [AlphaMode::Mask, AlphaMode::Blend] {
+        let material = Material {
+            alpha_mode: mode,
+            ..Material::default_unlit_white()
+        };
+        assert!(
+            !solid_surface(&uniforms(&material, 1.0, false)),
+            "{mode:?} reads texel alpha"
+        );
+    }
+    let volume = Material {
+        volume_geometry: true,
+        transmission_factor: 0.5,
+        ..Material::default_unlit_white()
+    };
+    assert!(
+        !solid_surface(&uniforms(&volume, 1.0, false)),
+        "volume optics discard against the nearest-surface depth"
+    );
+}
+
+/// The solid depth-only variant is a text edit of `shadow_depth.wgsl`, so a
+/// shader edit that stops matching the pattern would silently keep the
+/// discards (and the hidden-surface removal they defeat). The variant must
+/// lose every `discard;` from all three fragment entries and still
+/// naga-validate.
+#[test]
+fn solid_depth_variant_has_no_discard_and_validates() {
+    assert!(
+        include_str!("../shaders/shadow_depth.wgsl").contains("discard;"),
+        "the base shader is the one with the discards"
+    );
+    let src = RenderScene::solid_depth_source();
+    assert!(!src.contains("discard;"), "a discard survived");
+    let module = naga::front::wgsl::parse_str(&src).expect("solid depth variant must parse");
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    if let Err(e) = validator.validate(&module) {
+        panic!(
+            "solid depth variant failed validation:\n{}",
+            e.emit_to_string(&src)
+        );
+    }
+}
+
+/// The solid depth pipeline has no `discard`, so a draw may use it only when
+/// both shader tests (Mask cutout, appearance fade) are provably false.
+#[test]
+fn discard_free_needs_every_removed_depth_test_dead() {
+    let uniforms = |alpha_mode: f32, gain: f32, weights_wired: f32| {
+        let mut su: ShadowUniforms = bytemuck::Zeroable::zeroed();
+        su.alpha[0] = alpha_mode;
+        su.appearance[0] = gain;
+        su.appearance[1] = weights_wired;
+        su
+    };
+    for (alpha_mode, gain) in [
+        (0.0, 1.0),
+        (0.0, 2.5),
+        (0.0, 0.3),
+        (2.0, 1.0),
+        (0.0, 1.0e-30),
+    ] {
+        assert!(
+            uniforms(alpha_mode, gain, 0.0).discard_free(),
+            "alpha mode {alpha_mode} gain {gain} never discards"
+        );
+    }
+    assert!(
+        !uniforms(1.0, 1.0, 0.0).discard_free(),
+        "a Mask cutout discards on texel alpha"
+    );
+    assert!(
+        !uniforms(0.0, 1.0, 1.0).discard_free(),
+        "per-vertex weights can fade a fragment to nothing"
+    );
+    for gain in [0.0, -1.0, 1.0e-40, f32::NAN] {
+        assert!(
+            !uniforms(0.0, gain, 0.0).discard_free(),
+            "gain {gain} can hide the surface"
+        );
+    }
 }
 
 /// "Hard" must mean an exactly-zero cone, or the RT sun shadow stays a

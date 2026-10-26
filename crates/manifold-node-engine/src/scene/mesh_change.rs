@@ -55,6 +55,31 @@ pub struct MeshOutputRule<'a> {
     pub positions: MeshRevisionRule<'a>,
 }
 
+/// The topology dependency of a deformer whose mesh input port is `in`.
+pub const TOPOLOGY_OF_IN: &[MeshDependency] = &[MeshDependency {
+    input: Cow::Borrowed("in"),
+    aspect: MeshAspect::Topology,
+}];
+/// The topology dependency of a deformer whose mesh input port is `mesh`.
+pub const TOPOLOGY_OF_MESH: &[MeshDependency] = &[MeshDependency {
+    input: Cow::Borrowed("mesh"),
+    aspect: MeshAspect::Topology,
+}];
+
+impl<'a> MeshOutputRule<'a> {
+    /// A deformer's rule: `out` moves vertices record-for-record inside the
+    /// triangle stream of the input named in `topology`, so triangle
+    /// membership follows that input and only positions revise on a write.
+    /// Ray-traced scenes then refit instead of rebuilding. Any other output
+    /// revises both aspects on every write.
+    pub fn deformer(port: &str, topology: &'a [MeshDependency]) -> Self {
+        if port == "out" {
+            return Self { topology: MeshRevisionRule::Dependencies(topology), positions: MeshRevisionRule::Written };
+        }
+        Self { topology: MeshRevisionRule::Written, positions: MeshRevisionRule::Written }
+    }
+}
+
 /// Monotonic revision counters for one mesh resource. See design §3.1.
 /// Position changes also imply content changes; structural
 /// identity/layout changes advance all three.

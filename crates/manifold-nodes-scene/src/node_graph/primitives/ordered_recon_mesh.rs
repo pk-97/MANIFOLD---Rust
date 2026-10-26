@@ -40,7 +40,8 @@ struct OrderedReconUniforms {
     source_offset_z: f32,
     enabled: f32,
     dispatch_count: u32,
-    _pad0: u32,
+    /// Multiplier of the live count bound at binding 4; 0 without an extent.
+    live_per_item: u32,
     _pad1: u32,
 }
 
@@ -92,9 +93,14 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/ordered_recon_mesh_body.wgsl"),
     input_access: [Coincident, BufferGather],
+    live_anchor: "in",
 }
 
 impl Primitive for OrderedReconMesh {
+    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(port, manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_IN)
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -141,6 +147,9 @@ impl Primitive for OrderedReconMesh {
         let Some(dst) = ctx.outputs.array("out") else {
             return;
         };
+        let Some(live) = ctx.inputs.live_counts("in") else {
+            return;
+        };
         let vertex_size = std::mem::size_of::<MeshVertex>() as u64;
         let count = ((src.size / vertex_size) as u32)
             .min((reference.size / vertex_size) as u32)
@@ -165,7 +174,7 @@ impl Primitive for OrderedReconMesh {
             source_offset_z,
             enabled,
             dispatch_count: count,
-            _pad0: 0,
+            live_per_item: live.per_item,
             _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
@@ -189,6 +198,11 @@ impl Primitive for OrderedReconMesh {
                     binding: 3,
                     buffer: dst,
                     offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &live.counts,
+                    offset: live.offset,
                 },
             ],
             [count.div_ceil(256), 1, 1],
@@ -269,6 +283,12 @@ mod gpu_tests {
                     buffer: &out,
                     offset: 0,
                 },
+                // No extent (`live_per_item` 0): never read.
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &src,
+                    offset: 0,
+                },
             ],
             [(current.len() as u32).div_ceil(256), 1, 1],
             label,
@@ -294,7 +314,7 @@ mod gpu_tests {
             source_offset_z: 0.0,
             enabled,
             dispatch_count: 6,
-            _pad0: 0,
+            live_per_item: 0,
             _pad1: 0,
         }
     }
@@ -519,7 +539,7 @@ mod gpu_tests {
             source_offset_z: 0.07,
             enabled: 1.0,
             dispatch_count: 3,
-            _pad0: 0,
+            live_per_item: 0,
             _pad1: 0,
         };
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OrderedReconMesh>()
@@ -599,16 +619,16 @@ mod gpu_tests {
         }
     }
 
-    /// BUG-x72p: the reference gather ADMITS at the codegen — the kernel is
-    /// expressible. What refuses fusion is the identity probe: this atom's
-    /// output capacity is identity ONLY when `in` and `reference` share a
-    /// capacity, `None` otherwise — and the probe's distinct ascending
-    /// synthetic caps (1009, 2009) hit the `None` branch, so `build_region`
-    /// refuses the region (unfused, always correct). A same-mesh fork with
-    /// genuinely equal capacities would still refuse: the static probe cannot
-    /// see real capacities, and the conservative answer is the safe one.
+    /// The reference gather admits at the codegen: the kernel is
+    /// expressible. This atom's output capacity is identity only when `in` and
+    /// `reference` share a capacity and `None` otherwise. `build_region` hands
+    /// both ports one capacity when their producers share a capacity root (two
+    /// remaps through one cut map, the shape of a fragment stage), so such a
+    /// region fuses; two meshes with different roots still hit the `None`
+    /// branch and the region is refused (unfused, always correct). The
+    /// region-level cases are in the freeze region contract tests.
     #[test]
-    fn structured_modifier_ordered_recon_reference_capacity_refuses_the_gather_identity_probe() {
+    fn structured_modifier_ordered_recon_capacity_is_identity_only_for_one_shared_capacity() {
         let id = NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![RegionNode {
@@ -636,6 +656,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: None,
         };
         let g = generate_fused(&region).expect("the reference-gather kernel fuses");
@@ -653,7 +674,7 @@ mod gpu_tests {
                 &[("in", 1009), ("reference", 2009)]
             ),
             None,
-            "distinct capacities — the probe's case, refused"
+            "distinct capacities have no identity answer, so a region needs one shared source"
         );
         assert_eq!(
             node.array_output_capacity(

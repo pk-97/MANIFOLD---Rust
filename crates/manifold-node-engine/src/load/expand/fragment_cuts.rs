@@ -645,20 +645,20 @@ pub(super) fn apply(
             )?;
             wire_to(def, object, "weights", aligned);
         }
+        // The mesh is padded to the map's capacity; the map's live extent
+        // reaches the mesh through every step, so the draw stops at its live
+        // records.
         wire_to(def, object, "topology", (map_id, "map".into()));
-        // The mesh is padded to the map's capacity; the draw stops at the
-        // map's live records.
-        wire_to(def, object, "live_count", (map_id, "live_count".into()));
     }
     align_mesh_diagrams(def, &mut next_id, &lineages, &mut remap_cache)
 }
 
 /// Math View seam. The diagram compares `reference_mesh` with `current_mesh`
 /// face by face, and its samplers pick faces by index, so the reference and
-/// its sampler are remapped through the current mesh's cut maps. Every
-/// sampler also reads the last map's live count so it never samples the
-/// map's padded tail. Incompatible lineages are left alone; the diagram's
-/// size guard then hides the arrows.
+/// its sampler are remapped through the current mesh's cut maps. The
+/// sampler reads the live extent the remapped mesh carries, so it never
+/// samples the map's padded tail. Incompatible lineages are left alone; the
+/// diagram's size guard then hides the arrows.
 fn align_mesh_diagrams(
     def: &mut EffectGraphDef,
     next_id: &mut u32,
@@ -676,9 +676,9 @@ fn align_mesh_diagrams(
             continue;
         };
         let target = mesh_input_lineage(lineages, &current);
-        let Some(map_id) = target.maps.last().copied() else {
+        if target.maps.is_empty() {
             continue;
-        };
+        }
         let compatible = |lineage: &Lineage| {
             lineage.source == target.source
                 && lineage.maps.len() <= target.maps.len()
@@ -725,7 +725,6 @@ fn align_mesh_diagrams(
                 RemapKind::Mesh,
             )?;
             wire_to(def, sampler, "in", aligned);
-            wire_to(def, sampler, "live_count", (map_id, "live_count".into()));
         }
     }
     Ok(())
@@ -841,14 +840,14 @@ mod tests {
         let morph_input = input(&def, 3, "in").expect("morph input wire");
         assert_eq!(current.from_node, reference.from_node);
         assert_eq!(current.from_node, morph_input.from_node);
-        let map = input(&def, 4, "topology")
-            .expect("object topology wire")
-            .from_node;
-        let live = input(&def, 4, "live_count").expect("object live count wire");
+        let topology = input(&def, 4, "topology").expect("object topology wire");
         assert_eq!(
-            (live.from_node, live.from_port.as_str()),
-            (map, "live_count"),
-            "the draw stops at the cut's live records"
+            topology.from_port, "map",
+            "the draw reads the cut's live extent through the mesh"
+        );
+        assert!(
+            input(&def, 4, "live_count").is_none(),
+            "the live count travels as an extent, not as a wire"
         );
 
         let prepared = def.clone();

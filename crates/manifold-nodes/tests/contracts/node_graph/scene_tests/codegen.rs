@@ -50,6 +50,7 @@ fn fused_buffer_region_threads_element_registers() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("buffer region fuses");
@@ -133,6 +134,7 @@ fn fused_buffer_region_two_array_externals_bounds_count_by_min() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("two-external buffer region fuses");

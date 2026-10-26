@@ -168,6 +168,7 @@ fn wave_pilot_fused_copy_wave_displace_matches_standalone_and_cpu() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let fused = generate_fused(&region).expect("copy → wave → displace buffer region fuses");

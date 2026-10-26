@@ -221,7 +221,11 @@ struct Uniforms {
     // SCENE_RENDER_MODE_DESIGN.md D8 (P3): render-mode params, scene-wide.
     // x = point_size (px, read by vs_points ONLY — every other vertex entry
     // ignores it, so Rendered/Solid/Wireframe are byte-identical with any
-    // value here). y/z/w reserved.
+    // value here). y = mip_bias (log2(render_w / native_w) when temporal_upscale
+    // is on, 0.0 when off). z = 1.0 when `prev_positions` holds last frame's
+    // position for every vertex this draw reads (a mesh that deforms with the
+    // same triangles), else 0.0; per draw, read by the velocity variant only.
+    // w reserved.
     render_mode: vec4<f32>,
     volume_optics: vec4<f32>,
     volume_scattering_color: vec4<f32>,
@@ -291,6 +295,10 @@ const LIGHT_STRIDE: u32 = 4u;
 @group(0) @binding(53) var volume_path: texture_2d<f32>;
 @group(0) @binding(54) var volume_density: texture_2d<f32>;
 @group(0) @binding(55) var volume_nearest: texture_depth_2d;
+// Last frame's vertex positions (xyz, w = 1), one record per vertex record of
+// `verts`, for a draw whose mesh deforms. Read only when `u.render_mode.z` is
+// set; every other draw binds a one-record stand-in.
+@group(0) @binding(56) var<storage, read> prev_positions: array<vec4<f32>>;
 
 // Same Point meaning as Light::light_dir_at/attenuation_at and shaft_march:
 // return direction toward the light in xyz and distance attenuation in w.
@@ -530,7 +538,7 @@ fn sample_extension_map(tex: texture_2d<f32>, uv: vec4<f32>, index: u32) -> vec4
     let settings = material_maps.maps[index].sampling;
     let dim = vec2<f32>(textureDimensions(tex, 0));
     let footprint = max(length(dpdx(coord) * dim), length(dpdy(coord) * dim));
-    let lod = clamp(log2(max(footprint, 1e-8)), 0.0, f32(textureNumLevels(tex) - 1u));
+    let lod = clamp(log2(max(footprint, 1e-8)) + u.render_mode.y, 0.0, f32(textureNumLevels(tex) - 1u));
     let linear = select((settings.z & 1u) != 0u, (settings.z & 2u) != 0u, footprint > 1.0);
     if settings.w == 0u { return map_level(tex, coord, 0, settings.xy, linear); }
     if settings.w == 1u { return map_level(tex, coord, i32(round(lod)), settings.xy, linear); }
@@ -917,8 +925,14 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     let local_normal = inner_cofactor * v.normal * inner_sign;
     let local_tangent = (inner * vec4<f32>(v.tangent.xyz, 0.0)).xyz;
     let inst_pos = rot * ((local_pos * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
-    // Read only by the velocity variant's GBUFFER_VS_VELOCITY_BODY.
-    let prev_local_pos = (u.prev_instance_inner * vec4<f32>(v.position, 1.0)).xyz;
+    // Read only by the velocity variant's GBUFFER_VS_VELOCITY_BODY. A vertex
+    // of a deforming mesh starts from where it was last frame; any other
+    // vertex has not moved in its own space.
+    var prev_vertex = v.position;
+    if u.render_mode.z > 0.5 {
+        prev_vertex = prev_positions[vid].xyz;
+    }
+    let prev_local_pos = (u.prev_instance_inner * vec4<f32>(prev_vertex, 1.0)).xyz;
     let prev_inst_pos = rot * ((prev_local_pos * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
     let scale_sign = select(1.0, -1.0, inst.pos_scale.w < 0.0);
     let inst_normal = rot * (local_normal * msign * scale_sign);
@@ -931,14 +945,14 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     out.clip_pos = u.view_proj * world;
     // EMIT_VELOCITY substitutes
     // `out.clip_now = out.clip_pos; let prev_world = u.prev_model *
-    // vec4<f32>(inst_pos, 1.0); out.clip_prev = u.prev_view_proj *
-    // prev_world;` here — reusing THIS frame's `inst_pos` (there is no
-    // previous-frame instance buffer to diff against), so only the
-    // object group's rigid `model_n` motion is captured; a moving
-    // instance array (e.g. scatter_on_mesh re-scattering per frame)
-    // contributes no per-instance velocity, the same documented v1
-    // rigid-only-motion limitation D5 states for deform atoms. Inert
-    // comment in the velocity-off compile.
+    // vec4<f32>(prev_inst_pos, 1.0); out.clip_prev = u.prev_view_proj *
+    // prev_world;` here. `prev_inst_pos` carries the object's and the
+    // instance space's previous transforms and, for a mesh that deforms, the
+    // vertex's own previous position. This frame's instance TRS is reused
+    // (there is no previous-frame instance buffer to diff against), so a
+    // moving instance array (e.g. scatter_on_mesh re-scattering per frame)
+    // contributes no per-instance velocity. Inert comment in the
+    // velocity-off compile.
     // GBUFFER_VS_VELOCITY_BODY
     // Cofactors give the inverse transpose up to determinant magnitude.
     // Preserve its sign for reflected models, without dividing by a tiny scale.
@@ -1089,11 +1103,11 @@ fn tbn_for(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tangent: vec4<f32>) -> mat
 fn resolve_normal(uv: vec4<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
     if u.texture_flags.x > 0.5 {
         if (u32(u.appearance.z) & 1u) != 0u {
-            return normalize(textureSample(normal_map, normal_sampler, uv.xy).xyz);
+            return normalize(textureSampleBias(normal_map, normal_sampler, uv.xy, u.render_mode.y).xyz);
         }
         let n = normalize(vertex_normal);
         let uv_t = material_uv(uv, 1u);
-        let sampled = textureSample(normal_map, normal_sampler, uv_t).rgb;
+        let sampled = textureSampleBias(normal_map, normal_sampler, uv_t, u.render_mode.y).rgb;
         var tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
         tangent_normal = vec3<f32>(tangent_normal.xy * u.normal_uv_t.z, tangent_normal.z);
         // glTF TANGENT is the authored normal-map frame. Only meshes
@@ -1119,7 +1133,7 @@ fn apply_uv_transform(uv: vec2<f32>, m: vec4<f32>, t: vec4<f32>) -> vec2<f32> {
 fn resolve_albedo(uv: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
     if u.texture_flags.z > 0.5 {
         let uv_t = material_uv(uv, 0u);
-        let t = textureSample(base_color_map, base_color_sampler, uv_t);
+        let t = textureSampleBias(base_color_map, base_color_sampler, uv_t, u.render_mode.y);
         return u.base_color * t * color;
     }
     return u.base_color * color;
@@ -1133,7 +1147,7 @@ fn resolve_albedo(uv: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
 fn resolve_mr(uv: vec4<f32>) -> vec2<f32> {
     if u.texture_flags2.x > 0.5 {
         let uv_t = material_uv(uv, 2u);
-        let t = textureSample(mr_map, mr_sampler, uv_t);
+        let t = textureSampleBias(mr_map, mr_sampler, uv_t, u.render_mode.y);
         // glTF's packed channels multiply the material factors.  A texture
         // is a modulation map, not a replacement for the authored values.
         return vec2<f32>(
@@ -1160,7 +1174,7 @@ fn resolve_mr(uv: vec4<f32>) -> vec2<f32> {
 fn resolve_occlusion(uv: vec4<f32>) -> f32 {
     if u.texture_flags2.y > 0.5 {
         let uv_t = material_uv(uv, 3u);
-        return mix(1.0, textureSample(occlusion_map, occlusion_sampler, uv_t).r, u.occlusion_uv_t.z);
+        return mix(1.0, textureSampleBias(occlusion_map, occlusion_sampler, uv_t, u.render_mode.y).r, u.occlusion_uv_t.z);
     }
     return 1.0;
 }
@@ -1176,7 +1190,7 @@ fn resolve_emissive(uv: vec4<f32>) -> vec3<f32> {
     let strength = u.emission.w;
     if u.texture_flags2.z > 0.5 {
         let uv_t = material_uv(uv, 4u);
-        let t = textureSample(emissive_map, emissive_sampler, uv_t).rgb;
+        let t = textureSampleBias(emissive_map, emissive_sampler, uv_t, u.render_mode.y).rgb;
         return u.emission.rgb * strength * t;
     }
     return u.emission.rgb * strength;

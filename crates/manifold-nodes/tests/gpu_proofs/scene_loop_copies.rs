@@ -270,8 +270,9 @@ fn vortex_fragments_draw_only_the_cuts_live_vertices() {
     let dumps = runtime.dump_arrays_all();
     let counts: Vec<u32> = dumps
         .iter()
-        .filter(|d| d.type_id == "node.cut_mesh_cells" && d.port == "live_count")
-        .map(|d| manifold_node_engine::testkit::array_harness::read::<u32>(d.buffer, 1)[0])
+        .filter(|d| d.type_id == "node.cut_mesh_cells" && d.port == "map")
+        .filter_map(|d| d.live_extent.as_ref())
+        .map(|extent| manifold_node_engine::testkit::array_harness::read::<u32>(&extent.counts, 1)[0])
         .collect();
     let [live] = counts[..] else {
         panic!("one fragment cut, found {counts:?}")

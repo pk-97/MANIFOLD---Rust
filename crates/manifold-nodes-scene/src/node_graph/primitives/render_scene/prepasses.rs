@@ -92,6 +92,7 @@ impl RenderScene {
                 .filter(|d| d.cast_shadows)
                 .collect();
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
+            let solid_pipeline = self.solid_depth_pipeline.as_ref().expect("ensured");
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
             for (slot, l) in casters.iter().enumerate() {
                 let Some(shadow_map) = self
@@ -159,11 +160,23 @@ impl RenderScene {
                 }
                 self.shadow_cache_keys[slot] = Some(shadow_key);
 
-                let shadow_uniforms: Vec<ShadowUniforms> = caster_draws
+                // Only a miss pays for the cull: a caster wholly outside this
+                // light's clip volume leaves its map untouched, so it is not
+                // drawn. The key above still covers every caster, so a cache
+                // hit stays free. An empty list still clears the map.
+                let lit: Vec<&ObjectDraw> = caster_draws
+                    .iter()
+                    .copied()
+                    .filter(|d| {
+                        !d.bounds
+                            .is_some_and(|b| box_outside_clip(&vp, &d.uniforms.model, &b))
+                    })
+                    .collect();
+                let shadow_uniforms: Vec<ShadowUniforms> = lit
                     .iter()
                     .map(|d| ShadowUniforms::for_draw(vp, d))
                     .collect();
-                let shadow_bindings: Vec<[GpuBinding; 6]> = caster_draws
+                let shadow_bindings: Vec<[GpuBinding; 6]> = lit
                     .iter()
                     .zip(&shadow_uniforms)
                     .map(|(d, su)| {
@@ -201,12 +214,17 @@ impl RenderScene {
                         ]
                     })
                     .collect();
-                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = caster_draws
+                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = lit
                     .iter()
+                    .zip(&shadow_uniforms)
                     .zip(&shadow_bindings)
-                    .map(|(d, b)| {
+                    .map(|((d, su), b)| {
                         d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
-                            &shadow_pipeline,
+                            if su.discard_free() {
+                                solid_pipeline
+                            } else {
+                                &shadow_pipeline
+                            },
                             b,
                             d.vertex_count,
                             d.instance_count,
@@ -251,14 +269,18 @@ impl RenderScene {
                 .as_ref()
                 .expect("ensured above")
                 .clone();
+            let solid_depth_pipeline = self.solid_depth_pipeline.as_ref().expect("ensured above");
             let opaque_depth_ds = self.depth_stencil.as_ref().expect("ensured above");
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
+            // A draw wholly outside the camera's clip volume leaves no depth.
             let cam_uniforms: Vec<ShadowUniforms> = opaque_draws
                 .iter()
+                .filter(|d| d.in_view)
                 .map(|d| ShadowUniforms::for_draw(view_proj, d))
                 .collect();
             let cam_bindings: Vec<[GpuBinding; 6]> = opaque_draws
                 .iter()
+                .filter(|d| d.in_view)
                 .zip(&cam_uniforms)
                 .map(|(d, su)| {
                     [
@@ -297,10 +319,16 @@ impl RenderScene {
                 .collect();
             let cam_draws: Vec<manifold_gpu::DepthMsaaDraw> = opaque_draws
                 .iter()
+                .filter(|d| d.in_view)
+                .zip(&cam_uniforms)
                 .zip(&cam_bindings)
-                .map(|(d, b)| {
+                .map(|((d, su), b)| {
                     d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
-                        &opaque_depth_pipeline,
+                        if su.discard_free() {
+                            solid_depth_pipeline
+                        } else {
+                            &opaque_depth_pipeline
+                        },
                         b,
                         d.vertex_count,
                         d.instance_count,
@@ -490,7 +518,10 @@ impl RenderScene {
 pub(super) struct ShadowUniforms {
     pub(super) light_view_proj: [[f32; 4]; 4],
     pub(super) model: [[f32; 4]; 4],
-    /// `(gain, weights_wired, 0, 0)` for the depth visibility discard.
+    /// `(gain, weights_wired, …)` for the depth visibility discard; the pick
+    /// pass writes its item id into `z`. `w` is always 0: the render uniforms
+    /// carry the env rotation there, and no depth shader reads it, so it must
+    /// not reach the shadow cache key.
     pub(super) appearance: [f32; 4],
     pub(super) alpha: [f32; 4],
     pub(super) uv_m: [f32; 4],
@@ -501,11 +532,29 @@ pub(super) struct ShadowUniforms {
 const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 256);
 
 impl ShadowUniforms {
+    /// Whether every `discard` in `shadow_depth.wgsl`'s fragment entries is
+    /// provably false for this draw, so the solid depth-only pipeline
+    /// (`RenderScene::SOLID_DEPTH_SPECIALIZATIONS`) writes the same depth.
+    /// Reads the very fields the shader tests:
+    /// - `alpha.x != 1` (not a Mask cutout): the coverage test is skipped.
+    /// - `appearance.y <= 0.5` (no per-vertex weights): the vertex stage
+    ///   hands the fragment a weight of 1, interpolated to 1 within a few ulps.
+    /// - `appearance.x >= f32::MIN_POSITIVE` (gain): `gain * weight` stays a
+    ///   positive normal float, so the fade test (`<= 0`) is false. NaN fails.
+    pub(super) fn discard_free(&self) -> bool {
+        self.alpha[0] != 1.0 && self.appearance[1] <= 0.5 && self.appearance[0] >= f32::MIN_POSITIVE
+    }
+
     pub(super) fn for_draw(view_proj: [[f32; 4]; 4], draw: &ObjectDraw<'_>) -> Self {
         Self {
             light_view_proj: view_proj,
             model: draw.uniforms.model,
-            appearance: draw.uniforms.appearance,
+            appearance: [
+                draw.uniforms.appearance[0],
+                draw.uniforms.appearance[1],
+                draw.uniforms.appearance[2],
+                0.0,
+            ],
             alpha: [
                 draw.uniforms.alpha_params[0],
                 draw.uniforms.alpha_params[1],

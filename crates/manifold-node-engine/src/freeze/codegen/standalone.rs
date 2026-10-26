@@ -218,6 +218,7 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
                 use_flags: &use_flag_names,
                 expand_vectors: true,
                 dispatch_count: false,
+                live_per_item: false,
             },
         )?;
     }
@@ -498,17 +499,27 @@ pub(super) fn generate_standalone_buffer(
     spec: &StandaloneKernelSpec<'_>,
     atomic_outputs: &[&str],
 ) -> Result<String, CodegenError> {
-    generate_standalone_buffer_with_options(spec, atomic_outputs, &[], None)
+    generate_standalone_buffer_with_options(spec, atomic_outputs, &[], None, None)
 }
 
-/// Buffer standalone wrapper with the two variable-length-output extensions:
-/// `owned_outputs` lets a body write its own disjoint output intervals, while
-/// `buffer_index` maps a dense dispatch id to a sparse element schedule.
+/// Buffer standalone wrapper with the extensions: `owned_outputs` lets a body
+/// write its own disjoint output intervals, `buffer_index` maps a dense
+/// dispatch id to a sparse element schedule, and `live_anchor` names the array
+/// input whose published live extent bounds the kernel.
+///
+/// A live-anchored kernel gains a trailing `live_counts: array<u32>` binding
+/// (the anchor's counts word, bound at its byte offset) and a `live_per_item`
+/// uniform; `live_per_item == 0` means the anchor has no extent and the
+/// kernel runs to `dispatch_count`. When the anchor is a coincident input,
+/// elements at or past `min(dispatch_count, counts[0] * live_per_item)` are
+/// written as zero and the kernel returns before any read. A gathered anchor
+/// only exposes the two for the body to read.
 pub(super) fn generate_standalone_buffer_with_options(
     spec: &StandaloneKernelSpec<'_>,
     atomic_outputs: &[&str],
     owned_outputs: &[&str],
     buffer_index: Option<&str>,
+    live_anchor: Option<&str>,
 ) -> Result<String, CodegenError> {
     let StandaloneKernelSpec {
         body,
@@ -532,6 +543,21 @@ pub(super) fn generate_standalone_buffer_with_options(
         .iter()
         .filter(|i| matches!(i.ty, PortType::Array(_)))
         .collect();
+    // The live anchor's index among the array inputs, and whether the kernel
+    // stops at its live count (a coincident anchor) or only exposes it.
+    let live = match live_anchor {
+        None => None,
+        Some(port) => {
+            let index = array_inputs
+                .iter()
+                .position(|i| i.name == port)
+                .ok_or(CodegenError::BadInput)?;
+            if buffer_index.is_some() {
+                return Err(CodegenError::BadInput);
+            }
+            Some(!is_gather(index))
+        }
+    };
     // Texture inputs sampled at a body-computed coord (the particle position) —
     // the buffer analogue of the texture-domain Gather. The body receives each
     // `tex_<name>` handle + the shared `samp` and samples them itself (the
@@ -640,6 +666,7 @@ pub(super) fn generate_standalone_buffer_with_options(
             use_flags: &use_flag_names,
             expand_vectors: false,
             dispatch_count: true,
+            live_per_item: live.is_some(),
         },
     )?;
 
@@ -689,6 +716,13 @@ pub(super) fn generate_standalone_buffer_with_options(
         .unwrap();
         binding += 1;
     }
+    if live.is_some() {
+        writeln!(
+            out,
+            "@group(0) @binding({binding}) var<storage, read> live_counts: array<u32>;"
+        )
+        .unwrap();
+    }
     out.push('\n');
 
     // Multi-output body returns a struct with one field per PLAIN output array
@@ -723,6 +757,17 @@ pub(super) fn generate_standalone_buffer_with_options(
         out.push_str("    let idx = gid.x;\n");
     }
     out.push_str("    if idx >= params.dispatch_count {\n        return;\n    }\n");
+    // Past the anchor's live count: zero the plain outputs and return before
+    // any read. No extent (`live_per_item == 0`) runs the whole dispatch.
+    if live == Some(true) {
+        out.push_str(
+            "    if params.live_per_item != 0u && idx >= min(params.dispatch_count, live_counts[0] * params.live_per_item) {\n",
+        );
+        for (name, ety) in &plain_outputs {
+            writeln!(out, "        {}[idx] = {ety}();", out_global(name)).unwrap();
+        }
+        out.push_str("        return;\n    }\n");
+    }
     // Pre-read each COINCIDENT input's own element `[idx]`; gather inputs are
     // read by the body itself through the bound global.
     for (i, inp) in array_inputs.iter().enumerate() {
@@ -851,6 +896,7 @@ pub(super) fn generate_standalone_resolve(
                 use_flags: &[],
                 expand_vectors: false,
                 dispatch_count: false,
+                live_per_item: false,
             },
         )?;
     }

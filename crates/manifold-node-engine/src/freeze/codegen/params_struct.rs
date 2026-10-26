@@ -38,6 +38,10 @@ pub(super) struct ParamsStructOpts<'a> {
     /// buffer path only — it drives the 1D dispatch guard and is passed to
     /// the body as `count`).
     pub dispatch_count: bool,
+    /// Append the injected `live_per_item: u32` right after `dispatch_count`
+    /// (standalone buffer path, live-anchored kernels only): the multiplier of
+    /// the bound live count, 0 when the anchor has no extent.
+    pub live_per_item: bool,
 }
 
 /// Emit `struct Params { … }\n\n` for one standalone kernel: the atom's scalar
@@ -92,6 +96,10 @@ pub(super) fn emit_params_struct(
     }
     if opts.dispatch_count {
         out.push_str("    dispatch_count: u32,\n");
+        words += 1;
+    }
+    if opts.live_per_item {
+        out.push_str("    live_per_item: u32,\n");
         words += 1;
     }
     let pad_words = (4 - (words % 4)) % 4;

@@ -102,8 +102,9 @@ impl Primitive for GeneratePlaneMesh {
         // present, the param is the fallback.
         let width = ctx.scalar_or_param("width", 1.0);
         let height = ctx.scalar_or_param("height", 1.0);
-        ctx.outputs
-            .set_mesh_source("source", MeshSource::Plane { width, height });
+        let source = MeshSource::Plane { width, height };
+        ctx.outputs.set_cpu_value("vertices", source.local_bounds());
+        ctx.outputs.set_mesh_source("source", source);
 
         let Some(dst) = ctx.outputs.array("vertices") else {
             return;

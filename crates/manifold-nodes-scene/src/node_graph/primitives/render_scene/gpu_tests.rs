@@ -1409,7 +1409,7 @@ fn prewarm_pipelines_populates_the_shared_render_cache() {
     let mut scene = RenderScene::default();
     let cache_before_use = device.render_pipeline_cache_len();
     for kind in [MaterialKind::Unlit, MaterialKind::Pbr, MaterialKind::Cel] {
-        for blend in [false, true] {
+        for (blend, opaque_fast) in [(false, false), (false, true), (true, false)] {
             for (emit_velocity, emit_ao_mask, emit_denoise_feed) in [
                 (false, false, false),
                 (true, false, false),
@@ -1428,11 +1428,12 @@ fn prewarm_pipelines_populates_the_shared_render_cache() {
                     emit_denoise_feed,
                     blend,
                     false,
+                    opaque_fast,
                 );
                 assert_eq!(
                     device.render_pipeline_cache_len(),
                     cache_before_use,
-                    "pipeline_for({kind:?}, velocity={emit_velocity}, ao_mask={emit_ao_mask}, denoise={emit_denoise_feed}, blend={blend}) after prewarm must be a cache hit, not compile a new pipeline"
+                    "pipeline_for({kind:?}, velocity={emit_velocity}, ao_mask={emit_ao_mask}, denoise={emit_denoise_feed}, blend={blend}, opaque_fast={opaque_fast}) after prewarm must be a cache hit, not compile a new pipeline"
                 );
             }
         }
@@ -1448,6 +1449,7 @@ fn prewarm_pipelines_populates_the_shared_render_cache() {
         false,
         false,
         true,
+        false,
     );
     assert_eq!(
         device.render_pipeline_cache_len(),

@@ -1919,6 +1919,16 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
+    /// The array input whose published [`LiveExtent`](crate::scene::live_extent::LiveExtent)
+    /// bounds this buffer kernel. Its generated kernel reads the extent's
+    /// count and stops there: a coincident anchor has its output zeroed past
+    /// the live count, a gathered one only exposes the count to the body.
+    /// `run()` binds the count through
+    /// [`NodeInputs::live_counts`](crate::bindings::NodeInputs::live_counts).
+    fn live_anchor(&self) -> Option<&'static str> {
+        None
+    }
+
     /// An equivalent dense per-element form of a scheduled buffer kernel.
     /// Schedule-only inputs disappear from fused dataflow; cell-owned outputs
     /// still cannot fuse. The dense form uses ordinary params, no pass uniforms.

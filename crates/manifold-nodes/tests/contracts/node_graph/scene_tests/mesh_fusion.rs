@@ -60,6 +60,7 @@ fn mesh_change_compose_region_rules_wave_morph() {
         sampled_externals: vec![],
         virtual_chains: vec![],
         output_capacity: None,
+        live_anchor: None,
     };
     let keepalive: Vec<Box<dyn manifold_node_engine::exec::effect_node::EffectNode>> =
         vec![Box::new(NormalWaveMesh::new()), Box::new(MorphMesh::new())];

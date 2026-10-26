@@ -495,6 +495,16 @@ pub struct FusionRegion<'a> {
     /// [`Self::in_place_alias`] (writing a widened range back over the shorter
     /// loop buffer would corrupt it).
     pub output_capacity: Option<CapacityExpr>,
+    /// BUFFER regions only: the array external slot whose published
+    /// [`LiveExtent`](crate::scene::live_extent::LiveExtent) bounds the whole
+    /// region. `Some(e)` binds that extent's count to the kernel
+    /// (`live_counts`, with a `live_per_item` uniform and a
+    /// `// @live_counts: src_<e>` marker) and the kernel zeroes its output
+    /// past `min(count, counts[0] * live_per_item)` before any read; an anchor
+    /// with no extent at run time leaves the whole dispatch live. `None`
+    /// keeps the kernel text unchanged. Refused with
+    /// [`Self::in_place_alias`] (an in-place loop buffer is not zeroed).
+    pub live_anchor: Option<usize>,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list

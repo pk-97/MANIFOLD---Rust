@@ -587,6 +587,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: Some(CapacityExpr::Slot(0)),
     };
     let fused = generate_fused(&region).expect("the emitter chain fuses");
@@ -1108,6 +1109,7 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: Some(CapacityExpr::Product(vec![CapacityExpr::Param(
             "n0_capacity".to_string(),
         )])),

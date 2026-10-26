@@ -80,7 +80,9 @@ manifold_node_engine::primitive! {
 impl Primitive for GenerateCubeMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let size = ctx.param_f32("size", 1.0);
-        ctx.outputs.set_mesh_source("source", MeshSource::Cube { size });
+        let source = MeshSource::Cube { size };
+        ctx.outputs.set_cpu_value("vertices", source.local_bounds());
+        ctx.outputs.set_mesh_source("source", source);
 
         // Allocation-only param — not used by the shader, but the generated
         // uniform lays out every PARAM, so pack it (the body ignores it).

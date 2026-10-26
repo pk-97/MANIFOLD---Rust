@@ -187,6 +187,7 @@ impl RenderScene {
             }
             self.ensure_dummy_texture(gpu.device);
             self.ensure_dummy_emissive_buffer(gpu.device);
+            self.ensure_prev_positions_dummy(gpu.device);
             // Split-sum IBL resources —
             // always ensured (fixed size, allocated once) so
             // `@binding(16..18)` always has something valid, regardless of
@@ -697,6 +698,25 @@ impl RenderScene {
         }
     }
 
+    /// The one-record buffer bound at `@binding(56)` for every draw whose
+    /// velocity does not read previous positions; the shader reads it only
+    /// when `render_mode.z` is set.
+    pub(super) fn ensure_prev_positions_dummy(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.prev_positions_dummy.is_none() {
+            let buf = device.create_buffer_shared(prev_positions::RECORD_BYTES);
+            // The newly allocated buffer is exclusively owned and not yet
+            // submitted, and the write covers exactly its allocation.
+            unsafe {
+                std::ptr::write_bytes(
+                    buf.mapped_ptr().expect("shared buffer"),
+                    0,
+                    prev_positions::RECORD_BYTES as usize,
+                );
+            }
+            self.prev_positions_dummy = Some(buf);
+        }
+    }
+
     pub(super) fn ensure_dummy_emissive_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.dummy_emissive_buffer.is_none() {
             // Metal validates one complete pointee even when entry_count=0
@@ -780,18 +800,15 @@ impl RenderScene {
         }
     }
 
-    /// Ensure the depth-only shadow pipeline + its depth-stencil state exist.
+    /// Ensure the depth-only shadow pipelines (plain and solid) + their depth-stencil state exist.
     /// Called ONLY when at least one caster is present — compiling the shadow
     /// shader is real work an unwired scene must not pay.
     pub(super) fn ensure_shadow_pass(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.shadow_pipeline.is_none() {
-            self.shadow_pipeline = Some(device.create_render_pipeline_depth_only(
-                include_str!("../shaders/shadow_depth.wgsl"),
-                "vs_main",
-                "fs_shadow",
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                "node.render_scene shadow depth",
-            ));
+            self.shadow_pipeline = Some(Self::create_depth_only_pipeline(device, false));
+        }
+        if self.solid_depth_pipeline.is_none() {
+            self.solid_depth_pipeline = Some(Self::create_depth_only_pipeline(device, true));
         }
         if self.shadow_depth_stencil.is_none() {
             self.shadow_depth_stencil = Some(device.create_depth_stencil_state(
@@ -1103,7 +1120,7 @@ impl RenderScene {
         }
         // Dimensions changed or first creation — replace.
         self.denoiser = None;
-        match crate::denoiser::Denoiser::new(device, render_w, render_h, native_w, native_h, false)
+        match crate::denoiser::Denoiser::new(device, render_w, render_h, native_w, native_h, true)
         {
             Some(d) => {
                 self.denoiser = Some(d);

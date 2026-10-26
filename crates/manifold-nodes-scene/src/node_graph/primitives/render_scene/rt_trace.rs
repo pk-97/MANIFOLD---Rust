@@ -513,7 +513,8 @@ impl RenderScene {
             let refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
             let svt_full_b = self.rt_svt_full_b.as_ref().expect("ensured above");
             let history_valid = self.rt_moments_valid;
-            for pass in 0..(ATROUS_ITERATIONS - 1) {
+            if !denoise_active {
+                for pass in 0..(ATROUS_ITERATIONS - 1) {
                 // T1-D: dilation starts at 2, not 1 — the AO/GI trace
                 // dispatch is HALF-res (D11), so every 2x2 block of
                 // full-res texels shares the identical raw noise
@@ -586,6 +587,7 @@ impl RenderScene {
                     dst_svt,
                     "node.render_scene RT-T1-D atrous_pass",
                 );
+            }
             }
 
             // RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2: the ONE call site

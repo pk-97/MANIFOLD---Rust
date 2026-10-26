@@ -20,6 +20,7 @@ mod imp {
     use manifold_gpu::denoiser::GpuDenoiser;
     use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     /// macOS-native MetalFX Temporal Denoised Scaler, wrapped to avoid
     /// leaking Apple types into render-scene code.
@@ -35,6 +36,8 @@ mod imp {
         pub input_height: u32,
         pub output_width: u32,
         pub output_height: u32,
+        pub depth_reversed: bool,
+        pub output: RenderTarget,
     }
 
     impl Denoiser {
@@ -89,6 +92,7 @@ mod imp {
                 return None;
             }
 
+            let output = RenderTarget::new(device, output_width, output_height, GpuTextureFormat::Rgba16Float, "MetalFX Denoiser Output");
             Some(Self {
                 classic,
                 m4,
@@ -96,6 +100,8 @@ mod imp {
                 input_height,
                 output_width,
                 output_height,
+                depth_reversed,
+                output,
             })
         }
 
@@ -142,7 +148,6 @@ mod imp {
             diffuse_albedo: &GpuTexture,
             specular_albedo: &GpuTexture,
             specular_hit_distance: &GpuTexture,
-            output: &GpuTexture,
             reset: bool,
             reactive_mask: Option<&GpuTexture>,
         ) -> bool {
@@ -156,7 +161,7 @@ mod imp {
                     cmd_buf,
                     color,
                     depth,
-                    false, // depth_reversed: standard (0=near, 1=far)
+                    self.depth_reversed,
                     motion,
                     normal,
                     roughness,
@@ -164,7 +169,7 @@ mod imp {
                     specular_albedo,
                     specular_hit_distance,
                     None, // exposure — the denoiser normalises internally
-                    output,
+                    &self.output.texture,
                     reset,
                     reactive_mask,
                 )
@@ -174,7 +179,7 @@ mod imp {
                     cmd_buf,
                     color,
                     depth,
-                    false,
+                    self.depth_reversed,
                     motion,
                     normal,
                     roughness,
@@ -182,7 +187,7 @@ mod imp {
                     specular_albedo,
                     specular_hit_distance,
                     None,
-                    output,
+                    &self.output.texture,
                     reset,
                     reactive_mask,
                 );

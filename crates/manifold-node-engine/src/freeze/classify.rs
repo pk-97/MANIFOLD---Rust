@@ -157,7 +157,7 @@ pub enum FusedOutputCapacity {
     /// minimum over the member's wired array input capacities (every shipped
     /// identity buffer atom: in-capacity or min-clamped). The fused count
     /// anchor is `min(arrayLength(&src_e), …)` over the region's array
-    /// externals — the pre-BUG-orm4 behavior, byte-identical.
+    /// externals read per element.
     MinInputs,
     /// One output per element of the named coincident input. Other array
     /// inputs are bounds-checked gathers whose lengths do not limit dispatch

@@ -23,8 +23,9 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `t` param (f32), `blend_frames` (u32),
-/// then the derived `weights_len` and codegen-injected `dispatch_count`.
-/// Four words = 16 bytes. Matches
+/// then the derived `weights_len` and the codegen-injected `dispatch_count`
+/// and `live_per_item` (the multiplier of the live count bound at binding 5,
+/// 0 without an extent), padded to eight words. Matches
 /// `standalone_for_spec::<MorphMesh>()`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -33,6 +34,10 @@ struct MorphUniforms {
     blend_frames: u32,
     weights_len: u32,
     dispatch_count: u32,
+    live_per_item: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
@@ -82,6 +87,7 @@ manifold_node_engine::primitive! {
     // is a frame-derived uniform the body uses to bounds-check the coincident
     // weight read (degrade to 1.0 past the buffer, D2).
     derived_uniforms: ["weights_len:u32"],
+    live_anchor: "in",
 }
 
 // Per-frame recompute for a FUSED region's derived block: `weights_len` is
@@ -168,6 +174,9 @@ impl Primitive for MorphMesh {
         let Some(out_buf) = ctx.outputs.array("out") else {
             return;
         };
+        let Some(live) = ctx.inputs.live_counts("in") else {
+            return;
+        };
 
         let vertex_size = std::mem::size_of::<MeshVertex>() as u64;
         let a_cap = (a_buf.size / vertex_size) as u32;
@@ -187,6 +196,10 @@ impl Primitive for MorphMesh {
             blend_frames: blend_frames as u32,
             weights_len,
             dispatch_count: count,
+            live_per_item: live.per_item,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -215,6 +228,11 @@ impl Primitive for MorphMesh {
                     binding: 4,
                     buffer: out_buf,
                     offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: &live.counts,
+                    offset: live.offset,
                 },
             ],
             [count.div_ceil(256), 1, 1],
@@ -335,6 +353,10 @@ mod gpu_tests {
             blend_frames: blend_frames as u32,
             weights_len,
             dispatch_count: a.len() as u32,
+            live_per_item: 0,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
 
         let bindings = [
@@ -343,6 +365,8 @@ mod gpu_tests {
             GpuBinding::Buffer { binding: 2, buffer: &b_buf, offset: 0 },
             GpuBinding::Buffer { binding: 3, buffer: &wbuf, offset: 0 },
             GpuBinding::Buffer { binding: 4, buffer: &dbuf, offset: 0 },
+            // No extent (`live_per_item` 0): never read.
+            GpuBinding::Buffer { binding: 5, buffer: &a_buf, offset: 0 },
         ];
         let mut enc = device.create_encoder("morph-mesh-test");
         enc.dispatch_compute(
@@ -623,6 +647,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: None,
         };
         let generated_fused = generate_fused(&region).expect("morph mesh should fuse");

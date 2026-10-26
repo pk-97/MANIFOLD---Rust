@@ -33,6 +33,11 @@ pub(super) fn run<P: Primitive>(
         ctx.error("cut remap: output must have the map's vertex capacity");
         return;
     }
+    // The map's live records: the kernel zeroes the rest of the output.
+    let Some(live) = ctx.inputs.live_counts("map") else {
+        ctx.mark_outputs_pending();
+        return;
+    };
     let hash_content = |content: Option<ContentVersion>| {
         use std::hash::{Hash, Hasher};
         let mut hasher = ahash::AHasher::default();
@@ -64,7 +69,7 @@ pub(super) fn run<P: Primitive>(
     if count != 0 {
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<P>(pipeline, gpu.device);
-        let uniforms = [count as u32, 0, 0, 0];
+        let uniforms = [count as u32, live.per_item, 0, 0];
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -86,6 +91,11 @@ pub(super) fn run<P: Primitive>(
                     binding: 3,
                     buffer: output,
                     offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &live.counts,
+                    offset: live.offset,
                 },
             ],
             [(count as u32).div_ceil(256), 1, 1],
@@ -157,6 +167,18 @@ mod gpu_tests {
         source: &[MeshVertex],
         maps: &[Vec4Vertex],
     ) -> Vec<MeshVertex> {
+        dispatch_mesh_live(device, wgsl, source, maps, None)
+    }
+
+    /// `live`: the map's live record count the kernel stops at, or `None` for
+    /// a map with no extent (the whole dispatch is live).
+    fn dispatch_mesh_live(
+        device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
+        source: &[MeshVertex],
+        maps: &[Vec4Vertex],
+        live: Option<u32>,
+    ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
             manifold_node_engine::freeze::codegen::ENTRY,
@@ -166,11 +188,18 @@ mod gpu_tests {
         let map_buf = device.create_buffer_shared(std::mem::size_of_val(maps).max(1) as u64);
         let output_buf = device
             .create_buffer_shared((maps.len() * std::mem::size_of::<MeshVertex>()).max(1) as u64);
+        let counts_buf = device.create_buffer_shared(4);
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(source));
             map_buf.write(0, bytemuck::cast_slice(maps));
+            // Pre-fill the output so a record the kernel skips would show.
+            output_buf.write(
+                0,
+                &vec![0xAB_u8; maps.len() * std::mem::size_of::<MeshVertex>()],
+            );
+            counts_buf.write(0, bytemuck::bytes_of(&live.unwrap_or(0)));
         }
-        let uniforms = [maps.len() as u32, 0, 0, 0];
+        let uniforms = [maps.len() as u32, u32::from(live.is_some()), 0, 0];
         let mut encoder = device.create_encoder("cut-remap-test");
         encoder.dispatch_compute(
             &pipeline,
@@ -192,6 +221,11 @@ mod gpu_tests {
                 GpuBinding::Buffer {
                     binding: 3,
                     buffer: &output_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &counts_buf,
                     offset: 0,
                 },
             ],
@@ -221,6 +255,7 @@ mod gpu_tests {
             source_buf.write(0, bytemuck::cast_slice(source));
             map_buf.write(0, bytemuck::cast_slice(maps));
         }
+        // No extent: `live_per_item` 0, and the counts binding is never read.
         let uniforms = [maps.len() as u32, 0, 0, 0];
         let mut encoder = device.create_encoder("cut-weight-remap-test");
         encoder.dispatch_compute(
@@ -243,6 +278,11 @@ mod gpu_tests {
                 GpuBinding::Buffer {
                     binding: 3,
                     buffer: &output_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: &map_buf,
                     offset: 0,
                 },
             ],
@@ -314,6 +354,47 @@ mod gpu_tests {
         assert!(
             out[3].position.iter().all(|x| x.is_finite()) && out[3].position == [0.0; 3],
             "out-of-range source triangle must be guarded"
+        );
+    }
+
+    /// A kernel with a live extent writes the records below the count exactly
+    /// as without one and zeroes every record from the count on, whatever the
+    /// map holds there.
+    #[test]
+    fn standalone_remap_zeroes_records_past_the_live_count() {
+        let device = manifold_gpu::testkit::test_device();
+        let source = vec![
+            vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0], [1.0, 0.0, 0.0, 1.0]),
+            vertex([2.0, 1.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0], [0.0, 1.0, 0.0, -1.0]),
+            vertex([0.0, 0.0, 3.0], [0.0, 0.0, 1.0], [0.0, 1.0], [0.0, 0.0, 1.0, 1.0]),
+        ];
+        // Seven records, three live: the tail holds valid maps that must still
+        // come out zero.
+        let maps = vec![
+            map([1.0, 0.0, 0.0], 0.0),
+            map([0.0, 1.0, 0.0], 0.0),
+            map([0.0, 0.0, 1.0], 0.0),
+            map([0.25, 0.5, 0.25], 0.0),
+            map([0.5, 0.25, 0.25], 0.0),
+            map([0.25, 0.25, 0.5], 0.0),
+            map([1.0, 0.0, 0.0], 0.0),
+        ];
+        let wgsl = standalone_for_spec::<RemapMeshCut>().expect("mesh remap codegen");
+        assert!(
+            wgsl.contains("live_counts") && wgsl.contains("live_per_item"),
+            "the map anchor carries the live guard"
+        );
+        let whole = dispatch_mesh(&device, &wgsl, &source, &maps);
+        let live = dispatch_mesh_live(&device, &wgsl, &source, &maps, Some(3));
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&live[..3]), bytemuck::cast_slice::<_, u8>(&whole[..3]));
+        assert!(
+            bytemuck::cast_slice::<_, u8>(&live[3..]).iter().all(|byte| *byte == 0),
+            "records past the live count are all zero"
+        );
+        let none = dispatch_mesh_live(&device, &wgsl, &source, &maps, Some(0));
+        assert!(
+            bytemuck::cast_slice::<_, u8>(&none).iter().all(|byte| *byte == 0),
+            "a live count of zero zeroes everything"
         );
     }
 
@@ -393,6 +474,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: Some(CapacityExpr::Slot(1)),
         };
         let generated = generate_fused(&region).expect("remap+taper fused codegen");
@@ -676,5 +758,134 @@ mod gpu_tests {
             (false, false),
             "new executor epoch invalidates stasis"
         );
+    }
+}
+
+#[cfg(test)]
+mod live_guard_tests {
+    use crate::node_graph::primitives::{
+        remap_cut_weights::RemapCutWeights, remap_mesh_cut::RemapMeshCut,
+    };
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::CapacityExpr;
+    use manifold_node_engine::freeze::codegen::{
+        FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
+    };
+    use manifold_node_engine::primitive::PrimitiveSpec;
+
+    /// A one-member remap region: `in` gathered (external 0), `map` read per
+    /// element (external 1).
+    fn remap_region(
+        output_capacity: Option<CapacityExpr>,
+        live_anchor: Option<usize>,
+    ) -> FusionRegion<'static> {
+        FusionRegion {
+            nodes: vec![RegionNode {
+                node_id: NodeInstanceId(0),
+                fusion_kind: RemapMeshCut::FUSION_KIND,
+                body: RemapMeshCut::WGSL_BODY.unwrap(),
+                params: RemapMeshCut::PARAMS,
+                inputs: vec![InputSource::External(0), InputSource::External(1)],
+                input_access: RemapMeshCut::INPUT_ACCESS.to_vec(),
+                node_inputs: RemapMeshCut::INPUTS,
+                node_outputs: RemapMeshCut::OUTPUTS,
+                node_includes: RemapMeshCut::WGSL_INCLUDES,
+                derived_uniforms: RemapMeshCut::DERIVED_UNIFORMS,
+                type_id: RemapMeshCut::TYPE_ID.to_string(),
+                derived_camera_ext: None,
+                output_storage: "rgba16float",
+                stencil_fetch: false,
+                quantize_f16: false,
+            }],
+            num_external_inputs: 2,
+            outputs: vec![(NodeInstanceId(0), "out".into())],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+            camera_externals: 0,
+            live_anchor,
+            output_capacity,
+        }
+    }
+
+    fn line_starting<'a>(wgsl: &'a str, prefix: &str) -> &'a str {
+        wgsl.lines()
+            .find(|line| line.trim_start().starts_with(prefix))
+            .unwrap_or_else(|| panic!("no line starting `{prefix}` in:\n{wgsl}"))
+            .trim()
+    }
+
+    /// Without a capacity expression the count follows the arrays read per
+    /// element: the gathered `in` (src_0) does not set it, and the fresh dst's
+    /// own length still caps it.
+    #[test]
+    fn fused_count_anchor_ignores_gathered_externals() {
+        let wgsl = generate_fused(&remap_region(None, None)).expect("remap region").wgsl;
+        assert_eq!(
+            line_starting(&wgsl, "let count ="),
+            "let count = min(arrayLength(&src_1), arrayLength(&dst));"
+        );
+        assert!(
+            !wgsl.contains("live_counts") && !wgsl.contains("live_per_item"),
+            "no live anchor, no live binding or uniform"
+        );
+        assert!(naga::front::wgsl::parse_str(&wgsl).is_ok(), "parses:\n{wgsl}");
+    }
+
+    /// A live-anchored fused kernel binds the anchor's counts after `dst`,
+    /// carries the `live_per_item` uniform, and zeroes the output past the
+    /// live count before it reads any element.
+    #[test]
+    fn fused_kernel_with_a_live_anchor_stops_at_the_live_count() {
+        let wgsl = generate_fused(&remap_region(Some(CapacityExpr::Slot(1)), Some(1)))
+            .expect("anchored remap region")
+            .wgsl;
+        assert!(naga::front::wgsl::parse_str(&wgsl).is_ok(), "parses:\n{wgsl}");
+        assert!(wgsl.contains("// @live_counts: src_1"), "marker names the anchor port:\n{wgsl}");
+        assert!(
+            wgsl.contains("var<storage, read> live_counts: array<u32>;"),
+            "counts binding:\n{wgsl}"
+        );
+        assert!(wgsl.contains("live_per_item: u32"), "uniform field:\n{wgsl}");
+        assert_eq!(line_starting(&wgsl, "let count ="), "let count = arrayLength(&src_1);");
+        let guard = wgsl
+            .find("idx >= min(count, live_counts[0] * params.live_per_item)")
+            .expect("live guard");
+        let zero_write = wgsl[guard..].find("dst[idx] = ").map(|at| guard + at).unwrap();
+        let first_read = wgsl.find("let e_1 = src_1[idx];").expect("map pre-read");
+        assert!(
+            guard < zero_write && zero_write < first_read,
+            "the tail is zeroed before any read:\n{wgsl}"
+        );
+        let count_guard = wgsl.find("if idx >= count {").expect("count guard");
+        assert!(count_guard < guard, "the dispatch bound comes first");
+    }
+
+    /// Standalone kernels anchored on a cut map carry the same guard.
+    #[test]
+    fn standalone_remap_kernels_carry_the_live_guard() {
+        for (name, wgsl) in [
+            ("mesh", standalone_for_spec::<RemapMeshCut>().expect("mesh remap")),
+            ("weights", standalone_for_spec::<RemapCutWeights>().expect("weights remap")),
+        ] {
+            assert!(naga::front::wgsl::parse_str(&wgsl).is_ok(), "{name} parses:\n{wgsl}");
+            assert!(
+                wgsl.contains("var<storage, read> live_counts: array<u32>;"),
+                "{name} counts binding:\n{wgsl}"
+            );
+            let guard = wgsl
+                .find("params.live_per_item != 0u && idx >= min(params.dispatch_count, live_counts[0] * params.live_per_item)")
+                .unwrap_or_else(|| panic!("{name} live guard:\n{wgsl}"));
+            let read = wgsl
+                .find("let e_map = buf_map[idx];")
+                .unwrap_or_else(|| panic!("{name} map pre-read:\n{wgsl}"));
+            let between = &wgsl[guard..read];
+            assert!(
+                between.contains("buf_out[idx] = ") && between.contains("();"),
+                "{name}: the output element is zeroed before any read:\n{wgsl}"
+            );
+        }
     }
 }

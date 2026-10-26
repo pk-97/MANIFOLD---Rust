@@ -104,6 +104,13 @@ pub enum Marker {
     /// `precision_critical` (D6(a)). Lets the fused kernel keep requesting the
     /// fp32 upstream intermediate its members would have requested unfused.
     PrecisionCritical { port: String },
+    /// `// @live_counts: <port>` — fused buffer codegen, own line before the
+    /// `live_counts: array<u32>` binding, only when the region is anchored on
+    /// a published live extent. `<port>` is the `src_<e>` array input whose
+    /// extent `node.wgsl_compute` binds there (its counts word, at the
+    /// extent's byte offset) and whose multiplier it writes to the
+    /// `live_per_item` uniform; the fresh `dst` inherits that input's extent.
+    LiveCounts { port: String },
     /// `// @bool_uniform: <field>` — fused codegen, one per Bool parameter
     /// field. WGSL represents the field as `u32`, so this typed side-channel
     /// lets `node.wgsl_compute` preserve Bool parameter and packing semantics.
@@ -154,6 +161,7 @@ impl Marker {
             Marker::InputAccess { port, token } => format!("// @input_access: {port} {token}"),
             Marker::PrecisionCritical { port } => format!("// @precision_critical: {port}"),
             Marker::BoolUniform { field } => format!("// @bool_uniform: {field}"),
+            Marker::LiveCounts { port } => format!("// @live_counts: {port}"),
             Marker::FusedOutputCapacity { expr } => {
                 format!("// @fused_output_capacity: {}", expr.to_marker_payload())
             }
@@ -236,6 +244,12 @@ impl Marker {
                 field: field.to_string(),
             });
         }
+        if let Some(rest) = c.strip_prefix("@live_counts:") {
+            let port = rest.trim();
+            return (!port.is_empty()).then(|| Marker::LiveCounts {
+                port: port.to_string(),
+            });
+        }
         if let Some(rest) = c.strip_prefix("@fused_output_capacity:") {
             let expr = CapacityExpr::parse_marker_payload(rest)?;
             return Some(Marker::FusedOutputCapacity { expr });
@@ -314,6 +328,9 @@ mod tests {
             Marker::BoolUniform {
                 field: "n0_enabled".to_string(),
             },
+            Marker::LiveCounts {
+                port: "src_1".to_string(),
+            },
             Marker::DerivedUniformMember {
                 first_field: "n0_dt_scaled".to_string(),
                 words: 1,
@@ -374,6 +391,7 @@ mod tests {
     fn parse_rejects_empty_payload() {
         assert_eq!(Marker::parse("// @dispatch_count_param:"), None);
         assert_eq!(Marker::parse("// @camera_external:"), None);
+        assert_eq!(Marker::parse("// @live_counts:"), None);
     }
 
     #[test]

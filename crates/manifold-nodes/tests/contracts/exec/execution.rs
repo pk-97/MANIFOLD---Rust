@@ -227,11 +227,13 @@ mod tests {
         /// registered recompute, so the fail-closed gate in
         /// `fuse_canonical_def_masked` keeps those regions unfused; see the
         /// report and the composition unit proof in freeze/install.rs).
-        /// Ripple carries no mesh-rule declaration, so both sides compile
-        /// the conservative Written/Written class: the fused node's
-        /// installed sidecar must select exactly that class, and driving
-        /// both graphs through the executor must show the class's behavior
-        /// on both paths — every actual write revises all three aspects.
+        /// Ripple declares the deformer class (`MeshOutputRule::deformer`):
+        /// topology follows its `in`, positions are Written. Unfused, the
+        /// second ripple's topology depends on the first's output; fused, the
+        /// installed sidecar substitutes the first ripple away and depends on
+        /// the region's external mesh input. Both are the same class, and
+        /// driving both graphs through the executor must show it: a source
+        /// that rewrites every frame revises every aspect on both paths.
         #[test]
         fn mesh_change_fused_rules_match_unfused() {
             use manifold_core::NodeId;
@@ -287,7 +289,7 @@ mod tests {
                 .clone()
                 .into_graph(&registry, &PreparedMeshRules::default())
                 .unwrap();
-            let _src_a = swap_source(&mut graph_a, &shared_rule(None));
+            let src_a = swap_source(&mut graph_a, &shared_rule(None));
             let r1_a = graph_a.instance_by_node_id(&NodeId::new("r1")).unwrap();
             let r2_a = graph_a.instance_by_node_id(&NodeId::new("r2")).unwrap();
             for id in [r1_a, r2_a] {
@@ -300,14 +302,38 @@ mod tests {
             }
             let plan_a = compile(&graph_a).unwrap();
             let res_r2 = out_res(&plan_a, r2_a);
-            // No declaration on ripple: the conservative Written/Written class.
+            // Ripple's deformer class: positions Written, topology following
+            // `in`. r2's `in` is r1's output, and r1's is the source's.
+            let produced_by = |plan: &ExecutionPlan, node: NodeInstanceId, res: ResourceId| {
+                plan.steps()
+                    .iter()
+                    .find(|s| s.node == node)
+                    .is_some_and(|s| s.outputs.iter().any(|&(_, out)| out == res))
+            };
             let unfused_rule = plan_a
                 .mesh_rule(res_r2)
                 .expect("r2 output compiles a mesh rule");
             assert!(
-                matches!(unfused_rule.topology, CompiledMeshRevisionRule::Written)
-                    && matches!(unfused_rule.positions, CompiledMeshRevisionRule::Written),
-                "unfused ripple must compile to the conservative class, got {unfused_rule:?}"
+                matches!(unfused_rule.positions, CompiledMeshRevisionRule::Written),
+                "unfused ripple positions are Written, got {unfused_rule:?}"
+            );
+            let CompiledMeshRevisionRule::Dependencies(r2_deps) = &unfused_rule.topology else {
+                panic!("unfused ripple topology must follow its input, got {unfused_rule:?}");
+            };
+            assert_eq!(
+                r2_deps.as_slice(),
+                [(out_res(&plan_a, r1_a), MeshAspect::Topology)],
+                "r2's topology follows r1's topology"
+            );
+            let r1_rule = plan_a
+                .mesh_rule(out_res(&plan_a, r1_a))
+                .expect("r1 output compiles a mesh rule");
+            let CompiledMeshRevisionRule::Dependencies(r1_deps) = &r1_rule.topology else {
+                panic!("unfused ripple topology must follow its input, got {r1_rule:?}");
+            };
+            assert!(
+                matches!(r1_deps.as_slice(), [(res, MeshAspect::Topology)] if produced_by(&plan_a, src_a, *res)),
+                "r1's topology follows the source mesh, got {r1_deps:?}"
             );
 
             // ── Path B: fuse the same def and install the sidecar ──
@@ -328,8 +354,9 @@ mod tests {
                     doc.node_id.as_str().to_string()
                 }
             };
-            // The composed sidecar: Written/Written, matching the unfused
-            // declarations — no silent class change from fusion.
+            // The composed sidecar: positions Written and topology following
+            // the region's mesh input — the unfused class, with r1 substituted
+            // away.
             {
                 let mut entries = fused.mesh_rules.values().flatten();
                 let rule = entries
@@ -346,9 +373,11 @@ mod tests {
                     rule
                 );
                 assert!(
-                    matches!(rule.topology, PreparedMeshRevisionRule::Written)
+                    matches!(&rule.topology, PreparedMeshRevisionRule::Dependencies(deps)
+                        if matches!(deps.as_slice(), [dep]
+                            if dep.aspect == MeshAspect::Topology && dep.input.starts_with("src_")))
                         && matches!(rule.positions, PreparedMeshRevisionRule::Written),
-                    "fused sidecar must compose to Written/Written, got {rule:?}"
+                    "fused sidecar must compose to topology-follows-input / positions Written, got {rule:?}"
                 );
             }
             let FusedDef {
@@ -357,7 +386,7 @@ mod tests {
                 ..
             } = fused;
             let mut graph_b = fused_def.into_graph(&registry, &mesh_rules).unwrap();
-            let _src_b = swap_source(&mut graph_b, &shared_rule(None));
+            let src_b = swap_source(&mut graph_b, &shared_rule(None));
             let fused_rt = graph_b
                 .instance_by_node_id(&NodeId::new(&fused_key))
                 .expect("fused node must instantiate");
@@ -375,17 +404,24 @@ mod tests {
                 .mesh_rule(res_fused)
                 .expect("fused MeshVertex output compiles a mesh rule");
             assert!(
-                matches!(fused_rule.topology, CompiledMeshRevisionRule::Written)
-                    && matches!(fused_rule.positions, CompiledMeshRevisionRule::Written),
-                "fused rule must match the unfused class, got {fused_rule:?}"
+                matches!(fused_rule.positions, CompiledMeshRevisionRule::Written),
+                "fused positions are Written, got {fused_rule:?}"
+            );
+            let CompiledMeshRevisionRule::Dependencies(fused_deps) = &fused_rule.topology else {
+                panic!("fused topology must follow the region's mesh input, got {fused_rule:?}");
+            };
+            assert!(
+                matches!(fused_deps.as_slice(), [(res, MeshAspect::Topology)] if produced_by(&plan_b, src_b, *res)),
+                "fused topology follows the source mesh, as r1's does unfused, got {fused_deps:?}"
             );
 
             // ── Drive both graphs: same-class revision behavior every frame ──
             // Revision tokens come from a per-executor global counter, so
             // absolute values are not comparable across two executors (the
             // unfused graph has more mesh writers). The parity invariant is
-            // behavioral: both sides advance ALL THREE aspects on EVERY
-            // write — the conservative class's signature.
+            // behavioral: the source rewrites its mesh every frame, so both
+            // sides advance ALL THREE aspects on EVERY write (topology
+            // follows the source's, positions are Written).
             fn run_frame_pair(
                 graph_a: &mut Graph,
                 plan_a: &ExecutionPlan,
@@ -435,8 +471,8 @@ mod tests {
                         next.topology > prev.topology
                             && next.positions > prev.positions
                             && next.content > prev.content,
-                        "{side}: the conservative class must revise all aspects on every \
-                         write, got {prev:?} then {next:?}"
+                        "{side}: a source rewritten every frame must revise every aspect \
+                         through the deformer class, got {prev:?} then {next:?}"
                     );
                 }
                 (prev_a, prev_b) = (next_a, next_b);

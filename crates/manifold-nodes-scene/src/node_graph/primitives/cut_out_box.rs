@@ -320,6 +320,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 1,
+            live_anchor: None,
             output_capacity: Some(CapacityExpr::Slot(0)),
         };
         let generated = generate_fused(&region).expect("displace+cut fused codegen");

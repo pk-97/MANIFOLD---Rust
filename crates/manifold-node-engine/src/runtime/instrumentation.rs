@@ -15,6 +15,8 @@ pub struct ArrayDump<'a> {
     pub buffer: &'a manifold_gpu::GpuBuffer,
     pub item_size: u32,
     pub fields: Vec<(String, &'static str, u32)>,
+    /// The live extent the array carried at the end of the frame, if any.
+    pub live_extent: Option<crate::scene::live_extent::LiveExtent>,
 }
 
 impl PresetRuntime {
@@ -274,6 +276,7 @@ impl PresetRuntime {
                 buffer,
                 item_size: at.item_size,
                 fields,
+                live_extent: self.executor.dump_array_live_extent(res),
             });
         }
         out
@@ -453,6 +456,7 @@ impl PresetRuntime {
                 buffer,
                 item_size: at.item_size,
                 fields,
+                live_extent: self.executor.dump_array_live_extent(res),
             });
         }
         out

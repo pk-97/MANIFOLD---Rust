@@ -157,6 +157,16 @@ so the dispatch writes the multiplied range (reflect_array's 2x mirror,
 analytic_echo_instances' 8x echo stride — BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity));
 the fresh `dst` is sized to the
 same expression via the `// @fused_output_capacity:` marker on the kernel.
+Arrays that share a capacity source are one capacity at run time, which the
+structural `Slot` comparison cannot see: `capacity_root` (`freeze/region.rs`)
+follows each external back through `FromInput` producers, and `MinInputs`
+producers whose required inputs share one root, to the node that sets the
+capacity (a cut map, a source). `build_region` counts every external through
+its group's lowest slot, in both the capacity expressions and the probe's
+synthetic capacities, so a remap and the cut map it reads (or two remaps
+through one map) are one source. When that source's producer publishes a live
+extent (`LiveExtentOutput`), the region carries it as `live_anchor` and the
+fused kernel stops at the extent's live count.
 A lattice atom declaring `ParamProduct { params }` (its output is the
 product of Float lattice params, whatever its inputs hold: spawn_whitewater)
 counts from the fused uniforms,
@@ -299,6 +309,7 @@ should diff both ends.
 |---|---|---|
 | `// @fused_output` on a `var<storage, read_write>` array | fused buffer codegen (fresh-dst model) | Output-ONLY port: no input port, no aliased pair — keeps read-only inputs forward deps (the fix for the buffer ordering bug where an aliased output read as a feedback back-edge). |
 | `// @dispatch_count_param: n{i}_<p>` | fused buffer codegen (in-place loop regions where all members agree on one `active_count` producer) | Cap the 1D grid at the named uniform's live value instead of buffer capacity (the FluidSim "fused slower" fix — kernel carries the matching guard). |
+| `// @live_counts: src_<e>` before a `live_counts: array<u32>` binding | fused buffer codegen (regions whose count follows one capacity source whose producer publishes a `LiveExtent`) | `node.wgsl_compute` binds that array's live-extent counts word (at the extent's byte offset) and writes the extent's per-item multiplier to the `live_per_item` uniform; the kernel zeroes every element from `min(count, counts * live_per_item)` on. With no extent the multiplier is 0 and the whole count is live. |
 | `// @sampler_address_mode: repeat\|mirror` on `samp` | fused texture codegen | Create the shared gather sampler at this mode (WGSL can't express address modes). `clamp` emits no marker — byte-identical legacy text. |
 | `// @bool_uniform: <field>` | fused texture/buffer codegen | Retains Bool parameter metadata when WGSL stores it as `u32`. Seeded values stay Bool; live `BoolThreshold` bindings pack true only above 0.5. |
 | `// @reset_gated` | seed-pattern kernels | Node grows a synthetic optional `reset_trigger` input; dispatches only on integer edges. On skip of an *aliased* kernel it calls `mark_gpu_accessed()` — the executor stale-guard's documented escape hatch. |

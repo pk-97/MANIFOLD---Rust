@@ -443,6 +443,21 @@ impl<'a> NodeInputs<'a> {
     pub fn live_extent_slot(&self, slot: Slot) -> Option<crate::scene::live_extent::LiveExtent> {
         self.backend.live_extent(slot)
     }
+
+    /// The live count a live-guarded kernel binds for the array on `port`:
+    /// its published extent, or the array itself with `per_item == 0` when it
+    /// has none, so one kernel serves both. `None` when the port is unwired.
+    pub fn live_counts(&self, port: &str) -> Option<crate::scene::live_extent::LiveCounts> {
+        let slot = self.slot(port)?;
+        match self.backend.live_extent(slot) {
+            Some(extent) => Some(extent.counts()),
+            None => Some(crate::scene::live_extent::LiveCounts {
+                counts: self.backend.array_buffer(slot)?.clone(),
+                offset: 0,
+                per_item: 0,
+            }),
+        }
+    }
 }
 
 /// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port

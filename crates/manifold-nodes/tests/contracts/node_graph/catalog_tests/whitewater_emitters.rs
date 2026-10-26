@@ -235,6 +235,7 @@ fn whitewater_emitter_fusion_compiles_without_device() {
             virtual_chains: vec![],
             sampled_externals: vec![],
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: Some(CapacityExpr::Slot(0)),
         };
         let g = generate_fused(&region).unwrap();

@@ -21,11 +21,13 @@ use crate::exec::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId, Par
 use crate::exec::execution_plan::{
     CompiledMeshRevisionRule, ExecutionPlan, ExecutionStep, ResourceId,
 };
+use crate::exec::metal_backend::MetalBackend;
 use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
 use crate::ports::{ArrayType, PortType};
 use crate::runtime::layer_skin::LayerSkinRegistry;
+use crate::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
 use crate::scene::mesh_change::{MeshAspect, MeshRevision};
 use crate::state_store::{OwnerKey, StateStore};
 
@@ -109,6 +111,18 @@ struct FrameTally {
     preview_matched: bool,
     preview_tex_count: usize,
     evaluated_steps: u32,
+}
+
+/// A bypassed terminal step whose input producer renders straight into the
+/// host's final target, so the bypass needs no full-resolution copy.
+#[derive(Clone, Copy)]
+struct ForwardRetarget {
+    /// The bypassed step's chosen input: the producer's output resource.
+    source: ResourceId,
+    /// The bypassed step's output, which carries the host's target.
+    final_output: ResourceId,
+    /// Set when the producer's slot was bound to the host target this frame.
+    installed: bool,
 }
 
 /// Which pass is evaluating a step.
@@ -206,6 +220,9 @@ pub struct Executor {
     /// Per-frame liveness bitset over resources, sized to
     /// `plan.resource_count()`. Populated by [`compute_live_steps`].
     live_resources: Vec<bool>,
+    /// Bypassed terminal steps planned by [`compute_live_steps`] this frame.
+    /// Rebuilt every frame, because the bypass is decided from live params.
+    forward_retargets: Vec<ForwardRetarget>,
     /// Per-frame scratch for `selected_input_branch`'s `wired_inputs`
     /// argument. Reused across nodes; cleared before each call.
     wired_scratch: Vec<&'static str>,
@@ -607,6 +624,7 @@ impl Executor {
             initialized_persistent: ahash::AHashSet::default(),
             live_steps: Vec::new(),
             live_resources: Vec::new(),
+            forward_retargets: Vec::new(),
             wired_scratch: Vec::new(),
             preview_target: None,
             scene_viewport: None,
@@ -942,6 +960,17 @@ impl Executor {
         })
     }
 
+    /// The live extent published for a dumped array's storage, if its
+    /// producer (or the executor's forwarding rule) set one on the last frame.
+    pub fn dump_array_live_extent(
+        &self,
+        res: ResourceId,
+    ) -> Option<crate::scene::live_extent::LiveExtent> {
+        self.backend
+            .slot_for(res)
+            .and_then(|s| self.backend.live_extent(s))
+    }
+
     /// The storage holding `res` after the frame, for a host reading arrays
     /// once the GPU is done. `None` when a later step gave that storage to a
     /// different array: declare the read with
@@ -1256,6 +1285,7 @@ impl Executor {
     /// allocation in the inner loop.
     fn compute_live_steps(&mut self, graph: &Graph, plan: &ExecutionPlan) {
         let steps = plan.steps();
+        self.forward_retargets.clear();
         self.live_steps.clear();
         self.live_steps.resize(steps.len(), false);
         self.live_resources.clear();
@@ -1364,7 +1394,7 @@ impl Executor {
             let passthrough = inst
                 .node
                 .skip_passthrough(&inst.params, &self.wired_scratch);
-            let passthrough_in = passthrough.and_then(|(in_port, out_port)| {
+            let passthrough_link = passthrough.and_then(|(in_port, out_port)| {
                 let r_in = step
                     .inputs
                     .iter()
@@ -1375,14 +1405,21 @@ impl Executor {
                     .iter()
                     .find(|&&(n, _)| n == out_port)
                     .map(|&(_, r)| r)?;
-                if plan.resource_dims(r_in) == plan.resource_dims(r_out)
-                    && plan.resource_format(r_in) == plan.resource_format(r_out)
-                {
-                    Some(in_port)
-                } else {
-                    None
-                }
+                Some((in_port, r_in, r_out))
             });
+            let passthrough_in = passthrough_link.and_then(|(in_port, r_in, r_out)| {
+                (plan.resource_dims(r_in) == plan.resource_dims(r_out)
+                    && plan.resource_format(r_in) == plan.resource_format(r_out))
+                .then_some(in_port)
+            });
+            // The plan's format declaration can be absent on one side of an
+            // edge whose allocated textures still match, so the retarget is
+            // decided on the concrete textures when the producer acquires.
+            if let Some((_, r_in, r_out)) = passthrough_link
+                && inst.node.empty_skip_input_ports().is_empty()
+            {
+                self.plan_forward_retarget(graph, plan, idx, (r_in, r_out), &producer);
+            }
 
             for &(port_name, res_id) in &step.inputs {
                 if let Some(chosen) = selected
@@ -1427,6 +1464,180 @@ impl Executor {
             self.live_steps.fill(true);
             self.live_resources.fill(true);
         }
+    }
+
+    /// Plan a forward retarget for the bypassed step `idx`: when it feeds
+    /// the final output and is the only reader of its input, the input's
+    /// producer renders straight into the host's target and the bypass skips
+    /// its full-resolution copy.
+    ///
+    /// Everything that could make the producer's slot hold something other
+    /// than this frame's only copy of its output keeps the copy instead:
+    /// resources held or persisted across frames, a second reader, a producer
+    /// inside a pair or substep region, and the capture modes that read slots
+    /// after the frame. The caller leaves out a data-skippable step, which may
+    /// evaluate in place instead of passing through.
+    fn plan_forward_retarget(
+        &mut self,
+        graph: &Graph,
+        plan: &ExecutionPlan,
+        idx: usize,
+        (source, final_output): (ResourceId, ResourceId),
+        producers: &ahash::AHashMap<ResourceId, usize>,
+    ) {
+        if self.scene_viewport.is_some() || self.preview_target.is_some() || self.dumps_resources()
+        {
+            return;
+        }
+        let steps = plan.steps();
+        let Some(&producer) = producers.get(&source) else {
+            return;
+        };
+        if plan.held_resources().contains(&source)
+            || plan.persistent_resources().contains(&source)
+            || plan.is_provided_texture(source)
+            || plan.step_hoistable(producer)
+            || plan
+                .node_pairs()
+                .iter()
+                .any(|pair| pair.first_step == producer || pair.second_step == producer)
+            || plan
+                .substep_regions()
+                .iter()
+                .any(|region| region.steps.contains(&producer) || region.steps.contains(&idx))
+        {
+            return;
+        }
+        let readers = steps
+            .iter()
+            .flat_map(|step| &step.inputs)
+            .filter(|&&(_, resource)| resource == source)
+            .count();
+        let feeds_final_output = steps.iter().any(|step| {
+            step.inputs.iter().any(|&(_, resource)| resource == final_output)
+                && graph.get_node(step.node).is_some_and(|inst| {
+                    inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID
+                })
+        });
+        if readers == 1 && feeds_final_output {
+            self.forward_retargets.push(ForwardRetarget {
+                source,
+                final_output,
+                installed: false,
+            });
+        }
+    }
+
+    /// The extent `node`'s array outputs follow: `None` when the node's
+    /// outputs are not forwarded at all, else the extent of the input they
+    /// follow (`Some(None)` when that input has none). `FromInput` names the
+    /// input; a fusable atom with the default `MinInputs` follows its first
+    /// per-element (not gathered) array input that has an extent.
+    fn forwarding_source<E>(
+        node: &dyn crate::exec::effect_node::EffectNode,
+        mut extent_of: impl FnMut(&str) -> Option<E>,
+    ) -> Option<Option<E>> {
+        use crate::freeze::classify::{FusedOutputCapacity, InputAccess};
+        match node.fused_output_capacity() {
+            FusedOutputCapacity::FromInput { input } => Some(extent_of(input)),
+            FusedOutputCapacity::MinInputs if node.fusion_kind().is_fusable() => {
+                let access = node.input_access();
+                Some(
+                    node.inputs()
+                        .iter()
+                        .filter(|input| matches!(input.ty, PortType::Array(_)))
+                        .enumerate()
+                        .filter(|(position, _)| {
+                            !matches!(access.get(*position), Some(InputAccess::BufferGather))
+                        })
+                        .find_map(|(_, input)| extent_of(input.name.as_ref())),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// Hand each array output whose capacity follows an input that input's
+    /// live extent, with its bound clamped to the output's capacity. An output
+    /// follows the input its node declares (`FromInput`), or for a fusable
+    /// atom with the default `MinInputs` the first per-element (not gathered)
+    /// array input that has an extent. When that input has none, the output's
+    /// extent is cleared: extents persist across frames, so a stale one would
+    /// keep clamping a mesh that is whole again. A node's own extent for the
+    /// output (already in the write scratch) wins. Other nodes are untouched.
+    fn forward_live_extents(
+        &mut self,
+        plan: &ExecutionPlan,
+        step: &ExecutionStep,
+        node: &dyn crate::exec::effect_node::EffectNode,
+    ) {
+        if !step
+            .outputs
+            .iter()
+            .any(|&(_, resource)| matches!(plan.resource_type(resource), Some(PortType::Array(_))))
+        {
+            return;
+        }
+        let input_extent = |this: &Self, port: &str| {
+            this.input_scratch
+                .iter()
+                .find(|(name, _)| *name == port)
+                .and_then(|&(_, slot)| this.backend.live_extent(slot))
+        };
+        let Some(source) = Self::forwarding_source(node, |port| input_extent(self, port)) else {
+            return;
+        };
+        for &(port, out_slot) in &self.output_scratch {
+            let Some(&(_, resource)) = step.outputs.iter().find(|(name, _)| *name == port) else {
+                continue;
+            };
+            let Some(PortType::Array(layout)) = plan.resource_type(resource) else {
+                continue;
+            };
+            if self
+                .live_extent_write_scratch
+                .iter()
+                .any(|(slot, _)| *slot == out_slot)
+            {
+                continue;
+            }
+            match &source {
+                Some(extent) => {
+                    let Some(buffer) = self.backend.array_buffer(out_slot) else {
+                        continue;
+                    };
+                    let capacity = (buffer.size() / u64::from(layout.item_size.max(1)))
+                        .min(u64::from(u32::MAX)) as u32;
+                    let mut inherited = extent.clone();
+                    inherited.bound = inherited.bound.min(capacity);
+                    self.live_extent_write_scratch.push((out_slot, inherited));
+                }
+                None => self.backend.clear_live_extent(out_slot),
+            }
+        }
+    }
+
+    /// Bind the slot just acquired for `source` to the host's target when a
+    /// forward retarget was planned for it. The backend refuses unless the
+    /// target is a host-installed borrow and the producer's own texture has
+    /// the same size, format and mip chain; a refusal leaves the bypass copy.
+    fn install_forward_retarget(&mut self, source: ResourceId, slot: Slot) {
+        let Some(retarget) = self
+            .forward_retargets
+            .iter()
+            .position(|retarget| retarget.source == source)
+        else {
+            return;
+        };
+        let final_output = self.forward_retargets[retarget].final_output;
+        let Some(host_slot) = self.backend.slot_for(final_output) else {
+            return;
+        };
+        self.forward_retargets[retarget].installed = self
+            .backend
+            .as_any_mut()
+            .and_then(|any| any.downcast_mut::<MetalBackend>())
+            .is_some_and(|metal| metal.retarget_to_host_texture(source, slot, host_slot));
     }
 
     /// Shared implementation. For each step in plan order:
@@ -1608,6 +1819,15 @@ impl Executor {
     /// no-write fast path.
     fn outputs_retained(&self, step: &ExecutionStep) -> bool {
         step.outputs.iter().all(|&(_, res)| {
+            // An output rendered into the host's target is not storage this
+            // executor keeps between frames: the producer writes it again.
+            if self
+                .forward_retargets
+                .iter()
+                .any(|retarget| retarget.installed && retarget.source == res)
+            {
+                return false;
+            }
             let current = self.storage_snapshot(res);
             current.is_some()
                 && self
@@ -1713,6 +1933,7 @@ impl Executor {
         let partial_sample = sample.is_some();
         if let Some(sample) = sample {
             debug_assert_eq!(sample.steps.len(), plan.steps().len());
+            self.forward_retargets.clear();
             self.live_steps.clear();
             self.live_steps.extend_from_slice(sample.steps);
         } else {
@@ -2238,6 +2459,9 @@ impl Executor {
                 } else {
                     self.backend.acquire(res_id, ty, fmt, dims)
                 };
+                if gpu.is_some() {
+                    self.install_forward_retarget(res_id, slot);
+                }
                 self.output_scratch.push((port_name, slot));
             }
 
@@ -2472,7 +2696,11 @@ impl Executor {
                         // destination is borrowed by the host. Preserve the
                         // no-op contract with a same-format blit, while
                         // retaining evaluation for genuine resampling cases.
-                        g.copy_texture_to_texture(src, dst, dst.width, dst.height);
+                        // A producer retargeted onto the host's target has
+                        // already written the destination: nothing to blit.
+                        if !src.ptr_eq(dst) {
+                            g.copy_texture_to_texture(src, dst, dst.width, dst.height);
+                        }
                         copied_passthrough = true;
                     }
                     if copied_passthrough {
@@ -2756,6 +2984,9 @@ impl Executor {
                     for (slot, value) in self.mesh_source_write_scratch.drain(..) {
                         self.backend.set_mesh_source(slot, value);
                     }
+                    // An output whose capacity follows an input carries that
+                    // input's live extent, unless the node published its own.
+                    self.forward_live_extents(plan, step, inst.node.as_ref());
                     for (slot, value) in self.live_extent_write_scratch.drain(..) {
                         self.backend.set_live_extent(slot, value);
                     }
@@ -3453,6 +3684,300 @@ mod tests {
         // Should panic inside the executor's debug_assert! after the
         // node's `evaluate` returns without touching the GPU.
         exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+    }
+
+    /// A node declaring only what the extent-forwarding rule reads.
+    struct RuleProbe {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        access: Vec<crate::freeze::classify::InputAccess>,
+        capacity: crate::freeze::classify::FusedOutputCapacity,
+        fusion: crate::freeze::classify::FusionKind,
+    }
+
+    impl RuleProbe {
+        fn new(
+            ports: &[&'static str],
+            access: Vec<crate::freeze::classify::InputAccess>,
+            capacity: crate::freeze::classify::FusedOutputCapacity,
+            fusion: crate::freeze::classify::FusionKind,
+        ) -> Self {
+            let layout = crate::ports::ArrayType::of_known::<crate::particles::Particle>();
+            Self {
+                type_id: EffectNodeType::new("test.rule_probe"),
+                inputs: ports
+                    .iter()
+                    .map(|&name| input(name, PortType::Array(layout), true))
+                    .collect(),
+                access,
+                capacity,
+                fusion,
+            }
+        }
+    }
+
+    impl EffectNode for RuleProbe {
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &[]
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn fusion_kind(&self) -> crate::freeze::classify::FusionKind {
+            self.fusion
+        }
+        fn input_access(&self) -> &[crate::freeze::classify::InputAccess] {
+            &self.access
+        }
+        fn fused_output_capacity(&self) -> crate::freeze::classify::FusedOutputCapacity {
+            self.capacity
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    /// Which input's extent a node's outputs follow, with plain numbers
+    /// standing in for extents: an identity atom takes its first per-element
+    /// input that has one, a gathered input is skipped, `FromInput` names its
+    /// input, and a node with no identity capacity forwards nothing.
+    #[test]
+    fn extent_source_is_the_input_the_nodes_capacity_follows() {
+        use crate::freeze::classify::{
+            FusedOutputCapacity::{FromInput, MinInputs},
+            FusionKind::{Boundary, Pointwise},
+            InputAccess::{BufferGather, Coincident},
+        };
+        let follows = |node: &RuleProbe, extents: &[(&str, u32)]| {
+            Executor::forwarding_source(node, |port| {
+                extents.iter().find(|(name, _)| *name == port).map(|&(_, extent)| extent)
+            })
+        };
+
+        let identity = RuleProbe::new(&["a", "b"], vec![Coincident, Coincident], MinInputs, Pointwise);
+        assert_eq!(follows(&identity, &[("b", 5)]), Some(Some(5)));
+        assert_eq!(follows(&identity, &[("a", 3), ("b", 5)]), Some(Some(3)));
+        assert_eq!(follows(&identity, &[]), Some(None), "no upstream extent: clear");
+
+        let gather = RuleProbe::new(&["g", "c"], vec![BufferGather, Coincident], MinInputs, Pointwise);
+        assert_eq!(follows(&gather, &[("g", 1), ("c", 2)]), Some(Some(2)));
+        assert_eq!(follows(&gather, &[("g", 1)]), Some(None), "a gathered input is not followed");
+
+        let selected = RuleProbe::new(
+            &["a", "map"],
+            vec![BufferGather, Coincident],
+            FromInput { input: "map" },
+            Pointwise,
+        );
+        assert_eq!(follows(&selected, &[("a", 1), ("map", 9)]), Some(Some(9)));
+        assert_eq!(follows(&selected, &[("a", 1)]), Some(None));
+        let fused = RuleProbe::new(&["a", "map"], vec![], FromInput { input: "map" }, Boundary);
+        assert_eq!(follows(&fused, &[("map", 9)]), Some(Some(9)), "FromInput needs no fusion kind");
+
+        let boundary = RuleProbe::new(&["a"], vec![Coincident], MinInputs, Boundary);
+        assert_eq!(follows(&boundary, &[("a", 1)]), None, "a boundary node forwards nothing");
+    }
+
+    /// Forwarding through a real executor and Metal backend: GPU proofs only,
+    /// since every extent holds a device buffer.
+    #[cfg(feature = "gpu-proofs")]
+    mod live_extent_proofs {
+        use super::*;
+
+        /// An array stage for the live-extent forwarding rule: a 16-element
+        /// `Particle` output, an optional `in` array, and the extent it publishes
+        /// on `out` when `publishes` holds one. `pointwise` makes it a fusable
+        /// identity atom (default `MinInputs`), the kind the rule forwards for.
+        struct ExtentStage {
+            type_id: EffectNodeType,
+            inputs: Vec<NodeInput>,
+            outputs: Vec<NodeOutput>,
+            pointwise: bool,
+            publishes: Option<crate::scene::live_extent::LiveExtent>,
+        }
+
+        impl ExtentStage {
+            fn new(
+                name: &'static str,
+                layout: crate::ports::ArrayType,
+                has_input: bool,
+                pointwise: bool,
+                publishes: Option<crate::scene::live_extent::LiveExtent>,
+            ) -> Self {
+                Self {
+                    type_id: EffectNodeType::new(name),
+                    inputs: if has_input {
+                        vec![input("in", PortType::Array(layout), true)]
+                    } else {
+                        Vec::new()
+                    },
+                    outputs: vec![output("out", PortType::Array(layout))],
+                    pointwise,
+                    publishes,
+                }
+            }
+        }
+
+        impl EffectNode for ExtentStage {
+            fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+                crate::scene::depth_rule::DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                &self.inputs
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                &self.outputs
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn fusion_kind(&self) -> crate::freeze::classify::FusionKind {
+                if self.pointwise {
+                    crate::freeze::classify::FusionKind::Pointwise
+                } else {
+                    crate::freeze::classify::FusionKind::Boundary
+                }
+            }
+            fn array_output_capacity(
+                &self,
+                _port: &str,
+                _params: &crate::exec::effect_node::ParamValues,
+                _input_capacities: &[(&str, u32)],
+            ) -> Option<u32> {
+                Some(16)
+            }
+            fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+                if let Some(extent) = &self.publishes {
+                    ctx.outputs.set_live_extent("out", extent.clone());
+                }
+            }
+        }
+
+        /// Runs `source -> stage -> sink` for one frame with both 16-element
+        /// outputs pre-bound (arrays always are, so their extents persist across
+        /// frames) and returns the stage output's extent afterwards. The sink
+        /// keeps the stage output in the plan (unread outputs are pruned). `stale`
+        /// seeds an extent on the stage output before the frame. None of the nodes
+        /// touches the GPU, so the frame runs without an encoder; the device only
+        /// backs the buffers and the extents' counts.
+        fn run_extent_stage(
+            device: &std::sync::Arc<manifold_gpu::GpuDevice>,
+            source_publishes: Option<crate::scene::live_extent::LiveExtent>,
+            stage_publishes: Option<crate::scene::live_extent::LiveExtent>,
+            stage_is_pointwise: bool,
+            stale: Option<crate::scene::live_extent::LiveExtent>,
+        ) -> Option<crate::scene::live_extent::LiveExtent> {
+            use crate::exec::metal_backend::MetalBackend;
+            use crate::ports::ArrayType;
+            use manifold_gpu::GpuTextureFormat;
+
+            let layout = ArrayType::of_known::<crate::particles::Particle>();
+            let mut g = Graph::new();
+            let source = g.add_node(Box::new(ExtentStage::new(
+                "test.extent_source",
+                layout,
+                false,
+                false,
+                source_publishes,
+            )));
+            let stage = g.add_node(Box::new(ExtentStage::new(
+                "test.extent_stage",
+                layout,
+                true,
+                stage_is_pointwise,
+                stage_publishes,
+            )));
+            let sink = g.add_node(Box::new(ExtentStage::new(
+                "test.extent_sink",
+                layout,
+                true,
+                false,
+                None,
+            )));
+            g.connect((source, "out"), (stage, "in")).unwrap();
+            g.connect((stage, "out"), (sink, "in")).unwrap();
+            let plan = compile(&g).expect("three-node array graph compiles");
+            let resource = |node| plan.steps().iter().find(|s| s.node == node).unwrap().outputs[0].1;
+            let mut backend = MetalBackend::new(
+                std::sync::Arc::clone(device),
+                4,
+                4,
+                GpuTextureFormat::Rgba16Float,
+            );
+            let bytes = 16 * u64::from(layout.item_size);
+            backend.pre_bind_array(resource(source), device.create_buffer_shared(bytes));
+            let stage_slot = backend.pre_bind_array(resource(stage), device.create_buffer_shared(bytes));
+            if let Some(stale) = stale {
+                backend.set_live_extent(stage_slot, stale);
+            }
+            let mut exec = Executor::new(Box::new(backend));
+            exec.execute_frame(&mut g, &plan, frame_time());
+            exec.backend().live_extent(stage_slot)
+        }
+
+        fn test_extent(
+            device: &std::sync::Arc<manifold_gpu::GpuDevice>,
+            offset: u64,
+            per_item: u32,
+            bound: u32,
+        ) -> crate::scene::live_extent::LiveExtent {
+            crate::scene::live_extent::LiveExtent {
+                counts: device.create_buffer_shared(32),
+                offset,
+                per_item,
+                bound,
+            }
+        }
+
+        /// The forwarding rule through a real executor, one device for all four
+        /// cases:
+        /// - a fusable identity stage hands on its source's extent: same counts
+        ///   word and multiplier, bound cut to the stage's own capacity;
+        /// - an extent the stage publishes itself is not overwritten;
+        /// - a source with no extent clears the stale one a pinned array kept;
+        /// - a node that declares no identity capacity is left as it was.
+        #[test]
+        fn identity_stage_forwards_live_extent_by_its_capacity_rule() {
+            let device = crate::gpu::context::test_gpu_device("execution tests");
+            let key = |extent: &crate::scene::live_extent::LiveExtent| {
+                (extent.counts.identity_key(), extent.offset, extent.per_item, extent.bound)
+            };
+
+            let source = test_extent(&device, 8, 3, 1000);
+            let counts = source.counts.identity_key();
+            let seen = run_extent_stage(&device, Some(source), None, true, None).expect("inherited");
+            assert_eq!(key(&seen), (counts, 8, 3, 16), "bound clamps to the stage's capacity");
+            let source = test_extent(&device, 0, 1, 7);
+            let seen = run_extent_stage(&device, Some(source), None, true, None).expect("inherited");
+            assert_eq!(seen.bound, 7, "a bound under the capacity stays");
+
+            let own = test_extent(&device, 4, 1, 5);
+            let own_counts = own.counts.identity_key();
+            let source = test_extent(&device, 8, 3, 1000);
+            let seen = run_extent_stage(&device, Some(source), Some(own), true, None).expect("own");
+            assert_eq!(key(&seen), (own_counts, 4, 1, 5), "the stage's own extent wins");
+
+            let stale = test_extent(&device, 0, 1, 9);
+            let seen = run_extent_stage(&device, None, None, true, Some(stale));
+            assert!(seen.is_none(), "stale extent survived: {:?}", seen.map(|e| e.bound));
+
+            let source = test_extent(&device, 0, 1, 7);
+            let stale = test_extent(&device, 0, 1, 9);
+            let seen = run_extent_stage(&device, Some(source), None, false, Some(stale))
+                .expect("the stale extent stays");
+            assert_eq!(seen.bound, 9, "a boundary node's extent is not forwarded or cleared");
+        }
+
     }
 
     /// Test EffectNode that records each evaluation's bindings into a shared log.
@@ -5698,6 +6223,94 @@ mod tests {
             "non-in producer must be pruned, got {names:?}"
         );
     }
+
+    fn bypass_node(name: &'static str) -> SkipPassthroughPruneNode {
+        SkipPassthroughPruneNode {
+            type_id: EffectNodeType::new(name),
+            evals: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn texture_source(name: &'static str) -> RecordingNode {
+        RecordingNode::new(
+            name,
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            Arc::new(Mutex::new(Vec::new())),
+        )
+    }
+
+    fn out_resource(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {
+        plan.steps()
+            .iter()
+            .find(|step| step.node == node)
+            .and_then(|step| step.outputs.first())
+            .map(|&(_, resource)| resource)
+            .expect("node has an output resource")
+    }
+
+    fn planned_retargets(
+        exec: &mut Executor,
+        graph: &Graph,
+        plan: &ExecutionPlan,
+    ) -> Vec<(ResourceId, ResourceId)> {
+        exec.live_steps_for(graph, plan);
+        exec.forward_retargets
+            .iter()
+            .map(|retarget| (retarget.source, retarget.final_output))
+            .collect()
+    }
+
+    /// A bypassed terminal that is the only reader of its producer's output
+    /// plans the retarget; a producer feeding a second step keeps the copy.
+    #[test]
+    fn forward_retarget_needs_a_single_reader_feeding_the_final_output() {
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(texture_source("producer")));
+        let bypassed = g.add_node(Box::new(bypass_node("bypassed")));
+        let fout = g.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
+        g.connect((producer, "out"), (bypassed, "in")).unwrap();
+        g.connect((bypassed, "out"), (fout, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        assert_eq!(
+            planned_retargets(&mut Executor::with_mock(), &g, &plan),
+            vec![(out_resource(&plan, producer), out_resource(&plan, bypassed))],
+        );
+
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(texture_source("producer")));
+        let side = g.add_node(Box::new(bypass_node("side")));
+        let bypassed = g.add_node(Box::new(bypass_node("bypassed")));
+        let fout = g.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
+        g.connect((producer, "out"), (side, "in")).unwrap();
+        g.connect((producer, "out"), (bypassed, "in")).unwrap();
+        g.connect((side, "out"), (bypassed, "extra")).unwrap();
+        g.connect((bypassed, "out"), (fout, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        assert!(
+            planned_retargets(&mut Executor::with_mock(), &g, &plan).is_empty(),
+            "a producer read by a second step must keep the copy"
+        );
+    }
+
+    /// Only the bypassed step that feeds the final output retargets: an inner
+    /// bypass in front of it has no host target of its own to render into.
+    #[test]
+    fn forward_retarget_skips_bypassed_steps_before_the_terminal() {
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(texture_source("producer")));
+        let inner = g.add_node(Box::new(bypass_node("inner")));
+        let terminal = g.add_node(Box::new(bypass_node("terminal")));
+        let fout = g.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
+        g.connect((producer, "out"), (inner, "in")).unwrap();
+        g.connect((inner, "out"), (terminal, "in")).unwrap();
+        g.connect((terminal, "out"), (fout, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        assert_eq!(
+            planned_retargets(&mut Executor::with_mock(), &g, &plan),
+            vec![(out_resource(&plan, inner), out_resource(&plan, terminal))],
+        );
+    }
 }
 
 /// The alias-path
@@ -5734,6 +6347,8 @@ mod alias_gpu_tests {
     struct BypassProbe {
         source: bool,
         evals: Arc<std::sync::atomic::AtomicUsize>,
+        /// Identity of the texture each evaluate wrote, in call order.
+        out_ids: Arc<Mutex<Vec<usize>>>,
         type_id: EffectNodeType,
     }
 
@@ -5745,12 +6360,20 @@ mod alias_gpu_tests {
             &self.type_id
         }
         fn inputs(&self) -> &[NodeInput] {
-            static INPUTS: [NodeInput; 1] = [NodePort {
-                name: std::borrow::Cow::Borrowed("in"),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: true,
-            }];
+            static INPUTS: [NodeInput; 2] = [
+                NodePort {
+                    name: std::borrow::Cow::Borrowed("in"),
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Input,
+                    required: true,
+                },
+                NodePort {
+                    name: std::borrow::Cow::Borrowed("extra"),
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Input,
+                    required: false,
+                },
+            ];
             if self.source { &[] } else { &INPUTS }
         }
         fn outputs(&self) -> &[NodeOutput] {
@@ -5782,6 +6405,7 @@ mod alias_gpu_tests {
             self.evals
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let out = ctx.outputs.texture_2d("out").unwrap().clone();
+            self.out_ids.lock().unwrap().push(out.identity_key());
             ctx.gpu_encoder().clear_texture(
                 &out,
                 if self.source { 0.25 } else { 0.75 },
@@ -5792,7 +6416,7 @@ mod alias_gpu_tests {
         }
     }
 
-    fn check_skip_passthrough(borrowed: bool, size: u32, format: GpuTextureFormat) {
+    fn check_skip_passthrough(size: u32, format: GpuTextureFormat) {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let device = manifold_gpu::testkit::test_device();
         let evals = Arc::new(AtomicUsize::new(0));
@@ -5800,11 +6424,13 @@ mod alias_gpu_tests {
         let src = graph.add_node(Box::new(BypassProbe {
             source: true,
             evals: Arc::new(AtomicUsize::new(0)),
+            out_ids: Default::default(),
             type_id: EffectNodeType::new("test.bypass_source"),
         }));
         let effect = graph.add_node(Box::new(BypassProbe {
             source: false,
             evals: evals.clone(),
+            out_ids: Default::default(),
             type_id: EffectNodeType::new("test.bypass_effect"),
         }));
         let out = graph.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
@@ -5834,11 +6460,6 @@ mod alias_gpu_tests {
             dst_res,
             RenderTarget::new(&device, size, size, format, "bypass-dst"),
         );
-        let dst_slot = backend.slot_for(dst_res).unwrap();
-        let host = RenderTarget::new(&device, size, size, format, "bypass-host");
-        if borrowed {
-            assert!(backend.replace_texture_2d(dst_slot, host.texture.clone()));
-        }
         let mut exec = Executor::new(Box::new(backend));
         // Two frames also exercise alias generation bookkeeping and copy freshness.
         for _ in 0..2 {
@@ -5852,41 +6473,105 @@ mod alias_gpu_tests {
             evals.load(Ordering::Relaxed),
             if compatible { 0 } else { 2 }
         );
-        if borrowed && compatible {
-            assert_eq!(
-                exec.backend().texture_2d(dst_slot).unwrap().raw_ptr(),
-                host.texture.raw_ptr()
-            );
-            let buffer = device.create_buffer_shared(4 * 4 * 8);
-            let mut enc = device.create_encoder("bypass-readback");
-            enc.copy_texture_to_buffer(&host.texture, &buffer, 4, 4, 32);
-            enc.commit_and_wait_completed();
-            let bits = unsafe { *buffer.mapped_ptr().unwrap().cast::<u16>() };
-            assert_eq!(half::f16::from_bits(bits).to_f32(), 0.25);
-            assert!(
-                exec.alias_propagation_state
-                    .iter()
-                    .flatten()
-                    .any(|state| { state.source == src_res && state.source_content.is_some() }),
-                "a physical passthrough copy must retain its selected logical dependency"
-            );
+    }
+
+    /// `src -> bypassed effect -> final_output` with the effect's output slot
+    /// holding the host's target, run for two frames. Returns the identity of
+    /// each texture `src` rendered into and the host target.
+    fn run_bypass_into_host(second_reader: bool) -> (Vec<usize>, manifold_gpu::GpuTexture) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let device = manifold_gpu::testkit::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let evals = Arc::new(AtomicUsize::new(0));
+        let src_ids = Arc::new(Mutex::new(Vec::new()));
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(BypassProbe {
+            source: true,
+            evals: Arc::new(AtomicUsize::new(0)),
+            out_ids: src_ids.clone(),
+            type_id: EffectNodeType::new("test.bypass_source"),
+        }));
+        let effect = graph.add_node(Box::new(BypassProbe {
+            source: false,
+            evals: evals.clone(),
+            out_ids: Default::default(),
+            type_id: EffectNodeType::new("test.bypass_effect"),
+        }));
+        let out = graph.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
+        graph.connect((src, "out"), (effect, "in")).unwrap();
+        if second_reader {
+            graph.connect((src, "out"), (effect, "extra")).unwrap();
         }
+        graph.connect((effect, "out"), (out, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let dst_res = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == effect)
+            .unwrap()
+            .outputs[0]
+            .1;
+        // Only the final output is pre-bound, as in a generator: the producer
+        // takes an ordinary pooled slot.
+        let mut backend = MetalBackend::new(device.arc(), 4, 4, format);
+        let dst_slot = backend.pre_bind_texture_2d(
+            dst_res,
+            RenderTarget::new(&device, 4, 4, format, "bypass-dst"),
+        );
+        let host = RenderTarget::new(&device, 4, 4, format, "bypass-host");
+        assert!(backend.replace_texture_2d(dst_slot, host.texture.clone()));
+        let mut exec = Executor::new(Box::new(backend));
+        for _ in 0..2 {
+            let mut enc = device.create_encoder("bypass-proof");
+            let mut gpu = GpuEncoder::new(&mut enc, &device);
+            // A target the producer never reaches stays at this value.
+            gpu.clear_texture(&host.texture, 0.9, 0.0, 0.0, 1.0);
+            exec.execute_frame_with_gpu(&mut graph, &plan, frame_time(), &mut gpu);
+            enc.commit_and_wait_completed();
+        }
+        assert_eq!(
+            evals.load(Ordering::Relaxed),
+            0,
+            "a pass-through never evaluates"
+        );
+        assert_eq!(first_red(&device, &host.texture), 0.25);
+        assert!(
+            exec.alias_propagation_state
+                .iter()
+                .flatten()
+                .any(|state| state.source_content.is_some()),
+            "a pass-through must retain its selected logical dependency"
+        );
+        let ids = src_ids.lock().unwrap().clone();
+        (ids, host.texture.clone())
     }
 
     #[test]
     fn skip_passthrough_matches_concrete_default_format() {
-        check_skip_passthrough(false, 4, GpuTextureFormat::Rgba16Float);
+        check_skip_passthrough(4, GpuTextureFormat::Rgba16Float);
     }
 
+    /// The bypassed terminal's only input renders straight into the host's
+    /// target, so the bypass has no copy to make.
+    #[test]
+    fn skip_passthrough_renders_producer_into_borrowed_destination() {
+        let (ids, host) = run_bypass_into_host(false);
+        assert_eq!(ids, vec![host.identity_key(); 2]);
+    }
+
+    /// A producer read by a second port keeps its own texture, and the bypass
+    /// copies it into the host's target.
     #[test]
     fn skip_passthrough_copies_to_borrowed_destination() {
-        check_skip_passthrough(true, 4, GpuTextureFormat::Rgba16Float);
+        let (ids, host) = run_bypass_into_host(true);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().all(|&id| id != host.identity_key()));
     }
 
     #[test]
     fn skip_passthrough_evaluates_real_mismatches() {
-        check_skip_passthrough(false, 2, GpuTextureFormat::Rgba16Float);
-        check_skip_passthrough(false, 4, GpuTextureFormat::Rgba8Unorm);
+        check_skip_passthrough(2, GpuTextureFormat::Rgba16Float);
+        check_skip_passthrough(4, GpuTextureFormat::Rgba8Unorm);
     }
 
     /// Clears its output to 0.25 while ready; writes nothing while pending,
@@ -5957,6 +6642,7 @@ mod alias_gpu_tests {
         let effect = graph.add_node(Box::new(BypassProbe {
             source: false,
             evals: evals.clone(),
+            out_ids: Default::default(),
             type_id: EffectNodeType::new("test.bypass_effect"),
         }));
         let out = graph.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));

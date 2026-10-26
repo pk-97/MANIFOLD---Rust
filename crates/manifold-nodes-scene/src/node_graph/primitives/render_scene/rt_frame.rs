@@ -528,8 +528,9 @@ impl RenderScene {
                         // 16 = 32).
                         uv_offset: 32,
                         alpha_mask: d.alpha_mode == AlphaMode::Mask,
-                        // Translucency is material state: visibility queries
-                        // override opacity, while BLAS opacity follows alpha mask.
+                        // Translucent objects are non-opaque in their BLAS, so
+                        // transmission walks see them as candidates while plain
+                        // opaque geometry commits in hardware.
                         translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
                         alpha_cutoff: d.uniforms.alpha_params[1],
                         base_color_texture: d.base_color_map,

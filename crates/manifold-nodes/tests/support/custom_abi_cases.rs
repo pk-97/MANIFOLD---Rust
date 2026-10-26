@@ -282,6 +282,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "render_scene/prev_positions.rs",
+        rust_struct: "PackArgs",
+        shader: "shaders/pack_prev_positions.wgsl",
+        shader_struct: "PackArgs",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "blob_detect_ffi.rs",
         rust_struct: "UploadUniforms",
         shader: "shaders/blob_detect_ffi_upload.wgsl",

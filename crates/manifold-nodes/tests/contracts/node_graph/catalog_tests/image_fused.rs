@@ -56,6 +56,7 @@ fn fused_buffer_gather_binds_array_global_without_preread() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("gathered buffer region fuses");
@@ -132,6 +133,7 @@ fn fused_buffer_gather_rejects_non_external_source() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     assert!(
@@ -156,6 +158,7 @@ fn fused_buffer_gather_rejects_gathered_inplace_alias() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     assert!(

@@ -172,9 +172,9 @@ impl RenderScene {
         let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
         // `None` whenever
         // `has_transmission` is false — nothing below reads it in that case
-        // (`draw.is_transmissive` can only be true when `has_transmission`
-        // is), but the option lets the same closure serve both cases
-        // without a branch on `has_transmission` itself.
+        // (a transmissive draw with no instances does not set
+        // `has_transmission` and binds the dummy; it draws nothing), but the
+        // option lets the same closure serve both cases.
         let opaque_scene_color_snapshot = self.opaque_scene_color.as_ref();
         // RAYTRACING_DESIGN.md RT-D3: the full-res RT shadow-visibility
         // mask, sampled by `shadow_factor` in place of the shadow-map
@@ -223,11 +223,17 @@ impl RenderScene {
         // D11: Pass 2 binds its own identity stub (each pass binds what it
         // needs since the stage-2 carve — the ensure block guarantees it).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 52]> = draws
+        let prev_positions_dummy = self.prev_positions_dummy.as_ref().expect("ensured");
+        // Indexed by draw, so a draw wholly outside the camera's clip volume
+        // keeps its place with no binding set built for it.
+        let binding_sets: Vec<Option<[GpuBinding; 53]>> = draws
             .iter()
             .enumerate()
             .map(|(draw_index, draw)| {
-                [
+                if !draw.in_view {
+                    return None;
+                }
+                Some([
                     GpuBinding::Bytes {
                         binding: 0,
                         data: bytemuck::bytes_of(&draw.uniforms),
@@ -362,9 +368,9 @@ impl RenderScene {
                     // no shading change.
                     GpuBinding::Texture {
                         binding: 27,
-                        texture: if draw.is_transmissive {
+                        texture: if draw.is_transmissive && has_transmission {
                             opaque_scene_color_snapshot
-                                .expect("ensured above whenever any draw.is_transmissive is true")
+                                .expect("ensured above whenever has_transmission is true")
                         } else {
                             dummy
                         },
@@ -489,6 +495,18 @@ impl RenderScene {
                             .nearest(draw_index)
                             .unwrap_or(dummy_depth),
                     },
+                    // Last frame's vertex positions for a deforming mesh, read
+                    // by the velocity variant only when `render_mode.z` is set;
+                    // every other draw binds the one-record stand-in.
+                    GpuBinding::Buffer {
+                        binding: 56,
+                        buffer: draw
+                            .prev_positions
+                            .as_ref()
+                            .and_then(prev_positions::PrevDraw::bound)
+                            .unwrap_or(prev_positions_dummy),
+                        offset: 0,
+                    },
                     GpuBinding::Bytes {
                         binding: 51,
                         data: bytemuck::bytes_of(&draw.subsurface_binding),
@@ -497,7 +515,7 @@ impl RenderScene {
                         binding: 52,
                         texture: self.subsurface_pass.output.as_ref().unwrap_or(dummy),
                     },
-                ]
+                ])
             })
             .collect();
         // Split into the existing
@@ -509,6 +527,9 @@ impl RenderScene {
         let mut draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = Vec::with_capacity(draws.len());
         let mut blend_entries: Vec<(f32, usize, manifold_gpu::DepthMsaaDraw)> = Vec::with_capacity(draws.len());
         for (draw_index, (draw, bindings)) in draws.iter().zip(&binding_sets).enumerate() {
+            let Some(bindings) = bindings else {
+                continue;
+            };
             // SCENE_RENDER_MODE_DESIGN.md D6/D8: the color pass carries each
             // draw's fill mode (Lines under wireframe) and topology (Point
             // under Points). The depth/shadow batches never see either —
@@ -542,11 +563,8 @@ impl RenderScene {
         // the camera's forward axis) drawn first, so nearer glass blends
         // correctly over farther glass.
         blend_entries.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let blend_draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = if has_transmission {
-            Vec::new()
-        } else {
-            blend_entries.iter().map(|(_, _, call)| *call).collect()
-        };
+        let blend_draw_calls: Vec<manifold_gpu::DepthMsaaDraw> =
+            blend_entries.iter().map(|(_, _, call)| *call).collect();
         // When the scene has a
         // transmissive object, the Blend group is pulled OUT of Pass A
         // entirely and drawn as a separate Pass B below (after the opaque-
@@ -743,6 +761,9 @@ impl RenderScene {
         ctx.gpu_encoder()
             .native_enc
             .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
+        // Pass A's velocity read last frame's vertex positions; refresh them
+        // for the next frame.
+        self.encode_prev_position_copies(ctx, draws);
 
         if let Some(output) = depth_resolve_target {
             ctx.gpu_encoder().native_enc.copy_depth_to_float(
@@ -796,17 +817,32 @@ impl RenderScene {
                 .as_ref()
                 .expect("transmission depth state ensured above");
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
+            let solid_depth_pipeline = self.solid_depth_pipeline.as_ref().expect("ensured").clone();
             // Capture the already-composited layers before each farther-to-nearer
             // draw. Every glass layer then transmits the layers behind it, instead
             // of all panes replacing one another with the original opaque image.
-            for (_, draw_index, draw_call) in &blend_entries {
-                let draw = &draws[*draw_index];
+            // A run of plain Blend layers needs no snapshot or depth seed and
+            // shares one state, so it draws as one batch; each transmissive
+            // layer keeps its own pass.
+            let mut layer = 0;
+            while layer < blend_entries.len() {
+                let draw_index = blend_entries[layer].1;
+                let draw = &draws[draw_index];
+                let batch_end = if draw.is_transmissive {
+                    layer + 1
+                } else {
+                    layer
+                        + blend_entries[layer..]
+                            .iter()
+                            .take_while(|(_, index, _)| !draws[*index].is_transmissive)
+                            .count()
+                };
                 let nearest_surface = draw.is_transmissive
                     && !draw.points
                     && draw.fill_mode == manifold_gpu::GpuTriangleFillMode::Fill;
                 #[cfg(feature = "fluid-perf-proofs")]
                 if nearest_surface {
-                    water_perf::record(*draw_index, draw);
+                    water_perf::record(draw_index, draw);
                 }
                 let gpu = ctx.gpu_encoder();
                 // The layer prepass starts from opaque depth, so a solid mesh
@@ -845,7 +881,11 @@ impl RenderScene {
                         },
                     ];
                     let depth_draw = draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
-                        &shadow_pipeline,
+                        if shadow_uniforms.discard_free() {
+                            &solid_depth_pipeline
+                        } else {
+                            &shadow_pipeline
+                        },
                         &shadow_bindings,
                         draw.vertex_count,
                         draw.instance_count,
@@ -901,11 +941,12 @@ impl RenderScene {
                     } else {
                         self.blend_depth_stencil.as_ref().expect("ensured")
                     },
-                    std::slice::from_ref(draw_call),
+                    &blend_draw_calls[layer..batch_end],
                     manifold_gpu::GpuLoadAction::Load,
                     manifold_gpu::GpuLoadAction::Load,
                     "node.render_scene transmissive layer",
                 );
+                layer = batch_end;
             }
         }
 

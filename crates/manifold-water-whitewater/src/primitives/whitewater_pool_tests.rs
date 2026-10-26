@@ -224,6 +224,7 @@ fn advect_whitewater_fused_matches_unfused() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let fused = generate_fused(&region).expect("the advect fuses");
@@ -591,6 +592,7 @@ fn whitewater_tick_fused_matches_unfused() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let fused = generate_fused(&region).expect("the tick fuses");
@@ -947,6 +949,7 @@ fn preserve_foam_fused_matches_unfused() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let fused = generate_fused(&region).expect("the preservation fuses");

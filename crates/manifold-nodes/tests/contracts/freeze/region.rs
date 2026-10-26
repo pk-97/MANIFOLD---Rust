@@ -1,7 +1,7 @@
 //! Renderer-owned catalog contracts for freeze region partitioning.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_node_engine::freeze::classify::InputAccess;
+use manifold_node_engine::freeze::classify::{CapacityExpr, InputAccess};
 use manifold_node_engine::freeze::region::*;
 use manifold_node_engine::freeze::region::{
     build_region, final_reachable_nodes, wire_coincident_consumed,
@@ -234,6 +234,205 @@ mod tests {
         assert_eq!(
             classify_node(&def.nodes[3], &def, &registry),
             NodeClass::Eligible
+        );
+    }
+
+    /// A Vortex layer and a Corrosion layer on one mesh, wired the way the
+    /// load-time expansion wires a fragment stage. Doc ids: 0 source, 1 cut A
+    /// (cells), 2 remap A, 3 patch, 4 mask 1, 5 weights remap A, 6 morph 1,
+    /// 7 cut B (bands, reference = remap A), 8 current remap B, 9 reference
+    /// remap B, 10 recon, 11 mask 2, 12 weights remap through A, 13 weights
+    /// remap through B, 14 morph 2, 15 object, 16 render, 17 output.
+    fn fragment_chain_def() -> EffectGraphDef {
+        let nodes = [
+            (0, "node.gltf_mesh_source"),
+            (1, "node.cut_mesh_cells"),
+            (2, "node.remap_mesh_cut"),
+            (3, "node.transform_mesh_patches"),
+            (4, "node.mesh_spatial_mask"),
+            (5, "node.remap_cut_weights"),
+            (6, "node.morph_mesh"),
+            (7, "node.cut_mesh_bands"),
+            (8, "node.remap_mesh_cut"),
+            (9, "node.remap_mesh_cut"),
+            (10, "node.ordered_recon_mesh"),
+            (11, "node.mesh_spatial_mask"),
+            (12, "node.remap_cut_weights"),
+            (13, "node.remap_cut_weights"),
+            (14, "node.morph_mesh"),
+            (15, "node.scene_object"),
+            (16, "node.render_scene"),
+            (17, "system.final_output"),
+        ];
+        let wires = [
+            (0, "vertices", 1, "reference"),
+            (0, "vertices", 2, "in"),
+            (1, "map", 2, "map"),
+            (2, "out", 3, "in"),
+            (2, "out", 3, "reference"),
+            (0, "vertices", 4, "in"),
+            (4, "weights", 5, "in"),
+            (1, "map", 5, "map"),
+            (2, "out", 6, "in"),
+            (3, "out", 6, "b"),
+            (5, "out", 6, "weights"),
+            (2, "out", 7, "reference"),
+            (6, "out", 8, "in"),
+            (7, "map", 8, "map"),
+            (2, "out", 9, "in"),
+            (7, "map", 9, "map"),
+            (8, "out", 10, "in"),
+            (9, "out", 10, "reference"),
+            (0, "vertices", 11, "in"),
+            (11, "weights", 12, "in"),
+            (1, "map", 12, "map"),
+            (12, "out", 13, "in"),
+            (7, "map", 13, "map"),
+            (8, "out", 14, "in"),
+            (10, "out", 14, "b"),
+            (13, "out", 14, "weights"),
+            (14, "out", 15, "vertices"),
+            (7, "map", 15, "topology"),
+            (15, "object", 16, "object_0"),
+            (16, "out", 17, "in"),
+        ];
+        serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": nodes
+                .iter()
+                .map(|(id, type_id)| serde_json::json!({
+                    "id": id, "nodeId": format!("n{id}"), "typeId": type_id
+                }))
+                .collect::<Vec<_>>(),
+            "wires": wires
+                .iter()
+                .map(|(from, from_port, to, to_port)| serde_json::json!({
+                    "fromNode": from, "fromPort": from_port, "toNode": to, "toPort": to_port
+                }))
+                .collect::<Vec<_>>(),
+        }))
+        .expect("fragment chain fixture")
+    }
+
+    fn region_of<'a>(regions: &'a [Region], members: &[u32]) -> &'a Region {
+        regions
+            .iter()
+            .find(|region| {
+                let mut ids: Vec<u32> = region.members.iter().map(|m| m.doc_id).collect();
+                ids.sort_unstable();
+                ids == members
+            })
+            .unwrap_or_else(|| {
+                let found: Vec<Vec<u32>> = regions
+                    .iter()
+                    .map(|r| r.members.iter().map(|m| m.doc_id).collect())
+                    .collect();
+                panic!("no region with members {members:?}; regions: {found:?}")
+            })
+    }
+
+    /// The region's count follows one canonical capacity source: its
+    /// `output_capacity` is that external's slot, the kernel stops at the
+    /// slot's live extent, and the slot's producer chain ends at `root`.
+    fn assert_counts_follow(def: &EffectGraphDef, region: &Region, root: (u32, &str)) {
+        let anchor = region.live_anchor.expect("the region stops at a live extent");
+        assert_eq!(
+            region.output_capacity,
+            Some(CapacityExpr::Slot(anchor)),
+            "the count is the anchor's capacity"
+        );
+        let external = &region.externals[anchor];
+        assert_eq!(
+            capacity_root(def, &registry(), external.from_node, &external.from_port),
+            (root.0, root.1.to_string()),
+            "the anchor's capacity comes from the cut map"
+        );
+    }
+
+    /// Arrays follow the cut map they were gathered through: a remap and a
+    /// weights remap take their map's root, a patch or a morph whose required
+    /// inputs share one root takes it, and an input that has no capacity rule
+    /// of its own is a root.
+    #[test]
+    fn capacity_root_follows_cut_maps_through_remaps_and_shared_inputs() {
+        let def = fragment_chain_def();
+        let registry = registry();
+        let root = |node: u32, port: &str| capacity_root(&def, &registry, node, port);
+        let map_a = (1, "map".to_string());
+        let map_b = (7, "map".to_string());
+        assert_eq!(root(0, "vertices"), (0, "vertices".to_string()), "a source is a root");
+        assert_eq!(root(1, "map"), map_a, "a cut map is a root");
+        assert_eq!(root(2, "out"), map_a, "remap follows its map input");
+        assert_eq!(root(5, "out"), map_a, "weights remap follows its map input");
+        assert_eq!(root(3, "out"), map_a, "patch: in and reference share a root");
+        assert_eq!(root(6, "out"), map_a, "morph: in and b share a root");
+        assert_eq!(root(8, "out"), map_b, "the second remap follows the second map");
+        assert_eq!(root(9, "out"), map_b);
+        assert_eq!(root(10, "out"), map_b, "recon: in and reference share a root");
+        assert_eq!(root(14, "out"), map_b);
+    }
+
+    /// Required inputs from two different roots have no single capacity
+    /// source: the node is its own root. Once both come from one root it is
+    /// not.
+    #[test]
+    fn capacity_root_of_a_mix_of_roots_is_the_node_itself() {
+        let mut def = fragment_chain_def();
+        let set_b = |def: &mut EffectGraphDef, from_node: u32| {
+            def.wires
+                .iter_mut()
+                .find(|w| w.to_node == 14 && w.to_port == "b")
+                .expect("morph 2 b wire")
+                .from_node = from_node;
+        };
+        // Morph 2 blends a layer-B mesh (`in`, root: cut B) with a layer-A
+        // mesh (`b`, root: cut A).
+        set_b(&mut def, 2);
+        assert_eq!(capacity_root(&def, &registry(), 14, "out"), (14, "out".to_string()));
+        set_b(&mut def, 8);
+        assert_eq!(capacity_root(&def, &registry(), 14, "out"), (7, "map".to_string()));
+    }
+
+    /// Vortex: patch, morph and the weights remap fuse. Remap A and cut A's
+    /// map are one capacity at run time, which the region now sees: the count
+    /// is that one slot, and the fused kernel stops at cut A's live records.
+    #[test]
+    fn vortex_patch_morph_and_weights_remap_fuse_on_the_cut_a_capacity() {
+        let def = fragment_chain_def();
+        let regions = partition_regions(&def, &registry());
+        let region = region_of(&regions, &[3, 5, 6]);
+        assert_counts_follow(&def, region, (1, "map"));
+    }
+
+    /// Corrosion: the current remap, recon, the weights remap and the morph
+    /// fuse. The reference remap and cut B's map are one capacity too, so the
+    /// recon's `in` and `reference` agree and the count is cut B's.
+    #[test]
+    fn corrosion_remap_recon_and_morph_fuse_on_the_cut_b_capacity() {
+        let def = fragment_chain_def();
+        let regions = partition_regions(&def, &registry());
+        let region = region_of(&regions, &[8, 10, 13, 14]);
+        assert_counts_follow(&def, region, (7, "map"));
+    }
+
+    /// Recon reads its reference by gather and is only an identity on the
+    /// mesh when `in` and `reference` are one capacity. Two remaps through
+    /// different cut maps are not, so the stage stays unfused.
+    #[test]
+    fn recon_over_two_different_cut_maps_does_not_fuse() {
+        let mut def = fragment_chain_def();
+        // The reference now comes from cut A's remap, not cut B's.
+        def.wires
+            .iter_mut()
+            .find(|w| w.to_node == 10 && w.to_port == "reference")
+            .expect("recon reference wire")
+            .from_node = 2;
+        let regions = partition_regions(&def, &registry());
+        assert!(
+            !regions
+                .iter()
+                .any(|region| region.members.iter().any(|m| m.doc_id == 10)),
+            "recon with mismatched capacity roots must not join a region"
         );
     }
 

@@ -20,6 +20,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::mesh_bounds::MeshBounds;
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::scene::source_asset::{LoadedAsset, SourceAssetIdentity, mesh_identity};
@@ -134,6 +135,30 @@ fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) ->
     }
     verts
 }
+
+/// The params that select the parsed geometry, borrowed from the node's
+/// params: `(path, mesh_index, primitive_index, material_index, fit, recenter,
+/// vertex_colors, translate_x, translate_y, translate_z, (fragment_count,
+/// fragment_index), (node_path, own_space))`. Same fields as
+/// `GltfMeshSource::last_key`, which owns its strings.
+/// A parse's result: the final vertices, their indices, and the box around
+/// the vertices (`None` when a coordinate is not finite).
+type ParsedMesh = (Vec<MeshVertex>, Vec<u32>, Option<MeshBounds>);
+
+type RequestedKey<'a> = (
+    &'a str,
+    i32,
+    i32,
+    i32,
+    u32,
+    bool,
+    bool,
+    f32,
+    f32,
+    f32,
+    (u32, u32),
+    (&'a str, bool),
+);
 
 manifold_node_engine::primitive! {
     name: GltfMeshSource,
@@ -311,6 +336,9 @@ manifold_node_engine::primitive! {
         // it is uploaded to `staging`.
         cached_verts: Vec<MeshVertex> = Vec::new(),
         cached_indices: Vec<u32> = Vec::new(),
+        // The box around the parsed vertices, computed once per parse on the
+        // loader thread and published with the mesh every frame.
+        cached_bounds: Option<MeshBounds> = None,
         // Shared-memory buffer holding uploaded geometry for subsequent
         // content/destination changes without retaining the CPU vertex vector.
         staging: Option<manifold_gpu::GpuBuffer> = None,
@@ -319,7 +347,7 @@ manifold_node_engine::primitive! {
         index_staging_len_bytes: u64 = 0,
         // Background loader channel. `Some` means a parse is in flight;
         // we don't spawn another until it returns.
-        pending_load: Option<mpsc::Receiver<Result<LoadedAsset<(Vec<MeshVertex>, Vec<u32>)>, String>>> = None,
+        pending_load: Option<mpsc::Receiver<Result<LoadedAsset<ParsedMesh>, String>>> = None,
         // Whether `staging` currently reflects the latest parsed geometry.
         uploaded: bool = false,
         // Content availability, distinct from `uploaded` (staging is CPU-
@@ -355,6 +383,28 @@ manifold_node_engine::primitive! {
         load_error: Option<String> = None,
         source_published: bool = false,
     },
+}
+
+impl GltfMeshSource {
+    /// Whether the last requested (or parsed) selection is exactly `key`.
+    /// Compares field by field, so a NaN translate never matches — the same
+    /// as comparing two owned key tuples.
+    fn key_matches(&self, key: &RequestedKey<'_>) -> bool {
+        let last = &self.last_key;
+        last.0 == key.0
+            && last.1 == key.1
+            && last.2 == key.2
+            && last.3 == key.3
+            && last.4 == key.4
+            && last.5 == key.5
+            && last.6 == key.6
+            && last.7 == key.7
+            && last.8 == key.8
+            && last.9 == key.9
+            && last.10 == key.10
+            && last.11.0 == key.11.0
+            && last.11.1 == key.11.1
+    }
 }
 
 impl Primitive for GltfMeshSource {
@@ -437,19 +487,21 @@ impl Primitive for GltfMeshSource {
         };
         let requested_own_space = matches!(params.get("own_space"), Some(ParamValue::Bool(true)));
 
-        let requested_key_matches = self.last_key.0.as_str() == requested_path
-            && self.last_key.1 == requested_mesh_index
-            && self.last_key.2 == requested_primitive_index
-            && self.last_key.3 == requested_material_index
-            && self.last_key.4 == requested_fit
-            && self.last_key.5 == requested_recenter
-            && self.last_key.6 == requested_vertex_colors
-            && self.last_key.7 == requested_translate_x
-            && self.last_key.8 == requested_translate_y
-            && self.last_key.9 == requested_translate_z
-            && self.last_key.10 == (requested_fragment_count, requested_fragment_index)
-            && self.last_key.11.0 == requested_node_path
-            && self.last_key.11.1 == requested_own_space;
+        let requested_key: RequestedKey = (
+            requested_path,
+            requested_mesh_index,
+            requested_primitive_index,
+            requested_material_index,
+            requested_fit,
+            requested_recenter,
+            requested_vertex_colors,
+            requested_translate_x,
+            requested_translate_y,
+            requested_translate_z,
+            (requested_fragment_count, requested_fragment_index),
+            (requested_node_path, requested_own_space),
+        );
+        let requested_key_matches = self.key_matches(&requested_key);
         if !requested_key_matches {
             return SourceAssetIdentity::Pending;
         }
@@ -474,8 +526,8 @@ impl Primitive for GltfMeshSource {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // 1. Params.
         let path = match ctx.params.get("path") {
-            Some(ParamValue::String(s)) => s.as_str().to_owned(),
-            _ => String::new(),
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
         };
         let mesh_index = match ctx.params.get("mesh_index") {
             Some(ParamValue::Float(n)) => n.round() as i32,
@@ -515,16 +567,18 @@ impl Primitive for GltfMeshSource {
             .clamp(1.0, 64.0) as u32;
         let fragment_index = ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32;
         let node_path = match ctx.params.get("node_path") {
-            Some(ParamValue::String(s)) => s.as_str().to_owned(),
-            _ => String::new(),
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
         };
         let own_space = matches!(ctx.params.get("own_space"), Some(ParamValue::Bool(true)));
 
         // 2. Re-trigger a background parse if the effective selection (or
         // the fit/recenter/translate_* authoring choice) changed since the
-        // last one we started.
-        let key = (
-            path.clone(),
+        // last one we started. The key borrows the params, so the per-frame
+        // comparison allocates nothing; `last_key` clones them only when the
+        // selection changed.
+        let key: RequestedKey = (
+            path,
             mesh_index,
             primitive_index,
             material_index,
@@ -535,10 +589,10 @@ impl Primitive for GltfMeshSource {
             translate_y,
             translate_z,
             (fragment_count, fragment_index),
-            (node_path.clone(), own_space),
+            (node_path, own_space),
         );
         let want_indexed = ctx.outputs.array("indices").is_some() && fragment_count == 1;
-        if (key != self.last_key || want_indexed != self.last_indexed)
+        if (!self.key_matches(&key) || want_indexed != self.last_indexed)
             && self.pending_load.is_none()
         {
             if source_trace_enabled() {
@@ -557,12 +611,26 @@ impl Primitive for GltfMeshSource {
                     self.content_version
                 );
             }
-            self.last_key = key.clone();
+            self.last_key = (
+                path.to_owned(),
+                mesh_index,
+                primitive_index,
+                material_index,
+                fit_idx,
+                recenter,
+                vertex_colors,
+                translate_x,
+                translate_y,
+                translate_z,
+                (fragment_count, fragment_index),
+                (node_path.to_owned(), own_space),
+            );
             self.last_indexed = want_indexed;
             self.trace_pending_logged = false;
             self.trace_pending_destination = (0, 0);
             self.cached_verts.clear();
             self.cached_indices.clear();
+            self.cached_bounds = None;
             self.staging = None;
             self.staging_len_bytes = 0;
             self.index_staging = None;
@@ -583,7 +651,7 @@ impl Primitive for GltfMeshSource {
                 // mesh_index / primitive_index path applies.
                 let selector = if !node_path.is_empty() {
                     GltfMeshSelector::Node {
-                        path: node_path.as_str().into(),
+                        path: node_path.into(),
                         material: material_index,
                         own_space,
                     }
@@ -608,7 +676,7 @@ impl Primitive for GltfMeshSource {
                         primitive_index: primitive_index as u32,
                     }
                 };
-                let path_buf = std::path::PathBuf::from(&path);
+                let path_buf = std::path::PathBuf::from(path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
                     let result = if want_indexed {
@@ -618,7 +686,9 @@ impl Primitive for GltfMeshSource {
                                 let verts = apply_mesh_fit(verts, fit_unit_box, recenter);
                                 let verts = apply_translate(verts, translate);
                                 let identity = mesh_identity(&verts);
-                                LoadedAsset::new((verts, indices), identity)
+                                let bounds =
+                                    MeshBounds::of_positions(verts.iter().map(|v| v.position));
+                                LoadedAsset::new((verts, indices, bounds), identity)
                             },
                         )
                     } else {
@@ -635,7 +705,9 @@ impl Primitive for GltfMeshSource {
                             })
                             .map(|verts| {
                                 let identity = mesh_identity(&verts);
-                                LoadedAsset::new((verts, Vec::new()), identity)
+                                let bounds =
+                                    MeshBounds::of_positions(verts.iter().map(|v| v.position));
+                                LoadedAsset::new((verts, Vec::new(), bounds), identity)
                             })
                     };
                     let _ = tx.send(result);
@@ -651,7 +723,7 @@ impl Primitive for GltfMeshSource {
             let rx = self.pending_load.take().unwrap();
             match rx.try_recv() {
                 Ok(Ok(loaded)) => {
-                    if key != self.last_key || want_indexed != self.last_indexed {
+                    if !self.key_matches(&key) || want_indexed != self.last_indexed {
                         // Params changed while this parse was in flight —
                         // the result answers a stale request. Drop it; the
                         // key mismatch re-triggers a fresh parse next frame.
@@ -669,9 +741,10 @@ impl Primitive for GltfMeshSource {
                             );
                         }
                         self.source_identity = Some(loaded.identity());
-                        let (verts, indices) = loaded.into_value();
+                        let (verts, indices, bounds) = loaded.into_value();
                         self.cached_verts = verts;
                         self.cached_indices = indices;
+                        self.cached_bounds = bounds;
                         self.uploaded = false;
                         self.content_version = self.content_version.wrapping_add(1);
                         self.published_source = Some(MeshSource::Gltf {
@@ -695,7 +768,7 @@ impl Primitive for GltfMeshSource {
                 // A file that cannot be read is a node error: the stage
                 // names the layer and the part once, the log the cause.
                 Ok(Err(e)) => {
-                    if key == self.last_key {
+                    if self.key_matches(&key) {
                         self.load_error = Some(e.clone());
                         ctx.error(e.clone());
                     }
@@ -712,7 +785,7 @@ impl Primitive for GltfMeshSource {
                     self.pending_load = Some(rx);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    if key == self.last_key {
+                    if self.key_matches(&key) {
                         self.load_error = Some("Background loader disconnected".to_owned());
                         ctx.error("background load channel disconnected");
                     }
@@ -727,7 +800,7 @@ impl Primitive for GltfMeshSource {
             }
         }
 
-        if key != self.last_key {
+        if !self.key_matches(&key) {
             // A stale parse may have completed above. Its old descriptor is
             // not the newly requested source; the next run starts that load.
             ctx.mark_outputs_pending();
@@ -748,6 +821,7 @@ impl Primitive for GltfMeshSource {
                 return;
             };
             self.cached_verts = Vec::new();
+            ctx.outputs.set_cpu_value("vertices", self.cached_bounds);
             ctx.outputs.set_mesh_source("source", source);
             self.source_published = true;
             return;
@@ -955,6 +1029,7 @@ impl Primitive for GltfMeshSource {
             // requested yet) — the output bytes are not consumable.
             ctx.mark_outputs_pending();
         } else if let Some(source) = &self.published_source {
+            ctx.outputs.set_cpu_value("vertices", self.cached_bounds);
             ctx.outputs.set_mesh_source("source", source.clone());
             self.source_published = true;
         }
@@ -968,6 +1043,7 @@ mod tests {
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
     use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::cpu_values::CpuWireWrites;
     use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::PortType;
@@ -1087,7 +1163,7 @@ mod tests {
         primitive.published = true;
         primitive.source_published = true;
 
-        let (_tx, rx) = mpsc::channel::<Result<LoadedAsset<(Vec<MeshVertex>, Vec<u32>)>, String>>();
+        let (_tx, rx) = mpsc::channel::<Result<LoadedAsset<ParsedMesh>, String>>();
         primitive.pending_load = Some(rx);
         assert_eq!(
             Primitive::source_asset_identity(&primitive, &params),
@@ -1126,8 +1202,25 @@ mod tests {
         params: &ParamValues,
         errors: &mut Vec<String>,
     ) -> bool {
+        run_cpu_only_bound(
+            primitive,
+            backend,
+            &[("source", source_slot)],
+            params,
+            errors,
+        )
+    }
+
+    /// One run with `output_bindings` bound and no buffer behind any of them,
+    /// committing the descriptor and the CPU values it published.
+    fn run_cpu_only_bound(
+        primitive: &mut GltfMeshSource,
+        backend: &mut MockBackend,
+        output_bindings: &[(&'static str, Slot)],
+        params: &ParamValues,
+        errors: &mut Vec<String>,
+    ) -> bool {
         let input_bindings: &[(&'static str, Slot)] = &[];
-        let output_bindings: &[(&'static str, Slot)] = &[("source", source_slot)];
         let mut scalar_scratch = Vec::new();
         let mut camera_scratch = Vec::new();
         let mut light_scratch = Vec::new();
@@ -1137,6 +1230,7 @@ mod tests {
         let mut render_mode_scratch = Vec::new();
         let mut object_scratch = Vec::new();
         let mut mesh_source_scratch = Vec::new();
+        let mut cpu_value_scratch = CpuWireWrites::default();
         let backend_ref: &dyn Backend = backend;
         let inputs = NodeInputs::new(input_bindings, backend_ref, &[]);
         let outputs = NodeOutputs::new(
@@ -1151,6 +1245,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         )
+        .with_cpu_value_writes(&mut cpu_value_scratch)
         .with_mesh_source_writes(&mut mesh_source_scratch);
         let pending;
         {
@@ -1159,6 +1254,7 @@ mod tests {
             primitive.run(&mut ctx);
             pending = ctx.outputs_pending;
         }
+        cpu_value_scratch.commit(backend.cpu_values_mut());
         for (slot, value) in mesh_source_scratch.drain(..) {
             backend.set_mesh_source(slot, value);
         }
@@ -1297,8 +1393,11 @@ mod tests {
             Primitive::source_asset_identity(&primitive, &params_b),
             SourceAssetIdentity::Pending
         );
-        tx.send(Ok(LoadedAsset::new((Vec::new(), Vec::new()), [0; 32])))
-            .unwrap();
+        tx.send(Ok(LoadedAsset::new(
+            (Vec::new(), Vec::new(), None),
+            [0; 32],
+        )))
+        .unwrap();
         assert!(
             run_cpu_only_once(&mut primitive, &mut backend, source_slot, &params_b),
             "a completed stale parse must not publish the old descriptor as ready"
@@ -1341,6 +1440,90 @@ mod tests {
             panic!("replacement CPU source must publish its own loaded identity");
         };
         assert_ne!(identity_b, identity_a);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// What the node publishes on `vertices` is the box a plain scan of the
+    /// fitted, translated vertices gives, not the file's own accessor bounds.
+    #[test]
+    fn published_bounds_equal_a_scan_of_the_final_vertices() {
+        let dir = std::env::temp_dir().join(format!(
+            "manifold-bounds-wire-{}",
+            manifold_core::short_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let positions = [
+            [10.0_f32, 100.0, -5.0],
+            [14.0, 101.0, -1.0],
+            [12.0, 102.0, -3.0],
+            [11.0, 100.5, -4.5],
+            [13.5, 101.5, -1.5],
+            [12.5, 100.0, -2.0],
+        ];
+        std::fs::write(dir.join("positions.bin"), bytemuck::cast_slice(&positions)).unwrap();
+        let document = serde_json::json!({
+            "asset": {"version": "2.0"}, "scene": 0,
+            "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+            "buffers": [{"uri": "positions.bin", "byteLength": 72}],
+            "bufferViews": [{"buffer": 0, "byteLength": 72}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 6,
+                "type": "VEC3", "min": [10,100,-5], "max": [14,102,-1]}]
+        });
+        let path = dir.join("m.gltf");
+        std::fs::write(&path, document.to_string()).unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let mut params = cpu_params(&path, -1.0);
+        params.insert(Cow::Borrowed("fit"), ParamValue::Enum(1));
+        params.insert(Cow::Borrowed("translate_x"), ParamValue::Float(2.5));
+        params.insert(Cow::Borrowed("translate_y"), ParamValue::Float(-7.0));
+        params.insert(Cow::Borrowed("translate_z"), ParamValue::Float(0.25));
+
+        let mut backend = MockBackend::new();
+        let source_slot = backend.acquire(ResourceId(0), PortType::MeshSource, None, (0, 0));
+        let vertices_slot = backend.acquire(ResourceId(1), PortType::MeshSource, None, (0, 0));
+        let bindings = [("source", source_slot), ("vertices", vertices_slot)];
+        let mut primitive = GltfMeshSource::new();
+        let mut errors = Vec::new();
+        let mut published = None;
+        for _ in 0..200 {
+            let pending = run_cpu_only_bound(
+                &mut primitive,
+                &mut backend,
+                &bindings,
+                &params,
+                &mut errors,
+            );
+            if !pending {
+                published = backend
+                    .cpu_values()
+                    .get::<Option<MeshBounds>>(vertices_slot);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let Some(Some(bounds)) = published else {
+            panic!("the settled mesh publishes its box ({errors:?})");
+        };
+
+        let loaded =
+            cached_load_gltf_mesh(std::path::Path::new(&path), GltfMeshSelector::WholeScene)
+                .unwrap();
+        let fitted = apply_translate(apply_mesh_fit(loaded, true, true), [2.5, -7.0, 0.25]);
+        for axis in 0..3 {
+            let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+            for vertex in &fitted {
+                lo = lo.min(vertex.position[axis]);
+                hi = hi.max(vertex.position[axis]);
+            }
+            assert_eq!(bounds.min[axis], lo, "min on axis {axis}");
+            assert_eq!(bounds.max[axis], hi, "max on axis {axis}");
+        }
+        assert!(
+            bounds.min[1] < -6.0 && bounds.max[0] > 2.5,
+            "the fit and the offset moved the box off the file's own"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1458,6 +1641,7 @@ mod gpu_tests {
     use manifold_gpu::testkit::TestDevice;
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
     use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::cpu_values::CpuWireWrites;
     use manifold_node_engine::exec::effect_node::ParamValues;
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
@@ -1515,6 +1699,7 @@ mod gpu_tests {
         let mut atmosphere_ws = Vec::new();
         let mut render_mode_ws = Vec::new();
         let mut object_ws = Vec::new();
+        let mut cpu_value_ws = CpuWireWrites::default();
         let backend_ref: &dyn Backend = backend;
         let inputs = NodeInputs::new(&[], backend_ref, &[]);
         let outputs = NodeOutputs::new(
@@ -1528,7 +1713,8 @@ mod gpu_tests {
             &mut atmosphere_ws,
             &mut render_mode_ws,
             &mut object_ws,
-        );
+        )
+        .with_cpu_value_writes(&mut cpu_value_ws);
         let mut native_enc = device.create_encoder("gltf-mesh-source-test");
         let unchanged;
         {

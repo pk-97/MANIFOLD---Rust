@@ -174,6 +174,13 @@ pub struct WgslCompute {
     /// half, echo stride) out of the buffer. `None` for identity regions
     /// (no marker; the default IS the legacy min anchor).
     fused_output_capacity: Option<CapacityExpr>,
+    /// `// @live_counts: <port>` marker (fused buffer codegen): the array
+    /// input whose published live extent bounds the kernel. Its counts word
+    /// is bound to the `live_counts` storage binding and its multiplier
+    /// written to the `live_per_item` uniform every dispatch (0 when the input
+    /// has no extent), and the fresh `dst` follows this input's capacity and
+    /// extent ([`EffectNode::fused_output_capacity`]).
+    live_anchor: Option<String>,
     /// `// @derived_uniform_member:` markers (D7/P0), resolved against the
     /// uniform layout: one per fused member with non-empty `derived_uniforms`.
     /// `evaluate()` refreshes each frame via `derived_uniform_registry::recompute`
@@ -256,6 +263,12 @@ enum BindingKind {
     /// bug where an aliased output made the producer wire read as a feedback
     /// back-edge. Bound from `ctx.outputs.array(port)`.
     StorageArrayWriteOut { port: String, _item: ArrayType },
+    /// `var<storage, read>` of `array<u32>` named [`LIVE_COUNTS_BINDING`],
+    /// tagged by a `// @live_counts: <port>` marker: the live count of the
+    /// array input `port`. Bound to that input's extent counts word (at its
+    /// byte offset), or to the input array itself when it has no extent. It
+    /// is neither an input nor an output port.
+    LiveCounts { port: String },
 }
 
 #[derive(Clone, Debug)]
@@ -370,6 +383,7 @@ impl WgslCompute {
             last_reset_trigger: None,
             dispatch_count_param: None,
             fused_output_capacity: None,
+            live_anchor: None,
             derived_uniform_members: Vec::new(),
             mesh_output_overrides: Vec::new(),
             pipeline: None,
@@ -472,6 +486,7 @@ impl WgslCompute {
         self.source_pure = parsed.source_pure;
         self.dispatch_count_param = parsed.dispatch_count_param;
         self.fused_output_capacity = parsed.fused_output_capacity;
+        self.live_anchor = parsed.live_anchor;
         self.derived_uniform_members = parsed.derived_uniform_members;
         // Rebuild access/precision metadata from the source's
         // markers, aligned to the texture inputs in declaration order. No
@@ -634,6 +649,8 @@ struct ParsedShader {
     /// Resolved `// @fused_output_capacity:` marker (BUG-orm4). See
     /// [`WgslCompute::fused_output_capacity`].
     fused_output_capacity: Option<CapacityExpr>,
+    /// Resolved `// @live_counts:` marker. See [`WgslCompute::live_anchor`].
+    live_anchor: Option<String>,
     /// Resolved `// @derived_uniform_member:` markers (D7/P0). See
     /// [`DerivedUniformMember`].
     derived_uniform_members: Vec<DerivedUniformMember>,
@@ -642,6 +659,11 @@ struct ParsedShader {
 /// The synthetic input port a `// @reset_gated` kernel exposes to receive its
 /// edge trigger (wired from the same clip-trigger count the gated consumer uses).
 const RESET_TRIGGER_PORT: &str = "reset_trigger";
+
+/// The storage binding and uniform field a `// @live_counts` kernel declares
+/// (fused buffer codegen).
+const LIVE_COUNTS_BINDING: &str = "live_counts";
+const LIVE_PER_ITEM_FIELD: &str = "live_per_item";
 
 /// `generate_standalone` names the single storage-texture output `dst`; a
 /// fragment node renames it to the conventional atom output port `out`.
@@ -717,6 +739,9 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     // expression over the array input slots (fused buffer codegen, widened
     // regions only). An unparseable payload fails closed (treated as absent).
     let fused_output_capacity = extract_fused_output_capacity(source);
+    // `// @live_counts: <port>` — the array input whose live extent bounds the
+    // kernel (fused buffer codegen, regions anchored on a published extent).
+    let live_anchor = extract_live_counts(source);
     // D7/P0: `// @camera_external:` / `// @derived_uniform_member:` markers —
     // see `emit_derived_uniform_markers` in `freeze/codegen.rs` for what emits
     // them and the resolution block below for what consumes them.
@@ -857,6 +882,17 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                 }
             },
             naga::AddressSpace::Storage { access } => {
+                // The live-count binding of a `// @live_counts` kernel is
+                // bound from its anchor input's extent: no port of its own.
+                if name == LIVE_COUNTS_BINDING
+                    && let Some(port) = &live_anchor
+                {
+                    bindings.push(BindingSlot {
+                        binding: binding.binding,
+                        kind: BindingKind::LiveCounts { port: port.clone() },
+                    });
+                    continue;
+                }
                 // Expect a runtime-sized array (`array<T>`).
                 let naga::TypeInner::Array { base, size: naga::ArraySize::Dynamic, stride } =
                     ty.inner
@@ -1035,6 +1071,13 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         }
     }
 
+    // The live multiplier is written by `evaluate` from the anchor's extent,
+    // never bound to a param or port.
+    if live_anchor.is_some() {
+        params.retain(|p| p.name.as_ref() != LIVE_PER_ITEM_FIELD);
+        inputs.retain(|i| i.name.as_ref() != LIVE_PER_ITEM_FIELD);
+    }
+
     // D7/P0: each `// @camera_external:` marker synthesizes a DECLARED,
     // non-introspected Camera-typed input port. Camera has no WGSL
     // representation (unlike every texture/storage/uniform binding above), so
@@ -1078,6 +1121,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         source_pure,
         dispatch_count_param,
         fused_output_capacity,
+        live_anchor,
         derived_uniform_members,
     })
 }
@@ -1562,6 +1606,16 @@ fn extract_fused_output_capacity(source: &str) -> Option<CapacityExpr> {
     })
 }
 
+/// Scan for a `// @live_counts: <port>` marker (fused buffer codegen): the
+/// array input whose published live extent bounds the kernel.
+fn extract_live_counts(source: &str) -> Option<String> {
+    let stripped = strip_block_comments(source);
+    stripped.lines().find_map(|line| match Marker::parse(line) {
+        Some(Marker::LiveCounts { port }) => Some(port),
+        _ => None,
+    })
+}
+
 /// Scan for `// @bool_uniform: <field>` markers emitted by fused codegen.
 /// WGSL lowers authored Bool params to `u32`; this restores their source type
 /// after naga introspection so bindings keep `BoolThreshold` semantics.
@@ -1965,6 +2019,18 @@ impl EffectNode for WgslCompute {
         self.fusion_kind
     }
 
+    /// A live-anchored fused kernel's `dst` follows its anchor input: the
+    /// executor hands `dst` that input's live extent. Every other kernel keeps
+    /// the trait default.
+    fn fused_output_capacity(&self) -> crate::freeze::classify::FusedOutputCapacity {
+        match &self.live_anchor {
+            Some(port) => crate::freeze::classify::FusedOutputCapacity::FromInput {
+                input: intern_dynamic_name(port),
+            },
+            None => crate::freeze::classify::FusedOutputCapacity::MinInputs,
+        }
+    }
+
     /// Mirrors [`Self::fusion_kind`]'s dynamic dispatch: a full-kernel
     /// `node.wgsl_compute` (user-authored source, no fragment parse) is a
     /// Boundary IO bridge; a fragment-form node that parsed to a fusable
@@ -2222,6 +2288,13 @@ impl EffectNode for WgslCompute {
         let trace = std::env::var_os("MANIFOLD_WGSL_COMPUTE_TRACE").is_some();
         let node_id = ctx.node_id;
 
+        // The anchor's live count, for the `live_counts` binding and the
+        // `live_per_item` uniform. Unwired: no binding to make.
+        let live_counts = self
+            .live_anchor
+            .as_deref()
+            .and_then(|port| ctx.inputs.live_counts(port));
+
         // Pack the uniform: every member of the generic layout. Params stay
         // uniforms — no value-baked variants.
         if let Some(layout) = &self.uniform_layout {
@@ -2230,6 +2303,20 @@ impl EffectNode for WgslCompute {
                     }
                     for m in &layout.members {
                         if m.name.starts_with("_pad") {
+                            continue;
+                        }
+                        // The live multiplier comes from the anchor's extent
+                        // (0 without one), never from a param or a wire.
+                        if m.name == LIVE_PER_ITEM_FIELD && self.live_anchor.is_some() {
+                            let start = m.offset as usize;
+                            let end = start + 4;
+                            if end <= self.uniform_scratch.len() {
+                                let per_item = live_counts.as_ref().map_or(0, |live| live.per_item);
+                                m.ty.write_to(
+                                    &mut self.uniform_scratch[start..end],
+                                    &ParamValue::Float(per_item as f32),
+                                );
+                            }
                             continue;
                         }
                         // D7/P0: a field inside a `derived_uniform_members` block
@@ -2366,7 +2453,7 @@ impl EffectNode for WgslCompute {
         // into the binding slice. Texture / buffer refs must outlive
         // the dispatch_compute call.
         let mut tex_refs: Vec<(u32, &manifold_gpu::GpuTexture)> = Vec::with_capacity(8);
-        let mut buf_refs: Vec<(u32, &manifold_gpu::GpuBuffer)> = Vec::with_capacity(8);
+        let mut buf_refs: Vec<(u32, &manifold_gpu::GpuBuffer, u64)> = Vec::with_capacity(8);
         let mut sampler_refs: Vec<(u32, &GpuSampler)> = Vec::with_capacity(2);
 
         for slot in &self.bindings {
@@ -2408,7 +2495,7 @@ impl EffectNode for WgslCompute {
                         );
                         return;
                     };
-                    buf_refs.push((slot.binding, buf));
+                    buf_refs.push((slot.binding, buf, 0));
                 }
                 BindingKind::StorageArrayReadWrite { port, .. } => {
                     // For aliased in/out, the chain runtime routes
@@ -2421,7 +2508,7 @@ impl EffectNode for WgslCompute {
                         );
                         return;
                     };
-                    buf_refs.push((slot.binding, buf));
+                    buf_refs.push((slot.binding, buf, 0));
                 }
                 BindingKind::StorageAtomicAccumOut { port } => {
                     let Some(buf) = ctx.outputs.array(port) else {
@@ -2430,7 +2517,7 @@ impl EffectNode for WgslCompute {
                         );
                         return;
                     };
-                    buf_refs.push((slot.binding, buf));
+                    buf_refs.push((slot.binding, buf, 0));
                 }
                 BindingKind::StorageArrayWriteOut { port, .. } => {
                     // Fresh output-only array (buffer-fusion dst) — bind the
@@ -2441,7 +2528,16 @@ impl EffectNode for WgslCompute {
                         );
                         return;
                     };
-                    buf_refs.push((slot.binding, buf));
+                    buf_refs.push((slot.binding, buf, 0));
+                }
+                BindingKind::LiveCounts { port } => {
+                    let Some(live) = live_counts.as_ref() else {
+                        log::warn!(
+                            "[node.wgsl_compute] live-count anchor '{port}' unwired"
+                        );
+                        return;
+                    };
+                    buf_refs.push((slot.binding, &live.counts, live.offset));
                 }
             }
         }
@@ -2481,15 +2577,16 @@ impl EffectNode for WgslCompute {
                 BindingKind::StorageArrayRead { .. }
                 | BindingKind::StorageArrayReadWrite { .. }
                 | BindingKind::StorageAtomicAccumOut { .. }
-                | BindingKind::StorageArrayWriteOut { .. } => {
-                    let (_, buf) = buf_refs
+                | BindingKind::StorageArrayWriteOut { .. }
+                | BindingKind::LiveCounts { .. } => {
+                    let (_, buf, offset) = buf_refs
                         .iter()
-                        .find(|(b, _)| *b == slot.binding)
+                        .find(|(b, _, _)| *b == slot.binding)
                         .expect("buf ref present");
                     gpu_bindings.push(GpuBinding::Buffer {
                         binding: slot.binding,
                         buffer: buf,
-                        offset: 0,
+                        offset: *offset,
                     });
                 }
             }

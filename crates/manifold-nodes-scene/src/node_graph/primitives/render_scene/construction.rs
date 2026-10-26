@@ -57,6 +57,9 @@ impl RenderScene {
             rt_temporal_upscaler: None,
             rt_temporal_unavailable_logged: false,
             prev_model: Vec::new(),
+            prev_positions: Vec::new(),
+            prev_positions_dummy: None,
+            pack_prev_positions_pipeline: None,
             prev_view_proj: None,
             prev_cam_state: None,
             rendered_camera: None,
@@ -76,6 +79,7 @@ impl RenderScene {
             light_frame: 0,
             light_capacity: 0,
             shadow_pipeline: None,
+            solid_depth_pipeline: None,
             shadow_depth_stencil: None,
             shadow_maps: None,
             shadow_maps_refused: None,
@@ -438,6 +442,7 @@ impl RenderScene {
         // exactly the same "no history yet" case a freshly-created node
         // starts in.
         self.prev_model = vec![None; n_obj];
+        self.prev_positions = (0..n_obj).map(|_| None).collect();
         self.prev_view_proj = None;
         self.prev_cam_state = None;
 

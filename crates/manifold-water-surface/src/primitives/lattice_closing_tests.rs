@@ -337,6 +337,7 @@ fn fused_redistance_offset() -> String {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: Some(manifold_node_engine::freeze::classify::CapacityExpr::Slot(
             0,
         )),

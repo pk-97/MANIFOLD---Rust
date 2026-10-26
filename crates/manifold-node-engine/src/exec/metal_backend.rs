@@ -334,6 +334,47 @@ impl MetalBackend {
         true
     }
 
+    /// Make `producer_slot` resolve to the texture the host installed on
+    /// `host_slot` until the next [`Backend::clear_skip_aliases`], so the
+    /// producer of `producer` renders straight into the host's target and a
+    /// bypassed step downstream has nothing to copy.
+    ///
+    /// Refuses (returns `false`, nothing changes) unless `host_slot` carries a
+    /// host-installed borrow, `producer` is an ordinary pooled resource whose
+    /// slot has no borrow of its own, and the producer's own texture has the
+    /// same size, format and mip chain as the host's target.
+    pub fn retarget_to_host_texture(
+        &mut self,
+        producer: ResourceId,
+        producer_slot: Slot,
+        host_slot: Slot,
+    ) -> bool {
+        if producer_slot == host_slot
+            || self.pinned.contains(&producer)
+            || self.provided_2d.contains_key(&producer_slot)
+            || self.borrowed_2d.contains_key(&producer_slot)
+            || self.skip_aliased_slots.contains(&host_slot)
+        {
+            return false;
+        }
+        let (Some(host), Some(owned)) = (
+            self.borrowed_2d.get(&host_slot),
+            self.textures_2d.get(&producer_slot),
+        ) else {
+            return false;
+        };
+        let owned = &owned.texture;
+        if (owned.width, owned.height, owned.format, owned.mip_level_count())
+            != (host.width, host.height, host.format, host.mip_level_count())
+        {
+            return false;
+        }
+        let host = host.clone();
+        self.borrowed_2d.insert(producer_slot, host);
+        self.skip_aliased_slots.push(producer_slot);
+        true
+    }
+
     /// Swap the `RenderTarget` at a slot, returning the previous one
     /// (or `None` if the slot was empty). Unlike
     /// a pool-owned install, the previous target is **not** released
@@ -1035,6 +1076,10 @@ impl Backend for MetalBackend {
 
     fn set_live_extent(&mut self, slot: Slot, value: crate::scene::live_extent::LiveExtent) {
         self.live_extents.insert(slot, value);
+    }
+
+    fn clear_live_extent(&mut self, slot: Slot) {
+        self.live_extents.remove(&slot);
     }
 
     fn object(&self, slot: Slot) -> Option<crate::scene::scene_object::SceneObject> {

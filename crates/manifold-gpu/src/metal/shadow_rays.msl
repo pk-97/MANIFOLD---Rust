@@ -277,7 +277,7 @@ struct GiMaterial {
     // (the material card's `diffuse_transmission_params`, populated from the
     // SAME uniform the raster forward term reads — one source of truth).
     // 0 = opaque to shadow-class rays.
-    // Read ONLY by `walk_with_transmission` (I-TL4's two call sites).
+    // Read ONLY by `walk_with_transmission` (three call sites).
     float4 translucency;
     float4 specular;
     float4 clearcoat;
@@ -338,13 +338,25 @@ struct RtMaterialAttributes {
     uint sampling[20][4];
     float extension_uv_transforms[15][6];
 };
+// One row of the per-object / per-slot bindless table. A nonopaque candidate
+// reads its row in `walk_with_alpha_test_counted` / `walk_with_transmission`
+// (alpha test, appearance coverage, and the UV / colour / index fetches behind
+// them), so everything those walks touch is the first 104 bytes of the row
+// (the start of `material_attributes` covers uv1_offset, color_offset and
+// sampling[0]) and the row is padded to a multiple of the 128-byte GPU cache
+// line: one candidate costs one line of the row. Hit shading reads the rest.
+// The Rust mirror (`RtNormalSource` in params.rs) asserts the same offsets.
 struct RtNormalSource {
     ulong  vertex_base_addr;
+    // Bindless address of the u32 index buffer (0 = flat triangles) —
+    // `rt_index_at` (declared above the emissive kernels) resolves every
+    // corner fetch.
+    ulong  index_base_addr;
+    // Bindless address of the per-vertex f32 weight buffer (0 = unwired,
+    // weight 1); `appearance_weight_count` its float count (CPU-validated to
+    // equal `vertex_count`); `appearance_gain` the object's `u.appearance.x`.
+    ulong  appearance_weights_addr;
     uint   vertex_stride;
-    uint   normal_offset;
-    packed_float3 normal_matrix_col0;
-    packed_float3 normal_matrix_col1;
-    packed_float3 normal_matrix_col2;
     // RT-T2-A additions below — extends this SAME per-object bindless
     // table rather than introducing a parallel one (RAYTRACING_DESIGN.md
     // section 8.2 D21's "extends the T1-B bindless per-object table" brief).
@@ -355,6 +367,19 @@ struct RtNormalSource {
     // `MAX_RT_MATERIAL_TEXTURES` or above means "no texture bound" (degrades
     // to always-pass in `sample_candidate_alpha`).
     uint   alpha_tex_index;
+    float  base_color_alpha;
+    uint   appearance_weight_count;
+    float  appearance_gain;
+    float  base_color_uv_transform[6];
+    RtMaterialAttributes material_attributes;
+    // The bindless address of THIS slot's InstanceTransform (0 = unwired).
+    // 8-aligned at 768 with no padding before it.
+    ulong  instance_addr;
+    uint   vertex_count;
+    uint   normal_offset;
+    packed_float3 normal_matrix_col0;
+    packed_float3 normal_matrix_col1;
+    packed_float3 normal_matrix_col2;
     // Raster-parity reflections (RAYTRACING_DESIGN.md section 9.6): base-color texture
     // index for hit-point material sampling; `MAX_RT_MATERIAL_TEXTURES` or above
     // means "no texture bound" (flat gi_materials albedo is the fallback).
@@ -384,48 +409,28 @@ struct RtNormalSource {
     uint   emissive_tex_index;
     float  emissive_uv_m[4];
     float  emissive_uv_t[2];
-    // The owning OBJECT index of this
-    // per-slot row (packed into out_n.w at the primary hit) + the bindless
-    // address of THIS slot's InstanceTransform (0 = unwired). Declared in
-    // this order so the ulong lands 8-aligned at 112 — the Rust mirror
-    // asserts offsets 108/112 (the old `_pad2[2]` words, consumed
-    // field-for-field).
+    // The owning OBJECT index of this per-slot row (packed into out_n.w at
+    // the primary hit, D6).
     uint   object_index;
-    ulong  instance_addr;
-    // Appearance + indexed hit
-    // attributes. `appearance_weights_addr` is the bindless address of the
-    // per-vertex f32 weight buffer (0 = unwired, weight 1);
-    // `appearance_weight_count` its float count (CPU-validated to equal
-    // `vertex_count`); `appearance_gain` the object's `u.appearance.x`.
-    // `index_base_addr` is the bindless address of the u32 index buffer
-    // (0 = flat triangles) — `rt_index_at` (declared above the emissive
-    // kernels) resolves every corner fetch. The Rust mirror asserts
-    // offsets 120/128/132/136/144 and sizeof 152 (field-for-field order).
-    ulong  appearance_weights_addr;
-    uint   appearance_weight_count;
-    float  appearance_gain;
-    ulong  index_base_addr;
-    uint   vertex_count;
-    uint   _pad_p4b;
-    float  base_color_uv_transform[6];
     float  mr_uv_transform[6];
     float  normal_uv_transform[6];
     float  normal_scale;
-    float  base_color_alpha;
     uint   tangent_offset;
     packed_float3 model_matrix_col0;
     packed_float3 model_matrix_col1;
     packed_float3 model_matrix_col2;
     float  model_handedness;
-    RtMaterialAttributes material_attributes;
     uint extra_tex_indices[15];
     // Instance space: upper-left 3x3 of the inner matrix, applied to local
     // directions before the instance fold (identity in Object space).
     packed_float3 inner_matrix_col0;
     packed_float3 inner_matrix_col1;
     packed_float3 inner_matrix_col2;
-    uint   _pad_inner;
+    uint   _pad_row[24];
 };
+static_assert(sizeof(RtNormalSource) == 1152, "RtNormalSource row stride must match RT_NORMAL_SOURCE_ROW_BYTES");
+static_assert(__builtin_offsetof(RtNormalSource, material_attributes) == 80, "candidate-walk record");
+static_assert(__builtin_offsetof(RtNormalSource, instance_addr) == 768, "RtNormalSource rest-of-row offset");
 
 // Manual MSL mirror of the renderer's
 // `generators::mesh_common::InstanceTransform` (32 bytes: pos_scale =
@@ -1220,6 +1225,19 @@ static bool appearance_accepts(device const RtNormalSource& src, uint instance_i
 // candidate walks (MSL requires declaration before use).
 static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
+// Params for every query whose walk answers only "blocked or not" (AO,
+// binary shadow/emissive visibility, the transmission shadow walks): the
+// query ends at the first committed hit instead of finishing traversal for
+// the closest one. A hardware-committed opaque hit and an accepted candidate
+// both mean blocked, so the answer is the same; only the traversal after
+// that commit is skipped. Closest-hit queries (primary, GI, reflection) must
+// not use these.
+static intersection_params rt_any_hit_params() {
+    intersection_params params;
+    params.accept_any_intersection(true);
+    return params;
+}
+
 // RT-T2-A (RAYTRACING_DESIGN.md section 8.2 D21): shared candidate walk for ALL of
 // this kernel's ray casts (primary visibility, shadow, AO, GI + its
 // sun-bounce) — ONE alpha-test mechanism, not a per-ray-class copy (the
@@ -1228,13 +1246,13 @@ static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 // alpha mask, translucency, wired appearance weights, nonunit gain)
 // already gives OPAQUE objects the hardware early-termination fast path;
 // this manual walk only pays the per-candidate tests for objects actually
-// in the nonopaque class (an opaque candidate's `pass` is unconditionally
-// true, no texture/weights touch). `any_hit`: true stops at the first accepted
-// candidate (shadow/AO/GI occlusion tests only need existence — the
-// original `accept_any_intersection(true)` semantics); false walks every
-// candidate so the query commits its true CLOSEST accepted hit (primary
-// visibility + the GI ray's own hit need real shading data, not just
-// "something's there").
+// in the nonopaque class. `any_hit`: true stops at the first accepted
+// candidate (shadow/AO occlusion tests only need existence); those queries
+// are reset with `rt_any_hit_params()`, so a hardware-committed opaque hit
+// ends traversal too. false walks every candidate so the query commits its
+// true CLOSEST accepted hit (primary visibility + the GI ray's own hit need
+// real shading data, not just "something's there") and its query uses
+// default params.
 //
 // BUG-k1n2w (RT trace hangs GPU on alpha-masked foliage): every walk tests at
 // most RT_WALK_MAX_CANDIDATES candidates. Dense see-through foliage hands one
@@ -1374,9 +1392,16 @@ static bool walk_with_alpha_test(
 // is constructed and no interval is touched — the BUG-ny4v
 // (degenerate-ray GPU hang) guard class does not apply here.
 // Returns the rgb tint: float3(1) fully lit, float3(0) blocked, partial
-// tints between. Called from EXACTLY TWO sites (I-TL4, machine-checked):
-// the sv caster loop and `sun_bounce_at_hit`. AO/GI/reflection/primary
-// rays keep the binary walk.
+// tints between. Called from THREE sites: the sv caster loop,
+// `rt_direct_lights`' light loop and `sun_bounce_at_hit`. AO/GI/reflection/
+// primary rays keep the binary walk. Its queries use `rt_any_hit_params()`
+// and default opacity: opaque BLAS objects (not alpha-masked, translucent or
+// appearance-weighted) auto-commit in hardware, which ends the query and
+// reads as blocked at the terminal check; only nonopaque BLAS objects
+// (`blas_geometry_nonopaque`, which includes every `translucency.x > 0`
+// object) reach the loop as candidates. The tint is a product of
+// per-candidate factors, so candidates skipped behind a blocker cannot
+// change an unblocked result.
 #define RT_TRANSMISSION_MAX_HITS 8u
 #define RT_TRANSMISSION_LUMA_FLOOR 0.00390625
 
@@ -1433,8 +1458,8 @@ static float3 walk_with_transmission(
     // Terminal check is load-bearing (same as `walk_with_alpha_test`): an
     // OPAQUE-BLAS object auto-commits in hardware without ever delivering a
     // candidate, so a ray that ended on plain opaque geometry falls out of
-    // the loop with a committed hit and no visible candidate — without this
-    // check it read as fully LIT (the factor-0 control leg caught it).
+    // the loop with a committed hit and no visible candidate. This is how
+    // opaque geometry blocks here; without it the ray read as fully LIT.
     return (q.get_committed_intersection_type() != intersection_type::none) ? float3(0.0) : tint;
 }
 
@@ -1552,13 +1577,7 @@ static float3 sun_bounce_at_hit(
         sun_r.max_distance = INFINITY;
         intersection_query<triangle_data, instancing> sun_q;
         rt_sanitize_ray(sun_r, 1u, tid, diagnostics);
-        if (HAS_TRANSLUCENCY) {
-            intersection_params transmission_params;
-            transmission_params.force_opacity(forced_opacity::non_opaque);
-            sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER, transmission_params);
-        } else {
-            sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
-        }
+        sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER, rt_any_hit_params());
         // RT-TL-B (TL4): sun-bounce shadow rays transmit — a petal between
         // the bounce vertex and the sun attenuates (tinted) instead of
         // killing the term outright. Binary-identical when every factor
@@ -1869,11 +1888,10 @@ static float3 rt_direct_lights(instance_acceleration_structure accel,device RtNo
             ray r;r.origin=position+l*eps;r.direction=l;r.min_distance=eps*0.5f;r.max_distance=distance-eps;
             intersection_query<triangle_data,instancing> q;
             rt_sanitize_ray(r,1u,pixel,diagnostics);
+            q.reset(r,accel,RT_MASK_SHADOW_CASTER,rt_any_hit_params());
             if(HAS_TRANSLUCENCY) {
-                intersection_params options;options.force_opacity(forced_opacity::non_opaque);
-                q.reset(r,accel,RT_MASK_SHADOW_CASTER,options);
                 vis=walk_with_transmission(q,sources,materials,textures,pixel,p.frame_index,seed+i);
-            }else { q.reset(r,accel,RT_MASK_SHADOW_CASTER);float brightness;
+            }else { float brightness;
                 if(walk_with_alpha_test(q,sources,textures,true,pixel,p.frame_index,seed+i,brightness))vis=float3(0.0f); }
         }
         total+=rt_direct_brdf(m,view,l,sheen_scale,fast_bounce)*color.rgb*attenuation*vis;
@@ -2298,15 +2316,12 @@ kernel void trace_shadow_rays(
                 intersection_query<triangle_data, instancing> shadow_q;
                 rt_sanitize_ray(r, 1u, tid, diagnostics);
                 // RT-TL-B (TL4/TL5): shadow rays transmit through thin surfaces
-                // when HAS_TRANSLUCENCY is true. Binary scenes keep the pre-TL-B
-                // walk_with_alpha_test codegen byte-for-byte.
+                // when HAS_TRANSLUCENCY is true. Binary scenes use
+                // walk_with_alpha_test.
+                shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER, rt_any_hit_params());
                 if (HAS_TRANSLUCENCY) {
-                    intersection_params transmission_params;
-                    transmission_params.force_opacity(forced_opacity::non_opaque);
-                    shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER, transmission_params);
                     vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures, tid, p.frame_index, RT_APP_STREAM_SHADOW + c * spp + s);
                 } else {
-                    shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
                     float shadow_brightness;
                     bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_SHADOW + c * spp + s, shadow_brightness);
                     if (!blocked) vis += 1.0;
@@ -2352,7 +2367,7 @@ kernel void trace_shadow_rays(
         for (uint s = 0; s < p.ao_spp; s++) {
             ao_r.direction = cosine_hemisphere(shading_n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
-                rt_sanitize_ray(ao_r, 2u, tid, diagnostics); ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
+                rt_sanitize_ray(ao_r, 2u, tid, diagnostics); ao_q.reset(ao_r, accel, RT_MASK_VISIBLE, rt_any_hit_params());
             float ao_brightness;
             if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_AO + s, ao_brightness)) ao += 1.0;
         }
@@ -2620,7 +2635,7 @@ kernel void trace_shadow_rays(
                         em_r.max_distance = l_len - bias_eps;
                         em_r.direction = l_hat;
                         intersection_query<triangle_data, instancing> em_q;
-                        rt_sanitize_ray(em_r, 4u, tid, diagnostics); em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
+                        rt_sanitize_ray(em_r, 4u, tid, diagnostics); em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER, rt_any_hit_params());
                         float em_vis_brightness;
                         bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_EMISSIVE_VIS, em_vis_brightness);
                         if (!blocked) {

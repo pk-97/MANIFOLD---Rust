@@ -491,9 +491,12 @@ impl Graph {
         // two cheap virtual calls on the rare actually-changed write.
         let forced_changed = {
             let forced_before = inst.node.force_consumed_outputs(&inst.params);
+            let scale_before = inst.node.output_canvas_scale("depth", &inst.params);
             inst.params.insert(key, value);
             inst.param_epoch += 1;
-            inst.node.force_consumed_outputs(&inst.params) != forced_before
+            let forced_after = inst.node.force_consumed_outputs(&inst.params);
+            let scale_after = inst.node.output_canvas_scale("depth", &inst.params);
+            forced_after != forced_before || scale_after != scale_before
         };
         // Variadic nodes rebuild their port lists when a count-style param
         // changes. Disjoint field borrows (`node` mut, `params` shared).
@@ -632,9 +635,12 @@ impl Graph {
             // Forced-outputs watch (BUG-317) — same contract as `set_param`.
             let forced_changed = {
                 let forced_before = inst.node.force_consumed_outputs(&inst.params);
+                let scale_before = inst.node.output_canvas_scale("depth", &inst.params);
                 inst.params.insert(std::borrow::Cow::Borrowed(name), value);
                 inst.param_epoch += 1;
-                inst.node.force_consumed_outputs(&inst.params) != forced_before
+                let forced_after = inst.node.force_consumed_outputs(&inst.params);
+                let scale_after = inst.node.output_canvas_scale("depth", &inst.params);
+                forced_after != forced_before || scale_after != scale_before
             };
             if forced_changed {
                 self.forced_outputs_epoch += 1;

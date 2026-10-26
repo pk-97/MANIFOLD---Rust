@@ -7,6 +7,7 @@ pub mod light;
 pub mod live_extent;
 pub mod material;
 pub mod mesh_asset_source;
+pub mod mesh_bounds;
 mod mesh_boundary;
 pub mod mesh_change;
 pub mod mesh_selection;

@@ -35,6 +35,7 @@ pub fn standalone_for_spec<P: crate::primitive::PrimitiveSpec>() -> Result<Strin
             P::ATOMIC_OUTPUTS,
             P::OWNED_OUTPUTS,
             P::BUFFER_INDEX,
+            P::LIVE_ANCHOR,
         );
     }
     // Resolve kernels cannot read textures. Texture-domain atoms with Array
@@ -159,6 +160,7 @@ pub fn standalone_for_node(
             node.atomic_outputs(),
             node.owned_outputs(),
             node.buffer_index(),
+            node.live_anchor(),
         );
     }
     if node

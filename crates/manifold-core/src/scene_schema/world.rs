@@ -24,6 +24,7 @@ const AO_BLUR_H: Reach = Reach::Own("ao_blur_h");
 const AO_BLUR_V: Reach = Reach::Own("ao_blur_v");
 const AO_MULTIPLY: Reach = Reach::Own("ao_multiply");
 const AO_MASK: Reach = Reach::Own("ao_mask");
+const AO_GATE: Reach = Reach::Own("ao_gate");
 /// The camera switch every camera's lens feeds, and the image switch that
 /// picks the same camera's depth of field and motion blur.
 const CUT: Reach = Reach::Own("camera_switch");
@@ -68,7 +69,7 @@ const fn look(
     row(property, reach, section, perform(CardBand::Look, order))
 }
 
-pub static WORLD_ROWS: [PropertyRow; 57] = [
+pub static WORLD_ROWS: [PropertyRow; 59] = [
     // Camera: which camera renders. A cut is a param write, so it lands on
     // its frame and never recompiles; the choices are the cameras by name.
     // No top limit: a recorded cut past the highest live number is a
@@ -276,6 +277,20 @@ pub static WORLD_ROWS: [PropertyRow; 57] = [
         Exposure::Internal("the render's ao mask decides where it lands"),
     )
     .param("amount"),
+    row(
+        "ao_gate_selector",
+        AO_GATE,
+        AmbientOcclusion,
+        Exposure::Automatic("follows the Strength row: zero draws the plain picture"),
+    )
+    .param("selector"),
+    row(
+        "ao_gate_count",
+        AO_GATE,
+        AmbientOcclusion,
+        Exposure::Automatic("the plain picture and the occluded one"),
+    )
+    .param("num_inputs"),
     // Render. Each ray-traced term does nothing while Ray Tracing is off.
     ray_tracing("rt_enabled").switch(Feature::RayTracing),
     ray_tracing("temporal_upscale"),
@@ -290,12 +305,7 @@ pub static WORLD_ROWS: [PropertyRow; 57] = [
         RayTracing,
         Exposure::Internal("always on; it only guards against fireflies"),
     ),
-    row(
-        "rt_denoise_feed",
-        RENDER,
-        RayTracing,
-        Exposure::Internal("a debug view of the denoiser input"),
-    ),
+    ray_traced("rt_denoise_feed").name("Neural Denoiser"),
 ];
 
 pub static WORLD_FIELDS: [FieldRow; 2] = [

@@ -152,6 +152,72 @@ impl RenderScene {
         ),
     ];
 
+    /// The solid-surface variant: drops every `discard` from the three
+    /// fragment entries (the `fs_pbr` volume-nearest test, and the
+    /// appearance-fade and alpha-cutout tests all three share). A fragment
+    /// shader that can discard defeats hidden-surface removal on Apple GPUs, so
+    /// occluded surfaces behind an opaque panel still get shaded. Only valid
+    /// for a draw where each removed test is provably false; see
+    /// `solid_surface`.
+    pub(super) const OPAQUE_FAST_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
+        (
+            "    if u.volume_optics.x > 0.5 {\n        let nearest = textureLoad(volume_nearest, vec2<i32>(in.clip_pos.xy), 0);\n        if in.clip_pos.z < nearest - max(nearest * 0.00001, 0.0000001) { discard; }\n    }\n",
+            "",
+        ),
+        (
+            "    if appearance_discard(in.appearance_weight) {\n        discard;\n    }\n    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {\n        discard;\n    }\n",
+            "",
+        ),
+    ];
+
+    /// The solid depth-only variant of `shaders/shadow_depth.wgsl`: drops the
+    /// cutout and appearance-fade `discard` block that all three fragment
+    /// entries share. A fragment shader that can discard defeats Apple's
+    /// hidden-surface removal, so the shadow maps and the camera depth
+    /// prepass would shade occluded solid geometry. Only valid for a draw
+    /// where `ShadowUniforms::discard_free` holds.
+    pub(super) const SOLID_DEPTH_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[(
+        "    if su.alpha.x == 1.0 {\n        var alpha = su.alpha.z * in.vertex_alpha;\n        if su.alpha.w > 0.5 { alpha *= textureSample(base_color_map, base_color_sampler, in.uv).a; }\n        if alpha < su.alpha.y { discard; }\n    }\n    if su.appearance.x * in.appearance_weight <= 0.0 {\n        discard;\n    }\n",
+        "",
+    )];
+
+    /// The solid depth-only shader source: `shadow_depth.wgsl` with
+    /// `SOLID_DEPTH_SPECIALIZATIONS` applied.
+    pub(super) fn solid_depth_source() -> String {
+        let mut source = include_str!("../shaders/shadow_depth.wgsl").to_string();
+        for &(pattern, replacement) in Self::SOLID_DEPTH_SPECIALIZATIONS {
+            source = source.replace(pattern, replacement);
+        }
+        source
+    }
+
+    /// Compile the depth-only pipeline for the shadow maps and the camera
+    /// depth prepass: the plain one, or the solid variant. The one
+    /// constructor behind `ensure_shadow_pass` and `prewarm_pipelines`, so
+    /// they can never disagree on a variant's source.
+    pub(super) fn create_depth_only_pipeline(
+        device: &manifold_gpu::GpuDevice,
+        solid: bool,
+    ) -> manifold_gpu::GpuRenderPipeline {
+        if solid {
+            device.create_render_pipeline_depth_only(
+                &Self::solid_depth_source(),
+                "vs_main",
+                "fs_shadow",
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                "node.render_scene shadow depth solid",
+            )
+        } else {
+            device.create_render_pipeline_depth_only(
+                include_str!("../shaders/shadow_depth.wgsl"),
+                "vs_main",
+                "fs_shadow",
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                "node.render_scene shadow depth",
+            )
+        }
+    }
+
     /// The specialization list + aux attachment formats + label for an
     /// aux-emitting pipeline variant. One authority so `pipeline_for` and
     /// `prewarm_pipelines` can never disagree; `None` = no aux outputs (the
@@ -272,6 +338,12 @@ impl RenderScene {
     /// temporal-upscale input — under Points the aux targets keep their
     /// clear values for the frame. The material substitution guarantees
     /// Unlit, so the key's `kind` is informational for points draws.
+    ///
+    /// `opaque_fast` selects the solid-surface variant (see
+    /// `OPAQUE_FAST_SPECIALIZATIONS`): no `discard` and no alpha-to-coverage.
+    /// The caller must only set it for a non-blend draw where `solid_surface`
+    /// holds.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn pipeline_for(
         &mut self,
         device: &manifold_gpu::GpuDevice,
@@ -281,6 +353,7 @@ impl RenderScene {
         emit_denoise_feed: bool,
         blend: bool,
         points: bool,
+        opaque_fast: bool,
     ) -> &manifold_gpu::GpuRenderPipeline {
         if points {
             // D8: the points pipeline is the plain variant — no aux, no
@@ -296,6 +369,7 @@ impl RenderScene {
                     false,
                     false,
                     true,
+                    false,
                     MSAA_SAMPLES,
                 ))
                 .or_insert_with(|| {
@@ -313,11 +387,7 @@ impl RenderScene {
                     )
                 });
         }
-        let fs_entry = match kind {
-            MaterialKind::Unlit => "fs_unlit",
-            MaterialKind::Pbr => "fs_pbr",
-            MaterialKind::Cel => "fs_cel",
-        };
+        debug_assert!(!(blend && opaque_fast), "a blend draw is never solid");
         self.pipelines
             .entry((
                 kind,
@@ -326,48 +396,82 @@ impl RenderScene {
                 emit_denoise_feed,
                 blend,
                 false,
+                opaque_fast,
                 MSAA_SAMPLES,
             ))
             .or_insert_with(|| {
-                let blend_state = if blend {
-                    Some(Self::blend_state())
-                } else {
-                    None
-                };
-                if let Some((specs, aux_formats, label)) =
-                    Self::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed)
-                {
-                    device.create_specialized_render_pipeline_depth_msaa(
-                        include_str!("../shaders/render_scene.wgsl"),
-                        "vs_main",
-                        fs_entry,
-                        specs,
-                        manifold_gpu::GpuTextureFormat::Rgba16Float,
-                        manifold_gpu::GpuTextureFormat::Depth32Float,
-                        blend_state,
-                        MSAA_SAMPLES,
-                        !blend,
-                        aux_formats,
-                        label,
-                    )
-                } else {
-                    device.create_render_pipeline_depth_msaa(
-                        include_str!("../shaders/render_scene.wgsl"),
-                        "vs_main",
-                        fs_entry,
-                        manifold_gpu::GpuTextureFormat::Rgba16Float,
-                        manifold_gpu::GpuTextureFormat::Depth32Float,
-                        blend_state,
-                        MSAA_SAMPLES,
-                        // alpha-to-coverage antialiases the cutout `discard`
-                        // edge for Opaque/Mask; a Blend pipeline has no
-                        // discard and already blends per-fragment alpha, so
-                        // it stays off (the two mechanisms would double up).
-                        !blend,
-                        "node.render_scene",
-                    )
-                }
+                Self::create_variant(
+                    device,
+                    kind,
+                    emit_velocity,
+                    emit_ao_mask,
+                    emit_denoise_feed,
+                    blend,
+                    opaque_fast,
+                )
             })
+    }
+
+    /// Compile one Pass A pipeline variant. The one constructor behind both
+    /// `pipeline_for` and `prewarm_pipelines`, so they can never disagree on
+    /// a variant's source, blend state or alpha-to-coverage.
+    fn create_variant(
+        device: &manifold_gpu::GpuDevice,
+        kind: MaterialKind,
+        emit_velocity: bool,
+        emit_ao_mask: bool,
+        emit_denoise_feed: bool,
+        blend: bool,
+        opaque_fast: bool,
+    ) -> manifold_gpu::GpuRenderPipeline {
+        let fs_entry = match kind {
+            MaterialKind::Unlit => "fs_unlit",
+            MaterialKind::Pbr => "fs_pbr",
+            MaterialKind::Cel => "fs_cel",
+        };
+        let blend_state = blend.then(Self::blend_state);
+        // Alpha-to-coverage antialiases the cutout `discard` edge for
+        // Opaque/Mask; a Blend pipeline has no discard and already blends
+        // per-fragment alpha, so it stays off (the two mechanisms would
+        // double up). The solid-surface variant has no discard and writes
+        // alpha exactly 1, so its coverage is every sample and it stays off
+        // too.
+        let alpha_to_coverage = !blend && !opaque_fast;
+        let (aux_specs, aux_formats, label) =
+            match Self::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed) {
+                Some(aux) => aux,
+                None if opaque_fast => (&[][..], &[][..], "node.render_scene"),
+                None => {
+                    return device.create_render_pipeline_depth_msaa(
+                        include_str!("../shaders/render_scene.wgsl"),
+                        "vs_main",
+                        fs_entry,
+                        manifold_gpu::GpuTextureFormat::Rgba16Float,
+                        manifold_gpu::GpuTextureFormat::Depth32Float,
+                        blend_state,
+                        MSAA_SAMPLES,
+                        alpha_to_coverage,
+                        "node.render_scene",
+                    );
+                }
+            };
+        let mut specs = aux_specs.to_vec();
+        if opaque_fast {
+            specs.extend_from_slice(Self::OPAQUE_FAST_SPECIALIZATIONS);
+        }
+        device.create_specialized_render_pipeline_depth_msaa(
+            include_str!("../shaders/render_scene.wgsl"),
+            "vs_main",
+            fs_entry,
+            &specs,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            manifold_gpu::GpuTextureFormat::Depth32Float,
+            blend_state,
+            MSAA_SAMPLES,
+            alpha_to_coverage,
+            aux_formats,
+            label,
+        )
     }
 
     /// The Blend pipeline for the transmissive Pass B: Rgba16Float color and
@@ -379,7 +483,7 @@ impl RenderScene {
         kind: MaterialKind,
     ) -> &manifold_gpu::GpuRenderPipeline {
         self.pipelines
-            .entry((kind, false, false, false, true, false, 1))
+            .entry((kind, false, false, false, true, false, false, 1))
             .or_insert_with(|| Self::create_pass_b_pipeline(device, kind))
     }
 
@@ -421,22 +525,17 @@ impl RenderScene {
     /// for the bundled JSON generator presets.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
         for kind in [MaterialKind::Unlit, MaterialKind::Pbr, MaterialKind::Cel] {
-            let fs_entry = match kind {
-                MaterialKind::Unlit => "fs_unlit",
-                MaterialKind::Pbr => "fs_pbr",
-                MaterialKind::Cel => "fs_cel",
-            };
             // The Blend-material pipeline
             // variants (BUG-037 discipline — a live project's first glass
             // draw must be a cache hit, not a first-use compile stall).
             // RAYTRACING_DESIGN.md section 12 AM1 adds the ao_mask aux
             // dimension — same lazy-compile-stall argument: every import
-            // graph wires ao_mask, so its variants must be warm. All
-            // compiles below are on-disk-cache hits after the first launch.
+            // graph wires ao_mask, so its variants must be warm. The
+            // solid-surface variants (never blend) are the common case for
+            // opaque geometry. All compiles below are on-disk-cache hits
+            // after the first launch.
             Self::create_pass_b_pipeline(device, kind);
-            for blend in [false, true] {
-                let blend_state = blend.then(Self::blend_state);
-                let a2c = !blend;
+            for (blend, opaque_fast) in [(false, false), (false, true), (true, false)] {
                 for (emit_velocity, emit_ao_mask, emit_denoise_feed) in [
                     (false, false, false),
                     (true, false, false),
@@ -447,35 +546,15 @@ impl RenderScene {
                     (false, true, true),
                     (true, true, true),
                 ] {
-                    if let Some((specs, aux_formats, label)) =
-                        Self::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed)
-                    {
-                        device.create_specialized_render_pipeline_depth_msaa(
-                            include_str!("../shaders/render_scene.wgsl"),
-                            "vs_main",
-                            fs_entry,
-                            specs,
-                            manifold_gpu::GpuTextureFormat::Rgba16Float,
-                            manifold_gpu::GpuTextureFormat::Depth32Float,
-                            blend_state,
-                            MSAA_SAMPLES,
-                            a2c,
-                            aux_formats,
-                            label,
-                        );
-                    } else {
-                        device.create_render_pipeline_depth_msaa(
-                            include_str!("../shaders/render_scene.wgsl"),
-                            "vs_main",
-                            fs_entry,
-                            manifold_gpu::GpuTextureFormat::Rgba16Float,
-                            manifold_gpu::GpuTextureFormat::Depth32Float,
-                            blend_state,
-                            MSAA_SAMPLES,
-                            a2c,
-                            "node.render_scene",
-                        );
-                    }
+                    Self::create_variant(
+                        device,
+                        kind,
+                        emit_velocity,
+                        emit_ao_mask,
+                        emit_denoise_feed,
+                        blend,
+                        opaque_fast,
+                    );
                 }
             }
         }
@@ -494,13 +573,8 @@ impl RenderScene {
         // budget with no RENDER_TRACE spike at all. Root fix, not a
         // per-scene workaround: warm all four pipelines here so a live
         // project's first shadow-casting/shaft-on frame is a cache hit.
-        device.create_render_pipeline_depth_only(
-            include_str!("../shaders/shadow_depth.wgsl"),
-            "vs_main",
-            "fs_shadow",
-            manifold_gpu::GpuTextureFormat::Depth32Float,
-            "node.render_scene shadow depth",
-        );
+        Self::create_depth_only_pipeline(device, false);
+        Self::create_depth_only_pipeline(device, true);
         device.create_compute_pipeline(
             include_str!("../shaders/shaft_depth_downsample.wgsl"),
             "cs_main",
@@ -589,5 +663,6 @@ impl RenderScene {
             "cs_main",
             "node.render_scene upscale_alpha_combine",
         );
+        prev_positions::create_pack_pipeline(device);
     }
 }

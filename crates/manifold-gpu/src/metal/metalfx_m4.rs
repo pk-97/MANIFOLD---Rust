@@ -253,7 +253,7 @@ impl MTL4Bridge {
             queue,
             allocators,
             event,
-            event_value: AtomicU64::new(0),
+            event_value: AtomicU64::new(1),
             saturated_logged: std::sync::atomic::AtomicBool::new(false),
             residency_set,
         })
@@ -573,7 +573,7 @@ impl Metal4FxDenoisedScaler {
         unsafe {
             let base: &ProtocolObject<dyn MTLFXTemporalDenoisedScalerBase> =
                 ProtocolObject::from_ref(&*scaler);
-            base.setMotionVectorScaleX(input_width as f32 * 0.5);
+            base.setMotionVectorScaleX(-(input_width as f32 * 0.5));
             base.setMotionVectorScaleY(input_height as f32 * 0.5);
             base.setDepthReversed(depth_reversed);
             set_mtl4fx_barrier_stages(&scaler);
@@ -794,8 +794,9 @@ impl Metal4FxTemporalScaler {
                 ProtocolObject::from_ref(&*scaler);
             base.setInputContentWidth(input_width as usize);
             base.setInputContentHeight(input_height as usize);
-            base.setMotionVectorScaleX(input_width as f32 * 0.5);
+            base.setMotionVectorScaleX(-(input_width as f32 * 0.5));
             base.setMotionVectorScaleY(input_height as f32 * 0.5);
+            base.setDepthReversed(true);
             set_mtl4fx_barrier_stages(&scaler);
         }
 

@@ -57,6 +57,7 @@ fn region() -> FusionRegion<'static> {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: Some(CapacityExpr::Slot(1)),
     }
 }

@@ -212,13 +212,11 @@ impl MetalFxDenoisedScaler {
             return None;
         };
 
-        // Motion vectors arrive in NDC-space `(dx, dy)` per pixel
-        // MetalFX expects motion in
-        // pixel units: multiplying by half the render-resolution
-        // converts an NDC delta spanning [-1, 1] across the full input
-        // width/height into pixels.
+        // Motion vectors arrive in NDC-space `(dx, dy)` per pixel;
+        // MetalFX expects the pixel offset back to the previous frame in
+        // top-left coordinates: (-input_width * 0.5, input_height * 0.5).
         unsafe {
-            scaler.setMotionVectorScaleX(input_width as f32 * 0.5);
+            scaler.setMotionVectorScaleX(-(input_width as f32 * 0.5));
             scaler.setMotionVectorScaleY(input_height as f32 * 0.5);
             scaler.setDepthReversed(depth_reversed);
         }
@@ -251,7 +249,7 @@ impl MetalFxDenoisedScaler {
     }
 
     /// Set the motion-vector scale factors. Defaults to
-    /// `(input_width * 0.5, input_height * 0.5)` (NDC→pixels) set at
+    /// `(-input_width * 0.5, input_height * 0.5)` (NDC→pixels) set at
     /// construction. Override if your motion vectors use a different
     /// convention.
     pub fn set_motion_vector_scale(&self, x: f32, y: f32) {

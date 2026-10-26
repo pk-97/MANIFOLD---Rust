@@ -9,10 +9,11 @@
 //! cameras, so a moving camera keeps its history) and its stored world normal
 //! is within about 26 degrees of this pixel's (the ray-tracing accumulator's
 //! test; the normal comes from depth by XeGTAO's edge-aware reconstruction).
-//! The render's velocity is per object, so copies, particles and deforming
-//! surfaces reproject from the same pixel; the normal test drops history a
-//! surface that turned or changed shape no longer matches, where its depth
-//! alone still would. Clip the kept history to
+//! The render's velocity is per vertex for a mesh that deforms with the same
+//! triangles and per object otherwise, so copies, particles and meshes whose
+//! triangles change reproject from the same pixel; the normal test drops
+//! history a surface that turned or changed shape no longer matches, where its
+//! depth alone still would. Clip the kept history to
 //! the current 3x3 neighbourhood; blend with a 1/n running mean capped at
 //! `frames`.
 //!
@@ -609,8 +610,8 @@ mod gpu_tests {
     /// A wall that turns about 45 degrees around the middle of the picture:
     /// the two middle columns keep their depth within the slope tolerance,
     /// so only the normal test can tell the history belongs to a surface
-    /// facing another way. A deforming mesh or a spinning copy does this
-    /// under per-object velocity.
+    /// facing another way. A spinning copy or a mesh whose triangles change
+    /// does this under per-object velocity.
     #[test]
     fn a_surface_that_turns_in_place_drops_its_history() {
         let mut rig = Rig::new();

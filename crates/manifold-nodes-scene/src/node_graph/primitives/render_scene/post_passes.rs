@@ -542,7 +542,6 @@ impl RenderScene {
                 diffuse_src,
                 specular_src,
                 hit_dist_src,
-                native_color, // output directly to native res
                 reset,
                 // DN-L (section 17.7): reactive mask — emissive
                 // surfaces and object-moved draws marked by the
@@ -551,6 +550,51 @@ impl RenderScene {
                 // and movers no longer trail).
                 Some(reactive_src),
             );
+
+            if denoised {
+                // The ML denoiser (like MetalFX Temporal) writes an opaque
+                // (or otherwise undefined) alpha into its output texture, so
+                // re-pair the denoised RGB with the scene's real alpha,
+                // bilinearly upsampled from the render-res color source the
+                // denoiser read (`color_src`). `native_color` is
+                // Rgba16Float storage-writeable, so this is one compute
+                // pass — no new scratch and no second blit.
+                if self.upscale_alpha_combine_pipeline.is_none() {
+                    self.upscale_alpha_combine_pipeline = Some(gpu.device.create_compute_pipeline(
+                        include_str!("../shaders/upscale_alpha_combine.wgsl"),
+                        "cs_main",
+                        "node.render_scene upscale_alpha_combine",
+                    ));
+                }
+                let combine_pipeline = self
+                    .upscale_alpha_combine_pipeline
+                    .as_ref()
+                    .expect("just created or prewarmed");
+                let combine_sampler = gpu.device.linear_sampler();
+                gpu.native_enc.dispatch_compute(
+                    combine_pipeline,
+                    &[
+                        GpuBinding::Texture {
+                            binding: 0,
+                            texture: &denoiser.output.texture,
+                        },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: color_src,
+                        },
+                        GpuBinding::Sampler {
+                            binding: 2,
+                            sampler: combine_sampler,
+                        },
+                        GpuBinding::Texture {
+                            binding: 3,
+                            texture: native_color,
+                        },
+                    ],
+                    [native_width.div_ceil(16), native_height.div_ceil(16), 1],
+                    "node.render_scene denoise alpha combine",
+                );
+            }
 
             if !denoised && !temporal_upscale {
                 // MTL4 allocator ring saturated: the denoiser left

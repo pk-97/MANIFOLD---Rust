@@ -395,13 +395,32 @@ impl Default for RtMaterialAttributes {
     }
 }
 
+/// One row of the per-object / per-slot bindless table. Candidate walks read
+/// a row for every nonopaque candidate a ray meets, so every field the walk
+/// touches (alpha test, appearance coverage, and the UV / colour / index
+/// fetches behind them) sits in the first 104 bytes and the row is padded to
+/// a multiple of the 128-byte GPU cache line: a candidate costs one line of
+/// the row, wherever its row lands. Hit shading reads the rest of the row.
+/// Keep the MSL mirror's field order identical; both sides assert it.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RtNormalSource {
     pub vertex_base_addr: u64,
+    /// P4b: bindless address of the object's u32 index buffer (offset zero,
+    /// the existing backend representation), or 0 = flat triangles. One
+    /// shared MSL helper (`rt_index_at`) resolves corners for normal/UV/
+    /// appearance fetch, normal-map frame derivation and emissive
+    /// generation — the trace path previously assumed flat layout.
+    pub index_base_addr: u64,
+    /// Bindless address of the
+    /// per-vertex appearance-weight buffer (`f32` per vertex, vertex-index
+    /// addressed), or 0 when unwired (weight = 1). The kernel evaluates
+    /// `level = gain * weight`, `coverage = clamp(level, 0, 1)`,
+    /// `brightness = max(level, 1)` at hit barycentrics — the raster's
+    /// `apply_appearance` (render_scene.wgsl:889) exactly. The buffer is
+    /// GPU-resident graph output, read bindless — never CPU-copied.
+    pub appearance_weights_addr: u64,
     pub vertex_stride: u32,
-    pub normal_offset: u32,
-    pub normal_matrix: [[f32; 3]; 3],
     /// RT-T2-A (RAYTRACING_DESIGN.md section 8.2 Tier-2 item 4): extends this SAME
     /// bindless table (D21's brief) rather than a parallel one — see the
     /// MSL mirror's doc comment for the field-by-field extension.
@@ -412,6 +431,42 @@ pub struct RtNormalSource {
     /// `>= MAX_RT_MATERIAL_TEXTURES` means "no texture bound" (degrades to
     /// always-pass — see `ensure_normal_sources`).
     pub alpha_tex_index: u32,
+    /// Base-color alpha factor used by alpha-mask candidate tests.
+    pub base_color_alpha: f32,
+    /// P4b: float count in the weights buffer — validated CPU-side to equal
+    /// the mesh vertex count (`ensure_normal_sources` computes it from
+    /// `vertex_buffer` size/stride; a short buffer is a structured
+    /// `RtAccelError::InvalidGeometry` at plan/encode). The kernel treats an
+    /// out-of-range corner index as zero coverage instead of reading
+    /// unchecked. 0 with a nonzero address is invalid; 0 with a zero
+    /// address is simply unwired.
+    pub appearance_weight_count: u32,
+    /// P4b: the object's appearance gain (`u.appearance.x` in the raster).
+    /// A fractional-to-fractional gain change rewrites THIS table row only
+    /// — no BLAS work; crossing into/out of `!= 1.0` flips the descriptor
+    /// nonopaque property and rebuilds.
+    pub appearance_gain: f32,
+    /// KHR_texture_transform fold for the base-color map, in the raster's
+    /// `(m00, m01, m10, m11, tx, ty)` convention.
+    pub base_color_uv_transform: [f32; 6],
+    /// Placed last in the candidate-walk record on purpose: the walk reads
+    /// `uv1_offset`, `color_offset` and `sampling[0]`, which are its first
+    /// 24 bytes.
+    pub material_attributes: RtMaterialAttributes,
+    /// Bindless address of THIS slot's
+    /// `InstanceTransform` (the renderer's 32-byte layout,
+    /// mesh_common.rs:96 — mirrored manually in the MSL; manifold-gpu
+    /// cannot depend on manifold-nodes), or 0 when unwired. When
+    /// nonzero, `fetch_world_normal` applies the D3 fold
+    /// (`rot · (n · msign)`) to the local normal BEFORE the row's
+    /// `normal_matrix`, bit-parity with render_scene.wgsl's `vs_main`.
+    pub instance_addr: u64,
+    /// P4b: mesh vertex count from the base address onward
+    /// (`(vertex_buffer.size - vertex_offset) / vertex_stride`) — the count
+    /// the weights check above is validated against.
+    pub vertex_count: u32,
+    pub normal_offset: u32,
+    pub normal_matrix: [[f32; 3]; 3],
     /// Raster-parity reflections (RAYTRACING_DESIGN.md section 9.6): base-color texture
     /// index for hit-point material sampling; `>= MAX_RT_MATERIAL_TEXTURES` means
     /// "no texture bound" (flat gi_materials albedo is the fallback).
@@ -447,61 +502,12 @@ pub struct RtNormalSource {
     /// For unwired scenes `object_index == instance_id` (one row per
     /// object), byte-identical to the pre-instancing id.
     pub object_index: u32,
-    /// Bindless address of THIS slot's
-    /// `InstanceTransform` (the renderer's 32-byte layout,
-    /// mesh_common.rs:96 — mirrored manually in the MSL; manifold-gpu
-    /// cannot depend on manifold-nodes), or 0 when unwired. When
-    /// nonzero, `fetch_world_normal` applies the D3 fold
-    /// (`rot · (n · msign)`) to the local normal BEFORE the row's
-    /// `normal_matrix`, bit-parity with render_scene.wgsl's `vs_main`.
-    /// Declared AFTER `object_index` so the u64 lands on its natural
-    /// 8-byte alignment at offset 112 — an earlier slot would push the
-    /// struct past 120 bytes (the MSL mirror declares the same order).
-    pub instance_addr: u64,
-    /// Bindless address of the
-    /// per-vertex appearance-weight buffer (`f32` per vertex, vertex-index
-    /// addressed), or 0 when unwired (weight = 1). The kernel evaluates
-    /// `level = gain * weight`, `coverage = clamp(level, 0, 1)`,
-    /// `brightness = max(level, 1)` at hit barycentrics — the raster's
-    /// `apply_appearance` (render_scene.wgsl:889) exactly. The buffer is
-    /// GPU-resident graph output, read bindless — never CPU-copied.
-    pub appearance_weights_addr: u64,
-    /// P4b: float count in the weights buffer — validated CPU-side to equal
-    /// the mesh vertex count (`ensure_normal_sources` computes it from
-    /// `vertex_buffer` size/stride; a short buffer is a structured
-    /// `RtAccelError::InvalidGeometry` at plan/encode). The kernel treats an
-    /// out-of-range corner index as zero coverage instead of reading
-    /// unchecked. 0 with a nonzero address is invalid; 0 with a zero
-    /// address is simply unwired.
-    pub appearance_weight_count: u32,
-    /// P4b: the object's appearance gain (`u.appearance.x` in the raster).
-    /// A fractional-to-fractional gain change rewrites THIS table row only
-    /// — no BLAS work; crossing into/out of `!= 1.0` flips the descriptor
-    /// nonopaque property and rebuilds.
-    pub appearance_gain: f32,
-    /// P4b: bindless address of the object's u32 index buffer (offset zero,
-    /// the existing backend representation), or 0 = flat triangles. One
-    /// shared MSL helper (`rt_index_at`) resolves corners for normal/UV/
-    /// appearance fetch, normal-map frame derivation and emissive
-    /// generation — the trace path previously assumed flat layout.
-    pub index_base_addr: u64,
-    /// P4b: mesh vertex count from the base address onward
-    /// (`(vertex_buffer.size - vertex_offset) / vertex_stride`) — the count
-    /// the weights check above is validated against.
-    pub vertex_count: u32,
-    /// Preserves the pre-extension 16-byte tail alignment.
-    pub _pad_p4b: u32,
-    /// KHR_texture_transform fold for the base-color map, in the raster's
-    /// `(m00, m01, m10, m11, tx, ty)` convention.
-    pub base_color_uv_transform: [f32; 6],
     /// KHR_texture_transform fold for the metallic-roughness map.
     pub mr_uv_transform: [f32; 6],
     /// KHR_texture_transform fold for the tangent-space normal map.
     pub normal_uv_transform: [f32; 6],
     /// Raster normal-map scale applied to decoded tangent-space XY.
     pub normal_scale: f32,
-    /// Base-color alpha factor used by alpha-mask candidate tests.
-    pub base_color_alpha: f32,
     /// Byte offset of the per-vertex tangent (`float4`, xyz + authored
     /// handedness). `u32::MAX` means the mesh has no authored tangent.
     pub tangent_offset: u32,
@@ -509,7 +515,6 @@ pub struct RtNormalSource {
     pub model_matrix: [[f32; 3]; 3],
     /// Sign of the model matrix determinant (`-1` for mirrored transforms).
     pub model_handedness: f32,
-    pub material_attributes: RtMaterialAttributes,
     /// Shared material-texture-table indices for the 15 extension maps. The
     /// first three retain anisotropy/specular-weight/specular-color order;
     /// the remaining eleven follow the authored raster-index order, followed
@@ -519,36 +524,57 @@ pub struct RtNormalSource {
     /// local directions before the instance fold (identity in Object
     /// space). Normals take its cofactor, computed in the kernel.
     pub inner_matrix: [[f32; 3]; 3],
-    /// Keeps the 8-byte struct alignment the MSL mirror rounds to.
-    pub _pad_inner: u32,
+    /// Pads the row to [`RT_NORMAL_SOURCE_ROW_BYTES`].
+    pub _pad_row: [u32; 24],
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 1064);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, inner_matrix) == 1024);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, material_attributes) == 276);
+/// Row stride of the normal-source table: a whole number of 128-byte GPU
+/// cache lines, so the candidate-walk record that opens each row never
+/// straddles two lines.
+const RT_NORMAL_SOURCE_ROW_BYTES: usize = 1152;
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == RT_NORMAL_SOURCE_ROW_BYTES);
+const _: () = assert!(RT_NORMAL_SOURCE_ROW_BYTES.is_multiple_of(128));
 const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 688);
 const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, sampling) == 8);
 const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, extension_uv_transforms) == 328);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, extra_tex_indices) == 964);
-// The consumed `_pad2` words become
-// object_index (108) + instance_addr (112) — asserted, not hand-counted.
-// P4b: the appended appearance/index fields — asserted the same way.
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, object_index) == 108);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, instance_addr) == 112);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_weights_addr) == 120);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_weight_count) == 128);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_gain) == 132);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, index_base_addr) == 136);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_count) == 144);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, _pad_p4b) == 148);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_uv_transform) == 152);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, mr_uv_transform) == 176);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_uv_transform) == 200);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_scale) == 224);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_alpha) == 228);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, tangent_offset) == 232);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_matrix) == 236);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 272);
+// The candidate-walk record: every field a nonopaque candidate reads ends by
+// byte 104 (uv1_offset, color_offset and sampling[0] open `material_attributes`).
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_base_addr) == 0);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, index_base_addr) == 8);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_weights_addr) == 16);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_stride) == 24);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, uv_offset) == 28);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, alpha_mask) == 32);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, alpha_cutoff) == 36);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, alpha_tex_index) == 40);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_alpha) == 44);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_weight_count) == 48);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_gain) == 52);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_uv_transform) == 56);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, material_attributes) == 80);
+const _: () = assert!(
+    std::mem::offset_of!(RtNormalSource, material_attributes)
+        + std::mem::offset_of!(RtMaterialAttributes, sampling)
+        + 16
+        <= 104
+);
+// The rest of the row (hit shading only).
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, instance_addr) == 768);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_count) == 776);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_offset) == 780);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_matrix) == 784);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_tex_index) == 820);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, emissive_uv_m) == 836);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, object_index) == 860);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, mr_uv_transform) == 864);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_uv_transform) == 888);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_scale) == 912);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, tangent_offset) == 916);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_matrix) == 920);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 956);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, extra_tex_indices) == 960);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, inner_matrix) == 1020);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, _pad_row) == 1056);
 
 /// Manual mirror of the renderer's
 /// `mesh::InstanceTransform` (32 bytes,

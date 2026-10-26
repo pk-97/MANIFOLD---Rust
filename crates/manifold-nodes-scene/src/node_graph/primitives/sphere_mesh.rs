@@ -109,14 +109,13 @@ impl Primitive for SphereMesh {
         let segments = count_param(ctx.params, "segments", DEFAULT_SEGMENTS, 3);
         let rings = count_param(ctx.params, "rings", DEFAULT_RINGS, 2);
         let radius = ctx.scalar_or_param("radius", 0.5);
-        ctx.outputs.set_mesh_source(
-            "source",
-            MeshSource::Sphere {
-                radius,
-                segments,
-                rings,
-            },
-        );
+        let source = MeshSource::Sphere {
+            radius,
+            segments,
+            rings,
+        };
+        ctx.outputs.set_cpu_value("vertices", source.local_bounds());
+        ctx.outputs.set_mesh_source("source", source);
 
         let Some(dst) = ctx.outputs.array("vertices") else {
             return;

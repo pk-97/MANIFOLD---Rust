@@ -231,6 +231,13 @@ pub struct Region {
     /// clamped as `lattice_count` describes. Resolved in `build_region`;
     /// texture regions keep `None`.
     pub output_capacity: Option<CapacityExpr>,
+    /// BUFFER regions only: the external slot whose published live extent
+    /// bounds the whole region, when the region's count follows one canonical
+    /// capacity source (see [`capacity_root`]) and that source's producer
+    /// publishes a [`LiveExtent`](crate::scene::live_extent::LiveExtent). The
+    /// fused kernel then stops at that extent's live count. `None` for every
+    /// other region.
+    pub live_anchor: Option<usize>,
 }
 
 /// Partition a flattened def into its maximal pointwise-fusion regions. Returns
@@ -1152,6 +1159,130 @@ fn producer_tex_output_count(
                 .count()
         })
         .unwrap_or(0)
+}
+
+/// The (node, port) a producer's array capacity comes from: the root of the
+/// chain of capacity rules behind it. A fusable producer that declares its
+/// output follows one input (`FromInput`), or the minimum over its required
+/// array inputs (`MinInputs`) when all of them share one root, hands the
+/// question to that input's producer. Anything else is its own root, and so is
+/// a producer whose `array_output_capacity` contradicts its declaration.
+/// Arrays with one root have one capacity at run time, which the structural
+/// comparison of `Slot`s alone cannot see.
+pub fn capacity_root(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    from_node: u32,
+    from_port: &str,
+) -> (u32, String) {
+    capacity_root_walk(
+        def,
+        registry,
+        (from_node, from_port.to_string()),
+        &mut AHashMap::default(),
+        &mut Vec::new(),
+    )
+}
+
+/// [`capacity_root`] with a memo shared across one region's externals and the
+/// chain being walked, so a producer reached twice is resolved once.
+fn capacity_root_walk(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    own: (u32, String),
+    memo: &mut AHashMap<(u32, String), (u32, String)>,
+    path: &mut Vec<(u32, String)>,
+) -> (u32, String) {
+    if let Some(known) = memo.get(&own) {
+        return known.clone();
+    }
+    if path.contains(&own) {
+        return own;
+    }
+    path.push(own.clone());
+    let root = capacity_root_step(def, registry, &own, memo, path).unwrap_or_else(|| own.clone());
+    path.pop();
+    memo.insert(own, root.clone());
+    root
+}
+
+/// One link of [`capacity_root_walk`]: the root behind `own`'s inputs, or
+/// `None` when `own` is itself a root.
+fn capacity_root_step(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    own: &(u32, String),
+    memo: &mut AHashMap<(u32, String), (u32, String)>,
+    path: &mut Vec<(u32, String)>,
+) -> Option<(u32, String)> {
+    let node = def.nodes.iter().find(|n| n.id == own.0)?;
+    let constructed = configured_construct(registry, node)?;
+    // The declaration describes buffer atoms; a boundary node's default says
+    // nothing about its output.
+    if !constructed.fusion_kind().is_fusable() {
+        return None;
+    }
+    let mut array_outputs = constructed
+        .outputs()
+        .iter()
+        .filter(|o| matches!(o.ty, PortType::Array(_)));
+    match (array_outputs.next(), array_outputs.next()) {
+        (Some(out), None) if out.name.as_ref() == own.1 => {}
+        _ => return None,
+    }
+    let array_inputs: Vec<(&str, bool)> = constructed
+        .inputs()
+        .iter()
+        .filter(|i| matches!(i.ty, PortType::Array(_)))
+        .map(|i| (i.name.as_ref(), i.required))
+        .collect();
+    let followed: Vec<&str> = match constructed.fused_output_capacity() {
+        FusedOutputCapacity::FromInput { input } => vec![input],
+        FusedOutputCapacity::MinInputs => array_inputs
+            .iter()
+            .filter(|(_, required)| *required)
+            .map(|(name, _)| *name)
+            .collect(),
+        _ => return None,
+    };
+    if followed.is_empty() || !followed.iter().all(|port| array_inputs.iter().any(|(n, _)| n == port)) {
+        return None;
+    }
+    let wire_into = |port: &str| {
+        def.wires
+            .iter()
+            .find(|w| w.to_node == own.0 && w.to_port == port)
+    };
+    // Every followed input is wired and they share one root.
+    let mut root: Option<(u32, String)> = None;
+    for port in &followed {
+        let wire = wire_into(port)?;
+        let source = capacity_root_walk(
+            def,
+            registry,
+            (wire.from_node, wire.from_port.clone()),
+            memo,
+            path,
+        );
+        match &root {
+            None => root = Some(source),
+            Some(existing) if *existing == source => {}
+            Some(_) => return None,
+        }
+    }
+    // The declaration must be what the node computes: the followed inputs at
+    // one capacity and every other wired array input above it give that
+    // capacity back.
+    const FOLLOWED: u32 = 1009;
+    let capacities: Vec<(&str, u32)> = array_inputs
+        .iter()
+        .filter(|(name, _)| wire_into(name).is_some())
+        .map(|(name, _)| (*name, if followed.contains(name) { FOLLOWED } else { FOLLOWED + 1000 }))
+        .collect();
+    let params = configured_params(constructed.as_ref(), node);
+    (constructed.array_output_capacity(&own.1, &params, &capacities) == Some(FOLLOWED))
+        .then_some(root)
+        .flatten()
 }
 
 /// Conservative symbolic bound for array dispatch. Refuse an unproven relation
@@ -2076,6 +2207,32 @@ pub(crate) fn build_region(
             }
         }
     }
+    // Externals that share a capacity root have one capacity at run time, so
+    // each group is counted through its lowest slot: capacity expressions and
+    // the probe's synthetic capacities see one source per group, not one per
+    // wire.
+    let mut roots: Vec<(u32, String)> = Vec::new();
+    let mut canon: Vec<usize> = Vec::new();
+    if is_buffer {
+        let mut memo = AHashMap::default();
+        for external in &externals {
+            roots.push(capacity_root_walk(
+                def,
+                registry,
+                (external.from_node, external.from_port.clone()),
+                &mut memo,
+                &mut Vec::new(),
+            ));
+        }
+        for slot in 0..roots.len() {
+            canon.push(
+                roots
+                    .iter()
+                    .position(|root| *root == roots[slot])
+                    .expect("a slot matches its own root"),
+            );
+        }
+    }
     if is_buffer
         && (lattice_sized
             || members
@@ -2149,9 +2306,9 @@ pub(crate) fn build_region(
                 let access = member.input_access.get(k).copied().unwrap_or_default();
                 if let RegionInput::External(e) = source
                     && !access.is_gather()
-                    && !coincident_slots.contains(e)
+                    && !coincident_slots.contains(&canon[*e])
                 {
-                    coincident_slots.push(*e);
+                    coincident_slots.push(canon[*e]);
                 }
             }
 
@@ -2208,27 +2365,33 @@ pub(crate) fn build_region(
                             }
                             continue;
                         }
-                        match src {
-                            RegionInput::External(e) => children.push(CapacityExpr::Slot(*e)),
+                        let child = match src {
+                            RegionInput::External(e) => Some(CapacityExpr::Slot(canon[*e])),
                             RegionInput::Member(producer) => {
                                 let ppos = order
                                     .iter()
                                     .position(|id| id == producer)
                                     .ok_or("register producer not a region member")?;
-                                children.push(
+                                Some(
                                     member_expr[ppos]
                                         .as_ref()
                                         .ok_or("register producer lacks a capacity expression")?
                                         .clone(),
-                                );
+                                )
                             }
                             // An OPTIONAL UNWIRED array input has no buffer —
                             // it contributes no capacity (run() treats it as
                             // absent). A BufferGather source never unions (the
                             // finder keeps the producer external) — reaching
                             // one here is a finder bug; refuse rather than guess.
-                            RegionInput::Unwired => {}
+                            RegionInput::Unwired => None,
                             _ => return Err("identity member with a non-register array input"),
+                        };
+                        // Inputs from one capacity source are one bound.
+                        if let Some(child) = child
+                            && !children.contains(&child)
+                        {
+                            children.push(child);
                         }
                     }
                     match children.len() {
@@ -2263,7 +2426,7 @@ pub(crate) fn build_region(
                     }
                     selected_input_count = true;
                     match sources.get(selected) {
-                        Some(RegionInput::External(e)) => CapacityExpr::Slot(*e),
+                        Some(RegionInput::External(e)) => CapacityExpr::Slot(canon[*e]),
                         Some(RegionInput::Member(producer)) => {
                             let position = order
                                 .iter()
@@ -2292,7 +2455,7 @@ pub(crate) fn build_region(
                         {
                             widened = true;
                             multiplier_docs.push(doc_id);
-                            CapacityExpr::Mul(factor, Box::new(CapacityExpr::Slot(*e)))
+                            CapacityExpr::Mul(factor, Box::new(CapacityExpr::Slot(canon[*e])))
                         }
                         _ => return Err("MultipleOf input is not a gathered external"),
                     }
@@ -2313,8 +2476,9 @@ pub(crate) fn build_region(
                     let mut caps = Vec::with_capacity(sources.len());
                     for ((name, _), src) in arr_inputs.iter().zip(sources.iter()) {
                         let cap = match src {
-                            RegionInput::External(e) => syn_refs
+                            RegionInput::External(e) => canon
                                 .get(*e)
+                                .and_then(|slot| syn_refs.get(*slot))
                                 .map(|(_, c)| *c)
                                 .ok_or("array input names an unknown external slot")?,
                             RegionInput::Member(producer) => {
@@ -2428,6 +2592,36 @@ pub(crate) fn build_region(
         }
     }
 
+    // The slot the region's count follows, when it is a single capacity
+    // source: the output expression itself, or for an identity region the one
+    // group its coincident array externals belong to. The kernel stops at that
+    // slot's live extent if its producer publishes one.
+    let count_slot = match &output_capacity {
+        Some(CapacityExpr::Slot(slot)) => Some(*slot),
+        Some(_) => None,
+        None if is_buffer => {
+            let mut coincident = members
+                .iter()
+                .flat_map(|m| m.inputs.iter().zip(&m.input_access))
+                .filter_map(|(input, access)| match input {
+                    RegionInput::External(e) if !access.is_gather() => Some(canon[*e]),
+                    _ => None,
+                });
+            let first = coincident.next();
+            first.filter(|slot| coincident.all(|other| other == *slot))
+        }
+        None => None,
+    };
+    let live_anchor = count_slot.filter(|&slot| {
+        let (root_node, root_port) = &roots[slot];
+        def.nodes
+            .iter()
+            .find(|n| n.id == *root_node)
+            .is_some_and(|n| {
+                crate::scene::live_extent::publishes_live_extent(&n.type_id, root_port)
+            })
+    });
+
     // ── Tier 6: element-space uniformity. The fused kernel iterates one grid,
     // so every member's unfused output must have resolved to the SAME space,
     // and every coincident external (read via `textureLoad` at the kernel's
@@ -2501,6 +2695,7 @@ pub(crate) fn build_region(
         sampled_externals,
         virtual_chains: Vec::new(),
         output_capacity,
+        live_anchor,
     })
 }
 }

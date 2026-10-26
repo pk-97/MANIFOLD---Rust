@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
+use manifold_node_engine::content_revision::ContentVersion;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -38,6 +39,20 @@ struct MeshSpatialMaskUniforms {
     high: f32,
     weights_len: u32,
     dispatch_count: u32,
+}
+
+/// What the last dispatch read and wrote. While it repeats and the output
+/// buffer is the one that dispatch wrote, the output already holds the weights
+/// a new dispatch would produce.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaskStasisKey {
+    rebuild_epoch: u64,
+    input: Option<ContentVersion>,
+    weights: Option<ContentVersion>,
+    /// The dispatch uniforms bit for bit: every control after port shadowing,
+    /// the sample mode, and the element counts.
+    uniforms: [u32; 20],
+    output: usize,
 }
 
 manifold_node_engine::primitive! {
@@ -107,6 +122,7 @@ manifold_node_engine::primitive! {
     input_access: [BufferGather, Coincident],
     derived_uniforms: ["weights_len:u32"],
     wgsl_includes: [PATCH_CELL_COMMON],
+    extra_fields: { last_key: Option<MaskStasisKey> = None },
 }
 
 // Per-frame recompute for a FUSED region's derived block: `weights_len` is
@@ -191,8 +207,6 @@ impl Primitive for MeshSpatialMask {
             }
         }
         let weights_buf = weights_wired.unwrap_or(src);
-        let gpu = ctx.gpu_encoder();
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = MeshSpatialMaskUniforms {
             shape,
             sample_mode,
@@ -215,6 +229,33 @@ impl Primitive for MeshSpatialMask {
             weights_len: weights_wired.map(|b| (b.size / 4) as u32).unwrap_or(0),
             dispatch_count: count,
         };
+        // A wire with no content version (pending or externally bound bytes)
+        // cannot prove the output unchanged. A new output buffer needs a
+        // dispatch even when the weights repeat; the content is still the same.
+        let input_content = ctx.inputs.content_version("in");
+        let weights_content = ctx.inputs.content_version("weights");
+        let content_known = input_content.is_some()
+            && (ctx.inputs.slot("weights").is_none() || weights_content.is_some());
+        let key = MaskStasisKey {
+            rebuild_epoch: ctx.rebuild_epoch,
+            input: input_content,
+            weights: weights_content,
+            uniforms: bytemuck::cast(uniforms),
+            output: dst.identity_key(),
+        };
+        let content_unchanged = content_known
+            && self.last_key.is_some_and(|previous| {
+                MaskStasisKey {
+                    output: key.output,
+                    ..previous
+                } == key
+            });
+        if content_unchanged && self.last_key == Some(key) && ctx.outputs_retained() {
+            ctx.mark_outputs_unchanged();
+            return;
+        }
+        let gpu = ctx.gpu_encoder();
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -241,6 +282,10 @@ impl Primitive for MeshSpatialMask {
             [count.div_ceil(256), 1, 1],
             "node.mesh_spatial_mask",
         );
+        self.last_key = Some(key);
+        if content_unchanged {
+            ctx.mark_output_content_unchanged();
+        }
     }
 }
 
@@ -481,6 +526,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: None,
         };
         let g = generate_fused(&region).expect("the gathered mask kernel fuses");

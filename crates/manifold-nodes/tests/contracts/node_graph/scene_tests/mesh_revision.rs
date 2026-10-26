@@ -300,3 +300,50 @@ fn frame_time() -> FrameTime {
         frame_count: 0,
     }
 }
+
+/// Deformers that write one output record per input record, with only
+/// positions and normals changed, keep their triangle membership: topology
+/// follows the mesh input and positions are written on every run, so
+/// ray-traced scenes refit instead of rebuilding and the velocity pass can
+/// read per-vertex motion.
+#[test]
+fn membership_keeping_deformers_follow_their_mesh_input_topology() {
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+
+    let registry = PrimitiveRegistry::with_builtin();
+    for (type_id, input) in [
+        ("node.bend_mesh", "in"),
+        ("node.twist_mesh", "in"),
+        ("node.taper_mesh", "in"),
+        ("node.fold_mesh", "in"),
+        ("node.push_mesh", "in"),
+        ("node.noise_displace", "in"),
+        ("node.melt_mesh", "in"),
+        ("node.push_along_normals", "in"),
+        ("node.ripple_mesh", "in"),
+        ("node.rotate_3d", "in"),
+        ("node.skin_mesh", "in"),
+        ("node.glitch_jitter", "in"),
+        ("node.slice_mesh", "in"),
+        ("node.voxelize_mesh", "in"),
+        ("node.shatter_mesh", "in"),
+        ("node.ocean_displace", "mesh"),
+    ] {
+        let node = registry
+            .construct(type_id)
+            .unwrap_or_else(|| panic!("{type_id} is not registered"));
+        let rule = node.mesh_output_rule("out");
+        match rule.topology {
+            MeshRevisionRule::Dependencies(deps) => {
+                assert_eq!(deps.len(), 1, "{type_id}");
+                assert_eq!(deps[0].input, input, "{type_id}");
+                assert_eq!(deps[0].aspect, MeshAspect::Topology, "{type_id}");
+            }
+            other => panic!("{type_id}: topology must follow `{input}`, got {other:?}"),
+        }
+        assert!(
+            matches!(rule.positions, MeshRevisionRule::Written),
+            "{type_id}: positions must be Written"
+        );
+    }
+}

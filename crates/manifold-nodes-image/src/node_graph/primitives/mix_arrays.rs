@@ -402,6 +402,7 @@ mod gpu_tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: None,
         };
         let fused = generate_fused(&region).expect("mix_arrays chain should fuse");

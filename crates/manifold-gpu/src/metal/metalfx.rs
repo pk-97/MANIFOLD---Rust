@@ -253,13 +253,13 @@ impl MetalFxTemporalScaler {
         unsafe {
             scaler.setInputContentWidth(input_width as usize);
             scaler.setInputContentHeight(input_height as usize);
-            // Motion vectors arrive in NDC-space `(dx, dy)` per pixel
-            // (the format W0 stores). MetalFX
-            // expects motion in pixel units: multiplying by half the
-            // render-resolution converts an NDC delta spanning [-1, 1]
-            // across the full input width/height into pixels.
-            scaler.setMotionVectorScaleX(input_width as f32 * 0.5);
+            // `velocity` is NDC `now - prev` (+X right, +Y up) while
+            // MetalFX expects the pixel offset back to the previous frame in
+            // top-left coordinates (-0.5 * width in X, +0.5 * height in Y);
+            // scene depth is reversed-Z (1 = near, 0 = far).
+            scaler.setMotionVectorScaleX(-(input_width as f32 * 0.5));
             scaler.setMotionVectorScaleY(input_height as f32 * 0.5);
+            scaler.setDepthReversed(true);
         }
 
         log::info!(

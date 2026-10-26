@@ -405,15 +405,15 @@ fn cut_remap_generated_params_match_shared_four_word_upload() {
             ty: "u32",
         },
         Field {
+            name: "live_per_item".into(),
+            ty: "u32",
+        },
+        Field {
             name: "_pad0".into(),
             ty: "u32",
         },
         Field {
             name: "_pad1".into(),
-            ty: "u32",
-        },
-        Field {
-            name: "_pad2".into(),
             ty: "u32",
         },
     ];

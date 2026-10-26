@@ -102,6 +102,7 @@ fn fused_prelude_carries_and_dedups_top_level_consts() {
         virtual_chains: Vec::new(),
         sampled_externals: Vec::new(),
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("a region whose body declares a const fuses");
@@ -175,6 +176,7 @@ fn cross_resolution_external_sampled_at_uv() {
         virtual_chains: Vec::new(),
         sampled_externals: vec![1],
         camera_externals: 0,
+        live_anchor: None,
         output_capacity: None,
     };
     let g = generate_fused(&region).expect("cross-res region fuses");

@@ -41,6 +41,8 @@ mod generate_instance_transforms;
 mod glitch_jitter;
 pub(crate) mod gltf_anim_shared;
 mod plane_mesh;
+#[cfg(test)]
+mod builtin_mesh_bounds_tests;
 pub mod render_mesh_diagram;
 mod sample_triangle_grid;
 mod sphere_mesh;

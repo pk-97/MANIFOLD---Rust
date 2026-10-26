@@ -33,6 +33,7 @@ manifold_node_engine::primitive! {
     input_access: [BufferGather, Coincident],
     output_capacity: FusedOutputCapacity::FromInput { input: "map" },
     wgsl_includes: [include_str!("shaders/mesh_cut_map_valid.wgsl")],
+    live_anchor: "map",
     extra_fields: { last_key: Option<[u64; 5]> = None },
 }
 

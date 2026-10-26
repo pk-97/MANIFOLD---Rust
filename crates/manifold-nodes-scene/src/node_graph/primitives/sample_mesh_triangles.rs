@@ -25,7 +25,7 @@ struct SampleMeshTrianglesUniforms {
 manifold_node_engine::primitive! {
     name: SampleMeshTriangles,
     type_id: "node.sample_mesh_triangles",
-    purpose: "Select at most 512 complete triangles, evenly distributed by original face index, without changing any vertex attributes. Inactive output triangles are zero. An optional live_count (element 0 = live vertex count, e.g. a cut map's live_count) limits selection to the live front of a padded mesh. This preserves original face correspondence for sparse mesh diagnostics.",
+    purpose: "Select at most 512 complete triangles, evenly distributed by original face index, without changing any vertex attributes. Inactive output triangles are zero. An optional live_count (element 0 = live vertex count) limits selection to the live front of a padded mesh; unwired, the input's published live extent does, so a cut mesh is never sampled past its live records. This preserves original face correspondence for sparse mesh diagnostics.",
     inputs: { in: Array(MeshVertex) required, live_count: Array(u32) optional, density: ScalarF32 optional },
     outputs: { vertices: Array(MeshVertex) },
     params: [ParamDef { name: Cow::Borrowed("density"), label: "Density", ty: ParamType::Float, default: ParamValue::Float(3.0), range: Some((2.0,8.0)), enum_values: &[] }],
@@ -59,13 +59,20 @@ impl Primitive for SampleMeshTriangles {
             unsafe { buffer.write(0, bytemuck::bytes_of(&u32::MAX)) };
             self.unbounded_live_count = Some(buffer);
         }
-        // Unwired: u32::MAX, so the whole buffer length is live.
-        let Some(live_count) = ctx
+        // The live vertex count: a wired `live_count`, else the input's live
+        // extent (counted in vertices), else u32::MAX so the whole buffer
+        // length is live.
+        let extent = ctx
             .inputs
-            .array("live_count")
-            .or(self.unbounded_live_count.as_ref())
-        else {
-            return;
+            .live_extent("in")
+            .filter(|extent| extent.per_item == 1);
+        let (live_count, live_offset) = match (ctx.inputs.array("live_count"), &extent) {
+            (Some(wired), _) => (wired, 0),
+            (None, Some(extent)) => (&extent.counts, extent.offset),
+            (None, None) => match self.unbounded_live_count.as_ref() {
+                Some(unbounded) => (unbounded, 0),
+                None => return,
+            },
         };
         let Some(dst) = ctx.outputs.array("vertices") else {
             return;
@@ -95,7 +102,7 @@ impl Primitive for SampleMeshTriangles {
                 GpuBinding::Buffer {
                     binding: 2,
                     buffer: live_count,
-                    offset: 0,
+                    offset: live_offset,
                 },
                 GpuBinding::Buffer {
                     binding: 3,
@@ -175,6 +182,7 @@ mod tests {
             virtual_chains: Vec::new(),
             sampled_externals: Vec::new(),
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: None,
         };
         // The codegen can EMIT the gathered kernel (the mechanism is general);

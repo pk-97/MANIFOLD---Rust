@@ -257,6 +257,11 @@ pub trait PrimitiveSpec: Send {
     /// element. It is defined by the primitive's WGSL includes and returns
     /// `0xffffffffu` for an inactive dispatch item.
     const BUFFER_INDEX: Option<&'static str> = None;
+
+    /// The array input whose published live extent bounds this buffer kernel
+    /// (see [`EffectNode::live_anchor`](crate::exec::effect_node::EffectNode::live_anchor)).
+    /// Set via the macro's `live_anchor:` field.
+    const LIVE_ANCHOR: Option<&'static str> = None;
     const DENSE_BUFFER_FUSION: Option<crate::exec::effect_node::DenseBufferFusion> = None;
 
     /// How this primitive propagates a depth companion channel (no compiler
@@ -1101,6 +1106,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn buffer_index(&self) -> Option<&'static str> {
         P::BUFFER_INDEX
     }
+    fn live_anchor(&self) -> Option<&'static str> {
+        P::LIVE_ANCHOR
+    }
     fn dense_buffer_fusion(&self) -> Option<crate::exec::effect_node::DenseBufferFusion> {
         P::DENSE_BUFFER_FUSION
     }
@@ -1228,6 +1236,7 @@ macro_rules! primitive {
         $( atomic_outputs: [ $($atomic_out:literal),* $(,)? ], )?
         $( owned_outputs: [ $($owned_out:literal),* $(,)? ], )?
         $( buffer_index: $buffer_index:literal, )?
+        $( live_anchor: $live_anchor:literal, )?
         $( dense_buffer_fusion: $dense_buffer_fusion:expr, )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
@@ -1301,6 +1310,7 @@ macro_rules! primitive {
             $( const ATOMIC_OUTPUTS: &'static [&'static str] = &[ $($atomic_out),* ]; )?
             $( const OWNED_OUTPUTS: &'static [&'static str] = &[ $($owned_out),* ]; )?
             $( const BUFFER_INDEX: Option<&'static str> = Some($buffer_index); )?
+            $( const LIVE_ANCHOR: Option<&'static str> = Some($live_anchor); )?
             $( const DENSE_BUFFER_FUSION: Option<$crate::exec::effect_node::DenseBufferFusion> = Some($dense_buffer_fusion); )?
 
             fn cached_type_id() -> &'static $crate::exec::effect_node::EffectNodeType {

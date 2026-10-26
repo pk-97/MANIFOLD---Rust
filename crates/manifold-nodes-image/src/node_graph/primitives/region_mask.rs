@@ -430,6 +430,7 @@ mod gpu_tests {
             virtual_chains: vec![],
             sampled_externals: vec![],
             camera_externals: 0,
+            live_anchor: None,
             output_capacity: None,
         })
         .expect("region mask fused codegen")

@@ -123,6 +123,10 @@ inventory::submit! {
 }
 
 impl Primitive for FoldMesh {
+    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(port, manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_IN)
+    }
+
     /// Output `out` is sized to match input `in` — folding is a per-vertex
     /// transform, no expansion.
     fn array_output_capacity(

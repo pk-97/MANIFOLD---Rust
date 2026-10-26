@@ -2176,7 +2176,6 @@ pub fn ensure_normal_sources<'a>(
             appearance_gain: obj.appearance_gain,
             index_base_addr: obj.index_buffer.map_or(0, |b| b.gpu_address()),
             vertex_count: mesh_vertex_count(obj),
-            _pad_p4b: 0,
             base_color_uv_transform: obj.base_color_uv_transform,
             mr_uv_transform: obj.mr_uv_transform,
             normal_uv_transform: obj.normal_uv_transform,
@@ -2188,7 +2187,7 @@ pub fn ensure_normal_sources<'a>(
             material_attributes: obj.material_attributes,
             extra_tex_indices,
             inner_matrix: model_matrix_from_transform(obj.instance_inner),
-            _pad_inner: 0,
+            _pad_row: [0; 24],
         };
         // D11: canonical row at [0, N).
         unsafe {

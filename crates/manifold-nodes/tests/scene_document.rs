@@ -2444,11 +2444,12 @@ fn bends_add_detail_and_a_fragment_cut_draws_its_live_records() {
         .collect();
     assert!(!objects.is_empty(), "the cut reaches an object");
     for object in objects {
-        let (map, _) = feed(object, "topology").unwrap();
+        let (_, port) = feed(object, "topology").unwrap();
+        assert_eq!(port, "map", "the object reads the cut's map");
         assert_eq!(
             feed(object, "live_count"),
-            Some((map, "live_count".to_owned())),
-            "the object draws the cut's live records"
+            None,
+            "the cut's live records reach the object as a live extent, not a wire"
         );
     }
 }
@@ -2599,11 +2600,12 @@ fn a_group_bend_bends_turned_and_scaled_parts_as_one_body() {
         "both parts come back out of the frame"
     );
     for object in carried_out {
-        let (map, _) = feed(object, "topology").expect("the part draws the cut's triangles");
+        let (_, port) = feed(object, "topology").expect("the part draws the cut's triangles");
+        assert_eq!(port, "map", "the part reads the cut's map");
         assert_eq!(
             feed(object, "live_count"),
-            Some((map, "live_count".to_owned())),
-            "the part draws the cut's live records"
+            None,
+            "the cut's live records reach the part as a live extent, not a wire"
         );
     }
 

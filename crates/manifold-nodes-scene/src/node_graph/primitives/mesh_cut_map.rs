@@ -65,9 +65,9 @@ pub struct CutMapState {
     pub last_key: Option<u64>,
     status_needs_snapshot: bool,
     next_readback: usize,
-    /// Bound in place of an unallocated `live_count` output; the shader
-    /// always writes binding 6.
-    fallback_live_count: Option<GpuBuffer>,
+    /// How many leading map records are live, written by the scan pass
+    /// (binding 6) and published as the map's live extent.
+    live_count: Option<GpuBuffer>,
 }
 
 impl CutMapState {
@@ -86,7 +86,7 @@ impl CutMapState {
             last_key: None,
             status_needs_snapshot: false,
             next_readback: 0,
-            fallback_live_count: None,
+            live_count: None,
         }
     }
 }
@@ -329,18 +329,16 @@ fn run_cut_map(
         ctx.mark_outputs_pending();
         return;
     };
-    let live_output = ctx.outputs.array("live_count");
-    if live_output.is_none() && state.fallback_live_count.is_none() {
-        state.fallback_live_count = Some(ctx.gpu_encoder().device.create_buffer_shared(4));
+    if state.live_count.is_none() {
+        let buffer = ctx.gpu_encoder().device.create_buffer_shared(4);
+        buffer.zero_fill();
+        state.live_count = Some(buffer);
     }
-    let fallback_live_count = if live_output.is_none() {
-        state.fallback_live_count.clone()
-    } else {
-        None
-    };
-    let Some(live_count) = live_output.or(fallback_live_count.as_ref()) else {
-        return;
-    };
+    let live_count = state
+        .live_count
+        .clone()
+        .expect("cut-map live count allocated");
+    let live_count = &live_count;
     let reference_capacity = reference.size / MESH_VERTEX_SIZE;
     let output_capacity = map.size / VEC4_VERTEX_SIZE;
     if reference_capacity > u32::MAX as u64 || output_capacity > u32::MAX as u64 {
@@ -350,6 +348,17 @@ fn run_cut_map(
     }
     let reference_capacity = reference_capacity as u32;
     let output_capacity = output_capacity as u32;
+    // Published on every run, stasis included: downstream steps stop at the
+    // live records, and the extent is the only record of where they end.
+    ctx.outputs.set_live_extent(
+        "map",
+        manifold_node_engine::scene::live_extent::LiveExtent {
+            counts: live_count.clone(),
+            offset: 0,
+            per_item: 1,
+            bound: output_capacity,
+        },
+    );
     let triangle_count = reference_capacity / 3;
     let bands_value = if mode == 0 {
         ctx.scalar_or_param("bands", bands_default)
@@ -583,9 +592,6 @@ fn run_cut_map(
 }
 
 fn cut_map_capacity(port_name: &str, input_capacities: &[(&str, u32)]) -> Option<u32> {
-    if port_name == "live_count" {
-        return Some(1);
-    }
     if port_name != "map" {
         return None;
     }
@@ -611,7 +617,7 @@ manifold_node_engine::primitive! {
         source_offset_y: ScalarF32 optional,
         source_offset_z: ScalarF32 optional,
     },
-    outputs: { map: Array(Vec4Vertex), live_count: Array(u32), },
+    outputs: { map: Array(Vec4Vertex), },
     params: [
         ParamDef { name: Cow::Borrowed("bands"), label: "Bands", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((1.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("direction_x"), label: "Direction X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
@@ -623,7 +629,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("source_offset_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Bands are clamped to 1..64 and direction is normalized with a +Y fallback. Only internal slab planes cut geometry; the first and last bands are unbounded. Every map record is xyz barycentrics plus w = exact source triangle index, with unused records set to zero/-1. Valid records are compacted at the front; `live_count` holds how many (0 when the map is invalid), so samplers can skip the reserve tail. All numeric controls are port-shadowed.",
+    composition_notes: "Bands are clamped to 1..64 and direction is normalized with a +Y fallback. Only internal slab planes cut geometry; the first and last bands are unbounded. Every map record is xyz barycentrics plus w = exact source triangle index, with unused records set to zero/-1. Valid records are compacted at the front; the map publishes a live extent counting them (0 when the map is invalid), so every step downstream stops at the live records and the reserve tail stays zero. All numeric controls are port-shadowed.",
     examples: [], picker: { label: "Cut Mesh Bands", category: Atom },
     summary: "Cuts mesh triangles into directional bands while retaining source-triangle provenance.",
     category: Geometry3D, role: Source,
@@ -659,7 +665,7 @@ manifold_node_engine::primitive! {
         source_offset_y: ScalarF32 optional,
         source_offset_z: ScalarF32 optional,
     },
-    outputs: { map: Array(Vec4Vertex), live_count: Array(u32), },
+    outputs: { map: Array(Vec4Vertex), },
     params: [
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.15), range: Some((0.000001, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("scale"), label: "Scene Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.000001, 1000.0)), enum_values: &[] },
@@ -668,7 +674,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("source_offset_z"), label: "Source Offset Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Cells use normalized source position `(position + source_offset) / abs(scale).max(1e-6)` and the exact shared quantization `floor(p / abs(cell_size).max(1e-6) + 0.5)`. Every map record is xyz barycentrics plus w = exact source triangle index, with unused records set to zero/-1. Valid records are compacted at the front; `live_count` holds how many (0 when the map is invalid), so samplers can skip the reserve tail. All numeric controls are port-shadowed.",
+    composition_notes: "Cells use normalized source position `(position + source_offset) / abs(scale).max(1e-6)` and the exact shared quantization `floor(p / abs(cell_size).max(1e-6) + 0.5)`. Every map record is xyz barycentrics plus w = exact source triangle index, with unused records set to zero/-1. Valid records are compacted at the front; the map publishes a live extent counting them (0 when the map is invalid), so every step downstream stops at the live records and the reserve tail stays zero. All numeric controls are port-shadowed.",
     examples: [], picker: { label: "Cut Mesh Cells", category: Atom },
     summary: "Cuts mesh triangles into grid cells while retaining source-triangle provenance.",
     category: Geometry3D, role: Source,
@@ -689,6 +695,19 @@ impl Primitive for CutMeshCells {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         run_cut_map(ctx, 1, &mut self.state, 8.0, 0.15);
+    }
+}
+
+inventory::submit! {
+    manifold_node_engine::scene::live_extent::LiveExtentOutput {
+        type_id: "node.cut_mesh_bands",
+        port: "map",
+    }
+}
+inventory::submit! {
+    manifold_node_engine::scene::live_extent::LiveExtentOutput {
+        type_id: "node.cut_mesh_cells",
+        port: "map",
     }
 }
 

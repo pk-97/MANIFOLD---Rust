@@ -39,6 +39,9 @@ impl RenderScene {
             ao_mask_wired,
             denoise_aux_ready,
             rt_enabled,
+            temporal_upscale,
+            width,
+            native_width,
             ..
         } = pre;
         // SCENE_RENDER_MODE_DESIGN.md D4/INV-R4: the effective mode for this
@@ -140,25 +143,10 @@ impl RenderScene {
                 || whole_triangle_vertices(vertices),
                 |buffer| (buffer.size / 4 / 3 * 3).min(u64::from(u32::MAX)) as u32,
             );
-            // A fragment cut pads its mesh far past the live records, and the
-            // primitives after the cut do not forward its extent; the object's
-            // live count stands in so the padding is never drawn.
             let live_extent = object
                 .indices
                 .or(mesh_slot)
-                .and_then(|s| ctx.inputs.live_extent_slot(s))
-                .or_else(|| {
-                    let counts = object
-                        .live_count
-                        .filter(|_| object.indices.is_none())
-                        .and_then(|s| ctx.inputs.array_slot(s))?;
-                    Some(manifold_node_engine::scene::live_extent::LiveExtent {
-                        counts: counts.clone(),
-                        offset: 0,
-                        per_item: 1,
-                        bound: capacity,
-                    })
-                });
+                .and_then(|s| ctx.inputs.live_extent_slot(s));
             let (object_vertex_count, point_count) = match &live_extent {
                 Some(extent) => {
                     let bound = extent.bound.min(capacity);
@@ -412,6 +400,10 @@ impl RenderScene {
                 prev_jitter_ndc.0,
                 prev_jitter_ndc.1,
             ];
+            if *temporal_upscale {
+                uniforms.render_mode[1] =
+                    (*width as f32 / (*native_width).max(1) as f32).log2();
+            }
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -502,9 +494,6 @@ impl RenderScene {
             let is_blend = alpha_mode == AlphaMode::Blend;
             let is_transmissive =
                 material.kind == MaterialKind::Pbr && material.transmission_factor > 0.0;
-            if is_transmissive {
-                has_transmission = true;
-            }
 
             // D11: wired instances_n draws the optional live count, clamped
             // to buffer capacity (0 → that object's draw becomes a legal
@@ -517,8 +506,19 @@ impl RenderScene {
             let instance_capacity =
                 instances.map(|buf| (buf.size / instance_size).min(u64::from(u32::MAX)) as u32);
             let instance_count = effective_instance_count(instance_capacity, object.instance_count);
+            // Transmission turns on the snapshot passes and the opaque-depth
+            // redraw; a glass object that draws no instances needs neither.
+            if is_transmissive && instance_count > 0 {
+                has_transmission = true;
+            }
 
             let points = color_pass_points(&render_mode);
+            let fill_mode = color_pass_fill_mode(&render_mode);
+            let opaque_fast = !is_blend
+                && !is_transmissive
+                && !points
+                && fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
+                && solid_surface(&uniforms);
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
                 self.pipeline_for(
@@ -529,9 +529,35 @@ impl RenderScene {
                     *denoise_aux_ready,
                     is_blend || is_transmissive,
                     points,
+                    opaque_fast,
                 )
                 .clone()
             };
+
+            let geometry_content_known = [
+                object.mesh,
+                object.indices,
+                object.instances,
+                object.topology,
+            ]
+            .into_iter()
+            .flatten()
+            .all(|slot| inputs.content_version_of(slot).is_some());
+            // The producer's box stands for the vertices only while nothing
+            // but the model matrix places them: no instances, no live extent,
+            // filled triangles (a line or a point reaches past its vertex).
+            // It is tested against the same jittered `view_proj` the draw
+            // uniforms carry, after the previous-model write above, which a
+            // skipped draw still needs for its velocity on re-entry.
+            let bounds = (object.instances.is_none()
+                && live_extent.is_none()
+                && geometry_content_known
+                && fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
+                && !points)
+                .then(|| mesh_slot.and_then(|s| inputs.cpu_value_slot::<Option<MeshBounds>>(s)))
+                .flatten()
+                .flatten();
+            let in_view = !bounds.is_some_and(|b| box_outside_clip(view_proj, &model, &b));
 
             // View-space depth of this
             // object's translation (see the `sort_depth` doc comment above).
@@ -581,19 +607,12 @@ impl RenderScene {
                 live_args: None,
                 vertices_content,
                 mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
+                prev_positions: None,
                 topology_hint: object
                     .indices
                     .or(object.topology)
                     .and_then(|slot| inputs.content_version_of(slot)),
-                geometry_content_known: [
-                    object.mesh,
-                    object.indices,
-                    object.instances,
-                    object.topology,
-                ]
-                .into_iter()
-                .flatten()
-                .all(|slot| inputs.content_version_of(slot).is_some()),
+                geometry_content_known,
                 appearance_content_known: [
                     object.base_color_map,
                     object.normal_map,
@@ -650,8 +669,10 @@ impl RenderScene {
                 cast_shadows: object.cast_shadows,
                 closed: object.closed,
                 kind: material.kind,
-                fill_mode: color_pass_fill_mode(&render_mode),
+                fill_mode,
                 points,
+                bounds,
+                in_view,
             });
         }
 
@@ -782,6 +803,7 @@ impl RenderScene {
         self.rt_prev_accumulating = false;
         self.prev_temporal_upscale = false;
         self.prev_model.fill(None);
+        self.forget_prev_positions();
         self.prev_view_proj = None;
         self.prev_cam_state = None;
         self.prev_jitter_ndc = None;
@@ -989,6 +1011,9 @@ impl RenderScene {
         // returns PIXEL units at the render resolution (now `width`/
         // `height` above, D22); 1 pixel = `2.0 / dim` in NDC (NDC spans
         // [-1, 1] across `dim` pixels).
+        // Since `view_proj = P * V`, `clip.w` has contributions from all
+        // four columns of `view_proj`, so `jitter_ndc * col[3]` is added
+        // into `col[0]` and `col[1]` across all 4 columns.
         self.jitter_frame_index = self.jitter_frame_index.wrapping_add(1);
         // T2-B: hoisted out of the `if` below so the final MetalFX upscale
         // call (end of this fn) can reuse the SAME jitter this frame's
@@ -1000,9 +1025,13 @@ impl RenderScene {
             let (jx_px, jy_px) =
                 crate::metalfx_temporal_upscaler::jitter_offset(self.jitter_frame_index, 8);
             jitter_px = (jx_px, jy_px);
-            let wz = view_proj[2][3];
-            view_proj[2][0] += (jx_px * 2.0 / width as f32) * wz;
-            view_proj[2][1] += (jy_px * 2.0 / height as f32) * wz;
+            let jx_ndc = jx_px * 2.0 / width as f32;
+            let jy_ndc = jy_px * 2.0 / height as f32;
+            for col in &mut view_proj {
+                let w = col[3];
+                col[0] += jx_ndc * w;
+                col[1] += jy_ndc * w;
+            }
         }
         // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): the scene-level toggle
         // (W0's `rt_enabled` ParamDef). Read once here, after jitter is
@@ -1124,7 +1153,9 @@ impl RenderScene {
         // different scenes.
         if reset_decision {
             self.prev_model.iter_mut().for_each(|m| *m = None);
+            self.forget_prev_positions();
             self.prev_view_proj = None;
+            self.prev_jitter_ndc = None;
             self.prev_cam_state = None;
         }
         let upscale_just_resumed = temporal_upscale && !self.prev_temporal_upscale;
