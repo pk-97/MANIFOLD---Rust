@@ -1333,7 +1333,7 @@ mod cache_path_full_render {
         for action in &actions {
             let mut dctx = crate::ui_bridge::DispatchCtx {
                 project: crate::ui_bridge::ProjectRef::new(
-                    &mut data.project,
+                    &data.project,
                     &mut frame.edits,
                     content_tx,
                 ),

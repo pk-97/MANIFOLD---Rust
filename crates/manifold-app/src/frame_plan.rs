@@ -49,29 +49,20 @@ impl UiStamps {
     }
 }
 
-/// Take a published project snapshot into the UI's copy. Only a different
-/// allocation is cloned; modulation-only frames send the same Arc. A new Arc
-/// whose data version and stamps did not move (the content thread republishing
-/// after an export dropped edits) still replaces the project wholesale, so
-/// every part moves and the panels re-project from the corrected copy.
-/// Returns whether the Arc was new.
+/// Show a published project snapshot. Modulation-only frames resend the
+/// same Arc, which changes nothing. A new Arc whose data version and stamps
+/// did not move (the content thread republishing after an export dropped
+/// edits) still replaces the project, so every part moves and the panels
+/// re-project from the corrected project. Returns whether the Arc was new.
 pub(crate) fn take_project_snapshot(
-    local: &mut manifold_core::project::Project,
+    local: &mut crate::ui_bridge::LocalProject,
     stamps: &mut UiStamps,
-    last_arc: &mut Option<std::sync::Arc<manifold_core::project::Project>>,
     snapshot: std::sync::Arc<manifold_core::project::Project>,
     version_changed: bool,
 ) -> bool {
-    let is_new_arc = last_arc
-        .as_ref()
-        .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
-    if is_new_arc {
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
-        *local = (*snapshot).clone();
-        *last_arc = Some(snapshot);
-        if !version_changed {
-            stamps.project_replaced();
-        }
+    let is_new_arc = local.show(snapshot);
+    if is_new_arc && !version_changed {
+        stamps.project_replaced();
     }
     is_new_arc
 }

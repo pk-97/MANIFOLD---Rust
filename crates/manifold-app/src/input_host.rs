@@ -325,7 +325,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
         ContentCommand::send(
             self.content_tx,
-            crate::content_command::ContentCommand::ExecuteOnContent(boxed),
+            crate::content_command::ContentCommand::Execute(boxed),
         );
         true
     }
@@ -1418,12 +1418,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn cut_selected_automation(&mut self) {
-        self.project.with_sent(|p| {
-            (
-                automation::cut_selected(p, self.selection, self.content_tx),
-                crate::content_command::touch::AUTOMATION,
-            )
-        });
+        automation::cut_selected(&self.project, self.selection, self.content_tx);
     }
 
     fn has_automation_paste_target(&self) -> bool {
@@ -1442,50 +1437,30 @@ impl TimelineInputHost for AppInputHost<'_> {
             .map(|range| range.start)
             .or(self.selection.automation_insert_beat)
             .unwrap_or_else(|| Beats::from_f32(target_beat));
-        self.project.with_sent(|p| {
-            (
-                automation::paste(p, self.selection, self.content_tx, target_beat),
-                crate::content_command::touch::AUTOMATION,
-            )
-        });
+        automation::paste(&self.project, self.selection, self.content_tx, target_beat);
     }
 
     fn duplicate_selected_automation(&mut self) {
-        self.project.with_sent(|p| {
-            (
-                automation::duplicate_selected(
-                    p,
-                    self.selection,
-                    self.content_tx,
-                    self.ui_root.viewport.grid_step(),
-                ),
-                crate::content_command::touch::AUTOMATION,
-            )
-        });
+        automation::duplicate_selected(
+            &self.project,
+            self.selection,
+            self.content_tx,
+            self.ui_root.viewport.grid_step(),
+        );
     }
 
     fn nudge_selected_automation(&mut self, beat_delta: f32, value_steps: f32) -> bool {
-        self.project.with_sent(|p| {
-            (
-                automation::nudge_selected(
-                    p,
-                    self.selection,
-                    self.content_tx,
-                    Beats::from_f32(beat_delta),
-                    value_steps,
-                ),
-                crate::content_command::touch::AUTOMATION,
-            )
-        })
+        automation::nudge_selected(
+            &self.project,
+            self.selection,
+            self.content_tx,
+            Beats::from_f32(beat_delta),
+            value_steps,
+        )
     }
 
     fn delete_selected_automation_points(&mut self) {
-        self.project.with_sent(|p| {
-            (
-                automation::delete_selected(p, self.selection, self.content_tx),
-                crate::content_command::touch::AUTOMATION,
-            )
-        });
+        automation::delete_selected(&self.project, self.selection, self.content_tx);
     }
 
     fn toggle_automation_draw_mode(&mut self) {
@@ -1575,17 +1550,13 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .map(|l| l.layer_id.clone())
         });
         let project_io = &mut *self.project_io;
-        let action = self.project.with_sent(|project| {
-            let action = project_io.process_dropped_files(
-                file_paths,
-                target_beat,
-                drop_layer_index,
-                join_audio_layer,
-                project,
-            );
-            let touches = crate::gesture_preview::touches_of(&action.record_commands);
-            (action, touches)
-        });
+        let action = project_io.process_dropped_files(
+            file_paths,
+            target_beat,
+            drop_layer_index,
+            join_audio_layer,
+            &self.project,
+        );
         if !action.record_commands.is_empty() {
             if action.record_commands.len() == 1 {
                 let cmd = action.record_commands.into_iter().next().unwrap();
@@ -1759,6 +1730,7 @@ mod automation_clipboard_host_tests {
         active_layer: Option<LayerId>,
         redraw: bool,
         edits: crate::gesture_preview::UiEdits,
+        service: EditingService,
         current_project_path: Option<std::path::PathBuf>,
         pending_close_output: bool,
         pending_export: bool,
@@ -1846,6 +1818,7 @@ mod automation_clipboard_host_tests {
                 active_layer: None,
                 redraw: false,
                 edits: Default::default(),
+                service: EditingService::new(),
                 current_project_path: None,
                 pending_close_output: false,
                 pending_export: false,
@@ -1865,7 +1838,7 @@ mod automation_clipboard_host_tests {
         fn host(&mut self) -> AppInputHost<'_> {
             AppInputHost {
                 project: crate::ui_bridge::ProjectRef::new(
-                    &mut self.project,
+                    &self.project,
                     &mut self.edits,
                     &self.tx,
                 ),
@@ -1884,6 +1857,16 @@ mod automation_clipboard_host_tests {
                 #[cfg(target_os = "macos")]
                 internal_clipboard_change_count: &mut self.internal_clipboard_change_count,
             }
+        }
+
+        /// Run what the host sent through the content thread's edit runner
+        /// over the project, as the next snapshot would show it.
+        fn run_sent(&mut self) {
+            crate::edit_runner::apply_sent(
+                &mut self.service,
+                &mut self.project,
+                self.rx.try_iter(),
+            );
         }
 
         fn select(&mut self, points: &[(&str, f64)]) {
@@ -1923,19 +1906,6 @@ mod automation_clipboard_host_tests {
                 })
                 .collect();
             self.selection.selected_automation_point = None;
-        }
-    }
-
-    fn drain_batch(
-        h: &Harness,
-        authoritative: &mut manifold_core::project::Project,
-        service: &mut EditingService,
-    ) {
-        match h.rx.try_recv().expect("host must emit one command") {
-            ContentCommand::ExecuteBatch(commands, description) => {
-                service.execute_batch(commands, description, authoritative)
-            }
-            _ => panic!("expected an automation ExecuteBatch"),
         }
     }
 
@@ -2005,8 +1975,7 @@ mod automation_clipboard_host_tests {
                 h.project.timeline.layers[0].effect_groups.is_none(),
                 "UI must not mutate the model"
             );
-            let ContentCommand::ExecuteOnContent(mut command) =
-                h.rx.try_recv().expect("group queued")
+            let ContentCommand::Execute(mut command) = h.rx.try_recv().expect("group queued")
             else {
                 panic!("group must execute on content thread");
             };
@@ -2292,6 +2261,7 @@ mod automation_clipboard_host_tests {
             host.copy_selected_automation();
             host.paste_automation(10.0);
         }
+        h.run_sent();
         let amount = h.project.settings.master_effects[0]
             .automation_lanes
             .as_ref()
@@ -2310,24 +2280,17 @@ mod automation_clipboard_host_tests {
         assert_eq!(amount.value_at(Beats(14.0)), 0.6);
         assert_eq!(steps.value_at(Beats(12.0)), 2.0);
         assert_eq!(steps.value_at(Beats(16.0)), 8.0);
-        let mut authoritative = before.clone();
-        let mut service = EditingService::new();
-        drain_batch(&h, &mut authoritative, &mut service);
+        let pasted =
+            serde_json::to_value(&h.project.settings.master_effects[0].automation_lanes).unwrap();
+        assert!(h.service.undo(&mut h.project));
         assert_eq!(
-            points(&authoritative, "amount"),
-            points(&h.project, "amount")
-        );
-        assert!(service.undo(&mut authoritative));
-        assert_eq!(
-            serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes)
-                .unwrap(),
+            serde_json::to_value(&h.project.settings.master_effects[0].automation_lanes).unwrap(),
             serde_json::to_value(&before.settings.master_effects[0].automation_lanes).unwrap()
         );
-        assert!(service.redo(&mut authoritative));
+        assert!(h.service.redo(&mut h.project));
         assert_eq!(
-            serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes)
-                .unwrap(),
-            serde_json::to_value(&h.project.settings.master_effects[0].automation_lanes).unwrap()
+            serde_json::to_value(&h.project.settings.master_effects[0].automation_lanes).unwrap(),
+            pasted
         );
     }
 
@@ -2351,6 +2314,7 @@ mod automation_clipboard_host_tests {
             let mut host = h.host();
             host.paste_automation(20.0);
         }
+        h.run_sent();
         assert!(points(&h.project, "steps").contains(&(20.0, 2.0)));
         assert_eq!(h.selection.selected_automation_points.len(), 2);
         let lane = h.project.settings.master_effects[0]
@@ -2415,6 +2379,7 @@ mod automation_clipboard_host_tests {
             let mut host = h.host();
             host.paste_automation(100.0);
         }
+        h.run_sent();
         let lane = &h.project.settings.master_effects[0]
             .automation_lanes
             .as_ref()
@@ -2441,6 +2406,7 @@ mod automation_clipboard_host_tests {
             let mut host = h.host();
             host.cut_selected_automation();
         }
+        h.run_sent();
         let lane = h.project.settings.master_effects[0]
             .automation_lanes
             .as_ref()
@@ -2449,13 +2415,9 @@ mod automation_clipboard_host_tests {
             .find(|lane| lane.param_id.as_ref() == "amount")
             .unwrap();
         assert_eq!(lane.value_at(Beats(4.0)), lane.value_at(Beats(3.0)));
-        let mut authoritative = before.clone();
-        let mut service = EditingService::new();
-        drain_batch(&h, &mut authoritative, &mut service);
-        assert!(service.undo(&mut authoritative));
+        assert!(h.service.undo(&mut h.project));
         assert_eq!(
-            serde_json::to_value(&authoritative.settings.master_effects[0].automation_lanes)
-                .unwrap(),
+            serde_json::to_value(&h.project.settings.master_effects[0].automation_lanes).unwrap(),
             serde_json::to_value(&before.settings.master_effects[0].automation_lanes).unwrap()
         );
     }
@@ -2469,6 +2431,7 @@ mod automation_clipboard_host_tests {
             let mut host = h.host();
             host.duplicate_selected_automation();
         }
+        h.run_sent();
         let amount = h.project.settings.master_effects[0]
             .automation_lanes
             .as_ref()
@@ -2478,14 +2441,8 @@ mod automation_clipboard_host_tests {
             .unwrap();
         assert_eq!(amount.value_at(Beats(6.0)), 0.2);
         assert_eq!(amount.value_at(Beats(10.0)), 0.6);
-        let mut authoritative = before;
-        let mut service = EditingService::new();
-        drain_batch(&h, &mut authoritative, &mut service);
-        assert!(service.undo(&mut authoritative));
-        assert_eq!(
-            points(&authoritative, "amount"),
-            vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8)]
-        );
+        assert!(h.service.undo(&mut h.project));
+        assert_eq!(points(&h.project, "amount"), points(&before, "amount"));
         let mut empty = Harness::new();
         empty.select(&[("amount", 2.0)]);
         {
@@ -2519,9 +2476,8 @@ mod automation_clipboard_host_tests {
         h.project.settings.master_effects[0].automation_lanes = None;
         h.project.settings.time_signature_numerator = 3;
         let target = UiGraphTarget::Effect(h.effect_id());
-        let mut authoritative = h.project.clone();
         automation::insert_shape(
-            &mut h.project,
+            &h.project,
             &mut h.selection,
             &h.tx,
             &target,
@@ -2529,22 +2485,18 @@ mod automation_clipboard_host_tests {
             Beats(5.0),
             manifold_ui::panels::actions::AutomationShape::Triangle,
         );
+        let sent: Vec<_> = h.rx.try_iter().collect();
+        let [ContentCommand::Execute(_)] = sent.as_slice() else {
+            panic!("one undoable shape");
+        };
+        crate::edit_runner::apply_sent(&mut h.service, &mut h.project, sent);
         assert_eq!(
             points(&h.project, "amount"),
             vec![(5.0, 0.0), (6.5, 1.0), (8.0, 0.0)]
         );
-        let ContentCommand::Execute(command) = h.rx.try_recv().unwrap() else {
-            panic!("one undoable shape");
-        };
-        let mut service = EditingService::new();
-        service.execute(command, &mut authoritative);
-        assert_eq!(
-            points(&authoritative, "amount"),
-            points(&h.project, "amount")
-        );
-        assert!(service.undo(&mut authoritative));
+        assert!(h.service.undo(&mut h.project));
         assert!(
-            authoritative.settings.master_effects[0]
+            h.project.settings.master_effects[0]
                 .automation_lanes
                 .is_none()
         );
@@ -2554,34 +2506,28 @@ mod automation_clipboard_host_tests {
     fn cut_keeps_automation_paste_context_and_each_batch_undoes_as_one_step() {
         let mut h = Harness::new();
         h.select(&[("amount", 2.0)]);
-        let before = h.project.clone();
         {
             let mut host = h.host();
             host.cut_selected_automation();
         }
+        h.run_sent();
         assert_eq!(points(&h.project, "amount"), vec![(6.0, 0.6), (10.0, 0.8)]);
         {
             let mut host = h.host();
             assert!(host.has_automation_paste_target());
             host.paste_automation(12.0);
         }
+        h.run_sent();
         assert_eq!(
             points(&h.project, "amount"),
             vec![(6.0, 0.6), (10.0, 0.8), (12.0, 0.2)],
             "a single-point paste creates a breakpoint, without zero-duration punch guards"
         );
-        let mut authoritative = before;
-        let mut service = EditingService::new();
-        drain_batch(&h, &mut authoritative, &mut service);
-        drain_batch(&h, &mut authoritative, &mut service);
-        assert!(service.undo(&mut authoritative));
+        assert!(h.service.undo(&mut h.project));
+        assert_eq!(points(&h.project, "amount"), vec![(6.0, 0.6), (10.0, 0.8)]);
+        assert!(h.service.undo(&mut h.project));
         assert_eq!(
-            points(&authoritative, "amount"),
-            vec![(6.0, 0.6), (10.0, 0.8)]
-        );
-        assert!(service.undo(&mut authoritative));
-        assert_eq!(
-            points(&authoritative, "amount"),
+            points(&h.project, "amount"),
             vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8)]
         );
     }
@@ -2609,18 +2555,7 @@ mod automation_clipboard_host_tests {
             h.project.video_library.clips.is_empty(),
             "the paste wrote the screen's copy directly"
         );
-        while let Ok(cmd) = h.rx.try_recv() {
-            match cmd {
-                ContentCommand::Execute(mut cmd) => {
-                    cmd.execute(&mut content);
-                }
-                ContentCommand::ExecuteBatch(cmds, _) => cmds.into_iter().for_each(|mut c| {
-                    c.execute(&mut content);
-                }),
-                ContentCommand::MutateProject { f, .. } => f(&mut content),
-                _ => {}
-            }
-        }
+        crate::edit_runner::apply_sent(&mut EditingService::new(), &mut content, h.rx.try_iter());
         for clip in content.timeline.layers.iter().flat_map(|l| &l.clips) {
             assert!(
                 content

@@ -1,6 +1,0 @@
-[
-  "ResetWork",
-  { "ScrubDrag": { "param": { "Trim": { "kind": "Driver", "effect": 0, "param": "amount" } }, "from": 0.9, "to": 0.3, "steps": 60 } },
-  { "AssertWork": { "window": "drag_1s" } },
-  "AssertFresh"
-]

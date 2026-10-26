@@ -17,49 +17,43 @@ use crate::user_prefs::UserPrefs;
 use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
-use manifold_editing::command::{Command, rows_deferred, rows_written};
+use manifold_editing::command::Command;
+use std::sync::Arc;
 
 use super::scrub::ScrubState;
 
-/// The UI's copy of the project (UI_INVALIDATION D5). Readable through
-/// `Deref`; writable only through [`Self::edit`], a [`ProjectRef`] that stamps
-/// what it writes, or [`Self::intake`], which the snapshot accept and project
-/// load use because their stamps come from the snapshot itself. An unstamped
-/// edit does not compile.
-pub struct LocalProject(Project);
+/// The UI's view of the project: the content thread's published `Arc<Project>`,
+/// read-only. Readable through `Deref`; an edit is sent through
+/// [`Self::edit`]'s [`ProjectRef`], which stamps it and never writes the
+/// project. The view changes only when [`Self::show`] swaps in a newer
+/// snapshot.
+pub struct LocalProject(Arc<Project>);
 
 impl LocalProject {
-    pub fn new(project: Project) -> Self {
-        Self(project)
+    /// A view over `project` with its timeline caches fresh, as a published
+    /// snapshot's are.
+    pub fn new(mut project: Project) -> Self {
+        project.timeline.refresh_caches();
+        Self(Arc::new(project))
     }
 
-    /// The one way to edit the local project.
+    /// The one way to send an edit for the local project.
     pub fn edit<'a>(
         &'a mut self,
         edits: &'a mut crate::gesture_preview::UiEdits,
         content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
     ) -> ProjectRef<'a> {
-        ProjectRef::new(&mut self.0, edits, content_tx)
+        ProjectRef::new(&self.0, edits, content_tx)
     }
 
-    /// Writes that arrive from the content thread (snapshot accept, live
-    /// values, a drag's held value) or replace the project (load, new): the
-    /// accepted snapshot's stamps already cover them. Never an edit.
-    pub fn intake(&mut self) -> &mut Project {
-        &mut self.0
-    }
-
-    /// Clips active at `beat`. It refreshes the timeline's sort cache, which
-    /// is not model state, so it needs no stamp.
-    pub fn active_clips_at_beat(
-        &mut self,
-        beat: manifold_core::Beats,
-        results: &mut Vec<(usize, usize)>,
-        indices: &mut Vec<usize>,
-    ) {
-        self.0
-            .timeline
-            .get_active_clips_at_beat(beat, results, indices);
+    /// Show the content thread's published project. Returns false when it is
+    /// the allocation already shown (modulation-only frames resend it).
+    pub fn show(&mut self, snapshot: Arc<Project>) -> bool {
+        if Arc::ptr_eq(&self.0, &snapshot) {
+            return false;
+        }
+        self.0 = snapshot;
+        true
     }
 }
 
@@ -76,19 +70,20 @@ impl std::borrow::Borrow<Project> for LocalProject {
     }
 }
 
-/// The local project as dispatch sees it: readable through `Deref`, writable
-/// only through [`ProjectRef::mutate`] and [`ProjectRef::execute`], which stamp
-/// the parts they touch and send the same edit to the content thread
-/// (UI_INVALIDATION D5). There is no other way to write it.
+/// The UI's read-only view of the project (the content thread's published
+/// copy) plus the channel edits leave on. `mutate`, `execute` and
+/// `execute_batch` only send: the content thread runs each edit once and the
+/// next snapshot brings the result and its stamps. A drag writes only the
+/// gesture preview.
 pub struct ProjectRef<'a> {
-    project: &'a mut Project,
+    project: &'a Project,
     edits: &'a mut crate::gesture_preview::UiEdits,
     content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
 }
 
 impl<'a> ProjectRef<'a> {
     pub(crate) fn new(
-        project: &'a mut Project,
+        project: &'a Project,
         edits: &'a mut crate::gesture_preview::UiEdits,
         content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
     ) -> Self {
@@ -99,29 +94,26 @@ impl<'a> ProjectRef<'a> {
         }
     }
 
-    /// A non-undoable write: apply `f` locally, stamp what it wrote (as
-    /// `EditingService::mutate` does), and send the same closure to the
-    /// content thread.
+    /// A non-undoable write, sent to the content thread to run through
+    /// `EditingService::mutate`.
     pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)
     where
-        F: FnOnce(&mut Project) + Clone + Send + 'static,
+        F: FnOnce(&mut Project) + Send + 'static,
     {
-        let ((), rows) = rows_written(self.project, f.clone());
-        self.edits.stamps.bump(touches.union(rows));
         ContentCommand::send(
             self.content_tx,
             ContentCommand::mutate(touches, Box::new(f)),
         );
     }
 
-    /// A gesture's live move (a scrub tick): as [`Self::mutate`], but rows
-    /// wait for the gesture's commit on both threads, so no row appears or
-    /// vanishes under the cursor mid-drag.
+    /// A gesture's live move (a scrub tick), sent to the content thread
+    /// only. The UI's copy keeps the pre-drag value and controls draw the
+    /// drag from `ScrubState`. Rows wait for the gesture's commit on the
+    /// content thread.
     pub fn gesture_move<F>(&mut self, touches: ChangeSet, f: F)
     where
         F: FnOnce(&mut Project) + Clone + Send + 'static,
     {
-        rows_deferred(self.project, f.clone());
         self.edits.stamps.bump(touches);
         ContentCommand::send(
             self.content_tx,
@@ -129,89 +121,45 @@ impl<'a> ProjectRef<'a> {
         );
     }
 
-    /// An undoable edit: execute `cmd` locally, stamp what it touches (read
-    /// after execute, so a command can learn its parts from the project), and
-    /// send it to the content thread.
-    pub fn execute(&mut self, mut cmd: Box<dyn Command>) {
-        let wrote = cmd.execute(self.project);
-        self.edits.stamps.bump(wrote);
+    /// An undoable edit, sent to the content thread.
+    pub fn execute(&mut self, cmd: Box<dyn Command>) {
         ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
     }
 
-    /// Several undoable edits as one undo step, stamped with their union.
-    /// They run as one composite, as the content thread runs them, so a run
-    /// of scene edits compiles once here too.
+    /// Several undoable edits as one undo step.
     pub fn execute_batch(&mut self, cmds: Vec<Box<dyn Command>>, label: String) {
-        let mut batch = manifold_editing::command::CompositeCommand::new(cmds, label.clone());
-        let wrote = batch.execute(self.project);
-        self.edits.stamps.bump(wrote);
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::ExecuteBatch(batch.into_commands(), label),
-        );
+        ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(cmds, label));
     }
 
-    /// For factories that build a command and execute it on the project they
-    /// are handed (`EditingService::create_clip_at_position` and kin): stamp
-    /// what the returned command wrote and send it.
-    pub fn executed_by<R>(
-        &mut self,
-        f: impl FnOnce(&mut Project) -> Option<(Box<dyn Command>, R)>,
-    ) -> Option<R> {
-        let (made, rows) = rows_written(self.project, f);
-        let (cmd, out) = made?;
-        self.edits.stamps.bump(cmd.touches().union(rows));
-        ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
-        Some(out)
-    }
-
-    /// For helpers that write the local project and send their own content
-    /// commands (the keyboard automation helpers, the file importers): `f`
-    /// returns what those commands touch, and that is stamped.
-    pub fn with_sent<R>(&mut self, f: impl FnOnce(&mut Project) -> (R, ChangeSet)) -> R {
-        let ((out, touches), rows) = rows_written(self.project, f);
-        self.edits.stamps.bump(touches.union(rows));
-        out
-    }
-
-    /// Stamp an edit the local project already shows (a committed gesture
-    /// preview) or one only the content thread runs, as its command is sent.
-    pub fn stamp(&mut self, touches: ChangeSet) {
+    /// A gesture preview gained or lost a whole lane: the panels re-project
+    /// it, as they do when the committed edit lands.
+    pub fn preview_shape_changed(&mut self, touches: ChangeSet) {
         self.edits.stamps.bump(touches);
     }
 
-    /// A gesture preview write: local only, never sent, stamping nothing; it
-    /// records itself in the gesture preview, whose version the planner reads
-    /// (D12). The gesture's commit stamps.
-    pub fn preview<R>(
-        &mut self,
-        f: impl FnOnce(&mut Project, &mut crate::gesture_preview::GesturePreview) -> R,
-    ) -> R {
-        f(self.project, &mut self.edits.preview)
+    /// The gesture preview, for reads that lay the dragged state over the
+    /// project.
+    pub fn preview(&self) -> &crate::gesture_preview::GesturePreview {
+        &self.edits.preview
     }
 
-    /// The gesture preview, read or reset without a project write.
-    pub fn gesture_preview(&mut self) -> &mut crate::gesture_preview::GesturePreview {
-        &mut self.edits.preview
+    /// The project to read and the gesture preview to write. A drag records
+    /// into the preview; it never writes the project.
+    pub fn preview_mut(&mut self) -> (&Project, &mut crate::gesture_preview::GesturePreview) {
+        (self.project, &mut self.edits.preview)
     }
 
     pub fn content_tx(&self) -> &'a crossbeam_channel::Sender<ContentCommand> {
         self.content_tx
     }
 
-    /// A shorter-lived writer over the same project, for one dispatch in a loop.
+    /// A shorter-lived view over the same project, for one dispatch in a loop.
     pub fn reborrow(&mut self) -> ProjectRef<'_> {
         ProjectRef {
             project: self.project,
             edits: self.edits,
             content_tx: self.content_tx,
         }
-    }
-
-    /// Clip lookup by id. It refreshes the timeline's id cache, which is not
-    /// model state, so it needs no stamp.
-    pub fn find_clip_by_id(&mut self, clip_id: &str) -> Option<&manifold_core::clip::TimelineClip> {
-        self.project.timeline.find_clip_by_id(clip_id)
     }
 }
 
@@ -226,7 +174,8 @@ impl std::ops::Deref for ProjectRef<'_> {
 /// immediate UI feedback; `content_tx` carries authoritative mutations to the
 /// content thread.
 pub struct DispatchCtx<'a> {
-    /// Local project snapshot, read-only; its `mutate`/`execute` write it.
+    /// The content thread's published project, read-only; its `mutate` and
+    /// `execute` send edits.
     pub project: ProjectRef<'a>,
     /// Authoritative-mutation channel to the content thread.
     pub content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
@@ -253,9 +202,8 @@ pub struct DispatchCtx<'a> {
 
 impl DispatchCtx<'_> {
     /// An export owns the project: the content thread drops every edit sent
-    /// meanwhile (BUG-v2o9y), so applying one locally would leave the UI
-    /// showing a change the show never took. Refused here for every window
-    /// and shortcut that dispatches.
+    /// meanwhile, so one sent now would only be lost. Refused here for every
+    /// window and shortcut that dispatches.
     fn export_locks_edits(&self) -> bool {
         self.content_state.is_exporting
     }
@@ -263,7 +211,7 @@ impl DispatchCtx<'_> {
     /// See [`ProjectRef::mutate`]. Refused during an export.
     pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)
     where
-        F: FnOnce(&mut Project) + Clone + Send + 'static,
+        F: FnOnce(&mut Project) + Send + 'static,
     {
         if self.export_locks_edits() {
             return;
@@ -303,12 +251,12 @@ impl DispatchCtx<'_> {
 mod export_lock_tests {
     use super::*;
 
-    /// BUG-v2o9y: during an export an edit is refused in the UI copy and
-    /// never sent; outside one it applies and is sent.
+    /// During an export an edit is refused and never sent; outside one it is
+    /// sent. The UI's copy changes in neither case.
     #[test]
     fn export_refuses_edits_in_dispatch_ctx() {
-        for (exporting, applied) in [(true, false), (false, true)] {
-            let mut project = Project::default();
+        for (exporting, sent) in [(true, false), (false, true)] {
+            let project = Project::default();
             let (content_tx, content_rx) = crossbeam_channel::unbounded();
             let mut edits = Default::default();
             let content_state = ContentState {
@@ -321,7 +269,7 @@ mod export_lock_tests {
             let mut user_prefs = UserPrefs::in_memory();
             let mut scrub = ScrubState::default();
             let mut ctx = DispatchCtx {
-                project: ProjectRef::new(&mut project, &mut edits, &content_tx),
+                project: ProjectRef::new(&project, &mut edits, &content_tx),
                 content_tx: &content_tx,
                 content_state: &content_state,
                 ui: &mut ui,
@@ -345,18 +293,11 @@ mod export_lock_tests {
                 ),
             ));
             let sent_execute = content_rx.try_iter().count();
-            assert_eq!(
-                ctx.project.settings.frame_rate == 24.0,
-                applied,
-                "exporting={exporting}"
-            );
-            assert_eq!(
-                ctx.project.settings.tonemap_enabled, applied,
-                "exporting={exporting}"
-            );
+            assert_ne!(ctx.project.settings.frame_rate, 24.0);
+            assert!(!ctx.project.settings.tonemap_enabled);
             assert_eq!(
                 (sent_mutate, sent_execute),
-                (usize::from(applied), usize::from(applied)),
+                (usize::from(sent), usize::from(sent)),
                 "exporting={exporting}"
             );
         }

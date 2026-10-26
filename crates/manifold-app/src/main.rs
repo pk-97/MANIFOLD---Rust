@@ -59,6 +59,7 @@ pub(crate) mod content_thread;
 mod display_link;
 mod drag_hover;
 mod drag_interpose;
+mod edit_runner;
 mod edit_selection;
 mod editing_host;
 mod editor_bridge;

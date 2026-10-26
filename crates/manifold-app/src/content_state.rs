@@ -87,6 +87,14 @@ pub struct GraphEditDiagnostic {
     pub message: String,
 }
 
+impl GraphEditDiagnostic {
+    /// The diagnostic that follows `previous`: the next sequence number.
+    pub fn after(previous: Option<&Arc<Self>>, message: String) -> Arc<Self> {
+        let sequence = previous.map_or(1, |event| event.sequence.wrapping_add(1));
+        Arc::new(Self { sequence, message })
+    }
+}
+
 /// State snapshot sent from the content thread to the UI thread through a
 /// one-slot handoff ([`state_channel`]); a replaced state folds into its
 /// replacement ([`ContentState::absorb_replaced`]).
@@ -124,6 +132,10 @@ pub struct ContentState {
     // ── Editing ────────────────────────────────────────────────────
     pub data_version: u64,
     pub editing_is_dirty: bool,
+    /// Project installs on the content thread so far. The first snapshot
+    /// carrying a new value is the loaded project; the UI sets itself up for
+    /// it then (layout, presets, selection) and not before.
+    pub load_seq: u64,
     /// `EditingService::stamps()` at publish (D1).
     pub stamps: manifold_core::change::PartStamps,
     /// Moves only when a captured live value changed (D15); the modulation
@@ -591,6 +603,7 @@ impl Default for ContentState {
             active_clips: 0,
             data_version: 0,
             editing_is_dirty: false,
+            load_seq: 0,
             stamps: Default::default(),
             values_seq: 0,
             audio_directory_version: 0,
@@ -785,6 +798,7 @@ impl ContentState {
             self.project_snapshot = older.project_snapshot.take();
             self.stamps = older.stamps;
             self.data_version = older.data_version;
+            self.load_seq = older.load_seq;
         }
         if older.modulation_snapshot.is_some()
             && (self.modulation_snapshot.is_none() || older.values_seq > self.values_seq)

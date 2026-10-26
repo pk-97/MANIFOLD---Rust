@@ -70,6 +70,7 @@ mod scene_card_convergence_tests {
         // the field — supply an in-memory instance (wiring, not behavior).
         user_prefs: crate::user_prefs::UserPrefs,
         scrub: crate::ui_bridge::ScrubState,
+        service: manifold_editing::service::EditingService,
     }
 
     impl Harness {
@@ -84,7 +85,15 @@ mod scene_card_convergence_tests {
                 active_layer,
                 user_prefs: crate::user_prefs::UserPrefs::in_memory(),
                 scrub: crate::ui_bridge::ScrubState::default(),
+                service: manifold_editing::service::EditingService::new(),
             }
+        }
+
+        /// Run what dispatch sent through the content thread's edit runner
+        /// over `project`, as the next snapshot would show it.
+        fn land(&mut self, project: &mut Project) {
+            let sent = self.drain();
+            crate::edit_runner::apply_sent(&mut self.service, project, sent);
         }
 
         fn dispatch(&mut self, action: &PanelAction, project: &mut Project) -> DispatchResult {
@@ -162,6 +171,46 @@ mod scene_card_convergence_tests {
     }
 
     #[test]
+    fn a_released_slider_draws_its_value_until_the_commit_lands() {
+        let mut project = Project::default();
+        project.settings.master_opacity = 0.8;
+        let mut h = Harness::new(None);
+        h.content_state.data_version = 7;
+        let drawn = |h: &Harness| match h.scrub.drawn() {
+            Some(crate::ui_bridge::scrub::ResolvedScrub::MasterOpacity { live, .. }) => Some(*live),
+            _ => None,
+        };
+        h.dispatch(
+            &PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
+            &mut project,
+        );
+        h.dispatch(
+            &PanelAction::Scrub(
+                ValueRef::MasterOpacity,
+                ScrubPhase::Move(ScrubValue::Scalar(0.35)),
+            ),
+            &mut project,
+        );
+        h.dispatch(
+            &PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit),
+            &mut project,
+        );
+        assert_eq!(drawn(&h), Some(0.35), "the released slider keeps its value");
+        assert_eq!(
+            project.settings.master_opacity, 0.8,
+            "the UI copy waits for the snapshot"
+        );
+        h.scrub.snapshot_arrived(7);
+        assert_eq!(
+            drawn(&h),
+            Some(0.35),
+            "a snapshot before the commit keeps it"
+        );
+        h.scrub.snapshot_arrived(8);
+        assert_eq!(drawn(&h), None, "the commit's snapshot clears it");
+    }
+
+    #[test]
     fn toggling_a_selected_card_toggles_every_selected_effect() {
         let (mut project, layer_id) = scene_layer_project();
         let mut effect_ids = Vec::new();
@@ -202,6 +251,7 @@ mod scene_card_convergence_tests {
             &PanelAction::Params(ParamsAction::EffectToggle(c.clone())),
             &mut project,
         );
+        h.land(&mut project);
 
         let enabled = |id: &manifold_core::EffectId| {
             project
@@ -225,7 +275,6 @@ mod scene_card_convergence_tests {
                 .unwrap()
                 .get_base_param(&ids[i])
         });
-        let stale = project.clone();
         let mut content_project = project.clone();
         let mut h = Harness::new(Some(layer_id.clone()));
         let value_ref = ValueRef::ParamRgb(
@@ -250,13 +299,16 @@ mod scene_card_convergence_tests {
                 write(&mut content_project);
             }
         }
-        project = stale;
-        h.scrub.restore_dragged(&mut project);
         assert_eq!(
             ids.each_ref()
                 .map(|id| project.preset_instance(&target).unwrap().get_base_param(id)),
-            edited
+            baseline,
+            "the drag never wrote the UI copy"
         );
+        assert!(matches!(
+            h.scrub.drawn(),
+            Some(crate::ui_bridge::scrub::ResolvedScrub::ParamRgb { live, .. }) if *live == edited
+        ));
         h.dispatch(
             &PanelAction::Scrub(value_ref, ScrubPhase::Commit),
             &mut project,
@@ -652,16 +704,10 @@ mod scene_card_convergence_tests {
     }
 
     /// BUG-246 (trim family): while a modulation trim handle is dragged with
-    /// playback running, a full snapshot is accepted every frame
-    /// (`app_render.rs` ~808 replaces `local_project`, then the unguarded
-    /// per-frame `sync_inspector_data` at ~3373 reconfigures cards from it).
-    /// Before the `Trim` variant, `drag.apply` had no arm for trim, so the
-    /// in-flight `[min,max]` reverted to the snapshot's stale range every
-    /// frame — the handle jumped/vanished mid-gesture. The restore must write
-    /// the dragged range back through the driver's `trim_min/trim_max`, the
-    /// same store `TrimChanged`'s driver dual-edit uses.
+    /// playback running, the handle must keep showing the dragged range. The
+    /// drag's record holds that range; the project copy keeps the baseline.
     #[test]
-    fn driver_trim_range_survives_a_mid_gesture_snapshot() {
+    fn driver_trim_drag_draws_its_live_range_over_the_project() {
         use crate::ui_bridge::scrub::{ResolvedScrub, ScrubState};
         let (mut project, layer_id) = scene_layer_project();
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
@@ -686,7 +732,7 @@ mod scene_card_convergence_tests {
             }]);
         });
 
-        // The content thread's stale snapshot: same driver, DEFAULT trim.
+        // The UI copy holds the default trim while the drag runs.
         let mut stale = project.clone();
         stale.with_preset_graph_mut(&target, |inst| {
             if let Some(ds) = inst.drivers.as_mut() {
@@ -695,30 +741,30 @@ mod scene_card_convergence_tests {
             }
         });
 
-        // app_render mid-drag: local_project := stale, then restore the gesture
-        // through the P-I `active` scrub state (the production restore path).
-        let scrub = ScrubState {
-            active: Some(ResolvedScrub::Trim {
-                kind: manifold_ui::panels::TrimKind::Driver,
-                target: target.clone(),
-                ableton_target: None,
-                param_id: pid.clone(),
-                baseline: (0.3, 0.9),
-                live: (0.3, 0.9),
-            }),
-        };
-        let mut local = stale;
-        scrub.restore_dragged(&mut local);
+        // The P-I `active` record holds the live range the handle draws.
+        let mut scrub = ScrubState::default();
+        scrub.active = Some(ResolvedScrub::Trim {
+            kind: manifold_ui::panels::TrimKind::Driver,
+            target: target.clone(),
+            ableton_target: None,
+            param_id: pid.clone(),
+            baseline: (0.0, 1.0),
+            live: (0.3, 0.9),
+        });
+        assert!(matches!(
+            scrub.drawn(),
+            Some(ResolvedScrub::Trim { live, .. }) if *live == (0.3, 0.9)
+        ));
 
-        let (mn, mx) = local
+        let (mn, mx) = stale
             .with_preset_graph_mut(&target, |inst| {
                 let d = &inst.drivers.as_ref().unwrap()[0];
                 (d.trim_min, d.trim_max)
             })
             .expect("generator instance resolves");
         assert!(
-            (mn - 0.3).abs() < 1e-6 && (mx - 0.9).abs() < 1e-6,
-            "trim range must survive the snapshot stomp; got ({mn}, {mx}) instead of (0.3, 0.9)"
+            (mn - 0.0).abs() < 1e-6 && (mx - 1.0).abs() < 1e-6,
+            "the UI copy keeps the pre-drag trim; got ({mn}, {mx})"
         );
     }
 
@@ -730,22 +776,15 @@ mod scene_card_convergence_tests {
     ///   redo round-trips the probed value through a REAL `EditingService`
     ///   (the content thread's own gateway), and the undo stack grows by
     ///   exactly one per gesture.
-    /// - STOMP (drag trios only): a full project snapshot lands mid-gesture
-    ///   (data_version bump from any concurrent command — playback, MIDI
-    ///   phantom commit, another gesture), simulated exactly the way
-    ///   app_render.rs ~808-817 applies it: replace the local project, then
-    ///   restore the guarded drag (`ScrubState::restore_dragged`). A family
-    ///   whose gesture doesn't reach the `active` restore slot loses the
-    ///   in-flight value here — the commit then sees old == new and emits NO
-    ///   undo entry ("doesn't respond").
+    /// - DRAW (drag trios only): the moves never write the UI's copy, so it
+    ///   still shows the pre-drag value; the commit then builds its one undo
+    ///   entry from the gesture's record alone.
     mod undo_baseline {
         use super::*;
         use manifold_editing::service::EditingService;
 
         /// The content-thread side of the loop: a real `EditingService` over
-        /// its own project, driven exactly the way content_commands.rs drives
-        /// it (`Execute` → `service.execute`, `ExecuteBatch` → `execute_batch`,
-        /// `MutateProject` → plain closure application, no undo entry).
+        /// its own project, fed by the shared edit runner.
         struct ContentSide {
             project: Project,
             service: EditingService,
@@ -761,44 +800,24 @@ mod scene_card_convergence_tests {
                 }
             }
 
-            /// Apply every drained command the way the content thread would.
+            /// Run every drained command the way the content thread would.
             /// Returns how many undo-tracked commands landed.
             fn apply(&mut self, cmds: Vec<ContentCommand>) -> usize {
-                let mut n = 0;
-                for c in cmds {
-                    match c {
-                        ContentCommand::FireParameter { target, param_id } => {
-                            self.service.execute(
-                                Box::new(
-                                    manifold_editing::commands::effects::FireGraphParamCommand::new(
-                                        target, param_id,
-                                    ),
-                                ),
-                                &mut self.project,
-                            );
-                            if self.service.take_rejection().is_none() {
-                                self.undo_depth += 1;
-                                n += 1;
-                            }
-                        }
-                        ContentCommand::Execute(cmd) => {
-                            self.service.execute(cmd, &mut self.project);
-                            self.undo_depth += 1;
-                            n += 1;
-                        }
-                        ContentCommand::ExecuteBatch(cmds, desc) => {
-                            let k = cmds.len();
-                            self.service.execute_batch(cmds, desc, &mut self.project);
-                            self.undo_depth += k.max(1);
-                            n += 1;
-                        }
-                        ContentCommand::MutateProject { f, .. } => {
-                            f(&mut self.project);
-                        }
-                        _ => {}
+                let before = self.service.data_version();
+                let cmds = cmds.into_iter().map(|c| match c {
+                    ContentCommand::FireParameter { target, param_id } => {
+                        ContentCommand::Execute(Box::new(
+                            manifold_editing::commands::effects::FireGraphParamCommand::new(
+                                target, param_id,
+                            ),
+                        ))
                     }
-                }
-                n
+                    other => other,
+                });
+                crate::edit_runner::apply_sent(&mut self.service, &mut self.project, cmds);
+                let landed = (self.service.data_version() - before) as usize;
+                self.undo_depth += landed;
+                landed
             }
         }
 
@@ -851,17 +870,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        /// Mirror app_render's mid-gesture full-snapshot acceptance: replace
-        /// the local project with the stale pre-gesture one, then restore the
-        /// guarded drag (app_render.rs ~808-817).
-        fn snapshot_stomp(h: &Harness, stale: &Project) -> Project {
-            let mut p = stale.clone();
-            // Restore whichever gesture is live — the interim
-            // `active_inspector_drag` families or the P-I `active` gesture.
-            h.scrub.restore_dragged(&mut p);
-            p
-        }
-
         /// Drive a drag trio and assert the undo cycle, clean or stomped.
         /// `gesture` runs Snapshot + Changed ticks (NOT the commit); `commit`
         /// dispatches the commit action and returns the drained commands.
@@ -874,25 +882,21 @@ mod scene_card_convergence_tests {
             probe: impl Fn(&Project) -> P,
             before: P,
             after: P,
-            stomp: bool,
         ) where
             P: PartialEq + std::fmt::Debug,
         {
-            let stale = project.clone();
             let mut side = ContentSide::new(&project);
             gesture(h, &mut project);
-            // Live ticks reach the content thread as non-undoable writes.
+            // Live ticks reach the content thread as non-undoable writes, and
+            // the UI's copy keeps the pre-drag value.
             side.apply(h.drain());
-            if stomp {
-                project = snapshot_stomp(h, &stale);
-            }
+            assert_eq!(
+                probe(&project),
+                before,
+                "{label}: the drag never wrote the UI copy"
+            );
             commit(h, &mut project);
-            let label = if stomp {
-                format!("{label} [stomp]")
-            } else {
-                label.to_string()
-            };
-            assert_undo_cycle(&mut side, h.drain(), probe, before, after, &label);
+            assert_undo_cycle(&mut side, h.drain(), probe, before, after, label);
         }
 
         // ── Fixtures ─────────────────────────────────────────────
@@ -1077,7 +1081,6 @@ mod scene_card_convergence_tests {
                 pid.clone(),
             );
             h.ui.pending_automation_reveal = Some((ui_target, pid.clone()));
-            let mut content_project = project.clone();
             h.dispatch(
                 &PanelAction::Params(ParamsAction::ClearAutomation(
                     manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone()),
@@ -1085,12 +1088,14 @@ mod scene_card_convergence_tests {
                 )),
                 &mut project,
             );
-            assert!(
+            assert_eq!(
                 gen_inst(&project, &layer_a)
                     .automation_lanes
                     .as_ref()
-                    .unwrap()
-                    .is_empty()
+                    .unwrap()[0]
+                    .points,
+                points,
+                "the UI copy waits for the snapshot"
             );
             assert!(
                 !h.selection
@@ -1098,36 +1103,30 @@ mod scene_card_convergence_tests {
                     .contains_key(&layer_a)
             );
             assert!(h.ui.pending_automation_reveal.is_none());
-            let mut commands = h.drain();
+            let commands = h.drain();
             assert_eq!(commands.len(), 2);
             assert!(
-                matches!(
-                    commands.remove(0),
-                    ContentCommand::FinishAutomationRecording
-                ),
+                matches!(commands[0], ContentCommand::FinishAutomationRecording),
                 "finish an active take before clearing so it cannot recreate the envelope"
             );
-            let ContentCommand::Execute(mut command) = commands.remove(0) else {
-                panic!("expected edit");
-            };
-            command.execute(&mut content_project);
+            crate::edit_runner::apply_sent(&mut h.service, &mut project, commands);
             assert!(
-                gen_inst(&content_project, &layer_a)
+                gen_inst(&project, &layer_a)
                     .automation_lanes
                     .as_ref()
                     .unwrap()
                     .is_empty()
             );
-            command.undo(&mut content_project);
-            let restored = &gen_inst(&content_project, &layer_a)
+            assert!(h.service.undo(&mut project));
+            let restored = &gen_inst(&project, &layer_a)
                 .automation_lanes
                 .as_ref()
                 .unwrap()[0];
             assert_eq!(restored.param_id, pid);
             assert_eq!(restored.points, points);
-            command.execute(&mut content_project);
+            assert!(h.service.redo(&mut project));
             assert!(
-                gen_inst(&content_project, &layer_a)
+                gen_inst(&project, &layer_a)
                     .automation_lanes
                     .as_ref()
                     .unwrap()
@@ -1154,38 +1153,23 @@ mod scene_card_convergence_tests {
                 )),
                 &mut project,
             );
-            // The expansion is a stamped local write; the content thread gets
-            // the same closure.
-            assert!(
-                !project
+            let is_collapsed = |project: &Project| {
+                project
                     .timeline
                     .find_layer_by_id(&layer_id)
                     .unwrap()
                     .1
                     .is_collapsed
-            );
-            project
-                .timeline
-                .find_layer_by_id_mut(&layer_id)
-                .unwrap()
-                .1
-                .is_collapsed = true;
+            };
+            assert!(is_collapsed(&project), "the UI copy waits for the snapshot");
             let commands = h.drain();
             assert_eq!(commands.len(), 1);
-            for command in commands {
-                match command {
-                    ContentCommand::MutateProject { f: apply, .. } => apply(&mut project),
-                    _ => panic!("show automation must only send a view-state expansion"),
-                }
-            }
             assert!(
-                !project
-                    .timeline
-                    .find_layer_by_id(&layer_id)
-                    .unwrap()
-                    .1
-                    .is_collapsed
+                matches!(commands[0], ContentCommand::MutateProject { .. }),
+                "show automation must only send a view-state expansion"
             );
+            crate::edit_runner::apply_sent(&mut h.service, &mut project, commands);
+            assert!(!is_collapsed(&project));
             assert_eq!(
                 gen_inst(&project, &layer_id).get_base_param(pid.as_ref()),
                 before
@@ -1208,11 +1192,11 @@ mod scene_card_convergence_tests {
         }
 
         /// Every inspector slider's drag trio records exactly one undo that
-        /// restores the pre-gesture value and redoes the committed one, both
-        /// clean and when a full snapshot stomps the project mid-drag.
+        /// restores the pre-gesture value and redoes the committed one, with
+        /// the commit built from the gesture's record.
         #[test]
-        fn every_slider_gesture_undoes_cleanly_even_under_snapshot_stomp() {
-            let cases: [fn(bool); 15] = [
+        fn every_slider_gesture_commits_one_undo_from_its_record() {
+            let cases: [fn(); 15] = [
                 master_opacity_case,
                 led_brightness_case,
                 macro_case,
@@ -1230,14 +1214,13 @@ mod scene_card_convergence_tests {
                 audio_mod_step_amount_case,
             ];
             for case in cases {
-                case(false);
-                case(true);
+                case();
             }
         }
 
         // ── Settings sliders ─────────────────────────────────────
 
-        fn master_opacity_case(stomp: bool) {
+        fn master_opacity_case() {
             let project = Project::default();
             let mut h = Harness::new(None);
             let before = project.settings.master_opacity;
@@ -1275,11 +1258,10 @@ mod scene_card_convergence_tests {
                 |p| p.settings.master_opacity,
                 before,
                 after,
-                stomp,
             );
         }
 
-        fn led_brightness_case(stomp: bool) {
+        fn led_brightness_case() {
             let project = Project::default();
             let mut h = Harness::new(None);
             let before = project.settings.led_brightness;
@@ -1317,11 +1299,10 @@ mod scene_card_convergence_tests {
                 |p| p.settings.led_brightness,
                 before,
                 after,
-                stomp,
             );
         }
 
-        fn macro_case(stomp: bool) {
+        fn macro_case() {
             let mut project = Project::default();
             project.settings.macro_bank.slots[0].value = 0.2;
             let mut h = Harness::new(None);
@@ -1358,13 +1339,12 @@ mod scene_card_convergence_tests {
                 |p| p.settings.macro_bank.slots[0].value,
                 0.2,
                 0.8,
-                stomp,
             );
         }
 
         // ── Layer sliders ────────────────────────────────────────
 
-        fn layer_opacity_case(stomp: bool) {
+        fn layer_opacity_case() {
             let (project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
             let lid = layer_id.clone();
@@ -1411,11 +1391,10 @@ mod scene_card_convergence_tests {
                 },
                 before,
                 0.55,
-                stomp,
             );
         }
 
-        fn audio_gain_case(stomp: bool) {
+        fn audio_gain_case() {
             let (project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
             let lid = layer_id.clone();
@@ -1469,13 +1448,12 @@ mod scene_card_convergence_tests {
                 },
                 before,
                 -6.0,
-                stomp,
             );
         }
 
         // ── Card param drag (exposed manifest slot) ──────────────
 
-        fn card_param_case(stomp: bool) {
+        fn card_param_case() {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
             let pid = materialized_param(&mut h, &mut project, &layer_id);
@@ -1519,7 +1497,6 @@ mod scene_card_convergence_tests {
                 move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
                 before,
                 after,
-                stomp,
             );
         }
 
@@ -1557,6 +1534,7 @@ mod scene_card_convergence_tests {
             let before_a = gen_inst(&project, &layer_a).get_base_param(pid.as_ref());
             let before_b = gen_inst(&project, &layer_b).get_base_param(pid.as_ref());
             let after = before_a + 0.25;
+            let mut side = ContentSide::new(&project);
 
             let target = manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone());
             h.dispatch(
@@ -1578,13 +1556,14 @@ mod scene_card_convergence_tests {
                 &mut project,
             );
 
+            assert_eq!(side.apply(h.drain()), 1, "the row's commit lands once");
             assert_eq!(
-                gen_inst(&project, &layer_a).get_base_param(pid.as_ref()),
+                gen_inst(&side.project, &layer_a).get_base_param(pid.as_ref()),
                 after,
                 "scene row write must land on the panel's BOUND layer (A), not the active layer (B)"
             );
             assert_eq!(
-                gen_inst(&project, &layer_b).get_base_param(pid.as_ref()),
+                gen_inst(&side.project, &layer_b).get_base_param(pid.as_ref()),
                 before_b,
                 "the active layer (B) must be untouched by a scene row write bound to layer A"
             );
@@ -1602,7 +1581,7 @@ mod scene_card_convergence_tests {
             materialized_param(h, project, layer_id)
         }
 
-        fn driver_trim_case(stomp: bool) {
+        fn driver_trim_case() {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
             let pid = arm_driver(&mut h, &mut project, &layer_id);
@@ -1654,7 +1633,6 @@ mod scene_card_convergence_tests {
                 },
                 (0.0, 1.0),
                 (0.3, 0.9),
-                stomp,
             );
         }
 
@@ -1684,7 +1662,7 @@ mod scene_card_convergence_tests {
             pid
         }
 
-        fn envelope_target_case(stomp: bool) {
+        fn envelope_target_case() {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
             let pid = arm_envelope(&mut h, &mut project, &layer_id);
@@ -1721,11 +1699,10 @@ mod scene_card_convergence_tests {
                 move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].target_normalized,
                 0.2,
                 0.75,
-                stomp,
             );
         }
 
-        fn envelope_decay_case(stomp: bool) {
+        fn envelope_decay_case() {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
             let pid = arm_envelope(&mut h, &mut project, &layer_id);
@@ -1762,7 +1739,6 @@ mod scene_card_convergence_tests {
                 move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].decay_beats,
                 1.0,
                 3.5,
-                stomp,
             );
         }
 
@@ -1787,7 +1763,7 @@ mod scene_card_convergence_tests {
             pid
         }
 
-        fn audio_mod_shape_case(stomp: bool) {
+        fn audio_mod_shape_case() {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
             let pid = arm_audio_mod(&mut h, &mut project, &layer_id);
@@ -1846,11 +1822,10 @@ mod scene_card_convergence_tests {
                 },
                 before,
                 0.83,
-                stomp,
             );
         }
 
-        fn audio_trigger_shape_case(stomp: bool) {
+        fn audio_trigger_shape_case() {
             let (mut project, layer_id) = scene_layer_project();
             let send_id = with_send(&mut project);
             let (_, layer) = project.timeline.find_layer_by_id_mut(&layer_id).unwrap();
@@ -1920,13 +1895,12 @@ mod scene_card_convergence_tests {
                 },
                 before,
                 0.91,
-                stomp,
             );
         }
 
         // ── Audio Setup panel drags ──────────────────────────────
 
-        fn audio_send_gain_case(stomp: bool) {
+        fn audio_send_gain_case() {
             let mut project = Project::default();
             let send_id = with_send(&mut project);
             let before = project.audio_setup.find_send(&send_id).unwrap().gain_db;
@@ -1973,11 +1947,10 @@ mod scene_card_convergence_tests {
                 move |p| p.audio_setup.find_send(&sid3).unwrap().gain_db,
                 before,
                 -3.0,
-                stomp,
             );
         }
 
-        fn audio_crossover_case(stomp: bool) {
+        fn audio_crossover_case() {
             let project = Project::default();
             let before = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
             let after = (before.0, before.1 + 1000.0);
@@ -2014,7 +1987,6 @@ mod scene_card_convergence_tests {
                 |p| (p.audio_setup.low_hz, p.audio_setup.mid_hz),
                 before,
                 after,
-                stomp,
             );
         }
 
@@ -2222,6 +2194,7 @@ mod scene_card_convergence_tests {
                 (1usize, Some(true)),
                 "audio_trigger_add",
             );
+            // Later gestures read the snapshot the previous one produced.
             // Toggle the fresh (already-enabled) row off: one undo unit,
             // Some(true) → Some(false).
             h.dispatch(
@@ -2229,7 +2202,7 @@ mod scene_card_convergence_tests {
                     layer_id.clone(),
                     0,
                 )),
-                &mut project,
+                &mut side.project.clone(),
             );
             let cmds = h.drain();
             assert_undo_cycle(
@@ -2243,7 +2216,7 @@ mod scene_card_convergence_tests {
             // Remove: one undo unit, back to (0, None).
             h.dispatch(
                 &PanelAction::AudioSetup(AudioSetupAction::AudioTriggerRemove(layer_id.clone(), 0)),
-                &mut project,
+                &mut side.project.clone(),
             );
             let cmds = h.drain();
             assert_undo_cycle(
@@ -2312,7 +2285,7 @@ mod scene_card_convergence_tests {
 
         // ── Ableton macro trim + step-amount (same stomp class) ──
 
-        fn ableton_macro_trim_case(stomp: bool) {
+        fn ableton_macro_trim_case() {
             let mut project = Project::default();
             project.settings.macro_bank.slots[0].ableton_mapping =
                 Some(manifold_core::ableton_mapping::AbletonParamMapping {
@@ -2368,11 +2341,10 @@ mod scene_card_convergence_tests {
                 },
                 (0.0, 1.0),
                 (0.2, 0.7),
-                stomp,
             );
         }
 
-        fn audio_mod_step_amount_case(stomp: bool) {
+        fn audio_mod_step_amount_case() {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
             let pid = arm_audio_mod(&mut h, &mut project, &layer_id);
@@ -2431,7 +2403,6 @@ mod scene_card_convergence_tests {
                 read_amount,
                 0.1,
                 0.65,
-                stomp,
             );
         }
 
@@ -2621,7 +2592,7 @@ mod scene_card_convergence_tests {
 
             fn host(&mut self) -> crate::editing_host::AppEditingHost<'_> {
                 crate::editing_host::AppEditingHost::new(
-                    crate::ui_bridge::ProjectRef::new(&mut self.project, &mut self.edits, &self.tx),
+                    crate::ui_bridge::ProjectRef::new(&self.project, &mut self.edits, &self.tx),
                     &self.tx,
                     &self.content_state,
                     &mut self.cursor,
@@ -2692,12 +2663,12 @@ mod scene_card_convergence_tests {
             rig.host().commit_automation_group_move(moves);
             let mut commands = rig.drain();
             assert_eq!(commands.len(), 1);
-            let ContentCommand::ExecuteBatch(commands, description) = commands.remove(0) else {
-                panic!("one batch must contain the whole phrase move");
+            let ContentCommand::Execute(command) = commands.remove(0) else {
+                panic!("one command must contain the whole phrase move");
             };
-            assert_eq!(commands.len(), 2, "one atomic command per lane");
+            assert_eq!(command.description(), "Move Automation Points");
             let mut service = EditingService::new();
-            service.execute_batch(commands, description, &mut project);
+            service.execute(command, &mut project);
             for fx in &project.settings.master_effects {
                 let lane = &fx.automation_lanes.as_ref().unwrap()[0];
                 assert!(!lane.enabled);
@@ -2845,7 +2816,8 @@ mod scene_card_convergence_tests {
         }
 
         /// One video layer + one clip [4..8] created through the REAL host
-        /// path; both the rig's project and the returned content side carry it.
+        /// path and run on the rig's project; the returned content side carries
+        /// it too.
         fn clip_project() -> (ClipRig, ContentSide, manifold_core::ClipId) {
             let mut project = Project::default();
             project.timeline.add_layer(
@@ -2858,9 +2830,11 @@ mod scene_card_convergence_tests {
                 .host()
                 .create_clip_at_position(manifold_core::Beats(4.0), 0, manifold_core::Beats(4.0))
                 .expect("clip creation resolves");
-            // Setup is NOT under test: the content side simply starts from the
-            // post-create project with an empty undo history.
-            rig.drain();
+            // Setup is NOT under test: the create runs on the rig's project,
+            // and the content side starts from the post-create project with
+            // an empty undo history.
+            let created = rig.drain();
+            crate::edit_runner::apply_sent(&mut EditingService::new(), &mut rig.project, created);
             let side = ContentSide::new(&rig.project);
             (rig, side, clip_id)
         }
@@ -2987,7 +2961,7 @@ mod scene_card_convergence_tests {
 
         #[test]
         fn clip_delete_atomic() {
-            let (mut rig, mut side, clip_id) = clip_project();
+            let (rig, mut side, clip_id) = clip_project();
             let mut ui = UIRoot::new();
             let mut selection = manifold_ui::UIState::new();
             let mut active_layer = None;
@@ -2995,7 +2969,7 @@ mod scene_card_convergence_tests {
             crate::ui_bridge::editing::dispatch_editing(
                 &EditingAction::ContextDeleteClip(clip_id.to_string()),
                 &mut crate::ui_bridge::ProjectRef::new(
-                    &mut rig.project,
+                    &rig.project,
                     &mut Default::default(),
                     &rig.tx,
                 ),
@@ -3632,8 +3606,8 @@ mod scene_card_convergence_tests {
                 );
                 assert_eq!(
                     probe(&project),
-                    Some(true),
-                    "{label}: local project must flip"
+                    Some(false),
+                    "{label}: the UI copy waits for the snapshot"
                 );
 
                 let cmds = h.drain();
@@ -3668,119 +3642,6 @@ mod scene_card_convergence_tests {
                         pid,
                     );
                 }
-            }
-        }
-    }
-
-    /// BUG-262 regression. The mapping-sidebar range/affine drags dispatch
-    /// through `app_render`'s `pending_actions` loop, not the inspector host
-    /// the matrix above drives, so they can't ride `trio_cycle`. What made
-    /// them lose undo entries was a mid-gesture full-snapshot *stomp*
-    /// reverting the in-flight reshape before the commit read it back via
-    /// `watched_reshape` — the exact failure the `ResolvedScrub::Mapping*`
-    /// restore now prevents. These prove the restore at that level: given the
-    /// guard a live drag installs, a stale pre-drag snapshot must come back
-    /// carrying the dragged value, so the commit sees new != old and records one
-    /// undo.
-    mod mapping_undo_baseline {
-        use super::*;
-
-        /// A master effect carrying one user param binding whose reshape lives
-        /// in the per-instance graph (mirrors the editing crate's
-        /// `project_with_one_user_binding`). Pre-drag range 0..1, affine 1/0.
-        fn project_with_binding() -> (Project, manifold_core::GraphTarget, String) {
-            let mut project = Project::default();
-            let mut fx = manifold_core::effects::PresetInstance::new(
-                manifold_core::PresetTypeId::new("Mirror"),
-            );
-            let effect_id = fx.id.clone();
-            let binding_id = "user.uv_transform.rotation.1".to_string();
-            fx.append_user_binding(manifold_core::effects::UserParamBinding {
-                id: binding_id.clone(),
-                label: "Original Label".to_string(),
-                node_id: manifold_core::NodeId::new("uv_transform"),
-                legacy_node_handle: None,
-                inner_param: "rotation".to_string(),
-                min: 0.0,
-                max: 1.0,
-                default_value: 0.25,
-                convert: manifold_core::effects::ParamConvert::Float,
-                is_angle: false,
-                invert: false,
-                curve: manifold_core::macro_bank::MacroCurve::Linear,
-                scale: 1.0,
-                offset: 0.0,
-                value_labels: Vec::new(),
-                section: None,
-            });
-            project.settings.master_effects.push(fx);
-            (
-                project,
-                manifold_core::GraphTarget::Effect(effect_id),
-                binding_id,
-            )
-        }
-
-        /// Read the binding's live `(min, max, scale, offset)` back the way
-        /// `watched_reshape` does — through the synthesized binding view.
-        fn reshape(project: &Project, id: &str) -> (f32, f32, f32, f32) {
-            let b = project.settings.master_effects[0]
-                .user_param_bindings()
-                .into_iter()
-                .find(|b| b.id == id)
-                .expect("binding present");
-            (b.min, b.max, b.scale, b.offset)
-        }
-
-        /// A full snapshot landing mid-drag carries the stale pre-drag
-        /// project; restoring the guarded drag onto it must bring back the
-        /// in-flight value, so the commit sees new != old and records undo.
-        #[test]
-        fn mapping_drags_survive_snapshot_stomp() {
-            use crate::ui_bridge::scrub::{ResolvedScrub, ScrubState};
-            let (project, target, binding_id) = project_with_binding();
-            assert_eq!(
-                reshape(&project, &binding_id),
-                (0.0, 1.0, 1.0, 0.0),
-                "fixture starts at the default range and identity affine"
-            );
-
-            type Read = fn((f32, f32, f32, f32)) -> (f32, f32);
-            let cases: [(&str, ResolvedScrub, Read, (f32, f32)); 2] = [
-                (
-                    "range",
-                    ResolvedScrub::MappingRange {
-                        target: target.clone(),
-                        param_id: binding_id.clone(),
-                        baseline: (0.2, 0.8),
-                        live: (0.2, 0.8),
-                    },
-                    |r| (r.0, r.1),
-                    (0.2, 0.8),
-                ),
-                (
-                    "affine",
-                    ResolvedScrub::MappingAffine {
-                        target: target.clone(),
-                        param_id: binding_id.clone(),
-                        baseline: (2.5, -0.5),
-                        live: (2.5, -0.5),
-                    },
-                    |r| (r.2, r.3),
-                    (2.5, -0.5),
-                ),
-            ];
-            for (name, active, read, want) in cases {
-                let scrub = ScrubState {
-                    active: Some(active),
-                };
-                let mut stomped = project.clone();
-                scrub.restore_dragged(&mut stomped);
-                assert_eq!(
-                    read(reshape(&stomped, &binding_id)),
-                    want,
-                    "{name} drag restored after stomp"
-                );
             }
         }
     }

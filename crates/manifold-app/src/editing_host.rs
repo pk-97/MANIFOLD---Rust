@@ -9,9 +9,7 @@
 use manifold_core::change::{ChangeSet, Part};
 use manifold_core::{Beats, ClipId, GraphTarget, LayerId, Seconds};
 use manifold_ui::EditingAction;
-use std::collections::HashSet;
 
-use manifold_core::clip::TimelineClip;
 use manifold_core::effects::{AutomationPoint, ParamId, SegmentShape};
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::automation::{
@@ -120,28 +118,52 @@ pub struct AppEditingHost<'a> {
 }
 
 impl<'a> AppEditingHost<'a> {
-    /// Read-only clip lookup; `Timeline::find_clip_by_id` needs `&mut` for
-    /// its cache.
-    fn clip_by_id(&self, clip_id: &str) -> Option<&manifold_core::clip::TimelineClip> {
-        self.project
-            .timeline
-            .layers
-            .iter()
-            .flat_map(|l| l.clips.iter())
-            .find(|c| c.id.as_ref() == clip_id)
+    /// Clip lookup through the gesture preview: the clip as drawn.
+    fn clip_by_id(&self, clip_id: &str) -> Option<crate::gesture_preview::DrawnClip<'_>> {
+        self.project.preview().clip(&self.project, clip_id)
     }
 
-    /// Record the edited envelope in the gesture preview and send it once per
-    /// input event, leaving the content project's authoritative points
-    /// available to the undoable commit.
-    fn send_automation_preview(&mut self, target: &GraphTarget, param_id: &str) {
-        self.project
-            .preview(|p, preview| preview.record_lane(p, target, param_id));
-        let Some(lane) = self
+    /// The `ClipRef` a drawn clip answers with.
+    fn clip_ref(&self, drawn: &crate::gesture_preview::DrawnClip<'_>) -> ClipRef {
+        let layer = &self.project.timeline.layers[drawn.layer_index];
+        ClipRef {
+            clip_id: drawn.clip.id.clone(),
+            start_beat: drawn.start,
+            duration_beats: drawn.duration,
+            end_beat: drawn.end(),
+            layer_index: drawn.layer_index,
+            layer_id: layer.layer_id.clone(),
+            in_point: drawn.in_point,
+            is_generator: layer.hosts_generator(),
+            is_locked: drawn.clip.is_locked,
+            is_looping: drawn.clip.is_looping,
+        }
+    }
+
+    /// The data version whose snapshot carries a command sent now.
+    fn landing_version(&self) -> u64 {
+        self.content_state.data_version + 1
+    }
+
+    /// Send `commands` as one undo step the content thread runs.
+    fn execute_on_content(&mut self, commands: Vec<Box<dyn Command>>, label: &str) {
+        crate::content_command::ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::Execute(Box::new(CompositeCommand::new(
+                commands,
+                label.to_string(),
+            ))),
+        );
+    }
+
+    /// Send the lane record's points to the content thread once per input
+    /// event, leaving the content project's authoritative points available to
+    /// the undoable commit.
+    fn send_automation_preview(&mut self, target: &GraphTarget, param_id: &ParamId) {
+        let Some(points) = self
             .project
-            .preset_instance(target)
-            .and_then(|inst| inst.automation_lanes.as_ref())
-            .and_then(|lanes| lanes.iter().find(|lane| lane.param_id == param_id))
+            .preview()
+            .lane_points(target, param_id.as_ref())
         else {
             return;
         };
@@ -149,8 +171,8 @@ impl<'a> AppEditingHost<'a> {
             self.content_tx,
             crate::content_command::ContentCommand::PreviewAutomationLane {
                 target: target.clone(),
-                param_id: lane.param_id.clone(),
-                points: lane.points.clone(),
+                param_id: param_id.clone(),
+                points: points.to_vec(),
             },
         );
     }
@@ -222,17 +244,20 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn clip_source_seconds(&self, clip_id: &str, from: Beats, to: Beats) -> Seconds {
         match self.clip_by_id(clip_id) {
-            Some(clip) => self.project.source_clock().source_seconds(clip, from, to),
+            Some(drawn) => self
+                .project
+                .source_clock()
+                .source_seconds(drawn.clip, from, to),
             None => Seconds::ZERO,
         }
     }
 
     fn clip_beats_for_source(&self, clip_id: &str, from: Beats, seconds: Seconds) -> Beats {
         match self.clip_by_id(clip_id) {
-            Some(clip) => self
+            Some(drawn) => self
                 .project
                 .source_clock()
-                .beats_for_source(clip, from, seconds),
+                .beats_for_source(drawn.clip, from, seconds),
             None => Beats::ZERO,
         }
     }
@@ -244,48 +269,14 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     // ── Clip queries ────────────────────────────────────────────
 
     fn find_clip_by_id(&self, clip_id: &str) -> Option<ClipRef> {
-        let project = Some(&*self.project)?;
-        for (li, layer) in project.timeline.layers.iter().enumerate() {
-            for clip in &layer.clips {
-                if clip.id == clip_id {
-                    return Some(ClipRef {
-                        clip_id: clip.id.clone(),
-                        start_beat: clip.start_beat,
-                        duration_beats: clip.duration_beats,
-                        end_beat: clip.start_beat + clip.duration_beats,
-                        layer_index: li,
-                        layer_id: layer.layer_id.clone(),
-                        in_point: clip.in_point,
-                        is_generator: layer.hosts_generator(),
-                        is_locked: clip.is_locked,
-                        is_looping: clip.is_looping,
-                    });
-                }
-            }
-        }
-        None
+        self.clip_by_id(clip_id).map(|drawn| self.clip_ref(&drawn))
     }
 
     fn clips_on_layer(&self, layer_index: usize) -> Vec<ClipRef> {
-        let Some(layer) = Some(&*self.project).and_then(|p| p.timeline.layers.get(layer_index))
-        else {
-            return Vec::new();
-        };
-        layer
-            .clips
-            .iter()
-            .map(|clip| ClipRef {
-                clip_id: clip.id.clone(),
-                start_beat: clip.start_beat,
-                duration_beats: clip.duration_beats,
-                end_beat: clip.start_beat + clip.duration_beats,
-                layer_index,
-                layer_id: layer.layer_id.clone(),
-                in_point: clip.in_point,
-                is_generator: layer.hosts_generator(),
-                is_locked: clip.is_locked,
-                is_looping: clip.is_looping,
-            })
+        self.project
+            .preview()
+            .clips_on_layer(&self.project, layer_index)
+            .map(|drawn| self.clip_ref(&drawn))
             .collect()
     }
 
@@ -333,67 +324,53 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             grid_step
         };
 
-        // AddClipCommand enforces non-overlap internally.
-        self.project.executed_by(|project| {
-            let (mut cmd, id) =
-                EditingService::create_clip_at_position(project, beat, layer, duration)?;
-            cmd.execute(project);
-            Some((cmd, id))
-        })
+        // AddClipCommand enforces non-overlap internally. The id is made with
+        // the command, so the caller selects the clip before it lands. Its
+        // layer takes focus now, since the clip is not in the project yet.
+        let (cmd, id) =
+            EditingService::create_clip_at_position(&self.project, beat, layer, duration)?;
+        *self.active_layer = Some(self.project.timeline.layers[layer].layer_id.clone());
+        self.project.execute(cmd);
+        Some(id)
     }
 
     fn move_clip_to_layer(&mut self, clip_id: &str, target_layer: usize) {
-        // Live mutation for drag preview — undo is tracked separately via record_move.
-        // Use the same container-kind admission as paste and committed moves.
-        self.project.preview(|project, preview| {
-            if target_layer >= project.timeline.layers.len() {
-                return;
-            }
-
-            // Find the clip and its source layer
-            let mut found = None;
-            for (li, layer) in project.timeline.layers.iter().enumerate() {
-                if layer.clips.iter().any(|c| c.id == clip_id) {
-                    found = Some(li);
-                    break;
-                }
-            }
-
-            if let Some(src_layer) = found {
-                if src_layer == target_layer {
-                    return;
-                }
-
-                if !project.timeline.layers[target_layer]
-                    .layer_type
-                    .accepts_clips_from(project.timeline.layers[src_layer].layer_type)
-                {
-                    return;
-                }
-
-                // Move clip between layers (overlap handled by drag enforce).
-                let clip_id = ClipId::new(clip_id);
-                let clip = project.timeline.layers[src_layer].remove_clip(&clip_id);
-                if let Some(clip) = clip {
-                    project.timeline.layers[target_layer].restore_clip(clip);
-                }
-                project.timeline.mark_clip_lookup_dirty();
-                preview.record_clip(project, &clip_id);
-            }
-        });
+        // Drag preview: the record gives the clip its new layer. Undo is
+        // tracked separately via record_move. Uses the same container-kind
+        // admission as paste and committed moves.
+        let (project, preview) = self.project.preview_mut();
+        let layers = &project.timeline.layers;
+        let Some(target) = layers.get(target_layer) else {
+            return;
+        };
+        let Some(drawn) = preview.clip(project, clip_id) else {
+            return;
+        };
+        if drawn.layer_index == target_layer
+            || !target
+                .layer_type
+                .accepts_clips_from(layers[drawn.layer_index].layer_type)
+        {
+            return;
+        }
+        let (id, layer_id) = (drawn.clip.id.clone(), target.layer_id.clone());
+        let (start, duration, in_point) = (drawn.start, drawn.duration, drawn.in_point);
+        preview.place_clip(&id, &layer_id, start, duration, in_point);
     }
 
     // ── Selection & UI ──────────────────────────────────────────
 
     fn on_clip_selected(&mut self, clip_id: &str) {
-        // Find clip's layer and set active_layer only if it changed.
-        let mut new_layer: Option<LayerId> = None;
-        for layer in &self.project.timeline.layers {
-            if layer.clips.iter().any(|c| c.id == clip_id) {
-                new_layer = Some(layer.layer_id.clone());
-                break;
-            }
-        }
+        // The clip's drawn layer becomes active, only if it changed. A clip
+        // that is still on its way to the project leaves focus alone.
+        let Some(drawn) = self.clip_by_id(clip_id) else {
+            return;
+        };
+        let new_layer = Some(
+            self.project.timeline.layers[drawn.layer_index]
+                .layer_id
+                .clone(),
+        );
         if new_layer != *self.active_layer {
             *self.active_layer = new_layer;
         }
@@ -466,41 +443,15 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         );
     }
 
-    // ── Overlap enforcement ─────────────────────────────────────
+    // ── Overlap resolution ──────────────────────────────────────
 
-    fn enforce_non_overlap(&mut self, clip_id: &str, ignore_ids: &HashSet<ClipId>) {
-        // Port of Unity InteractionOverlay overlap enforcement during drag.
-        // Commands are executed immediately (model consistency) and stored in
-        // command_batch for composite undo on commit_command_batch.
-        let overlap_cmds = {
-            if let Some(project) = Some(&*self.project) {
-                // Linear scan — find_clip_by_id requires &mut for cache healing
-                let mut found: Option<(TimelineClip, usize)> = None;
-                for (li, layer) in project.timeline.layers.iter().enumerate() {
-                    if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
-                        found = Some((clip.clone(), li));
-                        break;
-                    }
-                }
-                if let Some((clip_clone, layer_idx)) = found {
-                    EditingService::enforce_non_overlap(project, &clip_clone, layer_idx, ignore_ids)
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        };
-        if !overlap_cmds.is_empty() {
-            // Execute overlap commands immediately for model consistency,
-            // then store in batch for composite undo on commit, which stamps.
-            let batch = &mut self.command_batch;
-            self.project.preview(|project, _| {
-                for mut cmd in overlap_cmds {
-                    cmd.execute(project);
-                    batch.push(cmd);
-                }
-            });
+    fn resolve_overlaps(&mut self, clip_ids: Vec<ClipId>) {
+        // One command for the dropped set: it trims or removes the covered
+        // neighbours when the batch commits, on the project that runs it.
+        if !clip_ids.is_empty() {
+            self.command_batch.push(Box::new(
+                manifold_editing::commands::clip::ResolveDependentOverlaps::new(clip_ids),
+            ));
         }
     }
 
@@ -508,52 +459,22 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn split_clips_for_region_move(&mut self, region: &UiSelectionRegion) -> RegionSplitResult {
         // Port of Unity EditingService.SplitClipsForRegionMove.
-        // 1. Split clips at region boundaries (executed immediately)
-        // 2. Hold the split commands in the gesture preview for composite undo
-        //    (Unity: preDragSplitCommands, lines 69, 430-433)
-        // 3. Return interior clips (the drag set)
+        // 1. Build the splits from the project and record each one's result
+        //    (the shortened clip, the tail) in the gesture preview.
+        // 2. Hold the split commands in the preview; they lead the commit so
+        //    CompositeCommand.Undo() reverses them after undoing the move
+        //    (Unity: preDragSplitCommands).
+        // 3. Return the interior clips (the drag set).
         let region = crate::ui_translate::selection_region_to_core(region);
-        let region = &region;
-        // Step 1: Build split commands (immutable borrow)
-        let split_cmds = {
-            if let Some(project) = Some(&*self.project) {
-                EditingService::split_clips_at_region_boundaries(project, region)
-            } else {
-                return RegionSplitResult {
-                    interior_clip_ids: Vec::new(),
-                    split_count: 0,
-                };
-            }
-        };
-        let split_count = split_cmds.len();
-
-        // Step 2: Execute split commands for display and hold them in the
-        // gesture preview (not command_batch — they persist across host
-        // instances, replay over a mid-drag snapshot, and lead the commit so
-        // CompositeCommand.Undo() reverses them AFTER undoing the move).
-        if !split_cmds.is_empty() {
-            self.project.preview(|project, preview| {
-                let mut splits = Vec::with_capacity(split_cmds.len());
-                for mut cmd in split_cmds {
-                    cmd.execute(project);
-                    splits.push(cmd);
-                }
-                preview.set_splits(splits);
-            });
+        let (project, preview) = self.project.preview_mut();
+        let (splits, interior) =
+            EditingService::split_clips_at_region_boundaries_with_interior(project, &region);
+        let split_count = splits.len();
+        for split in splits {
+            preview.record_split(project, split);
         }
-
-        // Step 3: Get clips now fully inside region (immutable borrow)
-        let interior_clip_ids = if let Some(project) = Some(&*self.project) {
-            EditingService::get_clips_in_region(project, region)
-                .into_iter()
-                .map(|(_, id)| id)
-                .collect()
-        } else {
-            Vec::new()
-        };
-
         RegionSplitResult {
-            interior_clip_ids,
+            interior_clip_ids: interior.into_iter().map(|(_, id)| id).collect(),
             split_count,
         }
     }
@@ -619,70 +540,62 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn duplicate_clip_to(&mut self, src_clip_id: &str, target_beat: Beats, target_layer: usize) {
-        let src_id = ClipId::new(src_clip_id);
-        if let Some(mut cmd) =
-            EditingService::duplicate_clip_to(&self.project, &src_id, target_beat, target_layer)
-        {
-            // Apply to the local mirror now (the copy appears immediately) and
-            // push into the batch so it commits as part of the move's one undo
-            // entry and reaches the content thread via ExecuteBatch; the
-            // batch commit stamps it.
-            self.project.preview(|project, _| cmd.execute(project));
-            self.command_batch.push(cmd);
-        }
+        // The copy keeps all of the source's data with a fresh id, at the
+        // source's drawn duration and in-point (a region move may have
+        // shortened it). It joins the batch as the move's one undo entry
+        // and is created when the batch commits.
+        let Some(target) = self.project.timeline.layers.get(target_layer) else {
+            return;
+        };
+        let target_layer_id = target.layer_id.clone();
+        let Some(src) = self.clip_by_id(src_clip_id) else {
+            return;
+        };
+        let mut copy = src.clip.clone_with_new_id();
+        copy.start_beat = target_beat;
+        copy.duration_beats = src.duration;
+        copy.in_point = src.in_point;
+        self.command_batch.push(Box::new(
+            manifold_editing::commands::clip::AddClipCommand::new(copy, target_layer_id),
+        ));
     }
 
     fn commit_command_batch(&mut self, description: &str) {
         // Unity lines 428-434: prepend pre-drag split commands so
         // CompositeCommand.Undo() reverses them AFTER undoing the move.
-        // The gesture ends here, committed or cancelled: the preview clears.
-        let pre_cmds = self.project.gesture_preview().take_clip_gesture();
-        let batch_cmds: Vec<Box<dyn Command>> = self.command_batch.drain(..).collect();
-
-        let mut commands = Vec::with_capacity(pre_cmds.len() + batch_cmds.len());
-        commands.extend(pre_cmds);
-        commands.extend(batch_cmds);
+        // The gesture ends here, committed or cancelled. What is sent keeps
+        // drawing from the record until its snapshot arrives; a gesture that
+        // sends nothing clears at once.
+        let mut commands = self.project.preview_mut().1.take_splits();
+        commands.append(&mut self.command_batch);
 
         if commands.is_empty() {
+            self.project.preview_mut().1.clear_clips();
             return;
         }
-        self.project
-            .stamp(crate::gesture_preview::touches_of(&commands));
-        // Commands are already applied (drag mutated data live).
-        // Use record() not execute() — just push to undo stack.
-        if commands.len() == 1 {
-            let cmd = commands.into_iter().next().unwrap();
-            crate::content_command::ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::Execute(cmd),
-            );
+        let command: Box<dyn Command> = if commands.len() == 1 {
+            commands.remove(0)
         } else {
-            let composite = CompositeCommand::new(commands, description.to_string());
-            crate::content_command::ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::Execute(Box::new(composite)),
-            );
-        }
+            Box::new(CompositeCommand::new(commands, description.to_string()))
+        };
+        crate::content_command::ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::Execute(command),
+        );
+        let landing = self.landing_version();
+        self.project.preview_mut().1.land_clips(landing);
     }
 
     // ── Live clip mutation ──────────────────────────────────────
 
     fn set_clip_start_beat(&mut self, clip_id: &str, beat: Beats) {
-        self.project.preview(|project, preview| {
-            let mut layer_id = None;
-            if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                clip.start_beat = beat;
-                layer_id = Some(clip.layer_id.clone());
-            }
-            if let Some(layer_id) = layer_id
-                && let Some(layer_idx) = project.timeline.layer_index_for_id(&layer_id)
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-            {
-                layer.mark_clips_unsorted();
-            }
-            project.timeline.mark_clip_lookup_dirty();
-            preview.record_clip(project, clip_id);
-        });
+        let (project, preview) = self.project.preview_mut();
+        let Some(drawn) = preview.clip(project, clip_id) else {
+            return;
+        };
+        let (id, duration, in_point) = (drawn.clip.id.clone(), drawn.duration, drawn.in_point);
+        let layer_id = project.timeline.layers[drawn.layer_index].layer_id.clone();
+        preview.place_clip(&id, &layer_id, beat, duration, in_point);
     }
 
     fn set_clip_trim(
@@ -692,34 +605,22 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         duration_beats: Beats,
         in_point: Seconds,
     ) {
-        self.project.preview(|project, preview| {
-            let mut layer_id = None;
-            let mut old_start_beat = None;
-            if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                old_start_beat = Some(clip.start_beat);
-                clip.start_beat = start_beat;
-                clip.duration_beats = duration_beats;
-                clip.in_point = in_point;
-                layer_id = Some(clip.layer_id.clone());
-            }
-            if old_start_beat.is_some_and(|old| old != start_beat)
-                && let Some(layer_id) = layer_id
-                && let Some(layer_idx) = project.timeline.layer_index_for_id(&layer_id)
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-            {
-                layer.mark_clips_unsorted();
-            }
-            project.timeline.mark_clip_lookup_dirty();
-            preview.record_clip(project, clip_id);
-        });
+        let (project, preview) = self.project.preview_mut();
+        let Some(drawn) = preview.clip(project, clip_id) else {
+            return;
+        };
+        let id = drawn.clip.id.clone();
+        let layer_id = project.timeline.layers[drawn.layer_index].layer_id.clone();
+        preview.place_clip(&id, &layer_id, start_beat, duration_beats, in_point);
     }
 
     // ── Video metadata ──────────────────────────────────────────
 
     fn get_max_duration_beats(&self, clip_id: &str) -> Beats {
-        let Some(clip) = self.clip_by_id(clip_id) else {
+        let Some(drawn) = self.clip_by_id(clip_id) else {
             return Beats::ZERO;
         };
+        let clip = drawn.clip;
 
         // The media left after in_point, converted to beats the way playback
         // advances this clip's source.
@@ -738,10 +639,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         if media_seconds <= 0.0 {
             return Beats::ZERO;
         }
-        let available = Seconds((media_seconds - clip.in_point.0).max(0.0));
+        let available = Seconds((media_seconds - drawn.in_point.0).max(0.0));
         self.project
             .source_clock()
-            .beats_for_source(clip, clip.start_beat, available)
+            .beats_for_source(clip, drawn.start, available)
     }
 
     // ── Automation lane editing ──────────────────────────────────
@@ -777,30 +678,26 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     ) -> Option<f32> {
         let graph_target = to_graph_target(target);
         let param_id_str = param_id.as_ref();
-        let mut local_cmd = AddAutomationPointCommand::new_on_curve(
-            graph_target.clone(),
-            param_id_str,
-            beat,
-            to_segment_shape(outside_shape),
-        );
-        self.project
-            .executed_by(|project| {
-                local_cmd.execute(project);
-                if !local_cmd.was_applied() {
-                    return None;
-                }
-                let value = project
-                    .preset_instance(&graph_target)
-                    .and_then(|inst| inst.automation_lanes.as_ref())
-                    .and_then(|lanes| {
-                        lanes
-                            .iter()
-                            .find(|lane| lane.param_id.as_ref() == param_id_str)
-                    })
-                    .map(|lane| lane.value_at(beat));
-                Some((Box::new(local_cmd) as Box<dyn Command>, value))
+        // The new point takes the lane's own value there; the insert lands
+        // with the next snapshot.
+        let value = self
+            .project
+            .preset_instance(&graph_target)
+            .and_then(|inst| inst.automation_lanes.as_ref())
+            .and_then(|lanes| {
+                lanes
+                    .iter()
+                    .find(|lane| lane.param_id.as_ref() == param_id_str)
             })
-            .flatten()
+            .and_then(|lane| manifold_editing::commands::automation::on_curve_value(lane, beat))?;
+        self.project
+            .execute(Box::new(AddAutomationPointCommand::new_on_curve(
+                graph_target,
+                param_id_str,
+                beat,
+                to_segment_shape(outside_shape),
+            )));
+        Some(value)
     }
 
     fn set_automation_point_preview(
@@ -813,25 +710,20 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         to_value: f32,
     ) {
         let target = to_graph_target(target);
-        let param_id = param_id.as_ref();
-        self.project.preview(|project, _| {
-            if let Some(inst) = project.preset_instance_mut(&target)
-                && let Some(lanes) = inst.automation_lanes.as_mut()
-                && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
-                && let Some(p) = lane
-                    .points
-                    .iter_mut()
-                    .find(|p| p.beat == from_beat && p.value == from_value)
-            {
-                p.beat = to_beat;
-                p.value = to_value;
-                lane.points.sort_by(|a, b| {
-                    a.beat
-                        .partial_cmp(&b.beat)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            }
-        });
+        let (project, preview) = self.project.preview_mut();
+        if let Some(points) = preview.lane_points_mut(project, &target, param_id.as_ref())
+            && let Some(p) = points
+                .iter_mut()
+                .find(|p| p.beat == from_beat && p.value == from_value)
+        {
+            p.beat = to_beat;
+            p.value = to_value;
+            points.sort_by(|a, b| {
+                a.beat
+                    .partial_cmp(&b.beat)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
         self.send_automation_preview(&target, param_id);
     }
 
@@ -853,11 +745,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             value: new.1,
             shape: to_segment_shape(new.2),
         };
-        // The UI already displays the draft, but content still owns the original
+        // The UI draws the draft from its record; content owns the original
         // lane. Execute captures that complete lane for collision-safe undo.
         let cmd =
             MoveAutomationPointCommand::new(graph_target, param_id.as_ref(), old_point, new_point);
-        self.project.stamp(cmd.touches());
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
@@ -916,19 +807,14 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         bend: f32,
     ) {
         let target = to_graph_target(target);
-        let param_id = param_id.as_ref();
-        self.project.preview(|project, _| {
-            if let Some(inst) = project.preset_instance_mut(&target)
-                && let Some(lanes) = inst.automation_lanes.as_mut()
-                && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
-                && let Some(p) = lane
-                    .points
-                    .iter_mut()
-                    .find(|p| p.beat == left_beat && p.value == left_value)
-            {
-                p.shape = SegmentShape::Curved(bend);
-            }
-        });
+        let (project, preview) = self.project.preview_mut();
+        if let Some(points) = preview.lane_points_mut(project, &target, param_id.as_ref())
+            && let Some(p) = points
+                .iter_mut()
+                .find(|p| p.beat == left_beat && p.value == left_value)
+        {
+            p.shape = SegmentShape::Curved(bend);
+        }
         self.send_automation_preview(&target, param_id);
     }
 
@@ -944,28 +830,21 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         right_value: f32,
     ) {
         let target = to_graph_target(target);
-        let param_id = param_id.as_ref();
-        self.project.preview(|project, _| {
-            if let Some(inst) = project.preset_instance_mut(&target)
-                && let Some(lanes) = inst.automation_lanes.as_mut()
-                && let Some(lane) = lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id)
+        let (project, preview) = self.project.preview_mut();
+        if let Some(points) = preview.lane_points_mut(project, &target, param_id.as_ref()) {
+            if let Some(p) = points
+                .iter_mut()
+                .find(|p| p.beat == left_beat && p.value == left_from_value)
             {
-                if let Some(p) = lane
-                    .points
-                    .iter_mut()
-                    .find(|p| p.beat == left_beat && p.value == left_from_value)
-                {
-                    p.value = left_value;
-                }
-                if let Some(p) = lane
-                    .points
-                    .iter_mut()
-                    .find(|p| p.beat == right_beat && p.value == right_from_value)
-                {
-                    p.value = right_value;
-                }
+                p.value = left_value;
             }
-        });
+            if let Some(p) = points
+                .iter_mut()
+                .find(|p| p.beat == right_beat && p.value == right_from_value)
+            {
+                p.value = right_value;
+            }
+        }
         self.send_automation_preview(&target, param_id);
     }
 
@@ -1003,15 +882,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             make(left.0, left.1, left.2, left.3),
             make(right.0, right.1, right.2, right.3),
         ];
-        self.project
-            .stamp(crate::gesture_preview::touches_of(&commands));
-        crate::content_command::ContentCommand::send(
-            self.content_tx,
-            crate::content_command::ContentCommand::ExecuteBatch(
-                commands,
-                "Move Automation Segment".to_string(),
-            ),
-        );
+        self.execute_on_content(commands, "Move Automation Segment");
     }
 
     // ── Automation lane editing — marquee group move (P4 Unit B) ─────
@@ -1058,15 +929,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 )) as Box<dyn Command>
             })
             .collect();
-        self.project
-            .stamp(crate::gesture_preview::touches_of(&commands));
-        crate::content_command::ContentCommand::send(
-            self.content_tx,
-            crate::content_command::ContentCommand::ExecuteBatch(
-                commands,
-                "Move Automation Points".to_string(),
-            ),
-        );
+        self.execute_on_content(commands, "Move Automation Points");
     }
 
     // ── Automation lane editing — draw/pencil mode (P4 Unit B) ────────
@@ -1078,15 +941,19 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     ) -> Option<Vec<(Beats, f32, UiSegmentShape)>> {
         let target = to_graph_target(target);
         let param_id = param_id.as_ref();
+        let drawn = |points: &[AutomationPoint]| {
+            points
+                .iter()
+                .map(|p| (p.beat, p.value, from_segment_shape(p.shape)))
+                .collect()
+        };
+        if let Some(points) = self.project.preview().lane_points(&target, param_id) {
+            return Some(drawn(points));
+        }
         let inst = self.project.preset_instance(&target)?;
         let lanes = inst.automation_lanes.as_ref()?;
         let lane = lanes.iter().find(|l| l.param_id.as_ref() == param_id)?;
-        Some(
-            lane.points
-                .iter()
-                .map(|p| (p.beat, p.value, from_segment_shape(p.shape)))
-                .collect(),
-        )
+        Some(drawn(&lane.points))
     }
 
     fn set_automation_lane_preview(
@@ -1096,15 +963,17 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         points: &[(Beats, f32, UiSegmentShape)],
     ) {
         self.restore_automation_lane_preview(target, param_id, Some(points));
-        self.send_automation_preview(&to_graph_target(target), param_id.as_ref());
+        self.send_automation_preview(&to_graph_target(target), param_id);
     }
 
     fn clear_automation_previews(&mut self) {
-        self.project.gesture_preview().clear_lanes();
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ClearAutomationPreviews,
         );
+        let landing = self.landing_version();
+        let (project, preview) = self.project.preview_mut();
+        preview.land_lanes(project, landing);
     }
 
     fn restore_automation_lane_preview(
@@ -1114,78 +983,37 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         points: Option<&[(Beats, f32, UiSegmentShape)]>,
     ) {
         let target = to_graph_target(target);
+        let (project, preview) = self.project.preview_mut();
         let Some(points) = points else {
-            let mutated = self.project.preview(|project, _| {
-                let mut mutated = false;
-                if let Some(inst) = project.preset_instance_mut(&target)
-                    && let Some(lanes) = inst.automation_lanes.as_mut()
-                {
-                    let old_len = lanes.len();
-                    lanes.retain(|lane| lane.param_id != *param_id);
-                    mutated = lanes.len() != old_len;
-                    if mutated && lanes.is_empty() {
-                        inst.automation_lanes = None;
-                    }
-                }
-                mutated
-            });
-            // A lane appearing or vanishing is a shape change; it stamps like a commit.
-            if mutated {
-                self.project.stamp(ChangeSet::of(&[Part::Automation]));
+            // The lane did not exist before the gesture: stop drawing it. A
+            // lane vanishing is a shape change; it stamps like a commit.
+            if preview.drop_lane(&target, param_id.as_ref()) {
+                self.project
+                    .preview_shape_changed(ChangeSet::of(&[Part::Automation]));
             }
             return;
         };
-        let param_id_str = param_id.as_ref();
-        let created = self.project.preview(|project, _| {
-            let mut created = false;
-            if let Some(inst) = project.preset_instance_mut(&target) {
-                let lanes = inst.automation_lanes.get_or_insert_with(Vec::new);
-                match lanes
-                    .iter_mut()
-                    .find(|l| l.param_id.as_ref() == param_id_str)
-                {
-                    Some(lane) => {
-                        let same_points = lane.points.len() == points.len()
-                            && lane.points.iter().zip(points).all(
-                                |(existing, &(beat, value, shape))| {
-                                    existing.beat == beat
-                                        && existing.value == value
-                                        && existing.shape == to_segment_shape(shape)
-                                },
-                            );
-                        if !same_points {
-                            lane.points.clear();
-                            lane.points
-                                .extend(points.iter().map(|&(beat, value, shape)| {
-                                    AutomationPoint {
-                                        beat,
-                                        value,
-                                        shape: to_segment_shape(shape),
-                                    }
-                                }));
-                        }
-                    }
-                    None => {
-                        lanes.push(manifold_core::effects::AutomationLane {
-                            param_id: param_id.clone(),
-                            enabled: true,
-                            points: points
-                                .iter()
-                                .map(|&(beat, value, shape)| AutomationPoint {
-                                    beat,
-                                    value,
-                                    shape: to_segment_shape(shape),
-                                })
-                                .collect(),
-                        });
-                        created = true;
-                    }
-                }
-            }
-            created
-        });
-        if created {
-            self.project.stamp(ChangeSet::of(&[Part::Automation]));
+        let known = preview.lane_points(&target, param_id.as_ref()).is_some()
+            || project
+                .preset_instance(&target)
+                .and_then(|inst| inst.automation_lanes.as_ref())
+                .is_some_and(|lanes| lanes.iter().any(|l| l.param_id == *param_id));
+        if project.preset_instance(&target).is_none() {
+            return;
+        }
+        preview.set_lane(
+            &target,
+            param_id,
+            points.iter().map(|&(beat, value, shape)| AutomationPoint {
+                beat,
+                value,
+                shape: to_segment_shape(shape),
+            }),
+        );
+        // A lane appearing is a shape change; it stamps like a commit.
+        if !known {
+            self.project
+                .preview_shape_changed(ChangeSet::of(&[Part::Automation]));
         }
     }
 
@@ -1219,7 +1047,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             new_converted,
             old_converted,
         );
-        self.project.stamp(cmd.touches());
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),

@@ -486,9 +486,7 @@ pub(crate) fn send_scene_edit(
                     crate::edit_selection::SelectAfterEdit::NewItem(layer_id.clone(), item),
                 ),
             ),
-            None => {
-                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(edit.command))
-            }
+            None => ContentCommand::send(content_tx, ContentCommand::Execute(edit.command)),
         },
         Ok(None) => {}
         Err(reason) => ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason)),

@@ -1,6 +1,0 @@
-[
-  "ResetWork",
-  { "Pointer": { "target": { "Query": { "text": "▼", "type": "Button", "under_name": "inspector", "nth": 0 } }, "gesture": { "Click": { "modifiers": {} } } } },
-  { "AssertWork": { "window": "chrome_fold" } },
-  "AssertFresh"
-]

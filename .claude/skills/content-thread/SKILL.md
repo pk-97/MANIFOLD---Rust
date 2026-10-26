@@ -44,7 +44,7 @@ content stamps (`PartStamps`) say which parts moved.
 
 ## Mutation Flow
 
-Every project write goes through `EditingService`, on both threads. Each write names the parts it
+Every project write goes through `EditingService`, once, on the content thread. Each write names the parts it
 touches (`ChangeSet` of `Part`s); the stamps move, and the frame planner and the
 content reactions read the stamps. There is no other signal.
 
@@ -71,9 +71,18 @@ ContentCommand::mutate(touch::VALUES, Box::new(|project: &mut Project| { ... }))
   points, recording provenance, base tempo) go through
   `manifold_editing::tick_write`: compare first, no stamp, no publish, no
   reaction. Anything structural the tick produces returns a command.
-- UI side: `ctx.project` is read-only; write the local copy only through
-  `DispatchCtx::mutate(touches, f)` / `execute(cmd)` (`ui_bridge/context.rs`),
-  which apply locally, stamp, and send the same edit to the content thread.
+- UI side: the UI holds the content thread's `Arc<Project>` read-only
+  (`LocalProject`). `DispatchCtx::execute(cmd)` / `mutate(touches, f)`
+  (`ui_bridge/context.rs`) only send; the edit shows when the next snapshot
+  arrives (one frame of click latency, accepted).
+- Drags never write the project. A slider drag lives in `ScrubState`
+  (`ui_bridge/scrub.rs`) and a timeline drag in `GesturePreview`
+  (`gesture_preview.rs`); controls draw the drag first, then the live value
+  (`ModulationSnapshot`), then the project. A released drag keeps drawing
+  until the snapshot carrying its commit arrives.
+- One edit runner, `edit_runner::run_edit`, runs every edit command over
+  `EditingService`: the content thread, the flow harness and unit tests
+  (`apply_sent`, `land_on_app`) all use it.
 - Every write compares before it mutates, so an unchanged value moves no stamp.
 
 **NEVER:**
@@ -86,7 +95,7 @@ ContentCommand::mutate(touch::VALUES, Box::new(|project: &mut Project| { ... }))
 ## ContentCommand → UI Flow
 
 ```
-UI click → DispatchCtx::execute / mutate (local write + stamp) → send ContentCommand
+UI click → DispatchCtx::execute / mutate → send ContentCommand (no local write)
 Content thread drains all → EditingService → stamps move → reactions run once per drain
 Content thread publishes ContentState (one slot; a replaced state folds into the newest)
 UI accepts the snapshot → moved parts bump its own stamps → the frame planner

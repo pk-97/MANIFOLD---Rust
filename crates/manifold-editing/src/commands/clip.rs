@@ -88,20 +88,28 @@ pub fn build_audio_dependent_edits(
         }
     }
     if !moved_ids.is_empty() {
-        commands.push(Box::new(ResolveDependentOverlaps {
-            moved_ids,
-            commands: None,
-        }));
+        commands.push(Box::new(ResolveDependentOverlaps::new(moved_ids)));
     }
     commands
 }
 
-/// Resolve collisions after every child has reached its new position. Protect
-/// siblings in this edit, as the ordinary multi-clip move command does.
+/// Resolve collisions after every clip in `moved_ids` has reached its new
+/// position. The moved set is protected, as the ordinary multi-clip move
+/// command does: each clip, in order, trims or removes the unprotected
+/// neighbours it now covers on whatever project runs this command.
 #[derive(Debug)]
-struct ResolveDependentOverlaps {
+pub struct ResolveDependentOverlaps {
     moved_ids: Vec<ClipId>,
     commands: Option<Vec<Box<dyn Command>>>,
+}
+
+impl ResolveDependentOverlaps {
+    pub fn new(moved_ids: Vec<ClipId>) -> Self {
+        Self {
+            moved_ids,
+            commands: None,
+        }
+    }
 }
 
 impl Command for ResolveDependentOverlaps {
@@ -1266,6 +1274,26 @@ impl SplitClipCommand {
     /// The clip ID of the tail (right) segment created by the split.
     pub fn tail_clip_id(&self) -> &ClipId {
         &self.tail_clip.id
+    }
+
+    /// The clip the split shortens.
+    pub fn clip_id(&self) -> &ClipId {
+        &self.clip_id
+    }
+
+    /// The layer holding the clip and receiving the tail.
+    pub fn layer_id(&self) -> &LayerId {
+        &self.layer_id
+    }
+
+    /// The shortened clip's duration after the split.
+    pub fn new_duration_beats(&self) -> Beats {
+        self.new_duration_beats
+    }
+
+    /// The tail clip the split adds.
+    pub fn tail_clip(&self) -> &TimelineClip {
+        &self.tail_clip
     }
 }
 

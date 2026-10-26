@@ -1,6 +1,0 @@
-[
-  "ResetWork",
-  { "ScrubDrag": { "param": { "Crossover": "Low" }, "from": 150.0, "to": 600.0, "steps": 60 } },
-  { "AssertWork": { "window": "drag_1s" } },
-  "AssertFresh"
-]

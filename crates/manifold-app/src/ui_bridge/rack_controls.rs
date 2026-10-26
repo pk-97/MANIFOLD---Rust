@@ -3,12 +3,12 @@
 //! content thread. A wet/dry drag writes the live value with gesture moves and
 //! commits one command, so the whole drag is one undo step.
 
-use super::scrub::ResolvedScrub;
+use super::scrub::{ResolvedScrub, commit_record};
 use super::{DispatchCtx, DispatchResult};
 use crate::content_command::ContentCommand;
 use manifold_core::project::Project;
 use manifold_core::{EffectGroupId, LayerId};
-use manifold_editing::commands::effect_groups::{ChangeGroupWetDryCommand, ToggleGroupCommand};
+use manifold_editing::commands::effect_groups::ToggleGroupCommand;
 use manifold_editing::commands::effect_target::{EffectTarget, with_effects, with_effects_mut};
 use manifold_ui::{InspectorTab, ScrubPhase};
 
@@ -50,10 +50,7 @@ pub(crate) fn dispatch_bypass(
         && current != enabled
     {
         let cmd = ToggleGroupCommand::new(target, group_id.clone(), current, enabled);
-        ContentCommand::send(
-            ctx.content_tx,
-            ContentCommand::ExecuteOnContent(Box::new(cmd)),
-        );
+        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
     }
     DispatchResult::handled()
 }
@@ -73,8 +70,8 @@ pub(crate) fn set_wet_dry(
     });
 }
 
-/// Wet/dry scrub: Begin captures the baseline, Move writes live, Commit sends
-/// the one undo command.
+/// Wet/dry scrub: Begin captures the baseline, Move sends the live value,
+/// Commit sends the one undo command built from the record.
 pub(crate) fn dispatch_wet_dry(
     tab: InspectorTab,
     layer_id: &Option<LayerId>,
@@ -108,12 +105,7 @@ pub(crate) fn dispatch_wet_dry(
             }
         }
         ScrubPhase::Commit => {
-            if let Some(ResolvedScrub::RackWetDry { baseline, live, .. }) = ctx.scrub.active.take()
-                && (baseline - live).abs() > f32::EPSILON
-            {
-                let cmd = ChangeGroupWetDryCommand::new(target, group_id.clone(), baseline, live);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-            }
+            commit_record(ctx);
         }
     }
     DispatchResult::handled()
@@ -180,7 +172,7 @@ mod tests {
             for cmd in self.rx.try_iter() {
                 match cmd {
                     ContentCommand::MutateProject { f, .. } => f(project),
-                    ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
+                    ContentCommand::Execute(cmd) => {
                         service.execute(cmd, &mut *project);
                         landed += 1;
                     }
@@ -250,10 +242,17 @@ mod tests {
                 &mut project,
             );
         }
+        assert!(
+            matches!(
+                rig.scrub.drawn(),
+                Some(ResolvedScrub::RackWetDry { live, .. }) if *live == 0.3
+            ),
+            "the drag draws from its record"
+        );
         assert_eq!(
             group_of(&project, &layer).wet_dry,
-            0.3,
-            "the UI copy tracks the cursor"
+            1.0,
+            "the UI copy keeps the pre-drag value"
         );
         rig.dispatch(&scrub(ScrubPhase::Commit), &mut project);
         assert_eq!(

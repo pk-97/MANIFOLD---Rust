@@ -412,9 +412,9 @@ impl ProjectIOService {
                 let modifier_notices = prepare_loaded_project(&mut project);
 
                 // Overlay install happened in the pre-deserialize hook above;
-                // `apply_project_io_action` re-installs on every project apply
-                // (unconditionally, even when empty) so a previous project's
-                // forks never leak into the next one.
+                // `show_loaded_project` re-installs when the loaded project's
+                // snapshot arrives (unconditionally, even when empty) so a
+                // previous project's forks never leak into the next one.
 
                 let path_str = path.to_string_lossy().to_string();
                 let was_v1 = !manifold_io::archive::is_v2_archive(&path_str);
@@ -611,7 +611,7 @@ impl ProjectIOService {
         drop_beat: f32,
         drop_layer_index: i32,
         join_audio_layer: Option<manifold_core::LayerId>,
-        project: &mut Project,
+        project: &Project,
     ) -> ProjectIOAction {
         if file_paths.is_empty() {
             return ProjectIOAction::default();
@@ -646,6 +646,8 @@ impl ProjectIOService {
                 .map(|l| l.layer_id.clone())
         });
         let mut audio_imported = 0;
+        // New lanes this drop adds, so each lands after the last.
+        let mut new_lanes = 0;
         for raw_path in file_paths {
             let file_path = match resolve_dropped_file_path(raw_path) {
                 Some(fp) => fp,
@@ -672,24 +674,18 @@ impl ProjectIOService {
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "Audio".to_string());
-                let insert_index = project.timeline.layers.len();
-                let mut add_layer = AddLayerCommand::new(
+                // The lane is built here so its id is known: the clip below
+                // names it before the lane exists in the project.
+                let insert_index = project.timeline.layers.len() + new_lanes;
+                new_lanes += 1;
+                let mut lane = manifold_core::layer::Layer::new(
                     file_name,
                     manifold_core::types::LayerType::Audio,
-                    PresetTypeId::NONE,
-                    insert_index,
-                    None,
+                    insert_index as i32,
                 );
-                add_layer.execute(project);
-                let Some(lid) = project
-                    .timeline
-                    .layers
-                    .get(insert_index)
-                    .map(|l| l.layer_id.clone())
-                else {
-                    continue;
-                };
-                (lid, Some(add_layer))
+                lane.layer_color = manifold_core::layer::Layer::generate_layer_color(insert_index);
+                let lid = lane.layer_id.clone();
+                (lid, Some(AddLayerCommand::from_layer(lane, insert_index)))
             };
 
             let clip = TimelineClip::new_audio(
@@ -699,8 +695,7 @@ impl ProjectIOService {
                 manifold_core::Seconds::ZERO,
                 source_duration,
             );
-            let mut add_clip = AddClipCommand::new(clip, layer_id);
-            add_clip.execute(project);
+            let add_clip = AddClipCommand::new(clip, layer_id);
 
             // One undo step per file: a new lane removes clip + lane; a join removes
             // just the clip.
@@ -734,7 +729,7 @@ impl ProjectIOService {
         file_path: &Path,
         drop_beat: f32,
         drop_layer_index: i32,
-        project: &mut Project,
+        project: &Project,
     ) -> ProjectIOAction {
         let file_path_str = file_path.to_string_lossy().into_owned();
 

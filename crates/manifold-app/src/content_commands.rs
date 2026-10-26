@@ -766,14 +766,59 @@ impl ContentThread {
         }
     }
 
+    /// Run an edit variant through `edit_runner::run_edit` over the content
+    /// project, then publish what it left behind. The renderers resize to
+    /// match an output-size edit before it is accepted.
+    fn run_edit(&mut self, cmd: ContentCommand) {
+        match &cmd {
+            ContentCommand::Undo | ContentCommand::Redo => {
+                self.commit_automation_recording(true);
+                self.engine.clear_automation_previews();
+            }
+            ContentCommand::Execute(_)
+            | ContentCommand::ExecuteBatch(..)
+            | ContentCommand::ExecuteSelecting(..) => self.engine.clear_automation_previews(),
+            _ => {}
+        }
+        let (renderers, project) = self.engine.split_renderer_project_edit();
+        let Some(project) = project else {
+            return;
+        };
+        let Some(outcome) =
+            crate::edit_runner::run_edit(&mut self.editing_service, project, cmd, |candidate| {
+                self.content_pipeline.resize_renderers(
+                    renderers.as_mut_slice(),
+                    candidate.settings.output_width.max(1) as u32,
+                    candidate.settings.output_height.max(1) as u32,
+                    candidate.settings.render_scale,
+                )
+            })
+        else {
+            unreachable!("handle_command routes only edit variants here");
+        };
+        if let Some(event) = outcome.undo_redo {
+            self.pending_undo_redo_event = Some(event);
+        }
+        if let Some(message) = outcome.rejection {
+            self.report_graph_edit_rejection(message);
+            return;
+        }
+        if outcome.output_changed {
+            self.graph_edit_diagnostic = None;
+        }
+        if let Some(selection) = outcome.selection {
+            self.edit_selection_update = Some(crate::edit_selection::EditSelectionUpdate::after(
+                self.edit_selection_update.as_ref(),
+                selection,
+            ));
+        }
+    }
+
     fn report_graph_edit_rejection(&mut self, message: String) {
         log::warn!("{message}");
-        let sequence = self
-            .graph_edit_diagnostic
-            .as_ref()
-            .map_or(1, |event| event.sequence.wrapping_add(1));
-        self.graph_edit_diagnostic = Some(std::sync::Arc::new(
-            crate::content_state::GraphEditDiagnostic { sequence, message },
+        self.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic::after(
+            self.graph_edit_diagnostic.as_ref(),
+            message,
         ));
     }
 
@@ -795,6 +840,7 @@ impl ContentThread {
         self.link_offset.clear();
         self.tempo_recorder.reset();
         self.engine.initialize(*project);
+        self.reactions.load_seq += 1;
         // Clear stale temporal effect state from the previous project
         // (feedback textures, bloom state, etc.) to prevent bleed-through.
         self.content_pipeline.clear_all_effect_state();
@@ -899,9 +945,9 @@ impl ContentThread {
             return false;
         }
         let settings_edit = match &cmd {
-            ContentCommand::Execute(c)
-            | ContentCommand::ExecuteOnContent(c)
-            | ContentCommand::ExecuteSelecting(c, _) => c.touches().contains(Part::Settings),
+            ContentCommand::Execute(c) | ContentCommand::ExecuteSelecting(c, _) => {
+                c.touches().contains(Part::Settings)
+            }
             ContentCommand::ExecuteBatch(cs, _) => {
                 cs.iter().any(|c| c.touches().contains(Part::Settings))
             }
@@ -920,20 +966,7 @@ impl ContentThread {
         if settings_edit {
             self.retain_tempo_for_reaction();
         }
-        let (cmd, pending_selection) = match cmd {
-            ContentCommand::ExecuteSelecting(command, request) => {
-                let pending = self
-                    .engine
-                    .project()
-                    .map(|project| request.capture(project));
-                (ContentCommand::ExecuteOnContent(command), pending)
-            }
-            cmd => (cmd, None),
-        };
         match cmd {
-            ContentCommand::ExecuteSelecting(..) => {
-                unreachable!("selection request normalized above")
-            }
             ContentCommand::Shutdown => return true,
 
             ContentCommand::WatchEffectGraph(_)
@@ -1208,7 +1241,6 @@ impl ContentThread {
             }
 
             // ── Editing ────────────────────────────────────────────
-            ContentCommand::GraphEditRejected(message) => self.report_graph_edit_rejection(message),
             ContentCommand::ChangeGeneratorType { layer_id, new_type } => {
                 let result = self
                     .engine
@@ -1269,7 +1301,7 @@ impl ContentThread {
                     .project()
                     .and_then(|project| project.preset_instance(&target))
                     .map(|instance| instance.get_base_param(param_id.as_ref()));
-                self.handle_command(ContentCommand::ExecuteOnContent(Box::new(
+                self.handle_command(ContentCommand::Execute(Box::new(
                     manifold_editing::commands::effects::FireGraphParamCommand::new(
                         target.clone(),
                         param_id.clone(),
@@ -1334,226 +1366,13 @@ impl ContentThread {
                     }
                 }
             }
-            ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
-                self.engine.clear_automation_previews();
-                let pre = self.engine.project().map(|p| {
-                    (
-                        p.settings.output_width,
-                        p.settings.output_height,
-                        p.settings.render_scale,
-                    )
-                });
-                let (renderers, project) = self.engine.split_renderer_project_edit();
-                if let Some(project) = project {
-                    self.editing_service
-                        .execute_with_validation(cmd, project, |candidate| {
-                            let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
-                                candidate.settings.output_width != pre_w
-                                    || candidate.settings.output_height != pre_h
-                                    || (candidate.settings.render_scale - pre_rs).abs() > 0.01
-                            });
-                            if !changed {
-                                return Ok(());
-                            }
-                            self.content_pipeline.resize_renderers(
-                                renderers.as_mut_slice(),
-                                candidate.settings.output_width.max(1) as u32,
-                                candidate.settings.output_height.max(1) as u32,
-                                candidate.settings.render_scale,
-                            )
-                        });
-                }
-                if let Some(message) = self.editing_service.take_rejection() {
-                    self.report_graph_edit_rejection(message);
-                    return false;
-                }
-                if let Some(pending) = pending_selection
-                    && let Some(project) = self.engine.project()
-                    && let Some(selection) = pending.resolve(project)
-                {
-                    let sequence = self
-                        .edit_selection_update
-                        .as_ref()
-                        .map_or(1, |update| update.sequence.wrapping_add(1));
-                    self.edit_selection_update = Some(std::sync::Arc::new(
-                        crate::edit_selection::EditSelectionUpdate {
-                            sequence,
-                            selection,
-                        },
-                    ));
-                }
-            }
-            ContentCommand::ExecuteBatch(cmds, desc) => {
-                self.engine.clear_automation_previews();
-                let pre = self.engine.project().map(|p| {
-                    (
-                        p.settings.output_width,
-                        p.settings.output_height,
-                        p.settings.render_scale,
-                    )
-                });
-                let (renderers, project) = self.engine.split_renderer_project_edit();
-                if let Some(project) = project {
-                    let command =
-                        Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
-                    self.editing_service
-                        .execute_with_validation(command, project, |candidate| {
-                            let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
-                                candidate.settings.output_width != pre_w
-                                    || candidate.settings.output_height != pre_h
-                                    || (candidate.settings.render_scale - pre_rs).abs() > 0.01
-                            });
-                            if !changed {
-                                return Ok(());
-                            }
-                            self.content_pipeline.resize_renderers(
-                                renderers.as_mut_slice(),
-                                candidate.settings.output_width.max(1) as u32,
-                                candidate.settings.output_height.max(1) as u32,
-                                candidate.settings.render_scale,
-                            )
-                        });
-                }
-                if let Some(message) = self.editing_service.take_rejection() {
-                    self.report_graph_edit_rejection(message);
-                    return false;
-                }
-            }
-            ContentCommand::Undo => {
-                self.commit_automation_recording(true);
-                self.engine.clear_automation_previews();
-                // Capture pre-undo settings so we can detect resolution changes. The fps
-                // follows through the engine clock (FRAME_EXACT_TRANSPORT_DESIGN D10).
-                // Port of Unity WorkspaceController.OnUndoRedo() which calls
-                // ApplyProjectResolutionFromFooter() + ApplyProjectFpsFromFooter().
-                let pre = self.engine.project().map(|p| {
-                    (
-                        p.settings.output_width,
-                        p.settings.output_height,
-                        p.settings.render_scale,
-                    )
-                });
-                // D11 undo/redo toast: peek the description of the command
-                // ABOUT to be undone before calling `undo` — the manager
-                // moves it onto the redo stack once acted on, so peeking
-                // after would need a second (post-undo) accessor.
-                let desc = self
-                    .editing_service
-                    .peek_undo_description()
-                    .map(str::to_string);
-                let undone = {
-                    let (renderers, project) = self.engine.split_renderer_project_edit();
-                    if let Some(project) = project {
-                        self.editing_service
-                            .undo_with_validation(project, |candidate| {
-                                let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
-                                    candidate.settings.output_width != pre_w
-                                        || candidate.settings.output_height != pre_h
-                                        || (candidate.settings.render_scale - pre_rs).abs() > 0.01
-                                });
-                                if !changed {
-                                    return Ok(());
-                                }
-                                self.content_pipeline.resize_renderers(
-                                    renderers.as_mut_slice(),
-                                    candidate.settings.output_width.max(1) as u32,
-                                    candidate.settings.output_height.max(1) as u32,
-                                    candidate.settings.render_scale,
-                                )
-                            })
-                    } else {
-                        false
-                    }
-                };
-                if undone {
-                    self.pending_undo_redo_event = Some(crate::content_state::UndoRedoEvent {
-                        is_redo: false,
-                        description: desc.unwrap_or_else(|| "action".to_string()),
-                    });
-                }
-                if let Some(message) = self.editing_service.take_rejection() {
-                    self.report_graph_edit_rejection(message);
-                    return false;
-                }
-                // Apply resolution changes if the undo altered project settings.
-                let post = self.engine.project().map(|p| {
-                    (
-                        p.settings.output_width,
-                        p.settings.output_height,
-                        p.settings.render_scale,
-                    )
-                });
-                if let (Some((pre_w, pre_h, pre_rs)), Some((post_w, post_h, post_rs))) = (pre, post)
-                    && (post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01)
-                {
-                    self.graph_edit_diagnostic = None;
-                }
-            }
-            ContentCommand::Redo => {
-                self.commit_automation_recording(true);
-                self.engine.clear_automation_previews();
-                // Same pre/post settings detection as Undo.
-                let pre = self.engine.project().map(|p| {
-                    (
-                        p.settings.output_width,
-                        p.settings.output_height,
-                        p.settings.render_scale,
-                    )
-                });
-                // D11 undo/redo toast: peek BEFORE calling `redo` — see the
-                // matching comment in the `Undo` arm above.
-                let desc = self
-                    .editing_service
-                    .peek_redo_description()
-                    .map(str::to_string);
-                let redone = {
-                    let (renderers, project) = self.engine.split_renderer_project_edit();
-                    if let Some(project) = project {
-                        self.editing_service
-                            .redo_with_validation(project, |candidate| {
-                                let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
-                                    candidate.settings.output_width != pre_w
-                                        || candidate.settings.output_height != pre_h
-                                        || (candidate.settings.render_scale - pre_rs).abs() > 0.01
-                                });
-                                if !changed {
-                                    return Ok(());
-                                }
-                                self.content_pipeline.resize_renderers(
-                                    renderers.as_mut_slice(),
-                                    candidate.settings.output_width.max(1) as u32,
-                                    candidate.settings.output_height.max(1) as u32,
-                                    candidate.settings.render_scale,
-                                )
-                            })
-                    } else {
-                        false
-                    }
-                };
-                if redone {
-                    self.pending_undo_redo_event = Some(crate::content_state::UndoRedoEvent {
-                        is_redo: true,
-                        description: desc.unwrap_or_else(|| "action".to_string()),
-                    });
-                }
-                if let Some(message) = self.editing_service.take_rejection() {
-                    self.report_graph_edit_rejection(message);
-                    return false;
-                }
-                // Apply resolution changes if the redo altered project settings.
-                let post = self.engine.project().map(|p| {
-                    (
-                        p.settings.output_width,
-                        p.settings.output_height,
-                        p.settings.render_scale,
-                    )
-                });
-                if let (Some((pre_w, pre_h, pre_rs)), Some((post_w, post_h, post_rs))) = (pre, post)
-                    && (post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01)
-                {
-                    self.graph_edit_diagnostic = None;
-                }
-            }
+            edit @ (ContentCommand::Execute(_)
+            | ContentCommand::ExecuteBatch(..)
+            | ContentCommand::ExecuteSelecting(..)
+            | ContentCommand::MutateProject { .. }
+            | ContentCommand::Undo
+            | ContentCommand::Redo
+            | ContentCommand::GraphEditRejected(_)) => self.run_edit(edit),
             ContentCommand::SetProject => {
                 // Follows LoadProject, whose load path already ran every
                 // reaction (routes, listeners, overlay, renderers), so the
@@ -1718,22 +1537,6 @@ impl ContentThread {
             // ── Audio ──────────────────────────────────────────────
             ContentCommand::SetSpectrogramSend(send) => {
                 self.audio_mod_runtime.set_spectrogram_send(send);
-            }
-
-            // ── Direct project mutation ────────────────────────────
-            // Reactions run once per drain pass from the stamps (D4).
-            ContentCommand::MutateProject {
-                touches,
-                f,
-                gesture,
-            } => {
-                if let Some(edit) = self.engine.project_edit() {
-                    if gesture {
-                        self.editing_service.mutate_gesture(touches, edit, f);
-                    } else {
-                        self.editing_service.mutate(touches, edit, f);
-                    }
-                }
             }
 
             // ── Clipboard ─────────────────────────────────────────

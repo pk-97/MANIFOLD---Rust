@@ -51,9 +51,7 @@ fn perf_metrics_from_content_state(
 pub(crate) use crate::frame::present::fmt_table_cell_seed;
 pub(crate) use crate::frame::present::format_scope_readout;
 
-pub(crate) use crate::editor_bridge::build_mapping_command;
 pub(crate) use crate::editor_bridge::resolve_canvas_binding;
-pub(crate) use crate::editor_bridge::seed_def_for_project;
 pub(crate) use crate::editor_bridge::serialized_value_as_f32;
 
 /// A node-face scrub session currently rerouted through a card binding's
@@ -84,17 +82,6 @@ impl BoundNodeParamDrag {
     ) -> Option<f32> {
         (self.target == *target && self.outer_param_id == param_id).then_some(self.current_value)
     }
-
-    /// Re-apply the in-flight card value after snapshot acceptance — the
-    /// same write the live scrub path uses (`with_preset_graph_mut` +
-    /// `set_base_param` on `outer_param_id`), mirroring
-    /// `ResolvedScrub::Param`'s restore arm (BUG-262 precedent). Called via
-    /// `ResolvedScrub::BoundNodeParam`'s restore arm (P-I).
-    pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
-        project.with_preset_graph_mut(&self.target, |inst| {
-            inst.set_base_param(&self.outer_param_id, self.current_value);
-        });
-    }
 }
 
 mod unbound_node_param_drag;
@@ -117,26 +104,10 @@ impl Application {
         let drag_active = self.overlay.drag_mode()
             != manifold_ui::interaction_overlay::DragMode::None
             || self.overlay.has_pending_automation_press();
-        // Suppress snapshots until content thread catches up after a local project load.
-        // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
-        const MAX_SUPPRESS_FRAMES: u64 = 120;
-        let suppress_timed_out = self.suppress_snapshot_until > 0
-            && self
-                .frame_count
-                .saturating_sub(self.suppress_snapshot_set_at)
-                >= MAX_SUPPRESS_FRAMES;
-        if suppress_timed_out {
-            log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
-            self.suppress_snapshot_until = 0;
-        }
-        let suppressed = state.data_version < self.suppress_snapshot_until;
-
         // Accept the project snapshot. A drag in flight lives in the
-        // gesture preview, which re-covers the fresh clone below, so
+        // gesture preview, which draws over whatever project is shown, so
         // no drag holds snapshots back (D12).
-        if let Some(snapshot) = state.project_snapshot
-            && !suppressed
-        {
+        if let Some(snapshot) = state.project_snapshot {
             // `ContentState` travels every tick, so only an accepted
             // snapshot folds stamps, and a Values, Shapes or
             // MappingRanges move alone never re-projects (D23).
@@ -145,36 +116,29 @@ impl Application {
                 || !moved
                     .minus(manifold_core::change::ChangeSet::LIVE)
                     .is_empty();
-            // Only a different allocation is cloned (see `take_project_snapshot`);
-            // modulation-only frames send the same Arc.
+            // Modulation-only frames send the same Arc, which changes nothing
+            // (see `take_project_snapshot`).
             let is_new_arc = crate::frame_plan::take_project_snapshot(
-                self.local_project.intake(),
+                &mut self.local_project,
                 &mut self.ui_edits.stamps,
-                &mut self.last_snapshot_arc,
                 snapshot,
                 version_changed,
             );
             if is_new_arc {
-                // Re-cover the clone with the gesture in flight.
-                // With no drag live, a leftover preview is stale
-                // and drops with the content's truth.
-                if drag_active {
-                    self.ui_edits.preview.reapply(self.local_project.intake());
-                } else {
-                    drop(self.ui_edits.preview.take_clip_gesture());
-                    self.ui_edits.preview.clear_lanes();
+                if state.load_seq != self.shown_load_seq {
+                    self.shown_load_seq = state.load_seq;
+                    self.show_loaded_project();
+                }
+                // A landed gesture whose commit this snapshot carries has
+                // nothing left to draw. With no drag live and nothing
+                // landing, a leftover preview is stale and drops with the
+                // content's truth.
+                self.ui_edits.preview.snapshot_arrived(state.data_version);
+                self.scrub.snapshot_arrived(state.data_version);
+                if !drag_active {
+                    self.ui_edits.preview.clear_stale();
                 }
             }
-            // Restore the one actively-dragged gesture so a snapshot
-            // doesn't overwrite the value the user is manipulating —
-            // every family, panel-wired and frame-resident (the
-            // bound-node-param card scrub, BUG-281, whose live writes
-            // land in `local_project` every tick, is now a
-            // `ResolvedScrub::BoundNodeParam` in `active`).
-            self.scrub.restore_dragged(self.local_project.intake());
-            // Clear suppression once we've accepted a post-load snapshot
-            self.suppress_snapshot_until = 0;
-
             // An edit snapshot: the stamp fold above already moved the
             // parts the planner re-projects (D5 source a). Here only
             // the selection drops references the edit removed.
@@ -347,7 +311,11 @@ impl Application {
         // until the next unrelated edit. Re-sync so the new renderer attaches; the
         // per-layer fingerprint (waveform.is_some()) then repaints the lane once.
         if self.ws.ui_root.audio_waveforms.drive(clips_key, gather) {
-            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
+            crate::ui_bridge::sync_clip_positions(
+                &mut self.ws.ui_root,
+                &self.local_project,
+                &self.ui_edits.preview,
+            );
         }
 
         // 1c. Push the latest graph snapshot into the editor canvas
@@ -1732,12 +1700,22 @@ impl Application {
                             {
                                 let cmd =
                                     manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                                        drag.target,
-                                        drag.outer_param_id,
+                                        drag.target.clone(),
+                                        drag.outer_param_id.clone(),
                                         drag.old_value,
                                         drag.current_value,
                                     );
-                                self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                                if let Some(tx) = self.content_tx.as_ref() {
+                                    crate::ui_bridge::scrub::send_commit(
+                                        tx,
+                                        &mut self.scrub,
+                                        self.content_state.data_version,
+                                        crate::ui_bridge::scrub::ResolvedScrub::BoundNodeParam(
+                                            drag,
+                                        ),
+                                        Box::new(cmd),
+                                    );
+                                }
                             }
                         }
                         Some(crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag)) => {
@@ -1750,8 +1728,18 @@ impl Application {
                                 && drag.param_name == *param_name
                                 && drag.moved()
                             {
-                                let cmd = drag.into_command();
-                                self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                                let cmd = drag.clone().into_command();
+                                if let Some(tx) = self.content_tx.as_ref() {
+                                    crate::ui_bridge::scrub::send_commit(
+                                        tx,
+                                        &mut self.scrub,
+                                        self.content_state.data_version,
+                                        crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(
+                                            drag,
+                                        ),
+                                        Box::new(cmd),
+                                    );
+                                }
                             }
                         }
                         // Not a node-param gesture — EndScrub shouldn't fire
@@ -2167,7 +2155,7 @@ impl Application {
                 is_dirty: content_state.editing_is_dirty,
                 project_path: self.current_project_path.as_deref(),
                 transport_cache: &mut self.transport_cache,
-                drag: self.scrub.active.as_ref(),
+                drag: self.scrub.drawn(),
             },
             &mut self.ui_edits,
             |ui_root, project, selection, active_layer, redraw, ui_edits| {
@@ -2712,91 +2700,6 @@ pub(crate) fn render_text_input_overlay(
 // sidebar are gone: the canvas now derives exposed / wire-driven / outer-driven
 // state itself from the snapshot (see `GraphCanvas::apply_driven_state`), and the
 // per-node expose checkbox lives on the node face.
-
-/// BUG-281 regression. A card-bound graph-node-face scrub live-writes
-/// `local_project` every tick via `bound_node_param_drag` (the reroute arm
-/// above, `with_preset_graph_mut` + `set_base_param` on `outer_param_id`),
-/// but the snapshot-acceptance restore path only re-applied
-/// `active_inspector_drag` — so a snapshot landing mid-gesture stomped the
-/// bound value back to `old_value` until the next tick (visible revert on
-/// the card slider). Mirrors the BUG-262 `mapping_undo_baseline` shape:
-/// given the guard a live drag installs, a stale pre-drag snapshot must come
-/// back carrying the dragged value.
-#[cfg(test)]
-mod bound_node_param_drag_tests {
-    use super::BoundNodeParamDrag;
-    use manifold_core::effect_graph_def::ParamSpecDef;
-    use manifold_core::effects::PresetInstance;
-    use manifold_core::macro_bank::MacroCurve;
-    use manifold_core::params::Param;
-    use manifold_core::project::Project;
-    use manifold_core::{GraphTarget, PresetTypeId};
-
-    /// One master effect carrying a single outer card param ("amount"),
-    /// default 0.0 — the write target `BoundNodeParamDrag::apply` reaches
-    /// via `with_preset_graph_mut` + `set_base_param`.
-    fn project_with_amount_param() -> (Project, GraphTarget) {
-        let mut project = Project::default();
-        let mut fx = PresetInstance::new(PresetTypeId::new("Test"));
-        let effect_id = fx.id.clone();
-        fx.params.push(Param::bundled(ParamSpecDef {
-            tooltip: None,
-            id: "amount".into(),
-            name: "Amount".into(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 0.0,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: vec![],
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: MacroCurve::Linear,
-            invert: false,
-            is_angle: false,
-            is_trigger_gate: false,
-            wraps: false,
-            section: None,
-            card_visible: true,
-            material_role: None,
-            limit: Default::default(),
-            unit: None,
-            scene: None,
-        }));
-        project.settings.master_effects.push(fx);
-        (project, GraphTarget::Effect(effect_id))
-    }
-
-    #[test]
-    fn bound_node_param_drag_survives_snapshot_stomp() {
-        let (project, target) = project_with_amount_param();
-        let before = project.settings.master_effects[0].get_base_param("amount");
-        assert_eq!(before, 0.0, "fixture starts at the default value");
-
-        // The guard a live bound-node-param scrub installs (in-flight value
-        // 0.7, matching the live write at app_render.rs's
-        // `SetGraphNodeParam` reroute arm).
-        let guard = BoundNodeParamDrag {
-            target: target.clone(),
-            node_id: 1,
-            param_name: "inner".to_string(),
-            outer_param_id: "amount".to_string(),
-            old_value: 0.0,
-            current_value: 0.7,
-        };
-        // A full snapshot lands mid-drag carrying the stale pre-drag
-        // project; app_render restores the guarded drag onto it.
-        let mut stomped = project.clone();
-        guard.apply(&mut stomped);
-
-        let after = stomped.settings.master_effects[0].get_base_param("amount");
-        assert_eq!(
-            after, 0.7,
-            "bound-node-param stomp must be undone so the card doesn't revert mid-gesture"
-        );
-    }
-}
 
 #[cfg(test)]
 mod live_sim_hud_flow_tests {

@@ -14,7 +14,6 @@
 use crate::node::Vec2;
 use crate::view::{SelectionRegion, UiGraphTarget, UiLayer, UiSegmentShape};
 use manifold_foundation::{Beats, ClipId, LayerId, ParamId, Seconds};
-use std::collections::HashSet;
 
 /// Cursor shapes the overlay can request.
 /// Matches Unity Cursors.cs static methods: SetDefault, SetMove, SetResizeHorizontal, SetBlocked.
@@ -205,10 +204,11 @@ pub trait TimelineEditingHost {
 
     // ── Overlap enforcement ─────────────────────────────────────────
 
-    /// DaVinci-style overlap enforcement on a placed clip.
-    /// Commands are collected internally by the host (added to the current batch).
-    /// Unity: EnforceNonOverlap(TimelineClip, HashSet<string>).
-    fn enforce_non_overlap(&mut self, clip_id: &str, ignore_ids: &HashSet<ClipId>);
+    /// DaVinci-style overlap resolution for a dropped set of clips. Each clip,
+    /// in `clip_ids` order, trims or removes the neighbours it now covers;
+    /// the set itself is protected. The host adds one entry to the current
+    /// command batch; the neighbours change when the batch commits.
+    fn resolve_overlaps(&mut self, clip_ids: Vec<ClipId>);
 
     // ── Region-partial move ─────────────────────────────────────────
 

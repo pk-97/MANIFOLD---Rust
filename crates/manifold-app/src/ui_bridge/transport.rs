@@ -54,7 +54,7 @@ pub(super) fn dispatch_transport(
                 let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(
                     old_points, bpm,
                 );
-                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             DispatchResult::handled()
         }
@@ -209,7 +209,7 @@ mod view_move_dispatch_tests {
     /// the plan updates the scroll panels and runs no project or inspector sync.
     #[test]
     fn scroll_and_zoom_are_view_moves_not_structural_syncs() {
-        let mut project = manifold_core::project::Project::default();
+        let project = manifold_core::project::Project::default();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         let content_state = crate::content_state::ContentState::default();
         let mut ui = crate::ui_root::UIRoot::new();
@@ -252,11 +252,7 @@ mod view_move_dispatch_tests {
         for (action, scroll, zoom) in cases {
             {
                 let mut ctx = crate::ui_bridge::DispatchCtx {
-                    project: crate::ui_bridge::ProjectRef::new(
-                        &mut project,
-                        &mut edits,
-                        &content_tx,
-                    ),
+                    project: crate::ui_bridge::ProjectRef::new(&project, &mut edits, &content_tx),
                     content_tx: &content_tx,
                     content_state: &content_state,
                     ui: &mut ui,

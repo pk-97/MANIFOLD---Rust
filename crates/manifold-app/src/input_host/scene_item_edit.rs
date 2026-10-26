@@ -69,10 +69,9 @@ impl AppInputHost<'_> {
         if reorder {
             if let Some(item) = self.ui_root.scene_setup_panel.selected_scene_item() {
                 match crate::scene_edit::nudge(&self.project, &item.layer_id, &item.item, delta) {
-                    Ok(Some(edit)) => ContentCommand::send(
-                        self.content_tx,
-                        ContentCommand::ExecuteOnContent(edit.command),
-                    ),
+                    Ok(Some(edit)) => {
+                        ContentCommand::send(self.content_tx, ContentCommand::Execute(edit.command))
+                    }
                     Ok(None) => {}
                     Err(reason) => ContentCommand::send(
                         self.content_tx,

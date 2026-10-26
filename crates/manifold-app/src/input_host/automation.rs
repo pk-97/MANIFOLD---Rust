@@ -385,7 +385,7 @@ pub(crate) fn copy_selected(
 /// Flatten the selected time interval to its entry value in every selected
 /// enabled lane, retaining exact curve continuity outside the interval.
 fn flatten_time_selection(
-    project: &mut manifold_core::project::Project,
+    project: &manifold_core::project::Project,
     selection: &UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
 ) -> bool {
@@ -434,13 +434,12 @@ fn flatten_time_selection(
         let old_points = lane.points.clone();
         let new_points =
             manifold_playback::automation::punch_recorded_points(&old_points, &replacement);
-        let mut command = CommitRecordedGestureCommand::new(
+        let command = CommitRecordedGestureCommand::new(
             target,
             param_id.as_ref(),
             new_points,
             Some(old_points),
         );
-        command.execute(project);
         commands.push(Box::new(command));
     }
     if commands.is_empty() {
@@ -456,7 +455,7 @@ fn flatten_time_selection(
 /// Delete selected points as one undoable batch. Missing targets/points are
 /// skipped without changing the project.
 pub(crate) fn delete_selected(
-    project: &mut manifold_core::project::Project,
+    project: &manifold_core::project::Project,
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
 ) {
@@ -530,9 +529,6 @@ pub(crate) fn delete_selected(
     if commands.is_empty() {
         return;
     }
-    for command in &mut commands {
-        command.execute(project);
-    }
     ContentCommand::send(
         content_tx,
         ContentCommand::ExecuteBatch(commands, "Delete Automation Points".to_string()),
@@ -563,7 +559,7 @@ fn nudged_value(value: f32, value_steps: f32, min: f32, max: f32, whole_numbers:
 /// when a limit leaves nothing to move; a stale selection returns false and
 /// the arrow nudges clips instead.
 pub(crate) fn nudge_selected(
-    project: &mut manifold_core::project::Project,
+    project: &manifold_core::project::Project,
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
     beat_delta: Beats,
@@ -693,7 +689,7 @@ pub(crate) fn nudge_selected(
     if lanes.is_empty() {
         return true;
     }
-    let mut commands: Vec<Box<dyn Command>> = lanes
+    let commands: Vec<Box<dyn Command>> = lanes
         .into_iter()
         .map(|(target, param_id, moves)| {
             Box::new(MoveAutomationPointCommand::for_group(
@@ -701,9 +697,6 @@ pub(crate) fn nudge_selected(
             )) as Box<dyn Command>
         })
         .collect();
-    for command in &mut commands {
-        command.execute(project);
-    }
     ContentCommand::send(
         content_tx,
         ContentCommand::ExecuteBatch(commands, "Nudge Automation Points".to_string()),
@@ -734,7 +727,7 @@ pub(crate) fn nudge_selected(
 }
 
 pub(crate) fn cut_selected(
-    project: &mut manifold_core::project::Project,
+    project: &manifold_core::project::Project,
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
 ) {
@@ -769,7 +762,7 @@ pub(crate) fn cut_selected(
 }
 
 pub(crate) fn paste(
-    project: &mut manifold_core::project::Project,
+    project: &manifold_core::project::Project,
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
     target_beat: Beats,
@@ -874,9 +867,8 @@ pub(crate) fn paste(
                 &phrase,
             )
         };
-        let mut command =
+        let command =
             CommitRecordedGestureCommand::new(target, param_id.as_ref(), new_points, old_points);
-        command.execute(project);
         for point in phrase {
             inserted.push(UiAutomationPointRef {
                 target: ui_target.clone(),
@@ -903,7 +895,7 @@ pub(crate) fn paste(
 }
 
 pub(crate) fn duplicate_selected(
-    project: &mut manifold_core::project::Project,
+    project: &manifold_core::project::Project,
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
     grid_step: f32,
@@ -1029,7 +1021,7 @@ fn shape_points(
 /// project's time signature beginning at the snapped context-menu beat is
 /// replaced.
 pub(crate) fn insert_shape(
-    project: &mut manifold_core::project::Project,
+    project: &manifold_core::project::Project,
     selection: &mut UIState,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
     target: &UiGraphTarget,
@@ -1080,13 +1072,12 @@ pub(crate) fn insert_shape(
         shape,
     );
     let old_points = lane_points;
-    let mut command = CommitRecordedGestureCommand::new(
+    let command = CommitRecordedGestureCommand::new(
         graph_target,
         param_id.as_ref(),
         points.clone(),
         old_points,
     );
-    command.execute(project);
     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(command)));
     selection.selected_automation_points = points
         .iter()
@@ -1272,7 +1263,6 @@ mod tests {
         }]);
         let mut project = Project::default();
         project.settings.master_effects.push(fx);
-        let original = project.clone();
         let before = serde_json::to_value(&project).unwrap();
         let (min, max) = project.settings.master_effects[0]
             .params
@@ -1289,21 +1279,31 @@ mod tests {
         let mut selection = UIState::new();
         selection.selected_automation_points = vec![select(4.0, 0.6)];
         let (tx, rx) = crossbeam_channel::unbounded();
+        let mut service = EditingService::new();
 
-        // Right one grid step, up one percent.
+        // Right one grid step, up one percent. One batch is sent, which the
+        // content thread runs as one undo entry.
         assert!(nudge_selected(
-            &mut project,
+            &project,
             &mut selection,
             &tx,
             Beats(0.25),
             1.0
         ));
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert_eq!(sent.len(), 1);
+        assert!(
+            matches!(sent[0], ContentCommand::ExecuteBatch(..)),
+            "a nudge is one batch"
+        );
+        crate::edit_runner::apply_sent(&mut service, &mut project, sent);
         let lane = &project.settings.master_effects[0]
             .automation_lanes
             .as_ref()
             .unwrap()[0];
         assert_eq!(lane.points[1].beat, Beats(4.25));
-        assert!((lane.points[1].value - (0.6 + 0.01 * span)).abs() < 1e-5);
+        let nudged = lane.points[1].value;
+        assert!((nudged - (0.6 + 0.01 * span)).abs() < 1e-5);
         assert_eq!(
             selection.selected_automation_points[0].beat,
             Beats(4.25),
@@ -1311,26 +1311,19 @@ mod tests {
         );
 
         // One undo entry for the whole keypress.
-        let commands: Vec<_> = rx.try_iter().collect();
-        assert_eq!(commands.len(), 1);
-        let ContentCommand::ExecuteBatch(batch, description) = commands.into_iter().next().unwrap()
-        else {
-            panic!("a nudge is one batch");
-        };
-        let mut undo_project = original.clone();
-        let mut service = EditingService::new();
-        service.execute_batch(batch, description, &mut undo_project);
-        assert!(service.undo(&mut undo_project));
-        assert!(!service.undo(&mut undo_project));
-        assert_eq!(serde_json::to_value(&undo_project).unwrap(), before);
+        let moved = serde_json::to_value(&project).unwrap();
+        assert!(service.undo(&mut project));
+        assert!(!service.undo(&mut project));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+        assert!(service.redo(&mut project));
+        assert_eq!(serde_json::to_value(&project).unwrap(), moved);
 
         // A point at beat 0 pins the group: a left nudge moves nothing and
         // still consumes the key.
-        selection.selected_automation_points =
-            vec![select(0.0, 0.2), select(4.25, lane.points[1].value)];
+        selection.selected_automation_points = vec![select(0.0, 0.2), select(4.25, nudged)];
         let after = serde_json::to_value(&project).unwrap();
         assert!(nudge_selected(
-            &mut project,
+            &project,
             &mut selection,
             &tx,
             Beats(-0.25),
@@ -1342,7 +1335,7 @@ mod tests {
         // No selection: the key is not consumed.
         selection.selected_automation_points.clear();
         assert!(!nudge_selected(
-            &mut project,
+            &project,
             &mut selection,
             &tx,
             Beats(0.25),
@@ -1383,7 +1376,7 @@ mod tests {
 
     #[test]
     fn nudge_with_a_stale_selection_is_not_consumed() {
-        let (mut project, ui_target, min, max) =
+        let (project, ui_target, min, max) =
             project_with_amount_lane(vec![point(4.0, 0.6, SegmentShape::Linear)]);
         let before = serde_json::to_value(&project).unwrap();
         let mut selection = UIState::new();
@@ -1395,7 +1388,7 @@ mod tests {
         }];
         let (tx, rx) = crossbeam_channel::unbounded();
         assert!(!nudge_selected(
-            &mut project,
+            &project,
             &mut selection,
             &tx,
             Beats(0.25),
@@ -1419,15 +1412,17 @@ mod tests {
             beat: Beats(4.0),
             value_norm: normalized_value(0.6, min, max),
         }];
-        let (tx, _rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut service = manifold_editing::service::EditingService::new();
 
         assert!(nudge_selected(
-            &mut project,
+            &project,
             &mut selection,
             &tx,
             Beats(0.25),
             0.0
         ));
+        crate::edit_runner::apply_sent(&mut service, &mut project, rx.try_iter());
         let points = lane_points(&project);
         assert_eq!(points.len(), 3, "a nudge never deletes a point");
         assert!(
@@ -1441,12 +1436,13 @@ mod tests {
 
         // Already against the neighbour: further presses move nothing.
         assert!(nudge_selected(
-            &mut project,
+            &project,
             &mut selection,
             &tx,
             Beats(0.25),
             0.0
         ));
+        crate::edit_runner::apply_sent(&mut service, &mut project, rx.try_iter());
         assert_eq!(lane_points(&project), points);
     }
 
@@ -1468,14 +1464,16 @@ mod tests {
             beat: Beats(4.0),
             value_norm: normalized_value(0.5, lane_min, lane_max),
         }];
-        let (tx, _rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crossbeam_channel::unbounded();
         assert!(nudge_selected(
-            &mut project,
+            &project,
             &mut selection,
             &tx,
             Beats(0.0),
             1.0
         ));
+        let mut service = manifold_editing::service::EditingService::new();
+        crate::edit_runner::apply_sent(&mut service, &mut project, rx.try_iter());
         let points = lane_points(&project);
         assert_eq!(points.len(), 2, "the twin survives the move: {points:?}");
         assert!(points.iter().all(|p| p.1 == twin));

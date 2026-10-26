@@ -1298,10 +1298,14 @@ impl ContentThread {
         // Per-frame param values ride the lightweight ModulationSnapshot
         // instead (just param_values Vec<f32> clones — no full Project clone).
         let snapshot = if version_changed {
-            // Structural change — create a new Arc with a fresh clone.
+            // Structural change — create a new Arc with a fresh clone. The UI
+            // holds it read-only, so its timeline caches are brought up to
+            // date here, before it is shared.
             let arc = self.engine.project().map(|p| {
                 record_work(WorkKind::ProjectClone);
-                std::sync::Arc::new(p.clone())
+                let mut copy = p.clone();
+                copy.timeline.refresh_caches();
+                std::sync::Arc::new(copy)
             });
             self.cached_project_snapshot = arc.clone();
             arc
@@ -1452,6 +1456,7 @@ impl ContentThread {
             editing_is_dirty: self.editing_service.is_dirty(),
             stamps: self.editing_service.stamps(),
             values_seq: self.reactions.values_seq,
+            load_seq: self.reactions.load_seq,
             audio_directory_version: self.audio_mod_runtime.directory_version(),
             runtime,
             bpm: self

@@ -19,10 +19,9 @@ pub enum ContentCommand {
     SetRecording(bool),
 
     // ── Editing (commands cross thread boundary) ───────────────────
+    /// An unexecuted command: the content thread runs it once through
+    /// `EditingService` and the UI sees the result in a later snapshot.
     Execute(Box<dyn Command + Send>),
-    /// An unexecuted command; UI snapshots wait for content publication. Unlike
-    /// legacy optimistic Execute producers, headless UI must execute this too.
-    ExecuteOnContent(Box<dyn Command + Send>),
     /// Increment a trigger against the authoritative content project. A UI
     /// snapshot supplies only its identity, never the next counter value.
     FireParameter {
@@ -429,7 +428,6 @@ pub mod touch {
     pub const MAPPINGS: ChangeSet = ChangeSet::of(&[Part::Mappings]);
     pub const LAYERS: ChangeSet = ChangeSet::of(&[Part::Layers]);
     pub const MARKERS: ChangeSet = ChangeSet::of(&[Part::Markers]);
-    pub const AUTOMATION: ChangeSet = ChangeSet::of(&[Part::Automation]);
     pub const EFFECTS: ChangeSet = ChangeSet::of(&[Part::Effects]);
     /// Adding or removing a macro mapping also moves its range (Shapes).
     pub const EFFECTS_SHAPES: ChangeSet = ChangeSet::of(&[Part::Effects, Part::Shapes]);

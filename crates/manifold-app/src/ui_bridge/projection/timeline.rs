@@ -4,6 +4,7 @@
 
 use super::trigger_routing::TriggerRoutingCatalog;
 use crate::app::SelectionState;
+use crate::gesture_preview::{DrawnClip, GesturePreview};
 use crate::ui_root::UIRoot;
 #[cfg(test)]
 use manifold_core::Beats;
@@ -187,12 +188,15 @@ pub fn sync_trigger_catalog(ui: &mut UIRoot, project: &Project) {
 /// clips and lanes the frame plan re-projects on its own. The selection push
 /// (`push_selection`) is separate.
 pub fn sync_project_all(ui: &mut UIRoot, project: &Project, selection: &SelectionState) {
+    // Load and setup: no gesture is in flight.
+    let preview = GesturePreview::default();
     sync_trigger_catalog(ui, project);
     sync_project_data(ui, project, selection);
-    sync_clip_positions(ui, project);
+    sync_clip_positions(ui, project, &preview);
     sync_automation_lane_geometry(
         ui,
         project,
+        &preview,
         selection.automation_mode_visible(),
         selection.chosen_automation_params(),
         selection.automation_lane_order(),
@@ -201,8 +205,34 @@ pub fn sync_project_all(ui: &mut UIRoot, project: &Project, selection: &Selectio
     );
 }
 
+/// Feed the Settings popup and the RT Quality panel the project's settings.
+/// Both bake them into their nodes at build, and a settings edit lands as one
+/// Settings stamp, so they are fed here, before the rebuild that stamp plans.
+fn feed_settings_panels(ui: &mut UIRoot, project: &Project) {
+    let settings = &project.settings;
+    // The preset's name when the size matches it, otherwise "WxH".
+    let (preset_w, preset_h) = settings.resolution_preset.dimensions();
+    let res_label = if preset_w == settings.output_width && preset_h == settings.output_height {
+        settings.resolution_preset.display_name().to_string()
+    } else {
+        format!("{}x{}", settings.output_width, settings.output_height)
+    };
+    let popup = &mut ui.settings_popup;
+    popup.set_resolution_text(&res_label);
+    popup.set_render_scale(settings.render_scale);
+    popup.set_tonemap_curve(crate::ui_translate::tonemap_curve_to_ui(
+        settings.tonemap_curve,
+    ));
+    popup.set_tonemap_enabled(settings.tonemap_enabled);
+    popup.set_hdr(settings.export_hdr);
+    popup.set_split_sections(settings.split_at_markers);
+    popup.set_export_gizmos(settings.export_gizmos);
+    ui.rt_quality_panel.configure(settings.rt_quality);
+}
+
 pub fn sync_project_data(ui: &mut UIRoot, project: &Project, selection: &SelectionState) {
     record_work(WorkKind::ProjectSync);
+    feed_settings_panels(ui, project);
     // Keep the chooser catalog beside the manifest projection. It is rebuilt
     // only with structural project data, so opening/searching the popup does
     // not walk or allocate from the project on the input hot path. The trigger
@@ -531,40 +561,46 @@ pub(super) fn clip_base_color(
 }
 
 /// Lightweight per-frame clip position sync.
-/// Refreshes viewport.clips_by_layer from the live project model so that
-/// drag mutations (clip move, trim) are visible in the bitmap renderer.
+/// Refreshes viewport.clips_by_layer from the project with the gesture
+/// preview laid over it, so that drag state (clip move, trim, region-move
+/// splits) is visible in the bitmap renderer.
 /// Does NOT touch tracks, bitmap renderers, layer headers or automation
 /// lanes — only clip data and markers. The bitmap fingerprint will detect if
 /// positions actually changed and skip repaint when nothing moved.
-pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
+pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project, preview: &GesturePreview) {
     record_work(WorkKind::ClipProjection);
     use manifold_ui::panels::viewport::ViewportClip;
     let mut viewport_clips = Vec::new();
-    for (i, layer) in project.timeline.layers.iter().enumerate() {
-        let is_gen = layer.layer_type == LayerType::Generator;
-        for (clip_idx, clip) in layer.clips.iter().enumerate() {
-            let name = clip_display_name(layer, clip, clip_idx + 1, &project.video_library);
-            let clip_color = clip_base_color(layer, clip, 0.86);
-            viewport_clips.push(ViewportClip {
-                clip_id: clip.id.clone(),
-                layer_index: i,
-                start_beat: clip.start_beat,
-                duration_beats: clip.duration_beats,
-                name: name.into(),
-                color: clip_color,
-                is_muted: clip.is_muted,
-                is_locked: false,
-                is_generator: is_gen,
-                is_audio: layer.is_audio(),
-                waveform: if layer.is_audio() {
-                    ui.audio_waveforms.renderer(&clip.id)
-                } else {
-                    None
-                },
-                in_point_seconds: clip.in_point.0 as f32,
-                waveform_breakpoints: audio_waveform_breakpoints(clip, project),
-            });
-        }
+    // Each layer numbers its clips in the order they are drawn.
+    let mut instance = vec![0usize; project.timeline.layers.len()];
+    for drawn in preview.clips_drawn(project) {
+        let i = drawn.layer_index;
+        let layer = &project.timeline.layers[i];
+        let clip = drawn.clip;
+        instance[i] += 1;
+        let name = clip_display_name(layer, clip, instance[i], &project.video_library);
+        let clip_color = clip_base_color(layer, clip, 0.86);
+        let mut waveform_breakpoints = Vec::new();
+        audio_waveform_breakpoints_into(&drawn, project, &mut waveform_breakpoints);
+        viewport_clips.push(ViewportClip {
+            clip_id: clip.id.clone(),
+            layer_index: i,
+            start_beat: drawn.start,
+            duration_beats: drawn.duration,
+            name: name.into(),
+            color: clip_color,
+            is_muted: clip.is_muted,
+            is_locked: false,
+            is_generator: layer.layer_type == LayerType::Generator,
+            is_audio: layer.is_audio(),
+            waveform: if layer.is_audio() {
+                ui.audio_waveforms.renderer(&clip.id)
+            } else {
+                None
+            },
+            in_point_seconds: drawn.in_point.0 as f32,
+            waveform_breakpoints,
+        });
     }
     ui.viewport.set_clips(viewport_clips);
 
@@ -576,23 +612,35 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
     }
 }
 
-/// The viewport's marker list, from the live project: a marker drag preview
-/// moves a marker the clip sync's stale check can miss (it compares the
-/// count and the last marker only).
-pub fn sync_markers(ui: &mut UIRoot, project: &Project) {
-    ui.viewport.set_markers(crate::ui_translate::markers_to_ui(
-        &project.timeline.markers,
-    ));
+/// The viewport's marker list, from the live project. A dragged marker draws
+/// at its gesture's live beat, which the project does not hold until the
+/// commit lands; the list stays sorted by beat.
+pub fn sync_markers(
+    ui: &mut UIRoot,
+    project: &Project,
+    drag: Option<&crate::ui_bridge::scrub::ResolvedScrub>,
+) {
+    let mut markers = crate::ui_translate::markers_to_ui(&project.timeline.markers);
+    if let Some(crate::ui_bridge::scrub::ResolvedScrub::Marker {
+        marker_id, live, ..
+    }) = drag
+        && let Some(marker) = markers.iter_mut().find(|m| m.id == *marker_id)
+    {
+        marker.beat = manifold_core::Beats::from_f32(*live);
+        markers.sort_by(|a, b| a.beat.as_f32().total_cmp(&b.beat.as_f32()));
+    }
+    ui.viewport.set_markers(markers);
 }
 
-/// Re-projects `viewport`'s automation lane geometry from the live project:
-/// a point preview or restore (`InteractionOverlay` drags and press drafts)
-/// writes the local project, and the lanes must follow without a clip resync
-/// or a tree rebuild. No-op when
+/// Re-projects `viewport`'s automation lane geometry from the project with
+/// the gesture preview laid over it: a point preview or restore
+/// (`InteractionOverlay` drags and press drafts) records in the preview, and
+/// the lanes must follow without a clip resync or a tree rebuild. No-op when
 /// automation mode is hidden.
 pub fn sync_automation_lane_geometry(
     ui: &mut UIRoot,
     project: &Project,
+    preview: &GesturePreview,
     automation_visible: bool,
     chosen_automation_params: &std::collections::HashMap<
         manifold_core::LayerId,
@@ -618,13 +666,14 @@ pub fn sync_automation_lane_geometry(
             continue;
         }
         let chosen = chosen_automation_params.get(&layer.layer_id);
-        for lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+        for mut lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
             layer,
             chosen,
             lane_order,
             hidden_lanes,
             pinned_lanes,
         ) {
+            overlay_lane(project, preview, &mut lane);
             viewport_lanes.push(ViewportAutomationLane {
                 layer_index: i,
                 lane,
@@ -632,6 +681,30 @@ pub fn sync_automation_lane_geometry(
         }
     }
     ui.viewport.set_automation_lanes(viewport_lanes);
+}
+
+/// Draw `lane` from the gesture preview's points when the preview holds it.
+/// A lane the gesture created is a real lane from then on, not a placeholder.
+fn overlay_lane(
+    project: &Project,
+    preview: &GesturePreview,
+    lane: &mut manifold_ui::view::UiAutomationLane,
+) {
+    if preview.lanes().is_empty() {
+        return;
+    }
+    let target = crate::editing_host::to_graph_target(&lane.target);
+    if let Some(points) = preview.lane_points(&target, lane.param_id.as_ref())
+        && let Some(instance) = project.preset_instance(&target)
+        && crate::ui_translate::preview_lane_points_into(
+            instance,
+            lane.param_id.as_ref(),
+            points,
+            &mut lane.points,
+        )
+    {
+        lane.placeholder = false;
+    }
 }
 
 /// Beat-anchored beat→file-seconds breakpoints for an audio clip's waveform.
@@ -649,47 +722,59 @@ pub fn sync_automation_lane_geometry(
 /// `file_secs` the source-file position at that beat. Empty for non-audio clips or non-positive
 /// duration. Baked once per clip per structural sync (not per frame). Returns plain data, no
 /// core types, per `manifold-ui`'s layering rule (depends on `manifold-foundation` only).
+/// The breakpoints of a clip drawn where it sits in the project.
+#[cfg(test)]
 fn audio_waveform_breakpoints(
     clip: &manifold_core::clip::TimelineClip,
     project: &Project,
 ) -> Vec<(f32, f32)> {
+    let drawn = DrawnClip {
+        clip,
+        layer_index: 0,
+        start: clip.start_beat,
+        duration: clip.duration_beats,
+        in_point: clip.in_point,
+    };
     let mut out = Vec::new();
-    audio_waveform_breakpoints_into(clip, project, &mut out);
+    audio_waveform_breakpoints_into(&drawn, project, &mut out);
     out
 }
 
-/// [`audio_waveform_breakpoints`] over a caller's buffer, which it clears
-/// first: a drag preview rewrites an audio clip's breakpoints without allocating.
+/// The breakpoints of `drawn` over a caller's buffer, which it clears first:
+/// a drag preview rewrites an audio clip's breakpoints without allocating.
+/// They follow the drawn place, not the project's.
 pub(super) fn audio_waveform_breakpoints_into(
-    clip: &manifold_core::clip::TimelineClip,
+    drawn: &DrawnClip<'_>,
     project: &Project,
     breakpoints: &mut Vec<(f32, f32)>,
 ) {
     breakpoints.clear();
+    let clip = drawn.clip;
     if !clip.is_audio() {
         return;
     }
-    let duration_beats = clip.duration_beats.as_f32();
+    let duration_beats = drawn.duration.as_f32();
     if duration_beats <= 0.0 {
         return;
     }
 
-    let start_beat = clip.start_beat;
-    let end_beat = clip.end_beat();
+    let start_beat = drawn.start;
+    let end_beat = drawn.end();
     let clock = project.source_clock();
-    breakpoints.push((0.0, clock.source_position(clip, start_beat).as_f32()));
+    let source_at = |beat| (drawn.in_point + clock.source_seconds(clip, start_beat, beat)).as_f32();
+    breakpoints.push((0.0, source_at(start_beat)));
     if clip.recorded_bpm_resolved() <= 0.0 {
         for point in project.tempo_map.points() {
             if point.beat > start_beat && point.beat < end_beat {
                 breakpoints.push((
                     (point.beat - start_beat).as_f32() / duration_beats,
-                    clock.source_position(clip, point.beat).as_f32(),
+                    source_at(point.beat),
                 ));
             }
         }
         breakpoints.sort_by(|a, b| a.0.total_cmp(&b.0));
     }
-    breakpoints.push((1.0, clock.source_position(clip, end_beat).as_f32()));
+    breakpoints.push((1.0, source_at(end_beat)));
 }
 
 #[cfg(test)]

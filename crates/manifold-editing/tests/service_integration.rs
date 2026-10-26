@@ -541,7 +541,7 @@ fn create_clip_at_position() {
     let initial = project.timeline.layers[0].clips.len();
 
     let (mut cmd, _clip_id) =
-        EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0))
+        EditingService::create_clip_at_position(&project, Beats(2.0), 0, Beats(4.0))
             .expect("should create clip on non-group layer");
     cmd.execute(&mut project);
     project.timeline.rebuild_clip_lookup();
@@ -560,7 +560,7 @@ fn create_clip_at_position_uses_trigger_constructor() {
     project.timeline.layers.extend([owner, trigger]);
 
     let (mut command, clip_id) =
-        EditingService::create_clip_at_position(&mut project, Beats(2.0), 1, Beats(4.0))
+        EditingService::create_clip_at_position(&project, Beats(2.0), 1, Beats(4.0))
             .expect("trigger layers accept ordinary timeline clips");
     command.execute(&mut project);
 
@@ -734,13 +734,9 @@ fn multi_step_undo_redo() {
 
     // Execute 5 operations
     for i in 0..5 {
-        let (cmd, _) = EditingService::create_clip_at_position(
-            &mut project,
-            Beats(i as f64 * 4.0),
-            0,
-            Beats(4.0),
-        )
-        .unwrap();
+        let (cmd, _) =
+            EditingService::create_clip_at_position(&project, Beats(i as f64 * 4.0), 0, Beats(4.0))
+                .unwrap();
         service.execute(cmd, &mut project);
     }
     assert_eq!(project.timeline.layers[0].clips.len(), 5);
@@ -767,7 +763,7 @@ fn data_version_increments() {
     assert_eq!(service.data_version(), 0);
 
     let (cmd, _) =
-        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0)).unwrap();
+        EditingService::create_clip_at_position(&project, Beats(0.0), 0, Beats(4.0)).unwrap();
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
 
@@ -786,7 +782,7 @@ fn dirty_flag_tracks_saves() {
     assert!(!service.is_dirty());
 
     let (cmd, _) =
-        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0)).unwrap();
+        EditingService::create_clip_at_position(&project, Beats(0.0), 0, Beats(4.0)).unwrap();
     service.execute(cmd, &mut project);
     assert!(service.is_dirty());
 

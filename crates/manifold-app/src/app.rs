@@ -48,11 +48,10 @@ pub type SelectionState = UIState;
 // ClipDragMode, ClipDragSnapshot, ClipDragState — REMOVED.
 // All drag state now lives in InteractionOverlay (interaction_overlay.rs).
 
-// ActiveInspectorDrag — REMOVED (UI_FUNNEL_DECOMPOSITION P-I). Every scrubable
-// gesture's snapshot-stomp guard — panel-wired and frame-resident (the
-// graph-editor mapping drags, the graph-canvas node-param drags, the marker
-// drag) — now rides the single `ui_bridge::scrub::ScrubState.active` slot as a
-// `ResolvedScrub` variant. The restore path is `ScrubState::restore_dragged`.
+// Every scrubable gesture, panel-wired and frame-resident (the graph-editor
+// mapping drags, the graph-canvas node-param drags, the marker drag), lives in
+// the single `ui_bridge::scrub::ScrubState` slot as a `ResolvedScrub`, which
+// controls draw from until its commit lands.
 
 pub struct Application {
     #[cfg(all(feature = "ui-automation", unix))]
@@ -79,26 +78,18 @@ pub struct Application {
     /// Latest state snapshot from the content thread.
     pub(crate) content_state: ContentState,
 
-    /// Local project snapshot for UI reads. Updated from content thread
-    /// when data_version changes. During drag, snapshots are deferred.
+    /// The content thread's published project, read-only. Swapped when a
+    /// new snapshot arrives.
     pub(crate) local_project: crate::ui_bridge::LocalProject,
 
-    /// Last received project snapshot Arc. Used to skip redundant deep clones
-    /// when the content thread sends the same Arc for modulation-only frames.
-    pub(crate) last_snapshot_arc: Option<std::sync::Arc<manifold_core::project::Project>>,
+    /// The content thread's `load_seq` the UI has set itself up for. A
+    /// snapshot carrying a different one is a freshly loaded project.
+    pub(crate) shown_load_seq: u64,
     /// The UI's part stamps (folded from each accepted snapshot, D5) and the
     /// in-flight gesture preview (D12), shared by every editing host.
     pub(crate) ui_edits: crate::gesture_preview::UiEdits,
     /// The main window's frame planner (D6).
     pub(crate) frame_planner: crate::frame_plan::FramePlanner,
-
-    /// After a local project load (open/new), suppress content thread snapshots
-    /// until its data_version exceeds this value. Prevents the old project from
-    /// overwriting the locally-loaded new project before the content thread
-    /// processes the LoadProject command.
-    pub(crate) suppress_snapshot_until: u64,
-    /// Frame count when suppress_snapshot_until was set (for timeout).
-    pub(crate) suppress_snapshot_set_at: u64,
 
     /// Debounced background autosave. Ticked from
     /// `tick_and_render` after the state drain, editor mode only — perform
@@ -581,11 +572,9 @@ impl Application {
             content_thread_handle: None,
             content_state: ContentState::default(),
             local_project: crate::ui_bridge::LocalProject::new(default_project),
-            last_snapshot_arc: None,
+            shown_load_seq: 0,
             ui_edits: Default::default(),
             frame_planner: Default::default(),
-            suppress_snapshot_until: 0,
-            suppress_snapshot_set_at: 0,
             autosave: crate::autosave::AutosaveState::new(),
             show_crash_notice: false,
             import_failures_rx: None,
@@ -2109,25 +2098,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         .as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         .unwrap_or(0) as i32;
-                    let Some(tx) = self.content_tx.as_ref() else {
-                        return;
-                    };
-                    let project_io = &mut self.project_io;
-                    let action =
-                        self.local_project
-                            .edit(&mut self.ui_edits, tx)
-                            .with_sent(|project| {
-                                let action = project_io.process_dropped_files(
-                                    std::slice::from_ref(&path),
-                                    drop_beat,
-                                    drop_layer,
-                                    join_audio_layer,
-                                    project,
-                                );
-                                let touches =
-                                    crate::gesture_preview::touches_of(&action.record_commands);
-                                (action, touches)
-                            });
+                    let action = self.project_io.process_dropped_files(
+                        std::slice::from_ref(&path),
+                        drop_beat,
+                        drop_layer,
+                        join_audio_layer,
+                        &self.local_project,
+                    );
                     self.apply_project_io_action(action);
                 } else if crate::project_io::is_supported_image_extension(&path) {
                     // Still images → an image clip, Video layers only. Resolve

@@ -227,6 +227,8 @@ impl Command for AddLayerCommand {
 #[derive(Debug)]
 pub struct ImportModelLayerCommand {
     layer: Option<Layer>,
+    /// Made with the command, so a clip can name the layer before it exists.
+    layer_id: LayerId,
     name: String,
     doc: manifold_core::scene_doc::SceneDoc,
     /// Param id and value, written after the document is installed.
@@ -246,6 +248,7 @@ impl ImportModelLayerCommand {
     ) -> Self {
         Self {
             layer: None,
+            layer_id: LayerId::new(manifold_core::math::short_id()),
             name,
             doc,
             values,
@@ -255,12 +258,10 @@ impl ImportModelLayerCommand {
         }
     }
 
-    /// The `LayerId` of the inserted layer, available after [`Command::execute`]
-    /// has run (the id is generated at first execute). `None` before then.
-    /// The drop handler reads it to target the same layer with a default
-    /// generator clip so the model renders immediately.
-    pub fn inserted_layer_id(&self) -> Option<LayerId> {
-        self.layer.as_ref().map(|l| l.layer_id.clone())
+    /// The `LayerId` the layer takes when inserted. The drop handler targets
+    /// it with a default generator clip so the model renders immediately.
+    pub fn layer_id(&self) -> &LayerId {
+        &self.layer_id
     }
 }
 
@@ -279,6 +280,7 @@ impl Command for ImportModelLayerCommand {
                 PresetTypeId::from_string("Scene".to_owned()),
                 0,
             );
+            new_layer.layer_id = self.layer_id.clone();
             new_layer.parent_layer_id = self.parent_group_id.clone();
             new_layer.layer_color = Layer::generate_layer_color(project.timeline.layers.len());
             let Some(instance) = new_layer.gen_params_mut() else {

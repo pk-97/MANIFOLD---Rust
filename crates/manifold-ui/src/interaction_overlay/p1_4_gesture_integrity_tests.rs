@@ -253,7 +253,7 @@ impl TimelineEditingHost for GestureTestHost {
     }
     fn set_cursor(&mut self, _cursor: TimelineCursor) {}
     fn scrub_to_time(&mut self, _time: Seconds) {}
-    fn enforce_non_overlap(&mut self, _clip_id: &str, _ignore_ids: &HashSet<ClipId>) {}
+    fn resolve_overlaps(&mut self, _clip_ids: Vec<ClipId>) {}
     fn split_clips_for_region_move(&mut self, _region: &SelectionRegion) -> RegionSplitResult {
         RegionSplitResult {
             interior_clip_ids: Vec::new(),

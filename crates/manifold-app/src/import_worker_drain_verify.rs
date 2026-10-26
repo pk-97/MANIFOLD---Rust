@@ -27,12 +27,11 @@ fn small_fixture_path() -> std::path::PathBuf {
 /// `Application::new()` (no window/GPU touched) with `content_tx` wired to
 /// an unbounded stub channel so `finish_import_model`'s `content_tx.send`
 /// calls have somewhere to land.
-fn headless_application() -> Application {
+fn headless_application() -> (Application, crossbeam_channel::Receiver<ContentCommand>) {
     let mut app = Application::new();
     let (tx, rx) = crossbeam_channel::unbounded::<ContentCommand>();
-    std::thread::spawn(move || while rx.recv().is_ok() {});
     app.content_tx = Some(tx);
-    app
+    (app, rx)
 }
 
 #[test]
@@ -40,7 +39,7 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
     let path = small_fixture_path();
     assert!(path.exists(), "fixture missing at {path:?}");
 
-    let mut app = headless_application();
+    let (mut app, rx) = headless_application();
     let layers_before = app.local_project.timeline.layers.len();
 
     // A real model — CPU-only parse, no GPU.
@@ -88,6 +87,16 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
 
     assert_eq!(
         app.local_project.timeline.layers.len(),
+        layers_before,
+        "the UI's copy waits for the content thread"
+    );
+    crate::edit_runner::land_on_app(
+        &mut app,
+        &mut manifold_editing::service::EditingService::new(),
+        rx.try_iter(),
+    );
+    assert_eq!(
+        app.local_project.timeline.layers.len(),
         layers_before + 1,
         "Done must dispatch the new layer exactly once"
     );
@@ -110,7 +119,7 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
 
 #[test]
 fn failed_event_shows_an_accent_toast_never_silent() {
-    let mut app = headless_application();
+    let (mut app, _rx) = headless_application();
     app.import_worker_busy = true;
 
     app.import_progress_tx
@@ -133,7 +142,7 @@ fn failed_event_shows_an_accent_toast_never_silent() {
 
 #[test]
 fn a_second_drop_while_busy_is_queued_not_run_in_parallel() {
-    let mut app = headless_application();
+    let (mut app, _rx) = headless_application();
     // Simulate an in-flight worker without actually spawning one (spawning
     // starts a thread —
     // this test is about the enqueue branch only, which never does).
@@ -170,7 +179,7 @@ fn an_import_whose_layer_went_is_dropped_with_a_toast() {
     let path = small_fixture_path();
     let read = manifold_nodes_scene::node_graph::gltf_import::read_model(&path)
         .unwrap_or_else(|e| panic!("read_model({}) failed: {e}", path.display()));
-    let mut app = headless_application();
+    let (mut app, _rx) = headless_application();
     let layers_before = app.local_project.timeline.layers.len();
     let gone = manifold_core::LayerId::new("removed-while-parsing");
     for target in [

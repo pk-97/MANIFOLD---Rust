@@ -1,11 +1,13 @@
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
+use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{Beats, Seconds};
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::AddClipCommand;
+use manifold_editing::commands::layer::AddLayerCommand;
 
 use crate::midi_parser::MidiNote;
 
@@ -36,7 +38,7 @@ impl MidiImportService {
         notes: &[MidiNote],
         target_layer_id: &LayerId,
         start_beat_offset: f32,
-        project: &mut Project,
+        project: &Project,
     ) -> MidiImportResult {
         let mut result = MidiImportResult::default();
 
@@ -44,32 +46,37 @@ impl MidiImportService {
             return result;
         }
 
-        // Resolve LayerId to positional index
-        let target_layer_index = match project.timeline.find_layer_index_by_id(target_layer_id) {
-            Some(idx) => idx,
-            None => {
-                log::warn!(
-                    "[MidiImportService] Target layer '{}' not found, appending new layer.",
-                    target_layer_id,
-                );
-                project.timeline.add_layer_default();
-                project.timeline.layers.len() - 1
-            }
-        };
-
         // Build trimmed placement list
         let placements = build_trimmed_placements(notes, start_beat_offset);
         if placements.is_empty() {
             return result;
         }
 
+        // The target layer, or a new one this import adds first (its id is
+        // made here, so the clips can name it before it exists in the project).
+        let mut commands: Vec<Box<dyn Command>> = Vec::with_capacity(placements.len() + 1);
+        let added_layer;
+        let target_layer = match project.timeline.find_layer_by_id(target_layer_id.as_str()) {
+            Some((_, layer)) => layer,
+            None => {
+                log::warn!(
+                    "[MidiImportService] Target layer '{}' not found, appending new layer.",
+                    target_layer_id,
+                );
+                let at = project.timeline.layers.len();
+                added_layer = Layer::new(format!("Layer {}", at + 1), LayerType::Video, at as i32);
+                commands.push(Box::new(AddLayerCommand::from_layer(
+                    added_layer.clone(),
+                    at,
+                )));
+                &added_layer
+            }
+        };
+
         // Resolve clip creation strategy
-        let is_generator =
-            project.timeline.layers[target_layer_index].layer_type == LayerType::Generator;
-        let gen_type = project.timeline.layers[target_layer_index].generator_type();
-        let source_clip_ids_empty = project.timeline.layers[target_layer_index]
-            .source_clip_ids
-            .is_empty();
+        let is_generator = target_layer.layer_type == LayerType::Generator;
+        let gen_type = target_layer.generator_type();
+        let source_clip_ids_empty = target_layer.source_clip_ids.is_empty();
 
         let (use_generator, _resolved_gen_type) = if !is_generator && source_clip_ids_empty {
             // Video layer with no source clips — fall back to BasicShapes generator
@@ -84,17 +91,14 @@ impl MidiImportService {
 
         // Snapshot source_clip_ids to avoid borrow issues during iteration
         let source_clip_ids: Vec<String> = if !use_generator {
-            project.timeline.layers[target_layer_index]
-                .source_clip_ids
-                .clone()
+            target_layer.source_clip_ids.clone()
         } else {
             Vec::new()
         };
 
         // Create clips
-        let mut commands: Vec<Box<dyn Command>> = Vec::with_capacity(placements.len());
         let mut source_index: usize = 0;
-        let target_layer_lid = project.timeline.layers[target_layer_index].layer_id.clone();
+        let target_layer_lid = target_layer.layer_id.clone();
 
         for note in &placements {
             let clip: TimelineClip = if use_generator {
@@ -115,9 +119,10 @@ impl MidiImportService {
                 )
             };
 
-            let mut add_cmd = AddClipCommand::new(clip, target_layer_lid.clone());
-            add_cmd.execute(project);
-            commands.push(Box::new(add_cmd));
+            commands.push(Box::new(AddClipCommand::new(
+                clip,
+                target_layer_lid.clone(),
+            )));
             result.added_clips += 1;
         }
 

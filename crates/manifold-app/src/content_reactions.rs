@@ -33,6 +33,9 @@ pub(crate) struct ReactionState {
     pub session_discovered: bool,
     /// D15: moves only when a captured live value changed.
     pub values_seq: u64,
+    /// Project installs so far. The snapshot published after one carries the
+    /// new count, which tells the UI it is a freshly loaded project.
+    pub load_seq: u64,
     /// D16: one sequence per runtime input the UI builds structure from.
     pub runtime: crate::content_state::RuntimeSeqs,
     /// What `runtime` last saw, compared each publish.

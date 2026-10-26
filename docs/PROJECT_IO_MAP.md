@@ -41,14 +41,15 @@ renderer catalog (embedded-preset snapshotting) deliberately lives app-side in
 
 ## 3. Save paths — there are exactly two, with different sources
 
-1. **Manual save / Save As** (`app_lifecycle.rs:51`): serializes
-   `Application::local_project` — the **UI thread's replica** (the copy UI
-   commands execute against optimistically) — after stamping viewport state
-   and running `snapshot_and_prune_embedded_presets`. Failure surfaces a
+1. **Manual save / Save As** (`app_lifecycle.rs:51`): asks the
+   content thread for its project (`PrepareProjectSave`), stamps the playhead
+   and viewport state onto that owned copy (`stamp_save_state`), runs
+   `snapshot_and_prune_embedded_presets` and serializes it; the UI's view of
+   the project is never written. Failure surfaces a
    dialog (G4).
 2. **Autosave** (`autosave.rs`): dirty-debounced (60s after the last edit,
    never mid-drag, parked in perform mode), serializes the **content-thread
-   snapshot** (`last_snapshot_arc` deep-cloned on a background thread) with a
+   snapshot** (deep-cloned on a background thread) with a
    `UiStateStamp` of the same viewport fields. Same save path underneath
    (`is_auto = true`). First failure in a streak raises a dialog.
 
@@ -154,11 +155,11 @@ Proven: per-type serde round trips and legacy-index resolution on synthetic
 data (drivers, envelopes, Ableton and macro mappings, params maps), generator
 identity reconcile, history journal push/dedup/prune/unknown-hash, autosave
 state machine (7 unit tests, time injected), snapshot-on-save capture/prune/
-never-shadow-Saved, and one real-show re-save: Liveschool keeps every old
+never-shadow-Saved, and one real-show re-save: Right Where I Need You keeps every old
 8-char id and writes no empty session field
-(`liveschool_resave_keeps_old_ids_and_omits_empty_session`).
+(`music_video_resave_keeps_old_ids_and_omits_empty_session`).
 
-Dark: the Liveschool fixture is gitignored and that test fails when it is
+Dark: the Right Where I Need You fixture is gitignored and that test fails when it is
 absent, so only a checkout with the fixture runs the real-scale proof
 (section 9 E9). No test constructs
 a future-version file, a corrupted ZIP, a truncated write, or a hash
@@ -199,15 +200,10 @@ this crate.
   is ~7×10⁻⁵ per project lifetime — small, not show-file-grade small. Fix
   shape: full 64-bit prefix (8 hex chars is still short enough for entry
   names).
-- **E5 — Two live save sources.** Manual save serializes the UI replica
-  (`local_project`), autosave serializes the content-thread snapshot. Any
-  divergence between the replica and the authoritative content-thread
-  `Project` gets persisted by whichever path fires next — silently different
-  files from the "same" state. Nothing currently proves replica convergence;
-  The optimistic-apply design is described but no test
-  compares the two serializations. Cheap probe: serialize both after a
-  scripted edit session and diff. (Also: three save functions exist for two
-  paths — the dead ported one should die.)
+- **E5 — Three save-shaped functions for two paths.** Manual save and
+  autosave both serialize a content-thread copy of the project (the UI's view
+  is read-only), so they cannot diverge. The dead ported save function should
+  still die.
 - **E6 — Pre-pass failure is WARN-only.** If the embedded-presets pre-pass
   fails to parse, the load continues and every project-local preset's params
   resolve to "no template" — the BUG-036 symptom returns, silently. The full
@@ -222,7 +218,7 @@ this crate.
   future shape change strands exported libraries. (Graph presets embedded in
   projects ride the project chain; standalone exports don't.)
 - **E9 — The real-scale re-save proof is machine-local.** The one
-  Liveschool test fails if the fixture is absent, and the fixture is
+  music video test fails if the fixture is absent, and the fixture is
   gitignored (the repo is public), so only a checkout holding it runs that
   test. Migrations are proven on synthetic data; the converted fixtures no
   longer carry legacy shapes, so they could not prove a migration anyway.

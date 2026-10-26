@@ -26,7 +26,8 @@ fn apply_detection_edit(
 ) {
     use crate::content_command::ContentCommand;
     let mut config = project
-        .find_clip_by_id(clip_id)
+        .timeline
+        .find_clip(clip_id)
         .and_then(|c| c.audio_detection.as_ref())
         .map(|d| d.config.clone())
         .unwrap_or_default();
@@ -51,16 +52,14 @@ pub(crate) fn dispatch_clip(
         ClipAction::ClipBpmClicked => DispatchResult::handled(),
         ClipAction::ClipWarpToggled => {
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id()
-                && let Some(clip) = ctx.project.find_clip_by_id(clip_id)
+                && let Some(clip) = ctx.project.timeline.find_clip(clip_id)
             {
                 ContentCommand::send(
                     ctx.content_tx,
-                    ContentCommand::ExecuteOnContent(Box::new(
-                        ChangeClipRecordedBpmCommand::new_warp(
-                            clip_id.clone(),
-                            !clip.is_audio_warp_enabled(),
-                        ),
-                    )),
+                    ContentCommand::Execute(Box::new(ChangeClipRecordedBpmCommand::new_warp(
+                        clip_id.clone(),
+                        !clip.is_audio_warp_enabled(),
+                    ))),
                 );
             }
             DispatchResult::handled()
@@ -99,7 +98,7 @@ pub(crate) fn dispatch_clip(
                     ctx.dialogs,
                     ctx.user_prefs,
                 )
-                && let Some(clip) = ctx.project.find_clip_by_id(&clip_id)
+                && let Some(clip) = ctx.project.timeline.find_clip(&clip_id)
             {
                 let new_path = path.to_string_lossy().into_owned();
                 let new_source_duration = crate::project_io::audio_source_duration(&new_path);
@@ -201,7 +200,7 @@ pub(crate) fn dispatch_clip(
         ClipAction::ClipLoopToggle => {
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id() {
                 let clip_id = clip_id.clone();
-                if let Some(clip) = ctx.project.find_clip_by_id(&clip_id) {
+                if let Some(clip) = ctx.project.timeline.find_clip(&clip_id) {
                     let old_loop = clip.is_looping;
                     let old_dur = clip.loop_duration_beats;
                     let cmd =

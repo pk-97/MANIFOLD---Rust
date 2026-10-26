@@ -193,10 +193,15 @@ fn project(ui: &mut UIRoot, data: &mut SceneData, which: Projection) {
             &data.content.automation_latched_params,
             data.content.led_preview.as_ref(),
         ),
-        Projection::ClipPositions => crate::ui_bridge::sync_clip_positions(ui, &data.project),
+        Projection::ClipPositions => crate::ui_bridge::sync_clip_positions(
+            ui,
+            &data.project,
+            &crate::gesture_preview::GesturePreview::default(),
+        ),
         Projection::LaneGeometry => crate::ui_bridge::sync_automation_lane_geometry(
             ui,
             &data.project,
+            &crate::gesture_preview::GesturePreview::default(),
             data.selection.automation_mode_visible(),
             data.selection.chosen_automation_params(),
             data.selection.automation_lane_order(),
@@ -459,6 +464,7 @@ fn run_matrix(base: &SceneData, perturbations: Vec<Perturbation>, shown: Shown) 
     for perturbation in perturbations {
         let mut data = clone_data(base);
         (perturbation.apply)(&mut data);
+        fixtures::capture_live_values(&mut data);
 
         // What the planner sees: one planner, base then perturbed.
         let mut planner = FramePlanner::default();

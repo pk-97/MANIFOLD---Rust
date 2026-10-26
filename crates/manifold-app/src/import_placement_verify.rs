@@ -9,11 +9,11 @@ use manifold_core::LayerId;
 use manifold_core::scene_doc::{
     ItemFields, ItemId, ModelFacts, SceneDoc, import_placement_id, param_id,
 };
-use manifold_editing::command::Command;
+use manifold_editing::service::EditingService;
 
 use crate::app::Application;
 use crate::content_command::ContentCommand;
-use crate::edit_selection::SelectAfterEdit;
+use crate::edit_selection::{EditSelection, SelectAfterEdit};
 use crate::import_worker::{ImportProgress, ImportTarget};
 
 struct Parsed {
@@ -49,14 +49,15 @@ fn headless_application() -> (Application, crossbeam_channel::Receiver<ContentCo
 }
 
 fn add_scene_layer(app: &mut Application) -> LayerId {
-    let index = app.local_project.intake().timeline.add_layer(
+    let mut project = (*app.local_project).clone();
+    let index = project.timeline.add_layer(
         "Scene",
         manifold_core::types::LayerType::Generator,
         manifold_core::PresetTypeId::SCENE,
     );
-    app.local_project.intake().timeline.layers[index]
-        .layer_id
-        .clone()
+    let layer_id = project.timeline.layers[index].layer_id.clone();
+    app.local_project = crate::ui_bridge::LocalProject::new(project);
+    layer_id
 }
 
 fn send(app: &mut Application, parsed: &Parsed, target: ImportTarget) {
@@ -74,21 +75,32 @@ fn send(app: &mut Application, parsed: &Parsed, target: ImportTarget) {
     app.drain_import_progress();
 }
 
+/// Run the import's selecting edit on the content thread's side; the group it
+/// selects comes back.
 fn execute_into(
     app: &mut Application,
+    service: &mut EditingService,
     rx: &crossbeam_channel::Receiver<ContentCommand>,
-) -> (ItemId, Box<dyn Command + Send>) {
-    let mut found = None;
-    while let Ok(command) = rx.try_recv() {
-        if let ContentCommand::ExecuteSelecting(mut command, SelectAfterEdit::NewItem(_, group)) =
-            command
-        {
-            command.execute(app.local_project.intake());
-            assert!(found.is_none(), "one selecting import command");
-            found = Some((group, command));
-        }
-    }
-    found.expect("the into import dispatched its command")
+) -> ItemId {
+    let sent: Vec<_> = rx.try_iter().collect();
+    let selecting = sent
+        .iter()
+        .filter(|c| {
+            matches!(
+                c,
+                ContentCommand::ExecuteSelecting(_, SelectAfterEdit::NewItem(..))
+            )
+        })
+        .count();
+    assert_eq!(selecting, 1, "one selecting import command");
+    let outcomes = crate::edit_runner::land_on_app(app, service, sent);
+    outcomes
+        .iter()
+        .find_map(|outcome| match outcome.selection.as_ref() {
+            Some(EditSelection::Item { item, .. }) => Some(item.clone()),
+            _ => None,
+        })
+        .expect("the into import selected its group")
 }
 
 fn layer_with_file(app: &Application, file: &str) -> LayerId {
@@ -167,7 +179,7 @@ fn assert_placement(app: &Application, layer: &LayerId, group: &ItemId, center: 
 fn a_fresh_drop_centres_and_selects_a_clean_root_without_fitting_the_camera() {
     let parsed = parsed("DamagedHelmet.glb");
     let file = parsed.path.to_string_lossy().into_owned();
-    let (mut app, _rx) = headless_application();
+    let (mut app, rx) = headless_application();
     let reference = add_scene_layer(&mut app);
     let default_camera = camera_values(&app, &reference);
 
@@ -179,6 +191,7 @@ fn a_fresh_drop_centres_and_selects_a_clean_root_without_fitting_the_camera() {
             under: None,
         },
     );
+    crate::edit_runner::land_on_app(&mut app, &mut EditingService::new(), rx.try_iter());
 
     let layer = layer_with_file(&app, &file);
     let doc = doc(&app, &layer);
@@ -248,6 +261,7 @@ fn repeated_imports_undo_facts_and_swaps_preserve_camera_and_placement() {
     let helmet_file = helmet.path.to_string_lossy().into_owned();
     let lowe_file = lowe.path.to_string_lossy().into_owned();
     let (mut app, rx) = headless_application();
+    let mut service = EditingService::new();
     let layer = add_scene_layer(&mut app);
     let camera = camera_values(&app, &layer);
 
@@ -259,7 +273,7 @@ fn repeated_imports_undo_facts_and_swaps_preserve_camera_and_placement() {
             parent: None,
         },
     );
-    let (first, _) = execute_into(&mut app, &rx);
+    let first = execute_into(&mut app, &mut service, &rx);
     let first_placement = placement(&app, &layer, &first);
     assert_eq!(camera_values(&app, &layer), camera);
     assert_placement(&app, &layer, &first, helmet.center);
@@ -272,7 +286,7 @@ fn repeated_imports_undo_facts_and_swaps_preserve_camera_and_placement() {
             parent: None,
         },
     );
-    let (second, mut second_command) = execute_into(&mut app, &rx);
+    let second = execute_into(&mut app, &mut service, &rx);
     let second_placement = placement(&app, &layer, &second);
     assert_eq!(
         placement(&app, &layer, &first),
@@ -286,7 +300,7 @@ fn repeated_imports_undo_facts_and_swaps_preserve_camera_and_placement() {
         "the second import leaves the camera alone"
     );
 
-    second_command.undo(app.local_project.intake());
+    crate::edit_runner::land_on_app(&mut app, &mut service, [ContentCommand::Undo]);
     assert!(
         doc(&app, &layer).find(&second).is_none(),
         "undo removes the second import"
@@ -297,7 +311,7 @@ fn repeated_imports_undo_facts_and_swaps_preserve_camera_and_placement() {
         camera,
         "undo does not move the camera"
     );
-    second_command.execute(app.local_project.intake());
+    crate::edit_runner::land_on_app(&mut app, &mut service, [ContentCommand::Redo]);
 
     send(
         &mut app,
@@ -307,6 +321,7 @@ fn repeated_imports_undo_facts_and_swaps_preserve_camera_and_placement() {
             item: second.clone(),
         },
     );
+    crate::edit_runner::land_on_app(&mut app, &mut service, rx.try_iter());
     assert!(
         doc(&app, &layer).models.contains(&helmet_file),
         "the swap attached the new facts"
@@ -335,6 +350,7 @@ fn repeated_imports_undo_facts_and_swaps_preserve_camera_and_placement() {
         })
         .unwrap();
     app.drain_import_progress();
+    crate::edit_runner::land_on_app(&mut app, &mut service, rx.try_iter());
     assert_eq!(placement(&app, &layer, &second), second_placement);
     assert_eq!(
         camera_values(&app, &layer),

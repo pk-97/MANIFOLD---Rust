@@ -3651,6 +3651,10 @@ impl InteractionOverlay {
 
         host.begin_command_batch();
 
+        // Overlaps are resolved only when something actually moved or
+        // resized: a click without a move sends nothing.
+        let mut recorded = false;
+
         // D15 landing-line flash geometry — leftmost landed beat + layer span
         // of the clips that actually moved, accumulated in the record loop.
         let mut landed: Option<(Beats, usize, usize)> = None;
@@ -3677,6 +3681,7 @@ impl InteractionOverlay {
                                 hi.max(clip.layer_index),
                             ),
                         });
+                        recorded = true;
                         host.record_move(
                             &snapshot.clip_id,
                             snapshot.start_beat,
@@ -3698,9 +3703,9 @@ impl InteractionOverlay {
                 }
             }
 
-            // Unity lines 407-416: enforce non-overlap on all dragged clips
-            for snapshot in &mv.snapshots {
-                host.enforce_non_overlap(&snapshot.clip_id, &mv.snapshot_clip_ids);
+            // Unity lines 407-416: resolve overlaps for all dragged clips
+            if recorded {
+                host.resolve_overlaps(mv.snapshots.iter().map(|s| s.clip_id.clone()).collect());
             }
         } else if let Some(trim) = &trim_state {
             // Unity lines 390-401: record a trim command for every selected clip
@@ -3711,6 +3716,7 @@ impl InteractionOverlay {
                     let dur_changed =
                         (clip.duration_beats - orig.duration_beats).abs() >= Beats(0.0001);
                     if start_changed || dur_changed {
+                        recorded = true;
                         host.record_trim(
                             &orig.clip_id,
                             orig.start_beat,
@@ -3724,13 +3730,11 @@ impl InteractionOverlay {
                 }
             }
 
-            // Unity lines 417-421: enforce non-overlap on every trimmed clip,
-            // ignoring the trimmed set itself so co-selected clips don't shove
-            // each other (mirrors the move path's snapshot-clip-id set).
-            let trimmed_ids: HashSet<ClipId> =
-                trim.originals.iter().map(|o| o.clip_id.clone()).collect();
-            for id in &trimmed_ids {
-                host.enforce_non_overlap(id, &trimmed_ids);
+            // Unity lines 417-421: resolve overlaps for every trimmed clip;
+            // the trimmed set is protected so co-selected clips don't shove
+            // each other (mirrors the move path).
+            if recorded {
+                host.resolve_overlaps(trim.originals.iter().map(|o| o.clip_id.clone()).collect());
             }
         }
 

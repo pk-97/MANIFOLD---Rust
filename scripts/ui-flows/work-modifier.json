@@ -1,9 +1,0 @@
-[
-  "ResetWork",
-  { "Modifiers": { "modifiers": { "shift": true } } },
-  { "Modifiers": { "modifiers": {} } },
-  { "Modifiers": { "modifiers": { "command": true } } },
-  { "Modifiers": { "modifiers": {} } },
-  { "AssertWork": { "window": "four_modifier_changes" } },
-  "AssertFresh"
-]

@@ -544,44 +544,10 @@ pub fn push_chrome(
         ui.footer
             .set_fps_text(&format!("{:.0} FPS", project.settings.frame_rate));
 
-        // Show preset label if dimensions match, otherwise show "WxH" (Unity: UpdateFooterResolutionText)
-        let (preset_w, preset_h) = project.settings.resolution_preset.dimensions();
-        let res_label = if preset_w == project.settings.output_width
-            && preset_h == project.settings.output_height
-        {
-            project
-                .settings
-                .resolution_preset
-                .display_name()
-                .to_string()
-        } else {
-            format!(
-                "{}x{}",
-                project.settings.output_width, project.settings.output_height
-            )
-        };
-
-        // Settings popup hosts the render config — feed the same state so its
-        // segmented controls highlight the active option.
+        // The Settings popup's live sim-rate control writes in place; the rest
+        // of its state is fed before the build (`sync_project_data`).
         ui.settings_popup
             .sync_sim_rate(tree, project.settings.physics.sim_rate);
-        ui.settings_popup.set_resolution_text(&res_label);
-        ui.settings_popup
-            .set_render_scale(project.settings.render_scale);
-        ui.settings_popup
-            .set_tonemap_curve(crate::ui_translate::tonemap_curve_to_ui(
-                project.settings.tonemap_curve,
-            ));
-        ui.settings_popup
-            .set_tonemap_enabled(project.settings.tonemap_enabled);
-        ui.settings_popup.set_hdr(project.settings.export_hdr);
-        ui.settings_popup
-            .set_split_sections(project.settings.split_at_markers);
-        ui.settings_popup
-            .set_export_gizmos(project.settings.export_gizmos);
-
-        // RT Quality panel — feed the current settings
-        ui.rt_quality_panel.configure(project.settings.rt_quality);
     }
 
     // Footer stats
@@ -838,7 +804,12 @@ pub fn push_live(
         push_live_values(ui, project, content_state, active_layer, drag);
     }
     if groups.shapes {
-        crate::ui_bridge::projection::live_shapes::sync_live_shapes(ui, project, active_layer);
+        crate::ui_bridge::projection::live_shapes::sync_live_shapes(
+            ui,
+            project,
+            active_layer,
+            drag,
+        );
     }
 }
 
@@ -928,20 +899,36 @@ fn push_live_values(
         &ui.macro_display_labels[..shown],
     );
 
-    // Active layer opacity and name in the layer chrome.
+    use crate::ui_bridge::scrub::ResolvedScrub;
+    // Active layer opacity and name in the layer chrome. A drag draws its own
+    // live value; the project holds the pre-drag one until the commit lands.
     if let Some(layer) = active_layer.and_then(|idx| project.timeline.layers.get(idx)) {
-        ui.inspector
-            .layer_chrome_mut()
-            .sync_opacity(tree, layer.opacity);
+        let opacity = match drag {
+            Some(ResolvedScrub::LayerOpacity { layer_id, live, .. })
+                if *layer_id == layer.layer_id =>
+            {
+                *live
+            }
+            _ => layer.opacity,
+        };
+        ui.inspector.layer_chrome_mut().sync_opacity(tree, opacity);
         ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
     }
     // The master chrome shows with or without an active layer.
+    let master_opacity = match drag {
+        Some(ResolvedScrub::MasterOpacity { live, .. }) => *live,
+        _ => project.settings.master_opacity,
+    };
+    let led_brightness = match drag {
+        Some(ResolvedScrub::LedBrightness { live, .. }) => *live,
+        _ => project.settings.led_brightness,
+    };
     ui.inspector
         .master_chrome_mut()
-        .sync_opacity(tree, project.settings.master_opacity);
+        .sync_opacity(tree, master_opacity);
     ui.inspector
         .master_chrome_mut()
-        .sync_led_brightness(tree, project.settings.led_brightness);
+        .sync_led_brightness(tree, led_brightness);
     ui.inspector
         .master_chrome_mut()
         .sync_led_enabled(tree, content_state.led_enabled);

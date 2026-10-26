@@ -107,16 +107,16 @@ pub(super) fn dispatch_editing(
             let grid_step = Beats::from_f32(ui.viewport.grid_step());
             let snapped = manifold_ui::snap::floor_beat_to_grid(Beats::from_f32(*beat), grid_step);
             {
-                // AddClipCommand enforces non-overlap internally.
-                if let Some(clip_id) = project.executed_by(|p| {
-                    EditingService::create_clip_at_position(
-                        p,
-                        snapped,
-                        *layer,
-                        Beats::from_f32(4.0),
-                    )
-                }) {
-                    // Select the newly created clip
+                // AddClipCommand enforces non-overlap internally. The clip's
+                // id is made with the command, so it is selected before the
+                // clip reaches the UI's copy.
+                if let Some((cmd, clip_id)) = EditingService::create_clip_at_position(
+                    project,
+                    snapped,
+                    *layer,
+                    Beats::from_f32(4.0),
+                ) {
+                    project.execute(cmd);
                     let new_lid = project
                         .timeline
                         .layers
@@ -177,7 +177,7 @@ pub(super) fn dispatch_editing(
             {
                 // Calculate region from the single clip for proper offset
                 let mut region = manifold_core::selection::SelectionRegion::default();
-                if let Some(clip) = project.find_clip_by_id(&clip_id) {
+                if let Some(clip) = project.timeline.find_clip(&clip_id) {
                     region.start_beat = clip.start_beat;
                     region.end_beat = clip.start_beat + clip.duration_beats;
                     region.is_active = true;
@@ -342,37 +342,17 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextAutomationCut(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
-            project.with_sent(|p| {
-                (
-                    automation::cut_selected(p, selection, content_tx),
-                    crate::content_command::touch::AUTOMATION,
-                )
-            });
+            automation::cut_selected(project, selection, content_tx);
             DispatchResult::handled()
         }
         EditingAction::ContextAutomationPaste(target, param_id, beat) => {
             automation::set_lane_context(selection, target, param_id);
-            project.with_sent(|p| {
-                (
-                    automation::paste(p, selection, content_tx, *beat),
-                    crate::content_command::touch::AUTOMATION,
-                )
-            });
+            automation::paste(project, selection, content_tx, *beat);
             DispatchResult::handled()
         }
         EditingAction::ContextAutomationDuplicate(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
-            project.with_sent(|p| {
-                (
-                    automation::duplicate_selected(
-                        p,
-                        selection,
-                        content_tx,
-                        ui.viewport.grid_step(),
-                    ),
-                    crate::content_command::touch::AUTOMATION,
-                )
-            });
+            automation::duplicate_selected(project, selection, content_tx, ui.viewport.grid_step());
             DispatchResult::handled()
         }
         EditingAction::ContextSelectAllAutomation(target, param_id) => {
@@ -381,23 +361,13 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextDeleteSelectedAutomation(target, param_id) => {
             automation::set_lane_context(selection, target, param_id);
-            project.with_sent(|p| {
-                (
-                    automation::delete_selected(p, selection, content_tx),
-                    crate::content_command::touch::AUTOMATION,
-                )
-            });
+            automation::delete_selected(project, selection, content_tx);
             DispatchResult::handled()
         }
         EditingAction::ContextInsertAutomationShape(target, param_id, beat, shape) => {
-            project.with_sent(|p| {
-                (
-                    automation::insert_shape(
-                        p, selection, content_tx, target, param_id, *beat, *shape,
-                    ),
-                    crate::content_command::touch::AUTOMATION,
-                )
-            });
+            automation::insert_shape(
+                project, selection, content_tx, target, param_id, *beat, *shape,
+            );
             DispatchResult::handled()
         }
         EditingAction::ContextAutomationSetShape(target, param_id, beat, value_norm, shape) => {
@@ -539,20 +509,16 @@ pub(super) fn dispatch_editing(
                 if !notes.is_empty() {
                     // `layer_id` is already the stable target — no index resolution needed.
                     let target_layer_id = layer_id.clone();
-                    let added = project.executed_by(|p| {
-                        let result =
-                            manifold_playback::midi_import::MidiImportService::import_to_layer(
-                                &notes,
-                                &target_layer_id,
-                                0.0,
-                                p,
-                            );
-                        if !result.success {
-                            return None;
-                        }
-                        let added = result.added_clips;
-                        result.undo_command.map(|cmd| (cmd, added))
-                    });
+                    let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
+                        &notes,
+                        &target_layer_id,
+                        0.0,
+                        project,
+                    );
+                    let added = result.success.then_some(result.added_clips);
+                    if let Some(cmd) = result.undo_command {
+                        project.execute(cmd);
+                    }
                     if let Some(added) = added {
                         log::info!(
                             "Imported {} clips from MIDI to layer '{}'",

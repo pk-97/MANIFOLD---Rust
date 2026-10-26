@@ -62,7 +62,7 @@ impl Rig {
     fn dispatch(&mut self, action: PanelAction) -> crate::ui_bridge::DispatchResult {
         let mut ctx = crate::ui_bridge::DispatchCtx {
             project: crate::ui_bridge::ProjectRef::new(
-                &mut self.project,
+                &self.project,
                 &mut self.edits,
                 &self.content_tx,
             ),

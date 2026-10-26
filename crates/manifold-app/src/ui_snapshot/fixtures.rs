@@ -78,11 +78,16 @@ pub fn build(scene: &str) -> Option<SceneData> {
 /// [`build`], reusing `cache`'s assembled GLBs.
 pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> {
     let mut data = scene_data(scene, cache)?;
-    // The fixture's live values are what the content thread would have captured.
+    capture_live_values(&mut data);
+    Some(data)
+}
+
+/// Publish `data.project`'s live values as the content thread would on its
+/// next frame, so displays read the same values the project holds.
+pub(super) fn capture_live_values(data: &mut SceneData) {
     let mut live = crate::content_state::ModulationSnapshot::empty();
     live.capture_into(&data.project);
     data.content.modulation_snapshot = Some(std::sync::Arc::new(live));
-    Some(data)
 }
 
 fn scene_data(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> {
@@ -360,7 +365,7 @@ fn imported_gltf_scene(
     project.reconcile_param_manifests();
     set_up_scene_cards(&mut project);
 
-    let lid = cmd.inserted_layer_id().expect("layer inserted");
+    let lid = cmd.layer_id().clone();
     let mut selection = UIState::default();
     selection.select_layer(lid);
 

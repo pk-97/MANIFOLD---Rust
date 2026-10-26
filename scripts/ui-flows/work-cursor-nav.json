@@ -1,9 +1,0 @@
-[
-  "ResetWork",
-  { "Pointer": { "target": { "Point": { "x": 1400.0, "y": 700.0 } }, "gesture": { "Click": { "modifiers": {} } } } },
-  { "Pointer": { "target": { "Point": { "x": 1420.0, "y": 700.0 } }, "gesture": { "Click": { "modifiers": {} } } } },
-  { "Pointer": { "target": { "Point": { "x": 1440.0, "y": 700.0 } }, "gesture": { "Click": { "modifiers": {} } } } },
-  { "Pointer": { "target": { "Point": { "x": 1460.0, "y": 700.0 } }, "gesture": { "Click": { "modifiers": {} } } } },
-  { "AssertWork": { "window": "four_cursor_moves" } },
-  "AssertFresh"
-]

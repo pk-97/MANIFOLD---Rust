@@ -250,23 +250,15 @@ pub(super) fn dispatch_layer(
             log::info!("Folder clicked (file picker not yet implemented)");
             DispatchResult::handled()
         }
-        LayerAction::NewClipClicked(id) => {
+        LayerAction::NewClipClicked(id) | LayerAction::AddGenClipClicked(id) => {
             let beat = content_state.current_beat;
             // create_clip_at_position takes a positional index; resolve the
             // stable id to its current row against the live model.
-            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id) {
-                project.executed_by(|p| {
-                    EditingService::create_clip_at_position(p, beat, layer_idx, Beats(4.0))
-                });
-            }
-            DispatchResult::handled()
-        }
-        LayerAction::AddGenClipClicked(id) => {
-            let beat = content_state.current_beat;
-            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id) {
-                project.executed_by(|p| {
-                    EditingService::create_clip_at_position(p, beat, layer_idx, Beats(4.0))
-                });
+            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id)
+                && let Some((cmd, _)) =
+                    EditingService::create_clip_at_position(project, beat, layer_idx, Beats(4.0))
+            {
+                project.execute(cmd);
             }
             DispatchResult::handled()
         }

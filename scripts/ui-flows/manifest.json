@@ -186,73 +186,29 @@
       "material-inspector-textures"
     ],
     "crates/manifold-app/src/editor_frame.rs": [
-      "work-editor-open",
-      "work-editor-idle",
-      "work-node-param-drag",
-      "work-mapping-drawer"
-    ],
-    "crates/manifold-app/src/editor_input.rs": [
-      "work-editor-open",
-      "work-node-param-drag",
-      "work-mapping-drawer"
-    ],
-    "crates/manifold-app/src/editor_bridge.rs": [
-      "work-editor-open",
-      "work-editor-idle",
-      "work-node-param-drag",
-      "work-mapping-drawer"
-    ],
-    "crates/manifold-app/src/graph_snapshot.rs": [
-      "work-editor-open",
-      "work-editor-idle",
       "work-node-param-drag"
     ],
-    "crates/manifold-ui/src/graph_canvas/mapping_popover.rs": [
-      "work-mapping-drawer"
+    "crates/manifold-app/src/editor_input.rs": [
+      "work-node-param-drag"
+    ],
+    "crates/manifold-app/src/editor_bridge.rs": [
+      "work-node-param-drag"
+    ],
+    "crates/manifold-app/src/graph_snapshot.rs": [
+      "work-node-param-drag"
     ],
     "crates/manifold-app/src/perform_mode/": [
-      "work-perform-idle",
-      "work-perform-exit"
-    ],
-    "crates/manifold-app/src/text_session.rs": [
-      "work-browser-search",
-      "work-text-commit"
+      "work-perform-idle"
     ]
   },
   "flows": {
     "work-idle": "timeline",
     "work-playback": "timeline",
-    "work-follow-scroll": "timeline",
-    "work-clock-jitter": "inspector",
-    "work-hover": "timeline",
-    "work-automation-hover": "automation",
     "work-clip-drag": "timeline",
-    "work-clip-trim": "timeline",
     "work-automation-point-drag": "automation",
-    "work-marquee": "timeline",
-    "work-region-move": "timeline",
-    "work-split-drag": "timeline",
-    "work-inspector-resize": "inspector",
-    "work-modifier": "timeline",
-    "work-select-click": "timeline",
-    "work-driver-trim": "inspector",
-    "work-envelope-drag": "envmod",
-    "work-audio-mod-range": "inspector",
-    "work-trigger-shape": "inspector",
-    "work-layer-gain": "inspector",
-    "work-send-gain": "audiosends",
-    "work-band-split": "audiosends",
     "work-values-undo": "inspector",
-    "work-trim-undo": "inspector",
-    "work-cursor-nav": "timeline",
-    "work-paused-cursor": "timeline",
     "work-zoom": "timeline",
-    "work-dock-scroll": "audiosends",
-    "work-scrollbar-drag": "timeline",
-    "work-layer-reorder": "timeline",
-    "work-drawer-tween": "envmod",
     "work-modulated-step": "inspector",
-    "work-fold-toggle": "inspector",
     "automation-clipboard-shapes": "automation",
     "automation-time-selection": "automation",
     "automation-lane-management": "automation",
@@ -296,14 +252,9 @@
     "scene-naming": "gltfscene",
     "rt-quality-panel-demo": "rtquality",
     "material-inspector-textures": "gltfscene",
-    "work-editor-open": "paramsteps",
-    "work-editor-idle": "paramsteps",
     "work-node-param-drag": "paramsteps",
-    "work-mapping-drawer": "paramsteps",
     "work-perform-idle": "timeline",
     "audio-clip-trigger-add": "inspector",
-    "work-browser-search": "inspector",
-    "work-perform-exit": "timeline",
     "trigger-lane-sibling": "envmod",
     "trigger-lane-assignment": "envmod"
   },
@@ -313,25 +264,10 @@
       "bug": "BUG-gm08t",
       "reason": "step 38: the Trigger 1 header button sits at y 671, the flow expects 685 (the picker tick and the label now refresh). Unproven whether the flow expectation or the scene setup layout moved."
     },
-    "work-slider-grab": {
-      "scene": "inspector",
-      "bug": "BUG-rqsaa",
-      "reason": "FrameAlloc 29 over the 27 ceiling since 9b8086df6: a param slider press sends AutomationHold with a cloned owned ParamId, one allocation per press. Ceiling held (D11) pending the ParamId type change or a reviewed --record-work."
-    },
     "work-slider-drag": {
       "scene": "inspector",
       "bug": "BUG-rqsaa",
       "reason": "FrameAlloc 490 over the 489 ceiling; red from the 2026-10-17 nightly, the same range as work-slider-grab. Not bisected."
-    },
-    "work-text-commit": {
-      "scene": "inspector",
-      "bug": "BUG-rqsaa",
-      "reason": "FrameAlloc 25 over the 24 ceiling; red from the 2026-10-17 nightly, the same range as work-slider-grab. Not bisected."
-    },
-    "work-lane-resize": {
-      "scene": "automation",
-      "bug": "BUG-rqsaa",
-      "reason": "FrameAlloc 14064 over the 13390 ceiling; already red in the 2026-10-16 nightly at 8743ad871, before 9b8086df6, so a separate cause. Not bisected."
     }
   },
   "unresolved": {}

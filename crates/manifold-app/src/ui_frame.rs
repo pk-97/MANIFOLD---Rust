@@ -548,7 +548,7 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     // A marker drag moved the dragged marker; the viewport lays the new list
     // out in place.
     if projections.contains(Projection::MarkerPreview) && !project_sync {
-        crate::ui_bridge::sync_markers(ui_root, project);
+        crate::ui_bridge::sync_markers(ui_root, project, push.drag);
     }
     // The dock's device query keys on its own inputs, not on every inspector
     // sync (P4c).
@@ -668,20 +668,21 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     let clips_moved = project_sync || projections.contains(Projection::ClipPositions);
     let clip_preview = projections.contains(Projection::ClipPreview);
     if clips_moved {
-        crate::ui_bridge::sync_clip_positions(ui_root, project);
+        crate::ui_bridge::sync_clip_positions(ui_root, project, &edits.preview);
     } else if edits.preview.clip_gesture_live() {
         if (clip_preview || clip_drag)
             && !crate::ui_bridge::project_clip_preview(ui_root, project, &edits.preview)
         {
-            crate::ui_bridge::sync_clip_positions(ui_root, project);
+            crate::ui_bridge::sync_clip_positions(ui_root, project, &edits.preview);
         }
     } else if clip_preview {
-        crate::ui_bridge::sync_clip_positions(ui_root, project);
+        crate::ui_bridge::sync_clip_positions(ui_root, project, &edits.preview);
     }
     let sync_lanes = |ui_root: &mut UIRoot| {
         crate::ui_bridge::sync_automation_lane_geometry(
             ui_root,
             project,
+            &edits.preview,
             selection.automation_mode_visible(),
             selection.chosen_automation_params(),
             selection.automation_lane_order(),

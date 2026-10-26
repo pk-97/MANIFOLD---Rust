@@ -91,6 +91,20 @@ pub(crate) struct EditSelectionUpdate {
     pub selection: EditSelection,
 }
 
+impl EditSelectionUpdate {
+    /// The receipt that follows `previous`: the next sequence number.
+    pub(crate) fn after(
+        previous: Option<&std::sync::Arc<Self>>,
+        selection: EditSelection,
+    ) -> std::sync::Arc<Self> {
+        let sequence = previous.map_or(1, |update| update.sequence.wrapping_add(1));
+        std::sync::Arc::new(Self {
+            sequence,
+            selection,
+        })
+    }
+}
+
 /// Consume a receipt before structural projection so labels, controls and
 /// selection are built from the same accepted snapshot.
 pub(crate) fn apply_update(
@@ -183,29 +197,6 @@ pub(crate) fn apply_update(
         }
     }
     true
-}
-
-/// Select an import root on the spot, when the UI thread already knows the
-/// edit landed — a drop that made its own layer executes that layer locally,
-/// so there is no content-thread receipt to wait for (SCENE_DOCUMENT_DESIGN.md
-/// section 7.7 (Imports)). The same appearance as a receipt.
-pub(crate) fn select_import_root(
-    ui: &mut crate::ui_root::UIRoot,
-    doc: &manifold_core::scene_doc::SceneDoc,
-    selection: &mut crate::app::SelectionState,
-    active_layer: &mut Option<LayerId>,
-    layer_id: &LayerId,
-    item: &ItemId,
-) {
-    if doc.find(item).is_none() {
-        return;
-    }
-    focus_scene_tab(selection, active_layer, layer_id);
-    reveal(ui, doc, layer_id, item);
-    ui.scene_setup_panel.set_selection(
-        layer_id.clone(),
-        manifold_ui::panels::scene_setup_panel::SceneSelection::Item(item.clone()),
-    );
 }
 
 /// Unfold every group above `item`, so its row shows in the tree.

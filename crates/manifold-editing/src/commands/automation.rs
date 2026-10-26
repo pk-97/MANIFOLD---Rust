@@ -106,6 +106,16 @@ impl AddAutomationPointCommand {
     }
 }
 
+/// The value a curve insert at `beat` gives `lane`'s new point: the lane's own
+/// line there. `None` when the insert is a no-op (no line to sample yet, or a
+/// breakpoint already sits at `beat`).
+pub fn on_curve_value(lane: &AutomationLane, beat: manifold_core::Beats) -> Option<f32> {
+    if lane.points.is_empty() || lane.points.iter().any(|p| p.beat == beat) {
+        return None;
+    }
+    Some(lane.value_at(beat))
+}
+
 impl AddAutomationPointCommand {
     pub fn was_applied(&self) -> bool {
         self.applied
@@ -157,12 +167,12 @@ impl Command for AddAutomationPointCommand {
             match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id) {
                 Some(lane) => {
                     if self.on_curve {
-                        point.value = lane.value_at(point.beat);
                         // An insertion on an existing breakpoint is a no-op.
                         // In particular, do not rewrite its outgoing shape.
-                        if lane.points.iter().any(|p| p.beat == point.beat) {
+                        let Some(value) = on_curve_value(lane, point.beat) else {
                             return false;
-                        }
+                        };
+                        point.value = value;
                         let segment = lane.points.windows(2).position(|pair| {
                             pair[0].beat.0 < point.beat.0 && point.beat.0 < pair[1].beat.0
                         });

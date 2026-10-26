@@ -561,9 +561,7 @@ impl Application {
                                 self.cursor_manager.set_default();
                                 self.ws.ui_root.set_split_handle_idle();
                                 // Width/ratio are captured at save time from
-                                // the live UI layout (save_viewport_state) —
-                                // a write here would be clobbered by the next
-                                // content snapshot clone of local_project.
+                                // the live UI layout (stamp_save_state).
                             } else if self.ws.ui_root.inspector_resize_dragging {
                                 self.ws.ui_root.end_inspector_resize();
                             } else if self.ws.ui_root.audio_setup_resize_dragging {
@@ -1893,19 +1891,8 @@ impl Application {
                     // ── New: Cmd+N ──
                     Key::Character(c) if c.as_str() == "n" && m.is_command_only() => {
                         let project = Self::create_default_project();
-                        *self.local_project.intake() = project.clone();
-                        self.ui_edits.stamps.project_replaced();
-                        self.suppress_snapshot_until = self.content_state.data_version + 1;
-                        self.suppress_snapshot_set_at = self.frame_count;
                         self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                         self.send_content_cmd(ContentCommand::SetProject);
-                        self.selection.clear_selection();
-                        self.active_layer_id = self
-                            .local_project
-                            .timeline
-                            .layers
-                            .first()
-                            .map(|l| l.layer_id.clone());
                         log::info!("New project created");
                         consumed = true;
                     }

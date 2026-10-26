@@ -704,10 +704,7 @@ pub(crate) fn commit<'a>(
                         &cx.project,
                         new_bpm,
                     );
-                    ContentCommand::send(
-                        cx.content_tx,
-                        ContentCommand::ExecuteOnContent(Box::new(cmd)),
-                    );
+                    ContentCommand::send(cx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
         }
@@ -837,7 +834,7 @@ pub(crate) fn commit<'a>(
             };
             if let Some(clip_id) = cx.selection.primary_selected_clip_id() {
                 let clip_id = clip_id.clone();
-                let clip = cx.project.find_clip_by_id(&clip_id);
+                let clip = cx.project.timeline.find_clip(&clip_id);
                 let old_bpm = clip.map(|c| c.recorded_bpm).unwrap_or(0.0);
                 let enabling = new_bpm > 0.0
                     && clip.is_some_and(|clip| {
@@ -848,10 +845,7 @@ pub(crate) fn commit<'a>(
                     let cmd = manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
                         clip_id, old_bpm, new_bpm,
                     );
-                    ContentCommand::send(
-                        cx.content_tx,
-                        ContentCommand::ExecuteOnContent(Box::new(cmd)),
-                    );
+                    ContentCommand::send(cx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
         }
@@ -950,10 +944,9 @@ pub(crate) fn commit<'a>(
                 && let Some(item) = text_input.scene_item_ref.take()
             {
                 match crate::scene_edit::rename(&cx.project, &layer_id, &item, text) {
-                    Ok(Some(edit)) => ContentCommand::send(
-                        cx.content_tx,
-                        ContentCommand::ExecuteOnContent(edit.command),
-                    ),
+                    Ok(Some(edit)) => {
+                        ContentCommand::send(cx.content_tx, ContentCommand::Execute(edit.command))
+                    }
                     Ok(None) => {}
                     Err(reason) => ContentCommand::send(
                         cx.content_tx,
@@ -1193,7 +1186,7 @@ mod tests {
     #[test]
     fn bpm_field_opens_types_and_commits() {
         let mut ui = UIRoot::new();
-        let mut project = Project::default();
+        let project = Project::default();
         let mut selection = SelectionState::default();
         let mut text_input = TextInputState::new();
         let action = PanelAction::Transport(TransportAction::BpmFieldClicked);
@@ -1236,7 +1229,7 @@ mod tests {
         let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
         let mut scrub = crate::ui_bridge::ScrubState::default();
         let mut cx = crate::ui_bridge::DispatchCtx {
-            project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &tx),
+            project: crate::ui_bridge::ProjectRef::new(&project, &mut edits, &tx),
             content_tx: &tx,
             content_state: &content_state,
             ui: &mut ui,
@@ -1254,10 +1247,7 @@ mod tests {
             &mut cx,
             &EditorCommitCtx::none(),
         );
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(ContentCommand::ExecuteOnContent(_))
-        ));
+        assert!(matches!(rx.try_recv(), Ok(ContentCommand::Execute(_))));
     }
 
     /// Escape cancels without a commit; with no session keys pass through.
@@ -1311,7 +1301,7 @@ mod tests {
     /// commands it sent, and the project afterwards.
     fn commit_collect(
         text_input: &mut TextInputState,
-        project: &mut Project,
+        project: &Project,
         field: TextInputField,
         text: &str,
         ed: &EditorCommitCtx<'_>,
@@ -1370,12 +1360,12 @@ mod tests {
         let target = manifold_core::GraphTarget::Generator(manifold_core::LayerId::new("g"));
         let default = empty_def();
         let ed = watched_ctx(&target, &default);
-        let mut project = Project::default();
+        let project = Project::default();
 
         let mut ti = TextInputState::new();
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::GraphGroupRename(3),
             " Core ",
             &ed,
@@ -1383,7 +1373,7 @@ mod tests {
         assert_eq!(executes(&cmds), 1, "group rename");
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::GraphGroupRename(3),
             "   ",
             &ed,
@@ -1393,7 +1383,7 @@ mod tests {
         ti.graph_param_name = Some("label".into());
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::GraphStringParam(3),
             "hi",
             &ed,
@@ -1403,7 +1393,7 @@ mod tests {
 
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::GraphWgsl(3),
             "fn main() {}",
             &ed,
@@ -1419,7 +1409,7 @@ mod tests {
         });
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::GraphNumericParam(3),
             "0.5x",
             &ed,
@@ -1435,7 +1425,7 @@ mod tests {
         });
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::GraphTableCell,
             "1.0",
             &ed,
@@ -1450,7 +1440,7 @@ mod tests {
         });
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::GraphTableCell,
             "2.0",
             &ed,
@@ -1464,7 +1454,7 @@ mod tests {
             TextInputField::GraphStringParam(3),
             TextInputField::GraphWgsl(3),
         ] {
-            let (cmds, ..) = commit_collect(&mut ti, &mut project, field, "x", &none);
+            let (cmds, ..) = commit_collect(&mut ti, &project, field, "x", &none);
             assert!(cmds.is_empty(), "{field:?} without a watched graph");
         }
     }
@@ -1473,11 +1463,11 @@ mod tests {
     /// commit, and it reaches the seam.
     #[test]
     fn graph_node_search_commits_nothing() {
-        let mut project = Project::default();
+        let project = Project::default();
         let mut ti = TextInputState::new();
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::GraphNodeSearch,
             "blur",
             &EditorCommitCtx::none(),
@@ -1500,7 +1490,7 @@ mod tests {
         ti.save_preset = Some(ctx());
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::SavePresetName,
             "  ",
             &EditorCommitCtx::none(),
@@ -1512,17 +1502,19 @@ mod tests {
         ti.save_preset = Some(ctx());
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::SavePresetName,
             "My Look",
             &EditorCommitCtx::none(),
         );
         assert_eq!(executes(&cmds), 1);
-        assert_eq!(
-            project.embedded_presets.len(),
-            1,
-            "the local project is written too"
+        assert!(project.embedded_presets.is_empty(), "the commit only sends");
+        crate::edit_runner::apply_sent(
+            &mut manifold_editing::service::EditingService::new(),
+            &mut project,
+            cmds,
         );
+        assert_eq!(project.embedded_presets.len(), 1);
         assert!(ti.save_preset.is_none());
     }
 
@@ -1581,7 +1573,7 @@ mod tests {
         open(&mut ti, TextInputField::AutomationPointValue);
         let (cmds, ..) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::AutomationPointValue,
             "nope",
             &none,
@@ -1596,12 +1588,17 @@ mod tests {
         open(&mut ti, TextInputField::AutomationPointTime);
         let (cmds, _, selection) = commit_collect(
             &mut ti,
-            &mut project,
+            &project,
             TextInputField::AutomationPointTime,
             "3.1.000",
             &none,
         );
         assert_eq!(executes(&cmds), 1, "time commit");
+        crate::edit_runner::apply_sent(
+            &mut manifold_editing::service::EditingService::new(),
+            &mut project,
+            cmds,
+        );
         assert_eq!(
             lane_points(&project)[1].beat,
             Beats(8.0),

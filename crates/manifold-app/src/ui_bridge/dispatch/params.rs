@@ -172,10 +172,7 @@ pub(crate) fn dispatch_params(
                 expand_layer_ancestors(id, ctx);
                 ctx.ui.request_layer_reveal(id.clone());
             }
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::ExecuteOnContent(Box::new(command)),
-            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(command)));
             DispatchResult::handled()
         }
         ParamsAction::CreateTriggerLane { owner, assignment } => {
@@ -458,10 +455,7 @@ pub(crate) fn dispatch_params(
                 param_id.to_string(),
                 *pin,
             );
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::ExecuteOnContent(Box::new(command)),
-            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(command)));
             DispatchResult::handled()
         }
         ParamsAction::SetSliderRange(gpt, param_id, range) => {
@@ -563,10 +557,7 @@ pub(crate) fn dispatch_params(
                 destination_group.clone(),
                 *preserve_groups,
             );
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::ExecuteOnContent(Box::new(command)),
-            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(command)));
             DispatchResult::handled()
         }
         ParamsAction::EffectGroupCollapsed {
@@ -589,10 +580,7 @@ pub(crate) fn dispatch_params(
                 group_id.clone(),
                 *collapsed,
             );
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::ExecuteOnContent(Box::new(command)),
-            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(command)));
             DispatchResult::handled()
         }
         ParamsAction::EffectGroupBypass {
@@ -670,10 +658,7 @@ pub(crate) fn dispatch_params(
                 catalog_default,
             )
             .with_scope(scope_path);
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::ExecuteOnContent(Box::new(cmd)),
-            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
             DispatchResult::handled()
         }
         ParamsAction::GenStringParamClicked(_) | ParamsAction::GenStringParamDropdownClicked(_) => {
@@ -710,7 +695,7 @@ pub(crate) fn dispatch_params(
                         .with_scope(scope_path);
                         ContentCommand::send(
                             ctx.content_tx,
-                            ContentCommand::ExecuteOnContent(Box::new(cmd)),
+                            ContentCommand::Execute(Box::new(cmd)),
                         );
                         return DispatchResult::handled();
                     }
@@ -789,10 +774,7 @@ pub(crate) fn dispatch_params(
                 target,
                 group_id.clone(),
             );
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::ExecuteOnContent(Box::new(cmd)),
-            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
             DispatchResult::handled()
         }
         ParamsAction::AddMask {
@@ -887,10 +869,7 @@ pub(crate) fn dispatch_params(
                 } => AddGroupMaskCommand::new(target, selected_indices.clone(), mask),
                 _ => unreachable!(),
             };
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::ExecuteOnContent(Box::new(cmd)),
-            );
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
             DispatchResult::handled()
         }
         ParamsAction::CopyGenerator => {
@@ -1269,7 +1248,7 @@ mod audio_send_dispatch_tests {
         {
             let mut edits = crate::gesture_preview::UiEdits::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
+                project: crate::ui_bridge::ProjectRef::new(&project, &mut edits, &content_tx),
                 content_tx: &content_tx,
                 content_state: &content_state,
                 ui: &mut ui,
@@ -1284,8 +1263,8 @@ mod audio_send_dispatch_tests {
         };
 
         let command = match content_rx.try_recv().expect("selection queues a command") {
-            crate::content_command::ContentCommand::ExecuteOnContent(command) => command,
-            _ => panic!("expected ExecuteOnContent"),
+            crate::content_command::ContentCommand::Execute(command) => command,
+            _ => panic!("expected Execute"),
         };
         let target = GraphTarget::Generator(layer_id);
         let mut service = EditingService::new();
@@ -1308,7 +1287,7 @@ mod view_fold_dispatch_tests {
     /// inspector and runs no project or inspector sync.
     #[test]
     fn fold_toggles_are_view_changes_not_structural_syncs() {
-        let mut project = manifold_core::project::Project::default();
+        let project = manifold_core::project::Project::default();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         let content_state = crate::content_state::ContentState::default();
         let mut ui = crate::ui_root::UIRoot::new();
@@ -1330,11 +1309,7 @@ mod view_fold_dispatch_tests {
             let was_collapsed = ui.inspector.macros_panel().is_collapsed();
             {
                 let mut ctx = crate::ui_bridge::DispatchCtx {
-                    project: crate::ui_bridge::ProjectRef::new(
-                        &mut project,
-                        &mut edits,
-                        &content_tx,
-                    ),
+                    project: crate::ui_bridge::ProjectRef::new(&project, &mut edits, &content_tx),
                     content_tx: &content_tx,
                     content_state: &content_state,
                     ui: &mut ui,
@@ -1438,7 +1413,7 @@ mod trigger_dispatch_tests {
             &action,
             &mut crate::ui_bridge::DispatchCtx {
                 project: crate::ui_bridge::ProjectRef::new(
-                    &mut project,
+                    &project,
                     &mut Default::default(),
                     &content_tx,
                 ),
@@ -1460,7 +1435,7 @@ mod trigger_dispatch_tests {
             Some(project.timeline.layers[2].layer_id.clone())
         );
 
-        let ContentCommand::ExecuteOnContent(command) = content_rx.try_recv().unwrap() else {
+        let ContentCommand::Execute(command) = content_rx.try_recv().unwrap() else {
             panic!("expected content-owned trigger assignment")
         };
         let mut editing = EditingService::new();
@@ -1513,7 +1488,7 @@ mod trigger_dispatch_tests {
             )),
             &mut crate::ui_bridge::DispatchCtx {
                 project: crate::ui_bridge::ProjectRef::new(
-                    &mut project,
+                    &project,
                     &mut Default::default(),
                     &content_tx,
                 ),
@@ -1534,17 +1509,17 @@ mod trigger_dispatch_tests {
             ui.pending_trigger_response_reveal(),
             Some(&(ui_target, "amount".into()))
         );
-        // The card expands locally, and the content thread gets the same write.
-        assert!(!project.graph_target_owner(&target).unwrap().collapsed);
-        for command in content_rx.try_iter() {
-            let ContentCommand::MutateProject {
-                f: presentation, ..
-            } = command
-            else {
-                panic!("navigation must not author an assignment or response");
-            };
-            presentation(&mut content);
-        }
+        // The UI's copy waits; the content thread expands the card.
+        assert!(project.graph_target_owner(&target).unwrap().collapsed);
+        let sent: Vec<_> = content_rx.try_iter().collect();
+        assert!(
+            sent.iter()
+                .all(|c| matches!(c, ContentCommand::MutateProject { .. })),
+            "navigation must not author an assignment or response"
+        );
+        crate::edit_runner::apply_sent(&mut EditingService::new(), &mut content, sent);
+        assert!(!content.graph_target_owner(&target).unwrap().collapsed);
+        project.graph_target_owner_mut(&target).unwrap().collapsed = false;
         assert_eq!(
             serde_json::to_value(&content).unwrap(),
             serde_json::to_value(&project).unwrap()
@@ -1583,7 +1558,7 @@ mod trigger_dispatch_tests {
             &action,
             &mut crate::ui_bridge::DispatchCtx {
                 project: crate::ui_bridge::ProjectRef::new(
-                    &mut project,
+                    &project,
                     &mut Default::default(),
                     &content_tx,
                 ),
@@ -1598,28 +1573,27 @@ mod trigger_dispatch_tests {
                 dialogs: Default::default(),
             },
         );
-        // The parent expands locally (a stamped presentation write); the lane
-        // itself waits for the content receipt.
-        assert!(!project.timeline.layers[0].is_collapsed);
-        project.timeline.layers[0].is_collapsed = true;
+        // The UI's copy waits for the snapshot: the parent stays folded and
+        // the lane is not there yet.
+        assert!(project.timeline.layers[0].is_collapsed);
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
 
-        let ContentCommand::MutateProject { f: expand, .. } = content_rx.try_recv().unwrap() else {
-            panic!("expected the same parent expansion on the content thread")
-        };
-        expand(&mut project);
-        assert!(!project.timeline.layers[0].is_collapsed);
-        let ContentCommand::ExecuteSelecting(command, request) = content_rx.try_recv().unwrap()
+        let sent: Vec<_> = content_rx.try_iter().collect();
+        let [
+            ContentCommand::MutateProject { .. },
+            ContentCommand::ExecuteSelecting(_, request),
+        ] = sent.as_slice()
         else {
-            panic!("expected selected trigger-lane insertion")
+            panic!("expected the parent expansion, then a selected trigger-lane insertion")
         };
         assert!(matches!(
             request,
             crate::edit_selection::SelectAfterEdit::NewLayer
         ));
         let mut editing = EditingService::new();
-        editing.execute(command, &mut project);
-        assert!(editing.take_rejection().is_none());
+        let outcomes = crate::edit_runner::apply_sent(&mut editing, &mut project, sent);
+        assert!(outcomes.iter().all(|o| o.rejection.is_none()));
+        assert!(!project.timeline.layers[0].is_collapsed);
         assert_eq!(project.timeline.layers.len(), 4);
         let lane = project
             .timeline
@@ -1733,11 +1707,7 @@ mod reveal_dispatch_tests {
         for pass in 0..2 {
             {
                 let mut ctx = crate::ui_bridge::DispatchCtx {
-                    project: crate::ui_bridge::ProjectRef::new(
-                        &mut project,
-                        &mut edits,
-                        &content_tx,
-                    ),
+                    project: crate::ui_bridge::ProjectRef::new(&project, &mut edits, &content_tx),
                     content_tx: &content_tx,
                     content_state: &content_state,
                     ui: &mut ui,

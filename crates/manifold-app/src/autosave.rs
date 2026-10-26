@@ -131,7 +131,7 @@ impl AutosaveState {
 }
 
 /// UI-thread state stamped onto the snapshot clone before serialization —
-/// the same fields `Application::save_viewport_state` writes for a manual
+/// the same fields `Application::stamp_save_state` writes for a manual
 /// save (playhead, viewport, panel sizing, collapse states). Captured as
 /// plain scalars so the background thread needs nothing from the UI.
 pub(crate) struct UiStateStamp {

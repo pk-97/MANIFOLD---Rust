@@ -5,7 +5,7 @@ use manifold_editing::commands::marker::{DeleteMarkerCommand, MoveMarkerCommand}
 use manifold_ui::MarkerAction;
 
 use super::DispatchResult;
-use super::scrub::{ResolvedScrub, ScrubState};
+use super::scrub::{ResolvedScrub, ScrubState, send_commit};
 use crate::app::SelectionState;
 use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
@@ -13,10 +13,11 @@ use crate::ui_root::UIRoot;
 pub(super) fn dispatch_marker(
     action: &MarkerAction,
     project: &mut crate::ui_bridge::ProjectRef<'_>,
-    _content_tx: &crossbeam_channel::Sender<ContentCommand>,
+    content_tx: &crossbeam_channel::Sender<ContentCommand>,
     _ui: &mut UIRoot,
     selection: &mut SelectionState,
     scrub: &mut ScrubState,
+    data_version: u64,
 ) -> DispatchResult {
     match action {
         // ── Click: select/multi-select marker ──────────────────
@@ -56,51 +57,31 @@ pub(super) fn dispatch_marker(
             DispatchResult::handled()
         }
 
-        // ── Drag move: update marker position for live preview ─
-        MarkerAction::MarkerDragMoved(marker_id_str, new_beat) => {
-            let marker_id = MarkerId::new(marker_id_str.as_str());
-            let beat = Beats::from_f32(*new_beat);
-            project.preview(|p, preview| {
-                if let Some(marker) = p.timeline.find_marker_mut(&marker_id) {
-                    marker.beat = beat;
-                }
-                p.timeline.sort_markers();
-                preview.record_marker();
-            });
+        // ── Drag move: the dragged marker draws at the live beat ─
+        MarkerAction::MarkerDragMoved(_, new_beat) => {
             if let Some(ResolvedScrub::Marker { live, .. }) = &mut scrub.active {
                 *live = *new_beat;
             }
+            let (_, preview) = project.preview_mut();
+            preview.record_marker();
             DispatchResult::handled()
         }
 
-        // ── Drag end: commit MoveMarkerCommand ─────────────────
+        // ── Drag end: commit MoveMarkerCommand from the record ─
         MarkerAction::MarkerDragEnded(marker_id_str, final_beat) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
-            let baseline = match &scrub.active {
-                Some(ResolvedScrub::Marker { baseline, .. }) => Some(*baseline),
-                _ => None,
-            };
-            scrub.active = None;
-            if let Some(old_beat) = baseline {
-                // Only commit if the marker actually moved
-                if (old_beat - *final_beat).abs() > 0.001 {
-                    // Undo the live preview mutation first — the command will redo it
-                    project.preview(|p, preview| {
-                        if let Some(marker) = p.timeline.find_marker_mut(&marker_id) {
-                            marker.beat = Beats::from_f32(old_beat);
-                        }
-                        p.timeline.sort_markers();
-                        preview.record_marker();
-                    });
-
-                    let cmd: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(MoveMarkerCommand::new(
-                            marker_id,
-                            Beats::from_f32(old_beat),
-                            Beats::from_f32(*final_beat),
-                        ));
-                    project.execute(cmd);
-                }
+            let (_, preview) = project.preview_mut();
+            preview.record_marker();
+            if let Some(record) = scrub.active.take()
+                && let ResolvedScrub::Marker { baseline, .. } = &record
+                && (*baseline - *final_beat).abs() > 0.001
+            {
+                let cmd = MoveMarkerCommand::new(
+                    marker_id,
+                    Beats::from_f32(*baseline),
+                    Beats::from_f32(*final_beat),
+                );
+                send_commit(content_tx, scrub, data_version, record, Box::new(cmd));
             }
             DispatchResult::handled()
         }
@@ -132,57 +113,9 @@ pub(super) fn dispatch_marker(
 }
 
 #[cfg(test)]
-mod tests {
-    use manifold_core::marker::TimelineMarker;
-    use manifold_core::{Beats, project::Project};
-
-    /// BUG-280 regression. Marker drag is driven by `ViewportDrag::MarkerDrag`,
-    /// outside `InteractionOverlay`'s `DragMode`, so a mid-gesture content-thread
-    /// snapshot swap used to revert the in-flight `marker.beat`. This mirrors
-    /// `bound_node_param_drag_survives_snapshot_stomp`: build the guard the live
-    /// `MarkerDragMoved` arm installs (now a `ResolvedScrub::Marker` in
-    /// `ScrubState.active`), run the real restore entry point on a stomped (stale)
-    /// project, and confirm the dragged beat survives.
-    #[test]
-    fn marker_drag_survives_snapshot_stomp() {
-        use crate::ui_bridge::scrub::{ResolvedScrub, ScrubState};
-
-        let mut project = Project::default();
-        let marker = TimelineMarker::new(Beats::from_f32(0.0));
-        let marker_id = marker.id.clone();
-        project.timeline.markers.push(marker);
-
-        let scrub = ScrubState {
-            active: Some(ResolvedScrub::Marker {
-                marker_id: marker_id.clone(),
-                baseline: 0.0,
-                live: 5.0,
-            }),
-        };
-
-        // A full snapshot lands mid-drag carrying the stale pre-drag project;
-        // app_render restores the guarded drag onto it via the real restore path.
-        let mut stomped = project.clone();
-        scrub.restore_dragged(&mut stomped);
-
-        let after = stomped
-            .timeline
-            .find_marker(&marker_id)
-            .expect("marker still present")
-            .beat
-            .as_f32();
-        assert_eq!(
-            after, 5.0,
-            "marker-drag stomp must be undone so the marker doesn't revert mid-gesture"
-        );
-    }
-}
-
-#[cfg(test)]
 mod drag_preview_tests {
     use crate::frame_plan::{FrameInputs, MainRegion, Projection, plan_frame};
     use crate::gesture_preview::UiEdits;
-    use manifold_core::change::Part;
     use manifold_core::marker::TimelineMarker;
     use manifold_core::{Beats, project::Project};
     use manifold_ui::MarkerAction;
@@ -218,6 +151,7 @@ mod drag_preview_tests {
                 &mut ui,
                 &mut selection,
                 &mut scrub,
+                0,
             );
         };
 
@@ -256,11 +190,10 @@ mod drag_preview_tests {
             &mut edits,
             &mut project,
         );
-        assert!(
-            inputs(&edits)
-                .parts
-                .moved_since(&last.parts)
-                .contains(Part::Markers)
+        assert_ne!(
+            inputs(&edits).preview,
+            last.preview,
+            "the drop re-projects the markers"
         );
         assert!(rx.try_recv().is_ok(), "the drop sends its command");
     }

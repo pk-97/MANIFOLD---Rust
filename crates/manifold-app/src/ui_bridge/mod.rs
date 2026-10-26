@@ -197,6 +197,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             ctx.ui,
             ctx.selection,
             ctx.scrub,
+            ctx.content_state.data_version,
         ),
         PanelAction::Project(a) => project::dispatch_project(
             a,
@@ -878,7 +879,7 @@ mod command_site_plan_tests {
     /// stamps it left and what it sent.
     fn dispatch_stamped(
         action: &PanelAction,
-        project: &mut Project,
+        project: &Project,
     ) -> (DispatchResult, UiStamps, Vec<ContentCommand>) {
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         let content_state = crate::content_state::ContentState::default();
@@ -906,6 +907,14 @@ mod command_site_plan_tests {
         (result, edits.stamps, content_rx.try_iter().collect())
     }
 
+    /// The content thread runs what dispatch sent and its snapshot's stamps
+    /// fold into the UI's, as the App folds an accepted snapshot.
+    fn land(project: &mut Project, stamps: &mut UiStamps, sent: Vec<ContentCommand>) {
+        let mut service = manifold_editing::service::EditingService::new();
+        crate::edit_runner::apply_sent(&mut service, project, sent);
+        stamps.fold_snapshot(&service.stamps());
+    }
+
     fn plan_after(stamps: &UiStamps) -> crate::frame_plan::FramePlan {
         plan_frame(
             &FrameInputs::default(),
@@ -920,12 +929,17 @@ mod command_site_plan_tests {
     fn execute_site_projects_from_its_stamps() {
         let mut project = Project::default();
         project.timeline.add_layer_default();
-        let (_, stamps, sent) = dispatch_stamped(
-            &PanelAction::Layer(LayerAction::AddLayerClicked),
-            &mut project,
-        );
-        assert_eq!(project.timeline.layers.len(), 2, "executed locally");
+        let (_, mut stamps, sent) =
+            dispatch_stamped(&PanelAction::Layer(LayerAction::AddLayerClicked), &project);
+        assert_eq!(project.timeline.layers.len(), 1, "the UI's copy waits");
+        assert!(plan_after(&stamps).projections == Default::default());
         assert!(matches!(sent.as_slice(), [ContentCommand::Execute(_)]));
+        land(&mut project, &mut stamps, sent);
+        assert_eq!(
+            project.timeline.layers.len(),
+            2,
+            "the content thread ran it"
+        );
         let plan = plan_after(&stamps);
         assert!(plan.projections.contains(Projection::ProjectSync));
         assert!(plan.projections.contains(Projection::InspectorSync));
@@ -937,18 +951,21 @@ mod command_site_plan_tests {
         project.timeline.add_layer_default();
         let id = project.timeline.layers[0].layer_id.clone();
         let collapsed = project.timeline.layers[0].is_collapsed;
-        let (_, stamps, sent) = dispatch_stamped(
+        let (_, mut stamps, sent) = dispatch_stamped(
             &PanelAction::Layer(LayerAction::ChevronClicked(id)),
-            &mut project,
+            &project,
         );
-        assert_ne!(
-            project.timeline.layers[0].is_collapsed, collapsed,
-            "written locally"
-        );
+        assert_eq!(project.timeline.layers[0].is_collapsed, collapsed);
+        assert!(plan_after(&stamps).projections == Default::default());
         assert!(matches!(
             sent.as_slice(),
             [ContentCommand::MutateProject { .. }]
         ));
+        land(&mut project, &mut stamps, sent);
+        assert_ne!(
+            project.timeline.layers[0].is_collapsed, collapsed,
+            "the content thread wrote it"
+        );
         let plan = plan_after(&stamps);
         assert!(plan.projections.contains(Projection::ProjectSync));
         assert!(plan.projections.contains(Projection::ClipPositions));
@@ -973,7 +990,7 @@ mod command_site_plan_tests {
                 vec![manifold_core::scene_doc::ItemId::new("cube")],
             );
             let (_, stamps, sent) =
-                dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
+                dispatch_stamped(&PanelAction::Project(action.clone()), &project);
             assert_eq!(
                 serde_json::to_value(&project).unwrap(),
                 before,
@@ -983,7 +1000,7 @@ mod command_site_plan_tests {
                 plan_after(&stamps).projections == Default::default(),
                 "{action:?}: nothing to project yet"
             );
-            let [ContentCommand::ExecuteOnContent(command)] = sent.as_slice() else {
+            let [ContentCommand::Execute(command)] = sent.as_slice() else {
                 panic!("{action:?}: expected one content-owned edit");
             };
             // The receipt: the content thread stamps what the command touches

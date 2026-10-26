@@ -178,7 +178,7 @@ impl UiSide {
     fn dispatch(&mut self, action: PanelAction) -> Vec<ContentCommand> {
         let mut edits = crate::gesture_preview::UiEdits::default();
         let mut ctx = crate::ui_bridge::DispatchCtx {
-            project: crate::ui_bridge::ProjectRef::new(&mut self.project, &mut edits, &self.tx),
+            project: crate::ui_bridge::ProjectRef::new(&self.project, &mut edits, &self.tx),
             content_tx: &self.tx,
             content_state: &self.state,
             ui: &mut self.ui,

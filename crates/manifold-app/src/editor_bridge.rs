@@ -912,6 +912,8 @@ pub(crate) fn goto_mapped_node(
 pub(crate) struct MappingHost<'a> {
     pub project: crate::ui_bridge::ProjectRef<'a>,
     pub scrub: &'a mut crate::ui_bridge::ScrubState,
+    /// The content state's data version, which a commit lands after.
+    pub data_version: u64,
 }
 
 impl MappingHost<'_> {
@@ -971,11 +973,12 @@ impl MappingHost<'_> {
 
     /// Drag commit: one undoable command carrying the explicit pre-drag
     /// reverse, so undo restores the pre-drag values rather than the
-    /// preview-mutated ones.
+    /// preview-mutated ones. The record keeps drawing until it lands.
     fn commit_with_reverse(
-        &self,
+        &mut self,
         target: &manifold_core::GraphTarget,
         param_id: &str,
+        record: crate::ui_bridge::scrub::ResolvedScrub,
         new: BindingMappingEdit,
         reverse: BindingMappingEdit,
     ) {
@@ -983,9 +986,14 @@ impl MappingHost<'_> {
             return;
         };
         let seed_def = seed_def_for_project(&self.project, &target);
-        self.send(ContentCommand::Execute(build_mapping_command_with_reverse(
-            &target, param_id, new, reverse, seed_def,
-        )));
+        let cmd = build_mapping_command_with_reverse(&target, param_id, new, reverse, seed_def);
+        crate::ui_bridge::scrub::send_commit(
+            self.project.content_tx(),
+            self.scrub,
+            self.data_version,
+            record,
+            cmd,
+        );
     }
 
     /// The mapping action handler, shared by both modal entry points. Every
@@ -1039,25 +1047,22 @@ impl MappingHost<'_> {
                 if matches!(&self.scrub.active,
                     Some(ResolvedScrub::MappingRange { target: owner, param_id, .. })
                     if owner == target && param_id == binding_id)
-                    && let Some(ResolvedScrub::MappingRange { baseline, live, .. }) =
-                        self.scrub.active.take()
+                    && let Some(record) = self.scrub.active.take()
+                    && let ResolvedScrub::MappingRange { baseline, live, .. } = &record
                     && ((baseline.0 - live.0).abs() > f32::EPSILON
                         || (baseline.1 - live.1).abs() > f32::EPSILON)
                 {
-                    self.commit_with_reverse(
-                        target,
-                        binding_id,
-                        BindingMappingEdit {
-                            min: Some(live.0),
-                            max: Some(live.1),
-                            ..Default::default()
-                        },
-                        BindingMappingEdit {
-                            min: Some(baseline.0),
-                            max: Some(baseline.1),
-                            ..Default::default()
-                        },
-                    );
+                    let new = BindingMappingEdit {
+                        min: Some(live.0),
+                        max: Some(live.1),
+                        ..Default::default()
+                    };
+                    let reverse = BindingMappingEdit {
+                        min: Some(baseline.0),
+                        max: Some(baseline.1),
+                        ..Default::default()
+                    };
+                    self.commit_with_reverse(target, binding_id, record, new, reverse);
                 }
             }
             RootAction::EffectMappingAffineSnapshot { target, binding_id } => {
@@ -1105,25 +1110,22 @@ impl MappingHost<'_> {
                 if matches!(&self.scrub.active,
                     Some(ResolvedScrub::MappingAffine { target: owner, param_id, .. })
                     if owner == target && param_id == binding_id)
-                    && let Some(ResolvedScrub::MappingAffine { baseline, live, .. }) =
-                        self.scrub.active.take()
+                    && let Some(record) = self.scrub.active.take()
+                    && let ResolvedScrub::MappingAffine { baseline, live, .. } = &record
                     && ((baseline.0 - live.0).abs() > f32::EPSILON
                         || (baseline.1 - live.1).abs() > f32::EPSILON)
                 {
-                    self.commit_with_reverse(
-                        target,
-                        binding_id,
-                        BindingMappingEdit {
-                            scale: Some(live.0),
-                            offset: Some(live.1),
-                            ..Default::default()
-                        },
-                        BindingMappingEdit {
-                            scale: Some(baseline.0),
-                            offset: Some(baseline.1),
-                            ..Default::default()
-                        },
-                    );
+                    let new = BindingMappingEdit {
+                        scale: Some(live.0),
+                        offset: Some(live.1),
+                        ..Default::default()
+                    };
+                    let reverse = BindingMappingEdit {
+                        scale: Some(baseline.0),
+                        offset: Some(baseline.1),
+                        ..Default::default()
+                    };
+                    self.commit_with_reverse(target, binding_id, record, new, reverse);
                 }
             }
             RootAction::EffectMappingLabel {
@@ -1307,6 +1309,7 @@ impl Application {
                 .local_project
                 .edit(&mut self.ui_edits, self.content_tx.as_ref()?),
             scrub: &mut self.scrub,
+            data_version: self.content_state.data_version,
         })
     }
 
@@ -2112,7 +2115,7 @@ impl Application {
                 live: self.frame_planner.last.live(),
                 dt,
                 show_image,
-                drag: self.scrub.active.as_ref(),
+                drag: self.scrub.drawn(),
             },
             false,
         );
@@ -2715,18 +2718,16 @@ mod binding_reroute_tests {
         effect.params = manifest_for(&def);
         effect.graph = Some(def.clone());
         let a = GraphTarget::Effect(effect.id.clone());
-        app.local_project
-            .intake()
-            .settings
-            .master_effects
-            .push(effect);
+        let mut project = manifold_core::project::Project::default();
+        project.settings.master_effects.push(effect);
         let mut layer =
             manifold_core::layer::Layer::new_generator("Test".into(), PresetTypeId::new("Test"), 0);
         let b = GraphTarget::Generator(layer.layer_id.clone());
         let generator = layer.gen_params_mut().unwrap();
         generator.params = manifest_for(&def);
         generator.graph = Some(def);
-        app.local_project.intake().timeline.layers.push(layer);
+        project.timeline.layers.push(layer);
+        app.local_project = crate::ui_bridge::LocalProject::new(project);
         app.watched_graph_target = Some(a.clone());
         (app, a, b)
     }
@@ -2995,6 +2996,7 @@ mod binding_reroute_tests {
 
     #[test]
     fn mapping_gesture_survives_selection_change_and_commits_one_undo() {
+        use crate::ui_bridge::scrub::ResolvedScrub;
         use manifold_editing::undo::UndoRedoManager;
         use manifold_ui::RootAction;
         let (mut app, owner, other) = mapping_test_app();
@@ -3021,11 +3023,16 @@ mod binding_reroute_tests {
             binding_id: "amount".into(),
         });
         assert!(app.scrub.active.is_some());
+        assert!(matches!(
+            app.scrub.drawn(),
+            Some(ResolvedScrub::MappingRange { live, .. }) if live.1 == 7.0
+        ));
         assert_eq!(
             super::target_full_reshape(&app.local_project, &owner, "amount")
                 .unwrap()
                 .2,
-            7.0
+            1.0,
+            "the UI copy keeps the pre-drag max until the commit lands"
         );
         assert_eq!(
             super::target_full_reshape(&app.local_project, &other, "amount")
@@ -3088,6 +3095,7 @@ mod binding_reroute_tests {
 
     #[test]
     fn mapping_cancel_restores_captured_owner_without_undo() {
+        use crate::ui_bridge::scrub::ResolvedScrub;
         use manifold_ui::RootAction;
         let (mut app, owner, other) = mapping_test_app();
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -3104,11 +3112,16 @@ mod binding_reroute_tests {
             scale: 9.0,
             offset: 4.0,
         });
+        assert!(matches!(
+            app.scrub.drawn(),
+            Some(ResolvedScrub::MappingAffine { live, .. }) if live.0 == 9.0
+        ));
         assert_eq!(
             super::target_full_reshape(&app.local_project, &owner, "amount")
                 .unwrap()
                 .5,
-            9.0
+            2.0,
+            "the UI copy keeps the pre-drag scale"
         );
         app.dispatch_mapping_action(&RootAction::EffectMappingCancel {
             target,

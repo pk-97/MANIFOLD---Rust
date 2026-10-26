@@ -472,7 +472,7 @@ fn push_instance_automation_lanes(
         };
         let ((pmin, pmax), whole) = (p.slider_span(), p.whole_numbers());
         let mut points = Vec::with_capacity(lane.points.len());
-        lane_points_into(lane, pmin, pmax, &mut points);
+        lane_points_into(&lane.points, pmin, pmax, &mut points);
         out.push(UiAutomationLane {
             effect_id: instance.id.clone(),
             param_id: lane.param_id.clone(),
@@ -490,14 +490,14 @@ fn push_instance_automation_lanes(
 
 /// A lane's points normalised against the slider span, written over `out`.
 fn lane_points_into(
-    lane: &manifold_core::effects::AutomationLane,
+    points: &[manifold_core::effects::AutomationPoint],
     pmin: f32,
     pmax: f32,
     out: &mut Vec<UiAutomationPoint>,
 ) {
     let range = (pmax - pmin).abs().max(f32::EPSILON);
     out.clear();
-    out.extend(lane.points.iter().map(|pt| {
+    out.extend(points.iter().map(|pt| {
         let norm = (pt.value - pmin) / range;
         UiAutomationPoint {
             beat: pt.beat,
@@ -508,19 +508,20 @@ fn lane_points_into(
     }));
 }
 
-/// `lane`'s points as the viewport shows them, written over `out`. The drag
-/// preview refills a lane's entry with this instead of re-translating every
-/// lane. False when the lane's param is gone.
+/// `points` of lane `param_id` as the viewport shows them, written over
+/// `out`. The drag preview refills a lane's entry with this instead of
+/// re-translating every lane. False when the lane's param is gone.
 pub(crate) fn preview_lane_points_into(
     instance: &PresetInstance,
-    lane: &manifold_core::effects::AutomationLane,
+    param_id: &str,
+    points: &[manifold_core::effects::AutomationPoint],
     out: &mut Vec<UiAutomationPoint>,
 ) -> bool {
-    let Some(p) = instance.params.get(lane.param_id.as_ref()) else {
+    let Some(p) = instance.params.get(param_id) else {
         return false;
     };
     let (pmin, pmax) = p.slider_span();
-    lane_points_into(lane, pmin, pmax, out);
+    lane_points_into(points, pmin, pmax, out);
     true
 }
 

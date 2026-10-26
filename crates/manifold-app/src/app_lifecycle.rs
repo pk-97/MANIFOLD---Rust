@@ -184,18 +184,17 @@ fn log_model_warnings(file: &str, warnings: &[String]) {
 impl Application {
     // ── Project I/O — delegates to ProjectIOService ────────────────────
 
-    /// Persist current viewport scroll + zoom and UI collapse states into the
-    /// save snapshot's settings.
-    fn save_viewport_state(&mut self) {
-        let settings = &mut self.local_project.intake().settings;
+    /// Stamp the UI-owned state (playhead, viewport scroll and zoom, panel
+    /// sizes and collapse states) onto the project about to be saved.
+    fn stamp_save_state(&self, project: &mut manifold_core::project::Project) {
+        project.saved_playhead_time = self.content_state.current_time.as_f32();
+        let settings = &mut project.settings;
         settings.viewport_scroll_x_beats = self.ws.ui_root.viewport.scroll_x_beats().as_f32();
         settings.viewport_scroll_y_px = self.ws.ui_root.viewport.scroll_y_px();
         settings.viewport_pixels_per_beat = self.ws.ui_root.viewport.pixels_per_beat();
 
-        // Persist panel sizing. These read from the live UI layout (which is
-        // never clobbered by content-thread snapshots) rather than relying on a
-        // drag-end write into local_project.settings — that write gets wiped by
-        // the next snapshot clone before save can capture it.
+        // Persist panel sizing. These live in the UI layout, not in the
+        // project, until a save writes them.
         settings.inspector_width = self.ws.ui_root.layout.inspector_width;
         settings.timeline_height_percent = self.ws.ui_root.layout.timeline_split_ratio;
 
@@ -213,9 +212,10 @@ impl Application {
     }
 
     /// Save. Delegates to ProjectIOService.save_project.
-    /// Save only a content-owned snapshot after queued edits and recording have
-    /// reached the undo service. Never silently serialize a stale UI replica.
-    fn prepare_recording_save(&mut self) -> Option<u64> {
+    /// Save only a content-owned copy after queued edits and recording have
+    /// reached the undo service. Never silently serialize the UI's view.
+    /// Returns that copy, which the save owns, and the data version it holds.
+    fn prepare_recording_save(&mut self) -> Option<(manifold_core::project::Project, u64)> {
         // The content thread owns the project while it renders an export and
         // would drop the request; say why instead of timing out.
         if self.content_state.is_exporting {
@@ -228,11 +228,7 @@ impl Application {
         let (tx, rx) = std::sync::mpsc::channel();
         self.send_content_cmd(ContentCommand::PrepareProjectSave(tx));
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(Some((project, version))) => {
-                *self.local_project.intake() = project;
-                self.ui_edits.stamps.project_replaced();
-                Some(version)
-            }
+            Ok(Some(saved)) => Some(saved),
             result => {
                 log::error!("Cannot obtain authoritative save snapshot: {result:?}");
                 crate::alerts::error(
@@ -251,15 +247,12 @@ impl Application {
         let Some(path) = self.current_project_path.clone() else {
             return self.save_project_as();
         };
-        let Some(save_version) = self.prepare_recording_save() else {
+        let Some((mut project, save_version)) = self.prepare_recording_save() else {
             return false;
         };
-        let current_time = self.content_state.current_time;
-        // Stamp UI layout onto the authoritative snapshot.
-        self.local_project.intake().saved_playhead_time = current_time.as_f32();
-        self.save_viewport_state();
-        crate::project_io::snapshot_and_prune_embedded_presets(self.local_project.intake());
-        match manifold_io::saver::save_project(self.local_project.intake(), &path, None, false) {
+        self.stamp_save_state(&mut project);
+        crate::project_io::snapshot_and_prune_embedded_presets(&mut project);
+        match manifold_io::saver::save_project(&mut project, &path, None, false) {
             Ok(()) => {
                 self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
                 log::info!("[ProjectIO] Saved to {}", path.display());
@@ -288,12 +281,11 @@ impl Application {
     /// Save As. Delegates to ProjectIOService.save_project_as. True once the
     /// project is on disk; false when it failed or the dialog was cancelled.
     pub(crate) fn save_project_as(&mut self) -> bool {
-        let Some(save_version) = self.prepare_recording_save() else {
+        let Some((mut project, save_version)) = self.prepare_recording_save() else {
             return false;
         };
         let current_time = self.content_state.current_time;
-        self.local_project.intake().saved_playhead_time = current_time.as_f32();
-        self.save_viewport_state();
+        self.stamp_save_state(&mut project);
         let host = crate::file_dialogs::host(
             &self.window_registry,
             self.dialog_window_id,
@@ -301,7 +293,7 @@ impl Application {
             self.current_project_path.as_deref(),
         );
         let mut action = self.project_io.save_project_as(
-            self.local_project.intake(),
+            &mut project,
             current_time.as_f32(),
             &mut EditingService::new(), // placeholder — mark clean via content thread
             host,
@@ -319,15 +311,14 @@ impl Application {
     /// Collect All and Save: copy every external
     /// asset into the project folder's `Media/` family subfolders, re-point the
     /// stored paths to the in-folder files, and save. Runs on the UI thread
-    /// against `local_project` — the same replica manual save serializes — so
+    /// against the content thread's copy, which manual save serializes, so
     /// the re-pointed paths land in the on-disk file. The copy work runs inline
     /// (synchronous): P4 defers the background-thread split until a large-media
     /// collect shows copy cost worth offloading.
     pub(crate) fn collect_all_and_save(&mut self) {
-        let Some(save_version) = self.prepare_recording_save() else {
+        let Some((mut project, save_version)) = self.prepare_recording_save() else {
             return;
         };
-        let current_time = self.content_state.current_time;
         let Some(current_path) = self.current_project_path.clone() else {
             // Untitled: no folder to collect into. Save As first (creates the
             // project folder), then Collect can run against it.
@@ -335,12 +326,10 @@ impl Application {
             return;
         };
 
-        self.local_project.intake().saved_playhead_time = current_time.as_f32();
-        self.save_viewport_state();
-        crate::project_io::snapshot_and_prune_embedded_presets(self.local_project.intake());
+        self.stamp_save_state(&mut project);
+        crate::project_io::snapshot_and_prune_embedded_presets(&mut project);
 
-        match manifold_io::collect::collect_all_and_save(self.local_project.intake(), &current_path)
-        {
+        match manifold_io::collect::collect_all_and_save(&mut project, &current_path) {
             Ok(report) => {
                 // The content thread owns the project the next save reads, so
                 // it takes the same re-points (a non-undoable write; the copies
@@ -987,10 +976,9 @@ impl Application {
             return;
         }
 
-        let mut local = self.local_project.edit(&mut self.ui_edits, &content_tx);
         // Insert above the layer under the cursor, or at the top when dropped
         // outside the tracks area.
-        let insert_index = insert_index.min(local.timeline.layers.len());
+        let insert_index = insert_index.min(self.local_project.timeline.layers.len());
         let center =
             manifold_nodes_scene::node_graph::gltf_import::world_bounds(&facts).map(|(c, _)| c);
         let mut doc = model.scene_doc(&file_str, group.clone());
@@ -1004,58 +992,40 @@ impl Application {
             .collect::<Vec<_>>();
         let display_name = model.name.clone();
 
-        // Execute the layer command locally first so the generated LayerId is
-        // fixed in the command instance, then send that SAME instance to the
-        // content thread. Both threads then insert the identical layer (id
-        // included), which lets the clip below target it deterministically.
-        use manifold_editing::command::Command;
-        let mut layer_cmd = manifold_editing::commands::layer::ImportModelLayerCommand::new(
+        // The layer and a default generator clip on it, so the model renders
+        // at once, are one undo step. The layer's id is made with its
+        // command, so the clip names it before it exists. The content thread
+        // selects the import root when the layer lands (section 7.7
+        // (Imports)); a refused layer comes back as a rejection message.
+        let layer_cmd = manifold_editing::commands::layer::ImportModelLayerCommand::new(
             display_name,
             doc,
             values,
             insert_index,
             None,
         );
-        let inserted = local.executed_by(|project| {
-            layer_cmd.execute(project);
-            if let Some(reason) = layer_cmd.rejection_reason() {
-                log::error!("[Import] {file_name} was refused: {reason}");
-                return None;
-            }
-            let layer_id = layer_cmd.inserted_layer_id()?;
-            Some((Box::new(layer_cmd) as Box<dyn Command>, layer_id))
-        });
-        let Some(layer_id) = inserted else {
-            self.ws.ui_root.toast.show_with_accent(
-                format!("Couldn't import {file_name}: no scene layer could be made"),
-                manifold_ui::color::RED_BASE,
-            );
-            return;
-        };
-
-        // A default generator clip on that layer, so the model renders at
-        // once. Sent after the layer on the same ordered channel, so the
-        // layer exists on the content thread before the clip targets it.
+        let layer_id = layer_cmd.layer_id().clone();
         let clip = manifold_core::clip::TimelineClip::new_generator(
             manifold_core::Beats::from_f32(drop_beat.max(0.0)),
             manifold_core::Beats::from_f32(DEFAULT_MODEL_DURATION_BEATS),
         );
-        local.execute(Box::new(
-            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone()),
+        let command = Box::new(manifold_editing::command::CompositeCommand::new(
+            vec![
+                Box::new(layer_cmd),
+                Box::new(manifold_editing::commands::clip::AddClipCommand::new(
+                    clip,
+                    layer_id.clone(),
+                )),
+            ],
+            "Import 3D Model".to_string(),
         ));
-
-        // The import root is selected at once, as every Add selects (section
-        // 7.7 (Imports)); the layer landed here, so there is no receipt.
-        if let Some(doc) = self.local_project.scene_of(&layer_id) {
-            crate::edit_selection::select_import_root(
-                &mut self.ws.ui_root,
-                doc,
-                &mut self.selection,
-                &mut self.active_layer_id,
-                &layer_id,
-                &group,
-            );
-        }
+        ContentCommand::send(
+            &content_tx,
+            ContentCommand::ExecuteSelecting(
+                command,
+                crate::edit_selection::SelectAfterEdit::NewItem(layer_id, group),
+            ),
+        );
     }
 
     /// Open. Delegates to ProjectIOService.open_project.
@@ -1096,44 +1066,9 @@ impl Application {
 
             // PrepareForProjectSwitch — audio-layer playback resets on the content
             // thread when it applies LoadProject (evicts the old project's voices).
-            // Apply saved layout before initializing
-            self.ws.ui_root.apply_project_layout(&project.settings);
-
-            // Update local_project BEFORE sending to content thread so UI
-            // can rebuild the timeline in this same frame.
-            *self.local_project.intake() = project.clone();
-            self.ui_edits.stamps.project_replaced();
-            // An open reads every model file again, a missing one included.
-            self.model_store = Default::default();
-            // Sync the global preset overlay to THIS project's embedded
-            // presets on every apply — open, snapshot restore, and New
-            // Project all pass here, so a previous project's forks never
-            // leak into the next one (New Project used to skip the install).
-            crate::project_io::install_project_preset_overlay(&self.local_project);
-            // Suppress content thread snapshots until it processes the LoadProject
-            // command (which will bump data_version above current).
-            self.suppress_snapshot_until = self.content_state.data_version + 1;
-            self.suppress_snapshot_set_at = self.frame_count;
-
+            // The UI keeps showing the old project until the loaded one's
+            // first snapshot arrives (`show_loaded_project`).
             send_open_project(project, |cmd| self.send_content_cmd(cmd));
-            {
-                let w = self.local_project.settings.output_width.max(1) as u32;
-                let h = self.local_project.settings.output_height.max(1) as u32;
-                let rs = self.local_project.settings.render_scale;
-                log::info!(
-                    "[ProjectIO] GPU resize sent: {}x{} @ {:.2}x render scale",
-                    w,
-                    h,
-                    rs
-                );
-            }
-            self.selection.clear_selection();
-            self.active_layer_id = self
-                .local_project
-                .timeline
-                .layers
-                .first()
-                .map(|l| l.layer_id.clone());
 
             // Content thread renders at project FPS; UI always runs at display rate.
             // Don't sync UI frame timer to project FPS — that couples UI to render cadence.
@@ -1164,11 +1099,8 @@ impl Application {
             self.send_content_cmd(ContentCommand::MarkClean);
         }
 
-        // Send record_commands to content thread so clips exist on both sides.
-        // Without this, clips added directly to local_project (e.g. MIDI import)
-        // are invisible to the content thread and vanish on next sync.
-        // They ran on local_project through `ProjectRef::with_sent`, which
-        // stamped them.
+        // The importers built these without applying them: the content thread
+        // runs them once, as one undo step.
         if !action.record_commands.is_empty() {
             if action.record_commands.len() == 1 {
                 let cmd = action.record_commands.into_iter().next().unwrap();
@@ -1186,6 +1118,29 @@ impl Application {
         self.refresh_recent_menu();
         // Same for the archive's history entries (File → Revert to Snapshot).
         self.refresh_history_menu();
+    }
+
+    /// The UI's setup for a freshly loaded project, run when its first
+    /// snapshot arrives (open, restore a history snapshot and New all load
+    /// through the content thread): saved layout, the preset overlay, the
+    /// model files, an empty selection and the first layer active.
+    pub(crate) fn show_loaded_project(&mut self) {
+        self.ws
+            .ui_root
+            .apply_project_layout(&self.local_project.settings);
+        self.ui_edits.stamps.project_replaced();
+        // An open reads every model file again, a missing one included.
+        self.model_store = Default::default();
+        // Sync the global preset overlay to THIS project's embedded presets,
+        // so a previous project's forks never leak into the next one.
+        crate::project_io::install_project_preset_overlay(&self.local_project);
+        self.selection.clear_selection();
+        self.active_layer_id = self
+            .local_project
+            .timeline
+            .layers
+            .first()
+            .map(|l| l.layer_id.clone());
     }
 
     /// Rebuild the File → Open Recent submenu from the current recent-projects

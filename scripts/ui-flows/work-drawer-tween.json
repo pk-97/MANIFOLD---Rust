@@ -1,9 +1,0 @@
-[
-  "ResetWork",
-  { "Pointer": { "target": { "Query": { "text": "Step", "type": "Button" } }, "gesture": { "Click": { "modifiers": {} } } } },
-  { "AssertWork": { "window": "drawer_change_click" } },
-  "ResetWork",
-  { "Step": { "frames": 30 } },
-  { "AssertWork": { "window": "drawer_change_half_second" } },
-  "AssertFresh"
-]

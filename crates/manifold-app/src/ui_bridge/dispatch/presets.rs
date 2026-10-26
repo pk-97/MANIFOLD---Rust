@@ -135,7 +135,7 @@ pub(crate) fn dispatch_preset(
 fn submit(target: &GraphTarget, command: Box<dyn Command + Send>, ctx: &mut DispatchCtx) {
     if matches!(target, GraphTarget::SceneModifier { .. }) {
         // Structural admission and authoritative mutation both belong to content.
-        ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(command));
+        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(command));
     } else {
         // Preserve the existing optimistic effect/generator UI contract.
         ctx.execute(command);

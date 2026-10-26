@@ -13,10 +13,10 @@ use manifold_ui::GraphParamTarget;
 use super::super::DispatchResult;
 use crate::ui_root::UIRoot;
 
-/// Live (non-undo) edit of the envelope matched by `param_id` on `target`,
-/// locally and on the content thread, so the next snapshot does not stomp the
-/// drag. Edits an existing envelope only; the undo step lands on commit.
-pub(crate) fn graph_env_dual_edit<F>(
+/// A drag's live move of the envelope matched by `param_id` on `target`, sent
+/// to the content thread only; the UI copy keeps the pre-drag envelope. Edits
+/// an existing envelope only; the undo step lands on commit.
+pub(crate) fn graph_env_move<F>(
     project: &mut crate::ui_bridge::ProjectRef<'_>,
     target: &manifold_core::GraphTarget,
     param_id: manifold_core::effects::ParamId,
@@ -25,7 +25,7 @@ pub(crate) fn graph_env_dual_edit<F>(
     F: Fn(&mut ParamEnvelope) + Clone + Send + 'static,
 {
     let t = target.clone();
-    project.mutate(crate::content_command::touch::SHAPES, move |p| {
+    project.gesture_move(crate::content_command::touch::SHAPES, move |p| {
         p.with_preset_graph_mut(&t, |inst| {
             if let Some(env) = inst
                 .envelopes
@@ -38,8 +38,8 @@ pub(crate) fn graph_env_dual_edit<F>(
     });
 }
 
-/// Driver twin of [`graph_env_dual_edit`].
-pub(crate) fn graph_driver_dual_edit<F>(
+/// Driver twin of [`graph_env_move`].
+pub(crate) fn graph_driver_move<F>(
     project: &mut crate::ui_bridge::ProjectRef<'_>,
     target: &manifold_core::GraphTarget,
     param_id: manifold_core::effects::ParamId,
@@ -48,7 +48,7 @@ pub(crate) fn graph_driver_dual_edit<F>(
     F: Fn(&mut ParameterDriver) + Clone + Send + 'static,
 {
     let t = target.clone();
-    project.mutate(crate::content_command::touch::SHAPES, move |p| {
+    project.gesture_move(crate::content_command::touch::SHAPES, move |p| {
         p.with_preset_graph_mut(&t, |inst| {
             if let Some(driver) = inst
                 .drivers
@@ -61,8 +61,9 @@ pub(crate) fn graph_driver_dual_edit<F>(
     });
 }
 
-/// Audio-modulation twin of [`graph_env_dual_edit`], for the trim-handle drag.
-pub(crate) fn graph_audio_mod_dual_edit<F>(
+/// Audio-modulation twin of [`graph_env_move`], for the trim-handle and
+/// shaping drags.
+pub(crate) fn graph_audio_mod_move<F>(
     project: &mut crate::ui_bridge::ProjectRef<'_>,
     target: &manifold_core::GraphTarget,
     param_id: manifold_core::effects::ParamId,
@@ -71,7 +72,7 @@ pub(crate) fn graph_audio_mod_dual_edit<F>(
     F: Fn(&mut manifold_core::audio_mod::ParameterAudioMod) + Clone + Send + 'static,
 {
     let t = target.clone();
-    project.mutate(crate::content_command::touch::SHAPES, move |p| {
+    project.gesture_move(crate::content_command::touch::SHAPES, move |p| {
         p.with_preset_graph_mut(&t, |inst| {
             if let Some(m) = inst
                 .audio_mods
@@ -84,9 +85,9 @@ pub(crate) fn graph_audio_mod_dual_edit<F>(
     });
 }
 
-/// Live (non-undo) edit of one `LayerClipTrigger`'s shape, the clip-trigger
-/// twin of [`graph_audio_mod_dual_edit`].
-pub(crate) fn clip_trigger_shape_dual_edit<F>(
+/// Live move of one `LayerClipTrigger`'s shape, the clip-trigger twin of
+/// [`graph_audio_mod_move`].
+pub(crate) fn clip_trigger_shape_move<F>(
     project: &mut crate::ui_bridge::ProjectRef<'_>,
     layer_id: &LayerId,
     index: usize,
@@ -95,7 +96,7 @@ pub(crate) fn clip_trigger_shape_dual_edit<F>(
     F: Fn(&mut manifold_core::audio_mod::AudioModShape) + Clone + Send + 'static,
 {
     let lid = layer_id.clone();
-    project.mutate(crate::content_command::touch::SHAPES, move |p| {
+    project.gesture_move(crate::content_command::touch::SHAPES, move |p| {
         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&lid)
             && let Some(t) = layer.clip_triggers.get_mut(index)
         {

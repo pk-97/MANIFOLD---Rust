@@ -5,72 +5,85 @@
 //! the wire as `PanelAction::Scrub(ValueRef, ScrubPhase)` (manifold-ui). This
 //! module resolves each [`manifold_ui::ValueRef`] to a core write target and
 //! runs the phase's operation. **Begin** resolves, reads the pre-gesture value
-//! as the undo baseline, and stashes a self-contained restore payload
-//! ([`ResolvedScrub`]). **Move** resolves, applies the new value locally for
-//! immediate feedback, and ships a non-undoable live write to the content
-//! thread. **Commit** resolves, reads the final value, and emits ONE
-//! undo-tracked command spanning the whole gesture (baseline → final).
-//!
-//! Plus the restore path ([`ScrubState::restore_dragged`]): after a mid-gesture
-//! content-thread snapshot swap stomps `local_project`, re-apply the in-flight
-//! value with only `&mut Project` — no dispatch context — which is why the
-//! resolved target is captured at Begin, not re-resolved.
+//! as the undo baseline, and stores a [`ResolvedScrub`] record. **Move** updates
+//! the record's live value and sends a non-undoable write to the content thread
+//! only; the UI's project copy keeps the pre-drag value. **Commit** builds the
+//! one undo command from the record and sends it for the content thread to run.
+//! The record keeps drawing the dragged value until the snapshot carrying the
+//! commit arrives ([`ScrubState::snapshot_arrived`]).
 //!
 //! MIGRATION STATE (P-I complete for the restore slot): every scrubable family
 //! — panel-wired (`PanelAction::Scrub`) and frame-resident (the graph-editor
 //! mapping drags + graph-canvas node-param drags, driven from `app_render`'s
-//! pending-actions loop, not the wire) — now rides the single `active` slot.
-//! The interim per-gesture snapshot `Option`s and the `ActiveInspectorDrag`
-//! enum are gone; `ScrubState.active` is the one restore payload, and
+//! pending-actions loop, not the wire) — rides the single `active` slot.
 //! [`ScrubState::check_single_active_on_begin`] machine-checks that only one
 //! gesture is ever live (one pointer, one gesture).
 
 use crate::content_command::ContentCommand;
-use manifold_core::audio_mod::{AudioModShape, TriggerAction};
+use manifold_core::audio_mod::{AudioModShape, TriggerAction, WrapMode};
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
+use manifold_editing::command::Command;
 use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
 use manifold_editing::commands::audio_mod::{SetAudioModActionCommand, SetAudioModShapeCommand};
 use manifold_editing::commands::audio_setup::{SetAudioCrossoversCommand, SetAudioSendGainCommand};
 use manifold_editing::commands::drivers::ChangeTrimCommand;
+use manifold_editing::commands::effect_groups::ChangeGroupWetDryCommand;
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::ChangeGraphParamCommand;
 use manifold_editing::commands::envelopes::{
     ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand, SetEnvelopeActionCommand,
 };
-use manifold_editing::commands::layer::SetLayerClipTriggerCommand;
+use manifold_editing::commands::layer::{SetLayerAudioGainCommand, SetLayerClipTriggerCommand};
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand,
 };
+use manifold_ui::panels::TrimKind;
+use manifold_ui::panels::param_slider_shared::RowShapes;
 use manifold_ui::{AudioShapeParam, ScrubPhase, ValueRef};
 
 use super::dispatch::audio_setup::{AUDIO_SEND_GAIN_MAX_DB, AUDIO_SEND_GAIN_MIN_DB};
 use super::dispatch::resolve::{
-    ableton_mapping_target, audio_setup_command, clip_trigger_shape_dual_edit,
-    graph_audio_mod_dual_edit, graph_driver_dual_edit, graph_env_dual_edit, resolve_graph_target,
+    ableton_mapping_target, clip_trigger_shape_move, graph_audio_mod_move, graph_driver_move,
+    graph_env_move, resolve_graph_target,
 };
 use super::{DispatchCtx, DispatchResult};
 
 /// The single in-flight scrub gesture (P-I). `active` holds the undo baseline
-/// plus the resolved restore payload for whichever gesture is live —
-/// panel-wired or frame-resident — or `None` when none is. One pointer means one
-/// gesture, so one slot: [`Self::check_single_active_on_begin`] flags any Begin
-/// that finds the slot already occupied (a prior gesture that leaked it).
+/// plus the live value for whichever gesture is live — panel-wired or
+/// frame-resident — or `None` when none is. One pointer means one gesture, so
+/// one slot: [`Self::check_single_active_on_begin`] flags any Begin that finds
+/// the slot already occupied (a prior gesture that leaked it).
 #[derive(Default)]
 pub struct ScrubState {
-    /// The single live gesture: undo baseline + resolved restore payload.
+    /// The single live gesture: undo baseline + live value.
     pub active: Option<ResolvedScrub>,
+    /// A committed gesture and the data version its commit lands at. It keeps
+    /// drawing until that project snapshot arrives, so a released control
+    /// never shows its old value for a frame.
+    landing: Option<(ResolvedScrub, u64)>,
 }
 
 impl ScrubState {
-    /// Re-apply the in-flight scrub value after a mid-gesture content-thread
-    /// snapshot swap stomped `local_project` (the restore path). One gesture is
-    /// live at a time; `active` is the whole picture.
-    pub fn restore_dragged(&self, project: &mut Project) {
-        if let Some(active) = &self.active {
-            active.restore(project);
+    /// The gesture whose value displays draw: the live one, else a committed
+    /// one still waiting for its snapshot.
+    pub fn drawn(&self) -> Option<&ResolvedScrub> {
+        self.active
+            .as_ref()
+            .or(self.landing.as_ref().map(|(record, _)| record))
+    }
+
+    /// A project snapshot at `data_version` arrived: a landed gesture whose
+    /// commit it carries has nothing left to draw.
+    pub fn snapshot_arrived(&mut self, data_version: u64) {
+        if self
+            .landing
+            .as_ref()
+            .is_some_and(|(_, lands_at)| data_version >= *lands_at)
+        {
+            self.landing = None;
         }
     }
 
@@ -95,10 +108,8 @@ impl ScrubState {
 }
 
 /// A resolved, self-contained scrub gesture: the undo baseline plus the
-/// resolved write target and the latest live value, enough to restore the
-/// gesture after a snapshot stomp with only `&mut Project`. One variant per
-/// scrubable family — panel-wired and frame-resident alike — the unified
-/// successor to the retired `ActiveInspectorDrag` per-family write logic (P-I).
+/// resolved write target and the latest live value. One variant per scrubable
+/// family — panel-wired and frame-resident alike.
 pub enum ResolvedScrub {
     ParamRgb {
         target: GraphTarget,
@@ -107,11 +118,9 @@ pub enum ResolvedScrub {
         baseline: [f32; 3],
         live: [f32; 3],
     },
-    /// An exposed card param on an effect/generator graph (was the
-    /// `ParamSnapshot`/`ParamChanged`/`ParamCommit` trio +
-    /// `ActiveInspectorDrag::Param`). `baseline` is the pre-gesture base value
-    /// the commit diffs against; `live` is the latest dragged value the restore
-    /// path re-stamps.
+    /// An exposed card param on an effect/generator graph. `baseline` is the
+    /// pre-gesture base value the commit diffs against; `live` is the latest
+    /// dragged value.
     Param {
         target: GraphTarget,
         param_id: ParamId,
@@ -132,8 +141,7 @@ pub enum ResolvedScrub {
     MasterOpacity { baseline: f32, live: f32 },
     /// The LED master-brightness slider (`settings.led_brightness`).
     LedBrightness { baseline: f32, live: f32 },
-    /// A layer's opacity — `layer_id` captured at Begin so the restore path can
-    /// re-stamp it without the active-layer context.
+    /// A layer's opacity — `layer_id` captured at Begin.
     LayerOpacity {
         layer_id: LayerId,
         baseline: f32,
@@ -146,9 +154,7 @@ pub enum ResolvedScrub {
         baseline: f32,
         live: f32,
     },
-    /// A macro-bank knob (`idx`). Macros ride every ModulationSnapshot block, so
-    /// the restore path re-applies through `apply_macro` — the same write Move
-    /// uses — or a per-tick apply stomps the in-flight value.
+    /// A macro-bank knob (`idx`).
     Macro {
         idx: usize,
         baseline: f32,
@@ -161,12 +167,11 @@ pub enum ResolvedScrub {
         live: f32,
     },
     /// A modulation trim-range handle (driver / audio-mod / Ableton sub-range
-    /// bars, BUG-246). `kind` selects the store; `ableton_target` is resolved
-    /// only for `TrimKind::Ableton` (`None` for driver/audio). `baseline`/`live`
-    /// are `(min, max)` pairs — the pre-gesture range the commit diffs against
-    /// and the latest dragged range the restore path re-stamps.
+    /// bars). `kind` selects the store; `ableton_target` is resolved only for
+    /// `TrimKind::Ableton` (`None` for driver/audio). `baseline`/`live` are
+    /// `(min, max)` pairs.
     Trim {
-        kind: manifold_ui::panels::TrimKind,
+        kind: TrimKind,
         target: GraphTarget,
         ableton_target: Option<manifold_core::ableton_mapping::AbletonMappingTarget>,
         param_id: ParamId,
@@ -174,7 +179,7 @@ pub enum ResolvedScrub {
         live: (f32, f32),
     },
     /// An envelope target handle (`target_normalized`) — `target`/`param_id`
-    /// resolved at Begin so the restore path can re-stamp without dispatch ctx.
+    /// resolved at Begin.
     EnvelopeTarget {
         target: GraphTarget,
         param_id: ParamId,
@@ -189,10 +194,8 @@ pub enum ResolvedScrub {
         live: f32,
     },
     /// An audio-mod drawer shaping slider — holds the WHOLE shape at both
-    /// `baseline` and `live` (the drag edits one scalar; the restore re-stamps
-    /// the whole shape so the other two hold, matching the retired
-    /// `ActiveInspectorDrag::AudioModShape`). `which` scalar is drag-local and
-    /// carried on the wire, not here.
+    /// `baseline` and `live` (the drag edits one scalar; the other two hold).
+    /// `which` scalar is drag-local and carried on the wire, not here.
     AudioModShape {
         target: GraphTarget,
         param_id: ParamId,
@@ -200,22 +203,16 @@ pub enum ResolvedScrub {
         live: AudioModShape,
     },
     /// An audio-mod Step-action amount slider. The undo `baseline` is the WHOLE
-    /// pre-drag `TriggerAction` (the commit emits `SetAudioModActionCommand`
-    /// old→new), while the restore path only needs `live_amount`: it re-stamps
-    /// `TriggerAction::Step { amount: live_amount, wrap }` reading the current
-    /// wrap from the store, matching the retired
-    /// `ActiveInspectorDrag::AudioModStepAmount`.
+    /// pre-drag `TriggerAction`; the commit re-stamps `live_amount` with the
+    /// baseline's wrap.
     AudioModStepAmount {
         target: GraphTarget,
         param_id: ParamId,
         baseline: TriggerAction,
         live_amount: f32,
     },
-    /// An envelope Step-action amount slider. The undo `baseline` is the WHOLE
-    /// pre-drag `TriggerAction` (the commit emits `SetEnvelopeActionCommand`
-    /// old→new), while the restore path only needs `live_amount`: it re-stamps
-    /// `TriggerAction::Step { amount: live_amount, wrap }` reading the current
-    /// wrap from the envelope, mirroring `AudioModStepAmount` for the T drawer.
+    /// An envelope Step-action amount slider; mirrors `AudioModStepAmount` for
+    /// the T drawer.
     EnvelopeStepAmount {
         target: GraphTarget,
         param_id: ParamId,
@@ -224,9 +221,7 @@ pub enum ResolvedScrub {
     },
     /// A layer clip-trigger drawer shaping slider (AudioSetup-domain twin of
     /// `AudioModShape`). Addressed by `(layer_id, index)` into `clip_triggers`;
-    /// holds the WHOLE shape at both `baseline` and `live` (the drag edits one
-    /// scalar; the restore re-stamps the whole shape so the other two hold). The
-    /// commit diffs the whole `ClipTrigger` via `SetLayerClipTriggerCommand`.
+    /// holds the WHOLE shape at both `baseline` and `live`.
     AudioTriggerShape {
         layer_id: LayerId,
         index: usize,
@@ -234,53 +229,39 @@ pub enum ResolvedScrub {
         live: AudioModShape,
     },
     /// An Audio Setup send-gain (dB) calibration drag. `baseline` is the pre-drag
-    /// gain the commit diffs against; `live` is the latest clamped dB the restore
-    /// path re-stamps on the send.
+    /// gain the commit diffs against; `live` is the latest clamped dB.
     AudioSendGain {
         send_id: manifold_core::AudioSendId,
         baseline: f32,
         live: f32,
     },
     /// An Audio Setup band-divider (crossover) drag. Global; `baseline`/`live`
-    /// are the whole `(low_hz, mid_hz)` pair the commit diffs against and the
-    /// restore re-stamps (the live edit clamps the dragged line — identified by
-    /// the `BandDivider` on the wire — and writes both). The dragged band lives
-    /// on the ValueRef address, not here (restore/commit act on the pair).
+    /// are the whole `(low_hz, mid_hz)` pair.
     AudioCrossover {
         baseline: (f32, f32),
         live: (f32, f32),
     },
     /// An Ableton macro-bank trim-bar drag. Keyed by the macro slot `slot_idx`;
-    /// `baseline`/`live` are the `(min, max)` range the commit diffs against and
-    /// the restore path re-stamps on the slot's `ableton_mapping`. The panel
-    /// carries both edges, so the value is a `ScrubValue::Range` (unlike
-    /// crossover's single-band Scalar). Distinct from `Trim` — this addresses a
-    /// macro-bank slot, not a `GraphParamTarget`.
+    /// `baseline`/`live` are the `(min, max)` range. Distinct from `Trim` — this
+    /// addresses a macro-bank slot, not a `GraphParamTarget`.
     AbletonMacroTrim {
         slot_idx: usize,
         baseline: (f32, f32),
         live: (f32, f32),
     },
-    /// A timeline-marker drag (BUG-280). NOT a `PanelAction::Scrub` family — the
-    /// gesture is viewport-driven (`ViewportDrag::MarkerDrag` → the
-    /// `MarkerAction::MarkerDrag{Started,Moved,Ended}` arms in `marker.rs`), which
-    /// compute `beat` from pixel geometry the panel owns. Only the
-    /// snapshot-stomp GUARD lives here: `baseline` is the pre-drag beat the commit
-    /// diffs against, `live` is the in-flight beat the restore path re-stamps
-    /// (the marker drag runs outside `InteractionOverlay`'s `DragMode`, so a
-    /// mid-gesture content-thread snapshot would otherwise revert `marker.beat`).
+    /// A timeline-marker drag. NOT a `PanelAction::Scrub` family — the gesture
+    /// is viewport-driven (`ViewportDrag::MarkerDrag` → the
+    /// `MarkerAction::MarkerDrag{Started,Moved,Ended}` arms in `marker.rs`).
+    /// `baseline` is the pre-drag beat the commit diffs against, `live` the
+    /// in-flight beat the markers draw at.
     Marker {
         marker_id: manifold_core::MarkerId,
         baseline: f32,
         live: f32,
     },
-    /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*`,
-    /// BUG-262). NOT a `PanelAction::Scrub` family — dispatched from
-    /// `app_render`'s pending-actions loop (the commit reads the new range back
-    /// from the captured baseline/live pair in `dispatch_mapping_action`).
-    /// The snapshot-stomp guard lives here: `baseline`/`live`
-    /// are `(min, max)` pairs; the restore re-stamps the in-flight range through
-    /// the SAME `build_mapping_command` write `preview_mapping` lands each tick.
+    /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*`).
+    /// NOT a `PanelAction::Scrub` family — dispatched from `editor_bridge`.
+    /// `baseline`/`live` are `(min, max)` pairs.
     MappingRange {
         target: GraphTarget,
         param_id: String,
@@ -288,28 +269,22 @@ pub enum ResolvedScrub {
         live: (f32, f32),
     },
     /// A graph-editor mapping-sidebar affine (scale/offset) drag
-    /// (`EffectMappingAffine*`, BUG-262). Same frame-resident story as
-    /// `MappingRange`; `baseline`/`live` are `(scale, offset)` pairs.
+    /// (`EffectMappingAffine*`). Same frame-resident story as `MappingRange`;
+    /// `baseline`/`live` are `(scale, offset)` pairs.
     MappingAffine {
         target: GraphTarget,
         param_id: String,
         baseline: (f32, f32),
         live: (f32, f32),
     },
-    /// A card-bound graph-node-face param scrub (`BoundNodeParamDrag`, BUG-281).
-    /// NOT a `PanelAction::Scrub` family — driven from the graph canvas's
-    /// `SetGraphNodeParam` reroute arm in `app_render`. The wrapped struct IS the
-    /// undo baseline + in-flight value + session identity; the restore re-applies
-    /// its in-flight card value (the same `set_base_param` write the live tick
-    /// uses), since the bound path writes `local_project` synchronously.
+    /// A card-bound graph-node-face param scrub (`BoundNodeParamDrag`). NOT a
+    /// `PanelAction::Scrub` family — driven from the graph canvas's
+    /// `SetGraphNodeParam` reroute arm in `app_render`. The wrapped struct holds
+    /// the undo baseline, the in-flight card value and the session identity.
     BoundNodeParam(Box<crate::app_render::BoundNodeParamDrag>),
-    /// An unbound graph-node-face param scrub (`UnboundNodeParamDrag`, BUG-282).
-    /// The mirror of `BoundNodeParam` for the un-rerouted path — but its live
-    /// writes go through `MutateProject` (Values or Shapes) only (never a synchronous
-    /// `local_project` write), so a snapshot stomp has nothing local to revert:
-    /// the restore is a deliberate no-op. Held here purely so the ONE
-    /// undo-worthy commit on `EndGraphNodeParamScrub` and the single-active
-    /// invariant see it.
+    /// An unbound graph-node-face param scrub (`UnboundNodeParamDrag`). Its
+    /// live writes go through `MutateProject` only; the record holds the
+    /// session so the one undo-worthy commit sees it.
     UnboundNodeParam(Box<crate::app_render::UnboundNodeParamDrag>),
 }
 
@@ -353,335 +328,475 @@ impl ResolvedScrub {
         }
     }
 
-    /// Re-stamp the in-flight value through the SAME write the family's live
-    /// `Move` uses, so a mid-drag snapshot swap can't revert it (the
-    /// `ActiveInspectorDrag::apply` precedent, generalized).
-    fn restore(&self, project: &mut Project) {
+    /// Lay the in-flight value over `shapes`, the scalars one card row draws,
+    /// when this gesture is on `(target, param_id)`. Only a field the row
+    /// already has is filled: a row without a driver shows no driver trim.
+    pub(crate) fn overlay_shapes(
+        &self,
+        target: &GraphTarget,
+        param_id: &str,
+        shapes: &mut RowShapes,
+    ) {
         match self {
-            ResolvedScrub::ParamRgb {
-                target,
-                param_ids,
-                preset,
+            ResolvedScrub::Trim {
+                kind: TrimKind::Driver,
+                target: t,
+                param_id: p,
                 live,
                 ..
-            } => {
-                if project
-                    .preset_instance(target)
-                    .is_some_and(|inst| inst.effect_type() == preset)
-                    && super::projection::material::rgb_editable(project, target, param_ids)
-                {
-                    project.with_preset_graph_mut(target, |inst| {
-                        for (id, value) in param_ids.iter().zip(live) {
-                            inst.set_base_param(id, *value);
-                        }
-                    });
-                }
-            }
-            ResolvedScrub::Param {
-                target,
-                param_id,
-                live,
-                ..
-            } => {
-                // Restore through `set_base_param` — the write `Move` ticks use
-                // and the commit reads back; an effective-only restore would
-                // leave base stale and the commit would see old == new.
-                project.with_preset_graph_mut(target, |inst| {
-                    inst.set_base_param(param_id.as_ref(), *live);
-                });
-            }
-            // Node writes go through `MutateProject` only, so a stomp has
-            // nothing local of theirs to revert.
-            ResolvedScrub::ParamGroup { target, cards, .. } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    for card in cards {
-                        inst.set_base_param(card.id.as_ref(), card.live);
-                    }
-                });
-            }
-            ResolvedScrub::MasterOpacity { live, .. } => {
-                project.settings.master_opacity = *live;
-            }
-            ResolvedScrub::LedBrightness { live, .. } => {
-                project.settings.led_brightness = *live;
-            }
-            ResolvedScrub::LayerOpacity { layer_id, live, .. } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
-                    layer.opacity = *live;
-                }
-            }
-            ResolvedScrub::RackWetDry {
-                target,
-                group_id,
-                live,
-                ..
-            } => {
-                super::rack_controls::set_wet_dry(project, target, group_id, *live);
-            }
-            ResolvedScrub::Macro { idx, live, .. } => {
-                manifold_core::macro_bank::MacroBank::apply_macro(project, *idx, *live);
-            }
-            ResolvedScrub::LayerAudioGain { layer_id, live, .. } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
-                    layer.audio_gain_db = *live;
+            } if t == target && p.as_ref() == param_id => {
+                if let Some(range) = &mut shapes.driver_trim {
+                    *range = *live;
                 }
             }
             ResolvedScrub::Trim {
-                kind,
-                target,
-                ableton_target,
-                param_id,
-                live: (min, max),
+                kind: TrimKind::Audio,
+                target: t,
+                param_id: p,
+                live,
                 ..
-            } => {
-                use manifold_ui::panels::TrimKind;
-                // Same store each kind's live Move write lands in, re-applied so a
-                // mid-drag snapshot swap can't revert the in-flight range.
-                match kind {
-                    TrimKind::Driver => {
-                        project.with_preset_graph_mut(target, |inst| {
-                            if let Some(d) = inst
-                                .drivers
-                                .as_mut()
-                                .and_then(|ds| ds.iter_mut().find(|d| d.param_id == *param_id))
-                            {
-                                d.trim_min = *min;
-                                d.trim_max = *max;
-                            }
-                        });
-                    }
-                    TrimKind::Audio => {
-                        project.with_preset_graph_mut(target, |inst| {
-                            if let Some(m) = inst
-                                .audio_mods
-                                .as_mut()
-                                .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                            {
-                                m.shape.range_min = *min;
-                                m.shape.range_max = *max;
-                            }
-                        });
-                    }
-                    TrimKind::Ableton => {
-                        if let Some(mt) = ableton_target
-                            && let Some(ms) = project
-                                .ableton_param_mappings_mut(mt)
-                                .and_then(|opt| opt.as_mut())
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                        {
-                            m.range_min = *min;
-                            m.range_max = *max;
-                        }
-                    }
+            } if t == target && p.as_ref() == param_id => {
+                if let Some(audio) = &mut shapes.audio {
+                    audio.range_min = live.0;
+                    audio.range_max = live.1;
+                }
+            }
+            ResolvedScrub::Trim {
+                kind: TrimKind::Ableton,
+                target: t,
+                param_id: p,
+                live,
+                ..
+            } if t == target && p.as_ref() == param_id => {
+                if let Some(range) = &mut shapes.ableton_range {
+                    *range = *live;
                 }
             }
             ResolvedScrub::EnvelopeTarget {
-                target,
-                param_id,
+                target: t,
+                param_id: p,
                 live,
                 ..
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(e) = inst
-                        .envelopes
-                        .as_mut()
-                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
-                    {
-                        e.target_normalized = *live;
-                    }
-                });
+            } if t == target && p.as_ref() == param_id => {
+                if let Some(envelope) = &mut shapes.envelope {
+                    envelope.target_norm = *live;
+                }
             }
             ResolvedScrub::EnvDecay {
-                target,
-                param_id,
+                target: t,
+                param_id: p,
                 live,
                 ..
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(e) = inst
-                        .envelopes
-                        .as_mut()
-                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
-                    {
-                        e.decay_beats = *live;
-                    }
-                });
+            } if t == target && p.as_ref() == param_id => {
+                if let Some(envelope) = &mut shapes.envelope {
+                    envelope.decay = *live;
+                }
             }
             ResolvedScrub::AudioModShape {
-                target,
-                param_id,
+                target: t,
+                param_id: p,
                 live,
                 ..
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(m) = inst
-                        .audio_mods
-                        .as_mut()
-                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                    {
-                        m.shape = *live;
-                    }
-                });
+            } if t == target && p.as_ref() == param_id => {
+                if let Some(audio) = &mut shapes.audio {
+                    audio.sensitivity = live.sensitivity;
+                    audio.attack_ms = live.attack_ms;
+                    audio.release_ms = live.release_ms;
+                }
             }
             ResolvedScrub::AudioModStepAmount {
-                target,
-                param_id,
+                target: t,
+                param_id: p,
                 live_amount,
                 ..
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(m) = inst
-                        .audio_mods
-                        .as_mut()
-                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                    {
-                        // Re-stamp the Step action, preserving the current wrap —
-                        // the same write the live `Move` arm lands.
-                        let wrap = match m.action {
-                            TriggerAction::Step { wrap, .. } => wrap,
-                            _ => manifold_core::audio_mod::WrapMode::Wrap,
-                        };
-                        m.action = TriggerAction::Step {
-                            amount: *live_amount,
-                            wrap,
-                        };
-                    }
-                });
+            } if t == target && p.as_ref() == param_id => {
+                if let Some(step) = shapes.audio.as_mut().and_then(|a| a.step_amount.as_mut()) {
+                    *step = *live_amount;
+                }
             }
             ResolvedScrub::EnvelopeStepAmount {
-                target,
-                param_id,
+                target: t,
+                param_id: p,
                 live_amount,
                 ..
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(e) = inst
-                        .envelopes
-                        .as_mut()
-                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
-                    {
-                        let wrap = match e.action {
-                            TriggerAction::Step { wrap, .. } => wrap,
-                            _ => manifold_core::audio_mod::WrapMode::Wrap,
-                        };
-                        e.action = TriggerAction::Step {
-                            amount: *live_amount,
-                            wrap,
-                        };
-                    }
-                });
-            }
-            ResolvedScrub::AudioTriggerShape {
-                layer_id,
-                index,
-                live,
-                ..
-            } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
-                    && let Some(t) = layer.clip_triggers.get_mut(*index)
+            } if t == target && p.as_ref() == param_id => {
+                if let Some(step) = shapes
+                    .envelope
+                    .as_mut()
+                    .and_then(|e| e.step_amount.as_mut())
                 {
-                    t.shape = *live;
+                    *step = *live_amount;
                 }
             }
-            ResolvedScrub::AudioSendGain { send_id, live, .. } => {
-                if let Some(s) = project.audio_setup.find_send_mut(send_id) {
-                    s.gain_db = *live;
-                }
-            }
-            ResolvedScrub::AudioCrossover {
-                live: (low, mid), ..
-            } => {
-                project.audio_setup.low_hz = *low;
-                project.audio_setup.mid_hz = *mid;
-            }
-            ResolvedScrub::AbletonMacroTrim {
-                slot_idx,
-                live: (min, max),
-                ..
-            } => {
-                if let Some(m) = project
-                    .settings
-                    .macro_bank
-                    .slots
-                    .get_mut(*slot_idx)
-                    .and_then(|s| s.ableton_mapping.as_mut())
-                {
-                    m.range_min = *min;
-                    m.range_max = *max;
-                }
-            }
-            ResolvedScrub::Marker {
-                marker_id, live, ..
-            } => {
-                if let Some(marker) = project.timeline.find_marker_mut(marker_id) {
-                    marker.beat = manifold_core::Beats::from_f32(*live);
-                }
-                project.timeline.sort_markers();
-            }
-            // The two mapping families restore through the SAME command
-            // `preview_mapping` executes each `*Changed` tick — build the reshape
-            // edit and run it on the project so a mid-drag snapshot swap can't
-            // revert the manifest value shown by the mapping controls
-            // (BUG-262).
-            ResolvedScrub::MappingRange {
-                target,
-                param_id,
-                live: (min, max),
-                ..
-            } => {
-                let seed = crate::app_render::seed_def_for_project(project, target);
-                let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                    min: Some(*min),
-                    max: Some(*max),
-                    ..Default::default()
-                };
-                crate::app_render::build_mapping_command(target, param_id, edit, seed)
-                    .execute(project);
-            }
-            ResolvedScrub::MappingAffine {
-                target,
-                param_id,
-                live: (scale, offset),
-                ..
-            } => {
-                let seed = crate::app_render::seed_def_for_project(project, target);
-                let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                    scale: Some(*scale),
-                    offset: Some(*offset),
-                    ..Default::default()
-                };
-                crate::app_render::build_mapping_command(target, param_id, edit, seed)
-                    .execute(project);
-            }
-            // Bound: re-apply the in-flight card value (the same `set_base_param`
-            // write the live tick uses), since the bound path writes
-            // `local_project` synchronously (BUG-281).
-            ResolvedScrub::BoundNodeParam(drag) => {
-                drag.apply(project);
-            }
-            // Unbound: live writes go through `MutateProject` (Values or Shapes) only, so a
-            // stomp has nothing local to revert — deliberate no-op (BUG-282).
-            ResolvedScrub::UnboundNodeParam(_) => {}
+            _ => {}
         }
     }
 }
 
-/// End a param gesture: clear the slot and release the pointer hold its Begin
-/// sent. Every Commit exit of the Param arm runs this; a lost release would
-/// keep armed recording writing the frozen value until the transport stops.
-fn end_param_gesture(ctx: &mut DispatchCtx) {
-    if let Some(ResolvedScrub::Param {
+/// Send a gesture's one undoable edit for the content thread to run, and keep
+/// drawing the gesture until the project snapshot that carries it arrives.
+/// `data_version` is the content state's version the commit lands after.
+pub(crate) fn send_commit(
+    content_tx: &crossbeam_channel::Sender<ContentCommand>,
+    scrub: &mut ScrubState,
+    data_version: u64,
+    record: ResolvedScrub,
+    cmd: Box<dyn Command + Send>,
+) {
+    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+    scrub.landing = Some((record, data_version + 1));
+}
+
+/// Whether two scalars differ by more than the commit tolerance.
+fn moved_by_eps(a: f32, b: f32) -> bool {
+    (a - b).abs() > f32::EPSILON
+}
+
+/// The envelope index of `param_id` on `target`, for an envelope command.
+fn envelope_index(project: &Project, target: &GraphTarget, param_id: &ParamId) -> Option<usize> {
+    project
+        .with_preset_graph(target, |inst| {
+            inst.envelopes
+                .as_ref()
+                .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
+        })
+        .flatten()
+}
+
+/// The Step action with `amount`, keeping the wrap `action` already has (a
+/// Step's own wrap, else the default `Wrap`).
+fn stepped(action: TriggerAction, amount: f32) -> TriggerAction {
+    let wrap = match action {
+        TriggerAction::Step { wrap, .. } => wrap,
+        _ => WrapMode::Wrap,
+    };
+    TriggerAction::Step { amount, wrap }
+}
+
+/// The trim-range command for a `Trim` record: the kind's store decides the
+/// command, and the indexes and targets are read from `project` by param id.
+fn trim_command(
+    project: &Project,
+    kind: TrimKind,
+    target: &GraphTarget,
+    ableton_target: Option<&manifold_core::ableton_mapping::AbletonMappingTarget>,
+    param_id: &ParamId,
+    baseline: (f32, f32),
+    live: (f32, f32),
+) -> Option<Box<dyn Command + Send>> {
+    if !(moved_by_eps(baseline.0, live.0) || moved_by_eps(baseline.1, live.1)) {
+        return None;
+    }
+    match kind {
+        TrimKind::Driver => {
+            let index = project
+                .with_preset_graph(target, |inst| {
+                    inst.drivers
+                        .as_ref()
+                        .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
+                })
+                .flatten()?;
+            Some(Box::new(ChangeTrimCommand::new(
+                DriverTarget::from(target),
+                index,
+                baseline.0,
+                baseline.1,
+                live.0,
+                live.1,
+            )))
+        }
+        TrimKind::Audio => {
+            let shape = project
+                .with_preset_graph(target, |inst| {
+                    inst.audio_mods
+                        .as_ref()
+                        .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                        .map(|m| m.shape)
+                })
+                .flatten()?;
+            let mut old_shape = shape;
+            old_shape.range_min = baseline.0;
+            old_shape.range_max = baseline.1;
+            let mut new_shape = shape;
+            new_shape.range_min = live.0;
+            new_shape.range_max = live.1;
+            Some(Box::new(SetAudioModShapeCommand::new(
+                DriverTarget::from(target),
+                param_id.clone(),
+                old_shape,
+                new_shape,
+            )))
+        }
+        TrimKind::Ableton => Some(Box::new(ChangeAbletonTrimCommand::new(
+            ableton_target?.clone(),
+            baseline.0,
+            baseline.1,
+            live.0,
+            live.1,
+        ))),
+    }
+}
+
+/// The one undoable edit a slider gesture lands, built from its record: the
+/// baseline is the old value, the live value the new one. `None` when nothing
+/// moved. Groups, markers, mapping ranges and node params land their own
+/// commands, so they fall through to `None` here.
+fn commit_command(project: &Project, record: &ResolvedScrub) -> Option<Box<dyn Command + Send>> {
+    match record {
+        ResolvedScrub::Param {
+            target,
+            param_id,
+            baseline,
+            live,
+        } if moved_by_eps(*baseline, *live) => Some(Box::new(ChangeGraphParamCommand::new(
+            target.clone(),
+            param_id.clone(),
+            *baseline,
+            *live,
+        ))),
+        ResolvedScrub::ParamRgb {
+            target,
+            param_ids,
+            preset,
+            baseline,
+            live,
+        } if baseline != live => Some(Box::new(
+            super::material_colour::ChangeMaterialColourCommand::new(
+                target.clone(),
+                param_ids.clone(),
+                preset.clone(),
+                *baseline,
+                *live,
+            ),
+        )),
+        ResolvedScrub::MasterOpacity { baseline, live } if moved_by_eps(*baseline, *live) => {
+            Some(Box::new(ChangeMasterOpacityCommand::new(*baseline, *live)))
+        }
+        ResolvedScrub::LedBrightness { baseline, live } if moved_by_eps(*baseline, *live) => {
+            Some(Box::new(ChangeLedBrightnessCommand::new(*baseline, *live)))
+        }
+        ResolvedScrub::LayerOpacity {
+            layer_id,
+            baseline,
+            live,
+        } if moved_by_eps(*baseline, *live) => Some(Box::new(ChangeLayerOpacityCommand::new(
+            layer_id.clone(),
+            *baseline,
+            *live,
+        ))),
+        ResolvedScrub::RackWetDry {
+            target,
+            group_id,
+            baseline,
+            live,
+        } if moved_by_eps(*baseline, *live) => Some(Box::new(ChangeGroupWetDryCommand::new(
+            target.clone(),
+            group_id.clone(),
+            *baseline,
+            *live,
+        ))),
+        ResolvedScrub::Macro {
+            idx,
+            baseline,
+            live,
+        } if moved_by_eps(*baseline, *live) => {
+            Some(Box::new(ChangeMacroCommand::new(*idx, *baseline, *live)))
+        }
+        ResolvedScrub::LayerAudioGain {
+            layer_id,
+            baseline,
+            live,
+        } if moved_by_eps(*baseline, *live) => Some(Box::new(SetLayerAudioGainCommand::new(
+            layer_id.clone(),
+            *baseline,
+            *live,
+        ))),
+        ResolvedScrub::Trim {
+            kind,
+            target,
+            ableton_target,
+            param_id,
+            baseline,
+            live,
+        } => trim_command(
+            project,
+            *kind,
+            target,
+            ableton_target.as_ref(),
+            param_id,
+            *baseline,
+            *live,
+        ),
+        ResolvedScrub::EnvelopeTarget {
+            target,
+            param_id,
+            baseline,
+            live,
+        } if moved_by_eps(*baseline, *live) => {
+            let index = envelope_index(project, target, param_id)?;
+            Some(Box::new(ChangeEnvelopeTargetCommand::new(
+                target.clone(),
+                index,
+                *baseline,
+                *live,
+            )))
+        }
+        ResolvedScrub::EnvDecay {
+            target,
+            param_id,
+            baseline,
+            live,
+        } if moved_by_eps(*baseline, *live) => {
+            let index = envelope_index(project, target, param_id)?;
+            Some(Box::new(ChangeEnvelopeDecayCommand::new(
+                target.clone(),
+                index,
+                *baseline,
+                *live,
+            )))
+        }
+        ResolvedScrub::AudioModShape {
+            target,
+            param_id,
+            baseline,
+            live,
+        } if baseline != live => Some(Box::new(SetAudioModShapeCommand::new(
+            DriverTarget::from(target),
+            param_id.clone(),
+            *baseline,
+            *live,
+        ))),
+        ResolvedScrub::AudioModStepAmount {
+            target,
+            param_id,
+            baseline,
+            live_amount,
+        } => {
+            let new_action = stepped(*baseline, *live_amount);
+            (new_action != *baseline).then(|| {
+                Box::new(SetAudioModActionCommand::new(
+                    DriverTarget::from(target),
+                    param_id.clone(),
+                    *baseline,
+                    new_action,
+                )) as Box<dyn Command + Send>
+            })
+        }
+        ResolvedScrub::EnvelopeStepAmount {
+            target,
+            param_id,
+            baseline,
+            live_amount,
+        } => {
+            let new_action = stepped(*baseline, *live_amount);
+            if new_action == *baseline {
+                return None;
+            }
+            let index = envelope_index(project, target, param_id)?;
+            Some(Box::new(SetEnvelopeActionCommand::new(
+                target.clone(),
+                index,
+                *baseline,
+                new_action,
+            )))
+        }
+        ResolvedScrub::AudioTriggerShape {
+            layer_id,
+            index,
+            baseline,
+            live,
+        } if baseline != live => {
+            let current = project
+                .timeline
+                .find_layer_by_id(layer_id)
+                .and_then(|(_, l)| l.clip_triggers.get(*index).cloned())?;
+            let mut old = current.clone();
+            old.shape = *baseline;
+            let mut new = current;
+            new.shape = *live;
+            Some(Box::new(SetLayerClipTriggerCommand::new(
+                layer_id.clone(),
+                *index,
+                old,
+                new,
+            )))
+        }
+        ResolvedScrub::AudioSendGain {
+            send_id,
+            baseline,
+            live,
+        } if moved_by_eps(*baseline, *live) => Some(Box::new(SetAudioSendGainCommand::new(
+            send_id.clone(),
+            *baseline,
+            *live,
+        ))),
+        ResolvedScrub::AudioCrossover { baseline, live } if baseline != live => {
+            Some(Box::new(SetAudioCrossoversCommand::new(*baseline, *live)))
+        }
+        ResolvedScrub::AbletonMacroTrim {
+            slot_idx,
+            baseline,
+            live,
+        } if moved_by_eps(baseline.0, live.0) || moved_by_eps(baseline.1, live.1) => {
+            Some(Box::new(ChangeAbletonTrimCommand::new(
+                manifold_core::ableton_mapping::AbletonMappingTarget::MacroSlot {
+                    slot_index: *slot_idx,
+                },
+                baseline.0,
+                baseline.1,
+                live.0,
+                live.1,
+            )))
+        }
+        _ => None,
+    }
+}
+
+/// Release the pointer hold a Param Begin sent. Armed Touch recording keeps
+/// writing the slider while it is held, so every Param gesture end runs this.
+fn release_param_hold(
+    content_tx: &crossbeam_channel::Sender<ContentCommand>,
+    record: &ResolvedScrub,
+) {
+    if let ResolvedScrub::Param {
         target, param_id, ..
-    }) = ctx.scrub.active.take()
+    } = record
     {
         ContentCommand::send(
-            ctx.content_tx,
+            content_tx,
             ContentCommand::AutomationHold {
-                target,
-                param_id,
+                target: target.clone(),
+                param_id: param_id.clone(),
                 held: false,
             },
         );
+    }
+}
+
+/// Commit the live slider gesture: take its record, release a Param hold, and
+/// send the one undo command built from the record when the value moved.
+/// The UI's project copy is never read for the new value.
+pub(crate) fn commit_record(ctx: &mut DispatchCtx) -> DispatchResult {
+    if let Some(record) = ctx.scrub.active.take() {
+        release_param_hold(ctx.content_tx, &record);
+        if let Some(cmd) = commit_command(&ctx.project, &record) {
+            send_commit(
+                ctx.content_tx,
+                ctx.scrub,
+                ctx.content_state.data_version,
+                record,
+                cmd,
+            );
+        }
+    }
+    DispatchResult::handled()
+}
+
+/// Drop a Param gesture's record without a commit (a lock that arrived
+/// mid-drag): the pointer hold its Begin sent is released.
+fn cancel_param_hold(ctx: &mut DispatchCtx) {
+    if let Some(record) = ctx.scrub.active.take() {
+        release_param_hold(ctx.content_tx, &record);
     }
 }
 
@@ -716,7 +831,7 @@ pub(crate) fn dispatch_scrub(
             ),
             // A lock that arrived mid-gesture still ends the gesture: the
             // hold sent at Begin must be released.
-            ScrubPhase::Commit => end_param_gesture(ctx),
+            ScrubPhase::Commit => cancel_param_hold(ctx),
             ScrubPhase::Move(_) => {}
         }
         return DispatchResult::handled();
@@ -826,45 +941,7 @@ pub(crate) fn dispatch_scrub(
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                // Release commits ONE `ChangeGraphParamCommand` through the
-                // undo-tracked `Execute` path — one undo unit per gesture, not
-                // per motion event. Baseline from the stored gesture; target
-                // re-resolved from the wire address (matches the retired trio).
-                let baseline = match &ctx.scrub.active {
-                    Some(ResolvedScrub::Param { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                if let Some(old_val) = baseline
-                    && let Some(target) =
-                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
-                {
-                    let new_val = ctx
-                        .project
-                        .with_preset_graph(&target, |inst| {
-                            inst.params
-                                .contains(param_id.as_ref())
-                                .then(|| inst.get_base_param(param_id.as_ref()))
-                        })
-                        .flatten();
-                    if let Some(new_val) = new_val
-                        && (old_val - new_val).abs() > f32::EPSILON
-                    {
-                        let cmd = ChangeGraphParamCommand::new(
-                            target,
-                            param_id.clone(),
-                            old_val,
-                            new_val,
-                        );
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::Execute(Box::new(cmd)),
-                        );
-                    }
-                }
-                end_param_gesture(ctx);
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::MasterOpacity => match phase {
@@ -887,21 +964,7 @@ pub(crate) fn dispatch_scrub(
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                if let Some(ResolvedScrub::MasterOpacity { baseline, .. }) = &ctx.scrub.active {
-                    let baseline = *baseline;
-                    let new_val = ctx.project.settings.master_opacity;
-                    if (baseline - new_val).abs() > f32::EPSILON {
-                        let cmd = ChangeMasterOpacityCommand::new(baseline, new_val);
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::Execute(Box::new(cmd)),
-                        );
-                    }
-                }
-                ctx.scrub.active = None;
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::LedBrightness => match phase {
@@ -926,21 +989,7 @@ pub(crate) fn dispatch_scrub(
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                if let Some(ResolvedScrub::LedBrightness { baseline, .. }) = &ctx.scrub.active {
-                    let baseline = *baseline;
-                    let new_val = ctx.project.settings.led_brightness;
-                    if (baseline - new_val).abs() > f32::EPSILON {
-                        let cmd = ChangeLedBrightnessCommand::new(baseline, new_val);
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::Execute(Box::new(cmd)),
-                        );
-                    }
-                }
-                ctx.scrub.active = None;
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::LayerOpacity => match phase {
@@ -973,28 +1022,7 @@ pub(crate) fn dispatch_scrub(
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                let baseline = match &ctx.scrub.active {
-                    Some(ResolvedScrub::LayerOpacity { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                if let Some(old_val) = baseline
-                    && let Some(idx) = super::resolve_active_layer_index(active_layer, &ctx.project)
-                    && let Some(layer) = ctx.project.timeline.layers.get(idx)
-                {
-                    let layer_id = layer.layer_id.clone();
-                    let new_val = layer.opacity;
-                    if (old_val - new_val).abs() > f32::EPSILON {
-                        let cmd = ChangeLayerOpacityCommand::new(layer_id, old_val, new_val);
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::Execute(Box::new(cmd)),
-                        );
-                    }
-                }
-                ctx.scrub.active = None;
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::Macro(idx) => {
@@ -1030,26 +1058,7 @@ pub(crate) fn dispatch_scrub(
                     }
                     DispatchResult::handled()
                 }
-                ScrubPhase::Commit => {
-                    let baseline = match &ctx.scrub.active {
-                        Some(ResolvedScrub::Macro { baseline, .. }) => Some(*baseline),
-                        _ => None,
-                    };
-                    if let Some(old_val) = baseline
-                        && idx < manifold_core::macro_bank::MACRO_COUNT
-                    {
-                        let new_val = ctx.project.settings.macro_bank.slots[idx].value;
-                        if (old_val - new_val).abs() > f32::EPSILON {
-                            let cmd = ChangeMacroCommand::new(idx, old_val, new_val);
-                            ContentCommand::send(
-                                ctx.content_tx,
-                                ContentCommand::Execute(Box::new(cmd)),
-                            );
-                        }
-                    }
-                    ctx.scrub.active = None;
-                    DispatchResult::handled()
-                }
+                ScrubPhase::Commit => commit_record(ctx),
             }
         }
 
@@ -1082,43 +1091,19 @@ pub(crate) fn dispatch_scrub(
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                let baseline = match &ctx.scrub.active {
-                    Some(ResolvedScrub::LayerAudioGain { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                if let Some(old_db) = baseline
-                    && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(id)
-                {
-                    let new_db = layer.audio_gain_db;
-                    if (old_db - new_db).abs() > f32::EPSILON {
-                        let cmd = manifold_editing::commands::layer::SetLayerAudioGainCommand::new(
-                            layer.layer_id.clone(),
-                            old_db,
-                            new_db,
-                        );
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::Execute(Box::new(cmd)),
-                        );
-                    }
-                }
-                ctx.scrub.active = None;
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::Trim(kind, gpt, param_id) => {
-            use manifold_ui::panels::TrimKind;
             match phase {
                 ScrubPhase::Begin => {
                     if let Some(target) =
                         resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                     {
                         // The ValueRef→resolved mapping done ONCE, at Begin (FORK
-                        // 1): resolve the Ableton mapping target for the restore
-                        // payload, and read the pre-gesture range from the kind's
-                        // store as the undo baseline.
+                        // 1): resolve the Ableton mapping target for the record,
+                        // and read the pre-gesture range from the kind's store as
+                        // the undo baseline.
                         let ableton_target = matches!(kind, TrimKind::Ableton)
                             .then(|| ableton_mapping_target(&target, &ctx.project, param_id))
                             .flatten();
@@ -1170,12 +1155,11 @@ pub(crate) fn dispatch_scrub(
                         if let Some(ResolvedScrub::Trim { live, .. }) = &mut ctx.scrub.active {
                             *live = (mn, mx);
                         }
-                        // Each kind keeps the exact live edit it had before the
-                        // unification (driver dual-edit, audio dual-edit, Ableton
-                        // mapping local + content-sync).
+                        // Each kind keeps its own live edit (driver, audio and
+                        // Ableton trim stores), sent to the content thread only.
                         match kind {
                             TrimKind::Driver => {
-                                graph_driver_dual_edit(
+                                graph_driver_move(
                                     &mut ctx.project,
                                     &target,
                                     param_id.clone(),
@@ -1186,7 +1170,7 @@ pub(crate) fn dispatch_scrub(
                                 );
                             }
                             TrimKind::Audio => {
-                                graph_audio_mod_dual_edit(
+                                graph_audio_mod_move(
                                     &mut ctx.project,
                                     &target,
                                     param_id.clone(),
@@ -1200,8 +1184,6 @@ pub(crate) fn dispatch_scrub(
                                 if let Some(mapping_target) =
                                     ableton_mapping_target(&target, &ctx.project, param_id)
                                 {
-                                    // Local edit + content sync route through the
-                                    // shared locate-fork so they can't split.
                                     let mt = mapping_target.clone();
                                     let pid = param_id.clone();
                                     ctx.gesture_move(
@@ -1224,109 +1206,7 @@ pub(crate) fn dispatch_scrub(
                     }
                     DispatchResult::handled()
                 }
-                ScrubPhase::Commit => {
-                    let baseline = match &ctx.scrub.active {
-                        Some(ResolvedScrub::Trim { baseline, .. }) => Some(*baseline),
-                        _ => None,
-                    };
-                    if let Some((old_min, old_max)) = baseline
-                        && let Some(target) =
-                            resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
-                    {
-                        match kind {
-                            TrimKind::Driver => {
-                                let info = ctx
-                                    .project
-                                    .with_preset_graph(&target, |inst| {
-                                        inst.drivers
-                                            .as_ref()
-                                            .and_then(|ds| {
-                                                ds.iter().position(|d| d.param_id == *param_id)
-                                            })
-                                            .map(|di| {
-                                                let d = &inst.drivers.as_ref().unwrap()[di];
-                                                (di, d.trim_min, d.trim_max)
-                                            })
-                                    })
-                                    .flatten();
-                                if let Some((di, new_min, new_max)) = info
-                                    && ((old_min - new_min).abs() > f32::EPSILON
-                                        || (old_max - new_max).abs() > f32::EPSILON)
-                                {
-                                    let cmd = ChangeTrimCommand::new(
-                                        DriverTarget::from(&target),
-                                        di,
-                                        old_min,
-                                        old_max,
-                                        new_min,
-                                        new_max,
-                                    );
-                                    ContentCommand::send(
-                                        ctx.content_tx,
-                                        ContentCommand::Execute(Box::new(cmd)),
-                                    );
-                                }
-                            }
-                            TrimKind::Audio => {
-                                let new_shape = ctx
-                                    .project
-                                    .with_preset_graph(&target, |inst| {
-                                        inst.audio_mods
-                                            .as_ref()
-                                            .and_then(|ms| {
-                                                ms.iter().find(|a| a.param_id == *param_id)
-                                            })
-                                            .map(|m| m.shape)
-                                    })
-                                    .flatten();
-                                if let Some(new_shape) = new_shape
-                                    && ((old_min - new_shape.range_min).abs() > f32::EPSILON
-                                        || (old_max - new_shape.range_max).abs() > f32::EPSILON)
-                                {
-                                    let mut old_shape = new_shape;
-                                    old_shape.range_min = old_min;
-                                    old_shape.range_max = old_max;
-                                    let cmd = SetAudioModShapeCommand::new(
-                                        DriverTarget::from(&target),
-                                        param_id.clone(),
-                                        old_shape,
-                                        new_shape,
-                                    );
-                                    ContentCommand::send(
-                                        ctx.content_tx,
-                                        ContentCommand::Execute(Box::new(cmd)),
-                                    );
-                                }
-                            }
-                            TrimKind::Ableton => {
-                                if let Some(mt) =
-                                    ableton_mapping_target(&target, &ctx.project, param_id)
-                                {
-                                    let new = ctx
-                                        .project
-                                        .ableton_param_mappings(&mt)
-                                        .and_then(|opt| opt.as_ref())
-                                        .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
-                                        .map(|m| (m.range_min, m.range_max));
-                                    if let Some((new_min, new_max)) = new
-                                        && ((old_min - new_min).abs() > f32::EPSILON
-                                            || (old_max - new_max).abs() > f32::EPSILON)
-                                    {
-                                        let cmd = ChangeAbletonTrimCommand::new(
-                                            mt, old_min, old_max, new_min, new_max,
-                                        );
-                                        ContentCommand::send(
-                                            ctx.content_tx,
-                                            ContentCommand::Execute(Box::new(cmd)),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ctx.scrub.active = None;
-                    DispatchResult::handled()
-                }
+                ScrubPhase::Commit => commit_record(ctx),
             }
         }
 
@@ -1364,46 +1244,13 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live = v;
                     }
-                    graph_env_dual_edit(&mut ctx.project, &target, param_id.clone(), move |env| {
+                    graph_env_move(&mut ctx.project, &target, param_id.clone(), move |env| {
                         env.target_normalized = v;
                     });
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                let baseline = match &ctx.scrub.active {
-                    Some(ResolvedScrub::EnvelopeTarget { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                if let Some(old_target) = baseline
-                    && let Some(target) =
-                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
-                {
-                    let info = ctx
-                        .project
-                        .with_preset_graph(&target, |inst| {
-                            inst.envelopes
-                                .as_ref()
-                                .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
-                                .map(|idx| {
-                                    (idx, inst.envelopes.as_ref().unwrap()[idx].target_normalized)
-                                })
-                        })
-                        .flatten();
-                    if let Some((env_idx, new_t)) = info
-                        && (old_target - new_t).abs() > f32::EPSILON
-                    {
-                        let cmd =
-                            ChangeEnvelopeTargetCommand::new(target, env_idx, old_target, new_t);
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::Execute(Box::new(cmd)),
-                        );
-                    }
-                }
-                ctx.scrub.active = None;
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::EnvDecay(gpt, param_id) => match phase {
@@ -1439,44 +1286,13 @@ pub(crate) fn dispatch_scrub(
                     if let Some(ResolvedScrub::EnvDecay { live, .. }) = &mut ctx.scrub.active {
                         *live = v;
                     }
-                    graph_env_dual_edit(&mut ctx.project, &target, param_id.clone(), move |env| {
+                    graph_env_move(&mut ctx.project, &target, param_id.clone(), move |env| {
                         env.decay_beats = v;
                     });
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                let baseline = match &ctx.scrub.active {
-                    Some(ResolvedScrub::EnvDecay { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                if let Some(old_decay) = baseline
-                    && let Some(target) =
-                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
-                {
-                    let info = ctx
-                        .project
-                        .with_preset_graph(&target, |inst| {
-                            inst.envelopes
-                                .as_ref()
-                                .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
-                                .map(|idx| (idx, inst.envelopes.as_ref().unwrap()[idx].decay_beats))
-                        })
-                        .flatten();
-                    if let Some((env_idx, new_d)) = info
-                        && (old_decay - new_d).abs() > f32::EPSILON
-                    {
-                        let cmd =
-                            ChangeEnvelopeDecayCommand::new(target, env_idx, old_decay, new_d);
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::Execute(Box::new(cmd)),
-                        );
-                    }
-                }
-                ctx.scrub.active = None;
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::AudioModShape(gpt, param_id, which) => match phase {
@@ -1484,9 +1300,7 @@ pub(crate) fn dispatch_scrub(
                 if let Some(target) =
                     resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                 {
-                    // Capture the WHOLE pre-drag shape as the undo baseline (the
-                    // restore path re-stamps all three scalars, so a stomp on a
-                    // one-scalar drag can't revert the others).
+                    // Capture the WHOLE pre-drag shape as the undo baseline.
                     let baseline = ctx
                         .project
                         .with_preset_graph(&target, |inst| {
@@ -1520,55 +1334,17 @@ pub(crate) fn dispatch_scrub(
                             AudioShapeParam::Release => live.release_ms = v,
                         }
                     }
-                    graph_audio_mod_dual_edit(
-                        &mut ctx.project,
-                        &target,
-                        param_id.clone(),
-                        move |m| match which {
+                    graph_audio_mod_move(&mut ctx.project, &target, param_id.clone(), move |m| {
+                        match which {
                             AudioShapeParam::Sensitivity => m.shape.sensitivity = v,
                             AudioShapeParam::Attack => m.shape.attack_ms = v,
                             AudioShapeParam::Release => m.shape.release_ms = v,
-                        },
-                    );
+                        }
+                    });
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                // One undo step: baseline (old) → current shape (new). Matches the
-                // retired trio, including the local `execute` on the UI project.
-                let old_shape = match &ctx.scrub.active {
-                    Some(ResolvedScrub::AudioModShape { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                ctx.scrub.active = None;
-                if let Some(old_shape) = old_shape
-                    && let Some(target) =
-                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
-                {
-                    let new_shape = ctx
-                        .project
-                        .with_preset_graph(&target, |inst| {
-                            inst.audio_mods
-                                .as_ref()
-                                .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
-                                .map(|m| m.shape)
-                        })
-                        .flatten();
-                    if let Some(new_shape) = new_shape
-                        && new_shape != old_shape
-                    {
-                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(SetAudioModShapeCommand::new(
-                                DriverTarget::from(&target),
-                                param_id.clone(),
-                                old_shape,
-                                new_shape,
-                            ));
-                        ctx.execute(boxed);
-                    }
-                }
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::AudioModStepAmount(gpt, param_id) => match phase {
@@ -1577,8 +1353,8 @@ pub(crate) fn dispatch_scrub(
                     resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                 {
                     // Capture the WHOLE pre-drag action as the undo baseline (the
-                    // commit diffs it against the new action); the restore path
-                    // re-stamps only the live amount, preserving wrap.
+                    // commit diffs it against the new action); the live amount
+                    // keeps the wrap.
                     let baseline = ctx
                         .project
                         .with_preset_graph(&target, |inst| {
@@ -1610,57 +1386,18 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live_amount = v;
                     }
-                    // Re-stamp the Step action preserving the current wrap — the
-                    // same dual-edit the retired `AudioModStepAmountChanged` arm ran.
-                    graph_audio_mod_dual_edit(
-                        &mut ctx.project,
-                        &target,
-                        param_id.clone(),
-                        move |m| {
-                            let wrap = match m.action {
-                                TriggerAction::Step { wrap, .. } => wrap,
-                                _ => manifold_core::audio_mod::WrapMode::Wrap,
-                            };
-                            m.action = TriggerAction::Step { amount: v, wrap };
-                        },
-                    );
+                    // Re-stamp the Step action preserving the current wrap.
+                    graph_audio_mod_move(&mut ctx.project, &target, param_id.clone(), move |m| {
+                        let wrap = match m.action {
+                            TriggerAction::Step { wrap, .. } => wrap,
+                            _ => WrapMode::Wrap,
+                        };
+                        m.action = TriggerAction::Step { amount: v, wrap };
+                    });
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                // One undo step: baseline action (old) → current action (new),
-                // via `SetAudioModActionCommand` — matches the retired trio,
-                // including the local `execute` on the UI project.
-                let old_action = match &ctx.scrub.active {
-                    Some(ResolvedScrub::AudioModStepAmount { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                ctx.scrub.active = None;
-                if let Some(old_action) = old_action
-                    && let Some(target) =
-                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
-                {
-                    let new_action = ctx
-                        .project
-                        .with_preset_graph(&target, |inst| {
-                            inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
-                        })
-                        .flatten();
-                    if let Some(new_action) = new_action
-                        && new_action != old_action
-                    {
-                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(SetAudioModActionCommand::new(
-                                DriverTarget::from(&target),
-                                param_id.clone(),
-                                old_action,
-                                new_action,
-                            ));
-                        ctx.execute(boxed);
-                    }
-                }
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::EnvelopeStepAmount(gpt, param_id) => match phase {
@@ -1702,53 +1439,24 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live_amount = v;
                     }
-                    graph_env_dual_edit(&mut ctx.project, &target, param_id.clone(), move |env| {
+                    graph_env_move(&mut ctx.project, &target, param_id.clone(), move |env| {
                         let wrap = match env.action {
                             TriggerAction::Step { wrap, .. } => wrap,
-                            _ => manifold_core::audio_mod::WrapMode::Wrap,
+                            _ => WrapMode::Wrap,
                         };
                         env.action = TriggerAction::Step { amount: v, wrap };
                     });
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                let old_action = match &ctx.scrub.active {
-                    Some(ResolvedScrub::EnvelopeStepAmount { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                ctx.scrub.active = None;
-                if let Some(old_action) = old_action
-                    && let Some(target) =
-                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
-                {
-                    let info = ctx
-                        .project
-                        .with_preset_graph(&target, |inst| {
-                            inst.envelopes
-                                .as_ref()
-                                .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
-                                .map(|idx| (idx, inst.envelopes.as_ref().unwrap()[idx].action))
-                        })
-                        .flatten();
-                    if let Some((env_idx, new_action)) = info
-                        && new_action != old_action
-                    {
-                        let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
-                            SetEnvelopeActionCommand::new(target, env_idx, old_action, new_action),
-                        );
-                        ctx.execute(boxed);
-                    }
-                }
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::AudioTriggerShape(layer_id, index, which) => match phase {
             ScrubPhase::Begin => {
                 // Addressed directly by `(layer_id, index)` — no
                 // `resolve_graph_target`. Capture the WHOLE pre-drag shape as the
-                // undo baseline (the restore path re-stamps all three scalars).
+                // undo baseline.
                 let baseline = ctx
                     .project
                     .timeline
@@ -1777,54 +1485,23 @@ pub(crate) fn dispatch_scrub(
                             AudioShapeParam::Release => live.release_ms = v,
                         }
                     }
-                    clip_trigger_shape_dual_edit(
-                        &mut ctx.project,
-                        layer_id,
-                        *index,
-                        move |shape| match which {
+                    clip_trigger_shape_move(&mut ctx.project, layer_id, *index, move |shape| {
+                        match which {
                             AudioShapeParam::Sensitivity => shape.sensitivity = v,
                             AudioShapeParam::Attack => shape.attack_ms = v,
                             AudioShapeParam::Release => shape.release_ms = v,
-                        },
-                    );
+                        }
+                    });
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                // One undo step: baseline shape (old) → current shape (new), via
-                // `SetLayerClipTriggerCommand` diffing the whole `ClipTrigger` —
-                // matches the retired trio.
-                let old_shape = match &ctx.scrub.active {
-                    Some(ResolvedScrub::AudioTriggerShape { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                ctx.scrub.active = None;
-                if let Some(old_shape) = old_shape {
-                    let current = ctx
-                        .project
-                        .timeline
-                        .find_layer_by_id(layer_id)
-                        .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
-                    if let Some(current) = current
-                        && current.shape != old_shape
-                    {
-                        let mut old = current.clone();
-                        old.shape = old_shape;
-                        let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
-                            SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, current),
-                        );
-                        ctx.execute(boxed);
-                    }
-                }
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::AudioSendGain(send_id) => match phase {
             ScrubPhase::Begin => {
                 // Snapshot the pre-drag gain as the undo baseline — addressed
-                // directly by `AudioSendId`, no resolution (the retired
-                // `AudioSendGainDragBegin`).
+                // directly by `AudioSendId`, no resolution.
                 let baseline = ctx
                     .project
                     .audio_setup
@@ -1841,9 +1518,8 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let Some(db) = sv.scalar() {
                     // Clamp to the stepper's trim range, then push a LIVE
-                    // (non-undo) edit to both the local project and the content
-                    // thread so the label + `GainBank` track the cursor without a
-                    // capture restart (the retired `AudioSendGainDragChanged`).
+                    // (non-undo) edit to the content thread so the label +
+                    // `GainBank` track the cursor.
                     let clamped = db.clamp(AUDIO_SEND_GAIN_MIN_DB, AUDIO_SEND_GAIN_MAX_DB);
                     if let Some(ResolvedScrub::AudioSendGain { live, .. }) = &mut ctx.scrub.active {
                         *live = clamped;
@@ -1857,31 +1533,7 @@ pub(crate) fn dispatch_scrub(
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                // One undo step: baseline (old) → current gain (new), via
-                // `audio_setup_command` (which rebuilds the panel — structural),
-                // matching the retired trio.
-                let baseline = match &ctx.scrub.active {
-                    Some(ResolvedScrub::AudioSendGain { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                ctx.scrub.active = None;
-                if let Some(old) = baseline {
-                    let new = ctx
-                        .project
-                        .audio_setup
-                        .find_send(send_id)
-                        .map(|s| s.gain_db)
-                        .unwrap_or(old);
-                    if (new - old).abs() > f32::EPSILON {
-                        return audio_setup_command(
-                            &mut ctx.project,
-                            Box::new(SetAudioSendGainCommand::new(send_id.clone(), old, new)),
-                        );
-                    }
-                }
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::AudioCrossover(band) => match phase {
@@ -1900,24 +1552,21 @@ pub(crate) fn dispatch_scrub(
             }
             ScrubPhase::Move(sv) => {
                 if let Some(hz) = sv.scalar() {
-                    // Clamp the dragged line against the other line and the band
-                    // edges (core-only `clamp_crossovers`), then write BOTH low
-                    // and mid locally + a live, non-undo content edit so the
-                    // divider and analysis bands track the cursor.
+                    // Clamp the dragged line against the other line's live value
+                    // and the band edges (core-only `clamp_crossovers`), then send
+                    // BOTH low and mid as a live, non-undo content edit.
+                    let Some(ResolvedScrub::AudioCrossover { live, .. }) = &mut ctx.scrub.active
+                    else {
+                        return DispatchResult::handled();
+                    };
                     let dragging_low = matches!(band, manifold_ui::BandDivider::Low);
-                    let (cur_low, cur_mid) = (
-                        ctx.project.audio_setup.low_hz,
-                        ctx.project.audio_setup.mid_hz,
-                    );
+                    let (cur_low, cur_mid) = *live;
                     let (low, mid) = if dragging_low {
                         manifold_core::audio_setup::AudioSetup::clamp_crossovers(hz, cur_mid, true)
                     } else {
                         manifold_core::audio_setup::AudioSetup::clamp_crossovers(cur_low, hz, false)
                     };
-                    if let Some(ResolvedScrub::AudioCrossover { live, .. }) = &mut ctx.scrub.active
-                    {
-                        *live = (low, mid);
-                    }
+                    *live = (low, mid);
                     ctx.gesture_move(crate::content_command::touch::SHAPES, move |p| {
                         p.audio_setup.low_hz = low;
                         p.audio_setup.mid_hz = mid;
@@ -1925,28 +1574,7 @@ pub(crate) fn dispatch_scrub(
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                // One undo step: baseline pair (old) → current pair (new), via
-                // `audio_setup_command` (structural — the panel rebuilds).
-                let baseline = match &ctx.scrub.active {
-                    Some(ResolvedScrub::AudioCrossover { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                ctx.scrub.active = None;
-                if let Some(old) = baseline {
-                    let new = (
-                        ctx.project.audio_setup.low_hz,
-                        ctx.project.audio_setup.mid_hz,
-                    );
-                    if new != old {
-                        return audio_setup_command(
-                            &mut ctx.project,
-                            Box::new(SetAudioCrossoversCommand::new(old, new)),
-                        );
-                    }
-                }
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
 
         ValueRef::RackWetDry {
@@ -1958,8 +1586,7 @@ pub(crate) fn dispatch_scrub(
         ValueRef::AbletonMacroTrim(slot_idx) => match phase {
             ScrubPhase::Begin => {
                 // Snapshot the pre-drag `(min, max)` range as the undo baseline —
-                // addressed directly by the macro slot index, no resolution (the
-                // retired `AbletonMacroTrimSnapshot`).
+                // addressed directly by the macro slot index, no resolution.
                 let baseline = ctx
                     .project
                     .settings
@@ -1979,10 +1606,8 @@ pub(crate) fn dispatch_scrub(
             }
             ScrubPhase::Move(sv) => {
                 if let Some((min, max)) = sv.range() {
-                    // Live edit (no per-frame undo): write both edges locally and
-                    // to the content thread so the mapping tracks the cursor (the
-                    // retired `AbletonMacroTrimChanged` — `MutateProject`, not
-                    // `MutateProject` (Values or Shapes)).
+                    // Live edit (no undo): the mapping tracks the cursor on the
+                    // content thread only.
                     let slot_idx = *slot_idx;
                     if let Some(ResolvedScrub::AbletonMacroTrim { live, .. }) =
                         &mut ctx.scrub.active
@@ -2004,41 +1629,7 @@ pub(crate) fn dispatch_scrub(
                 }
                 DispatchResult::handled()
             }
-            ScrubPhase::Commit => {
-                // One undo step: baseline range (old) → current range (new), via
-                // `ChangeAbletonTrimCommand` on the macro-slot target — matches
-                // the retired trio.
-                use manifold_core::ableton_mapping::AbletonMappingTarget;
-                let baseline = match &ctx.scrub.active {
-                    Some(ResolvedScrub::AbletonMacroTrim { baseline, .. }) => Some(*baseline),
-                    _ => None,
-                };
-                ctx.scrub.active = None;
-                if let Some((old_min, old_max)) = baseline
-                    && let Some((new_min, new_max)) = ctx
-                        .project
-                        .settings
-                        .macro_bank
-                        .slots
-                        .get(*slot_idx)
-                        .and_then(|s| s.ableton_mapping.as_ref())
-                        .map(|m| (m.range_min, m.range_max))
-                    && ((old_min - new_min).abs() > f32::EPSILON
-                        || (old_max - new_max).abs() > f32::EPSILON)
-                {
-                    let cmd = ChangeAbletonTrimCommand::new(
-                        AbletonMappingTarget::MacroSlot {
-                            slot_index: *slot_idx,
-                        },
-                        old_min,
-                        old_max,
-                        new_min,
-                        new_max,
-                    );
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-                DispatchResult::handled()
-            }
+            ScrubPhase::Commit => commit_record(ctx),
         },
     }
 }
@@ -2182,16 +1773,19 @@ pub(crate) fn move_param_group(ctx: &mut DispatchCtx, cards: &[f32], nodes: &[f3
 /// End the group gesture: one undo entry for every param it changed, and
 /// the pointer holds its Begin sent released.
 pub(crate) fn commit_param_group(ctx: &mut DispatchCtx) {
-    let Some(ResolvedScrub::ParamGroup {
+    let Some(record) = ctx.scrub.active.take() else {
+        return;
+    };
+    let ResolvedScrub::ParamGroup {
         target,
         cards,
         nodes,
         label,
-    }) = ctx.scrub.active.take()
+    } = &record
     else {
         return;
     };
-    for card in &cards {
+    for card in cards {
         ContentCommand::send(
             ctx.content_tx,
             ContentCommand::AutomationHold {
@@ -2201,26 +1795,33 @@ pub(crate) fn commit_param_group(ctx: &mut DispatchCtx) {
             },
         );
     }
-    let mut changes: Vec<Box<dyn manifold_editing::command::Command>> = cards
-        .into_iter()
+    let mut changes: Vec<Box<dyn Command>> = cards
+        .iter()
         .filter(|card| (card.baseline - card.live).abs() > f32::EPSILON)
         .map(|card| {
             Box::new(ChangeGraphParamCommand::new(
                 target.clone(),
-                card.id,
+                card.id.clone(),
                 card.baseline,
                 card.live,
-            )) as Box<dyn manifold_editing::command::Command>
+            )) as Box<dyn Command>
         })
         .collect();
     changes.extend(
-        nodes.into_iter().filter(|drag| drag.moved()).map(|drag| {
-            Box::new(drag.into_command()) as Box<dyn manifold_editing::command::Command>
-        }),
+        nodes
+            .iter()
+            .filter(|drag| drag.moved())
+            .map(|drag| Box::new(drag.clone().into_command()) as Box<dyn Command>),
     );
     if !changes.is_empty() {
-        let cmd = manifold_editing::command::CompositeCommand::new(changes, label.into());
-        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+        let cmd = manifold_editing::command::CompositeCommand::new(changes, (*label).into());
+        send_commit(
+            ctx.content_tx,
+            ctx.scrub,
+            ctx.content_state.data_version,
+            record,
+            Box::new(cmd),
+        );
     }
 }
 
@@ -2344,27 +1945,9 @@ fn dispatch_rgb_scrub(
         }
         ScrubPhase::Move(_) => {}
         ScrubPhase::Commit => {
-            if !matches!(&ctx.scrub.active, Some(ResolvedScrub::ParamRgb {param_ids,..}) if param_ids == ids)
+            if matches!(&ctx.scrub.active, Some(ResolvedScrub::ParamRgb {param_ids,..}) if param_ids == ids)
             {
-                return DispatchResult::handled();
-            }
-            if let Some(ResolvedScrub::ParamRgb {
-                target,
-                param_ids,
-                preset,
-                baseline,
-                live,
-            }) = ctx.scrub.active.take()
-                && baseline != live
-            {
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::Execute(Box::new(
-                        super::material_colour::ChangeMaterialColourCommand::new(
-                            target, param_ids, preset, baseline, live,
-                        ),
-                    )),
-                );
+                commit_record(ctx);
             }
         }
     }
@@ -2420,5 +2003,38 @@ mod tests {
         };
         assert_eq!(scrub.live_macro(2), Some(0.7));
         assert_eq!(scrub.live_macro(1), None);
+    }
+
+    #[test]
+    fn drawn_reads_the_live_gesture_then_the_landing_until_its_snapshot() {
+        let mut scrub = ScrubState::default();
+        let record = |live: f32| ResolvedScrub::MasterOpacity {
+            baseline: 0.8,
+            live,
+        };
+        let value = |s: &ScrubState| match s.drawn() {
+            Some(ResolvedScrub::MasterOpacity { live, .. }) => Some(*live),
+            _ => None,
+        };
+        scrub.active = Some(record(0.35));
+        assert_eq!(value(&scrub), Some(0.35));
+        scrub.active = None;
+        assert_eq!(value(&scrub), None);
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let cmd = manifold_editing::commands::settings::ChangeMasterOpacityCommand::new(0.8, 0.35);
+        send_commit(&tx, &mut scrub, 7, record(0.35), Box::new(cmd));
+        assert_eq!(
+            value(&scrub),
+            Some(0.35),
+            "landing draws until its snapshot"
+        );
+        scrub.snapshot_arrived(7);
+        assert_eq!(
+            value(&scrub),
+            Some(0.35),
+            "version 7 is before the commit's 8"
+        );
+        scrub.snapshot_arrived(8);
+        assert_eq!(value(&scrub), None);
     }
 }

@@ -62,6 +62,16 @@ impl Timeline {
         self.clip_lookup_dirty = true;
     }
 
+    /// Bring every read cache up to date: the layers' clip order and the clip
+    /// id lookup. The content thread calls this on the copy it publishes, so
+    /// a reader holding the copy read-only uses [`Self::find_clip`] and
+    /// [`Self::get_active_clips_at_beat`] without healing anything. Sorting
+    /// can move clips within a layer, so the lookup is rebuilt after it.
+    pub fn refresh_caches(&mut self) {
+        self.ensure_layers_sorted();
+        self.rebuild_clip_lookup();
+    }
+
     /// The cached location of a clip, when the cache still holds it there.
     /// Allocates nothing.
     fn cached_clip_location(&self, clip_id: &str) -> Option<(usize, usize)> {
@@ -97,6 +107,14 @@ impl Timeline {
     /// O(1) clip lookup by ID with self-healing on miss.
     pub fn find_clip_by_id(&mut self, clip_id: &str) -> Option<&TimelineClip> {
         let (li, ci) = self.resolve_clip_location(clip_id)?;
+        self.layers.get(li).and_then(|l| l.clips.get(ci))
+    }
+
+    /// O(1) clip lookup that reads the cache and never heals it: right on a
+    /// timeline whose caches were refreshed ([`Self::refresh_caches`]) and not
+    /// edited since, which is what a published snapshot is.
+    pub fn find_clip(&self, clip_id: &str) -> Option<&TimelineClip> {
+        let (li, ci) = self.cached_clip_location(clip_id)?;
         self.layers.get(li).and_then(|l| l.clips.get(ci))
     }
 
@@ -382,15 +400,15 @@ impl Timeline {
 
     /// Get active clips at a given beat (group layers excluded; mute/solo are
     /// presentational, not membership, so muted clips remain in the result).
-    /// Ensures sort caches are up-to-date, then queries into caller-provided buffer.
+    /// The layers' sort caches must be current ([`Self::refresh_caches`]);
+    /// results go into the caller-provided buffers.
     /// From Unity Timeline.cs GetActiveClipsAtBeat (lines 331-374).
     pub fn get_active_clips_at_beat(
-        &mut self,
+        &self,
         beat: Beats,
         results: &mut Vec<(usize, usize)>,
         active_indices: &mut Vec<usize>,
     ) {
-        self.ensure_layers_sorted();
         self.get_clips_in_beat_window_ref(beat, beat, results, active_indices);
     }
 
@@ -756,5 +774,23 @@ mod clip_lookup_tests {
         assert!(timeline.find_clip_by_id_mut(a.as_str()).is_some());
         assert!(timeline.find_clip_by_id_mut(b.as_str()).is_some());
         assert!(timeline.find_clip_by_id_mut("no such clip").is_none());
+    }
+
+    #[test]
+    fn a_refreshed_copy_answers_reads_without_healing() {
+        let (mut timeline, a, b) = two_clip_timeline();
+        // Stored in reverse start order so refreshing must sort and re-index.
+        timeline.layers[0].clips[0].start_beat = crate::units::Beats(8.0);
+        timeline.layers[0].clips[1].start_beat = crate::units::Beats(0.0);
+        timeline.refresh_caches();
+        let snapshot = timeline.clone();
+        assert_eq!(snapshot.find_clip(a.as_str()).unwrap().start_beat.0, 8.0);
+        assert_eq!(snapshot.find_clip(b.as_str()).unwrap().start_beat.0, 0.0);
+        assert!(snapshot.find_clip("no such clip").is_none());
+        let (mut pairs, mut scratch) = (Vec::new(), Vec::new());
+        snapshot.get_active_clips_at_beat(crate::units::Beats(0.0), &mut pairs, &mut scratch);
+        assert_eq!(pairs.len(), 1);
+        let (li, ci) = pairs[0];
+        assert_eq!(snapshot.layers[li].clips[ci].id, b);
     }
 }

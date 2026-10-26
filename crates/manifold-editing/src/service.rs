@@ -706,16 +706,6 @@ impl EditingService {
         None
     }
 
-    /// Split clips that straddle region boundaries.
-    /// Returns commands for all splits performed.
-    /// Matches Unity SplitClipsAtRegionBoundaries.
-    pub fn split_clips_at_region_boundaries(
-        project: &Project,
-        region: &SelectionRegion,
-    ) -> Vec<Box<dyn Command>> {
-        Self::split_clips_at_region_boundaries_with_interior(project, region).0
-    }
-
     /// Split clips at region boundaries AND return the post-split interior clip IDs.
     ///
     /// The interior IDs are the clip IDs that will represent the region-interior
@@ -728,8 +718,8 @@ impl EditingService {
     pub fn split_clips_at_region_boundaries_with_interior(
         project: &Project,
         region: &SelectionRegion,
-    ) -> (Vec<Box<dyn Command>>, Vec<(usize, ClipId)>) {
-        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+    ) -> (Vec<SplitClipCommand>, Vec<(usize, ClipId)>) {
+        let mut commands: Vec<SplitClipCommand> = Vec::new();
         let mut interior_ids: Vec<(usize, ClipId)> = Vec::new();
 
         let Some((start_layer, end_layer)) = Self::region_layer_span(project, region) else {
@@ -765,7 +755,7 @@ impl EditingService {
                 if straddles_end
                     && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_end)
                 {
-                    commands.push(Box::new(cmd));
+                    commands.push(cmd);
                 }
 
                 // Split at region start
@@ -774,7 +764,7 @@ impl EditingService {
                 {
                     // The tail from this split IS the interior piece
                     let tail_id = cmd.tail_clip_id().clone();
-                    commands.push(Box::new(cmd));
+                    commands.push(cmd);
                     Some(tail_id)
                 } else {
                     None
@@ -828,7 +818,7 @@ impl EditingService {
     /// Returns None if the target layer is a group (groups cannot hold clips).
     /// Returns (command, clip_id) so the caller can track the new clip.
     pub fn create_clip_at_position(
-        project: &mut Project,
+        project: &Project,
         beat: Beats,
         layer_index: usize,
         duration_beats: Beats,
@@ -934,29 +924,6 @@ impl EditingService {
         commands
     }
 
-    /// Build a command that drops a copy of `src_clip_id` at `target_beat` on
-    /// `target_layer` — the opt/alt-drag-duplicate primitive. The clone keeps all
-    /// of the source clip's data (generator, effects, in_point, …) with a fresh
-    /// id. `AddClipCommand` enforces non-overlap internally. Returns None if the
-    /// source clip or target layer is missing.
-    pub fn duplicate_clip_to(
-        project: &Project,
-        src_clip_id: &ClipId,
-        target_beat: Beats,
-        target_layer: usize,
-    ) -> Option<Box<dyn Command>> {
-        let src = project
-            .timeline
-            .layers
-            .iter()
-            .flat_map(|l| l.clips.iter())
-            .find(|c| c.id == *src_clip_id)?;
-        let target_layer_id = project.timeline.layers.get(target_layer)?.layer_id.clone();
-        let mut new_clip = src.clone_with_new_id();
-        new_clip.start_beat = target_beat;
-        Some(Box::new(AddClipCommand::new(new_clip, target_layer_id)))
-    }
-
     // ─── Delete ───
 
     /// Delete selected clips.
@@ -978,7 +945,11 @@ impl EditingService {
             // which segment.
             let (split_cmds, interior_ids) =
                 Self::split_clips_at_region_boundaries_with_interior(project, region);
-            commands.extend(split_cmds);
+            commands.extend(
+                split_cmds
+                    .into_iter()
+                    .map(|c| Box::new(c) as Box<dyn Command>),
+            );
 
             // Build delete commands for the interior clips.
             // For clips that were split, we need the pre-split clip data to

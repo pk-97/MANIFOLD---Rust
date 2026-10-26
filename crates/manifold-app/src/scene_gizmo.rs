@@ -607,7 +607,7 @@ mod tests {
             for cmd in self.rx.try_iter() {
                 match cmd {
                     ContentCommand::MutateProject { f, .. } => f(project),
-                    ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
+                    ContentCommand::Execute(cmd) => {
                         service.execute(cmd, &mut *project);
                         landed += 1;
                     }
@@ -701,7 +701,10 @@ mod tests {
             1,
             "one undo entry for the drag"
         );
-        assert!((base(&local, &layer, &first, "pos_x") - 1.0).abs() < 1e-3);
+        assert!(
+            base(&local, &layer, &first, "pos_x").abs() < 1e-3,
+            "the UI copy keeps the pre-drag value"
+        );
         assert!((base(&content, &layer, &first, "pos_x") - 1.0).abs() < 1e-3);
         assert!(service.undo(&mut content));
         assert_eq!(base(&content, &layer, &first, "pos_x"), 0.0);
@@ -747,16 +750,18 @@ mod tests {
             1,
             "one undo entry for the whole selection"
         );
-        for project in [&local, &content] {
-            assert!(
-                (base(project, &layer, &first, "pos_x") - 1.0).abs() < 1e-3,
-                "the first cube moved one unit"
-            );
-            assert!(
-                (base(project, &layer, &second, "pos_x") - 7.0).abs() < 1e-3,
-                "the second cube moved one unit"
-            );
-        }
+        assert!(
+            base(&local, &layer, &first, "pos_x").abs() < 1e-3,
+            "the UI copy keeps the pre-drag value"
+        );
+        assert!(
+            (base(&content, &layer, &first, "pos_x") - 1.0).abs() < 1e-3,
+            "the first cube moved one unit"
+        );
+        assert!(
+            (base(&content, &layer, &second, "pos_x") - 7.0).abs() < 1e-3,
+            "the second cube moved one unit"
+        );
         assert!(service.undo(&mut content));
         assert_eq!(base(&content, &layer, &first, "pos_x"), 0.0);
         assert_eq!(base(&content, &layer, &second, "pos_x"), 6.0);

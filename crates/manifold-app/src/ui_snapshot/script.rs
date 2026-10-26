@@ -16,12 +16,11 @@
 //! `InteractionOverlay` + a `TimelineEditingHost`. `app_render.rs` supplies
 //! `AppEditingHost` wrapping the live `Application`; this driver builds its
 //! OWN `AppEditingHost` wrapping the fixture's `SceneData.project` plus
-//! scratch `ContentState`/`CursorManager`/etc. and a `crossbeam_channel`
-//! whose receiver it holds and never drains. `ContentCommand::send` only
-//! logs on a channel DISCONNECT (`content_command.rs`) — an alive-but-idle
-//! channel is silently fine — and the actual clip mutation
-//! (`set_clip_start_beat`/`commit_command_batch`) happens directly on
-//! `SceneData.project`, which is what the re-dump reads. No live content
+//! scratch `ContentState`/`CursorManager`/etc. and a `crossbeam_channel`.
+//! The UI side only sends edits; after each step the driver drains that
+//! channel and runs every edit over `SceneData.project` through
+//! `edit_runner::run_edit`, the same runner the content thread uses, so the
+//! re-dump reads what the content thread would publish. No live content
 //! thread is needed for the real drag path to run headlessly.
 //!
 //! Generic widget clicks route through the full, REAL `ui_bridge::dispatch`
@@ -55,8 +54,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use manifold_core::LayerId;
-use manifold_editing::command::CompositeCommand;
-use manifold_editing::undo::UndoRedoManager;
+use manifold_editing::edit::ProjectEdit;
+use manifold_editing::service::EditingService;
 use manifold_gpu::GpuDevice;
 use manifold_ui::automation::{
     self, AssertCheck, AutomationAction, AutomationTarget, Gesture, MatchInfo,
@@ -533,9 +532,8 @@ impl<'d> RenderState<'d> {
 struct Runner {
     overlay: InteractionOverlay,
     content_tx: crossbeam_channel::Sender<ContentCommand>,
-    // Held so the channel stays connected — `ContentCommand::send` only logs
-    // on disconnect; never drained (no content thread exists headlessly).
-    _content_rx: crossbeam_channel::Receiver<ContentCommand>,
+    /// What the UI side sent this step, drained into `service` after it.
+    content_rx: crossbeam_channel::Receiver<ContentCommand>,
     content_state: ContentState,
     cursor_manager: manifold_ui::cursors::CursorManager,
     active_layer: Option<LayerId>,
@@ -544,10 +542,12 @@ struct Runner {
     redraw: bool,
     /// The frame planner, as the App owns its own (D6).
     planner: crate::frame_plan::FramePlanner,
-    /// The content thread's part stamps, modelled: every absorbed command
-    /// bumps its parts here, and the next frame folds them into the UI's
-    /// stamps as the App folds an accepted snapshot (D5).
-    content_stamps: manifold_core::change::PartStamps,
+    /// The content thread's editing service, modelled: every edit the step
+    /// sent runs through it over `data.project` (`edit_runner::run_edit`, as
+    /// the content thread runs it), and its stamps fold into the UI's stamps
+    /// on the next frame as the App folds an accepted snapshot (D5). Cmd+Z
+    /// and Cmd+Shift+Z run through it too.
+    service: EditingService,
     transport_cache: crate::ui_bridge::TransportDisplayCache,
     /// Commands recorded at the end of a frame: the App sees them as a new
     /// snapshot next frame.
@@ -556,20 +556,6 @@ struct Runner {
     /// projection (D10). Test oracle only; the App has no such input.
     fresh_reference: bool,
     edits: crate::gesture_preview::UiEdits,
-    // BUG-198: the harness had no undo stack at all — commands executed
-    // straight against `data.project` via `AppEditingHost`/`ui_bridge` and
-    // were never recorded anywhere, so a headless `Key Z` step was a pure
-    // no-op that still reported "ok" (silently proving nothing). Real
-    // `UndoRedoManager`, same 200-command cap as the content thread's,
-    // fed by draining `_content_rx` after every step (see
-    // `record_executed_commands`) — every `ContentCommand::Execute`/
-    // `ExecuteBatch` sent through the seam this run already applied
-    // directly to `data.project` gets `record()`-ed here (NOT re-executed;
-    // `AppEditingHost`/`ui_bridge` always mutate the project synchronously
-    // before sending, matching the live app's `local_project` pattern —
-    // see the module doc). `Key`'s Cmd+Z / Cmd+Shift+Z arm dispatches
-    // against this directly.
-    undo: UndoRedoManager,
     clock: f32,
     modifiers: manifold_ui::input::Modifiers,
     // Scratch state `ui_bridge::dispatch` threads through the live
@@ -701,24 +687,23 @@ pub(crate) const WORK_CEILINGS_PATH: &str = "scripts/ui-flows/work_ceilings.json
 
 impl Runner {
     fn new() -> Self {
-        let (content_tx, _content_rx) = crossbeam_channel::bounded(64);
+        let (content_tx, content_rx) = crossbeam_channel::bounded(64);
         let mut modulation_engine = manifold_playback::engine::PlaybackEngine::new(Vec::new());
         modulation_engine.initialize(manifold_core::project::Project::default());
         Self {
             overlay: InteractionOverlay::new(manifold_ui::color::CLIP_VERTICAL_PAD),
             content_tx,
-            _content_rx,
+            content_rx,
             content_state: ContentState::default(),
             cursor_manager: manifold_ui::cursors::CursorManager::default(),
             active_layer: None,
             redraw: false,
             planner: Default::default(),
-            content_stamps: Default::default(),
+            service: EditingService::new(),
             transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
             echo_pending: false,
             fresh_reference: false,
             edits: Default::default(),
-            undo: UndoRedoManager::new(),
             clock: 0.0,
             modifiers: manifold_ui::input::Modifiers::NONE,
             user_prefs: crate::user_prefs::UserPrefs::in_memory(),
@@ -908,7 +893,7 @@ impl Runner {
                 live: self.planner.last.live(),
                 dt: DT,
                 show_image: false,
-                drag: self.scrub.active.as_ref(),
+                drag: self.scrub.drawn(),
             },
             fresh,
         )
@@ -1064,7 +1049,7 @@ impl Runner {
                 match reloaded {
                     Ok(project) => {
                         data.project = project;
-                        self.undo = UndoRedoManager::new();
+                        self.service.set_project();
                         self.edits.stamps.project_replaced();
                         self.live_frame(ui, data, render, false, true);
                         StepResult { index, action: action_desc, status: "ok",
@@ -1080,36 +1065,29 @@ impl Runner {
                 // widgets — every OTHER modifier-bearing key silently
                 // no-op'd through it and still reported "ok", which is the
                 // actual bug (a script asserting an undo/redo/shortcut
-                // "passed" when nothing happened). Cmd+Z / Cmd+Shift+Z are
-                // the one pair with a real headless seam (`self.undo`,
-                // above); every other modifier combo fails loudly instead
-                // of falling through, mirroring the `Text` arm's fail.
-                // Plain unmodified keys keep the existing `key_event` path.
+                // "passed" when nothing happened). Cmd+Z / Cmd+Shift+Z run
+                // the modelled content thread's undo and redo; every other
+                // modifier combo fails loudly instead of falling through,
+                // mirroring the `Text` arm's fail. Plain unmodified keys keep
+                // the existing `key_event` path.
                 if modifiers.is_command_only() && *key == Key::Z {
-                    // As `EditingService::undo`: what the undo wrote.
-                    let undone = self.undo.undo(&mut data.project);
-                    if undone {
-                        self.content_stamps.bump(self.undo.last_written());
-                    }
+                    let undone = self.run_history(data, ContentCommand::Undo);
                     self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
                         action: action_desc,
                         status: "ok",
-                        detail: format!("undo -> {undone} (undo_count={})", self.undo.undo_count()),
+                        detail: format!("undo -> {undone} (can_undo={})", self.service.can_undo()),
                         artifact: None,
                     }
                 } else if modifiers.is_command_shift() && *key == Key::Z {
-                    let redone = self.undo.redo(&mut data.project);
-                    if redone {
-                        self.content_stamps.bump(self.undo.last_written());
-                    }
+                    let redone = self.run_history(data, ContentCommand::Redo);
                     self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
                         action: action_desc,
                         status: "ok",
-                        detail: format!("redo -> {redone} (redo_count={})", self.undo.redo_count()),
+                        detail: format!("redo -> {redone} (can_redo={})", self.service.can_redo()),
                         artifact: None,
                     }
                 } else if !modifiers.is_none() {
@@ -1263,18 +1241,21 @@ impl Runner {
             }
             AutomationAction::ExternalEdit => {
                 use manifold_core::change::{ChangeSet, Part};
-                self.content_stamps.bump(ChangeSet::of(&[Part::Layers, Part::Effects]));
+                self.service.mutate(
+                    ChangeSet::of(&[Part::Layers, Part::Effects]),
+                    ProjectEdit::new(&mut data.project),
+                    |_| {},
+                );
                 self.live_frame(ui, data, render, false, true);
                 StepResult { index, action: action_desc, status: "ok", detail: "layers and effects stamps moved".into(), artifact: None }
             }
         }
         };
-        // BUG-198: whatever this step just sent over `content_tx` (via
-        // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
-        // directly to `data.project` — record it into the harness's own
-        // undo stack so `Key`'s Cmd+Z/Cmd+Shift+Z arm has something real to
-        // act on. Every step drains unconditionally (most steps sent
-        // nothing, so this is a no-op `try_recv` miss).
+        // Whatever this step sent over `content_tx` (via `AppEditingHost`/
+        // `ui_bridge::dispatch`) runs now through the modelled content
+        // thread, so `Key`'s Cmd+Z/Cmd+Shift+Z arm has real history to act
+        // on. Every step drains unconditionally (most steps sent nothing, so
+        // this is a no-op `try_recv` miss).
         if self.absorb_commands(ui, data) || std::mem::take(&mut self.echo_pending) {
             self.live_frame(ui, data, render, false, true);
         }
@@ -1292,7 +1273,7 @@ impl Runner {
             return;
         }
         let mut host = AppEditingHost::new(
-            crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
+            crate::ui_bridge::ProjectRef::new(&data.project, &mut self.edits, &self.content_tx),
             &self.content_tx,
             &self.content_state,
             &mut self.cursor_manager,
@@ -1303,9 +1284,9 @@ impl Runner {
             .on_pointer_move(pos, &mut host, &mut data.selection, &ui.viewport);
     }
 
-    /// Drain and record what the step sent (see `record_executed_commands`);
-    /// when that changed the project, apply the selection update; the commands
-    /// bumped `content_stamps`, which the next frame folds. True when it did.
+    /// Drain and run what the step sent (see `record_executed_commands`);
+    /// when that changed the project, apply the selection update; the edits
+    /// moved the service's stamps, which the next frame folds. True when it did.
     fn absorb_commands(&mut self, ui: &mut UIRoot, data: &mut SceneData) -> bool {
         if !self.record_executed_commands(data) {
             return false;
@@ -1380,7 +1361,8 @@ impl Runner {
             &mut self.graph_snapshot,
             Some(&data.project),
             self.content_watched.as_ref(),
-            self.content_stamps
+            self.service
+                .stamps()
                 .get(manifold_core::change::Part::EmbeddedPresets),
         );
         data.content.active_graph_target = target;
@@ -1394,10 +1376,10 @@ impl Runner {
         self.gizmo.report(ui, data);
         let content_work = manifold_core::work_count::thread_work_snapshot().since(&before);
         self.work.excluded = self.work.excluded.plus(&content_work);
-        self.gizmo.present(ui, data, &self.edits.stamps.parts());
         // The snapshot echo of what the last frame sent, folded as the App
-        // folds an accepted snapshot.
-        self.edits.stamps.fold_snapshot(&self.content_stamps);
+        // folds an accepted snapshot, before the preview presents.
+        self.edits.stamps.fold_snapshot(&self.service.stamps());
+        self.gizmo.present(ui, data, &self.edits.stamps.parts());
         // Settled drawers move in place; a settled structural tween (collapse,
         // spawn, delete) moves its panel's view version, so this frame's plan
         // rebuilds the settled layout.
@@ -1450,7 +1432,7 @@ impl Runner {
                 is_dirty: false,
                 project_path: None,
                 transport_cache: &mut self.transport_cache,
-                drag: self.scrub.active.as_ref(),
+                drag: self.scrub.drawn(),
             },
             &mut self.edits,
             |_, _, _, _, _, _| {
@@ -1663,7 +1645,7 @@ impl Runner {
     ) {
         let mut dctx = crate::ui_bridge::DispatchCtx {
             project: crate::ui_bridge::ProjectRef::new(
-                &mut data.project,
+                &data.project,
                 &mut self.edits,
                 &self.content_tx,
             ),
@@ -1898,7 +1880,7 @@ impl Runner {
                 crate::editor_input::CardLane {
                     ws: &mut ed.ws,
                     project: crate::ui_bridge::ProjectRef::new(
-                        &mut data.project,
+                        &data.project,
                         &mut self.edits,
                         &self.content_tx,
                     ),
@@ -2480,19 +2462,14 @@ impl Runner {
     }
 
     /// Drains every `ContentCommand` this step's `AppEditingHost`/
-    /// `ui_bridge::dispatch` calls sent over `content_tx` (the receiver is
-    /// otherwise held only to keep the channel alive — see `Runner::new`)
-    /// and folds the editing ones into the harness's `undo` stack. NEVER
-    /// re-executes ordinary Execute messages: `AppEditingHost`/`ui_bridge` mutate
-    /// `data.project` synchronously before sending (mirroring the live
-    /// app's `local_project` pattern, module doc), so by the time this runs
-    /// the command has already taken effect — `record()`, not `execute()`.
-    /// Non-editing variants (`SeekTo`, `Undo`, …) are inert here; the
-    /// harness's headless `Key` arm drives `self.undo` directly instead of
-    /// routing through this channel.
+    /// `ui_bridge::dispatch` calls sent over `content_tx` and runs the
+    /// editing ones through the modelled content thread: the
+    /// same `edit_runner::run_edit` over an `EditingService`, applied to
+    /// `data.project`, which is the only copy here. The UI never applied
+    /// them itself. Other variants (`SeekTo`, …) are inert here.
     fn record_executed_commands(&mut self, data: &mut SceneData) -> bool {
         let mut changed = false;
-        while let Ok(cmd) = self._content_rx.try_recv() {
+        while let Ok(cmd) = self.content_rx.try_recv() {
             // The content thread watches what the editor asks for; its next
             // state push carries the snapshot.
             if let Some(target) = crate::graph_snapshot::watch_command_target(&cmd) {
@@ -2502,7 +2479,7 @@ impl Runner {
             }
             let cmd = match cmd {
                 ContentCommand::FireParameter { target, param_id } => {
-                    ContentCommand::ExecuteOnContent(Box::new(
+                    ContentCommand::Execute(Box::new(
                         manifold_editing::commands::effects::FireGraphParamCommand::new(
                             target, param_id,
                         ),
@@ -2510,91 +2487,53 @@ impl Runner {
                 }
                 ContentCommand::ChangeGeneratorType { layer_id, new_type } => {
                     match crate::generator_change::build_change(&data.project, layer_id, new_type) {
-                        Ok(command) => ContentCommand::ExecuteOnContent(command),
+                        Ok(command) => ContentCommand::Execute(command),
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
                 other => other,
             };
-            match cmd {
-                ContentCommand::ExecuteSelecting(command, request) => {
-                    let pending = request.capture(&data.project);
-                    let applied = self.undo.execute(command, &mut data.project);
-                    if applied {
-                        self.content_stamps.bump(self.undo.last_written());
-                    }
-                    changed |= applied;
-                    if let Some(message) = self.undo.take_rejection() {
-                        let sequence = data
-                            .content
-                            .graph_edit_diagnostic
-                            .as_ref()
-                            .map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(
-                            crate::content_state::GraphEditDiagnostic { sequence, message },
-                        ));
-                    } else if applied && let Some(selection) = pending.resolve(&data.project) {
-                        let sequence = data
-                            .content
-                            .edit_selection_update
-                            .as_ref()
-                            .map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.edit_selection_update = Some(std::sync::Arc::new(
-                            crate::edit_selection::EditSelectionUpdate {
-                                sequence,
-                                selection,
-                            },
-                        ));
-                    }
-                }
-                ContentCommand::GraphEditRejected(message) => {
-                    let sequence = data
-                        .content
-                        .graph_edit_diagnostic
-                        .as_ref()
-                        .map_or(1, |old| old.sequence.wrapping_add(1));
-                    data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(
-                        crate::content_state::GraphEditDiagnostic { sequence, message },
-                    ));
-                    changed = true;
-                }
-                // The App gets these back as a snapshot with a new data
-                // version, which re-projects; this is that echo.
-                ContentCommand::Execute(cmd) => {
-                    self.content_stamps.bump(cmd.touches());
-                    self.undo.record(cmd);
-                    changed = true;
-                }
-                ContentCommand::ExecuteOnContent(cmd) => {
-                    let applied = self.undo.execute(cmd, &mut data.project);
-                    if applied {
-                        // After execute, as EditingService reads it.
-                        self.content_stamps.bump(self.undo.last_written());
-                    }
-                    changed |= applied;
-                    if let Some(message) = self.undo.take_rejection() {
-                        let sequence = data
-                            .content
-                            .graph_edit_diagnostic
-                            .as_ref()
-                            .map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(
-                            crate::content_state::GraphEditDiagnostic { sequence, message },
-                        ));
-                        changed = true;
-                    }
-                }
-                ContentCommand::ExecuteBatch(cmds, desc) => {
-                    self.content_stamps
-                        .bump(crate::gesture_preview::touches_of(&cmds));
-                    self.undo
-                        .record(Box::new(CompositeCommand::new(cmds, desc)));
-                    changed = true;
-                }
-                _ => {}
-            }
+            changed |= self.run_history(data, cmd);
         }
+        // The harness project is the truth: every command above has run on
+        // it, so a landed gesture has nothing left to draw.
+        self.edits.preview.snapshot_arrived(u64::MAX);
+        self.scrub.snapshot_arrived(u64::MAX);
         changed
+    }
+
+    /// Run one command through the shared edit runner over `data.project` and
+    /// publish what it left behind as the content thread does. True when it
+    /// changed the project or reported something. A command that is not an
+    /// edit is inert.
+    fn run_history(&mut self, data: &mut SceneData, cmd: ContentCommand) -> bool {
+        let before = self.service.stamps();
+        let Some(outcome) = crate::edit_runner::run_edit(
+            &mut self.service,
+            ProjectEdit::new(&mut data.project),
+            cmd,
+            |_| Ok(()),
+        ) else {
+            return false;
+        };
+        let moved = !self.service.stamps().moved_since(&before).is_empty();
+        if let Some(message) = outcome.rejection {
+            data.content.graph_edit_diagnostic =
+                Some(crate::content_state::GraphEditDiagnostic::after(
+                    data.content.graph_edit_diagnostic.as_ref(),
+                    message,
+                ));
+            return true;
+        }
+        if let Some(selection) = outcome.selection {
+            data.content.edit_selection_update =
+                Some(crate::edit_selection::EditSelectionUpdate::after(
+                    data.content.edit_selection_update.as_ref(),
+                    selection,
+                ));
+            return true;
+        }
+        moved || outcome.undo_redo.is_some()
     }
 
     fn surfaces_owned(
@@ -3018,7 +2957,7 @@ impl Runner {
             crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
         }
         let mut host = AppEditingHost::new(
-            crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
+            crate::ui_bridge::ProjectRef::new(&data.project, &mut self.edits, &self.content_tx),
             &self.content_tx,
             &self.content_state,
             &mut self.cursor_manager,
@@ -3206,11 +3145,12 @@ impl Runner {
             if let PanelAction::Root(root) = action {
                 let outcome = crate::editor_bridge::MappingHost {
                     project: crate::ui_bridge::ProjectRef::new(
-                        &mut data.project,
+                        &data.project,
                         &mut self.edits,
                         &self.content_tx,
                     ),
                     scrub: &mut self.scrub,
+                    data_version: data.content.data_version,
                 }
                 .dispatch(root);
                 match outcome {
@@ -3268,7 +3208,7 @@ impl Runner {
                     .map(|(_, camera)| *camera);
                 crate::scene_view_copy::run(
                     &mut crate::ui_bridge::ProjectRef::new(
-                        &mut data.project,
+                        &data.project,
                         &mut self.edits,
                         &self.content_tx,
                     ),
@@ -3351,7 +3291,7 @@ impl Runner {
             }
             let mut dctx = crate::ui_bridge::DispatchCtx {
                 project: crate::ui_bridge::ProjectRef::new(
-                    &mut data.project,
+                    &data.project,
                     &mut self.edits,
                     &self.content_tx,
                 ),

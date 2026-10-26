@@ -594,7 +594,6 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
 
         // Edits, undo and the project itself.
         ContentCommand::Execute(_)
-        | ContentCommand::ExecuteOnContent(_)
         | ContentCommand::FireParameter { .. }
         | ContentCommand::ExecuteSelecting(..)
         | ContentCommand::ChangeGeneratorType { .. }
@@ -2323,12 +2322,12 @@ mod tests {
         );
     }
 
-    /// BUG-v2o9y: an edit the UI applied locally during an export had its
-    /// command dropped; when the export ends the content thread publishes its
-    /// project so the UI copy is replaced and the divergent edit is gone.
+    /// BUG-v2o9y: edits sent during an export are dropped; when the export
+    /// ends the content thread publishes its project again so the UI shows
+    /// the new allocation and every panel re-projects from it.
     #[cfg(target_os = "macos")]
     #[test]
-    fn export_end_republishes_the_project_over_a_divergent_ui_copy() {
+    fn export_end_republishes_the_project_to_the_ui() {
         let mut thread = crate::headless_harness::headless_content_thread(
             manifold_core::project::Project::default(),
             64,
@@ -2344,13 +2343,15 @@ mod tests {
             .filter_map(|s| s.project_snapshot)
             .last()
             .expect("first publish");
-        let content_rate = published.settings.frame_rate;
-        // The UI took the first publish, then a direct edit changed its copy
-        // and its command was dropped by the export.
-        let mut ui_project = (*published).clone();
-        let mut last_arc = Some(published);
+        // The UI took the first publish.
+        let mut ui_project = crate::ui_bridge::LocalProject::new(Default::default());
         let mut stamps = crate::frame_plan::UiStamps::default();
-        ui_project.settings.frame_rate = content_rate + 12.0;
+        assert!(crate::frame_plan::take_project_snapshot(
+            &mut ui_project,
+            &mut stamps,
+            published.clone(),
+            true
+        ));
         let before = stamps.parts();
 
         thread.run_export(meta_config(false), &cmd_rx, &state_tx);
@@ -2361,16 +2362,16 @@ mod tests {
             .last()
             .expect("the export end republishes the project");
         // The UI's own intake function; data version and stamps unmoved.
+        assert!(!std::sync::Arc::ptr_eq(&published, &after));
         assert!(crate::frame_plan::take_project_snapshot(
             &mut ui_project,
             &mut stamps,
-            &mut last_arc,
-            after,
+            after.clone(),
             false
         ));
-        assert_eq!(
-            ui_project.settings.frame_rate, content_rate,
-            "the divergent edit is gone from the UI copy"
+        assert!(
+            std::ptr::eq(&*ui_project, &*after),
+            "the UI shows the content thread's project"
         );
         assert_ne!(
             stamps.parts(),

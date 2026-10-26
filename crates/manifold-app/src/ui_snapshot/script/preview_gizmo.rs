@@ -73,7 +73,7 @@ impl Runner {
         let fit = preview_fit(ui, &data.project);
         let mut dctx = crate::ui_bridge::DispatchCtx {
             project: crate::ui_bridge::ProjectRef::new(
-                &mut data.project,
+                &data.project,
                 &mut self.edits,
                 &self.content_tx,
             ),

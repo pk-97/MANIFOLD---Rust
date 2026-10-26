@@ -1,7 +1,0 @@
-[
-  { "ScrubDrag": { "param": { "Trim": { "kind": "Driver", "effect": 0, "param": "amount" } }, "from": 0.9, "to": 0.4, "steps": 4 } },
-  "ResetWork",
-  { "Key": { "key": "Z", "modifiers": { "command": true } } },
-  { "AssertWork": { "window": "undo" } },
-  "AssertFresh"
-]
