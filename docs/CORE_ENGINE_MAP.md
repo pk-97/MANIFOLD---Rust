@@ -397,7 +397,7 @@ Every magic number on the timing paths, in one place:
   custom-loop boundaries. The entire external-sync stack is verified only on
   stage (section 13.2).
 - Scope: `cargo test -p manifold-playback` is seconds. The canonical
-  load-bearing fixture is `Liveschool Live Show V6 LEDS.manifold`.
+  load-bearing fixture is `Right Where I Need You - Music Video V5.manifold`.
 - Debugging timing bugs: this is callback/event-ordering territory — add
   `println!`/`log`, reproduce, read. `show_debug_logs` flags exist on
   MidiInput/ClipLauncher/OscSync; CLK/Link/OSC log transport transitions and

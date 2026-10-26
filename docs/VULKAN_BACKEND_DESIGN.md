@@ -150,7 +150,7 @@ Mechanics:
 *Oracle:* full parity suite + `ui_color_swatches` + headless-PNG goldens (`reference_ui_headless_png_verification` memory). Explicitly check orientation (Y-flip) and winding on `render_3d_mesh`.
 
 **P3 — presentation + app bring-up (mostly `manifold-app`).** `GpuSurface` on swapchain (D17), shared-device restructure of the IOSurface triple-buffer bridges (D18), frame pacing port: `mach_wait_until` + 2 ms spin → `clock_nanosleep(TIMER_ABSTIME)` + spin on Linux, high-resolution waitable timers + spin on Windows; CVDisplayLink → swapchain-present-driven cadence (`VK_GOOGLE_display_timing`/`VK_EXT_present_timing` where exposed, plain FIFO pacing otherwise).
-*Oracle:* app boots, plays the canonical Liveschool fixture, frame-pacing telemetry matches the Metal profile shape.
+*Oracle:* app boots, plays the canonical music video fixture (Right Where I Need You), frame-pacing telemetry matches the Metal profile shape.
 
 **P4 — platform services.** Each row of section 8 is its own design/implementation unit gated on P3. None block the GPU port.
 

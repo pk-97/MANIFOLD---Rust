@@ -83,3 +83,5 @@ tests/fixtures/hdri/kloppenheim_06_puresky_4k.exr
 
 # Session-resume state written next to .manifold files (machine-local)
 *.breadcrumb
+# Local copies of recent show projects and their assets
+tests/fixtures/projects/

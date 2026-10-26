@@ -140,7 +140,7 @@ Decomposition and fusion-on-compile commit the stance: *decompose at authoring t
 
 The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction / multi-pass / stateful), partition algorithm, and `naga_oil`-based toolchain are designed in detail at section 8.2–section 8.4 of this doc's predecessor and still apply.
 
-**Why deferred:** fusion waits until measured frame-budget pressure on a real show file demands it (Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure). Scalar wires also softened the urgency: they removed the fp16-quantisation motivation, so the remaining pressure is purely dispatch overhead, which is fine at current scale.
+**Why deferred:** fusion waits until measured frame-budget pressure on a real show file demands it (Profile a fully-decomposed FluidSim or Black Hole on a real show file that uses them before committing to the fusion infrastructure). Scalar wires also softened the urgency: they removed the fp16-quantisation motivation, so the remaining pressure is purely dispatch overhead, which is fine at current scale.
 
 ---
 
@@ -204,7 +204,7 @@ Real ones, parked. Not the "(none yet)" placeholder from V0.
 
 - **Mid-show preset editing safety.** If presets become M4L-style devices and the graph editor is the depth, editing during a live performance is a real possibility. What gets undo? What happens if a user removes a node mid-render?
 - **Rebake-on-change scheduler caching.** Heavy generators (Black Hole's deflection map, ParametricSurface mesh build) need per-node dirty bits so the executor can skip re-evaluation when inputs haven't changed. Similar pattern to skip-passthrough but content-based.
-- **When to build fusion-on-compile.** Pending a measured profile on a fully-decomposed Black Hole or FluidSim on the Liveschool fixture. See section 8 above.
+- **When to build fusion-on-compile.** Pending a measured profile on a fully-decomposed Black Hole or FluidSim on a real show file that uses them. See section 8 above.
 - **Chain pool rekey by semantic ID.** Not started. Layer reorder still hits the positional-indexing bug class.
 - **Array port / Buffer port.** Array (particle pipelines) is V1. Buffer (audio waveforms) and 3D-volume primitives remain V2.
 

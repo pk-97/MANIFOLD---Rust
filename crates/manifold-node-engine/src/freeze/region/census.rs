@@ -431,7 +431,7 @@ fn census_def(
     }
 }
 
-/// The Liveschool fixture's `embedded_presets`: per-instance forked or edited
+/// The project fixture's `embedded_presets`: per-instance forked or edited
 /// graphs, the one place a real show's graphs diverge from the catalog's
 /// canonical defs. The caller loads the project, since `manifold-io` is only a
 /// dev-dependency of this crate.
@@ -480,10 +480,10 @@ pub fn build_census_report(fixture: FixtureCorpus) -> String {
 
     match fixture {
         FixtureCorpus::NotFound => {
-            eprintln!("[census] Liveschool fixture not found on disk — skipping");
+            eprintln!("[census] project fixture not found on disk — skipping");
         }
         FixtureCorpus::LoadFailed(error) => {
-            eprintln!("[census] Liveschool fixture found but failed to load: {error}");
+            eprintln!("[census] project fixture found but failed to load: {error}");
             liveschool_note = format!("load FAILED: {error}");
         }
         FixtureCorpus::Loaded { embedded } => {
@@ -509,16 +509,16 @@ pub fn build_census_report(fixture: FixtureCorpus) -> String {
          --example fusion_census\n```\n\n",
     );
     out.push_str(&format!(
-        "Corpus: {preset_count} bundled effect/generator presets + Liveschool fixture \
+        "Corpus: {preset_count} bundled effect/generator presets + project fixture \
          ({liveschool_note}).\n\n",
     ));
     if liveschool_count == 0 {
         out.push_str(
-            "**Liveschool note:** the fixture loaded successfully but has ZERO \
+            "**Project note:** the fixture loaded successfully but has ZERO \
              `embedded_presets` — this real show never forked/saved a preset to the project \
              (PROJECT_LIBRARY_DESIGN's \"fork\" mechanism), so every card it plays IS one of \
              the canonical bundled defs above, differing only by param VALUES, which don't \
-             change fusion topology. The bundled-preset census already covers Liveschool's \
+             change fusion topology. The bundled-preset census already covers the project's \
              graph shapes; the fixture run adds no additional structural coverage this time, \
              but stays wired so a future show that DOES fork a preset gets censused too.\n\n",
         );

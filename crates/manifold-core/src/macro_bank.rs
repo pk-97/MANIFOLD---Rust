@@ -657,8 +657,7 @@ mod tests {
 
     // Field names within target variants are snake_case on the wire
     // (matches existing V1.1 project files). The variant tag is the
-    // only camelCase identifier — see fixture `Liveschool Live Show V6
-    // LEDS.manifold` for an authoritative shape sample.
+    // only camelCase identifier — see fixture `Right Where I Need You - Music Video V5.manifold` for an authoritative shape sample.
 
     #[test]
     fn deserialize_canonical_effect_shape() {

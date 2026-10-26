@@ -155,7 +155,7 @@ offsets at build time; applied before the BASE render as of 2026-07-07).
 state; `UserPrefs::in_memory()` keeps determinism) — transport, inspector, and
 popup wiring are all headless-drivable now, not just `LayerClicked`. Scenes:
 `project:<path>` loads a real `.manifold` through the app's exact load path
-(real-scale renders — the 52-layer Liveschool fixture is the canonical
+(real-scale renders — the 18-layer music video fixture (Right Where I Need You) is the canonical
 subject), and `empty` renders the zero-layer File→New state.
 
 ### 3. State matrix

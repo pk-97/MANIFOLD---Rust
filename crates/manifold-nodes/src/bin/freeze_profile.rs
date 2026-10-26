@@ -119,7 +119,7 @@ fn main() {
     }
     // `poolstats` → synthetic reproduction of the texture-pool canvas-change leak
     // + the evict_resolution_mismatch fix, with before/after bytes. Headless, so
-    // it can't drive the real Liveschool fixture (that's MANIFOLD_POOL_STATS=1 on
+    // it can't drive a real show file such as Right Where I Need You (that's MANIFOLD_POOL_STATS=1 on
     // the app); this demonstrates the mechanism and the reclaim on a known
     // working set. The pool report is the lasting diagnostic either path surfaces.
     if args.first().map(String::as_str) == Some("poolstats") {

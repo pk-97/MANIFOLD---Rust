@@ -1,5 +1,5 @@
 //! Print the fusion refusal census over every bundled preset plus the
-//! Liveschool fixture's embedded presets, or write it to `--out <path>`.
+//! project fixture's embedded presets, or write it to `--out <path>`.
 //!
 //! ```text
 //! cargo run -p manifold-app --example fusion_census [-- --out <path>]
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use manifold_node_engine::freeze::region::census::{FixtureCorpus, build_census_report};
 
-const FIXTURE: &str = "Liveschool Live Show V6 LEDS 1.21.manifold";
+const FIXTURE: &str = "projects/Right Where I Need You - Music Video V5.manifold";
 
 /// The fixtures are gitignored, so a worktree checkout lacks them; resolve
 /// through `--git-common-dir` to the main checkout first.

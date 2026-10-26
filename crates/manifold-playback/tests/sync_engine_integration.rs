@@ -71,7 +71,7 @@ fn single_video_clip_project(bpm: f32) -> Project {
 /// is a single clock shared by ALL active clips, not a per-clip timer — a
 /// single-clip synthetic project keeps that clock's phase fully
 /// deterministic (nothing else perturbs `last_sync_time`), which a
-/// multi-clip fixture like Burn V5 does not (background clips scheduled
+/// multi-clip project like Right Where I Need You does not (background clips scheduled
 /// long before the one under test keep the cadence clock mid-cycle by the
 /// time this clip starts, making "N frames after this clip appeared" an
 /// unreliable proxy for "N frames after the last correction").

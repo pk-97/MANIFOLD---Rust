@@ -26,11 +26,12 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
     p
 }
 
-// Liveschool Live Show V6, a 20-minute live show (52 layers, 2828 clips) saved
-// with 8-char ids before session mode existed. Local and gitignored, like every
-// personal fixture. It is the one real show that pins what only an old saved
-// file can: a re-save keeps every id it read and adds no empty session field.
-const CANONICAL_FIXTURE: &str = "Liveschool Live Show V6 LEDS 1.21.manifold";
+// Right Where I Need You - Music Video V5, a recent music video (18 layers, 1110
+// clips) saved with 8-char ids before session mode existed. Local and gitignored,
+// like every personal fixture. It is the one real project that pins what only an
+// old saved file can: a re-save keeps every id it read and adds no empty session
+// field.
+const CANONICAL_FIXTURE: &str = "projects/Right Where I Need You - Music Video V5.manifold";
 
 /// Every id-like string (an `id` key or a key ending in `Id`), keyed by its
 /// path with array indices dropped, values sorted. Index-free so a loader that
@@ -84,35 +85,35 @@ fn archive_project_json(path: &std::path::Path) -> serde_json::Value {
 
 /// One load of the canonical fixture serves two re-save contracts.
 ///
-/// BUG-aaca3 (clip id collisions): new ids are 64-bit, old files keep their
-/// 32-bit ids. Saving the fixture through the real saver must write back every
-/// existing id exactly as it was read: re-keying would break the references
-/// between clips, layers and effects.
+/// Clip ids: new ids are 64-bit, old files keep their 32-bit ids. Saving the
+/// fixture through the real saver must write back every existing id exactly as
+/// it was read: re-keying would break the references between clips, layers and
+/// effects.
 ///
 /// Session mode added `Project.session:
 /// SessionGrid`, skipped on serialize when empty. This fixture predates
 /// session mode, so re-saving it must emit no `"session"` key at all — not an
 /// empty one — and a project lacking the field on disk defaults it cleanly.
 #[test]
-fn liveschool_resave_keeps_old_ids_and_omits_empty_session() {
+fn music_video_resave_keeps_old_ids_and_omits_empty_session() {
     let path = fixture_path(CANONICAL_FIXTURE);
     assert!(path.exists(), "Test fixture not found: {}", path.display());
 
     let before = id_strings(&archive_project_json(&path));
     let clip_ids = &before["/timeline/layers/#/clips/#/id"];
-    assert_eq!(clip_ids.len(), 2828);
+    assert_eq!(clip_ids.len(), 1110);
     assert!(
         clip_ids.iter().all(|id| id.len() == 8),
         "the fixture is meant to carry old 8-char ids"
     );
 
-    let mut project = loader::load_project(&path).expect("load liveschool project");
+    let mut project = loader::load_project(&path).expect("load music video project");
 
     assert!(
         project.session.is_empty(),
         "legacy fixture has no session data; session grid must default empty on load"
     );
-    let json = serde_json::to_string(&project).expect("serialize liveschool project");
+    let json = serde_json::to_string(&project).expect("serialize music video project");
     assert!(
         !json.contains("\"session\""),
         "empty SessionGrid must be skipped on serialize, not emitted as {{}}"
@@ -120,7 +121,7 @@ fn liveschool_resave_keeps_old_ids_and_omits_empty_session() {
     // Re-parsing the re-saved JSON must still round-trip to an empty grid —
     // confirms the field defaults cleanly when entirely absent from disk.
     let project2 =
-        loader::load_project_from_json(&json).expect("reload re-saved liveschool project");
+        loader::load_project_from_json(&json).expect("reload re-saved music video project");
     assert!(project2.session.is_empty());
 
     let new_layer = manifold_core::layer::Layer::new(
@@ -133,7 +134,7 @@ fn liveschool_resave_keeps_old_ids_and_omits_empty_session() {
     project.timeline.layers.push(new_layer);
 
     let dir = std::env::temp_dir().join(format!("manifold-wide-ids-{}", std::process::id()));
-    let out = dir.join("liveschool.manifold");
+    let out = dir.join("music_video.manifold");
     manifold_io::saver::save_project(&mut project, &out, None, false).expect("save");
     let mut after = id_strings(&archive_project_json(&out));
     let reloaded = loader::load_project(&out).expect("reload saved project");

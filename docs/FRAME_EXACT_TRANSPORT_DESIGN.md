@@ -811,7 +811,7 @@ Reuse, don't build:
 
 **App test** — `crates/manifold-app/src/frame_exact_app.rs::same_values_per_index_through_content_thread`. Same shape through `headless_content_thread` and `tick_frame_at` with the real grid timer, not `frame_clocked`: random press phase, jitter and a 3-frame stall. It compares per-index beat bits and param bits from the engine and does not compare pixels. One queued GPU run (audit item 1.8).
 
-**L2 artifact:** `manifold frame-time "<Liveschool Live Show V6 LEDS.manifold>" --frames 3600 --transport-log <path> --pre-play-delay-seed <n>`, twice with different seeds. The seed waits a random 0–2 frames of wall time before Play, so the two runs start at different phases. This extends the existing tool; it adds no new one. Each log line is `index beat_bits automation_hash`. `diff` over shared indices must be empty. Also report the `frames` histogram and the count of ticks with `frames > 1`.
+**L2 artifact:** `manifold frame-time "<Right Where I Need You - Music Video V5.manifold>" --frames 3600 --transport-log <path> --pre-play-delay-seed <n>`, twice with different seeds. The seed waits a random 0–2 frames of wall time before Play, so the two runs start at different phases. This extends the existing tool; it adds no new one. Each log line is `index beat_bits automation_hash`. `diff` over shared indices must be empty. Also report the `frames` histogram and the count of ticks with `frames > 1`.
 
 **Edge cases:** one test each in `frame_exact_transport.rs`:
 - `tempo_edit_during_play_keeps_beat`

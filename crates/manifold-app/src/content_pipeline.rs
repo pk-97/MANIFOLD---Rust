@@ -2123,7 +2123,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if pool.current_frame() % 300 == 0 {
                 // Lasting memory diagnostic: set MANIFOLD_POOL_STATS=1 to log the
                 // per-resolution pool breakdown (dims/format/bytes/age) every ~5s
-                // — run the Liveschool fixture with it to see what's dead and why.
+                // — run Right Where I Need You with it to see what's dead and why.
                 // Off by default (env read is cheap at this 300-frame cadence).
                 if std::env::var_os("MANIFOLD_POOL_STATS").is_some() {
                     log::info!("{}", pool.report());
