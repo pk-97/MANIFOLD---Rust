@@ -8,6 +8,7 @@
 use crate::content_command::ContentCommand;
 use crate::content_state::UndoRedoEvent;
 use crate::edit_selection::EditSelection;
+use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_editing::command::CompositeCommand;
 use manifold_editing::edit::ProjectEdit;
@@ -24,6 +25,10 @@ pub(crate) struct EditOutcome {
     pub selection: Option<EditSelection>,
     /// The edit changed the output size or render scale.
     pub output_changed: bool,
+    /// A non-undoable write moved a part outside the live values. It leaves
+    /// the data version alone, and only a project snapshot carries it to the
+    /// UI, so the caller publishes one.
+    pub publish: bool,
 }
 
 fn output_of(project: &Project) -> (i32, i32, f32) {
@@ -69,10 +74,12 @@ pub(crate) fn run_edit(
             f,
             gesture,
         } => {
+            // A gesture's moves wait for its commit, which publishes.
             if gesture {
                 service.mutate_gesture(touches, project, f);
             } else {
-                service.mutate(touches, project, f);
+                let wrote = service.mutate(touches, project, f);
+                outcome.publish = !wrote.minus(ChangeSet::LIVE).is_empty();
             }
             return Some(outcome);
         }
@@ -165,7 +172,7 @@ pub(crate) fn land_on_app(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::change::{ChangeSet, Part};
+    use manifold_core::change::Part;
     use manifold_editing::commands::settings::ChangeTonemapCurveCommand;
 
     fn tonemap(enabled: bool) -> Box<dyn manifold_editing::command::Command> {
@@ -222,6 +229,46 @@ mod tests {
         apply_sent(&mut service, &mut project, sent);
         assert_eq!(project.settings.frame_rate, 30.0);
         assert!(!service.can_undo());
+    }
+
+    /// A layer toggle (collapse, mute) leaves the data version alone, so the
+    /// outcome asks for a project publish; a live-value write and a gesture
+    /// move do not.
+    #[test]
+    fn a_layer_toggle_asks_for_a_publish_and_live_writes_do_not() {
+        let mut project = Project::default();
+        for i in 0..3 {
+            project
+                .timeline
+                .layers
+                .push(manifold_core::layer::Layer::new_video(format!("Video {i}"), i));
+        }
+        let id = project.timeline.layers[2].layer_id.clone();
+        let mut service = EditingService::new();
+        let out = apply_sent(
+            &mut service,
+            &mut project,
+            [
+                ContentCommand::mutate(
+                    crate::content_command::touch::LAYERS,
+                    Box::new(move |p| {
+                        let (_, layer) = p.timeline.find_layer_by_id_mut(&id).expect("layer");
+                        layer.is_collapsed = true;
+                        layer.is_muted = true;
+                    }),
+                ),
+                ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(|_| {})),
+                ContentCommand::gesture_move(
+                    crate::content_command::touch::LAYERS,
+                    Box::new(|p| p.timeline.layers[0].is_solo = true),
+                ),
+            ],
+        );
+        assert!(out[0].publish && !out[1].publish && !out[2].publish);
+        assert_eq!(service.data_version(), 0);
+        let layers = &project.timeline.layers;
+        assert!(layers[2].is_collapsed && layers[2].is_muted);
+        assert!(layers[..2].iter().all(|l| !l.is_collapsed && !l.is_muted));
     }
 
     #[test]

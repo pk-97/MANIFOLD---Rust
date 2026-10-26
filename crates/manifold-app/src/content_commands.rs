@@ -796,6 +796,7 @@ impl ContentThread {
         else {
             unreachable!("handle_command routes only edit variants here");
         };
+        self.reactions.publish_pending |= outcome.publish;
         if let Some(event) = outcome.undo_redo {
             self.pending_undo_redo_event = Some(event);
         }
