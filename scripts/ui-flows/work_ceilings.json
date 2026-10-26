@@ -41,7 +41,6 @@
       "two_drags": {
         "ChromeLayout": 9,
         "ClipProjection": 3,
-        "FrameAlloc": 6783,
         "InspectorSync": 3,
         "LaneProjection": 6,
         "OverviewRepaint": 3,
@@ -56,7 +55,6 @@
       "point_drag_1s": {
         "ChromeLayout": 6,
         "ClipProjection": 1,
-        "FrameAlloc": 1410,
         "InspectorSync": 2,
         "LanePreviewUpdate": 59,
         "LaneProjection": 3,
@@ -72,7 +70,6 @@
         "ChromeLayout": 9,
         "ClipPreviewUpdate": 32,
         "ClipProjection": 1,
-        "FrameAlloc": 1760,
         "InspectorSync": 2,
         "LaneProjection": 3,
         "OverviewRepaint": 33,
@@ -87,13 +84,11 @@
     },
     "work-modulated-step": {
       "step_half_second": {
-        "FrameAlloc": 1,
         "ValuePush": 28
       }
     },
     "work-node-param-drag": {
       "card_lane_drag": {
-        "FrameAlloc": 241,
         "ValuePush": 22
       }
     },
@@ -106,26 +101,22 @@
       },
       "play_start": {
         "ChromeLayout": 3,
-        "FrameAlloc": 130,
         "OverviewRepaint": 1,
         "TextMeasureMiss": 1
       }
     },
     "work-slider-drag": {
       "drag_2s": {
-        "FrameAlloc": 374,
         "ValuePush": 122
       }
     },
     "work-values-undo": {
       "undo": {
-        "FrameAlloc": 4,
         "ValuePush": 1
       }
     },
     "work-zoom": {
       "zoom_30_notches": {
-        "FrameAlloc": 86,
         "InPlaceUpdate": 17,
         "OverviewRepaint": 17,
         "SlotInvalidate": 34

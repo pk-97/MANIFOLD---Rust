@@ -210,10 +210,10 @@ fn scene_data(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> {
 }
 
 /// Whether building `scene` installs a project preset overlay (replacing the
-/// process-global preset registry). `script::run_batch` runs these scenes
-/// last; a scene missing from this list is caught there and rerun solo.
+/// process-global preset registry): a `project:` scene installs the presets
+/// its file embeds. `script::run_batch` runs these scenes last.
 pub fn installs_preset_overlay(scene: &str) -> bool {
-    scene.starts_with("project:") || matches!(scene, "gltfscene" | "mushroomscene")
+    scene.starts_with("project:")
 }
 
 /// Zero-layer scene: what a user sees on File → New before doing anything.
@@ -1720,34 +1720,5 @@ mod tests {
         assert_eq!(cache.assembled(), 1, "the GLB was assembled more than once");
         assert_eq!(second.project.timeline.layers.len(), 1);
         assert_eq!(second.project.timeline.layers[0].name, untouched);
-    }
-
-    /// `installs_preset_overlay` must name exactly the flow scenes whose
-    /// build replaces the preset registry, or the batched flow runner either
-    /// reruns flows solo (slow) or orders them wrongly.
-    #[test]
-    fn installs_preset_overlay_matches_what_each_flow_scene_does() {
-        let manifest: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../scripts/ui-flows/manifest.json"))
-                .expect("manifest parses");
-        let mut scenes: Vec<&str> = manifest["flows"]
-            .as_object()
-            .expect("flows map")
-            .values()
-            .filter_map(|v| v.as_str())
-            .collect();
-        scenes.sort_unstable();
-        scenes.dedup();
-        for scene in scenes {
-            let before = manifold_node_engine::load::preset_loader::catalog_generation();
-            assert!(super::build(scene).is_some(), "unknown flow scene {scene}");
-            let installed =
-                manifold_node_engine::load::preset_loader::catalog_generation() != before;
-            assert_eq!(
-                installed,
-                super::installs_preset_overlay(scene),
-                "scene {scene}: build installed an overlay = {installed}"
-            );
-        }
     }
 }

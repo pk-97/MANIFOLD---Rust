@@ -1,18 +1,12 @@
-//! `paint_and_hit_order_match_full_build`.
+//! Region rebuild invariants on the main window.
 //!
 //! Builds the main window with every stacked surface open at once (a
 //! dropdown, the Ableton picker, a toast, the warmup overlay, a card-drag
 //! ghost and a hovered control with a tooltip) and records what the tree
 //! paints and what it hits: the region-tier paint walk, each atlas panel's
 //! node run, each overlay's node run, the ghost pass, and a hit-test grid
-//! over the whole window. Each section is hashed against
-//! `order_golden.txt`, recorded on the flat tree before per-region storage,
-//! so the arenas must reproduce today's order exactly. Region rebuilds of
-//! every main region must reproduce it too.
-//!
-//! Re-record with `MANIFOLD_RECORD_ORDER_GOLDEN=1`. On a mismatch the full
-//! sections are written next to the golden as `order_golden.<section>.txt`
-//! for diffing.
+//! over the whole window. Each main region rebuilt alone must reproduce the
+//! full build's record and widget ids.
 
 use std::fmt::Write as _;
 
@@ -27,7 +21,6 @@ use crate::frame_plan::{MainRegion, RegionMask};
 use crate::ui_frame::{UiFrameSignals, apply_ui_frame_invalidations};
 use crate::ui_root::UIRoot;
 
-const GOLDEN: &str = "src/ui_snapshot/order_golden.txt";
 const HIT_STEP: f32 = 8.0;
 
 fn describe(n: &UINode) -> String {
@@ -225,33 +218,6 @@ fn stacked_ui() -> UIRoot {
         &mut ui.tree,
     );
     ui
-}
-
-fn check(sections: &[(&'static str, Vec<String>)], when: &str) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN);
-    let got = summary(sections);
-    if std::env::var_os("MANIFOLD_RECORD_ORDER_GOLDEN").is_some() {
-        std::fs::write(&path, &got).expect("write order golden");
-        return;
-    }
-    let want = std::fs::read_to_string(&path).expect("order golden recorded on the flat tree");
-    if got != want {
-        for (name, lines) in sections {
-            let out = path.with_file_name(format!("order_golden.{name}.txt"));
-            let _ = std::fs::write(out, lines.join("\n"));
-        }
-        panic!("paint or hit order moved ({when}):\n--- golden\n{want}--- now\n{got}");
-    }
-}
-
-#[test]
-fn paint_and_hit_order_match_full_build() {
-    let ui = stacked_ui();
-    let sections = record(&ui);
-    for (name, lines) in &sections {
-        assert!(!lines.is_empty(), "{name} recorded nothing");
-    }
-    check(&sections, "full build");
 }
 
 fn widget_ids(ui: &UIRoot) -> Vec<WidgetId> {

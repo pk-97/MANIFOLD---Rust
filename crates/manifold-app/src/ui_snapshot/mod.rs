@@ -16,7 +16,7 @@ mod interact;
 #[cfg(test)]
 mod lookup_coverage;
 #[cfg(test)]
-mod order_golden;
+mod region_rebuild;
 mod readback;
 mod render;
 mod script;

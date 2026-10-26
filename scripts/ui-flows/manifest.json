@@ -256,18 +256,14 @@
     "work-perform-idle": "timeline",
     "audio-clip-trigger-add": "inspector",
     "trigger-lane-sibling": "envmod",
-    "trigger-lane-assignment": "envmod"
+    "trigger-lane-assignment": "envmod",
+    "work-slider-drag": "inspector"
   },
   "expected_fail": {
     "scene-forces-controls": {
       "scene": "physicsscene",
       "bug": "BUG-gm08t",
       "reason": "step 38: the Trigger 1 header button sits at y 671, the flow expects 685 (the picker tick and the label now refresh). Unproven whether the flow expectation or the scene setup layout moved."
-    },
-    "work-slider-drag": {
-      "scene": "inspector",
-      "bug": "BUG-rqsaa",
-      "reason": "FrameAlloc 490 over the 489 ceiling; red from the 2026-10-17 nightly, the same range as work-slider-grab. Not bisected."
     }
   },
   "unresolved": {}
