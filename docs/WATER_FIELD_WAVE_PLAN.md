@@ -63,11 +63,15 @@ Track: **R** is the render track (`manifold-nodes-scene` only), **W** the water 
 | S1 | sonnet | Storage helpers + step kernels | W | S0, SA |
 | R4w | sonnet | Foam splat into a surface field (whitewater) | W | R4r |
 | S2 | haiku, lead gives the line list | Pressure, bodies, whitewater, sheeting onto the helpers | W | S1, R4w |
+| M1 | sonnet | Matter's grid passes onto the storage helpers | W | S2 |
 | R5w, R7w | sonnet | Water halves of mist and wet surfaces | W | S2 |
 | SB | sonnet, lead gives the queue design | Next tick overlaps render on its own compute queue (W8) | A | — |
+| SBm | sonnet | Matter's tick on SB's queue | A | SB |
 | S3.1–S3.5 | sonnet; S3.5 haiku | Sparse pool, split into five jobs | W | S2 |
+| M2 | sonnet | Matter's grid in the tile pool | W | S3.4, M1 |
 | SP | sonnet | Pressure group: fused smoother, warm start, visible tolerance, coarse jitter | W | S3.5 |
 | S4.1–S4.5 | sonnet; S4.3 A; S4.5 haiku | Infinite domain, split into five jobs | W | S3.5 |
+| M3 | sonnet | Matter on world tiles, with Bounds faces | W | S4.4, M2 |
 | S4b | sonnet | Surface, solids, wetness on world tiles | W | S4.5, R1b.2, R7w |
 | S5 | sonnet | Narrow Band on tiles | W | S4b, SA |
 
@@ -78,11 +82,11 @@ Track: **R** is the render track (`manifold-nodes-scene` only), **W** the water 
 3. R3 with SA.
 4. R1b.1, then R1b.2, both alone.
 5. RD.1, RD.2 and RD.4 one after another on W, while R runs R4r, R5r and R7r. RD.3 alone. RD.5 last.
-6. S1, then R4w, then S2.
+6. S1, then R4w, then S2, then M1.
 7. R5w, then R7w.
-8. SB alone.
-9. S3.1 to S3.5.
-10. SP, then S4.1 to S4.5, then S4b, then S5.
+8. SB alone, then SBm alone.
+9. S3.1 to S3.4, then M2, then S3.5. The deletions wait for Matter.
+10. SP, then S4.1 to S4.4, then M3, then S4.5, then S4b, then S5.
 11. Final check (section 5).
 
 The water track is the long pole. The run keeps going through step 11 with no stop at the end of a night; every piece up to S5 is in scope. While Peter has MANIFOLD open, GPU tests wait, and A jobs wait for other sessions to commit.
@@ -253,7 +257,7 @@ Files: `gpu_flip_pressure.rs` and `.wgsl`, `gpu_flip_lentine.wgsl`, `gpu_flip_bo
 
 ### S3 Sparse pool
 
-Bead: BUG-7wna (sparse tile storage). Five jobs in order, all W. Since S1 and S2 every kernel reads lattice fields through the storage helpers, so moving the helpers onto the pool moves the kernels with them. Each job leaves the Dam Break inside the volume test's tolerance; where one can't stand alone, the lead joins it to the next.
+Bead: BUG-7wna (sparse tile storage). Five jobs in order, all W. Since S1 and S2 every kernel reads lattice fields through the storage helpers, so moving the helpers onto the pool moves the kernels with them. Each job leaves the Dam Break inside the volume test's tolerance and `matter_look_volume_drift` passing, since Matter reads the same helpers and sorter from M1 on; where one can't stand alone, the lead joins it to the next.
 - **S3.1** (sonnet). The tile pool: lattice fields live in tiles allocated and freed on the GPU with no readback, with pool reservation and the exhausted word; the helpers index the pool. Files: the storage helpers in `manifold-water-liquid`, `gpu_flip_domain.rs`.
 - **S3.2** (sonnet). The sorter keys on (slot, local cell), for FLIP and MPM: `sort_particles_into_cells.rs` and `.wgsl` in `manifold-water-liquid`, shared with MPM through `matter_common.rs:16`. Extend runs on the frontier only.
 - **S3.3** (sonnet). The particle pool grows with the water, so sheeting works without an Inflow. Every particle pass dispatches from the live count through a GPU-written indirect argument; no CPU readback sizes any pass, including `history_slots` from `retired_max_speed`. Files: `liquid_state.rs`, `frame_history.rs`, `liquid_frame.rs`, `migration/liquid.rs`.
@@ -305,8 +309,16 @@ Each step keeps the existing solver proofs green.
 Ferstl et al. 2016, rebuilt on the storage helpers, working with sheeting, the field build and the speed changes. Particles live only in a band near the surface; deep water comes from the grid. The band width is derived from the CFL band the step already computes (`band_layers`).
 1. A deep-pool proof: the particle count drops, and the surface and volume match the full-particle run within the volume test's tolerance.
 
+### M Matter onto the new storage
+
+Matter (GPU MPM, `crates/manifold-water-gpu-mpm/`, about 6,500 lines in 12 primitives) shares `LiquidLattice`, the particle sorter and `closed_faces` with GPU FLIP. S3 and S4 change or delete those, so Matter moves with them in this wave rather than keeping the old box alive for it. SP and S5 are FLIP-only (end-game design section 3: MPM has no pressure solve). Matter's own bugs (the stubbed stiffness fit, the fill seeding through a Fixed body, impulses on coupled bodies) stay in their beads.
+- **M1** (W, after S2). Matter's node lattice is read and written through the storage helpers: `global_slot` (`matter_to_grid.wgsl:103` (f8084ab59)) and the node indexing in `matter_grid_update`, `grid_to_matter`, `matter_body_reaction`, `matter_face_component`, `matter_stats` and `matter_frame`. Matter's lattice is node-centred with three padding nodes (`matter_walls.wgsl`), so the helpers gain only the node accessor Matter needs. Proof: bitwise identical on WaterDamBreakMatter over 120 steps.
+- **M2** (W, after S3.4). Matter's node fields live in the tile pool (S3.1). Its particle passes dispatch from the live count (S3.3). A full pool stops the fill and the card says why (S3.4). Proof: `matter_look_volume_drift` (`manifold-nodes/tests/gpu_proofs/matter_look.rs:162`) passes; memory reported at 64 and 128.
+- **M3** (W, after S4.4). Matter on world tiles (S4.1). Bounds per I2 replace `matter_wall_stop`'s closed-face bits and the padding nodes: a Wall is a solid Matter collides with, and an Open face removes material. Bounds off per I3. Moving Domain Position or Bounds live never restarts Matter. Proof: with Bounds on and every face a Wall, WaterStillPoolMatter stays still and WaterFloatingBoxMatter floats as today, and `matter_look_volume_drift` passes.
+- **SBm** (A, after SB). Matter's tick moves to SB's compute queue, judged by live tick interval on WaterDamBreakMatter. It commits nothing if it gains nothing.
+
 ## 5. Final Verification
 
 - Regenerate the node catalog (`scripts/dev.py node-catalog`).
 - Clean-cut `rg` sweep: every deleted name returns zero across `crates scripts tools assets docs` (design-doc removal records excepted), with no dead code and no unused params or rows.
-- One speed and memory check, with nothing else running: `fluid_capture` on the Dam Break at 64 and 128, the base binary from step 1 against today's build, alternating, two runs each, reporting `gpu_ms`, `frame_ms` and memory.
+- One speed and memory check, with nothing else running: `fluid_capture` on the Dam Break and WaterDamBreakMatter at 64 and 128, the base binary from step 1 against today's build, alternating, two runs each, reporting `gpu_ms`, `frame_ms` and memory.
