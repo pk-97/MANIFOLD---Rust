@@ -3,7 +3,10 @@
 //! the cells on every axis. A pooled field is stored per 8^3 tile in a pool of
 //! `P` tiles plus a canonical block of [`CANON_RECORDS`] elements; the
 //! including shader defines `ts_cells()` (the cell counts) and
-//! `ts_pool_tiles()` (`P`) and declares the slot table `ts_table`.
+//! `ts_pool_tiles()` (`P`) and `ts_table_word(i)` (the slot table's words).
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;
 
 /// Cells per tile side (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
 /// table)). Partial edge tiles are allowed: no lattice side rule.
@@ -24,8 +27,12 @@ pub fn pool_len(pool_tiles: u32) -> u64 {
 /// The dense grid helpers (`ts_grid_*`); they need nothing from the includer.
 pub const TILE_GRID: &str = include_str!("primitives/shaders/tile_grid.wgsl");
 
-/// The grid helpers plus the lattice helpers; the including shader defines
-/// `ts_cells()` and `ts_pool_tiles()` and declares `ts_table`.
+/// The lattice helpers (`tile_storage.wgsl`); they build on [`TILE_GRID`].
+/// The including shader defines `ts_cells()`, `ts_pool_tiles()` and
+/// `ts_table_word(i)`.
+pub const TILE_POOL: &str = include_str!("primitives/shaders/tile_storage.wgsl");
+
+/// [`TILE_GRID`] then [`TILE_POOL`].
 pub const TILE_STORAGE: &str = concat!(
     include_str!("primitives/shaders/tile_grid.wgsl"),
     "\n",
@@ -54,7 +61,33 @@ mod tests {
 
     const STUB: &str = "fn ts_cells() -> vec3<i32> { return vec3<i32>(17, 8, 3); }\n\
         fn ts_pool_tiles() -> u32 { return 3u; }\n\
-        @group(0) @binding(0) var<storage, read> ts_table: array<u32>;\n";
+        @group(0) @binding(0) var<storage, read> ts_table: array<u32>;\n\
+        fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }\n";
+
+    /// What a codegen atom composes: the table from its `buf_tiles` input,
+    /// the sizes from its params.
+    const ATOM_STUB: &str = "struct Params { nx: u32, ny: u32, nz: u32, pool_tiles: u32 }\n\
+        @group(0) @binding(0) var<uniform> params: Params;\n\
+        @group(0) @binding(1) var<storage, read> buf_tiles: array<u32>;\n\
+        fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(params.nx), i32(params.ny), i32(params.nz)); }\n\
+        fn ts_pool_tiles() -> u32 { return params.pool_tiles; }\n\
+        fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }\n";
+
+    #[test]
+    fn atom_composition_validates() {
+        let shader = format!(
+            "{TILE_GRID}\n{TILE_POOL}\n{ATOM_STUB}\
+             @compute @workgroup_size(1) fn main() {{ \
+             _ = ts_cell_at(vec3<i32>(1)) + ts_face(vec3<i32>(1)); _ = ts_cell_coord(0u); }}\n"
+        );
+        let module = naga::front::wgsl::parse_str(&shader).expect("atom composition parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("atom composition validates");
+    }
 
     #[test]
     fn storage_helpers_validate() {

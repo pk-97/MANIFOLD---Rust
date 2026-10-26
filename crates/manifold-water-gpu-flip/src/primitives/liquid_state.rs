@@ -3,10 +3,7 @@
 //! frames and has the executor run its region once per liquid tick the
 //! domain's clock is due. The region body is one whole tick. A non-finite
 //! tick (read back through a fenced ring) reports an error and reseeds water
-//! without stopping its clock. The last
-//! tick's face grid escapes beside the particles into storage this node owns,
-//! sized from the lattice wires before the region runs, so it is whole from
-//! the first frame and holds while the transport is paused.
+//! without stopping its clock.
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
@@ -15,9 +12,6 @@ use manifold_node_engine::exec::substeps::{SubstepBoundaryPorts, SubstepResultPo
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::grid::face_bytes;
-use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use manifold_water_liquid::primitives::particle_identity::{IDENTITY_BYTES, ParticleIdentity};
 use manifold_water_liquid::whitewater::{
@@ -35,11 +29,6 @@ const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts {
         capture: "stats_in",
         output: "stats",
-        optional: false,
-    },
-    SubstepResultPorts {
-        capture: "faces_in",
-        output: "faces",
         optional: false,
     },
     SubstepResultPorts {
@@ -101,7 +90,7 @@ pub const LIQUID_STATE_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
 const READBACK_SLOTS: usize = 3;
 const WHITEWATER_STATE_WORDS: u32 = 8;
 const WHITEWATER_COUNT_WORDS: u32 = 9;
-const WHITEWATER_RESULT_START: usize = 3;
+const WHITEWATER_RESULT_START: usize = 2;
 const WHITEWATER_RESULT_COUNT: usize = 7;
 
 pub struct ReadbackSlot {
@@ -172,14 +161,13 @@ fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, Str
 manifold_node_engine::primitive! {
     name: LiquidState,
     type_id: "node.liquid_state",
-    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats and its last tick's face grid escape with them; a new epoch's faces are zero. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time.",
+    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats escape with them. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time.",
     inputs: {
         seed: Array(FluidParticle) required,
         in: Array(FluidParticle) required,
         stats_in: Array(u32) required,
         identity_in: Array(u32) optional,
         clock_status_in: Array(u32) optional,
-        faces_in: Array(FaceSample) required,
         whitewater_pool_in: Array(WhitewaterParticle) optional,
         whitewater_state_in: Array(u32) optional,
         whitewater_counts_in: Array(u32) optional,
@@ -203,7 +191,6 @@ manifold_node_engine::primitive! {
         identity: Array(u32),
         stats: Array(u32),
         clock_status: Array(u32),
-        faces: Array(FaceSample),
         whitewater_pool: Array(WhitewaterParticle),
         whitewater_state: Array(u32),
         whitewater_counts: Array(u32),
@@ -218,7 +205,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in; the last step's projected, extended faces close into faces_in, and the domain's nodes_x/y/z size the held faces (required with faces_in). out and stats escape to node.liquid_frame; faces to three node.face_sample_component that feed the frame's face grid.",
+    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in. out and stats escape to node.liquid_frame.",
     examples: [],
     picker: { label: "Liquid State", category: Atom },
     summary: "Keeps a particle liquid between frames and runs one pass of its simulation per tick.",
@@ -247,7 +234,6 @@ manifold_node_engine::primitive! {
         sync_sample: Option<SyncSample> = None,
         // Incoming tick ordinal the sync sample describes, set when copied.
         sync_sample_tick: Option<u64> = None,
-        faces: Option<GpuBuffer> = None,
         whitewater_pool: Option<GpuBuffer> = None,
         whitewater_empty: Option<GpuBuffer> = None,
         whitewater_state: Option<GpuBuffer> = None,
@@ -519,7 +505,6 @@ impl Primitive for LiquidState {
             "stats_in",
             "identity_in",
             "clock_status_in",
-            "faces_in",
             "whitewater_pool_in",
             "whitewater_state_in",
             "whitewater_counts_in",
@@ -550,7 +535,6 @@ impl Primitive for LiquidState {
         matches!(
             port,
             "identity"
-                | "faces"
                 | "whitewater_pool"
                 | "whitewater_state"
                 | "whitewater_counts"
@@ -564,7 +548,6 @@ impl Primitive for LiquidState {
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "identity" => self.identity.as_ref(),
-            "faces" => self.faces.as_ref(),
             "whitewater_pool" => self.whitewater_pool.as_ref(),
             "whitewater_state" => self.whitewater_state.as_ref(),
             "whitewater_counts" => self.whitewater_counts.as_ref(),
@@ -594,12 +577,9 @@ impl Primitive for LiquidState {
             "stats" => Some(LIQUID_STATS_WORDS),
             "identity" => Some(4),
             "clock_status" => Some(8),
-            // Provided storage: a one-record hint, sized at run time from the
-            // body's faces, which the plan allocates after this node.
-            "faces" | "whitewater_pool" | "whitewater_state" | "whitewater_counts"
-            | "foam_particles" | "bubble_particles" | "spray_particles" | "dust_particles" => {
-                Some(1)
-            }
+            // Provided storage: a one-record hint, sized at run time.
+            "whitewater_pool" | "whitewater_state" | "whitewater_counts" | "foam_particles"
+            | "bubble_particles" | "spray_particles" | "dust_particles" => Some(1),
             _ => None,
         }
     }
@@ -633,24 +613,6 @@ impl Primitive for LiquidState {
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
         let mut refused = None;
-        // The face grid's bytes, from the lattice this frame's ticks run on:
-        // faces_in still holds the last frame's (or no) body here.
-        let face_grid = if ctx.inputs.slot("faces_in").is_none() {
-            None
-        } else if ["nodes_x", "nodes_y", "nodes_z"]
-            .iter()
-            .any(|port| ctx.inputs.slot(port).is_none())
-        {
-            refused = Some(
-                "Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z"
-                    .to_string(),
-            );
-            None
-        } else {
-            LiquidLattice::from_wires(ctx, "Liquid State")
-                .map(|lattice| face_bytes(FlipSolverGrid::from_lattice(lattice).cells()))
-        }
-        .filter(|_| ctx.outputs.array("faces").is_some());
         let whitewater_active: [bool; WHITEWATER_RESULT_COUNT] = std::array::from_fn(|i| {
             ctx.inputs
                 .slot(RESULTS[WHITEWATER_RESULT_START + i].capture)
@@ -688,36 +650,6 @@ impl Primitive for LiquidState {
         };
         let whitewater_reset = whitewater_resized || old_whitewater_capacity != whitewater_capacity;
 
-        // The faces are the lattice's face grid, held across frames; unwired
-        // or refused, none.
-        let mut fresh_faces = false;
-        match face_grid {
-            None => self.faces = None,
-            Some(bytes) if self.faces.as_ref().is_none_or(|f| f.size != bytes) => {
-                let device = gpu.device;
-                self.faces = manifold_node_engine::load::expand::admit_candidate_bytes(
-                    device.modifier_memory_snapshot(),
-                    bytes,
-                )
-                .map_err(|error| error.to_string())
-                .and_then(|()| device.try_create_buffer_shared(bytes))
-                .map_err(|error| {
-                    refused = Some(format!(
-                        "Liquid State: the face grid needs {bytes} bytes the device cannot give: {error}. Lower Resolution."
-                    ));
-                })
-                .ok();
-                fresh_faces = self.faces.is_some();
-            }
-            Some(_) => {}
-        }
-
-        if self.epoch != Some(epoch) || fresh_faces || self.identity_reset {
-            // A new epoch's faces are zero until its first tick.
-            if let Some(faces) = &self.faces {
-                gpu.native_enc.clear_buffer(faces);
-            }
-        }
         let epoch_reset = self.epoch != Some(epoch) || self.identity_reset;
         // Recovery increments on the GPU, after all submitted births. Retired
         // CPU metadata may be older than the allocator currently on the queue.
@@ -921,20 +853,6 @@ impl Primitive for LiquidState {
         }
         if self.captures != self.pending {
             return;
-        }
-        // Only the frame's last tick reaches the faces.
-        if let (Some(candidate), Some(faces)) = (ctx.inputs.array("faces_in"), self.faces.as_ref())
-        {
-            if candidate.size == faces.size {
-                ctx.gpu_encoder()
-                    .native_enc
-                    .copy_buffer_to_buffer(candidate, faces, faces.size);
-            } else {
-                ctx.error(format!(
-                    "Liquid State: the tick's faces hold {} bytes; the lattice's face grid is {}",
-                    candidate.size, faces.size
-                ));
-            }
         }
         self.ticks_done += u64::from(self.pending);
         let Some(stats) = ctx.outputs.array("stats") else {

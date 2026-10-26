@@ -1631,13 +1631,7 @@
           {
             "id": 8,
             "nodeId": "frame",
-            "typeId": "node.liquid_frame",
-            "params": {
-              "face_valid_layers": {
-                "type": "Int",
-                "value": 2
-              }
-            }
+            "typeId": "node.liquid_frame"
           },
           {
             "id": 10,
@@ -4092,12 +4086,6 @@
             "toPort": "stats_in"
           },
           {
-            "fromNode": 4,
-            "fromPort": "faces",
-            "toNode": 3,
-            "toPort": "faces_in"
-          },
-          {
             "fromNode": 0,
             "fromPort": "nodes_x",
             "toNode": 3,
@@ -4504,6 +4492,18 @@
             "fromPort": "faces",
             "toNode": 11,
             "toPort": "faces"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "tiles",
+            "toNode": 11,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "pool_tiles",
+            "toNode": 11,
+            "toPort": "pool_tiles"
           },
           {
             "fromNode": 4,

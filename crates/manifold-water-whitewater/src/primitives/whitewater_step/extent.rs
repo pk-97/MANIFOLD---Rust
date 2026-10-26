@@ -4,10 +4,10 @@ use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::extent::{field_reads, whole};
-use manifold_water_liquid::grid::face_bytes;
+use manifold_water_liquid::primitives::face_sample_component::{pool_tiles_wire, pooled_bytes};
+use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
 use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
-use manifold_water_liquid::whitewater::cell_total;
 use std::mem::size_of;
 
 fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -40,8 +40,16 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.provide(port, shape.population_bytes());
     }
     x.hold(shape.held_bytes(x.items("particles").unwrap_or(0)));
+    if x.input("pool_tiles").is_none() {
+        return Err(Verdict::Refused("pool_tiles is not wired".into()));
+    }
+    let pool_tiles =
+        pool_tiles_wire(|name, default| x.scalar(name, default)).map_err(Verdict::Refused)?;
+    let (face_bytes, table_bytes) = pooled_bytes(shape.face_cells, pool_tiles);
+    x.covers("tiles", table_bytes)?;
+    x.covers("distance", pool_len(pool_tiles) * 4)?;
     if packed {
-        x.covers("faces", face_bytes(shape.face_cells))?;
+        x.covers("faces", face_bytes)?;
         x.hold(shape.unpacked_face_bytes());
     } else {
         for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
@@ -76,7 +84,6 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             x.covers("atlas", 4)?;
         }
     }
-    x.covers("distance", cell_total(shape.face_cells) * 4)?;
     x.covers("pool", shape.pool_bytes())?;
     x.covers("pool_state", 32)?;
     x.covers("solid", shape.solid_bytes())

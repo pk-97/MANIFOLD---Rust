@@ -18,9 +18,14 @@ use manifold_water_liquid::grid::{face_dims, face_len};
 use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
 use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
 
-fn axis_params(axis: u32) -> ParamValues {
+/// The component's params for a solver lattice of `cells`: its padded nodes
+/// are four more a side.
+fn axis_params(axis: u32, cells: [u32; 3]) -> ParamValues {
     let mut params = ParamValues::default();
     params.insert("axis".into(), ParamValue::Enum(axis));
+    for (name, n) in ["nodes_x", "nodes_y", "nodes_z"].into_iter().zip(cells) {
+        params.insert(name.into(), ParamValue::Float((n + 4) as f32));
+    }
     params
 }
 
@@ -43,18 +48,15 @@ fn matter_last_read(nodes: [u32; 3], axis: usize) -> u64 {
     q[0] + n[0] * (q[1] + n[1] * q[2])
 }
 
-/// The step's face grid holds one record per padded cell; the component's
-/// out holds one float per record, at least the axis's faces.
+/// The component's out holds one float per record of the dense face grid the
+/// nodes name (one per padded cell), at least the axis's faces, whatever the
+/// pooled faces input holds.
 fn check_gpu_flip(cells: [u32; 3]) {
     let records = face_bytes(cells) / size_of::<FaceSample>() as u64;
     for axis in 0..3 {
         let count = face_len(cells, axis);
         let capacity = FaceSampleComponent::new()
-            .array_output_capacity(
-                "out",
-                &axis_params(axis as u32),
-                &[("faces", records as u32)],
-            )
+            .array_output_capacity("out", &axis_params(axis as u32, cells), &[])
             .expect("out capacity");
         assert_eq!(
             u64::from(capacity),

@@ -6,9 +6,8 @@
 
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs, StepBirths};
 use super::gpu_flip_step::GpuFlipStep;
-use super::gpu_flip_step_tests::cpu_sample_on;
+use super::gpu_flip_step_tests::{cpu_sample_on, step_faces};
 use super::liquid_fill::LiquidFill;
-use super::pool_testkit::{identity_table, records_to_pool, to_pool};
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
@@ -27,6 +26,7 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels,
 };
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
+use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool, to_pool};
 
 const H: f32 = 0.25;
 /// The splash's grid is the step's solver grid: 37 box cells and the step's
@@ -68,6 +68,7 @@ struct Splash {
     particles: (manifold_node_engine::bindings::Slot, GpuBuffer),
     identity: (manifold_node_engine::bindings::Slot, GpuBuffer),
     faces: manifold_node_engine::bindings::Slot,
+    tiles: manifold_node_engine::bindings::Slot,
     capped: manifold_node_engine::bindings::Slot,
     regions: Option<[manifold_node_engine::bindings::Slot; 4]>,
     region_count: usize,
@@ -103,6 +104,7 @@ impl Splash {
         let faces = h
             .array::<FaceSample>(&[], SOLVER.map(|n| n + 1).iter().product())
             .0;
+        let tiles = h.array::<u32>(&[], 1).0;
         let capped = h
             .array::<u32>(
                 &[],
@@ -137,6 +139,7 @@ impl Splash {
             particles,
             identity,
             faces,
+            tiles,
             capped,
             regions: region_slots,
             region_count,
@@ -185,6 +188,7 @@ impl Splash {
         let outputs = [
             ("out", self.particles.0),
             ("faces", self.faces),
+            ("tiles", self.tiles),
             ("capped", self.capped),
         ];
         let (_, errors) = self.h.run(&mut self.node, &inputs, &outputs, &p);
@@ -218,10 +222,7 @@ impl Splash {
     }
 
     fn faces(&self) -> Vec<FaceSample> {
-        read(
-            &self.h.buffer(self.faces),
-            SOLVER.map(|n| n + 1).iter().product(),
-        )
+        step_faces(&self.h, self.faces, self.tiles, SOLVER.map(|n| n as u32))
     }
 
     /// Entry i: the seed written at birth index i, grid-local.
@@ -629,6 +630,7 @@ fn a_resting_pool_seeds_nothing() {
     let solver = BOX as usize + 3;
     let identity = h.array::<u32>(&[placed as u32 + 1, 1, 0, 0], 4);
     let faces = h.array::<FaceSample>(&[], (solver + 1).pow(3)).0;
+    let tiles = h.array::<u32>(&[], 1).0;
     let capped = h.array::<u32>(&[], 2 * placed + SOLVER_WORDS as usize).0;
     let mut node = GpuFlipStep::new();
     node.prepare_pipelines(&h.device);
@@ -645,7 +647,12 @@ fn a_resting_pool_seeds_nothing() {
             ("tick_index", tick as f32),
         ]);
         let inputs = [("particles", out.0), ("identity", identity.0)];
-        let outputs = [("out", out.0), ("faces", faces), ("capped", capped)];
+        let outputs = [
+            ("out", out.0),
+            ("faces", faces),
+            ("tiles", tiles),
+            ("capped", capped),
+        ];
         let (_, errors) = h.run(&mut node, &inputs, &outputs, &params(&values));
         assert!(errors.is_empty(), "tick {tick}: {errors:?}");
         let stats: Vec<u32> = read(node.sheeting().stats(), 4);

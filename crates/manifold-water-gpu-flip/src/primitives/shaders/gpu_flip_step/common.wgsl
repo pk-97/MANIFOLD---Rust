@@ -257,6 +257,10 @@ fn ts_pool_tiles() -> u32 {
     return u.pool_tiles;
 }
 
+fn ts_table_word(i: u32) -> u32 {
+    return ts_table[i];
+}
+
 // The tile table: `slot_of` per box tile, then `tile_of` per pool slot
 // (tile_storage.wgsl).
 @group(0) @binding(51) var<storage, read> ts_table: array<u32>;

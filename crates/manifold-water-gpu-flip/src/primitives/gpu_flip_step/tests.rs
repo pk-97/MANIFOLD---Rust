@@ -190,7 +190,6 @@ fn step_shader_validates_with_every_entry() {
         "tiles_lists",
         "tiles_retire",
         "pool_canon",
-        "publish",
         "pocket_accumulate_coarse",
         "pocket_remove_coarse",
         "pocket_leader_clear",

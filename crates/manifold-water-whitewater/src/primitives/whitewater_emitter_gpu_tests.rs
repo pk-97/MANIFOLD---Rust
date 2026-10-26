@@ -570,7 +570,10 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         ],
         32,
     );
-    let phi = h.array(&vec![-5.0f32; 512], 512);
+    let (phi, table, pool_tiles) =
+        super::whitewater_step::fused_tests::pooled_distance(&[-5.0f32; 512], [8; 3]);
+    let phi = h.array(&phi, phi.len());
+    let tiles = h.array(&table, table.len());
     let solid = h.array(&vec![1.0f32; 729], 729);
     let source = h.array(
         &vec![
@@ -641,6 +644,8 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             obstacle_source: Some(&source.1),
             faces: super::whitewater_step::FaceSource::Axes([&f[0].1, &f[1].1, &f[2].1]),
             distance: &phi.1,
+            tiles: &tiles.1,
+            pool_tiles,
         };
         let mut native = h.device.create_encoder("whitewater-dust-population");
         step.advance_tick(

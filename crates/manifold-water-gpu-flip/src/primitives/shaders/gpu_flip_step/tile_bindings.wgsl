@@ -37,13 +37,6 @@
 
 @group(0) @binding(35) var<storage, read_write> tile_rhs: array<f32>;
 
-// The step's output buffers, dense: the internal faces and φ (pooled) are
-// copied into them by `publish`, one record and one cell to their own box
-// index.
-@group(0) @binding(43) var<storage, read_write> faces_published: array<FaceSample>;
-
-@group(0) @binding(44) var<storage, read_write> distance_published: array<f32>;
-
 // The pool's free stack: slots no tile holds, `free_top` of them (counts
 // word `tile_free_top_word`). Starts as every slot.
 @group(0) @binding(52) var<storage, read_write> tile_free: array<u32>;

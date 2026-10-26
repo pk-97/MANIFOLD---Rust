@@ -6,7 +6,7 @@ use manifold_node_engine::exec::extent::{ExtentError, ExtentReport};
 #[cfg(feature = "gpu-proofs")]
 use manifold_nodes_water::presets::gpu_flip::*;
 use manifold_nodes_water::testkit::liquid_extents::*;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 
@@ -270,10 +270,6 @@ fn gpu_flip_rendered_scenes_cover_every_dispatch() {
         .map(|scale| WaterScene::dam_break(64).with_surface_scale(scale));
     // The cadence probe: one step a tick.
     let cadence = [WaterScene::dam_break(64).with_steps(1)];
-    // The published face grid, at every lattice.
-    let faces = LATTICES
-        .into_iter()
-        .map(|n| WaterScene::dam_break(n).with_faces());
     let registry = PrimitiveRegistry::with_builtin();
     for scene in LATTICES
         .into_iter()
@@ -281,7 +277,6 @@ fn gpu_flip_rendered_scenes_cover_every_dispatch() {
         .chain(coarser)
         .chain(detail)
         .chain(cadence)
-        .chain(faces)
     {
         let n = scene.pressure.n;
         let def = render_def(scene);
@@ -332,7 +327,7 @@ fn fused_regions(def: &EffectGraphDef) -> Vec<String> {
 fn gpu_flip_frozen_graphs_cover_every_dispatch() {
     for n in LATTICES {
         let scene = WaterScene::dam_break(n);
-        for scene in [scene.with_surface(), scene.with_faces()] {
+        for scene in [scene.with_surface(), scene] {
             let report = walked(&render_def(scene), true, &format!("frozen render {n}³"));
             assert!(
                 report.checked > 7,
@@ -350,30 +345,6 @@ fn gpu_flip_step_does_not_fuse() {
         fused_regions(&water_def(WaterScene::dam_break(64))),
         Vec::<String>::new()
     );
-}
-
-/// The tick hands the state the step's faces, whatever the step count.
-#[test]
-fn gpu_flip_state_takes_the_last_steps_extended_faces() {
-    for scene in [
-        WaterScene::dam_break(64),
-        WaterScene::dam_break(64).with_steps(2),
-    ] {
-        let def = serde_json::to_value(water_def(scene)).expect("def");
-        let name = |id: &Value| -> String {
-            let nodes = def["nodes"].as_array().expect("nodes");
-            nodes.iter().find(|n| n["id"] == *id).expect("wired node")["nodeId"]
-                .as_str()
-                .expect("name")
-                .to_string()
-        };
-        let wires = def["wires"].as_array().expect("wires");
-        let into: Vec<_> = wires.iter().filter(|w| w["toPort"] == "faces_in").collect();
-        assert_eq!(into.len(), 1, "one faces_in wire");
-        assert_eq!(name(&into[0]["toNode"]), "state");
-        assert_eq!(name(&into[0]["fromNode"]), STEP_NODE);
-        assert_eq!(into[0]["fromPort"], "faces");
-    }
 }
 
 #[test]
@@ -530,10 +501,7 @@ fn gpu_flip_builder_graphs_feed_every_interval_input() {
 #[test]
 fn liquid_presets_feed_state_dropped_time_from_their_clock_domain() {
     let mut graphs = vec![
-        (
-            "GPU FLIP builder",
-            render_def(WaterScene::dam_break(16).with_faces()),
-        ),
+        ("GPU FLIP builder", render_def(WaterScene::dam_break(16))),
         ("Add Fluid's liquid body", gpu_flip_liquid_body()),
     ];
     for name in [
@@ -593,10 +561,7 @@ fn liquid_presets_feed_state_dropped_time_from_their_clock_domain() {
 #[test]
 fn gpu_flip_frames_take_the_cursor_from_their_clock_domain() {
     let mut graphs = vec![
-        (
-            "GPU FLIP builder",
-            render_def(WaterScene::dam_break(16).with_faces()),
-        ),
+        ("GPU FLIP builder", render_def(WaterScene::dam_break(16))),
         ("Add Fluid's liquid body", gpu_flip_liquid_body()),
     ];
     for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET] {
@@ -678,7 +643,7 @@ fn gpu_flip_presets_feed_retired_speed_from_the_particles_state() {
 /// the boundary. This checks real preset compilation without a GPU.
 #[test]
 fn whitewater_per_tick_preset_closes_the_liquid_region() {
-    let def = render_def(WaterScene::dam_break(16).with_faces());
+    let def = render_def(WaterScene::dam_break(16));
     let (graph, plan) = built(&def);
     let def = manifold_core::flatten::flatten_groups(&def).expect("grouped region topology");
     let whitewater_node = graph
@@ -725,6 +690,9 @@ fn whitewater_per_tick_preset_closes_the_liquid_region() {
             .any(|n| n.id == distance.from_node && n.type_id == "node.gpu_flip_step")
     );
     for port in [
+        "faces",
+        "tiles",
+        "pool_tiles",
         "substep_schedule",
         "substep_u",
         "substep_v",

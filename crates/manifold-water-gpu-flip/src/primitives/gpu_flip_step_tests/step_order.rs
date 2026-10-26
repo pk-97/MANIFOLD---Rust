@@ -167,8 +167,8 @@ pub(super) fn gpu_flip_step_order_inflow_waits_until_next_step() {
     // cells outside the box.
     let solver = N.map(|n| n + 3);
     let solver_min: [f32; 3] = std::array::from_fn(|a| MIN[a] - 1.5 * H);
-    let solver_faces = solver.map(|n| n + 1).iter().product::<usize>();
-    let faces = h.array::<FaceSample>(&[], solver_faces);
+    let faces = h.array::<FaceSample>(&[], 1);
+    let tiles = h.array::<u32>(&[], 1);
     let (row, shape, atlas) = region_box(2.0, [2, 2, 1], [1, 1, 1], [0.25, 0.0, 0.0]);
     let regions = h.array(&[row], 1);
     let shapes = h.array(&[shape], 1);
@@ -204,6 +204,7 @@ pub(super) fn gpu_flip_step_order_inflow_waits_until_next_step() {
     let outputs = [
         ("out", particles.0),
         ("faces", faces.0),
+        ("tiles", tiles.0),
         ("capped", capped.0),
     ];
     let (_, errors) = h.run(&mut node, &inputs, &outputs, &p);
@@ -225,7 +226,7 @@ pub(super) fn gpu_flip_step_order_inflow_waits_until_next_step() {
     let (_, errors) = h.run(&mut node, &inputs, &outputs, &p);
     assert!(errors.is_empty(), "{errors:?}");
     let second: Vec<FluidParticle> = read(&particles.1, capacity);
-    let field: Vec<FaceSample> = read(&h.buffer(faces.0), solver_faces);
+    let field = step_faces(&h, faces.0, tiles.0, solver.map(|n| n as u32));
     assert!(
         alive
             .iter()

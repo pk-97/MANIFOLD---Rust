@@ -127,6 +127,10 @@ fn ts_pool_tiles() -> u32 {
     return u.pool_tiles;
 }
 
+fn ts_table_word(i: u32) -> u32 {
+    return ts_table[i];
+}
+
 // Whether thread gid's workgroup is inside the fine level's active list; a
 // workgroup past it returns before any barrier, whole.
 fn listed(gid: u32) -> bool {

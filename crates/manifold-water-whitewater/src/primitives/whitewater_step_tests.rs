@@ -288,7 +288,10 @@ mod gpu {
                 ((p.iter().map(|v| v * v).sum::<f32>()).sqrt() - 2.5).min(3.0) * h
             })
             .collect();
+        let (phi, table, pool_tiles) =
+            crate::primitives::whitewater_step::fused_tests::pooled_distance(&phi, cells);
         let distance = shared(bytemuck::cast_slice(&phi));
+        let tiles = shared(bytemuck::cast_slice(&table));
         let solid = shared(bytemuck::cast_slice(&vec![10.0f32; 13 * 13 * 13]));
         let mut rng = Rng(0x215);
         let particles: Vec<FluidParticle> = (0..256)
@@ -341,6 +344,8 @@ mod gpu {
                             &f[0], &f[1], &f[2],
                         ]),
                         distance: &distance,
+                        tiles: &tiles,
+                        pool_tiles,
                     };
                     let settings = StepFrame {
                         shape,

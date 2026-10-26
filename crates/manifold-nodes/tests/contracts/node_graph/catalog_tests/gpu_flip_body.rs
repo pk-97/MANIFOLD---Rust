@@ -22,12 +22,12 @@ use manifold_water_gpu_flip::primitives::gpu_flip_pressure::{
     MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water,
 };
 use manifold_water_gpu_flip::primitives::gpu_flip_step::{set_all_tiles, set_gate_off, set_poison};
-use manifold_water_gpu_flip::primitives::pool_testkit::{
-    from_pool, identity_table, records_from_pool, records_to_pool, to_pool,
-};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
+use manifold_water_liquid::tile_storage::testkit::{
+    from_pool, identity_table, records_from_pool, records_to_pool, to_pool,
+};
 use manifold_water_liquid::tile_storage::{TILE, pool_len};
 
 /// Tail index of stats word 16 (active-tile share): the tail starts at stats word 10 (liquid_stats.rs `SOLVER_WORDS`).
@@ -1307,6 +1307,32 @@ impl BoxRun {
         read(&staging, bytes as usize / 4)
     }
 
+    /// The step's pooled `port` array (`faces`, `distance`) in tile order:
+    /// each tile's slot read through the step's slot table, then the
+    /// canonical block. Two runs agree when this matches, whatever order
+    /// their atomic slot allocation gave.
+    fn tile_ordered(&self, port: &str) -> Vec<u32> {
+        const STEP: &str = "node.gpu_flip_step";
+        let (pool, table) = (self.words(STEP, port), self.words(STEP, "tiles"));
+        // The distance holds one f32 per cell: P * 512 + 8 words.
+        let distance = self.words(STEP, "distance");
+        let pool_tiles = (distance.len() - 8) / 512;
+        let tiles = table.len() - pool_tiles;
+        let record_words = pool.len() / (pool_tiles * 512 + 8);
+        let slot_words = 512 * record_words;
+        let mut ordered = Vec::with_capacity(pool.len());
+        for &slot in &table[..tiles] {
+            if slot == u32::MAX {
+                ordered.push(u32::MAX);
+            } else {
+                let at = slot as usize * slot_words;
+                ordered.extend_from_slice(&pool[at..at + slot_words]);
+            }
+        }
+        ordered.extend_from_slice(&pool[pool_tiles * slot_words..]);
+        ordered
+    }
+
     /// The share of 8^3 tiles the cell passes ran over, from the last tick.
     fn tile_share(&self) -> f32 {
         let capped = self.words("node.gpu_flip_step", "capped");
@@ -1444,13 +1470,8 @@ fn gpu_flip_inactive_slots_match_the_ungated_step() {
             let at = format!("{fixture:?} level {level} tick {tick}");
             let read = |run: &BoxRun| {
                 let mut arrays = run.left();
-                for port in [
-                    "faces",
-                    "substep_schedule",
-                    "substep_u",
-                    "substep_v",
-                    "substep_w",
-                ] {
+                arrays.push(("faces", run.tile_ordered("faces")));
+                for port in ["substep_schedule", "substep_u", "substep_v", "substep_w"] {
                     arrays.push((port, run.words(STEP, port)));
                 }
                 arrays
@@ -1480,8 +1501,8 @@ fn gpu_flip_inactive_slots_match_the_ungated_step() {
                 .filter(|row| f32::from_bits(row[0]) == 0.0)
                 .count();
             let (a, b) = (
-                ungated.words(STEP, "distance"),
-                gated.words(STEP, "distance"),
+                ungated.tile_ordered("distance"),
+                gated.tile_ordered("distance"),
             );
             assert_eq!(a.len(), b.len(), "{at}: distance is sized differently");
             let three_h = b
@@ -1598,12 +1619,13 @@ fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
             }));
             for (what, type_id, port) in [
                 ("full capped", STEP, "capped"),
-                ("faces", STEP, "faces"),
                 ("full stats", "node.liquid_stats", "stats_out"),
             ] {
                 got.push((what, automatic.words(type_id, port)));
                 want.push((what, full.words(type_id, port)));
             }
+            got.push(("faces", automatic.tile_ordered("faces")));
+            want.push(("faces", full.tile_ordered("faces")));
             for ((what, a), (expected_what, b)) in got.iter().zip(&want) {
                 assert_eq!(what, expected_what, "{at}: matching array labels");
                 assert_eq!(a.len(), b.len(), "{at}: {what} is sized differently");

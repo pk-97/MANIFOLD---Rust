@@ -2,7 +2,6 @@
 //! against FLIP's own sheeter) on the same level set and ordered markers.
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs};
 use super::gpu_flip_sheeting_cpu_tests::bucket_fixture;
-use super::pool_testkit::{from_pool, identity_table, records_to_pool, to_pool};
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
@@ -12,6 +11,9 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels,
 };
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
+use manifold_water_liquid::tile_storage::testkit::{
+    from_pool, identity_table, records_to_pool, to_pool,
+};
 
 const LABELS: SortLabels = SortLabels {
     clear: "sheeting proof sort clear",

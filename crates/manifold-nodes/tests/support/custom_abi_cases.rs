@@ -206,9 +206,9 @@ pub const CASES: &[CustomAbiCase] = &[
     },
     CustomAbiCase {
         source: "whitewater_step.rs",
-        rust_struct: "UnpackParams",
-        shader: "shaders/whitewater_fused.wgsl",
-        shader_struct: "UnpackParams",
+        rust_struct: "GatherParams",
+        shader: "shaders/gather_distance.wgsl",
+        shader_struct: "GatherParams",
         aliases: &[],
     },
     CustomAbiCase {

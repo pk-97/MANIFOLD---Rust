@@ -44,8 +44,8 @@ pub enum Fixture {
     /// [`STACK_HEIGHT`] boxes, each half again as dense as the liquid,
     /// stacked on the floor under a still pool.
     Stack,
-    /// The Dam Break at resolution [`FACE_GRID_RESOLUTION`] with its face
-    /// grid wired into the frame.
+    /// The Dam Break at resolution [`FACE_GRID_RESOLUTION`]; MPM wires its
+    /// face grid into the frame.
     FaceGrid,
 }
 
@@ -55,10 +55,6 @@ pub const STACK_HEIGHT: u32 = 3;
 /// The face grid scene's resolution: the publish path is the same at any
 /// size, and 32 keeps the check cheap.
 pub const FACE_GRID_RESOLUTION: u32 = 32;
-
-/// GPU FLIP's `face_valid_layers` in the face grid scene: the step's
-/// `FACE_VALID_LAYERS`, held to it by `gpu_flip_band_follows_the_cfl_guard`.
-pub const FACE_GRID_GPU_FLIP_LAYERS: u32 = 2;
 
 /// One conformance check (section 4 (Invariants & enforcement)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

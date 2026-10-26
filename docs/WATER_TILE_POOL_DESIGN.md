@@ -18,7 +18,7 @@ Not in the pool: the coarse multigrid levels (an eighth of the fine lattice per 
 - **Records live with their cell.** Record `p` holds cell `p`'s three low faces (as today), so it is stored at cell `p`'s index. A record with some `p[a] == n[a]` (the far boundary) belongs to no cell and always reads canonical.
 - **Inverse table.** `tile_of: array<u32>`, one word per slot: the box tile it holds (`TS_NONE` when free). Written by the allocator beside `slot_of`.
 - **Helpers.** `ts_cell_at(p)` and `ts_face(p)` return the pool index, or the canonical index when the tile is absent or the record is past the lattice. `ts_cell_coord(idx)` and `ts_face_coord(idx)` keep their callers: `ts_origin(tile_of[idx >> 9]) + local_coord(idx & 511)` for a pool index (never called on a canonical index). `ts_list_cell(tile, gid)` returns the pool index of the list tile's cell. `ts_cell_count()` and `ts_record_count()` stay the box's counts for passes still over the box (section 5); storage sizes come from `ts_pool_len()` (`P · 512 + 8`).
-- **Includer contract.** A shader including `TILE_STORAGE` declares `ts_slot_of: array<u32>` and `ts_tile_of: array<u32>` (read) at bindings of its choosing and defines `fn ts_pool_tiles() -> u32` beside `ts_cells()`. Codegen atoms that read pooled fields (whitewater) take the slot table as an input named `tiles` and the include `tile_pool_atom.wgsl` defines the same helpers on `buf_tiles` and the atom's `pool_tiles` param, the second include allowed to name a buffer (precedent: `marching_cubes_common.wgsl` reads `buf_levelset`).
+- **Includer contract.** The helpers name no buffer. A shader including `TILE_POOL` (or `TILE_STORAGE` = `TILE_GRID` + `TILE_POOL`) defines `fn ts_cells() -> vec3<i32>`, `fn ts_pool_tiles() -> u32` and `fn ts_table_word(i: u32) -> u32` (word `i` of the table: `slot_of` then `tile_of`). Hand shaders read a `ts_table` binding; a codegen atom (`node.face_sample_component`) defines them in its body from its params and its `tiles` input (`buf_tiles`) and lists `[TILE_GRID, TILE_POOL]` as includes.
 
 ## 3. Absent reads: the defined-value rule (I1)
 
@@ -49,7 +49,7 @@ Slot numbers depend on atomic order; no value does: reductions are indexed by bo
 - **Dense passes become A passes** (512 threads a tile over list A, indirect): the extend layers (the gated replay segments keep their gate, over A), face_gravity, open_fractions, solid_face_velocity and solid_extrapolate, pocket seed/check/pin/condition/mean, subtract_pressure, constrain, the density solve's dense passes, sheet distance, remove_crowded, the solver's `rows` and `init_main`. A record pass over A visits each allocated cell's own record; the far-boundary records are canonical and never written.
 - **Line passes** (pocket rounds sweep whole lines): stay one thread per line over the box; a step along the line through an absent tile reads canonical (no water) and writes nothing there.
 - **Retire.** `tiles_retire` stays for tiles leaving C but staying in A (C's canonical rule); tiles leaving A are freed instead.
-- **Outputs.** The step's `faces` and `distance` outputs are pooled buffers; the step adds output `tiles` (the slot table, `T³` words) and scalar `pool_tiles`. Readers index through the pool: `node.liquid_state` (its faces copy becomes a pooled buffer plus its own slot-table copy, both copied together), whitewater's distance and packed faces (`whitewater_fused.wgsl:87`, `:1589`), `face_sample_component_body.wgsl:26` (the substep history), `node.liquid_frame`'s face copies (deleted in S3.6 with the frame-history face copies if no reader remains).
+- **Outputs.** The step's `faces` and `distance` outputs are its pooled buffers (shared storage), with output `tiles` (the slot table, `T + P` words) and scalar `pool_tiles`. Readers go through the table: the substep history and whitewater's face unpacking run `node.face_sample_component` (pooled faces in, a dense axis array out); whitewater gathers the pooled distance once per run into its own box (`gather_distance.wgsl`), which every distance reader in the stage then reads, since whitewater itself stays a box. `node.liquid_state`'s dense face copy and the frame's face ports are deleted.
 - **Extent.** Every pooled field holds `ts_pool_len() · element` bytes; the step's hold adds the slot table, the free list and the fresh list.
 
 ## 6. Proofs
@@ -63,9 +63,9 @@ Slot numbers depend on atomic order; no value does: reductions are indexed by bo
 | Job | Worker | What |
 |---|---|---|
 | S3.0 | sonnet ×3 | Narrow Band and the interior field deleted before S3.1 (a whole dense subsystem the pool would otherwise carry). Done. |
-| S3.1a | sonnet | Helpers' pool bodies, slot table, pool sizing and canonical block, allocator with A = every tile, the step's GS shaders (C and A lists) |
-| S3.1b | sonnet | Pressure, Lentine, bodies, sheeting and sheet distance on the pool (slot binding, A lists for their dense loops) |
-| S3.1c | sonnet | Consumers: liquid_state, whitewater, face_sample_component, liquid_frame |
+| S3.1a | sonnet | Helpers' pool bodies, slot table, pool sizing and canonical block, allocator with A = every tile, the step's shaders. Done (438c89edd, Dam Break capture bitwise). |
+| S3.1b | sonnet | Pressure, Lentine, bodies, sheeting and sheet distance on the pool. Done with S3.1a. |
+| S3.1c | sonnet ×3 | Consumers: the step publishes its pool and table, the publish copy goes; face component, substep history and whitewater read through the table; liquid_state's face copy and the frame's face ports deleted. Done (capture bitwise). |
 | S3.2 | sonnet | A = ring ≤ ring_max: free, alloc, fresh fill; P from the budget; exhausted word |
 | S3.3 | sonnet | Sorter keyed on (slot, local cell) for FLIP and Matter; extend on the frontier only |
 | S3.4 | sonnet | Particle pool grows with the water; every particle pass dispatches from the live count |

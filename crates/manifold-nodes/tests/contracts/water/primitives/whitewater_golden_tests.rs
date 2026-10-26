@@ -106,7 +106,13 @@ fn compaction_moves_a_survivor() -> (usize, u32) {
         unsafe { b.write(0, bytes) };
         b
     };
-    let distance = shared(bytemuck::cast_slice(&vec![1.0f32; 512]));
+    let (distance, table, pool_tiles) =
+        manifold_water_whitewater::primitives::whitewater_step::fused_tests::pooled_distance(
+            &[1.0; 512],
+            cells,
+        );
+    let distance = shared(bytemuck::cast_slice(&distance));
+    let tiles = shared(bytemuck::cast_slice(&table));
     let solid = shared(bytemuck::cast_slice(&vec![10.0f32; 13 * 13 * 13]));
     let particles = shared(bytemuck::cast_slice(&vec![FluidParticle::default(); 256]));
     let faces: [GpuBuffer; 3] = std::array::from_fn(|a| {
@@ -145,6 +151,8 @@ fn compaction_moves_a_survivor() -> (usize, u32) {
             &faces[0], &faces[1], &faces[2],
         ]),
         distance: &distance,
+        tiles: &tiles,
+        pool_tiles,
     };
     let settings = StepFrame {
         shape,

@@ -52,8 +52,6 @@ pub(super) struct Pipelines {
     pub(super) tiles_retire: GpuComputePipeline,
     /// The canonical block of every pooled field, once per pool build.
     pub(super) pool_canon: GpuComputePipeline,
-    /// The pooled faces and φ into the step's dense outputs.
-    pub(super) publish: GpuComputePipeline,
     /// The proofs' poison entry, dispatched under [`POISON`].
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub(super) poison: GpuComputePipeline,
@@ -121,7 +119,6 @@ impl Pipelines {
             tiles_lists: pipe("tiles_lists"),
             tiles_retire: pipe("tiles_retire"),
             pool_canon: pipe("pool_canon"),
-            publish: pipe("publish"),
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             poison: pipe(super::super::gpu_flip_tile_tests::POISON_ENTRY),
         }

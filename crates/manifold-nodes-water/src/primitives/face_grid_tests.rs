@@ -14,6 +14,9 @@ use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::{face_coords, face_len, face_position};
 use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
+use manifold_water_liquid::tile_storage::testkit::{
+    identity_table, records_from_pool, records_to_pool,
+};
 
 /// Unequal sides, so a swapped axis shows.
 const N: [u32; 3] = [6, 5, 4];
@@ -59,6 +62,13 @@ impl Rng {
     }
 }
 
+/// The FLIP component's params: the matter ones plus the pool's tiles.
+fn flip_params(nodes: [u32; 3], axis: u32, pool_tiles: u32) -> ParamValues {
+    let mut p = component_params(nodes, axis);
+    p.insert("pool_tiles".into(), ParamValue::Float(pool_tiles as f32));
+    p
+}
+
 fn component_params(nodes: [u32; 3], axis: u32) -> ParamValues {
     let mut p = params(&[
         ("nodes_x", nodes[0] as f32),
@@ -72,12 +82,12 @@ fn component_params(nodes: [u32; 3], axis: u32) -> ParamValues {
 fn run_component<P: Primitive + 'static>(
     harness: &mut Harness,
     prim: &mut P,
-    input: (&'static str, manifold_node_engine::bindings::Slot),
+    inputs: &[(&'static str, manifold_node_engine::bindings::Slot)],
     len: usize,
     step_params: &ParamValues,
 ) -> Vec<f32> {
     let out = harness.array::<f32>(&[], len);
-    let (_, errors) = harness.run(prim, &[input], &[("out", out.0)], step_params);
+    let (_, errors) = harness.run(prim, inputs, &[("out", out.0)], step_params);
     assert!(errors.is_empty(), "{errors:?}");
     read(&out.1, len)
 }
@@ -100,7 +110,8 @@ fn seam_position(axis: usize, f: [u32; 3]) -> [f64; 3] {
 }
 
 /// GPU FLIP's lattice: (n+1)³ padded cells, face a of cell p at
-/// m + p·h with ½ on the other two axes; weight 1 where the face exists.
+/// m + p·h with ½ on the other two axes; weight 1 where the face exists. The
+/// far faces (p[a] = n[a]) are the box wall: closed, velocity 0.
 fn gpu_flip_lattice(field: &Field) -> Vec<FaceSample> {
     let m = N.map(|n| n + 1);
     (0..m.iter().product::<u32>())
@@ -109,13 +120,37 @@ fn gpu_flip_lattice(field: &Field) -> Vec<FaceSample> {
             let mut s = FaceSample::default();
             for a in 0..3 {
                 if (0..3).all(|b| b == a || p[b] < N[b]) {
-                    s.velocity[a] = field.at(seam_position(a, p))[a] as f32;
+                    if p[a] < N[a] {
+                        s.velocity[a] = field.at(seam_position(a, p))[a] as f32;
+                    }
                     s.weight[a] = 1.0;
                 }
             }
             s
         })
         .collect()
+}
+
+/// The canonical records of the pooled faces: every face absent except the
+/// masked axes, closed (velocity 0, weight 1).
+fn canonical_faces() -> [FaceSample; 8] {
+    std::array::from_fn(|mask| {
+        let mut s = FaceSample::default();
+        for a in 0..3 {
+            s.weight[a] = f32::from(u8::from(mask >> a & 1 == 1));
+        }
+        s
+    })
+}
+
+/// A dense face lattice in the step's pooled layout under the identity slot
+/// table: the pooled records, the table, the pool's tiles, and the dense
+/// lattice the pool reads back as (records past the cells read canonical).
+fn pooled(lattice: &[FaceSample]) -> (Vec<FaceSample>, Vec<u32>, u32, Vec<FaceSample>) {
+    let pool = records_to_pool(lattice, N, &canonical_faces());
+    let (table, pool_tiles) = identity_table(N);
+    let effective = records_from_pool(&pool, N);
+    (pool, table, pool_tiles, effective)
 }
 
 /// The padded lattice over the box: n + 7 nodes, the first at m − 3h. The
@@ -156,20 +191,28 @@ fn matter_grid(field: &Field) -> Vec<MatterGridNode> {
 fn liquid_face_grid_layout_gpu_flip() {
     let mut harness = Harness::new();
     for (name, field) in [("uniform", Field::uniform()), ("shear", Field::shear())] {
-        let lattice = gpu_flip_lattice(&field);
-        let input = harness.array(&lattice, lattice.len());
+        let (pool, table, pool_tiles, _) = pooled(&gpu_flip_lattice(&field));
+        let input = harness.array(&pool, pool.len());
+        let tiles = harness.array(&table, table.len());
         for axis in 0..3 {
             let got = run_component(
                 &mut harness,
                 &mut FaceSampleComponent::new(),
-                ("faces", input.0),
+                &[("faces", input.0), ("tiles", tiles.0)],
                 face_len(N, axis) as usize,
-                &component_params(gpu_flip_nodes(), axis as u32),
+                &flip_params(gpu_flip_nodes(), axis as u32, pool_tiles),
             );
+            // The far face of the axis is the closed wall.
             assert_faces(
                 axis,
                 &got,
-                |f| field.at(seam_position(axis, f))[axis],
+                |f| {
+                    if f[axis] == N[axis] {
+                        0.0
+                    } else {
+                        field.at(seam_position(axis, f))[axis]
+                    }
+                },
                 &format!("GPU FLIP {name}"),
             );
         }
@@ -189,7 +232,7 @@ fn liquid_face_grid_layout_matter() {
             let got = run_component(
                 &mut harness,
                 &mut MatterFaceComponent::new(),
-                ("grid", input.0),
+                &[("grid", input.0)],
                 face_len(N, axis) as usize,
                 &component_params(nodes, axis as u32),
             );
@@ -217,16 +260,19 @@ fn face_sample_component_zeroes_unweighted_faces() {
             }
         }
     }
-    let input = harness.array(&lattice, lattice.len());
+    // The far records read canonical, so the reference is what the pool holds.
+    let (pool, table, pool_tiles, lattice) = pooled(&lattice);
+    let input = harness.array(&pool, pool.len());
+    let tiles = harness.array(&table, table.len());
     let m = N.map(|n| n + 1);
     let mut zeroed = 0;
     for axis in 0..3 {
         let got = run_component(
             &mut harness,
             &mut FaceSampleComponent::new(),
-            ("faces", input.0),
+            &[("faces", input.0), ("tiles", tiles.0)],
             face_len(N, axis) as usize,
-            &component_params(gpu_flip_nodes(), axis as u32),
+            &flip_params(gpu_flip_nodes(), axis as u32, pool_tiles),
         );
         assert_faces(
             axis,
@@ -265,7 +311,7 @@ fn matter_face_component_skips_empty_nodes() {
         let got = run_component(
             &mut harness,
             &mut MatterFaceComponent::new(),
-            ("grid", input.0),
+            &[("grid", input.0)],
             face_len(N, axis) as usize,
             &component_params(n, axis as u32),
         );

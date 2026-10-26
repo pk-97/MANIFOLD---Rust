@@ -400,20 +400,3 @@ fn tiles_lists() {
     tile_args[3u * (r + 1u) + 2u] = 1u;
     capped[6u] = bitcast<u32>(f32(counts_load(0u)) / f32(total));
 }
-
-// One thread per record of the box, at the end of an active slot: the
-// pooled faces and φ copied to the step's dense outputs. A record past the
-// lattice reads its canonical record, so the output keeps its walls.
-@compute @workgroup_size(256)
-fn publish(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_record_count() {
-        return;
-    }
-    let p = ts_box_record(idx);
-    faces_published[ts_corner(p)] = faces_in[ts_face(p)];
-    if all(p < ts_cells()) {
-        distance_published[ts_dense_cell(p)] = phi[ts_cell_at(p)];
-    }
-}

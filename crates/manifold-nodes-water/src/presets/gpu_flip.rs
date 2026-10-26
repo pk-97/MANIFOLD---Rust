@@ -23,9 +23,7 @@ use serde_json::{Value, json};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_node_engine::scene::transform::Transform;
 use manifold_water_gpu_flip::primitives::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
-use manifold_water_gpu_flip::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
-use manifold_water_liquid::grid::FACE_INPUT_PORTS;
 
 /// The FLIP Fluids engine's Dam Break tank side, the scenes' default Domain
 /// Size; a scene's own `size` is what every measure reads.
@@ -96,10 +94,6 @@ pub(crate) struct WaterScene {
     /// volume and mesh): Surface Detail 0 is subdivision 1, the FLIP Fluids
     /// engine default.
     pub surface_scale: usize,
-    /// Publish the face grid: three node.face_sample_component named
-    /// [`FACE_NODES`] on the state's faces after the region, into the frame.
-    /// The tick always hands its last step's faces to the state.
-    pub faces: bool,
     /// Place the free surface where the particles' distance crosses zero
     /// (ghost fluid). Off wires zero distances: air at zero pressure on its
     /// cell centres, the race's comparison.
@@ -130,11 +124,6 @@ const CLOSED_PARAMS: [&str; 6] = [
 ];
 
 manifold_core::testkit_visible! {
-/// The face grid's nodes in a scene built with `faces`, x, y and z.
-pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
-}
-
-manifold_core::testkit_visible! {
 /// The water step node in every scene.
 pub(crate) const STEP_NODE: &str = "step";
 }
@@ -156,7 +145,6 @@ impl WaterScene {
             column: DAM_COLUMN,
             surface: false,
             surface_scale: 1,
-            faces: false,
             ghost_fluid: true,
             volume_projection: false,
             closed_faces: 63,
@@ -255,15 +243,6 @@ impl WaterScene {
     pub fn with_surface(self) -> Self {
         Self {
             surface: true,
-            ..self
-        }
-    }
-
-    /// Publish the face grid (section 3.2 (Grid outputs) of the seam).
-    #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-    pub fn with_faces(self) -> Self {
-        Self {
-            faces: true,
             ..self
         }
     }
@@ -591,7 +570,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire(count, step, "count");
     b.wire((domain, "reaction"), step, "reaction");
     b.wires(domain, step, &["regions", "region_count"]);
-    let (particles, faces) = ((step, "out"), (step, "faces"));
+    let particles = (step, "out");
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
     b.wire((state, "stats"), stats, "stats");
@@ -600,9 +579,6 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((step, "capped"), stats, "capped");
     b.wire(particles, state, "in");
     b.wire((stats, "stats_out"), state, "stats_in");
-    // The tick's last faces leave the region beside its particles, into the
-    // lattice's face grid.
-    b.wire(faces, state, "faces_in");
     b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
     // Solver faces, published surface and whitewater share the native grid.
@@ -621,7 +597,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         b.wire((domain, "body_rows"), node, "rows");
         b.wire((domain, "mesh_wall_inset"), node, "wall_inset");
     }
-    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
+    let frame = b.node("frame", "node.liquid_frame", json!({}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
     b.wire((state, "identity"), frame, "identity");
@@ -629,21 +605,6 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire(count, frame, "count");
     b.wires(domain, frame, &LATTICE_WIRES);
     b.wires(domain, frame, &["closed_faces", "simulation_time", "display_time", "epoch", "display_cursor", "dropped_seconds"]);
-    if scene.faces {
-        let nodes = scene.geometry().setup.lattice.nodes();
-        for (axis, name) in FACE_NODES.into_iter().enumerate() {
-            let params = json!({
-                "axis": {"type": "Enum", "value": axis},
-                "nodes_x": float(f64::from(nodes[0])),
-                "nodes_y": float(f64::from(nodes[1])),
-                "nodes_z": float(f64::from(nodes[2])),
-            });
-            let id = b.node(name, "node.face_sample_component", params);
-            b.wire((state, "faces"), id, "faces");
-            b.wires(domain, id, &["nodes_x", "nodes_y", "nodes_z"]);
-            b.wire((id, "out"), frame, FACE_INPUT_PORTS[axis]);
-        }
-    }
     // Solids pose their bodies at the end of the accepted interval, so they
     // agree with the step at every Sim Rate.
     feed_intervals(&b.nodes, &mut b.wires, domain as u32);
@@ -772,6 +733,8 @@ impl WaterScene {
                 "face_valid_layers",
                 "distance",
                 "faces",
+                "tiles",
+                "pool_tiles",
                 "substep_schedule",
                 "substep_u",
                 "substep_v",
@@ -1568,7 +1531,9 @@ pub fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
         next += 1;
         def["nodes"].as_array_mut().unwrap().push(serde_json::json!({"id": adapter, "nodeId": format!("whitewater_{port}"), "typeId": "node.face_sample_component", "params": {"axis": {"type": "Enum", "value": axis}}}));
         let wires = def["wires"].as_array_mut().unwrap();
-        wires.push(serde_json::json!({"fromNode": step, "fromPort": "faces", "toNode": adapter, "toPort": "faces"}));
+        for pool in ["faces", "tiles", "pool_tiles"] {
+            wires.push(serde_json::json!({"fromNode": step, "fromPort": pool, "toNode": adapter, "toPort": pool}));
+        }
         for dim in ["x", "y", "z"] {
             wires.push(serde_json::json!({"fromNode": domain, "fromPort": format!("nodes_{dim}"), "toNode": adapter, "toPort": format!("nodes_{dim}")}));
         }

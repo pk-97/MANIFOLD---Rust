@@ -78,6 +78,7 @@ fn clock_active() -> bool {
 
 fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
+fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 fn in_range(c: vec3<i32>) -> bool { return all(c >= vec3<i32>(0)) && all(c < ts_cells()); }
 // Grid3d::positionToGridIndex floors the f64 product of the widened position
 // and the f64 reciprocal. Emulated exactly in integers: the 24-bit mantissa

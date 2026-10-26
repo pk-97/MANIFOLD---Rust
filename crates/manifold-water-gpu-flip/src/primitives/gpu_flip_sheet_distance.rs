@@ -195,8 +195,8 @@ impl SheetDistance {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::primitives::pool_testkit::{from_pool, identity_table, to_pool};
     use manifold_node_engine::testkit::array_harness::read;
+    use manifold_water_liquid::tile_storage::testkit::{from_pool, identity_table, to_pool};
 
     const CELLS: [u32; 3] = [24, 40, 20];
     const H: f32 = 0.0625;

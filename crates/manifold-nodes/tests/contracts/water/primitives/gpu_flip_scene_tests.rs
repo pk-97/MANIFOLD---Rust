@@ -22,12 +22,17 @@ use manifold_node_engine::{
     load::graph_loader::pre_allocate_resources, persistence::EffectGraphDefExt,
     persistence::PrimitiveRegistry, state_store::StateStore,
 };
-use manifold_nodes_water::presets::gpu_flip::{FACE_NODES, STEP_NODE, WaterScene, water_def};
+use manifold_nodes_water::presets::gpu_flip::{STEP_NODE, WaterScene, water_def};
 #[cfg(test)]
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::grid::face_len;
 #[cfg(test)]
 use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
+#[cfg(test)]
+use manifold_water_liquid::tile_storage::{
+    pool_len,
+    testkit::{from_pool_with, records_from_pool_with},
+    tile_total,
+};
 
 #[cfg(test)]
 const G: f64 = 9.81;
@@ -139,14 +144,12 @@ impl Run {
         read.extend([
             (step, "out"),
             (step, "faces"),
+            (step, "tiles"),
             (step, "capped"),
             (node_named(&graph, "stats"), "stats_out"),
         ]);
         if scene.surface {
             read.push((node_ending(&graph, "liquid_carry_into_solids"), "out"));
-        }
-        if scene.faces {
-            read.extend(FACE_NODES.map(|name| (node_named(&graph, name), "out")));
         }
         for &(node, port) in &read {
             graph
@@ -420,19 +423,16 @@ impl Run {
     }
 
     /// The last substep's face grid: projected, constrained to the solids
-    /// and extended.
+    /// and extended, read from the step's pool through its slot table into
+    /// the dense `(n + 1)^3` records.
     #[cfg(test)]
     pub(super) fn faces(&self) -> Vec<FaceSample> {
-        self.read(STEP_NODE, "faces", (self.n() + 1).pow(3))
-    }
-
-    /// The seam face grid of the frame's last tick, x, y and z (a scene built
-    /// with `faces`).
-    pub fn face_grid(&self) -> [Vec<f32>; 3] {
-        let cells = [self.n() as u32; 3];
-        std::array::from_fn(|axis| {
-            self.read(FACE_NODES[axis], "out", face_len(cells, axis) as usize)
-        })
+        let cells = self.solver_grid().cells();
+        let pool_tiles = tile_total(cells) as usize;
+        let pool: Vec<FaceSample> =
+            self.read(STEP_NODE, "faces", pool_len(pool_tiles as u32) as usize);
+        let table: Vec<u32> = self.read(STEP_NODE, "tiles", 2 * pool_tiles);
+        records_from_pool_with(&pool, &table, cells)
     }
 
     /// Water cells in the step's lattice: the size of its pressure solve.
@@ -555,55 +555,6 @@ fn gpu_flip_free_fall_keeps_g() {
             <= 0.01 * want.abs(),
         "no sideways drift"
     );
-}
-
-/// The tick hands the state its last step's extended faces, bit for bit, and
-/// the face components gather the seam's arrays from them: at 32 first, then
-/// at 64.
-#[test]
-fn gpu_flip_face_grid_is_the_last_ticks_faces() {
-    for n in [32, 64] {
-        let scene = WaterScene::dam_break(n).with_faces();
-        let mut run = Run::new(scene);
-        for _ in 0..12 {
-            run.frame();
-        }
-        let records = (run.n() + 1).pow(3);
-        let state: Vec<FaceSample> = run.read("state", "faces", records);
-        let last = run.faces();
-        let differ = state
-            .iter()
-            .zip(&last)
-            .filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b))
-            .count();
-        let moving = state
-            .iter()
-            .filter(|s| s.velocity.iter().any(|v| *v != 0.0))
-            .count();
-        let grid = run.face_grid();
-        let expected = manifold_nodes_water::testkit::conformance::gpu_flip_faces(
-            bytemuck::cast_slice(&state),
-            run.solver_grid().cells(),
-        );
-        let gathered = (0..3)
-            .map(|axis| {
-                grid[axis]
-                    .iter()
-                    .zip(&expected[axis])
-                    .filter(|(a, b)| a.to_bits() != b.to_bits())
-                    .count()
-            })
-            .sum::<usize>();
-        println!(
-            "GPU FLIP face grid {n}³: {moving} of {records} face samples moving; state differs at {differ}, gather at {gathered}"
-        );
-        assert!(moving > records / 100, "{n}³: the faces barely move");
-        assert_eq!(differ, 0, "{n}³: the state's faces are not the last step's");
-        assert_eq!(
-            gathered, 0,
-            "{n}³: the face components differ from the state's faces"
-        );
-    }
 }
 
 /// The native engine's peak fastest particle in the same 64³ still pool at
@@ -1154,6 +1105,9 @@ mod native_reference {
         graph
             .add_external_output(node_named(&graph, STEP_NODE), "distance")
             .expect("distance in the plan");
+        graph
+            .add_external_output(node_named(&graph, STEP_NODE), "tiles")
+            .expect("slot table in the plan");
         let mut run = Run::with_graph(scene, graph);
         let step = node_named(&run.graph, STEP_NODE);
         run.exec
@@ -1166,41 +1120,42 @@ mod native_reference {
             "native solid on the GPU solver grid"
         );
         let h = scene.cell_size() as f32;
-        let res = run
-            .exec
-            .dump_array_resources()
-            .iter()
-            .find(|&&(node, port, _)| node == step && port == "distance")
-            .unwrap_or_else(|| {
-                panic!(
-                    "step distance not dumped: {:?}",
-                    run.exec
-                        .dump_array_resources()
-                        .iter()
-                        .filter(|r| r.0 == step)
-                        .map(|r| r.1)
-                        .collect::<Vec<_>>()
+        // The step's pooled φ through its own slot table, as dense cells.
+        let dumped = |port: &str, words: usize| -> Vec<u32> {
+            let res = run
+                .exec
+                .dump_array_resources()
+                .iter()
+                .find(|&&(node, name, _)| node == step && name == port)
+                .unwrap_or_else(|| panic!("step {port} not dumped"))
+                .2;
+            let buffer = run.exec.dump_array_buffer(res).expect("step buffer");
+            let bytes = 4 * words as u64;
+            let staging = run.device.create_buffer_shared(bytes);
+            let mut enc = run.device.create_encoder("wall phi readback");
+            enc.copy_buffer_to_buffer(buffer, &staging, bytes);
+            enc.commit_and_wait_completed();
+            // SAFETY: the copy completed; staging is shared and `bytes` long.
+            unsafe {
+                std::slice::from_raw_parts(
+                    staging
+                        .mapped_ptr()
+                        .expect("shared staging")
+                        .cast::<u32>()
+                        .cast_const(),
+                    words,
                 )
-            })
-            .2;
-        let buffer = run.exec.dump_array_buffer(res).expect("distance buffer");
-        let bytes = 4 * n * n * n;
-        let staging = run.device.create_buffer_shared(bytes as u64);
-        let mut enc = run.device.create_encoder("wall phi readback");
-        enc.copy_buffer_to_buffer(buffer, &staging, bytes as u64);
-        enc.commit_and_wait_completed();
-        // SAFETY: the copy completed; staging is shared and `bytes` long.
-        let phi: Vec<f32> = unsafe {
-            std::slice::from_raw_parts(
-                staging
-                    .mapped_ptr()
-                    .expect("shared staging")
-                    .cast::<f32>()
-                    .cast_const(),
-                n * n * n,
-            )
-        }
-        .to_vec();
+            }
+            .to_vec()
+        };
+        let cells = [n as u32; 3];
+        let pool_tiles = tile_total(cells);
+        let pool: Vec<f32> = dumped("distance", pool_len(pool_tiles as u32) as usize)
+            .into_iter()
+            .map(f32::from_bits)
+            .collect();
+        let table = dumped("tiles", 2 * pool_tiles as usize);
+        let phi = from_pool_with(&pool, &table, cells);
         let (mut extended, mut wrong) = (0, Vec::new());
         for k in 0..n {
             for j in 0..n {

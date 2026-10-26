@@ -334,6 +334,7 @@ fn whitewater_engine_outflow_values_and_fusion() {
 
 #[test]
 fn whitewater_engine_seam_publishes_accepted_substeps() {
+    use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool};
     use manifold_water_liquid::{fluid_particles::FaceSample, substep_history::SubstepHistory};
     let mut h = Harness::new();
     let faces: Vec<_> = (0..729)
@@ -342,7 +343,16 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
             weight: [1.0; 4],
         })
         .collect();
-    let source = h.array(&faces, 729);
+    // Pooled under the identity slot table; the far records of each axis read
+    // the canonical block, which holds a known velocity here.
+    let canon = FaceSample {
+        velocity: [-1.0, -2.0, -3.0, 0.0],
+        weight: [1.0; 4],
+    };
+    let (table, pool_tiles) = identity_table([8; 3]);
+    let pool = records_to_pool(&faces, [8; 3], &[canon; 8]);
+    let source = h.array(&pool, pool.len());
+    let tiles = h.array(&table, table.len());
     let plans = [
         [0.01f32.to_bits(), 0.01f32.to_bits(), 0, 0, 0, 0, 0, 0],
         [
@@ -362,7 +372,7 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
     history.reserve(&h.device, [8; 3], 2).unwrap();
     let mut enc = h.device.create_encoder("whitewater-engine-seam");
     for (i, plan) in plans.iter().enumerate() {
-        history.capture(&mut enc, i as u32, &plan.1, &source.1);
+        history.capture(&mut enc, i as u32, &plan.1, &source.1, &tiles.1, pool_tiles);
     }
     let staged = std::array::from_fn::<_, 3, _>(|_| h.array::<f32>(&[], 1152));
     for (source, target) in history.faces.as_ref().unwrap().iter().zip(&staged) {
@@ -390,27 +400,37 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
             let f = i % 576;
             let c = [f % dims[0], f / dims[0] % dims[1], f / (dims[0] * dims[1])];
             let index = c[0] + 9 * (c[1] + 9 * c[2]);
-            assert_eq!(*value, faces[index].velocity[axis]);
+            let want = if c[axis] == 8 {
+                canon.velocity[axis]
+            } else {
+                faces[index].velocity[axis]
+            };
+            assert_eq!(*value, want);
         }
     }
 }
 
 #[test]
 fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
+    use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool};
     use manifold_water_liquid::{fluid_particles::FaceSample, substep_history::SubstepHistory};
     let mut h = Harness::new();
+    // A uniform grid pooled under the identity slot table, its canonical
+    // block the same sample, so every face reads `velocity`.
     let faces = |velocity| {
-        vec![
-            FaceSample {
-                velocity,
-                weight: [1.0; 4]
-            };
-            729
-        ]
+        let sample = FaceSample {
+            velocity,
+            weight: [1.0; 4],
+        };
+        records_to_pool(&vec![sample; 729], [8; 3], &[sample; 8])
     };
-    let first = h.array(&faces([1.0, 2.0, 3.0, 0.0]), 729);
-    let poison = h.array(&faces([f32::NAN; 4]), 729);
-    let resumed = h.array(&faces([4.0, 5.0, 6.0, 0.0]), 729);
+    let (table, pool_tiles) = identity_table([8; 3]);
+    let tiles = h.array(&table, table.len());
+    let [first, poison, resumed] =
+        [[1.0, 2.0, 3.0, 0.0], [f32::NAN; 4], [4.0, 5.0, 6.0, 0.0]].map(|velocity| {
+            let pool = faces(velocity);
+            h.array(&pool, pool.len())
+        });
     let active = h.array(&[0.01f32.to_bits(), 0.01f32.to_bits(), 0, 0, 0, 0, 0, 0], 8);
     let inactive = h.array(&[0, 0.01f32.to_bits(), 0, 0, 0, 0, 0, 0x80000002], 8);
     let mut history = SubstepHistory::default();
@@ -422,16 +442,16 @@ fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
     let mut enc = h
         .device
         .create_encoder("whitewater-engine-inactive-history");
-    history.capture(&mut enc, 0, &active.1, &first.1);
+    history.capture(&mut enc, 0, &active.1, &first.1, &tiles.1, pool_tiles);
     // An inactive row must neither read this poisoned grid nor overwrite a
     // previous active capture. A never-active row starts with zero storage.
-    history.capture(&mut enc, 0, &inactive.1, &poison.1);
-    history.capture(&mut enc, 1, &inactive.1, &poison.1);
+    history.capture(&mut enc, 0, &inactive.1, &poison.1, &tiles.1, pool_tiles);
+    history.capture(&mut enc, 1, &inactive.1, &poison.1, &tiles.1, pool_tiles);
     for (source, target) in history.faces.as_ref().unwrap().iter().zip(&held) {
         enc.copy_buffer_to_buffer(source, &target.1, 1152 * 4);
     }
     enc.copy_buffer_to_buffer(history.schedule.as_ref().unwrap(), &held_schedule.1, 32);
-    history.capture(&mut enc, 0, &active.1, &resumed.1);
+    history.capture(&mut enc, 0, &active.1, &resumed.1, &tiles.1, pool_tiles);
     for (source, target) in history.faces.as_ref().unwrap().iter().zip(&final_grids) {
         enc.copy_buffer_to_buffer(source, &target.1, 1152 * 4);
     }

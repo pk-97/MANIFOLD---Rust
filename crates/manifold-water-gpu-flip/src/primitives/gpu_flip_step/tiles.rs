@@ -350,31 +350,3 @@ pub(super) fn encode_pool_canon(
         "gpu_flip.step.pool_canon",
     );
 }
-
-/// Copies the pooled faces and φ into the step's dense outputs
-/// (`publish`), one thread per record of the box.
-pub(super) fn encode_publish(
-    enc: &mut GpuEncoder,
-    pipes: &Pipelines,
-    params: &StepParams,
-    l: &LatticeBuffers,
-    table: &TileTable,
-    published: [&GpuBuffer; 2],
-    plan: &GpuBuffer,
-) {
-    let [faces, distance] = published;
-    enc.dispatch_compute(
-        &pipes.publish,
-        &[
-            uniform(params),
-            buffer(3, &l.faces),
-            buffer(7, &l.phi),
-            buffer(43, faces),
-            buffer(44, distance),
-            buffer(46, plan),
-            buffer(51, &table.table),
-        ],
-        groups(params.n.iter().map(|&n| u64::from(n) + 1).product()),
-        "gpu_flip.step.publish",
-    );
-}

@@ -30,6 +30,9 @@ const GPU_FLIP_WALLS_IN_SOLVE: &str = "GPU FLIP's tank walls are in its pressure
      floor's push back on a box pressing the pool is real ground reaction, so the walls absorb momentum and \
      body plus liquid momentum cannot balance; the check is valid only for a solver with no walls in the solve";
 
+const GPU_FLIP_FACES_ARE_POOLED: &str = "GPU FLIP's step keeps its faces in a tile pool that its whitewater reads \
+     through the slot table; the frame publishes no face grid, so there is nothing to compare";
+
 // Known bugs, each logged with its numbers; a known red comes off with its fix.
 const GPU_FLIP_CORNER_LIFT: &str = "BUG-o3kj8 (GPU FLIP pushes a light box tilted into a corner down instead of \
      up): the liquid pins the box flat in the corner, so it never lifts, and Box3D and the law part on its tilted ticks";
@@ -165,15 +168,11 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             port: "out",
             record_bytes: std::mem::size_of::<FluidParticle>(),
         }),
-        faces: Some(FaceSource {
-            type_id: "node.liquid_state",
-            port: "faces",
-            resample: gpu_flip_faces,
-            valid_layers: FACE_GRID_GPU_FLIP_LAYERS,
-            // A gather: the published faces are the solver's projected faces.
-            ulps: (0, ""),
-        }),
-        exempt: &[(Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE)],
+        faces: None,
+        exempt: &[
+            (Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE),
+            (Check::FaceGridPublished, GPU_FLIP_FACES_ARE_POOLED),
+        ],
         known_red: &[
             known(Check::FloatingRest, "centre", GPU_FLIP_FLOATS_HIGH),
             known(Check::FloatingRest, "rms", GPU_FLIP_FLOATS_HIGH),
@@ -198,9 +197,9 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     match fixture {
         Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
         Fixture::StillPool => Some(render_def(WaterScene::still_pool(64))),
-        Fixture::FaceGrid => Some(render_def(
-            WaterScene::dam_break(FACE_GRID_RESOLUTION as usize).with_faces(),
-        )),
+        Fixture::FaceGrid => Some(render_def(WaterScene::dam_break(
+            FACE_GRID_RESOLUTION as usize,
+        ))),
         Fixture::Collision { .. }
         | Fixture::FloatingBox
         | Fixture::SubmergedBox

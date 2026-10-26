@@ -4,7 +4,7 @@
 //! Face arrays concatenate ordinary seam grids in schedule order. Inactive
 //! rows do not publish faces; consumers must skip them before reading a grid.
 use super::grid::face_len;
-use crate::primitives::face_sample_component::FaceSampleComponent;
+use crate::primitives::face_sample_component::{ComponentUniforms, FaceSampleComponent};
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
@@ -89,14 +89,17 @@ impl SubstepHistory {
         self.shape = Some((cells, slots));
         Ok(())
     }
-    /// GPU FLIP adapts its scheduler and native face records here. Consumers
-    /// never see either solver-private layout.
+    /// GPU FLIP adapts its scheduler and native face records here: `faces`
+    /// are its pooled records, `table` its slot table over `pool_tiles`
+    /// tiles. Consumers never see either solver-private layout.
     pub fn capture(
         &mut self,
         enc: &mut GpuEncoder,
         index: u32,
         plan: &GpuBuffer,
         faces: &GpuBuffer,
+        table: &GpuBuffer,
+        pool_tiles: u32,
     ) {
         let (cells, slots) = self.shape.expect("history reserved");
         assert!(index < slots);
@@ -148,24 +151,15 @@ impl SubstepHistory {
             .iter()
             .enumerate()
         {
-            let count = face_len(cells, axis) as u32;
+            let count = face_len(cells, axis);
             // The component reads nodes − 4 cells: GPU FLIP's solver grid.
-            let words = [
-                axis as u32,
-                ((cells[0] + 4) as f32).to_bits(),
-                ((cells[1] + 4) as f32).to_bits(),
-                ((cells[2] + 4) as f32).to_bits(),
-                count,
-                0,
-                0,
-                0,
-            ];
+            let uniforms = ComponentUniforms::new(axis, cells.map(|n| n + 4), pool_tiles, count);
             enc.dispatch_compute_indirect(
                 self.component.as_ref().expect("component prepared"),
                 &[
                     GpuBinding::Bytes {
                         binding: 0,
-                        data: bytemuck::cast_slice(&words),
+                        data: bytemuck::bytes_of(&uniforms),
                     },
                     GpuBinding::Buffer {
                         binding: 1,
@@ -174,8 +168,13 @@ impl SubstepHistory {
                     },
                     GpuBinding::Buffer {
                         binding: 2,
+                        buffer: table,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
                         buffer: out,
-                        offset: u64::from(index) * u64::from(count) * 4,
+                        offset: u64::from(index) * count * 4,
                     },
                 ],
                 arguments,
@@ -200,6 +199,18 @@ mod tests {
         )
         .validate(&module)
         .expect("history capture WGSL validates");
+    }
+
+    /// The history binds the component's own uniform: axis, the padded nodes,
+    /// the pool's tiles (all as f32 bits), the count, two pad words.
+    #[test]
+    fn liquid_substep_history_component_uniform_layout() {
+        let words: [u32; 8] = bytemuck::cast(ComponentUniforms::new(2, [10, 11, 12], 7, 99));
+        let bits = |v: f32| v.to_bits();
+        assert_eq!(
+            words,
+            [2, bits(10.0), bits(11.0), bits(12.0), bits(7.0), 99, 0, 0]
+        );
     }
 
     #[test]

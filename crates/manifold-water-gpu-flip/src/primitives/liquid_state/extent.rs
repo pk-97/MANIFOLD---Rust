@@ -1,9 +1,6 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::extent::PARTICLE;
-use manifold_water_liquid::extent::liquid_lattice;
-use manifold_water_liquid::grid::face_bytes;
-use manifold_water_liquid::lattice::FlipSolverGrid;
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
 use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
@@ -60,35 +57,6 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.hold(pool);
     }
 
-    // The faces are the lattice's face grid, sized before the region runs and
-    // held only while something reads them. The tick's faces (written later
-    // in the plan: the second pass sees them) must be exactly that grid.
-    let mut faces_check = Ok(());
-    if x.input("faces_in").is_some() {
-        if ["nodes_x", "nodes_y", "nodes_z"]
-            .iter()
-            .any(|port| x.input(port).is_none())
-        {
-            return Err(Verdict::Refused(
-                "Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z".into(),
-            ));
-        }
-        let faces = face_bytes(FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells());
-        let fed = x.feeds("faces");
-        x.provide("faces", if fed { faces } else { 0 });
-        if fed {
-            x.hold(faces);
-            faces_check = match x.bytes("faces_in") {
-                Some(have) if have == faces => Ok(()),
-                Some(have) => Err(x.uncovered(format!(
-                    "faces_in holds {have} bytes; the lattice's face grid is {faces}"
-                ))),
-                None => Err(x.uncovered("faces_in is unbound".into())),
-            };
-        }
-    } else {
-        x.provide("faces", 0);
-    }
     let stats = u64::from(LIQUID_STATS_WORDS) * 4;
     // The zeroed stats a new epoch copies, and the readback ring.
     x.hold(4 * stats + 3 * 32);
@@ -104,7 +72,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.covers("stats", stats)?;
     x.covers("stats_in", stats)?;
-    faces_check.and(whitewater_check)
+    whitewater_check
 }
 inventory::submit! {
     ExtentRule { type_id: "node.liquid_state", check: liquid_state }

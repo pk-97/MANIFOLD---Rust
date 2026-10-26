@@ -10,10 +10,11 @@
 // `ts_grid_*`.
 // Builds on `tile_grid.wgsl`, which the including shader composes first.
 // The including shader defines `fn ts_cells() -> vec3<i32>` (the cell
-// counts) and `fn ts_pool_tiles() -> u32` (the pool's capacity P in tiles),
-// and declares `ts_table: array<u32>` (read-only storage): words [0, T) are
-// `slot_of` (a slot or TS_NONE per box tile), words [T, T + P) are `tile_of`
-// (the box tile a slot holds or TS_NONE), T = `ts_tile_count()`.
+// counts), `fn ts_pool_tiles() -> u32` (the pool's capacity P in tiles) and
+// `fn ts_table_word(i: u32) -> u32`, the slot table read from whatever buffer
+// it binds: words [0, T) are `slot_of` (a slot or TS_NONE per box tile),
+// words [T, T + P) are `tile_of` (the box tile a slot holds or TS_NONE),
+// T = `ts_tile_count()`. These helpers name no buffer.
 
 fn ts_records() -> vec3<i32> {
     return ts_cells() + vec3<i32>(1);
@@ -53,7 +54,7 @@ fn ts_canon(mask: u32) -> u32 {
 }
 
 fn ts_slot(tile: u32) -> u32 {
-    return ts_table[tile];
+    return ts_table_word(tile);
 }
 
 // The cell's position inside its tile.
@@ -115,7 +116,7 @@ fn ts_face(p: vec3<i32>) -> u32 {
 
 // The cell a pool index holds (idx is never canonical).
 fn ts_cell_coord(idx: u32) -> vec3<i32> {
-    return ts_origin(ts_table[ts_tile_count() + (idx >> 9u)]) + ts_grid_coord(idx & 511u, vec3<i32>(i32(TS_TILE)));
+    return ts_origin(ts_table_word(ts_tile_count() + (idx >> 9u))) + ts_grid_coord(idx & 511u, vec3<i32>(i32(TS_TILE)));
 }
 
 // A stored record's index is its cell's.

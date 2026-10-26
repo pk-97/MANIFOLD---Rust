@@ -27,7 +27,7 @@ mod fused_tests {
         use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
         use manifold_nodes_water::testkit::preset_extents::check_preset_extents;
         let backend = MockBackend::new();
-        let mut inputs = vec![("distance", Slot(0))];
+        let mut inputs = vec![("distance", Slot(0)), ("tiles", Slot(5))];
         if packed {
             inputs.push(("faces", Slot(1)));
         }
@@ -180,10 +180,13 @@ mod fused_tests {
             Show, whitewater_render_def, with_tick_probe,
         };
         use manifold_water_liquid::grid::face_len;
+        use manifold_water_liquid::tile_storage::tile_total;
         use manifold_water_liquid::whitewater::WhitewaterParticle;
         use manifold_water_liquid::whitewater::face_offset;
         use manifold_water_whitewater::primitives::whitewater_step::fused_tests::gpu::*;
-        use manifold_water_whitewater::primitives::whitewater_step::fused_tests::synthetic_shape;
+        use manifold_water_whitewater::primitives::whitewater_step::fused_tests::{
+            pooled_faces, synthetic_shape,
+        };
         use manifold_water_whitewater::primitives::whitewater_step::*;
         const PORTS: [&str; 6] = [
             "proof_sampled",
@@ -234,13 +237,6 @@ mod fused_tests {
                     continue;
                 }
                 ticks += 1;
-                let held_face_bytes = fused.provided_bytes("state", "faces");
-                if ticks == 1 {
-                    println!(
-                        "packed={packed} dust={dust}: liquid_state held faces = {held_face_bytes} bytes"
-                    );
-                }
-                assert_eq!(held_face_bytes, 0, "held face grid must be unallocated");
                 for port in PORTS[..if dust { 6 } else { 4 }]
                     .iter()
                     .chain([&"proof_turbulence"])
@@ -321,8 +317,11 @@ mod fused_tests {
                 }
                 let bytes = show.provided_all_bytes("step", "faces");
                 let packed = shared(&device, &bytes);
+                let tiles = shared(&device, &show.provided_all_bytes("step", "tiles"));
                 // Resolution 64 has 67 solver cells after native lattice padding.
-                let axes = adapter_outputs(&device, &packed, [67; 3]);
+                let cells = [67; 3];
+                let axes =
+                    adapter_outputs(&device, &packed, &tiles, tile_total(cells) as u32, cells);
                 let mut saw_nonzero_axis = false;
                 for (axis, port) in ["proof_unpack_u", "proof_unpack_v", "proof_unpack_w"]
                     .into_iter()
@@ -353,8 +352,10 @@ mod fused_tests {
 
             let shape = synthetic_shape();
             assert_eq!(face_offset(shape.nodes, shape.face_cells).unwrap(), [2; 3]);
-            let packed = shared(&device, &mixed_faces());
-            let axes = adapter_outputs(&device, &packed, shape.face_cells);
+            let (pooled, table, pool_tiles) = pooled_faces(&mixed_faces(), shape.face_cells);
+            let packed = shared(&device, &pooled);
+            let tiles = shared(&device, &table);
+            let axes = adapter_outputs(&device, &packed, &tiles, pool_tiles, shape.face_cells);
             let [mut stage, _reference] = particle_stages(&device, shape, 8);
             assert!(
                 stage.unpacked_faces_for_test().is_none(),
@@ -362,7 +363,12 @@ mod fused_tests {
             );
             stage.reserve_faces(&device, true).unwrap();
             let mut enc = device.create_encoder("whitewater unpack mixed-weight fixture");
-            stage.unpack_faces(&mut enc, &shape, FaceSource::Packed(&packed));
+            let fixture = Fixture::new(&device);
+            let mut inputs = fixture.inputs();
+            inputs.faces = FaceSource::Packed(&packed);
+            inputs.tiles = &tiles;
+            inputs.pool_tiles = pool_tiles;
+            stage.unpack_faces(&mut enc, &shape, &inputs);
             let captured = stage
                 .unpacked_faces_for_test()
                 .unwrap()
@@ -443,9 +449,10 @@ mod fused_tests {
             assert_eq!(face_offset(shape.nodes, shape.face_cells).unwrap(), [2; 3]);
             // Nonzero values behind invalid weights must be masked, including
             // negative weights. The fourth lanes and unused axis tails are poison.
-            let samples = mixed_faces();
-            let packed = shared(&device, &samples);
-            let axes = adapter_outputs(&device, &packed, shape.face_cells);
+            let (pooled, table, pool_tiles) = pooled_faces(&mixed_faces(), shape.face_cells);
+            let packed = shared(&device, &pooled);
+            let tiles = shared(&device, &table);
+            let axes = adapter_outputs(&device, &packed, &tiles, pool_tiles, shape.face_cells);
             let schedule = shared(
                 &device,
                 &[1.0f32 / 128.0, 0.0, 0.0, 0.0, 1.0 / 128.0, 0.0, 0.0, 0.0],

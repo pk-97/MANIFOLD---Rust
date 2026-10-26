@@ -149,15 +149,15 @@ fn whitewater_extents_at_64() {
     let particles = u64::from(PARTICLE_SLOTS);
     assert_eq!(
         tick.held_bytes(particles),
-        218_205_932,
-        "67-cubed grid, particle/pool/scan/output storage and reinitialisation scratch"
+        219_408_984,
+        "67-cubed grid, particle/pool/scan/output storage, reinitialisation scratch and the gathered distance"
     );
     // Packed input adds three adapter-sized 68³ float arrays: 3 * 68³ * 4
-    // = 3,773,184 bytes to the axis baseline, 218,205,932 + 3,773,184.
+    // = 3,773,184 bytes to the axis baseline, 219,408,984 + 3,773,184.
     assert_eq!(tick.unpacked_face_bytes(), 3_773_184);
     assert_eq!(
         tick.held_bytes(particles) + tick.unpacked_face_bytes(),
-        221_979_116
+        223_182_168
     );
     assert_eq!(2 * 67u64.pow(3) * 4, 2_406_104);
     let padded = StepShape::new(
@@ -172,11 +172,15 @@ fn whitewater_extents_at_64() {
     )
     .expect("padded tick grid");
     // Padding owns the distance and surface copies, 8 bytes a cell; the
-    // face-sized reinitialisation scratch follows the face grid.
+    // face-sized reinitialisation scratch and the gathered pooled distance
+    // follow the face grid.
     use manifold_water_liquid::primitives::whitewater_distance::scratch_bytes;
     assert_eq!(
-        padded.held_bytes(particles) + scratch_bytes([67; 3]),
-        tick.held_bytes(particles) + scratch_bytes([63; 3]) + 2_406_104
+        padded.held_bytes(particles) + scratch_bytes([67; 3]) + tick.raw_distance_bytes(),
+        tick.held_bytes(particles)
+            + scratch_bytes([63; 3])
+            + padded.raw_distance_bytes()
+            + 2_406_104
     );
 }
 
@@ -898,8 +902,10 @@ fn whitewater_step_extents_at_64() {
     // incomplete three-emitter port, not a limit on FLIP's emitter features.
     // Added storage, derived independently: padded surface phi, three
     // 64³ reinitialisation arrays, ceil(64/6)³ block flags, four state words, the sweep's indirect grid
-    // (16 bytes) and a zero clock plan (48 bytes).
-    let engine_distance = 4 * 70u64.pow(3) + 12 * 64u64.pow(3) + 4 * 11u64.pow(3) + 16 + 16 + 48;
+    // (16 bytes), a zero clock plan (48 bytes) and the 64³ distance gathered
+    // from the step's pool.
+    let engine_distance =
+        4 * 70u64.pow(3) + 12 * 64u64.pow(3) + 4 * 11u64.pow(3) + 16 + 16 + 48 + 4 * 64u64.pow(3);
     assert_eq!(
         held,
         218_526_472 + engine_distance,

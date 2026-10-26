@@ -31,17 +31,15 @@ impl StepState {
             .pipelines
             .as_ref()
             .expect("step pipelines built by prepare_pipelines at install");
-        let (Some(l), Some(tiles), Some(sorted), Some(published), Some(distance_out)) = (
+        let (Some(l), Some(tiles), Some(sorted)) = (
             self.lattice.as_ref(),
             self.tiles.as_ref(),
             self.sorted.as_ref(),
-            self.faces.as_ref(),
-            self.distance.as_ref(),
         ) else {
             return Err("the step's storage was not reserved".into());
         };
         let cells = l.cells;
-        // The step's own faces, pooled; `publish` copies them to `published`.
+        // The step's own faces, pooled: the `faces` output.
         let out_faces = &l.faces;
         let table = &tiles.table;
         let pool = tiles.pool_tiles;
@@ -853,16 +851,6 @@ impl StepState {
                 "gpu_flip.step.emit_tally",
             );
         }
-        // The pooled faces and φ are final: copy them to the dense outputs.
-        encode_publish(
-            enc,
-            pipes,
-            &base,
-            l,
-            tiles,
-            [published, distance_out],
-            step.clock_plan,
-        );
         enc.compute_memory_barrier_buffers();
         Ok(())
     }

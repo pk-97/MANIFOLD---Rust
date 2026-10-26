@@ -2,12 +2,9 @@
 use crate::primitives::liquid_frame::WHITEWATER_INPUTS;
 use crate::primitives::liquid_frame::WHITEWATER_OUTPUTS;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_water_liquid::extent::PARTICLE;
 use manifold_water_liquid::extent::liquid_lattice;
-use manifold_water_liquid::extent::{PARTICLE, cover_frame_faces, provide_frame_faces};
 use manifold_water_liquid::frame_history::H_MAX;
-use manifold_water_liquid::grid::FACE_INPUT_PORTS;
-use manifold_water_liquid::grid::face_len;
-use manifold_water_liquid::lattice::FlipSolverGrid;
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -16,14 +13,6 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("identity", 16)?;
     let lattice = liquid_lattice(x)?;
     let surface = lattice.surface();
-    let solver = FlipSolverGrid::from_lattice(lattice);
-    for (axis, input) in FACE_INPUT_PORTS.into_iter().enumerate() {
-        if x.wired(input) {
-            x.hold((SLOTS - 1) * face_len(solver.cells(), axis) * 4);
-        }
-    }
-    let valid_layers = x.param("face_valid_layers", 0.0).round().clamp(0.0, 8.0);
-    provide_frame_faces(x, solver.cells(), valid_layers);
     let count = x.count("count", 0.0)?;
     let particles = u64::from(count.max(1)) * PARTICLE;
     let solid = surface.solid_bytes();
@@ -68,7 +57,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         }
         x.covers("solid", solid)?;
     }
-    cover_frame_faces(x, solver.cells())
+    Ok(())
 }
 inventory::submit! {
     ExtentRule { type_id: "node.liquid_frame", check: liquid_frame }

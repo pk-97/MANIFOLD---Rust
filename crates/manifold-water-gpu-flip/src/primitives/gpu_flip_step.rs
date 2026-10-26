@@ -10,10 +10,10 @@
 //! before any pass is encoded, so no kernel reads `arrayLength`. The
 //! lattice's cell and face fields live in the tile pool (`tiles.rs`): their
 //! passes index them through the storage helpers, and a tile is stored while
-//! the allocator holds it. The `faces` and `distance` outputs are this
-//! node's own dense storage, exactly one record per padded cell and one value
-//! per cell, written from the pool at the end of each step and reallocated
-//! when the lattice changes.
+//! the allocator holds it. The `faces` and `distance` outputs are the pooled
+//! internal faces and φ themselves, read through the `tiles` slot table and
+//! `pool_tiles` (`manifold_water_liquid::tile_storage`); they are
+//! reallocated when the lattice changes.
 //!
 //! Extrapolation order/count, marker removal, inflow emission/placement,
 //! inflow constrained velocity and outflow removal port
@@ -31,7 +31,6 @@
 //! (Copyright (c) 2020 Andreas Reich, github.com/Wumpf/blub,
 //! `density_projection_gather_error.comp`; see THIRD_PARTY_NOTICES.md).
 
-use manifold_water_liquid::grid::face_bytes;
 use manifold_water_liquid::primitives::prefix_scan::PrefixScan;
 use std::borrow::Cow;
 
@@ -320,12 +319,6 @@ pub(crate) struct StepState {
     sorted: Option<GpuBuffer>,
     /// The emission flags' scan, one word a half-cell site.
     emit_scan: PrefixScan,
-    /// The face grid output: exactly [`face_bytes`] of the current lattice,
-    /// dense; `publish` copies the lattice's pooled faces into it.
-    faces: Option<GpuBuffer>,
-    /// The distance output, one f32 a cell of the current lattice, dense;
-    /// `publish` copies the lattice's pooled φ into it.
-    distance: Option<GpuBuffer>,
     /// [`ZERO_BYTES`] zero bytes bound where an optional input is unwired.
     saved_particles: Option<GpuBuffer>,
     saved_distance: Option<GpuBuffer>,
@@ -483,8 +476,14 @@ manifold_node_engine::primitive! {
     outputs: {
         out: Array(FluidParticle),
         identity_out: Array(u32),
+        // The pooled internal faces (`pool_len(pool_tiles)` records).
         faces: Array(FaceSample),
+        // The pooled distance (`pool_len(pool_tiles)` values).
         distance: Array(f32),
+        // The slot table of both pooled outputs: `slot_of` per box tile, then `tile_of` per slot.
+        tiles: Array(u32),
+        // The pool's capacity in tiles, `P`.
+        pool_tiles: ScalarF32,
         substep_schedule: Array(f32),
         substep_u: Array(f32), substep_v: Array(f32), substep_w: Array(f32),
         substep_count: ScalarF32,

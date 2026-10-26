@@ -1,77 +1,58 @@
-//! Copied text checks on the CPU, bitwise stage oracles on the GPU.
+//! Shader checks on the CPU, bitwise stage oracles on the GPU.
 use super::*;
 
 #[cfg(test)]
-fn function<'a>(source: &'a str, name: &str) -> &'a str {
-    let start = source
-        .find(&format!("fn {name}("))
-        .expect("function present");
-    let body = source[start..].find('{').unwrap() + start;
-    let mut depth = 0;
-    for (i, c) in source[body..].char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => depth -= 1,
-            _ => {}
-        }
-        if depth == 0 {
-            return &source[start..=body + i];
-        }
-    }
-    panic!("unclosed function {name}")
-}
-
-#[cfg(test)]
-fn random_calls(source: &str) -> Vec<&str> {
-    source
-        .match_indices("ww_random(")
-        .map(|(start, _)| {
-            let mut depth = 1;
-            let args = start + "ww_random(".len();
-            for (i, c) in source[args..].char_indices() {
-                match c {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-                if depth == 0 {
-                    return &source[start..=args + i];
-                }
-            }
-            panic!("unclosed random call")
-        })
-        .collect()
-}
-
-#[test]
-fn whitewater_fused_and_unpack_validate_on_cpu() {
-    let source = fused_source();
-    let module = naga::front::wgsl::parse_str(&source)
-        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+fn validate_wgsl(source: &str) -> naga::Module {
+    let module = naga::front::wgsl::parse_str(source)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     )
     .validate(&module)
     .unwrap_or_else(|e| panic!("{e:?}"));
+    module
+}
+
+#[test]
+fn whitewater_fused_and_gather_validate_on_cpu() {
+    let module = validate_wgsl(&fused_source());
     assert_eq!(std::mem::size_of::<EmitParams>(), 144);
     assert_eq!(std::mem::size_of::<SpawnParams>(), 112);
     assert_eq!(std::mem::size_of::<LifecycleParams>(), 144);
     assert_eq!(std::mem::size_of::<TurbulenceParams>(), 32);
-    assert_eq!(std::mem::size_of::<UnpackParams>(), 16);
-    assert_eq!(module.entry_points.len(), 6);
+    assert_eq!(std::mem::size_of::<GatherParams>(), 32);
+    assert_eq!(module.entry_points.len(), 5);
     for entry in &module.entry_points {
         assert_eq!(entry.workgroup_size, [256, 1, 1]);
     }
-    let adapter =
-        manifold_water_liquid::primitives::face_sample_component::FACE_SAMPLE_COMPONENT_BODY;
-    let expected = function(adapter, "body").replace("fn body(", "fn ww_unpack_face(");
-    assert_eq!(
-        function(WHITEWATER_FUSED_SHADER, "ww_unpack_face"),
-        expected,
-        "adapter indexing, select and zero tail"
-    );
-    assert!(random_calls(function(WHITEWATER_FUSED_SHADER, "ww_unpack_faces")).is_empty());
+    let gather = validate_wgsl(&gather_source());
+    assert_eq!(gather.entry_points.len(), 1);
+    assert_eq!(gather.entry_points[0].name, GATHER_ENTRY.0);
+    assert_eq!(gather.entry_points[0].workgroup_size, [256, 1, 1]);
+}
+
+/// A dense face-cells distance lattice in the step's pooled layout under the
+/// identity slot table: the pooled phi, the table words and the pool's tiles.
+/// Every tile is stored, so the canonical value is never read.
+pub fn pooled_distance(dense: &[f32], cells: [u32; 3]) -> (Vec<f32>, Vec<u32>, u32) {
+    use manifold_water_liquid::tile_storage::testkit::{identity_table, to_pool};
+    let (table, pool_tiles) = identity_table(cells);
+    (to_pool(dense, cells, &[0.0]), table, pool_tiles)
+}
+
+/// A dense face-record lattice (`(n+1)^3`) in the step's pooled layout under
+/// the identity slot table: the pooled records, the table words and the
+/// pool's tiles. Records past the cells read the canonical block (closed
+/// walls), so a dense reference reads `records_from_pool` of the result.
+pub fn pooled_faces(dense: &[FaceSample], cells: [u32; 3]) -> (Vec<FaceSample>, Vec<u32>, u32) {
+    use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool};
+    let canon: [FaceSample; 8] = std::array::from_fn(|mask| FaceSample {
+        weight: std::array::from_fn(|a| f32::from(u8::from(a < 3 && mask >> a & 1 == 1))),
+        ..FaceSample::default()
+    });
+    let (table, pool_tiles) = identity_table(cells);
+    (records_to_pool(dense, cells, &canon), table, pool_tiles)
 }
 
 #[cfg(any(test, feature = "gpu-proofs"))]
@@ -200,6 +181,8 @@ pub mod gpu {
         particles: GpuBuffer,
         solid: GpuBuffer,
         distance: GpuBuffer,
+        tiles: GpuBuffer,
+        pool_tiles: u32,
         faces: [GpuBuffer; 3],
         source: GpuBuffer,
         pool: GpuBuffer,
@@ -210,12 +193,15 @@ pub mod gpu {
         pub fn new(device: &GpuDevice) -> Self {
             let shape = synthetic_shape();
             let records = synthetic_records();
+            let (phi, table, pool_tiles) = pooled_distance(&vec![-1.0f32; 8 * 8 * 8], [8; 3]);
             Self {
                 shape,
                 particles: shared(device, &records),
                 records,
                 solid: shared(device, &vec![0.1f32; 13 * 13 * 13]),
-                distance: shared(device, &vec![-1.0f32; 8 * 8 * 8]),
+                distance: shared(device, &phi),
+                tiles: shared(device, &table),
+                pool_tiles,
                 faces: synthetic_faces().map(|face| shared(device, &face)),
                 source: shared(
                     device,
@@ -267,6 +253,8 @@ pub mod gpu {
                 obstacle_source: Some(&self.source),
                 faces: FaceSource::Axes(self.faces.each_ref()),
                 distance: &self.distance,
+                tiles: &self.tiles,
+                pool_tiles: self.pool_tiles,
             }
         }
     }
@@ -420,11 +408,14 @@ pub mod gpu {
             .collect()
     }
 
-    // Compile the actual adapter primitive, with its own generated uniform
-    // layout/body. Dispatch its whole output extent, including the zero tail.
+    // Compile the actual face component, with its own generated uniform
+    // layout/body, over the pooled faces and their slot table. Dispatch its
+    // whole output extent, including the zero tail.
     pub fn adapter_outputs(
         device: &GpuDevice,
         packed: &GpuBuffer,
+        tiles: &GpuBuffer,
+        pool_tiles: u32,
         cells: [u32; 3],
     ) -> [GpuBuffer; 3] {
         use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
@@ -443,8 +434,9 @@ pub mod gpu {
                     ("nodes_x", nx),
                     ("nodes_y", ny),
                     ("nodes_z", nz),
+                    ("pool_tiles", pool_tiles as f32),
                 ],
-                &[packed, output],
+                &[packed, tiles, output],
                 count,
                 "whitewater adapter oracle",
             );

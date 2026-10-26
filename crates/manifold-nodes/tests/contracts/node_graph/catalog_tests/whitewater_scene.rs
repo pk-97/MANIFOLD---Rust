@@ -15,7 +15,8 @@ use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
-use manifold_water_liquid::grid::face_bytes;
+use manifold_water_liquid::fluid_particles::FaceSample;
+use manifold_water_liquid::tile_storage::{pool_len, tile_total};
 
 const LIFECYCLE_REPORTS: [&str; 8] = [
     "foam_count",
@@ -193,13 +194,16 @@ fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
 /// the GPU emitter atoms feeding the vendored lifecycle (`ww.lifecycle`). Its
 /// frame-based ports are adapted by `vendored_render_def`. Kept for
 /// L5's side-by-side and O2, which reads the group's inner arrays.
+/// The face components feeding the vendored group, x, y and z.
+const VENDORED_FACES: [&str; 3] = ["vendored_face_u", "vendored_face_v", "vendored_face_w"];
+
 const VENDORED_GROUP: &str = include_str!("../../../fixtures/whitewater_vendored_group.json");
 
 /// `whitewater_render_def` with the vendored group in place of the node, on a
 /// frame that publishes the simulation lattice, its lifecycle reports probed
 /// by name.
 fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
-    let mut g = Appender::new(render_def(scene.with_faces()));
+    let mut g = Appender::new(render_def(scene));
     let mut group: Value = serde_json::from_str(VENDORED_GROUP).expect("the vendored group parses");
     let id = g.id("whitewater");
     // The render ids move with the water def's node count; the group takes the node's.
@@ -230,15 +234,30 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
         "grid_nodes_x",
         "grid_nodes_y",
         "grid_nodes_z",
-        "face_u",
-        "face_v",
-        "face_w",
+    ] {
+        g.wire((frame, port), id, port);
+    }
+    // The group's faces are the step's pooled faces gathered per axis by
+    // face components; its face counts and valid layers are the step's.
+    let (step, domain) = (g.id("step"), g.id("domain"));
+    for (axis, name) in VENDORED_FACES.into_iter().enumerate() {
+        let params = json!({"axis": {"type": "Enum", "value": axis}});
+        let adapter = g.node_in_scope(name, "node.face_sample_component", params, step);
+        for port in ["faces", "tiles", "pool_tiles"] {
+            g.wire((step, port), adapter, port);
+        }
+        for port in ["nodes_x", "nodes_y", "nodes_z"] {
+            g.wire((domain, port), adapter, port);
+        }
+        g.wire((adapter, "out"), id, ["face_u", "face_v", "face_w"][axis]);
+    }
+    for port in [
         "face_cells_x",
         "face_cells_y",
         "face_cells_z",
         "face_valid_layers",
     ] {
-        g.wire((frame, port), id, port);
+        g.wire((step, port), id, port);
     }
     let surface = g.id("surface");
     for port in [
@@ -249,7 +268,6 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     ] {
         g.wire((surface, port), id, port);
     }
-    let domain = g.id("domain");
     for port in ["ticks", "epoch", "gravity_x", "gravity", "gravity_z"] {
         g.wire((domain, port), id, port);
     }
@@ -293,8 +311,8 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
 
 /// Resolution is a live card (BUG-9an1 (resolution change), BUG-o65k (GPU
 /// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 48 under a
-/// running clip. On the first frame at each size the state already holds that
-/// lattice's face grid and the published population matches the new fill.
+/// running clip. On the first frame at each size the published population
+/// matches the new fill.
 /// During the following 0.5 s, count_b exactly describes the published live
 /// particles; after completion it matches the solver state. The initial fill
 /// is not a retention oracle: native-style marker cleanup can remove water.
@@ -311,7 +329,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         unsafe { std::slice::from_raw_parts(ptr.cast::<FluidParticle>(), len) }
     }
     let scene = WaterScene::dam_break(64);
-    let def = whitewater_render_def(scene.with_faces());
+    let def = whitewater_render_def(scene);
     let spec = def
         .preset_metadata
         .as_ref()
@@ -430,12 +448,8 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
             }
         }
         // The native solver grid: three cells more than the authored box.
-        let faces = face_bytes([n + 3; 3]);
-        assert_eq!(
-            show.provided_bytes("state", "faces"),
-            faces,
-            "Resolution {n}: the state's faces on its first frame"
-        );
+        let faces =
+            std::mem::size_of::<FaceSample>() as u64 * pool_len(tile_total([n + 3; 3]) as u32);
         let mut last = [0.0; 6];
         let mut gpu_ms = Vec::new();
         for frame in 0..30 {
@@ -464,7 +478,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         assert_eq!(
             show.provided_bytes(step, "faces"),
             faces,
-            "Resolution {n}: the step's faces"
+            "Resolution {n}: the step's pooled faces"
         );
         let record = std::mem::size_of::<manifold_node_engine::particles::FluidParticle>() as u64;
         assert_eq!(
@@ -639,6 +653,7 @@ mod emitter_oracle {
     use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use manifold_nodes_water::presets::gpu_flip::REST_PER_CELL;
     use manifold_water_liquid::grid::face_len;
+    use manifold_water_liquid::tile_storage::testkit::{from_pool_with, records_from_pool_with};
     use manifold_water_liquid::whitewater::KnownValue;
     use manifold_water_whitewater::primitives::emission_count::EmissionCount;
     use manifold_water_whitewater::primitives::jitter_particles::JitterParticles;
@@ -746,8 +761,10 @@ mod emitter_oracle {
 
     fn capture(scene: WaterScene, grid: GridBox) -> Vec<Captured> {
         let held: Vec<String> = ["frame", "ww.distance", "ww.extend2", "ww.cells"]
+            .into_iter()
+            .chain(VENDORED_FACES)
             .map(String::from)
-            .to_vec();
+            .collect();
         let mut show = Show::new(vendored_render_def(scene), (320, 180), false, &held);
         show.restart();
         let lattice = (cells(grid) as usize).pow(3);
@@ -764,8 +781,8 @@ mod emitter_oracle {
                 particles: show.dumped("frame", "particles_b", scene.particles() as usize),
                 faces: [0, 1, 2].map(|axis| {
                     show.dumped(
-                        "frame",
-                        ["face_u", "face_v", "face_w"][axis],
+                        VENDORED_FACES[axis],
+                        "out",
                         face_len(face_cells, axis) as usize,
                     )
                 }),
@@ -1454,9 +1471,8 @@ mod emitter_oracle {
     /// by `params`, and FLIP's engine on the water the step saw each tick.
     /// Tick-region nodes hold no dump, so the step's inputs are read where
     /// the tick leaves them: the particles from `state.out` (the step's
-    /// `out`), the faces from the `face_*` components of `state.faces` (the
-    /// step's `faces`), the distance from the step's own `distance` storage,
-    /// and `mesh_solid.solid`.
+    /// `out`), the faces and the distance from the step's pooled `faces` and
+    /// `distance` read through its `tiles` table, and `mesh_solid.solid`.
     fn parity_run(
         params: Value,
         engine_rates: whitewater_oracle::EmissionOptions,
@@ -1466,16 +1482,13 @@ mod emitter_oracle {
         let grid = GridBox::of(scene);
         let n = cells(grid);
         let face_cells = grid.face_cells as u32;
-        let mut def = serde_json::to_value(whitewater_render_def(scene.with_faces()))
-            .expect("def serialises");
+        let mut def = serde_json::to_value(whitewater_render_def(scene)).expect("def serialises");
         let node = json_node_mut(&mut def, "whitewater").expect("the step in the Water group");
         for (key, value) in params.as_object().expect("params") {
             node["params"][key] = value.clone();
         }
         let def: EffectGraphDef = serde_json::from_value(def).expect("def");
-        let held: Vec<String> = ["state", "mesh_solid", "face_u", "face_v", "face_w"]
-            .map(String::from)
-            .to_vec();
+        let held: Vec<String> = ["state", "mesh_solid"].map(String::from).to_vec();
         let mut show = Show::new(def, (320, 180), false, &held);
         show.restart();
         let origin = std::array::from_fn(|a| (grid.center[a] - 0.5 * grid.size[a]) as f32);
@@ -1522,15 +1535,23 @@ mod emitter_oracle {
                     ]
                 })
                 .collect();
-            let faces = [0, 1, 2].map(|axis| {
-                show.dumped::<f32>(
-                    ["face_u", "face_v", "face_w"][axis],
-                    "out",
-                    face_len([face_cells; 3], axis) as usize,
-                )
-            });
-            let distance: Vec<f32> =
-                show.provided("step", "distance", (face_cells as usize).pow(3));
+            let cells = [face_cells; 3];
+            let pool_tiles = tile_total(cells) as u32;
+            let table: Vec<u32> = show.provided("step", "tiles", 2 * pool_tiles as usize);
+            let records: Vec<FaceSample> = records_from_pool_with(
+                &show.provided::<FaceSample>("step", "faces", pool_len(pool_tiles) as usize),
+                &table,
+                cells,
+            );
+            let faces = manifold_nodes_water::testkit::conformance::gpu_flip_faces(
+                bytemuck::cast_slice(&records),
+                cells,
+            );
+            let distance: Vec<f32> = from_pool_with(
+                &show.provided::<f32>("step", "distance", pool_len(pool_tiles) as usize),
+                &table,
+                cells,
+            );
             let level = pad_distance(&distance, face_cells, n, grid.h as f32);
             let solid: Vec<f32> = show.dumped("mesh_solid", "solid", (grid.nodes as usize).pow(3));
             let fields = WhitewaterFields {
@@ -1721,7 +1742,7 @@ mod emitter_oracle {
 /// The Dam Break at 16 with the frame's presentation and the domain's
 /// simulation time probed.
 fn history_def() -> EffectGraphDef {
-    let mut g = Appender::new(render_def(WaterScene::dam_break(16).with_faces()));
+    let mut g = Appender::new(render_def(WaterScene::dam_break(16)));
     let frame = g.id("frame");
     for port in HISTORY_PROBES[..HISTORY_PROBES.len() - 1].iter() {
         g.probe(port, (frame, port));
@@ -1940,7 +1961,7 @@ fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
 #[test]
 fn liquid_frame_solid_shrink_keeps_mix_capacity() {
     for wired in [true, false] {
-        let mut g = Appender::new(render_def(WaterScene::dam_break(32).with_faces()));
+        let mut g = Appender::new(render_def(WaterScene::dam_break(32)));
         let frame = g.id("frame");
         if !wired {
             g.retain_wires(frame, |w| !(w["toNode"] == frame && w["toPort"] == "solid"));

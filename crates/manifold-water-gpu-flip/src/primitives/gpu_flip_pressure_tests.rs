@@ -12,9 +12,11 @@ use super::gpu_flip_pressure::{
     MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water,
     level_lattices, max_solve_level, passes, shader,
 };
-use super::pool_testkit::{from_pool, identity_table, records_to_pool, to_pool};
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_water_liquid::tile_storage::pool_len;
+use manifold_water_liquid::tile_storage::testkit::{
+    from_pool, identity_table, records_to_pool, to_pool,
+};
 
 /// One saved problem: water cells and the divergence f (zero in air).
 pub(crate) struct Problem {

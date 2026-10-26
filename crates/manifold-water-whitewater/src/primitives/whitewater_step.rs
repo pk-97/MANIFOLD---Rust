@@ -31,25 +31,37 @@ use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
 use manifold_water_liquid::fluid_particles::{FaceSample, MAX_BINS, bin_counts, bin_total};
 use manifold_water_liquid::grid::face_len;
+use manifold_water_liquid::primitives::face_sample_component::{
+    FaceSampleComponent, pool_tiles_wire, pooled_bytes,
+};
 use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortJob, SortLabels, range_storage_bytes, whitewater_record_read,
 };
+use manifold_water_liquid::tile_storage::{TILE_STORAGE, pool_len};
 use manifold_water_liquid::whitewater::{
     DEFAULT_CAPACITY, KnownValue, MAX_CAPACITY, WhitewaterParticle, cell_total, face_offset,
     grid_box, grid_cells, require_extended_faces,
 };
 
 const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
-const FUSED_ENTRIES: [(&str, &str); 6] = [
+const FUSED_ENTRIES: [(&str, &str); 5] = [
     ("ww_emit", "node.whitewater_step.emit"),
     ("ww_dust", "node.whitewater_step.dust"),
     ("ww_spawn", "node.whitewater_step.spawn"),
     ("ww_lifecycle", "node.whitewater_step.lifecycle"),
     ("ww_turbulence", "node.whitewater_step.turbulence"),
-    ("ww_unpack_faces", "node.whitewater_step.unpack_faces"),
 ];
+
+/// Copies the pooled phi into the stage's dense face-cells lattice.
+const GATHER_DISTANCE_SHADER: &str = include_str!("shaders/gather_distance.wgsl");
+const GATHER_ENTRY: (&str, &str) = ("gather_distance", "node.whitewater_step.gather_distance");
+const UNPACK_LABEL: &str = "node.whitewater_step.unpack_faces";
+
+fn gather_source() -> String {
+    format!("{TILE_STORAGE}\n{GATHER_DISTANCE_SHADER}")
+}
 
 #[derive(Clone, Copy)]
 enum Fused {
@@ -58,7 +70,6 @@ enum Fused {
     Spawn,
     Lifecycle,
     Turbulence,
-    UnpackFaces,
 }
 
 impl Fused {
@@ -109,13 +120,19 @@ macro_rules! emitter_path {
     }};
 }
 
+/// `gather_distance.wgsl`'s uniform: the face cells, the pool's tiles and the
+/// thread count, padded to 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct UnpackParams {
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
+struct GatherParams {
+    cells_x: u32,
+    cells_y: u32,
+    cells_z: u32,
+    pool_tiles: u32,
     count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 #[repr(C)]
@@ -435,6 +452,8 @@ manifold_node_engine::primitive! {
         face_cells_x: ScalarF32 optional, face_cells_y: ScalarF32 optional, face_cells_z: ScalarF32 optional,
         face_valid_layers: ScalarF32 optional,
         distance: Array(f32) required,
+        tiles: Array(u32) required,
+        pool_tiles: ScalarF32 optional,
         substep_schedule: Array(f32) optional,
         substep_u: Array(f32) optional, substep_v: Array(f32) optional, substep_w: Array(f32) optional,
         substep_count: ScalarF32 optional,
@@ -537,7 +556,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "For per-tick GPU FLIP, wire the solver distance, particles and packed faces (or all three projected face components); wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
+    composition_notes: "For per-tick GPU FLIP, wire the solver distance, tiles and pool_tiles from node.gpu_flip_step (its pooled phi and slot table), particles and packed faces (or all three projected face components); wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
     examples: [],
     picker: { label: "Whitewater Step", category: Atom },
     summary: "Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU.",
@@ -665,12 +684,18 @@ impl StepShape {
         let scan = storage_words(self.slot_scan_values()) as u64 * 4 + STATE_WORDS * 4;
         let outputs = 4 * self.population_bytes() + COUNT_WORDS as u64 * 4;
         grid + per_particle
+            + self.raw_distance_bytes()
             + pool
             + sort
             + scan
             + outputs
             + 6 * self.solid_bytes()
             + manifold_water_liquid::primitives::whitewater_distance::scratch_bytes(self.face_cells)
+    }
+
+    /// The dense face-cells distance the stage gathers from the pooled phi.
+    pub fn raw_distance_bytes(&self) -> u64 {
+        cell_total(self.face_cells) * 4
     }
 
     /// Three adapter-sized arrays, including their zero tails, for packed input.
@@ -773,7 +798,11 @@ pub(crate) struct StepInputs<'a> {
     pub solid: &'a GpuBuffer,
     pub obstacle_source: Option<&'a GpuBuffer>,
     pub faces: FaceSource<'a>,
+    /// The step's pooled phi (`pool_len(pool_tiles)` floats) and, for packed
+    /// faces, its pooled records, both read through the slot table `tiles`.
     pub distance: &'a GpuBuffer,
+    pub tiles: &'a GpuBuffer,
+    pub pool_tiles: u32,
 }
 }
 
@@ -798,13 +827,18 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
     {
         return Err("obstacle source is shorter than the solid lattice".to_owned());
     }
+    if inputs.pool_tiles == 0 {
+        return Err("the pool holds no tiles".into());
+    }
+    let (pooled_face_bytes, table_bytes) = pooled_bytes(shape.face_cells, inputs.pool_tiles);
     let wanted = [
         ("solid", inputs.solid, shape.solid_bytes()),
         (
             "liquid distance",
             inputs.distance,
-            cell_total(shape.face_cells) * 4,
+            pool_len(inputs.pool_tiles) * 4,
         ),
+        ("tiles", inputs.tiles, table_bytes),
     ];
     for (name, buffer, bytes) in wanted {
         if buffer.size < bytes {
@@ -816,7 +850,7 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
     }
     match inputs.faces {
         FaceSource::Packed(faces) => {
-            let bytes = manifold_water_liquid::grid::face_bytes(shape.face_cells);
+            let bytes = pooled_face_bytes;
             if faces.size < bytes {
                 return Err(format!(
                     "faces holds {} bytes, fewer than the {bytes} its grid reads",
@@ -992,8 +1026,12 @@ struct Pipelines {
     keep: Option<GpuComputePipeline>,
     /// `whitewater_step.wgsl`, in [`Hand`] order.
     hand: Vec<GpuComputePipeline>,
-    /// `whitewater_fused.wgsl` in [`FUSED_ENTRIES`] order, including the face unpack pass.
+    /// `whitewater_fused.wgsl` in [`FUSED_ENTRIES`] order.
     fused: Vec<GpuComputePipeline>,
+    /// The face component, once per axis, unpacks the pooled faces.
+    face_component: Option<GpuComputePipeline>,
+    /// `gather_distance.wgsl`.
+    gather: Option<GpuComputePipeline>,
 }
 
 #[derive(Clone, Copy)]
@@ -1063,6 +1101,10 @@ impl Pipelines {
         standalone_pipeline::<ExtendLattice>(&mut self.extend, device);
         standalone_pipeline::<PreserveFoam>(&mut self.preserve, device);
         standalone_pipeline::<KeepWhitewater>(&mut self.keep, device);
+        standalone_pipeline::<FaceSampleComponent>(&mut self.face_component, device);
+        self.gather.get_or_insert_with(|| {
+            device.create_compute_pipeline(&gather_source(), GATHER_ENTRY.0, GATHER_ENTRY.1)
+        });
         if self.fused.is_empty() {
             let source = fused_source();
             for (entry, label) in FUSED_ENTRIES {
@@ -1116,6 +1158,8 @@ fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, S
 /// The grid fields and the pool, sized from one [`StepShape`].
 struct Fields {
     unpacked_faces: Option<[GpuBuffer; 3]>,
+    /// The pooled phi gathered into the face-cells lattice, every run.
+    raw_distance: GpuBuffer,
     distance: Option<GpuBuffer>,
     surface: Option<GpuBuffer>,
     cells: GpuBuffer,
@@ -1137,6 +1181,7 @@ impl Fields {
         let alloc = |bytes| allocate(device, bytes, false);
         Ok(Self {
             unpacked_faces: None,
+            raw_distance: alloc(shape.raw_distance_bytes())?,
             distance: shape
                 .owns_distance_fields()
                 .then(|| alloc(cells * 4))
@@ -1323,16 +1368,62 @@ impl Step {
     }
 
     manifold_core::testkit_visible! {
-        pub(crate) fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, faces: FaceSource<'_>) {
-            if let FaceSource::Packed(packed) = faces {
-                let [u, v, w] = self.face_axes(faces);
+        /// The face component, once per axis, over the whole adapter-sized
+        /// array: the zero tail past each axis's faces is written too.
+        pub(crate) fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, inputs: &StepInputs<'_>) {
+            if let FaceSource::Packed(packed) = inputs.faces {
                 let [nodes_x, nodes_y, nodes_z] = shape.face_cells.map(|n| (n + 4) as f32);
-                let params = UnpackParams { nodes_x, nodes_y, nodes_z, count: (shape.unpacked_face_bytes() / 12) as u32 };
-                let pass = Fused::UnpackFaces;
-                dispatch(enc, &self.pipelines.fused[pass.index()], bytemuck::bytes_of(&params), &[packed, u, v, w],
-                    params.count, FUSED_ENTRIES[pass.index()].1, Barrier::After);
+                let count = (shape.unpacked_face_bytes() / 12) as u32;
+                for (axis, out) in self.face_axes(inputs.faces).into_iter().enumerate() {
+                    atom_then::<FaceSampleComponent>(
+                        enc,
+                        get(&self.pipelines.face_component),
+                        &[
+                            ("axis", axis as f32),
+                            ("nodes_x", nodes_x),
+                            ("nodes_y", nodes_y),
+                            ("nodes_z", nodes_z),
+                            ("pool_tiles", inputs.pool_tiles as f32),
+                        ],
+                        &[packed, inputs.tiles, out],
+                        count,
+                        UNPACK_LABEL,
+                        if axis == 2 { Barrier::After } else { Barrier::None },
+                    );
+                }
             }
         }
+    }
+
+    /// The pooled phi through the slot table into the dense face-cells
+    /// lattice every distance reader of the stage reads.
+    fn gather_distance(
+        &self,
+        enc: &mut manifold_gpu::GpuEncoder,
+        shape: &StepShape,
+        inputs: &StepInputs<'_>,
+    ) {
+        let [cells_x, cells_y, cells_z] = shape.face_cells;
+        let count = cell_total(shape.face_cells) as u32;
+        let params = GatherParams {
+            cells_x,
+            cells_y,
+            cells_z,
+            pool_tiles: inputs.pool_tiles,
+            count,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        dispatch(
+            enc,
+            get(&self.pipelines.gather),
+            bytemuck::bytes_of(&params),
+            &[inputs.tiles, inputs.distance, &self.fields().raw_distance],
+            count,
+            GATHER_ENTRY.1,
+            Barrier::After,
+        );
     }
 
     manifold_core::testkit_visible! {
@@ -1364,7 +1455,7 @@ impl Step {
             self.current = 0;
             let enc = &mut *gpu.native_enc;
             if enabled {
-                self.unpack_faces(enc, &shape, inputs.faces);
+                self.unpack_faces(enc, &shape, inputs);
                 let f = self.fields();
                 enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
                 enc.copy_buffer_to_buffer(state, &f.state, STATE_WORDS * 4);
@@ -1476,6 +1567,7 @@ impl Step {
         self.influence_epoch = Some(frame.epoch);
         let influence_previous = self.influence_current;
         let influence_next = 1 - influence_previous;
+        self.gather_distance(enc, s, inputs);
         let f = self.fields();
         let p = &self.pipelines;
         let cells = s.cell_count() as u32;
@@ -1490,7 +1582,7 @@ impl Step {
         };
         // Resolve once for emit and lifecycle; the next encode overwrites
         // SurfaceDistance's current storage, so this view is never history.
-        let distance = inputs.distance;
+        let distance = &f.raw_distance;
         let padding = face_offset(s.nodes, s.face_cells).expect("validated face placement")[0];
         let (distance, surface) = if padding == 0 {
             let surface = self.surface_distance.encode(enc, distance, s.cell_size);
@@ -2286,13 +2378,25 @@ impl Primitive for WhitewaterStep {
                 return;
             }
         };
-        let (Some(particles), Some(solid), Some(distance)) = (
+        let (Some(particles), Some(solid), Some(distance), Some(tiles)) = (
             ctx.inputs.array("particles"),
             ctx.inputs.array("solid"),
             ctx.inputs.array("distance"),
+            ctx.inputs.array("tiles"),
         ) else {
-            ctx.error("Whitewater Step: particles, solid and distance must all be wired");
+            ctx.error("Whitewater Step: particles, solid, distance and tiles must all be wired");
             return;
+        };
+        let Some(ParamValue::Float(pool_tiles)) = ctx.inputs.scalar("pool_tiles") else {
+            ctx.error("Whitewater Step: pool_tiles must be wired");
+            return;
+        };
+        let pool_tiles = match pool_tiles_wire(|_, _| pool_tiles) {
+            Ok(pool_tiles) => pool_tiles,
+            Err(refusal) => {
+                ctx.error(format!("Whitewater Step: {refusal}"));
+                return;
+            }
         };
         let faces = if packed {
             let Some(faces) = ctx.inputs.array("faces") else {
@@ -2349,6 +2453,8 @@ impl Primitive for WhitewaterStep {
             obstacle_source: ctx.inputs.array("obstacle_source"),
             faces,
             distance,
+            tiles,
+            pool_tiles,
         };
         let (Some(pool), Some(state)) = (ctx.inputs.array("pool"), ctx.inputs.array("pool_state"))
         else {

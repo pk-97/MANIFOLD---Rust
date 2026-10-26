@@ -11,14 +11,21 @@ impl Primitive for GpuFlipStep {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(
             port,
-            "faces" | "distance" | "substep_schedule" | "substep_u" | "substep_v" | "substep_w"
+            "faces"
+                | "distance"
+                | "tiles"
+                | "substep_schedule"
+                | "substep_u"
+                | "substep_v"
+                | "substep_w"
         )
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
-            "faces" => self.state.faces.as_ref(),
-            "distance" => self.state.distance.as_ref(),
+            "faces" => self.state.lattice.as_ref().map(|l| &l.faces),
+            "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
+            "tiles" => self.state.tiles.as_ref().map(|t| &t.table),
             "substep_schedule" => self.state.history.schedule.as_ref(),
             "substep_u" | "substep_v" | "substep_w" => self.state.history.faces.as_ref().map(|f| {
                 &f[match port {
@@ -43,9 +50,8 @@ impl Primitive for GpuFlipStep {
                 .find(|(name, _)| *name == "particles")
                 .map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the lattice at run time.
-            "faces" | "distance" | "substep_schedule" | "substep_u" | "substep_v" | "substep_w" => {
-                Some(1)
-            }
+            "faces" | "distance" | "tiles" | "substep_schedule" | "substep_u" | "substep_v"
+            | "substep_w" => Some(1),
             "reaction_out" => inputs
                 .iter()
                 .find(|(name, _)| *name == "reaction")
@@ -408,6 +414,16 @@ impl Primitive for GpuFlipStep {
             ctx.scalar_or_param("retired_max_speed", -1.0));
         ctx.outputs
             .set_scalar("substep_count", ParamValue::Float(history_slots as f32));
+        ctx.outputs.set_scalar(
+            "pool_tiles",
+            ParamValue::Float(
+                self.state
+                    .tiles
+                    .as_ref()
+                    .expect("tiles prepared")
+                    .pool_tiles as f32,
+            ),
+        );
         let gpu = ctx.gpu_encoder();
         self.state.history.prepare(gpu.device);
         if let Err(error) = self
@@ -538,7 +554,13 @@ impl Primitive for GpuFlipStep {
                     gpu.native_enc,
                     k as u32,
                     &plan_buffer,
-                    self.state.faces.as_ref().expect("faces prepared"),
+                    &self.state.lattice.as_ref().expect("lattice prepared").faces,
+                    &self.state.tiles.as_ref().expect("tiles prepared").table,
+                    self.state
+                        .tiles
+                        .as_ref()
+                        .expect("tiles prepared")
+                        .pool_tiles,
                 );
                 last_clock_plan = plan_buffer;
             }

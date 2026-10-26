@@ -79,35 +79,6 @@ impl StepState {
             self.tiles = None;
             self.tiles = Some(TileTable::new(device, cells, ring_max)?);
         }
-        let distance = cell_bytes(cells);
-        if self
-            .distance
-            .as_ref()
-            .is_none_or(|distance_out| distance_out.size != distance)
-        {
-            self.distance = None;
-            let out = manifold_node_engine::load::expand::admit_candidate_bytes(
-                device.modifier_memory_snapshot(),
-                distance,
-            )
-            .map_err(|error| error.to_string())
-            .and_then(|()| device.try_create_buffer_shared(distance))?;
-            out.zero_fill();
-            self.distance = Some(out);
-        }
-        let face = face_bytes(cells);
-        if self.faces.as_ref().is_none_or(|faces| faces.size != face) {
-            self.faces = None;
-            let faces = manifold_node_engine::load::expand::admit_candidate_bytes(
-                device.modifier_memory_snapshot(),
-                face,
-            )
-            .map_err(|error| error.to_string())
-            .and_then(|()| device.try_create_buffer_shared(face))?;
-            // A consumer reading before the first step sees still, invalid faces.
-            faces.zero_fill();
-            self.faces = Some(faces);
-        }
         let sorted = slots.max(1) * size_of::<FluidParticle>() as u64;
         if self
             .sorted

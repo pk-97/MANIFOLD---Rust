@@ -9,11 +9,10 @@
 //! fluidsimulation.cpp (solid face velocity, the constraint),
 //! pressuresolver.cpp (the pressure subtraction).
 
-use manifold_gpu::{GpuBinding, GpuBuffer};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice};
 
 use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass};
 use super::liquid_fill::LiquidFill;
-use super::pool_testkit::{from_pool, identity_table, records_from_pool, records_to_pool, to_pool};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_node_engine::testkit::atom::{
@@ -29,6 +28,9 @@ use manifold_water_liquid::bodies::{
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
 use manifold_water_liquid::primitives::liquid_stats::{INFLOW_BIRTHS_TAIL, with_stats_layout};
+use manifold_water_liquid::tile_storage::testkit::{
+    from_pool, identity_table, records_from_pool, records_from_pool_with, records_to_pool, to_pool,
+};
 use manifold_water_liquid::tile_storage::{pool_len, tile_total};
 mod cells;
 mod density;
@@ -45,6 +47,39 @@ use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
 use manifold_water_liquid::lattice::PADDING_NODES;
 pub(super) use motion::*;
 use solids::*;
+
+/// `count` elements of a buffer the step allocated (private storage), through
+/// a staging copy.
+pub(super) fn read_staged<T: bytemuck::Pod>(
+    device: &GpuDevice,
+    buffer: &GpuBuffer,
+    count: usize,
+) -> Vec<T> {
+    let staged = device.create_buffer_shared(buffer.size);
+    let mut enc = device.create_encoder("step proof readback");
+    enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
+    enc.commit_and_wait_completed();
+    read(&staged, count)
+}
+
+/// The step's pooled `faces` output as the dense `(n+1)^3` record array,
+/// read through its `tiles` output.
+pub(super) fn step_faces(
+    h: &Harness,
+    faces: manifold_node_engine::bindings::Slot,
+    tiles: manifold_node_engine::bindings::Slot,
+    cells: [u32; 3],
+) -> Vec<FaceSample> {
+    let pool = h.buffer(faces);
+    let table = h.buffer(tiles);
+    let pool: Vec<FaceSample> = read_staged(
+        &h.device,
+        &pool,
+        (pool.size / std::mem::size_of::<FaceSample>() as u64) as usize,
+    );
+    let table: Vec<u32> = read_staged(&h.device, &table, (table.size / 4) as usize);
+    records_from_pool_with(&pool, &table, cells)
+}
 
 /// A lattice with unequal sides, so a swapped axis shows.
 const N: [usize; 3] = [6, 5, 4];

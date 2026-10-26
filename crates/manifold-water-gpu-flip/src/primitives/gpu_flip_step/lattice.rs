@@ -17,8 +17,8 @@ pub(super) fn pool_face_bytes(pool_tiles: u32) -> u64 {
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
 /// [`LATTICE_CELL_ARRAYS`] pooled cell arrays, the dense solid corners,
 /// [`LATTICE_FACE_GRIDS`] pooled face grids, the pocket gate, the pocket sums
-/// (dense), the coarse pockets and the tile table. The dense published faces
-/// and distance are the node's outputs, held apart.
+/// (dense), the coarse pockets and the tile table. The pooled faces and φ
+/// are among them and are the node's `faces` and `distance` outputs.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
@@ -60,6 +60,8 @@ pub(super) const LATTICE_FACE_GRIDS: u64 = 7;
 pub(super) struct LatticeBuffers {
     pub(super) cells: [u32; 3],
     pub(super) water: GpuBuffer,
+    /// The `distance` output: shared, so it starts at zero and host proofs
+    /// read it as the dense outputs were read.
     pub(super) phi: GpuBuffer,
     pub(super) rhs: GpuBuffer,
     pub(super) pressure: GpuBuffer,
@@ -77,7 +79,7 @@ pub(super) struct LatticeBuffers {
     /// The solids' face velocity and friction.
     pub(super) v: GpuBuffer,
     /// The step's own face grid: the projected, extended, constrained faces
-    /// the move reads. `publish` copies it into the dense `faces` output.
+    /// the move reads; the `faces` output, shared like `phi`.
     pub(super) faces: GpuBuffer,
     /// Each cell's sealed-pocket state.
     pub(super) pocket: GpuBuffer,
@@ -133,7 +135,7 @@ impl LatticeBuffers {
         Ok(Self {
             cells,
             water: allocate(device, cell)?,
-            phi: allocate(device, cell)?,
+            phi: allocate_zeroed(device, cell)?,
             rhs: allocate(device, cell)?,
             pressure: allocate(device, cell)?,
             corners: allocate(device, corners)?,
@@ -143,7 +145,7 @@ impl LatticeBuffers {
             f: allocate(device, face)?,
             s: allocate(device, face)?,
             v: allocate(device, face)?,
-            faces: allocate(device, face)?,
+            faces: allocate_zeroed(device, face)?,
             pocket: allocate(device, cell)?,
             pocket_gate: allocate(device, POCKET_GATE_WORDS * 4)?,
             pocket_label: allocate(device, cell)?,

@@ -1,13 +1,10 @@
-/// Where the face grid nodes fuse in their host graphs. GPU FLIP's component
-/// sizes its output from its faces input, so it is an eligible atom, but the
-/// u and v components feeding one consumer form no region: the region gates
-/// leave each one isolated. The matter component sizes its output from its grid input, so it folds
-/// into one region with its consumer and stands alone without one; the
-/// fused-vs-unfused GPU proof covers the folded case.
+/// Where the matter face nodes fuse in their host graph. The matter component
+/// sizes its output from its grid input, so it folds into one region with its
+/// consumer and stands alone without one; the fused-vs-unfused GPU proof
+/// covers the folded case.
 #[test]
 fn face_grid_fusion_in_host_graphs() {
     use manifold_node_engine::freeze::FusionReport;
-    use manifold_nodes_water::presets::gpu_flip::{FACE_NODES, WaterScene, water_def};
     use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
     let mut registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
@@ -28,47 +25,6 @@ fn face_grid_fusion_in_host_graphs() {
             .cloned()
             .collect()
     };
-
-    let mut gpu_flip =
-        serde_json::to_value(water_def(WaterScene::dam_break(64).with_faces())).expect("def");
-    let nodes = gpu_flip["nodes"].as_array().expect("nodes");
-    let face_u = nodes
-        .iter()
-        .find(|n| n["nodeId"] == FACE_NODES[0])
-        .expect("face_u")["id"]
-        .clone();
-    let face_v = nodes
-        .iter()
-        .find(|n| n["nodeId"] == FACE_NODES[1])
-        .expect("face_v")["id"]
-        .clone();
-    let next = nodes
-        .iter()
-        .filter_map(|n| n["id"].as_u64())
-        .max()
-        .expect("ids")
-        + 1;
-    gpu_flip["nodes"]
-        .as_array_mut()
-        .expect("nodes")
-        .push(serde_json::json!({
-            "id": next, "nodeId": "face_u_consumer", "typeId": "node.divide_by_value", "params": {},
-        }));
-    gpu_flip["wires"].as_array_mut().expect("wires").extend([
-        serde_json::json!({"fromNode": face_u, "fromPort": "out", "toNode": next, "toPort": "values"}),
-        serde_json::json!({"fromNode": face_v, "fromPort": "out", "toNode": next, "toPort": "divisor"}),
-    ]);
-    let gpu_flip = report(serde_json::from_value(gpu_flip).expect("def"));
-    let sampled = of_type(&gpu_flip, "node.face_sample_component");
-    assert_eq!(sampled.len(), 3);
-    assert!(
-        sampled.iter().all(|n| !n.fused),
-        "GPU FLIP face components stay unfused: {sampled:?}"
-    );
-    assert!(
-        sampled.iter().all(|n| n.kind == "pointwise"),
-        "GPU FLIP face components are eligible atoms: {sampled:?}"
-    );
 
     let alone = report(matter_dam_break_faces(None));
     let components = of_type(&alone, "node.matter_face_component");

@@ -305,6 +305,110 @@ pub(crate) fn wire_retained_whitewater(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Move saved GPU FLIP graphs onto the step's pooled outputs, after
+/// flattening. The liquid state's dense face copy (`faces_in`, `faces`) and
+/// the frame's face grid are gone: the wire into `faces_in`, the face
+/// components fed by the state's `faces` with every wire they carry, and the
+/// frame's face wires are dropped. A whitewater step or face component reading
+/// the step's pooled `faces` or `distance` gains the step's `tiles` and
+/// `pool_tiles` beside them. Idempotent.
+pub(crate) fn retire_dense_liquid_faces(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    const FRAME_FACE_PORTS: [&str; 10] = [
+        "face_u_in",
+        "face_v_in",
+        "face_w_in",
+        "face_u",
+        "face_v",
+        "face_w",
+        "face_cells_x",
+        "face_cells_y",
+        "face_cells_z",
+        "face_valid_layers",
+    ];
+    fn type_of(def: &EffectGraphDef, id: u32) -> Option<&str> {
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.type_id.as_str())
+    }
+    let mut changed = false;
+    let state_faces: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.face_sample_component")
+        .filter(|n| {
+            def.wires.iter().any(|w| {
+                w.to_node == n.id
+                    && w.to_port == "faces"
+                    && w.from_port == "faces"
+                    && type_of(def, w.from_node) == Some("node.liquid_state")
+            })
+        })
+        .map(|n| n.id)
+        .collect();
+    let wires = def.wires.len();
+    let nodes = def.nodes.len();
+    def.nodes.retain(|n| !state_faces.contains(&n.id));
+    let kinds: std::collections::HashMap<u32, String> = def
+        .nodes
+        .iter()
+        .map(|n| (n.id, n.type_id.clone()))
+        .collect();
+    def.wires.retain(|w| {
+        let kind = |id: u32| kinds.get(&id).map(String::as_str);
+        let into_state = kind(w.to_node) == Some("node.liquid_state") && w.to_port == "faces_in";
+        let out_of_state = kind(w.from_node) == Some("node.liquid_state") && w.from_port == "faces";
+        let frame_face = (kind(w.to_node) == Some("node.liquid_frame")
+            && FRAME_FACE_PORTS.contains(&w.to_port.as_str()))
+            || (kind(w.from_node) == Some("node.liquid_frame")
+                && FRAME_FACE_PORTS.contains(&w.from_port.as_str()));
+        !(state_faces.contains(&w.from_node)
+            || state_faces.contains(&w.to_node)
+            || into_state
+            || out_of_state
+            || frame_face)
+    });
+    changed |= def.wires.len() != wires || def.nodes.len() != nodes;
+
+    // Readers of the step's pooled buffers: the whitewater step (distance and
+    // faces) and a face component fed by the step's faces.
+    let mut added = Vec::new();
+    for node in def.nodes.iter().filter(|n| {
+        matches!(
+            n.type_id.as_str(),
+            "node.whitewater_step" | "node.face_sample_component"
+        )
+    }) {
+        let step = def
+            .wires
+            .iter()
+            .filter(|w| w.to_node == node.id && matches!(w.to_port.as_str(), "faces" | "distance"))
+            .find(|w| {
+                w.from_port == w.to_port && type_of(def, w.from_node) == Some("node.gpu_flip_step")
+            })
+            .map(|w| w.from_node);
+        let Some(step) = step else { continue };
+        for (output, input) in [("tiles", "tiles"), ("pool_tiles", "pool_tiles")] {
+            if !def
+                .wires
+                .iter()
+                .any(|w| w.to_node == node.id && w.to_port == input)
+            {
+                added.push(EffectGraphWire {
+                    from_node: step,
+                    from_port: output.into(),
+                    to_node: node.id,
+                    to_port: input.into(),
+                });
+            }
+        }
+    }
+    changed |= !added.is_empty();
+    def.wires.extend(added);
+    changed
+}
+
 /// Correct standard GPU FLIP solid producers at the flattened installation seam.
 /// Authored lattice wires retain their old meaning; only the exact native-grid
 /// consumers move to the domain's mesh descriptor. Shared producers are cloned.
@@ -669,6 +773,15 @@ inventory::submit! {
         stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
         order: 330,
         apply: wire_retained_whitewater,
+    }
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "retire_dense_liquid_faces",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 340,
+        apply: retire_dense_liquid_faces,
     }
 }
 
@@ -1370,5 +1483,88 @@ mod tests {
             );
             assert!(!wire_liquid_intervals(&mut def));
         }
+    }
+
+    #[test]
+    fn dense_liquid_faces_retire_and_pooled_readers_gain_the_slot_table() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from,
+            from_port: output.into(),
+            to_node: to,
+            to_port: input.into(),
+        };
+        // State 1, step 2, frame 3, state-fed components 4 and 5, whitewater 6,
+        // an axis component 7 fed by the step, the domain 8.
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                bare_node(1, "node.liquid_state"),
+                bare_node(2, "node.gpu_flip_step"),
+                bare_node(3, "node.liquid_frame"),
+                bare_node(4, "node.face_sample_component"),
+                bare_node(5, "node.face_sample_component"),
+                bare_node(6, "node.whitewater_step"),
+                bare_node(7, "node.face_sample_component"),
+                bare_node(8, GPU_FLIP_DOMAIN_TYPE_ID),
+            ],
+            wires: vec![
+                wire(2, "faces", 1, "faces_in"),
+                wire(1, "faces", 4, "faces"),
+                wire(1, "faces", 5, "faces"),
+                wire(8, "nodes_x", 4, "nodes_x"),
+                wire(4, "out", 3, "face_u_in"),
+                wire(5, "out", 3, "face_v_in"),
+                wire(3, "face_cells_x", 6, "face_cells_x"),
+                wire(3, "particles_b", 6, "particles"),
+                wire(2, "face_cells_x", 6, "face_cells_x"),
+                wire(2, "distance", 6, "distance"),
+                wire(2, "faces", 6, "faces"),
+                wire(2, "faces", 7, "faces"),
+                wire(7, "out", 6, "face_u"),
+                wire(1, "out", 3, "particles"),
+            ],
+        };
+        assert!(retire_dense_liquid_faces(&mut def));
+        let ids: Vec<u32> = def.nodes.iter().map(|n| n.id).collect();
+        assert_eq!(ids, [1, 2, 3, 6, 7, 8], "only the state-fed components go");
+        for gone in [
+            wire(2, "faces", 1, "faces_in"),
+            wire(4, "out", 3, "face_u_in"),
+            wire(3, "face_cells_x", 6, "face_cells_x"),
+        ] {
+            assert!(!def.wires.contains(&gone), "{gone:?}");
+        }
+        for kept in [
+            wire(2, "face_cells_x", 6, "face_cells_x"),
+            wire(3, "particles_b", 6, "particles"),
+            wire(2, "faces", 6, "faces"),
+            wire(7, "out", 6, "face_u"),
+            wire(1, "out", 3, "particles"),
+        ] {
+            assert!(def.wires.contains(&kept), "{kept:?}");
+        }
+        for reader in [6, 7] {
+            for port in ["tiles", "pool_tiles"] {
+                assert_eq!(
+                    def.wires
+                        .iter()
+                        .filter(|w| w.from_node == 2
+                            && w.from_port == port
+                            && w.to_node == reader
+                            && w.to_port == port)
+                        .count(),
+                    1,
+                    "{reader}.{port}"
+                );
+            }
+        }
+        let migrated = def.clone();
+        assert!(!retire_dense_liquid_faces(&mut def));
+        assert_eq!(def, migrated);
     }
 }

@@ -25,6 +25,7 @@ fn clock_active() -> bool {
 
 fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
+fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 fn sign_of(v: f32) -> f32 { return select(-1.0, 1.0, v >= 0.0); }
 // The face neighbour of `c` along `axis` by `d` (-1 or 1) as a flat index, or
 // -1 off the grid.

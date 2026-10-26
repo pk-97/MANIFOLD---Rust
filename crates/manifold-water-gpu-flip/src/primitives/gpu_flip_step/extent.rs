@@ -14,13 +14,13 @@ use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::REACTION_FLOATS;
 use manifold_water_liquid::extent::liquid_lattice;
 use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, search_fits, whole};
+use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::fluid_particles::bin_total;
-use manifold_water_liquid::grid::face_bytes;
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::FlipSolverGrid;
 use manifold_water_liquid::primitives::prefix_scan::storage_words;
 use manifold_water_liquid::primitives::sort_particles_into_cells::range_storage_bytes;
-use manifold_water_liquid::whitewater::cell_total;
+use manifold_water_liquid::tile_storage::{pool_len, tile_total};
 use std::mem::size_of;
 
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -32,9 +32,11 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             "GPU FLIP Step: {reason}. Lower Resolution."
         )));
     }
-    let faces = face_bytes(cells);
-    x.provide("faces", faces);
-    x.provide("distance", cell_total(cells) * 4);
+    let pool = pool_tiles(cells);
+    x.provide("faces", pool_len(pool) * size_of::<FaceSample>() as u64);
+    x.provide("distance", pool_len(pool) * 4);
+    x.provide("tiles", (tile_total(cells) + u64::from(pool)) * 4);
+    x.publish("pool_tiles", pool as f32);
     let history_slots =
         manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + whole(x, "live_hit_count", 0.0);
     x.provide("substep_schedule", u64::from(history_slots) * 16);
@@ -80,14 +82,9 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.hold(ranges + bin_total(cells) * 4 + 2 * slots.max(1) * 4);
     // Same configured CFL as the step, never particle travel.
     let ring = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
-    // The dense published faces and distance, then the pooled fields: the
+    // The pooled fields (the published faces and distance among them): the
     // step's cell and face arrays and the solver's fine vectors.
-    x.hold(
-        faces
-            + cell_total(cells) * 4
-            + pressure_scratch_bytes(cells, pool_tiles(cells))
-            + step_scratch_bytes(cells, slots, ring),
-    );
+    x.hold(pressure_scratch_bytes(cells, pool) + step_scratch_bytes(cells, slots, ring));
     field_reads(x)?;
     x.covers_if_bound("clock_status", 32)?;
     for (buffer, count) in [

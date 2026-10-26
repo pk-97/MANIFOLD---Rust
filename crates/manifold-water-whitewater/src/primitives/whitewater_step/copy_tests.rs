@@ -1,6 +1,7 @@
 //! Live field placement and influence ownership, without golden recording.
 use super::super::whitewater_obstacle_source::WhitewaterSource;
 use super::super::whitewater_step::empty_slot;
+use super::fused_tests::pooled_distance;
 use super::*;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, read};
@@ -29,6 +30,8 @@ struct Fixture {
     particles: GpuBuffer,
     solid: GpuBuffer,
     distance: GpuBuffer,
+    tiles: GpuBuffer,
+    pool_tiles: u32,
     faces: [GpuBuffer; 3],
     source: GpuBuffer,
 }
@@ -59,6 +62,7 @@ impl Fixture {
                 }))
             })
             .collect();
+        let (phi, table, pool_tiles) = pooled_distance(&phi, face_cells);
         let particles: Vec<_> = (0..EMITTERS)
             .map(|i| {
                 let q = [i % 4, i / 4 % 4, i / 16];
@@ -103,6 +107,8 @@ impl Fixture {
                 bytemuck::cast_slice(&vec![0.1f32; cell_total(nodes) as usize]),
             ),
             distance: shared(device, bytemuck::cast_slice(&phi)),
+            tiles: shared(device, bytemuck::cast_slice(&table)),
+            pool_tiles,
             faces,
             source: shared(device, bytemuck::cast_slice(&sources)),
         }
@@ -116,6 +122,8 @@ impl Fixture {
             obstacle_source: Some(&self.source),
             faces: FaceSource::Axes(self.faces.each_ref()),
             distance: &self.distance,
+            tiles: &self.tiles,
+            pool_tiles: self.pool_tiles,
         }
     }
 

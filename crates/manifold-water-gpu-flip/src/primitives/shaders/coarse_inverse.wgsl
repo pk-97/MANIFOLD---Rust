@@ -54,6 +54,10 @@ fn ts_pool_tiles() -> u32 {
     return u.pool_tiles;
 }
 
+fn ts_table_word(i: u32) -> u32 {
+    return ts_table[i];
+}
+
 // Whether the lattice is the pooled fine level rather than a dense coarse box.
 fn pooled() -> bool {
     return u.pool_tiles != 0u;
