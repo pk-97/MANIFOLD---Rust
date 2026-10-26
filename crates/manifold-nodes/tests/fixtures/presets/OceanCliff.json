@@ -1784,74 +1784,6 @@
       "typeId": "node.whitewater_step"
     },
     {
-      "handle": "Foam Mesh",
-      "id": 476,
-      "nodeId": "foam_mesh",
-      "params": {
-        "radius": {
-          "type": "Float",
-          "value": 0.004999999888241291
-        },
-        "shape": {
-          "type": "Enum",
-          "value": 3
-        }
-      },
-      "typeId": "node.platonic_solid_mesh"
-    },
-    {
-      "handle": "Foam Material",
-      "id": 477,
-      "nodeId": "foam_material",
-      "params": {
-        "color_b": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "color_g": {
-          "type": "Float",
-          "value": 0.9800000190734863
-        },
-        "color_r": {
-          "type": "Float",
-          "value": 0.949999988079071
-        },
-        "ior": {
-          "type": "Float",
-          "value": 1.3329999446868896
-        },
-        "metallic": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "roughness": {
-          "type": "Float",
-          "value": 0.550000011920929
-        },
-        "transmission": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "volume_thickness": {
-          "type": "Float",
-          "value": 0.009999999776482582
-        }
-      },
-      "typeId": "node.pbr_material"
-    },
-    {
-      "handle": "Foam Object",
-      "id": 478,
-      "nodeId": "foam_object",
-      "params": {
-        "cast_shadows": {
-          "type": "Float",
-          "value": 0.0
-        }
-      },
-      "typeId": "node.scene_object"
-    },
-    {
       "handle": "Bubble Mesh",
       "id": 479,
       "nodeId": "bubble_mesh",
@@ -1990,12 +1922,6 @@
         }
       },
       "typeId": "node.scene_object"
-    },
-    {
-      "handle": "Foam Copies",
-      "id": 485,
-      "nodeId": "foam_copies",
-      "typeId": "node.particles_to_copies"
     },
     {
       "handle": "Bubble Copies",
@@ -3089,6 +3015,18 @@
         }
       },
       "typeId": "node.value"
+    },
+    {
+      "handle": "Foam Cover",
+      "id": 2026,
+      "nodeId": "water_foam_cover",
+      "params": {
+        "strength": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "typeId": "node.foam_cover"
     }
   ],
   "wires": [
@@ -3915,18 +3853,6 @@
       "toPort": "material"
     },
     {
-      "fromNode": 476,
-      "fromPort": "vertices",
-      "toNode": 478,
-      "toPort": "vertices"
-    },
-    {
-      "fromNode": 477,
-      "fromPort": "out",
-      "toNode": 478,
-      "toPort": "material"
-    },
-    {
       "fromNode": 479,
       "fromPort": "vertices",
       "toNode": 481,
@@ -3949,12 +3875,6 @@
       "fromPort": "out",
       "toNode": 484,
       "toPort": "material"
-    },
-    {
-      "fromNode": 485,
-      "fromPort": "copies",
-      "toNode": 478,
-      "toPort": "instances"
     },
     {
       "fromNode": 486,
@@ -4309,12 +4229,6 @@
       "fromPort": "span",
       "toNode": 510,
       "toPort": "span"
-    },
-    {
-      "fromNode": 510,
-      "fromPort": "out",
-      "toNode": 485,
-      "toPort": "particles"
     },
     {
       "fromNode": 5,
@@ -5001,12 +4915,6 @@
       "toPort": "object_6"
     },
     {
-      "fromNode": 478,
-      "fromPort": "object",
-      "toNode": 1019,
-      "toPort": "object_7"
-    },
-    {
       "fromNode": 481,
       "fromPort": "object",
       "toNode": 1019,
@@ -5095,6 +5003,72 @@
       "fromPort": "out",
       "toNode": 442,
       "toPort": "field_ripple_detail"
+    },
+    {
+      "fromNode": 510,
+      "fromPort": "out",
+      "toNode": 2026,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_x",
+      "toNode": 2026,
+      "toPort": "center_x"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_x",
+      "toNode": 2026,
+      "toPort": "size_x"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_x",
+      "toNode": 2026,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_y",
+      "toNode": 2026,
+      "toPort": "center_y"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_y",
+      "toNode": 2026,
+      "toPort": "size_y"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_y",
+      "toNode": 2026,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_z",
+      "toNode": 2026,
+      "toPort": "center_z"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_z",
+      "toNode": 2026,
+      "toPort": "size_z"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_z",
+      "toNode": 2026,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 2026,
+      "fromPort": "cover",
+      "toNode": 442,
+      "toPort": "field_foam"
     }
   ],
   "presetMetadata": {
@@ -5459,13 +5433,14 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.004999999888241291,
-        "id": "foam_radius",
-        "label": "Foam Size",
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 1.0,
+        "id": "surface_foam",
+        "label": "Foam",
         "target": {
           "kind": "node",
-          "nodeId": "foam_mesh",
-          "param": "radius"
+          "nodeId": "water_foam_cover",
+          "param": "strength"
         }
       },
       {
@@ -5740,6 +5715,27 @@
         "wholeNumbers": false
       },
       {
+        "defaultValue": 1.0,
+        "formatString": "F3",
+        "id": "surface_foam",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 4.0,
+        "min": 0.0,
+        "name": "Foam",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
+        "section": "Water Detail",
+        "wholeNumbers": false
+      },
+      {
         "defaultValue": 0.10000000149011612,
         "formatString": "F2",
         "id": "water_attenuation",
@@ -5771,18 +5767,6 @@
         "min": 0.0,
         "name": "Water Scattering",
         "section": "Water",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 0.004999999888241291,
-        "formatString": "F3",
-        "id": "foam_radius",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 0.029999999329447746,
-        "min": 0.0010000000474974513,
-        "name": "Foam Size",
-        "section": "Water Detail",
         "wholeNumbers": false
       },
       {

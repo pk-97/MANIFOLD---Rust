@@ -5,6 +5,7 @@ mod dust_potential;
 manifold_core::testkit_visible! { pub(crate) mod emission_count; }
 manifold_core::testkit_visible! { pub(crate) mod energy_potential; }
 manifold_core::testkit_visible! { pub(crate) mod extend_lattice; }
+mod foam_cover;
 mod inside_turbulence_potential;
 manifold_core::testkit_visible! { pub(crate) mod jitter_particles; }
 mod keep_whitewater;

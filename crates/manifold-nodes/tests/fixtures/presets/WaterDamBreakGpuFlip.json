@@ -1,21 +1,830 @@
 {
-  "description": "A dam of water collapses across a 4 m tank, solved on the GPU by GPU FLIP; the Liquid Surface group builds its surface as a level set each frame and the renderer draws it directly. Resolution stays at 64 for now; Speed and Reset drive the water's clock.",
+  "version": 3,
   "name": "Water — Dam Break (GPU FLIP)",
+  "description": "A dam of water collapses across a 4 m tank, solved on the GPU by GPU FLIP; the Liquid Surface group builds its surface as a level set each frame and the renderer draws it directly. Resolution stays at 64 for now; Speed and Reset drive the water's clock.",
+  "presetMetadata": {
+    "id": "WaterDamBreakGpuFlip",
+    "displayName": "Water — Dam Break (GPU FLIP)",
+    "category": "Sim",
+    "oscPrefix": "waterdambreakgpuflip",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "resolution",
+        "name": "Resolution",
+        "min": 8.0,
+        "max": 512.0,
+        "defaultValue": 64.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Fluid"
+      },
+      {
+        "id": "solve_level",
+        "name": "Coarse Solve",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Fluid"
+      },
+      {
+        "id": "max_iterations",
+        "name": "Max Iterations",
+        "min": 1.0,
+        "max": 900.0,
+        "defaultValue": 900.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Fluid"
+      },
+      {
+        "id": "sheet_fill_rate",
+        "name": "Sheet Fill Rate",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Fluid"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1",
+        "section": "Fluid"
+      },
+      {
+        "id": "reset",
+        "name": "Reset",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": true,
+        "formatString": "F0",
+        "section": "Fluid"
+      },
+      {
+        "id": "surface_detail",
+        "name": "Surface Detail",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Fluid",
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "band": null,
+          "cardOrder": 0,
+          "cardLabel": "param",
+          "gate": null,
+          "switch": null
+        }
+      },
+      {
+        "id": "surface_particle_scale",
+        "name": "Surface Particle Scale",
+        "min": 1.0,
+        "max": 4.0,
+        "defaultValue": 3.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "section": "Water Detail",
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "band": null,
+          "cardOrder": 0,
+          "cardLabel": "param",
+          "gate": null,
+          "switch": null
+        }
+      },
+      {
+        "id": "surface_smoothness",
+        "name": "Smoothness",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "section": "Water Detail",
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "band": null,
+          "cardOrder": 0,
+          "cardLabel": "param",
+          "gate": null,
+          "switch": null
+        }
+      },
+      {
+        "id": "surface_ripple_detail",
+        "name": "Ripple Detail",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "section": "Water Detail",
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "band": null,
+          "cardOrder": 0,
+          "cardLabel": "param",
+          "gate": null,
+          "switch": null
+        }
+      },
+      {
+        "id": "surface_foam",
+        "name": "Foam",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "section": "Water Detail",
+        "scene": {
+          "role": "setup",
+          "group": "look",
+          "band": null,
+          "cardOrder": 0,
+          "cardLabel": "param",
+          "gate": null,
+          "switch": null
+        }
+      },
+      {
+        "id": "water_attenuation",
+        "name": "Water Absorption Distance",
+        "min": 0.1,
+        "max": 20.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Water",
+        "materialRole": {
+          "scalar": {
+            "feature": "glass"
+          }
+        }
+      },
+      {
+        "id": "water_scattering",
+        "name": "Water Scattering",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Water",
+        "materialRole": {
+          "scalar": {
+            "feature": "glass"
+          }
+        }
+      },
+      {
+        "id": "bubble_density",
+        "name": "Bubble Scattering",
+        "min": 0.0,
+        "max": 200.0,
+        "defaultValue": 70.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Water"
+      },
+      {
+        "id": "whitewater_capacity",
+        "name": "Whitewater Budget",
+        "min": 1000.0,
+        "max": 250000.0,
+        "defaultValue": 100000.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Water Detail",
+        "scene": {
+          "role": "setup",
+          "group": "whitewater",
+          "band": null,
+          "cardOrder": 0,
+          "cardLabel": "param",
+          "gate": null,
+          "switch": null
+        }
+      },
+      {
+        "id": "parent_visible",
+        "name": "Visible",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "section": "Water",
+        "cardVisible": false
+      },
+      {
+        "id": "spray_size",
+        "name": "Size",
+        "min": 0.0,
+        "max": 100.0,
+        "defaultValue": 0.003,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Spray",
+        "cardVisible": false
+      },
+      {
+        "id": "spray_visible",
+        "name": "Visible",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Spray",
+        "cardVisible": false
+      },
+      {
+        "id": "bubble_size",
+        "name": "Size",
+        "min": 0.0,
+        "max": 100.0,
+        "defaultValue": 0.0035,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Bubbles",
+        "cardVisible": false
+      },
+      {
+        "id": "bubble_visible",
+        "name": "Visible",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Bubbles",
+        "cardVisible": false
+      },
+      {
+        "id": "physics_view",
+        "name": "Physics View",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "section": "Water"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "resolution",
+        "label": "Resolution",
+        "defaultValue": 64.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "resolution"
+        },
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "solve_level",
+        "label": "Coarse Solve",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "solve_level"
+        },
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "max_iterations",
+        "label": "Max Iterations",
+        "defaultValue": 900.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "max_iterations"
+        },
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "sheet_fill_rate",
+        "label": "Sheet Fill Rate",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "sheet_fill_rate"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "reset",
+        "label": "Reset",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "reset"
+        },
+        "convert": {
+          "type": "Trigger"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "water_attenuation",
+        "label": "Water Absorption Distance",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_material",
+          "param": "volume_attenuation_distance"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "water_scattering",
+        "label": "Water Scattering",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_material",
+          "param": "volume_scattering_density"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "surface_detail",
+        "label": "Surface Detail",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_volume",
+          "param": "resolution_scale"
+        },
+        "convert": {
+          "type": "IntRound"
+        },
+        "offset": 1.0
+      },
+      {
+        "id": "surface_particle_scale",
+        "label": "Surface Particle Scale",
+        "defaultValue": 3.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_blobs",
+          "param": "particle_scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "surface_smoothness",
+        "label": "Smoothness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_smoothness",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "surface_ripple_detail",
+        "label": "Ripple Detail",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_ripple_detail",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "surface_foam",
+        "label": "Foam",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_foam_cover",
+          "param": "strength"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "bubble_density",
+        "label": "Bubble Scattering",
+        "defaultValue": 70.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_material",
+          "param": "volume_particle_density"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "whitewater_capacity",
+        "label": "Whitewater Budget",
+        "defaultValue": 100000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "whitewater_budget",
+          "param": "value"
+        },
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "surface_detail",
+        "label": "Surface Detail",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_bricks",
+          "param": "resolution_scale"
+        },
+        "convert": {
+          "type": "IntRound"
+        },
+        "offset": 1.0
+      },
+      {
+        "id": "parent_visible",
+        "label": "Visible",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_object",
+          "param": "parent_visible"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "parent_visible",
+        "label": "Visible",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "spray_object",
+          "param": "parent_visible"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "parent_visible",
+        "label": "Visible",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_object",
+          "param": "parent_visible"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "parent_visible",
+        "label": "Visible",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "dots_object",
+          "param": "parent_visible"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "spray_size",
+        "label": "Size",
+        "defaultValue": 0.003,
+        "target": {
+          "kind": "node",
+          "nodeId": "spray_mesh",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "spray_visible",
+        "label": "Visible",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "spray_object",
+          "param": "visible"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "bubble_size",
+        "label": "Size",
+        "defaultValue": 0.0035,
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_mesh",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "bubble_visible",
+        "label": "Visible",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_object",
+          "param": "visible"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_field_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_velocity_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_nodes_x_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_nodes_y_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_nodes_z_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_visible",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "dots_visible",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "dots_instances_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "dots_mesh_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_foam_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "stringParams": [
+      {
+        "id": "hdri_file",
+        "name": "HDRI File",
+        "defaultValue": "",
+        "isFilePicker": true,
+        "useDropdown": false,
+        "file_path": true
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "hdri_file",
+        "label": "HDRI File",
+        "defaultValue": "",
+        "target": {
+          "kind": "node",
+          "nodeId": "sky_environment",
+          "param": "path"
+        }
+      }
+    ]
+  },
   "nodes": [
     {
-      "handle": "input",
       "id": 433,
       "nodeId": "input",
-      "typeId": "system.generator_input"
+      "typeId": "system.generator_input",
+      "handle": "input"
     },
     {
-      "handle": "camera",
       "id": 434,
       "nodeId": "camera",
+      "typeId": "node.orbit_camera",
+      "handle": "camera",
       "params": {
         "distance": {
           "type": "Float",
-          "value": 9.350000381469727
+          "value": 9.35
         },
         "far": {
           "type": "Float",
@@ -23,11 +832,11 @@
         },
         "fov_y": {
           "type": "Float",
-          "value": 0.6399999856948853
+          "value": 0.64
         },
         "look_y": {
           "type": "Float",
-          "value": 1.2000000476837158
+          "value": 1.2
         },
         "orbit": {
           "type": "Float",
@@ -35,15 +844,15 @@
         },
         "tilt": {
           "type": "Float",
-          "value": 0.3499999940395355
+          "value": 0.35
         }
-      },
-      "typeId": "node.orbit_camera"
+      }
     },
     {
-      "handle": "environment",
       "id": 435,
       "nodeId": "environment",
+      "typeId": "node.bake_environment",
+      "handle": "environment",
       "params": {
         "emitter_count": {
           "type": "Int",
@@ -51,19 +860,19 @@
         },
         "emitter_elevation": {
           "type": "Float",
-          "value": 0.550000011920929
+          "value": 0.55
         },
         "emitter_intensity": {
           "type": "Float",
-          "value": 1.399999976158142
+          "value": 1.4
         },
         "emitter_width": {
           "type": "Float",
-          "value": 0.1899999976158142
+          "value": 0.19
         },
         "fill": {
           "type": "Float",
-          "value": 0.07000000029802322
+          "value": 0.07
         },
         "height": {
           "type": "Int",
@@ -71,7 +880,7 @@
         },
         "intensity": {
           "type": "Float",
-          "value": 0.699999988079071
+          "value": 0.7
         },
         "mode": {
           "type": "Enum",
@@ -81,13 +890,13 @@
           "type": "Int",
           "value": 1024
         }
-      },
-      "typeId": "node.bake_environment"
+      }
     },
     {
-      "handle": "light",
       "id": 436,
       "nodeId": "light",
+      "typeId": "node.light",
+      "handle": "light",
       "params": {
         "aim_x": {
           "type": "Float",
@@ -107,11 +916,11 @@
         },
         "color_b": {
           "type": "Float",
-          "value": 0.800000011920929
+          "value": 0.8
         },
         "color_g": {
           "type": "Float",
-          "value": 0.8999999761581421
+          "value": 0.9
         },
         "color_r": {
           "type": "Float",
@@ -119,7 +928,7 @@
         },
         "intensity": {
           "type": "Float",
-          "value": 1.399999976158142
+          "value": 1.4
         },
         "mode": {
           "type": "Enum",
@@ -139,7 +948,7 @@
         },
         "shadow_bias": {
           "type": "Float",
-          "value": 0.0010000000474974513
+          "value": 0.001
         },
         "shadow_resolution": {
           "type": "Int",
@@ -149,19 +958,19 @@
           "type": "Enum",
           "value": 2
         }
-      },
-      "typeId": "node.light"
+      }
     },
     {
-      "handle": "Basin Floor Mesh",
       "id": 446,
       "nodeId": "floor_mesh",
-      "typeId": "node.cube_mesh"
+      "typeId": "node.cube_mesh",
+      "handle": "Basin Floor Mesh"
     },
     {
-      "handle": "Basin Material",
       "id": 447,
       "nodeId": "basin_material",
+      "typeId": "node.pbr_material",
+      "handle": "Basin Material",
       "params": {
         "ambient": {
           "type": "Float",
@@ -169,181 +978,181 @@
         },
         "color_b": {
           "type": "Float",
-          "value": 0.0560000017285347
+          "value": 0.056
         },
         "color_g": {
           "type": "Float",
-          "value": 0.04899999871850014
+          "value": 0.049
         },
         "color_r": {
           "type": "Float",
-          "value": 0.03500000014901161
+          "value": 0.035
         },
         "metallic": {
           "type": "Float",
-          "value": 0.10000000149011612
+          "value": 0.1
         },
         "roughness": {
           "type": "Float",
-          "value": 0.36000001430511475
+          "value": 0.36
         }
-      },
-      "typeId": "node.pbr_material"
+      }
     },
     {
-      "handle": "Basin Floor Transform",
       "id": 448,
       "nodeId": "floor_transform",
+      "typeId": "node.transform_3d",
+      "handle": "Basin Floor Transform",
       "params": {
         "pos_y": {
           "type": "Float",
-          "value": -0.054999999701976776
+          "value": -0.055
         },
         "scale_x": {
           "type": "Float",
-          "value": 4.159999847412109
+          "value": 4.16
         },
         "scale_y": {
           "type": "Float",
-          "value": 0.2199999988079071
+          "value": 0.22
         },
         "scale_z": {
           "type": "Float",
-          "value": 4.159999847412109
+          "value": 4.16
         }
-      },
-      "typeId": "node.transform_3d"
+      }
     },
     {
-      "handle": "Basin Floor",
       "id": 449,
       "nodeId": "floor_object",
-      "typeId": "node.scene_object"
+      "typeId": "node.scene_object",
+      "handle": "Basin Floor"
     },
     {
-      "handle": "Basin Rear Wall Mesh",
       "id": 450,
       "nodeId": "rear_mesh",
-      "typeId": "node.cube_mesh"
+      "typeId": "node.cube_mesh",
+      "handle": "Basin Rear Wall Mesh"
     },
     {
-      "handle": "Basin Rear Wall Transform",
       "id": 451,
       "nodeId": "rear_transform",
+      "typeId": "node.transform_3d",
+      "handle": "Basin Rear Wall Transform",
       "params": {
         "pos_y": {
           "type": "Float",
-          "value": 0.4000000059604645
+          "value": 0.4
         },
         "pos_z": {
           "type": "Float",
-          "value": -2.0399999618530273
+          "value": -2.04
         },
         "scale_x": {
           "type": "Float",
-          "value": 4.159999847412109
+          "value": 4.16
         },
         "scale_y": {
           "type": "Float",
-          "value": 0.949999988079071
+          "value": 0.95
         },
         "scale_z": {
           "type": "Float",
-          "value": 0.14000000059604645
+          "value": 0.14
         }
-      },
-      "typeId": "node.transform_3d"
+      }
     },
     {
-      "handle": "Basin Rear Wall",
       "id": 452,
       "nodeId": "rear_object",
-      "typeId": "node.scene_object"
+      "typeId": "node.scene_object",
+      "handle": "Basin Rear Wall"
     },
     {
-      "handle": "Basin Left Wall Mesh",
       "id": 453,
       "nodeId": "left_mesh",
-      "typeId": "node.cube_mesh"
+      "typeId": "node.cube_mesh",
+      "handle": "Basin Left Wall Mesh"
     },
     {
-      "handle": "Basin Left Wall Transform",
       "id": 454,
       "nodeId": "left_transform",
+      "typeId": "node.transform_3d",
+      "handle": "Basin Left Wall Transform",
       "params": {
         "pos_x": {
           "type": "Float",
-          "value": -2.0399999618530273
+          "value": -2.04
         },
         "pos_y": {
           "type": "Float",
-          "value": 0.4000000059604645
+          "value": 0.4
         },
         "scale_x": {
           "type": "Float",
-          "value": 0.14000000059604645
+          "value": 0.14
         },
         "scale_y": {
           "type": "Float",
-          "value": 0.949999988079071
+          "value": 0.95
         },
         "scale_z": {
           "type": "Float",
-          "value": 4.159999847412109
+          "value": 4.16
         }
-      },
-      "typeId": "node.transform_3d"
+      }
     },
     {
-      "handle": "Basin Left Wall",
       "id": 455,
       "nodeId": "left_object",
-      "typeId": "node.scene_object"
+      "typeId": "node.scene_object",
+      "handle": "Basin Left Wall"
     },
     {
-      "handle": "Basin Right Wall Mesh",
       "id": 456,
       "nodeId": "right_mesh",
-      "typeId": "node.cube_mesh"
+      "typeId": "node.cube_mesh",
+      "handle": "Basin Right Wall Mesh"
     },
     {
-      "handle": "Basin Right Wall Transform",
       "id": 457,
       "nodeId": "right_transform",
+      "typeId": "node.transform_3d",
+      "handle": "Basin Right Wall Transform",
       "params": {
         "pos_x": {
           "type": "Float",
-          "value": 2.0399999618530273
+          "value": 2.04
         },
         "pos_y": {
           "type": "Float",
-          "value": 0.4000000059604645
+          "value": 0.4
         },
         "scale_x": {
           "type": "Float",
-          "value": 0.14000000059604645
+          "value": 0.14
         },
         "scale_y": {
           "type": "Float",
-          "value": 0.949999988079071
+          "value": 0.95
         },
         "scale_z": {
           "type": "Float",
-          "value": 4.159999847412109
+          "value": 4.16
         }
-      },
-      "typeId": "node.transform_3d"
+      }
     },
     {
-      "handle": "Basin Right Wall",
       "id": 458,
       "nodeId": "right_object",
-      "typeId": "node.scene_object"
+      "typeId": "node.scene_object",
+      "handle": "Basin Right Wall"
     },
     {
-      "handle": "scene",
       "id": 463,
       "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
       "params": {
         "lights": {
           "type": "Int",
@@ -353,23 +1162,23 @@
           "type": "Int",
           "value": 10
         }
-      },
-      "typeId": "node.render_scene"
+      }
     },
     {
-      "handle": "final_output",
       "id": 464,
       "nodeId": "final_output",
-      "typeId": "system.final_output"
+      "typeId": "system.final_output",
+      "handle": "final_output"
     },
     {
-      "handle": "Rim Light",
       "id": 466,
       "nodeId": "rim_light",
+      "typeId": "node.light",
+      "handle": "Rim Light",
       "params": {
         "aim_y": {
           "type": "Float",
-          "value": 0.4000000059604645
+          "value": 0.4
         },
         "cast_shadows": {
           "type": "Float",
@@ -381,15 +1190,15 @@
         },
         "color_g": {
           "type": "Float",
-          "value": 0.7799999713897705
+          "value": 0.78
         },
         "color_r": {
           "type": "Float",
-          "value": 0.5699999928474426
+          "value": 0.57
         },
         "intensity": {
           "type": "Float",
-          "value": 0.6499999761581421
+          "value": 0.65
         },
         "mode": {
           "type": "Enum",
@@ -407,13 +1216,13 @@
           "type": "Float",
           "value": 2.5
         }
-      },
-      "typeId": "node.light"
+      }
     },
     {
-      "handle": "Filmic Display",
       "id": 471,
       "nodeId": "filmic_display",
+      "typeId": "node.tone_map",
+      "handle": "Filmic Display",
       "params": {
         "curve": {
           "type": "Enum",
@@ -421,19 +1230,19 @@
         },
         "exposure": {
           "type": "Float",
-          "value": 0.8999999761581421
+          "value": 0.9
         },
         "mode": {
           "type": "Enum",
           "value": 0
         }
-      },
-      "typeId": "node.tone_map"
+      }
     },
     {
-      "handle": "Sky Environment",
       "id": 472,
       "nodeId": "sky_environment",
+      "typeId": "node.hdri_source",
+      "handle": "Sky Environment",
       "params": {
         "height": {
           "type": "Int",
@@ -443,10 +1252,13 @@
           "type": "Int",
           "value": 2048
         }
-      },
-      "typeId": "node.hdri_source"
+      }
     },
     {
+      "id": 473,
+      "nodeId": "water_family",
+      "typeId": "group",
+      "handle": "Water",
       "group": {
         "interface": {
           "inputs": [],
@@ -464,10 +1276,6 @@
               "portType": "SceneObject"
             },
             {
-              "name": "object_3",
-              "portType": "SceneObject"
-            },
-            {
               "name": "object_4",
               "portType": "SceneObject"
             }
@@ -477,6 +1285,7 @@
           {
             "id": 0,
             "nodeId": "domain",
+            "typeId": "node.gpu_flip_domain",
             "params": {
               "domain_size": {
                 "type": "Float",
@@ -484,7 +1293,7 @@
               },
               "fill_height": {
                 "type": "Float",
-                "value": 0.1599999964237213
+                "value": 0.16
               },
               "resolution": {
                 "type": "Int",
@@ -494,10 +1303,13 @@
                 "type": "Float",
                 "value": 0.5
               }
-            },
-            "typeId": "node.gpu_flip_domain"
+            }
           },
           {
+            "id": 1,
+            "nodeId": "domain_initial_fill",
+            "typeId": "group",
+            "handle": "Initial Fill",
             "group": {
               "interface": {
                 "inputs": [],
@@ -512,6 +1324,7 @@
                 {
                   "id": 1,
                   "nodeId": "initial_column",
+                  "typeId": "node.transform_3d",
                   "params": {
                     "pos_x": {
                       "type": "Float",
@@ -519,7 +1332,7 @@
                     },
                     "pos_y": {
                       "type": "Float",
-                      "value": 1.1200000047683716
+                      "value": 1.12
                     },
                     "pos_z": {
                       "type": "Float",
@@ -527,30 +1340,29 @@
                     },
                     "scale_x": {
                       "type": "Float",
-                      "value": 1.1799999475479126
+                      "value": 1.18
                     },
                     "scale_y": {
                       "type": "Float",
-                      "value": 1.9199999570846558
+                      "value": 1.92
                     },
                     "scale_z": {
                       "type": "Float",
                       "value": 3.5
                     }
-                  },
-                  "typeId": "node.transform_3d"
+                  }
                 },
                 {
-                  "handle": "Initial Fill",
                   "id": 2,
                   "nodeId": "domain_initial_fill_role",
+                  "typeId": "node.fluid_role_source",
+                  "handle": "Initial Fill",
                   "params": {
                     "role": {
                       "type": "Enum",
                       "value": 0
                     }
-                  },
-                  "typeId": "node.fluid_role_source"
+                  }
                 },
                 {
                   "id": 3,
@@ -572,15 +1384,12 @@
                   "toPort": "role"
                 }
               ]
-            },
-            "handle": "Initial Fill",
-            "id": 1,
-            "nodeId": "domain_initial_fill",
-            "typeId": "group"
+            }
           },
           {
             "id": 2,
             "nodeId": "fill",
+            "typeId": "node.liquid_fill",
             "params": {
               "box_x0": {
                 "type": "Int",
@@ -646,8 +1455,7 @@
                 "type": "Int",
                 "value": 0
               }
-            },
-            "typeId": "node.liquid_fill"
+            }
           },
           {
             "id": 3,
@@ -657,6 +1465,7 @@
           {
             "id": 4,
             "nodeId": "step",
+            "typeId": "node.gpu_flip_step",
             "params": {
               "cell_size": {
                 "type": "Float",
@@ -664,7 +1473,7 @@
               },
               "flip": {
                 "type": "Float",
-                "value": 0.949999988079071
+                "value": 0.95
               },
               "ghost_fluid": {
                 "type": "Int",
@@ -706,8 +1515,7 @@
                 "type": "Int",
                 "value": 0
               }
-            },
-            "typeId": "node.gpu_flip_step"
+            }
           },
           {
             "id": 5,
@@ -727,15 +1535,33 @@
           {
             "id": 8,
             "nodeId": "frame",
+            "typeId": "node.liquid_frame",
             "params": {
               "face_valid_layers": {
                 "type": "Int",
                 "value": 2
               }
-            },
-            "typeId": "node.liquid_frame"
+            }
           },
           {
+            "id": 10,
+            "nodeId": "surface",
+            "typeId": "group",
+            "handle": "Liquid Surface",
+            "params": {
+              "bin_cells": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "particle_scale": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "smoothness": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
             "group": {
               "interface": {
                 "inputs": [
@@ -822,15 +1648,16 @@
                   "typeId": "system.group_input"
                 },
                 {
-                  "handle": "Lattice Box",
                   "id": 1,
                   "nodeId": "liquid_lattice_box",
-                  "typeId": "node.transform_components"
+                  "typeId": "node.transform_components",
+                  "handle": "Lattice Box"
                 },
                 {
-                  "handle": "Lattice Cells",
                   "id": 2,
                   "nodeId": "liquid_lattice_cells",
+                  "typeId": "node.math",
+                  "handle": "Lattice Cells",
                   "params": {
                     "b": {
                       "type": "Float",
@@ -840,25 +1667,25 @@
                       "type": "Enum",
                       "value": 1
                     }
-                  },
-                  "typeId": "node.math"
+                  }
                 },
                 {
-                  "handle": "Simulation Cell",
                   "id": 3,
                   "nodeId": "liquid_simulation_cell",
+                  "typeId": "node.math",
+                  "handle": "Simulation Cell",
                   "params": {
                     "op": {
                       "type": "Enum",
                       "value": 3
                     }
-                  },
-                  "typeId": "node.math"
+                  }
                 },
                 {
-                  "handle": "Bin Size",
                   "id": 4,
                   "nodeId": "liquid_bin_size",
+                  "typeId": "node.math",
+                  "handle": "Bin Size",
                   "params": {
                     "b": {
                       "type": "Float",
@@ -868,66 +1695,65 @@
                       "type": "Enum",
                       "value": 2
                     }
-                  },
-                  "typeId": "node.math"
+                  }
                 },
                 {
-                  "handle": "Sort Into Cells",
                   "id": 5,
                   "nodeId": "liquid_sort",
-                  "typeId": "node.sort_particles_into_cells"
+                  "typeId": "node.sort_particles_into_cells",
+                  "handle": "Sort Into Cells"
                 },
                 {
-                  "handle": "Particle Blobs",
                   "id": 6,
                   "nodeId": "liquid_blobs",
+                  "typeId": "node.shape_particle_blobs",
+                  "handle": "Particle Blobs",
                   "params": {
                     "particle_scale": {
                       "type": "Float",
                       "value": 3.0
                     }
-                  },
-                  "typeId": "node.shape_particle_blobs"
+                  }
                 },
                 {
-                  "handle": "Liquid Volume",
                   "id": 7,
                   "nodeId": "liquid_volume",
+                  "typeId": "node.particle_volume",
+                  "handle": "Liquid Volume",
                   "params": {
                     "resolution_scale": {
                       "type": "Int",
                       "value": 1
                     }
-                  },
-                  "typeId": "node.particle_volume"
+                  }
                 },
                 {
                   "id": 11,
                   "typeId": "system.group_output"
                 },
                 {
-                  "handle": "Carry Into Solids",
                   "id": 16,
                   "nodeId": "liquid_carry_into_solids",
-                  "typeId": "node.carry_liquid_into_solids"
+                  "typeId": "node.carry_liquid_into_solids",
+                  "handle": "Carry Into Solids"
                 },
                 {
-                  "handle": "Occupied Bricks",
                   "id": 20,
                   "nodeId": "liquid_bricks",
+                  "typeId": "node.lattice_bricks",
+                  "handle": "Occupied Bricks",
                   "params": {
                     "resolution_scale": {
                       "type": "Int",
                       "value": 1
                     }
-                  },
-                  "typeId": "node.lattice_bricks"
+                  }
                 },
                 {
-                  "handle": "Rebuild Surface Distance",
                   "id": 29,
                   "nodeId": "liquid_redistance",
-                  "typeId": "node.redistance_lattice"
+                  "typeId": "node.redistance_lattice",
+                  "handle": "Rebuild Surface Distance"
                 },
                 {
                   "id": 32,
@@ -935,27 +1761,28 @@
                   "typeId": "node.blob_bounds"
                 },
                 {
-                  "handle": "Surface Weights",
                   "id": 33,
                   "nodeId": "liquid_weights",
-                  "typeId": "node.surface_weights"
+                  "typeId": "node.surface_weights",
+                  "handle": "Surface Weights"
                 },
                 {
-                  "handle": "Smoothness",
                   "id": 35,
                   "nodeId": "liquid_smoothness",
+                  "typeId": "node.value",
+                  "handle": "Smoothness",
                   "params": {
                     "value": {
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.value"
+                  }
                 },
                 {
-                  "handle": "Smooth X 1",
                   "id": 40,
                   "nodeId": "liquid_smooth_x_1",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth X 1",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -965,13 +1792,13 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Y 1",
                   "id": 41,
                   "nodeId": "liquid_smooth_y_1",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth Y 1",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -981,13 +1808,13 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Z 1",
                   "id": 42,
                   "nodeId": "liquid_smooth_z_1",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth Z 1",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -997,19 +1824,19 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Blend 1",
                   "id": 43,
                   "nodeId": "liquid_blend_1",
-                  "typeId": "node.field_smooth_blend"
+                  "typeId": "node.field_smooth_blend",
+                  "handle": "Smooth Blend 1"
                 },
                 {
-                  "handle": "Smooth X 2",
                   "id": 44,
                   "nodeId": "liquid_smooth_x_2",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth X 2",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -1019,13 +1846,13 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Y 2",
                   "id": 45,
                   "nodeId": "liquid_smooth_y_2",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth Y 2",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -1035,13 +1862,13 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Z 2",
                   "id": 46,
                   "nodeId": "liquid_smooth_z_2",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth Z 2",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -1051,19 +1878,19 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Blend 2",
                   "id": 47,
                   "nodeId": "liquid_blend_2",
-                  "typeId": "node.field_smooth_blend"
+                  "typeId": "node.field_smooth_blend",
+                  "handle": "Smooth Blend 2"
                 },
                 {
-                  "handle": "Smooth X 3",
                   "id": 48,
                   "nodeId": "liquid_smooth_x_3",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth X 3",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -1073,13 +1900,13 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Y 3",
                   "id": 49,
                   "nodeId": "liquid_smooth_y_3",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth Y 3",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -1089,13 +1916,13 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Z 3",
                   "id": 50,
                   "nodeId": "liquid_smooth_z_3",
+                  "typeId": "node.smooth_lattice",
+                  "handle": "Smooth Z 3",
                   "params": {
                     "axis": {
                       "type": "Int",
@@ -1105,14 +1932,13 @@
                       "type": "Float",
                       "value": 1.0
                     }
-                  },
-                  "typeId": "node.smooth_lattice"
+                  }
                 },
                 {
-                  "handle": "Smooth Blend 3",
                   "id": 51,
                   "nodeId": "liquid_blend_3",
-                  "typeId": "node.field_smooth_blend"
+                  "typeId": "node.field_smooth_blend",
+                  "handle": "Smooth Blend 3"
                 }
               ],
               "wires": [
@@ -2167,30 +2993,13 @@
                   "toPort": "velocity"
                 }
               ]
-            },
-            "handle": "Liquid Surface",
-            "id": 10,
-            "nodeId": "surface",
-            "params": {
-              "bin_cells": {
-                "type": "Float",
-                "value": 1.0
-              },
-              "particle_scale": {
-                "type": "Float",
-                "value": 3.0
-              },
-              "smoothness": {
-                "type": "Float",
-                "value": 1.0
-              }
-            },
-            "typeId": "group"
+            }
           },
           {
-            "handle": "Whitewater",
             "id": 11,
             "nodeId": "whitewater",
+            "typeId": "node.whitewater_step",
+            "handle": "Whitewater",
             "params": {
               "amount": {
                 "type": "Float",
@@ -2206,26 +3015,25 @@
               },
               "min_energy": {
                 "type": "Float",
-                "value": 0.10000000149011612
+                "value": 0.1
               },
               "wavecrest_emission": {
                 "type": "Float",
                 "value": 175.0
               }
-            },
-            "typeId": "node.whitewater_step"
+            }
           },
           {
-            "handle": "Whitewater Budget",
             "id": 12,
             "nodeId": "whitewater_budget",
+            "typeId": "node.value",
+            "handle": "Whitewater Budget",
             "params": {
               "value": {
                 "type": "Float",
                 "value": 100000.0
               }
-            },
-            "typeId": "node.value"
+            }
           },
           {
             "id": 13,
@@ -2248,9 +3056,10 @@
             "typeId": "node.transform_components"
           },
           {
-            "handle": "Water Material",
             "id": 17,
             "nodeId": "water_material",
+            "typeId": "node.pbr_material",
+            "handle": "Water Material",
             "params": {
               "ambient": {
                 "type": "Float",
@@ -2270,7 +3079,7 @@
               },
               "ior": {
                 "type": "Float",
-                "value": 1.3329999446868896
+                "value": 1.333
               },
               "metallic": {
                 "type": "Float",
@@ -2286,40 +3095,39 @@
               },
               "volume_attenuation_color_b": {
                 "type": "Float",
-                "value": 0.9910403490066528
+                "value": 0.99104035
               },
               "volume_attenuation_color_g": {
                 "type": "Float",
-                "value": 0.9445940852165222
+                "value": 0.9445941
               },
               "volume_attenuation_color_r": {
                 "type": "Float",
-                "value": 0.7117702960968018
+                "value": 0.7117703
               },
               "volume_attenuation_distance": {
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.pbr_material"
+            }
           },
           {
-            "handle": "Water",
             "id": 18,
             "nodeId": "water_object",
-            "typeId": "node.scene_object"
+            "typeId": "node.scene_object",
+            "handle": "Water"
           },
           {
-            "handle": "Ripple Detail",
             "id": 19,
             "nodeId": "water_ripple_detail",
+            "typeId": "node.value",
+            "handle": "Ripple Detail",
             "params": {
               "value": {
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.value"
+            }
           },
           {
             "id": 20,
@@ -2327,25 +3135,26 @@
             "typeId": "system.group_output"
           },
           {
-            "handle": "Foam Mesh",
             "id": 21,
-            "nodeId": "foam_mesh",
+            "nodeId": "spray_mesh",
+            "typeId": "node.platonic_solid_mesh",
+            "handle": "Spray Mesh",
             "params": {
               "radius": {
                 "type": "Float",
-                "value": 0.004999999888241291
+                "value": 0.003
               },
               "shape": {
                 "type": "Enum",
                 "value": 3
               }
-            },
-            "typeId": "node.platonic_solid_mesh"
+            }
           },
           {
-            "handle": "Foam Material",
             "id": 22,
-            "nodeId": "foam_material",
+            "nodeId": "spray_material",
+            "typeId": "node.pbr_material",
+            "handle": "Spray Material",
             "params": {
               "color_b": {
                 "type": "Float",
@@ -2353,15 +3162,15 @@
               },
               "color_g": {
                 "type": "Float",
-                "value": 0.9800000190734863
+                "value": 0.98
               },
               "color_r": {
                 "type": "Float",
-                "value": 0.949999988079071
+                "value": 0.95
               },
               "ior": {
                 "type": "Float",
-                "value": 1.3329999446868896
+                "value": 1.333
               },
               "metallic": {
                 "type": "Float",
@@ -2369,141 +3178,62 @@
               },
               "roughness": {
                 "type": "Float",
-                "value": 0.550000011920929
+                "value": 0.12
               },
               "transmission": {
                 "type": "Float",
-                "value": 0.0
+                "value": 1.0
               },
               "volume_thickness": {
                 "type": "Float",
-                "value": 0.009999999776482582
+                "value": 0.006
               }
-            },
-            "typeId": "node.pbr_material"
+            }
           },
           {
-            "handle": "Foam",
             "id": 23,
-            "nodeId": "foam_object",
+            "nodeId": "spray_object",
+            "typeId": "node.scene_object",
+            "handle": "Spray",
             "params": {
               "cast_shadows": {
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.scene_object"
+            }
           },
           {
-            "handle": "Foam Copies",
             "id": 24,
-            "nodeId": "foam_copies",
-            "typeId": "node.particles_to_copies"
+            "nodeId": "spray_copies",
+            "typeId": "node.particles_to_copies",
+            "handle": "Spray Copies"
           },
           {
             "id": 25,
-            "nodeId": "foam_blend",
-            "typeId": "node.interpolate_particle_frames"
-          },
-          {
-            "handle": "Spray Mesh",
-            "id": 26,
-            "nodeId": "spray_mesh",
-            "params": {
-              "radius": {
-                "type": "Float",
-                "value": 0.003000000026077032
-              },
-              "shape": {
-                "type": "Enum",
-                "value": 3
-              }
-            },
-            "typeId": "node.platonic_solid_mesh"
-          },
-          {
-            "handle": "Spray Material",
-            "id": 27,
-            "nodeId": "spray_material",
-            "params": {
-              "color_b": {
-                "type": "Float",
-                "value": 1.0
-              },
-              "color_g": {
-                "type": "Float",
-                "value": 0.9800000190734863
-              },
-              "color_r": {
-                "type": "Float",
-                "value": 0.949999988079071
-              },
-              "ior": {
-                "type": "Float",
-                "value": 1.3329999446868896
-              },
-              "metallic": {
-                "type": "Float",
-                "value": 0.0
-              },
-              "roughness": {
-                "type": "Float",
-                "value": 0.11999999731779099
-              },
-              "transmission": {
-                "type": "Float",
-                "value": 1.0
-              },
-              "volume_thickness": {
-                "type": "Float",
-                "value": 0.006000000052154064
-              }
-            },
-            "typeId": "node.pbr_material"
-          },
-          {
-            "handle": "Spray",
-            "id": 28,
-            "nodeId": "spray_object",
-            "params": {
-              "cast_shadows": {
-                "type": "Float",
-                "value": 0.0
-              }
-            },
-            "typeId": "node.scene_object"
-          },
-          {
-            "handle": "Spray Copies",
-            "id": 29,
-            "nodeId": "spray_copies",
-            "typeId": "node.particles_to_copies"
-          },
-          {
-            "id": 30,
             "nodeId": "spray_blend",
             "typeId": "node.interpolate_particle_frames"
           },
           {
-            "handle": "Bubble Mesh",
-            "id": 31,
+            "id": 26,
             "nodeId": "bubble_mesh",
+            "typeId": "node.platonic_solid_mesh",
+            "handle": "Bubble Mesh",
             "params": {
               "radius": {
                 "type": "Float",
-                "value": 0.0035000001080334187
+                "value": 0.0035
               },
               "shape": {
                 "type": "Enum",
                 "value": 3
               }
-            },
-            "typeId": "node.platonic_solid_mesh"
+            }
           },
           {
-            "handle": "Bubble Material",
-            "id": 32,
+            "id": 27,
             "nodeId": "bubble_material",
+            "typeId": "node.pbr_material",
+            "handle": "Bubble Material",
             "params": {
               "color_b": {
                 "type": "Float",
@@ -2511,15 +3241,15 @@
               },
               "color_g": {
                 "type": "Float",
-                "value": 0.9800000190734863
+                "value": 0.98
               },
               "color_r": {
                 "type": "Float",
-                "value": 0.949999988079071
+                "value": 0.95
               },
               "ior": {
                 "type": "Float",
-                "value": 1.3329999446868896
+                "value": 1.333
               },
               "metallic": {
                 "type": "Float",
@@ -2527,11 +3257,11 @@
               },
               "roughness": {
                 "type": "Float",
-                "value": 0.30000001192092896
+                "value": 0.3
               },
               "transmission": {
                 "type": "Float",
-                "value": 0.3499999940395355
+                "value": 0.35
               },
               "volume_particle_density": {
                 "type": "Float",
@@ -2539,92 +3269,120 @@
               },
               "volume_thickness": {
                 "type": "Float",
-                "value": 0.007000000216066837
+                "value": 0.007
               }
-            },
-            "typeId": "node.pbr_material"
+            }
           },
           {
-            "handle": "Bubbles",
-            "id": 33,
+            "id": 28,
             "nodeId": "bubble_object",
+            "typeId": "node.scene_object",
+            "handle": "Bubbles",
             "params": {
               "cast_shadows": {
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.scene_object"
+            }
           },
           {
-            "handle": "Bubble Copies",
-            "id": 34,
+            "id": 29,
             "nodeId": "bubble_copies",
-            "typeId": "node.particles_to_copies"
+            "typeId": "node.particles_to_copies",
+            "handle": "Bubble Copies"
           },
           {
-            "id": 35,
+            "id": 30,
             "nodeId": "bubble_blend",
             "typeId": "node.interpolate_particle_frames"
           },
           {
-            "id": 36,
-            "nodeId": "water_field_switch",
+            "id": 31,
+            "nodeId": "foam_blend",
+            "typeId": "node.interpolate_particle_frames"
+          },
+          {
+            "id": 32,
+            "nodeId": "water_foam_cover",
+            "typeId": "node.foam_cover",
+            "handle": "Foam Cover",
+            "params": {
+              "strength": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 33,
+            "nodeId": "water_foam_switch",
+            "typeId": "node.switch_array",
             "params": {
               "selector": {
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.switch_array"
+            }
+          },
+          {
+            "id": 34,
+            "nodeId": "water_field_switch",
+            "typeId": "node.switch_array",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 35,
+            "nodeId": "water_velocity_switch",
+            "typeId": "node.switch_array",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 36,
+            "nodeId": "water_nodes_x_switch",
+            "typeId": "node.switch_value",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
           },
           {
             "id": 37,
-            "nodeId": "water_velocity_switch",
+            "nodeId": "water_nodes_y_switch",
+            "typeId": "node.switch_value",
             "params": {
               "selector": {
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.switch_array"
+            }
           },
           {
             "id": 38,
-            "nodeId": "water_nodes_x_switch",
+            "nodeId": "water_nodes_z_switch",
+            "typeId": "node.switch_value",
             "params": {
               "selector": {
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.switch_value"
+            }
           },
           {
             "id": 39,
-            "nodeId": "water_nodes_y_switch",
-            "params": {
-              "selector": {
-                "type": "Float",
-                "value": 0.0
-              }
-            },
-            "typeId": "node.switch_value"
-          },
-          {
-            "id": 40,
-            "nodeId": "water_nodes_z_switch",
-            "params": {
-              "selector": {
-                "type": "Float",
-                "value": 0.0
-              }
-            },
-            "typeId": "node.switch_value"
-          },
-          {
-            "id": 41,
             "nodeId": "water_visible",
+            "typeId": "node.switch_value",
             "params": {
               "in_0": {
                 "type": "Float",
@@ -2638,12 +3396,12 @@
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.switch_value"
+            }
           },
           {
-            "id": 42,
+            "id": 40,
             "nodeId": "dots_mesh",
+            "typeId": "node.platonic_solid_mesh",
             "params": {
               "radius": {
                 "type": "Float",
@@ -2653,12 +3411,12 @@
                 "type": "Enum",
                 "value": 0
               }
-            },
-            "typeId": "node.platonic_solid_mesh"
+            }
           },
           {
-            "id": 43,
+            "id": 41,
             "nodeId": "dots_material",
+            "typeId": "node.unlit_material",
             "params": {
               "color_b": {
                 "type": "Float",
@@ -2666,40 +3424,40 @@
               },
               "color_g": {
                 "type": "Float",
-                "value": 0.729411780834198
+                "value": 0.7294118
               },
               "color_r": {
                 "type": "Float",
-                "value": 0.37254902720451355
+                "value": 0.37254903
               }
-            },
-            "typeId": "node.unlit_material"
+            }
           },
           {
-            "id": 44,
+            "id": 42,
             "nodeId": "dots_blend",
             "typeId": "node.interpolate_particle_frames"
           },
           {
-            "id": 45,
+            "id": 43,
             "nodeId": "dots_copies",
             "typeId": "node.particles_to_copies"
           },
           {
-            "handle": "Physics Dots",
-            "id": 46,
+            "id": 44,
             "nodeId": "dots_object",
+            "typeId": "node.scene_object",
+            "handle": "Physics Dots",
             "params": {
               "cast_shadows": {
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.scene_object"
+            }
           },
           {
-            "id": 47,
+            "id": 45,
             "nodeId": "dots_visible",
+            "typeId": "node.switch_value",
             "params": {
               "in_0": {
                 "type": "Float",
@@ -2713,30 +3471,29 @@
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.switch_value"
+            }
           },
           {
-            "id": 48,
+            "id": 46,
             "nodeId": "dots_mesh_switch",
+            "typeId": "node.switch_mesh",
             "params": {
               "selector": {
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.switch_mesh"
+            }
           },
           {
-            "id": 49,
+            "id": 47,
             "nodeId": "dots_instances_switch",
+            "typeId": "node.switch_instances",
             "params": {
               "selector": {
                 "type": "Float",
                 "value": 0.0
               }
-            },
-            "typeId": "node.switch_instances"
+            }
           }
         ],
         "wires": [
@@ -4080,7 +4837,7 @@
           },
           {
             "fromNode": 8,
-            "fromPort": "foam_b",
+            "fromPort": "spray_b",
             "toNode": 25,
             "toPort": "particles_b"
           },
@@ -4127,8 +4884,26 @@
             "toPort": "object_1"
           },
           {
+            "fromNode": 0,
+            "fromPort": "gravity_x",
+            "toNode": 25,
+            "toPort": "acceleration_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "gravity",
+            "toNode": 25,
+            "toPort": "acceleration_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "gravity_z",
+            "toNode": 25,
+            "toPort": "acceleration_z"
+          },
+          {
             "fromNode": 8,
-            "fromPort": "spray_b",
+            "fromPort": "bubble_b",
             "toNode": 30,
             "toPort": "particles_b"
           },
@@ -4175,79 +4950,103 @@
             "toPort": "object_2"
           },
           {
-            "fromNode": 0,
-            "fromPort": "gravity_x",
-            "toNode": 30,
-            "toPort": "acceleration_x"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "gravity",
-            "toNode": 30,
-            "toPort": "acceleration_y"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "gravity_z",
-            "toNode": 30,
-            "toPort": "acceleration_z"
-          },
-          {
             "fromNode": 8,
-            "fromPort": "bubble_b",
-            "toNode": 35,
+            "fromPort": "foam_b",
+            "toNode": 31,
             "toPort": "particles_b"
           },
           {
             "fromNode": 8,
             "fromPort": "blend",
-            "toNode": 35,
+            "toNode": 31,
             "toPort": "blend"
           },
           {
             "fromNode": 8,
             "fromPort": "span",
-            "toNode": 35,
+            "toNode": 31,
             "toPort": "span"
           },
           {
-            "fromNode": 35,
+            "fromNode": 31,
             "fromPort": "out",
-            "toNode": 34,
+            "toNode": 32,
             "toPort": "particles"
           },
           {
-            "fromNode": 34,
-            "fromPort": "copies",
-            "toNode": 33,
-            "toPort": "instances"
+            "fromNode": 16,
+            "fromPort": "pos_x",
+            "toNode": 32,
+            "toPort": "center_x"
           },
           {
-            "fromNode": 31,
-            "fromPort": "vertices",
-            "toNode": 33,
-            "toPort": "vertices"
+            "fromNode": 16,
+            "fromPort": "scale_x",
+            "toNode": 32,
+            "toPort": "size_x"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "level_set_nodes_x",
+            "toNode": 32,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "pos_y",
+            "toNode": 32,
+            "toPort": "center_y"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "scale_y",
+            "toNode": 32,
+            "toPort": "size_y"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "level_set_nodes_y",
+            "toNode": 32,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "pos_z",
+            "toNode": 32,
+            "toPort": "center_z"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "scale_z",
+            "toNode": 32,
+            "toPort": "size_z"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "level_set_nodes_z",
+            "toNode": 32,
+            "toPort": "nodes_z"
           },
           {
             "fromNode": 32,
-            "fromPort": "out",
+            "fromPort": "cover",
             "toNode": 33,
-            "toPort": "material"
+            "toPort": "in_0"
           },
           {
             "fromNode": 33,
-            "fromPort": "object",
-            "toNode": 20,
-            "toPort": "object_3"
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "field_foam"
           },
           {
             "fromNode": 10,
             "fromPort": "level_set",
-            "toNode": 36,
+            "toNode": 34,
             "toPort": "in_0"
           },
           {
-            "fromNode": 36,
+            "fromNode": 34,
             "fromPort": "out",
             "toNode": 18,
             "toPort": "field"
@@ -4255,11 +5054,11 @@
           {
             "fromNode": 10,
             "fromPort": "velocity",
-            "toNode": 37,
+            "toNode": 35,
             "toPort": "in_0"
           },
           {
-            "fromNode": 37,
+            "fromNode": 35,
             "fromPort": "out",
             "toNode": 18,
             "toPort": "field_velocity"
@@ -4267,11 +5066,11 @@
           {
             "fromNode": 10,
             "fromPort": "level_set_nodes_x",
-            "toNode": 38,
+            "toNode": 36,
             "toPort": "in_0"
           },
           {
-            "fromNode": 38,
+            "fromNode": 36,
             "fromPort": "out",
             "toNode": 18,
             "toPort": "field_nodes_x"
@@ -4279,11 +5078,11 @@
           {
             "fromNode": 10,
             "fromPort": "level_set_nodes_y",
-            "toNode": 39,
+            "toNode": 37,
             "toPort": "in_0"
           },
           {
-            "fromNode": 39,
+            "fromNode": 37,
             "fromPort": "out",
             "toNode": 18,
             "toPort": "field_nodes_y"
@@ -4291,17 +5090,17 @@
           {
             "fromNode": 10,
             "fromPort": "level_set_nodes_z",
-            "toNode": 40,
+            "toNode": 38,
             "toPort": "in_0"
           },
           {
-            "fromNode": 40,
+            "fromNode": 38,
             "fromPort": "out",
             "toNode": 18,
             "toPort": "field_nodes_z"
           },
           {
-            "fromNode": 41,
+            "fromNode": 39,
             "fromPort": "out",
             "toNode": 18,
             "toPort": "visible"
@@ -4309,107 +5108,107 @@
           {
             "fromNode": 8,
             "fromPort": "particles_a",
-            "toNode": 44,
+            "toNode": 42,
             "toPort": "particles_a"
           },
           {
             "fromNode": 8,
             "fromPort": "particles_b",
-            "toNode": 44,
+            "toNode": 42,
             "toPort": "particles_b"
           },
           {
             "fromNode": 8,
             "fromPort": "count_a",
-            "toNode": 44,
+            "toNode": 42,
             "toPort": "count_a"
           },
           {
             "fromNode": 8,
             "fromPort": "count_b",
-            "toNode": 44,
+            "toNode": 42,
             "toPort": "count_b"
           },
           {
             "fromNode": 8,
             "fromPort": "identity_a",
-            "toNode": 44,
+            "toNode": 42,
             "toPort": "identity_a"
           },
           {
             "fromNode": 8,
             "fromPort": "identity_b",
-            "toNode": 44,
+            "toNode": 42,
             "toPort": "identity_b"
           },
           {
             "fromNode": 8,
             "fromPort": "blend",
-            "toNode": 44,
+            "toNode": 42,
             "toPort": "blend"
           },
           {
             "fromNode": 8,
             "fromPort": "span",
-            "toNode": 44,
+            "toNode": 42,
             "toPort": "span"
           },
           {
-            "fromNode": 44,
+            "fromNode": 42,
             "fromPort": "out",
-            "toNode": 45,
+            "toNode": 43,
             "toPort": "particles"
           },
           {
             "fromNode": 8,
             "fromPort": "count_b",
-            "toNode": 45,
+            "toNode": 43,
             "toPort": "live_count"
           },
           {
-            "fromNode": 45,
+            "fromNode": 43,
             "fromPort": "copies",
-            "toNode": 49,
+            "toNode": 47,
             "toPort": "in_1"
           },
           {
-            "fromNode": 49,
+            "fromNode": 47,
             "fromPort": "out",
-            "toNode": 46,
+            "toNode": 44,
             "toPort": "instances"
           },
           {
             "fromNode": 8,
             "fromPort": "count_b",
-            "toNode": 46,
+            "toNode": 44,
             "toPort": "instance_count"
           },
           {
-            "fromNode": 42,
+            "fromNode": 40,
             "fromPort": "vertices",
-            "toNode": 48,
+            "toNode": 46,
             "toPort": "in_1"
           },
           {
-            "fromNode": 48,
+            "fromNode": 46,
             "fromPort": "out",
-            "toNode": 46,
+            "toNode": 44,
             "toPort": "vertices"
           },
           {
-            "fromNode": 43,
+            "fromNode": 41,
             "fromPort": "out",
-            "toNode": 46,
+            "toNode": 44,
             "toPort": "material"
           },
           {
-            "fromNode": 47,
+            "fromNode": 45,
             "fromPort": "out",
-            "toNode": 46,
+            "toNode": 44,
             "toPort": "visible"
           },
           {
-            "fromNode": 46,
+            "fromNode": 44,
             "fromPort": "object",
             "toNode": 20,
             "toPort": "object_4"
@@ -4421,838 +5220,9 @@
             "toPort": "dt"
           }
         ]
-      },
-      "handle": "Water",
-      "id": 473,
-      "nodeId": "water_family",
-      "typeId": "group"
+      }
     }
   ],
-  "presetMetadata": {
-    "available": true,
-    "bindings": [
-      {
-        "convert": {
-          "type": "IntRound"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 64.0,
-        "id": "resolution",
-        "label": "Resolution",
-        "target": {
-          "kind": "node",
-          "nodeId": "domain",
-          "param": "resolution"
-        }
-      },
-      {
-        "convert": {
-          "type": "IntRound"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.0,
-        "id": "solve_level",
-        "label": "Coarse Solve",
-        "target": {
-          "kind": "node",
-          "nodeId": "domain",
-          "param": "solve_level"
-        }
-      },
-      {
-        "convert": {
-          "type": "IntRound"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 900.0,
-        "id": "max_iterations",
-        "label": "Max Iterations",
-        "target": {
-          "kind": "node",
-          "nodeId": "domain",
-          "param": "max_iterations"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.5,
-        "id": "sheet_fill_rate",
-        "label": "Sheet Fill Rate",
-        "target": {
-          "kind": "node",
-          "nodeId": "domain",
-          "param": "sheet_fill_rate"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 1.0,
-        "id": "speed",
-        "label": "Speed",
-        "target": {
-          "kind": "node",
-          "nodeId": "domain",
-          "param": "speed"
-        }
-      },
-      {
-        "convert": {
-          "type": "Trigger"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.0,
-        "id": "reset",
-        "label": "Reset",
-        "target": {
-          "kind": "node",
-          "nodeId": "domain",
-          "param": "reset"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 1.0,
-        "id": "water_attenuation",
-        "label": "Water Absorption Distance",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_material",
-          "param": "volume_attenuation_distance"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.0,
-        "id": "water_scattering",
-        "label": "Water Scattering",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_material",
-          "param": "volume_scattering_density"
-        }
-      },
-      {
-        "convert": {
-          "type": "IntRound"
-        },
-        "defaultValue": 0.0,
-        "id": "surface_detail",
-        "label": "Surface Detail",
-        "offset": 1.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "liquid_volume",
-          "param": "resolution_scale"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 3.0,
-        "id": "surface_particle_scale",
-        "label": "Surface Particle Scale",
-        "target": {
-          "kind": "node",
-          "nodeId": "liquid_blobs",
-          "param": "particle_scale"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 1.0,
-        "id": "surface_smoothness",
-        "label": "Smoothness",
-        "target": {
-          "kind": "node",
-          "nodeId": "liquid_smoothness",
-          "param": "value"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 1.0,
-        "id": "surface_ripple_detail",
-        "label": "Ripple Detail",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_ripple_detail",
-          "param": "value"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 70.0,
-        "id": "bubble_density",
-        "label": "Bubble Scattering",
-        "target": {
-          "kind": "node",
-          "nodeId": "bubble_material",
-          "param": "volume_particle_density"
-        }
-      },
-      {
-        "convert": {
-          "type": "IntRound"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 100000.0,
-        "id": "whitewater_capacity",
-        "label": "Whitewater Budget",
-        "target": {
-          "kind": "node",
-          "nodeId": "whitewater_budget",
-          "param": "value"
-        }
-      },
-      {
-        "convert": {
-          "type": "IntRound"
-        },
-        "defaultValue": 0.0,
-        "id": "surface_detail",
-        "label": "Surface Detail",
-        "offset": 1.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "liquid_bricks",
-          "param": "resolution_scale"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 1.0,
-        "id": "parent_visible",
-        "label": "Visible",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_object",
-          "param": "parent_visible"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 1.0,
-        "id": "parent_visible",
-        "label": "Visible",
-        "target": {
-          "kind": "node",
-          "nodeId": "foam_object",
-          "param": "parent_visible"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 1.0,
-        "id": "parent_visible",
-        "label": "Visible",
-        "target": {
-          "kind": "node",
-          "nodeId": "spray_object",
-          "param": "parent_visible"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 1.0,
-        "id": "parent_visible",
-        "label": "Visible",
-        "target": {
-          "kind": "node",
-          "nodeId": "bubble_object",
-          "param": "parent_visible"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 1.0,
-        "id": "parent_visible",
-        "label": "Visible",
-        "target": {
-          "kind": "node",
-          "nodeId": "dots_object",
-          "param": "parent_visible"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.004999999888241291,
-        "id": "foam_size",
-        "label": "Size",
-        "target": {
-          "kind": "node",
-          "nodeId": "foam_mesh",
-          "param": "radius"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 1.0,
-        "id": "foam_visible",
-        "label": "Visible",
-        "target": {
-          "kind": "node",
-          "nodeId": "foam_object",
-          "param": "visible"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.003000000026077032,
-        "id": "spray_size",
-        "label": "Size",
-        "target": {
-          "kind": "node",
-          "nodeId": "spray_mesh",
-          "param": "radius"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 1.0,
-        "id": "spray_visible",
-        "label": "Visible",
-        "target": {
-          "kind": "node",
-          "nodeId": "spray_object",
-          "param": "visible"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.0035000001080334187,
-        "id": "bubble_size",
-        "label": "Size",
-        "target": {
-          "kind": "node",
-          "nodeId": "bubble_mesh",
-          "param": "radius"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultMirrorsNodeParam": true,
-        "defaultValue": 1.0,
-        "id": "bubble_visible",
-        "label": "Visible",
-        "target": {
-          "kind": "node",
-          "nodeId": "bubble_object",
-          "param": "visible"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_field_switch",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_velocity_switch",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_nodes_x_switch",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_nodes_y_switch",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_nodes_z_switch",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "water_visible",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "dots_visible",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "dots_instances_switch",
-          "param": "selector"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "label": "Physics View",
-        "target": {
-          "kind": "node",
-          "nodeId": "dots_mesh_switch",
-          "param": "selector"
-        }
-      }
-    ],
-    "category": "Sim",
-    "displayName": "Water — Dam Break (GPU FLIP)",
-    "id": "WaterDamBreakGpuFlip",
-    "isLineBased": false,
-    "oscPrefix": "waterdambreakgpuflip",
-    "params": [
-      {
-        "defaultValue": 64.0,
-        "formatString": "F0",
-        "id": "resolution",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 512.0,
-        "min": 8.0,
-        "name": "Resolution",
-        "section": "Fluid",
-        "wholeNumbers": true
-      },
-      {
-        "defaultValue": 0.0,
-        "formatString": "F0",
-        "id": "solve_level",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 4.0,
-        "min": 0.0,
-        "name": "Coarse Solve",
-        "section": "Fluid",
-        "wholeNumbers": true
-      },
-      {
-        "defaultValue": 900.0,
-        "formatString": "F0",
-        "id": "max_iterations",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 900.0,
-        "min": 1.0,
-        "name": "Max Iterations",
-        "section": "Fluid",
-        "wholeNumbers": true
-      },
-      {
-        "defaultValue": 0.5,
-        "formatString": "F2",
-        "id": "sheet_fill_rate",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Sheet Fill Rate",
-        "section": "Fluid",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 1.0,
-        "formatString": "F1",
-        "id": "speed",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 4.0,
-        "min": 0.0,
-        "name": "Speed",
-        "section": "Fluid",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 0.0,
-        "formatString": "F0",
-        "id": "reset",
-        "isToggle": false,
-        "isTrigger": true,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Reset",
-        "section": "Fluid",
-        "wholeNumbers": true
-      },
-      {
-        "defaultValue": 0.0,
-        "formatString": "F0",
-        "id": "surface_detail",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 2.0,
-        "min": 0.0,
-        "name": "Surface Detail",
-        "scene": {
-          "band": null,
-          "cardLabel": "param",
-          "cardOrder": 0,
-          "gate": null,
-          "group": "look",
-          "role": "setup",
-          "switch": null
-        },
-        "section": "Fluid",
-        "wholeNumbers": true
-      },
-      {
-        "defaultValue": 3.0,
-        "formatString": "F3",
-        "id": "surface_particle_scale",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 4.0,
-        "min": 1.0,
-        "name": "Surface Particle Scale",
-        "scene": {
-          "band": null,
-          "cardLabel": "param",
-          "cardOrder": 0,
-          "gate": null,
-          "group": "look",
-          "role": "setup",
-          "switch": null
-        },
-        "section": "Water Detail",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 1.0,
-        "formatString": "F3",
-        "id": "surface_smoothness",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 2.0,
-        "min": 0.0,
-        "name": "Smoothness",
-        "scene": {
-          "band": null,
-          "cardLabel": "param",
-          "cardOrder": 0,
-          "gate": null,
-          "group": "look",
-          "role": "setup",
-          "switch": null
-        },
-        "section": "Water Detail",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 1.0,
-        "formatString": "F3",
-        "id": "surface_ripple_detail",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 2.0,
-        "min": 0.0,
-        "name": "Ripple Detail",
-        "scene": {
-          "band": null,
-          "cardLabel": "param",
-          "cardOrder": 0,
-          "gate": null,
-          "group": "look",
-          "role": "setup",
-          "switch": null
-        },
-        "section": "Water Detail",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 1.0,
-        "formatString": "F2",
-        "id": "water_attenuation",
-        "isToggle": false,
-        "isTrigger": false,
-        "materialRole": {
-          "scalar": {
-            "feature": "glass"
-          }
-        },
-        "max": 20.0,
-        "min": 0.10000000149011612,
-        "name": "Water Absorption Distance",
-        "section": "Water",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 0.0,
-        "formatString": "F2",
-        "id": "water_scattering",
-        "isToggle": false,
-        "isTrigger": false,
-        "materialRole": {
-          "scalar": {
-            "feature": "glass"
-          }
-        },
-        "max": 2.0,
-        "min": 0.0,
-        "name": "Water Scattering",
-        "section": "Water",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 70.0,
-        "formatString": "F2",
-        "id": "bubble_density",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 200.0,
-        "min": 0.0,
-        "name": "Bubble Scattering",
-        "section": "Water",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 100000.0,
-        "formatString": "F0",
-        "id": "whitewater_capacity",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 250000.0,
-        "min": 1000.0,
-        "name": "Whitewater Budget",
-        "scene": {
-          "band": null,
-          "cardLabel": "param",
-          "cardOrder": 0,
-          "gate": null,
-          "group": "whitewater",
-          "role": "setup",
-          "switch": null
-        },
-        "section": "Water Detail",
-        "wholeNumbers": true
-      },
-      {
-        "cardVisible": false,
-        "defaultValue": 1.0,
-        "id": "parent_visible",
-        "isToggle": true,
-        "isTrigger": false,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Visible",
-        "section": "Water",
-        "wholeNumbers": false
-      },
-      {
-        "cardVisible": false,
-        "defaultValue": 0.004999999888241291,
-        "id": "foam_size",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 100.0,
-        "min": 0.0,
-        "name": "Size",
-        "section": "Foam",
-        "wholeNumbers": false
-      },
-      {
-        "cardVisible": false,
-        "defaultValue": 1.0,
-        "id": "foam_visible",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Visible",
-        "section": "Foam",
-        "wholeNumbers": false
-      },
-      {
-        "cardVisible": false,
-        "defaultValue": 0.003000000026077032,
-        "id": "spray_size",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 100.0,
-        "min": 0.0,
-        "name": "Size",
-        "section": "Spray",
-        "wholeNumbers": false
-      },
-      {
-        "cardVisible": false,
-        "defaultValue": 1.0,
-        "id": "spray_visible",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Visible",
-        "section": "Spray",
-        "wholeNumbers": false
-      },
-      {
-        "cardVisible": false,
-        "defaultValue": 0.0035000001080334187,
-        "id": "bubble_size",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 100.0,
-        "min": 0.0,
-        "name": "Size",
-        "section": "Bubbles",
-        "wholeNumbers": false
-      },
-      {
-        "cardVisible": false,
-        "defaultValue": 1.0,
-        "id": "bubble_visible",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Visible",
-        "section": "Bubbles",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 0.0,
-        "id": "physics_view",
-        "isToggle": true,
-        "isTrigger": false,
-        "max": 1.0,
-        "min": 0.0,
-        "name": "Physics View",
-        "section": "Water",
-        "wholeNumbers": false
-      }
-    ],
-    "stringBindings": [
-      {
-        "defaultValue": "",
-        "id": "hdri_file",
-        "label": "HDRI File",
-        "target": {
-          "kind": "node",
-          "nodeId": "sky_environment",
-          "param": "path"
-        }
-      }
-    ],
-    "stringParams": [
-      {
-        "defaultValue": "",
-        "file_path": true,
-        "id": "hdri_file",
-        "isFilePicker": true,
-        "name": "HDRI File",
-        "useDropdown": false
-      }
-    ]
-  },
-  "version": 3,
   "wires": [
     {
       "fromNode": 434,
@@ -5408,17 +5378,11 @@
       "fromNode": 473,
       "fromPort": "object_1",
       "toNode": 463,
-      "toPort": "object_7"
-    },
-    {
-      "fromNode": 473,
-      "fromPort": "object_2",
-      "toNode": 463,
       "toPort": "object_9"
     },
     {
       "fromNode": 473,
-      "fromPort": "object_3",
+      "fromPort": "object_2",
       "toNode": 463,
       "toPort": "object_8"
     },

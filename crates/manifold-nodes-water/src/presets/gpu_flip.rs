@@ -689,9 +689,9 @@ fn surface_group() -> Value {
 /// Stage and capture populations, including the unrendered dust oracle.
 pub(super) const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];
 /// Child looks in family-output order. Dust has no display chain.
-const RENDERED_KINDS: [&str; 3] = ["foam", "spray", "bubble"];
-const FAMILY_OUTPUTS: [&str; 4] = ["object", "object_1", "object_2", "object_3"];
-/// Physics View's dots: a fifth output beside the four recognised roles.
+const RENDERED_KINDS: [&str; 2] = ["spray", "bubble"];
+const FAMILY_OUTPUTS: [&str; 3] = ["object", "object_1", "object_2"];
+/// Physics View's dots: a fourth output beside the three recognised roles.
 const DOTS_OUTPUT: &str = "object_4";
 /// The render slot the dots take: the one the tank layout leaves empty.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
@@ -709,6 +709,7 @@ const WATER_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[5];
 const DOTS_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[6];
 const DOTS_INSTANCES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[7];
 const DOTS_MESH_SWITCH: &str = PHYSICS_VIEW_SWITCHES[8];
+const FOAM_SWITCH: &str = PHYSICS_VIEW_SWITCHES[9];
 /// The Platonic shape a physics dot is drawn with, scaled by the particle's radius.
 const TETRAHEDRON: usize = 0;
 
@@ -720,7 +721,7 @@ pub const SHEET_FILL_RATE: f64 = 0.5;
 pub const LIQUID_BODY_OUTPUT: &str = "fluid_output";
 
 impl WaterScene {
-    /// The shared insertion body: simulation, captured display and four looks.
+    /// The shared insertion body: simulation, captured display and its looks.
     /// Preset colliders enter through the ordinary domain role interface.
     fn family_def(self) -> EffectGraphDef {
         let mut b = Builder::from_def(water_def(self.with_surface()));
@@ -824,7 +825,8 @@ impl WaterScene {
                 state,
                 &format!("{kind}_particles_in"),
             );
-            // All four captures remain observable; only three have rendered looks.
+            // All four captures remain observable; foam draws as the water's
+            // cover, spray and bubbles as objects.
             b.wire(
                 (state, &format!("{kind}_particles")),
                 frame,
@@ -837,7 +839,6 @@ impl WaterScene {
         b.wire((water, "object"), output, FAMILY_OUTPUTS[0]);
         for (index, kind) in RENDERED_KINDS.into_iter().enumerate() {
             let (radius, roughness, transmission) = match kind {
-                "foam" => (0.005, 0.55, 0.0),
                 "spray" => (0.003, 0.12, 1.0),
                 "bubble" => (0.0035, 0.3, 0.35),
                 _ => unreachable!("rendered kind"),
@@ -888,6 +889,7 @@ impl WaterScene {
                 }
             }
         }
+        display_foam(&mut b, frame, surface, water);
         let dots = display_dots(&mut b, frame, surface, water);
         b.wire((dots, "object"), output, DOTS_OUTPUT);
         // Resolve durations inside the domain-owning scope before it is wrapped.
@@ -902,18 +904,15 @@ impl WaterScene {
                 "water_ripple_detail" => Some("Ripple Detail"),
                 "whitewater" => Some("Whitewater"),
                 "whitewater_budget" => Some("Whitewater Budget"),
-                "foam_object" => Some("Foam"),
                 "spray_object" => Some("Spray"),
                 "bubble_object" => Some("Bubbles"),
-                "foam_mesh" => Some("Foam Mesh"),
-                "foam_material" => Some("Foam Material"),
-                "foam_copies" => Some("Foam Copies"),
                 "spray_mesh" => Some("Spray Mesh"),
                 "spray_material" => Some("Spray Material"),
                 "spray_copies" => Some("Spray Copies"),
                 "bubble_mesh" => Some("Bubble Mesh"),
                 "bubble_material" => Some("Bubble Material"),
                 "bubble_copies" => Some("Bubble Copies"),
+                "water_foam_cover" => Some("Foam Cover"),
                 "dots_object" => Some("Physics Dots"),
                 _ => None,
             }
@@ -1002,7 +1001,7 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-/// The five scene objects the Water family declares: water, foam, spray,
+/// The four scene objects the Water family declares: water, spray,
 /// bubbles, then Physics View's dots.
 fn family_group_outputs() -> Vec<manifold_core::effect_graph_def::InterfacePortDef> {
     FAMILY_OUTPUTS
@@ -1159,10 +1158,10 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
     let node = b.nodes.last_mut().expect("family");
     node.handle = Some("Water".into());
     node.group = wrap_family(body).group;
-    // Preserve the existing physical render order: water, foam, spray, bubbles.
+    // Preserve the existing physical render order: water, spray, bubbles.
     for (output, slot) in FAMILY_OUTPUTS
         .into_iter()
-        .zip(["object_0", "object_7", "object_9", "object_8"])
+        .zip(["object_0", "object_9", "object_8"])
     {
         b.wire((family, output), render, slot);
     }
@@ -1217,13 +1216,14 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
 /// how the surface is built, set once per scene: the Scene tab shows them,
 /// the card does not (card
 /// projection), the Scene band's setup-role surface row).
-pub const SURFACE_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlGroup); 5] = {
+pub const SURFACE_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlGroup); 6] = {
     use manifold_foundation::scene_surface::ControlGroup::{Look, Whitewater};
     [
         ("surface_detail", Look),
         ("surface_particle_scale", Look),
         ("surface_smoothness", Look),
         ("surface_ripple_detail", Look),
+        ("surface_foam", Look),
         ("whitewater_capacity", Whitewater),
     ]
 };
@@ -1682,6 +1682,46 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
     );
     b.wire((ripple_detail, "out"), water, "field_ripple_detail");
     water
+}
+
+/// The water's foam: the foam particles' display blend, the cover field made
+/// from them on the water field's lattice, and the switch that feeds it to the
+/// water object (off in Physics View, which hides the water).
+fn display_foam(b: &mut Builder, frame: usize, surface: usize, water: usize) {
+    let lattice_box = b.id("display_lattice_box");
+    let blend = b.node("foam_blend", "node.interpolate_particle_frames", json!({}));
+    b.wire((frame, "foam_b"), blend, "particles_b");
+    b.wires(frame, blend, &["blend", "span"]);
+    let cover = b.node(
+        "water_foam_cover",
+        "node.foam_cover",
+        json!({"strength": float(1.0)}),
+    );
+    b.wire((blend, "out"), cover, "particles");
+    for axis in ["x", "y", "z"] {
+        b.wire(
+            (lattice_box, &format!("pos_{axis}")),
+            cover,
+            &format!("center_{axis}"),
+        );
+        b.wire(
+            (lattice_box, &format!("scale_{axis}")),
+            cover,
+            &format!("size_{axis}"),
+        );
+        b.wire(
+            (surface, &format!("level_set_nodes_{axis}")),
+            cover,
+            &format!("nodes_{axis}"),
+        );
+    }
+    let switch = b.node(
+        FOAM_SWITCH,
+        "node.switch_array",
+        json!({"selector": float(0.0)}),
+    );
+    b.wire((cover, "cover"), switch, "in_0");
+    b.wire((switch, "out"), water, "field_foam");
 }
 
 /// Physics View: the switches between the surface and the particle dots,

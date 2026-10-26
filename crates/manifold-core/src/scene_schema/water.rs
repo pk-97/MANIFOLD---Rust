@@ -34,7 +34,7 @@ pub struct WaterFamily {
     pub nodes: Vec<EffectGraphNode>,
     pub wires: Vec<EffectGraphWire>,
     /// The node ids of the scene objects it draws, in render order: the
-    /// water, then foam, spray and bubbles where the solver has whitewater,
+    /// water, then spray and bubbles where the solver has whitewater,
     /// then Physics View's dots where it draws a surface.
     pub objects: Vec<String>,
 }
@@ -111,10 +111,10 @@ pub const DOMAIN_ROLE: &str = "domain";
 
 /// The template's Physics View switches: the field's inputs (its level set,
 /// its velocity lattice and its node counts, which come from the surface's
-/// volume), the water's visibility, the dots' visibility and the dots' two
-/// inputs. Each follows the World's Render Mode, on only in Physics View, so
+/// volume), the water's visibility, the dots' visibility, the dots' two
+/// inputs and the water's foam cover. Each follows the World's Render Mode, on only in Physics View, so
 /// the side that is off is never computed.
-pub const PHYSICS_VIEW_SWITCHES: [&str; 9] = [
+pub const PHYSICS_VIEW_SWITCHES: [&str; 10] = [
     "water_field_switch",
     "water_velocity_switch",
     "water_nodes_x_switch",
@@ -124,6 +124,7 @@ pub const PHYSICS_VIEW_SWITCHES: [&str; 9] = [
     "dots_visible",
     "dots_instances_switch",
     "dots_mesh_switch",
+    "water_foam_switch",
 ];
 
 /// The template nodes Surface Detail sets together.
@@ -158,6 +159,7 @@ const DETAIL: Reach = Reach::Own("surface_detail");
 const BLOBS: Reach = Reach::Own("liquid_blobs");
 const SMOOTHNESS: Reach = Reach::Own("liquid_smoothness");
 const RIPPLES: Reach = Reach::Own("water_ripple_detail");
+const FOAM: Reach = Reach::Own("water_foam_cover");
 use ControlGroup::{Domain, Simulation, Surface, Whitewater};
 
 /// The domain box is axis-aligned: the solvers take no rotation.
@@ -188,7 +190,12 @@ fn surface(fields: &ItemFields) -> bool {
     water(fields).is_some_and(|water| water.draw == WaterDraw::Surface)
 }
 
-pub static WATER_ROWS: [PropertyRow; 35] = [
+/// A drawn surface on the solver that makes whitewater, which is where foam is.
+fn foam_surface(fields: &ItemFields) -> bool {
+    flip(fields) && surface(fields)
+}
+
+pub static WATER_ROWS: [PropertyRow; 36] = [
     row("pos_x", T, Domain, setup())
         .unit(Unit::Metres)
         .limit(HardLimit::Unlimited),
@@ -327,6 +334,13 @@ pub static WATER_ROWS: [PropertyRow; 35] = [
         .default(1.0)
         .range(0.0, 2.0)
         .when(surface),
+    // Times the foam's area: 1 is the foam the particles make, 0 none.
+    row("surface_foam", FOAM, Surface, setup())
+        .param("strength")
+        .name("Foam")
+        .default(1.0)
+        .range(0.0, 4.0)
+        .when(foam_surface),
     row(
         "whitewater_amount",
         Reach::Own("whitewater"),

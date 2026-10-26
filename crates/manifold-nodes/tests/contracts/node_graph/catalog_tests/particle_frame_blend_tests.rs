@@ -308,12 +308,7 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
                 .id
         };
         let frame = id("frame");
-        for display in [
-            "particle_blend",
-            "foam_blend",
-            "bubble_blend",
-            "spray_blend",
-        ] {
+        for display in ["particle_blend", "bubble_blend", "spray_blend"] {
             assert!(has(frame, "blend", id(display), "blend"));
             assert!(has(frame, "span", id(display), "span"));
         }
@@ -330,7 +325,6 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
             "particles"
         ));
         for (display, copies) in [
-            ("foam_blend", "foam_copies"),
             ("bubble_blend", "bubble_copies"),
             ("spray_blend", "spray_copies"),
         ] {

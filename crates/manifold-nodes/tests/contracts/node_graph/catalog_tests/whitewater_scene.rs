@@ -264,7 +264,11 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
             !(w["toNode"] == frame && w["toPort"] == frame_in.as_str())
         });
     }
-    for kind in ["foam", "spray", "bubble"] {
+    // Foam draws as the water's cover, taken from the group's foam.
+    g.remove(&["foam_blend"]);
+    let cover = g.id("water_foam_cover");
+    g.wire((id, "foam_particles"), cover, "particles");
+    for kind in ["spray", "bubble"] {
         g.remove(&[format!("{kind}_blend").as_str()]);
         let render = ["copies", "object", "mesh", "material"].map(|part| format!("{kind}_{part}"));
         let particles = format!("{kind}_particles");
