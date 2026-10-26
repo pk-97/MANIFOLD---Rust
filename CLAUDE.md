@@ -12,12 +12,12 @@ The Rust codebase is the only reference. `/Users/peterkiemann/MANIFOLD - Render 
 
 ## Working as lead
 1. Read the exact code briefly. Tell Peter in plain words what's wrong, what changes, who does it, and how it's tested. End with one question.
-2. On his go, give a worker an exact `file:line` spec and the scoped test command. Say in one line that it's running.
-3. Read the diff and test output yourself, then report in a few lines what changed for him.
+2. On his go, give a worker an exact `file:line` spec and the tests to write. Say in one line that it's running.
+3. When the workers are done, read the diff, then build and test once yourself (clippy, then the scoped nextest). Fix a few lines directly; send bigger errors back to the worker that wrote the file. Report in a few lines what changed for him.
 
 If the scope grows, stop and tell him. Between those points stay quiet: no report per worker, speak when the job is done or a decision is needed. Investigation is lead work, workers execute specs. Edit directly only when it's tiny. These rules override the harness's "when in doubt, don't spawn."
 
-Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `sonnet` for a self-contained module or shader whose math you give it. In OpenCode, `opencode-go/beam-free`. Parallel workers get separate files in the main checkout. Never invent process rituals (worktree slots, audit swarms, review committees).
+Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `sonnet` for a self-contained module or shader whose math you give it. In OpenCode, `opencode-go/beam-free`. Workers only read, write and edit code: they never run `cargo`, tests, captures or the GPU, because workers compiling turns hours of work into days. So several can write at once, each on separate files in the main checkout. Never invent process rituals (worktree slots, audit swarms, review committees).
 
 ## Engineering checks (before finishing any change)
 1. Test beyond defaults: never only `0`, `1`, one item, a flat hierarchy, 60 fps or 120 BPM. Use real assets and non-trivial state.
@@ -29,7 +29,7 @@ Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `son
 
 ## Workflow
 - Work in the main checkout. No worktrees unless Peter asks.
-- Iterate with `cargo nextest run -p <crate> <filter>`. Before committing, run `cargo clippy -p <crate> --tests -- -D warnings`.
+- Builds and tests are the lead's. Iterate with `cargo nextest run -p <crate> <filter>`. Before committing, run `cargo clippy -p <crate> --tests -- -D warnings`.
 - Commit with explicit paths (`git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`.
 - Never launch the `manifold` GUI. Use the headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`. Peter runs the live app.
 - Use `rg`, `fd` and `ast-grep`. Never start `rust-analyzer`. Repo tools are listed in `scripts/TOOLS.md`.
