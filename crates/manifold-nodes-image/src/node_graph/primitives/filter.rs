@@ -10,7 +10,9 @@ use manifold_gpu::{
 };
 use std::borrow::Cow;
 
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+use manifold_node_engine::exec::effect_node::{
+    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
+};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
@@ -414,6 +416,39 @@ impl EffectNode for Blur {
     fn parameters(&self) -> &[ParamDef] {
         &BLUR_PARAMS
     }
+    fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+        Some(("source", "out"))
+    }
+    fn skip_passthrough(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
+        if wired_inputs.contains(&"radius") || wired_inputs.contains(&"mode") {
+            return None;
+        }
+        let Some(ParamValue::Float(radius)) = params.get("radius") else {
+            return None;
+        };
+        let mode = match params.get("mode") {
+            Some(ParamValue::Enum(i)) => *i,
+            _ => 0,
+        };
+        // Mirrors evaluate(): Smooth sanitizes radius and copies at or below
+        // epsilon; the other modes pass the raw radius to blur.wgsl, which
+        // copies when min(i32(radius), 32) <= 0 (both passes copy).
+        let copies_source = if mode == DUAL_BLUR_MODE {
+            let radius = if radius.is_finite() {
+                radius.max(0.0)
+            } else {
+                0.0
+            };
+            radius <= f32::EPSILON
+        } else {
+            radius.is_finite() && (*radius as i32) <= 0
+        };
+        copies_source.then_some(("source", "out"))
+    }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let radius = ctx.param_f32("radius", 4.0);
 
@@ -731,6 +766,27 @@ mod tests {
         assert_eq!(first_level, 1);
         assert!(first_blend < 1e-5);
         assert_eq!(dual_radius_level(first_radius - 0.01).0, 0);
+    }
+
+    #[test]
+    fn zero_radius_aliases_source_in_every_mode_unless_wired() {
+        let node = Blur::new();
+        let params = |radius: f32, mode: u32| {
+            let mut p = ParamValues::default();
+            p.insert(Cow::Borrowed("radius"), ParamValue::Float(radius));
+            p.insert(Cow::Borrowed("mode"), ParamValue::Enum(mode));
+            p
+        };
+        let skip = |radius: f32, mode: u32, wired: &[&str]| {
+            EffectNode::skip_passthrough(&node, &params(radius, mode), wired)
+        };
+        assert_eq!(skip(0.0, 0, &[]), Some(("source", "out")));
+        assert_eq!(skip(0.99, 1, &[]), Some(("source", "out")));
+        assert_eq!(skip(1.0, 0, &[]), None);
+        assert_eq!(skip(0.0, 3, &[]), Some(("source", "out")));
+        assert_eq!(skip(0.001, 3, &[]), None);
+        assert_eq!(skip(0.0, 3, &["radius"]), None);
+        assert_eq!(skip(0.0, 0, &["mode"]), None);
     }
 
     #[test]

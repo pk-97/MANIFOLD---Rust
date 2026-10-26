@@ -511,9 +511,18 @@ impl Primitive for BokehGather {
     fn skip_passthrough(
         &self,
         params: &ParamValues,
-        _wired_inputs: &[&str],
+        wired_inputs: &[&str],
     ) -> Option<(&'static str, &'static str)> {
-        matches!(params.get("enabled"), Some(ParamValue::Bool(false))).then_some(("in", "out"))
+        if matches!(params.get("enabled"), Some(ParamValue::Bool(false))) {
+            return Some(("in", "out"));
+        }
+        // encode() maps a non-finite or non-positive max_radius to 0, and
+        // bokeh_reconstruct.wgsl stores the source texel when radius <= 0.
+        let radius_is_zero = match params.get("max_radius") {
+            Some(ParamValue::Float(r)) => !r.is_finite() || *r <= 0.0,
+            _ => false,
+        };
+        (radius_is_zero && !wired_inputs.contains(&"max_radius")).then_some(("in", "out"))
     }
     fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
         Some(("in", "out"))
@@ -591,6 +600,23 @@ mod tests {
         assert_eq!(
             Primitive::skip_passthrough(&node, &params, &[]),
             Some(("in", "out"))
+        );
+    }
+    #[test]
+    fn zero_max_radius_aliases_source_unless_wired() {
+        let node = BokehGather::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("max_radius"), ParamValue::Float(0.0));
+        assert_eq!(
+            Primitive::skip_passthrough(&node, &params, &[]),
+            Some(("in", "out"))
+        );
+        params.insert(Cow::Borrowed("max_radius"), ParamValue::Float(0.25));
+        assert_eq!(Primitive::skip_passthrough(&node, &params, &[]), None);
+        params.insert(Cow::Borrowed("max_radius"), ParamValue::Float(0.0));
+        assert_eq!(
+            Primitive::skip_passthrough(&node, &params, &["max_radius"]),
+            None
         );
     }
     #[test]

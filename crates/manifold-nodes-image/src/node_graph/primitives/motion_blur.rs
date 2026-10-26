@@ -150,17 +150,22 @@ inventory::submit! {
 }
 
 impl Primitive for MotionBlur {
-    /// Param-driven no-op: `enabled = false` aliases `in` onto `out` —
-    /// zero GPU work — instead of running the gather.
+    /// Param-driven no-op: `enabled = false`, or `max_blur_px <= 0` (the
+    /// smear clamps to zero and motion_blur_body.wgsl returns `fetch_in(uv)`
+    /// before its taps), aliases `in` onto `out` — zero GPU work.
     fn skip_passthrough(
         &self,
         params: &ParamValues,
-        _wired_inputs: &[&str],
+        wired_inputs: &[&str],
     ) -> Option<(&'static str, &'static str)> {
-        match params.get("enabled") {
-            Some(ParamValue::Bool(false)) => Some(("in", "out")),
-            _ => None,
+        if matches!(params.get("enabled"), Some(ParamValue::Bool(false))) {
+            return Some(("in", "out"));
         }
+        let blur_is_zero = match params.get("max_blur_px") {
+            Some(ParamValue::Float(px)) => *px <= 0.0,
+            _ => false,
+        };
+        (blur_is_zero && !wired_inputs.contains(&"max_blur_px")).then_some(("in", "out"))
     }
 
     /// Static declaration of the alias `skip_passthrough` may install —
@@ -248,6 +253,18 @@ mod tests {
         assert_eq!(node.skip_passthrough(&params, &[]), Some(("in", "out")));
     }
 
+    #[test]
+    fn zero_max_blur_px_aliases_in_to_out_unless_wired() {
+        let prim = MotionBlur::new();
+        let node: &dyn EffectNode = &prim;
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("max_blur_px"), ParamValue::Float(0.0));
+        assert_eq!(node.skip_passthrough(&params, &[]), Some(("in", "out")));
+        params.insert(Cow::Borrowed("max_blur_px"), ParamValue::Float(0.25));
+        assert_eq!(node.skip_passthrough(&params, &[]), None);
+        params.insert(Cow::Borrowed("max_blur_px"), ParamValue::Float(0.0));
+        assert_eq!(node.skip_passthrough(&params, &["max_blur_px"]), None);
+    }
 }
 
 /// **CPU reference** on a synthetic velocity ramp (I1) — a plain-Rust
