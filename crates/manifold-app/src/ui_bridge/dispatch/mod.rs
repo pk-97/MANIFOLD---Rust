@@ -17,18 +17,5 @@ pub(crate) mod params;
 pub(crate) mod presets;
 pub(crate) mod resolve;
 
-// `resolve.rs`'s moved helpers reference `super::resolve_effect_id` /
-// `super::resolve_active_layer_index` verbatim (their `super::` was written
-// relative to `inspector.rs`'s nesting depth under `ui_bridge`, one level
-// shallower than `resolve.rs`'s own depth under `ui_bridge::dispatch`). This
-// re-export makes both names members of `dispatch` too, so the moved bodies
-// resolve unchanged — a private `use`, visible to `dispatch` and its
-// descendants (`resolve.rs`), needs no wider visibility. `params.rs` (S3)
-// extends the same set: its moved arm bodies and D-11 preamble reference
-// `super::editor_dispatch_context` / `super::resolve_effect_target` verbatim,
-// and its own top-level `use super::resolve_effects_read;` needs it
-// re-exported here too.
-use super::{
-    editor_dispatch_context, resolve_active_layer_index, resolve_effect_by_id, resolve_effect_id,
-    resolve_effect_target, resolve_effects_read,
-};
+// Lets the dispatch submodules reach these ui_bridge helpers as `super::name`.
+use super::{editor_active_layer, resolve_active_layer_index, resolve_effect_by_id};

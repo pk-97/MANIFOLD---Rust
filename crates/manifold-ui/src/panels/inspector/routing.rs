@@ -2,14 +2,14 @@ use super::*;
 
 impl InspectorCompositePanel {
     pub fn selection_has_group(&self) -> bool {
-        let selected = self.selection_for_tab(self.last_effect_tab).0;
-        self.rack_groups[Self::scope_idx(self.last_effect_tab)]
+        let selected = self.selection_for_tab(self.active_tab).0;
+        self.rack_groups[Self::scope_idx(self.active_tab)]
             .iter()
             .any(|group| group.member_ids.iter().any(|id| selected.contains(id)))
     }
 
     pub fn selected_effect_ids(&self) -> Vec<EffectId> {
-        let (selected, cards) = self.selection_for_tab(self.last_effect_tab);
+        let (selected, cards) = self.selection_for_tab(self.active_tab);
         cards
             .iter()
             .filter(|card| selected.contains(card.effect_id()))
@@ -30,12 +30,11 @@ impl InspectorCompositePanel {
         };
         let unchanged = *shown == wanted
             && other.is_empty()
-            && self.last_effect_tab == tab
+            && self.active_tab == tab
             && self.pending_reveal == reveal;
         self.selected_master_ids.clear();
         self.selected_layer_ids.clear();
         self.selection_set_mut(tab).extend(ids.iter().cloned());
-        self.last_effect_tab = tab;
         self.pending_reveal = reveal;
         if !unchanged {
             self.view_version += 1;
@@ -124,7 +123,6 @@ impl InspectorCompositePanel {
         if !self.selection_for_tab(tab).0.contains(id) {
             self.select_effect(tab, card_index);
         }
-        self.last_effect_tab = tab;
     }
 
     pub fn select_rack_group(&mut self, group_id: &EffectGroupId, additive: bool) {
@@ -146,7 +144,6 @@ impl InspectorCompositePanel {
         } else {
             selection.extend(members);
         }
-        self.last_effect_tab = tab;
     }
 
     /// Get the selection set and cards vec for a given tab.
@@ -235,7 +232,7 @@ impl InspectorCompositePanel {
     /// Select all effects in the active tab.
     /// Returns true if any effects were selected.
     pub fn select_all_effects(&mut self) -> bool {
-        let tab = self.last_effect_tab;
+        let tab = self.active_tab;
         let cards = self.cards_for_tab(tab);
         if cards.is_empty() {
             return false;
@@ -254,7 +251,7 @@ impl InspectorCompositePanel {
 
     /// How many effects are selected in the active tab.
     pub fn selected_effect_count(&self) -> usize {
-        let (set, _) = self.selection_for_tab(self.last_effect_tab);
+        let (set, _) = self.selection_for_tab(self.active_tab);
         set.len()
     }
 
@@ -440,7 +437,13 @@ impl InspectorCompositePanel {
         // column's current cards (collapse if any open, else expand).
         if self.collapse_all_btn_id == Some(node_id) {
             let collapsed = self.any_active_card_expanded();
-            return vec![PanelAction::Params(ParamsAction::SetAllCardsCollapsed {
+            let ids = self
+                .cards_for_tab(self.active_tab)
+                .iter()
+                .map(|card| card.effect_id().clone())
+                .collect();
+            return vec![PanelAction::Params(ParamsAction::SetCardsCollapsed {
+                ids,
                 collapsed,
             })];
         }
@@ -479,7 +482,6 @@ impl InspectorCompositePanel {
                 .collect();
         }
         if let Some(target) = self.find_target_for_node(tree, node_id) {
-            self.update_last_effect_tab(&target);
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_click(node_id),
                 PressedTarget::RackWetDry => Vec::new(),
@@ -501,14 +503,13 @@ impl InspectorCompositePanel {
                         // Only auto-select if not already in multi-selection
                         self.auto_select_effect(&PressedTarget::MasterEffect(i));
                     }
-                    let ei = self.effects[Self::SCOPE_MASTER]
-                        .get(i)
-                        .map(|c| c.effect_index())
-                        .unwrap_or(0);
                     if !actions.iter().any(|a| {
                         matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_)))
-                    }) {
-                        actions.insert(0, PanelAction::Params(ParamsAction::EffectCardClicked(ei)));
+                    }) && let Some(id) = self.effects[Self::SCOPE_MASTER]
+                        .get(i)
+                        .map(|c| c.effect_id().clone())
+                    {
+                        actions.insert(0, PanelAction::Params(ParamsAction::EffectCardClicked(id)));
                     }
                     actions
                 }
@@ -525,14 +526,13 @@ impl InspectorCompositePanel {
                     } else if !self.is_effect_target_selected(&PressedTarget::LayerEffect(i)) {
                         self.auto_select_effect(&PressedTarget::LayerEffect(i));
                     }
-                    let ei = self.effects[Self::SCOPE_LAYER]
-                        .get(i)
-                        .map(|c| c.effect_index())
-                        .unwrap_or(0);
                     if !actions.iter().any(|a| {
                         matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_)))
-                    }) {
-                        actions.insert(0, PanelAction::Params(ParamsAction::EffectCardClicked(ei)));
+                    }) && let Some(id) = self.effects[Self::SCOPE_LAYER]
+                        .get(i)
+                        .map(|c| c.effect_id().clone())
+                    {
+                        actions.insert(0, PanelAction::Params(ParamsAction::EffectCardClicked(id)));
                     }
                     actions
                 }
@@ -571,7 +571,6 @@ impl InspectorCompositePanel {
         self.pressed_target = target;
         // Record which tab this interaction targets (survives drag_end)
         if let Some(ref t) = target {
-            self.update_last_effect_tab(t);
             // Auto-select on pointer-down ONLY when:
             // 1. No selection modifiers are held (shift/ctrl defer to Click handler)
             // 2. The target is not already selected (preserve multi-selection for
@@ -589,21 +588,13 @@ impl InspectorCompositePanel {
             // For effect targets, prepend EffectCardClicked to trigger visual update
             let select_action = match target {
                 PressedTarget::MasterEffect(i) => {
-                    Some(PanelAction::Params(ParamsAction::EffectCardClicked(
-                        self.effects[Self::SCOPE_MASTER]
-                            .get(i)
-                            .map(|c| c.effect_index())
-                            .unwrap_or(0),
-                    )))
+                    self.effects[Self::SCOPE_MASTER].get(i).map(|c| {
+                        PanelAction::Params(ParamsAction::EffectCardClicked(c.effect_id().clone()))
+                    })
                 }
-                PressedTarget::LayerEffect(i) => {
-                    Some(PanelAction::Params(ParamsAction::EffectCardClicked(
-                        self.effects[Self::SCOPE_LAYER]
-                            .get(i)
-                            .map(|c| c.effect_index())
-                            .unwrap_or(0),
-                    )))
-                }
+                PressedTarget::LayerEffect(i) => self.effects[Self::SCOPE_LAYER].get(i).map(|c| {
+                    PanelAction::Params(ParamsAction::EffectCardClicked(c.effect_id().clone()))
+                }),
                 _ => None,
             };
 

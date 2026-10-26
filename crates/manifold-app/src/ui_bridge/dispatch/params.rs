@@ -7,27 +7,22 @@
 //! VERBATIM (they already read `ctx` fields directly); a `_ => unhandled()`
 //! fall-through lets the chain advance.
 //!
-//! D-11: `effective_tab`/`active_layer` are computed once near the top of
-//! `dispatch_inspector` in inspector.rs; this sub-dispatcher cannot see that
-//! outer function's locals, so it recomputes them here — the same two
-//! lines, byte-exact, as the sanctioned preamble.
+//! D-11: `effective_active_layer` is computed once near the top of
+//! `dispatch_params`; this sub-dispatcher cannot see the outer function's
+//! locals, so it recomputes the layer here as the sanctioned preamble.
 
 use crate::content_command::ContentCommand;
 use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::effects::PresetInstance;
 use manifold_editing::commands::effect_target::EffectTarget;
-use manifold_editing::commands::effects::{
-    ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
-    ToggleEffectCommand,
-};
+use manifold_editing::commands::effects::{ChangeGraphParamCommand, ToggleEffectCommand};
 use manifold_editing::commands::settings::{ChangeMacroCommand, PasteGeneratorCommand};
 use manifold_ui::panels::inspector::InspectorFold;
 use manifold_ui::{InspectorTab, PanelAction, ParamsAction};
 
 use super::super::DispatchResult;
 use super::resolve::{resolve_graph_target, resolve_preset_target};
-use super::resolve_effects_read;
 
 pub(crate) fn find_effect_string_node(
     nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
@@ -86,12 +81,8 @@ pub(crate) fn dispatch_params(
     action: &ParamsAction,
     ctx: &mut super::super::DispatchCtx,
 ) -> DispatchResult {
-    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
-        ctx.editor_target,
-        &ctx.project,
-        ctx.ui.inspector.last_effect_tab(),
-        ctx.active_layer,
-    );
+    let effective_active_layer =
+        super::editor_active_layer(ctx.editor_target, &ctx.project, ctx.active_layer);
     let active_layer = &effective_active_layer;
     if let ParamsAction::ParamEnumSet(gpt, param_id, _) | ParamsAction::ParamToggle(gpt, param_id) =
         action
@@ -324,50 +315,29 @@ pub(crate) fn dispatch_params(
         }
 
         // ── Effect operations ──────────────────────────────────────
-        ParamsAction::EffectToggle(fx_idx) => {
-            let tab = effective_tab;
-            let selected = ctx.ui.inspector.get_selected_effect_indices();
+        ParamsAction::EffectToggle(clicked) => {
+            let selected = ctx.ui.inspector.selected_effect_ids();
             // If clicked effect is part of multi-selection, apply to all selected
-            let indices: Vec<usize> = if selected.len() > 1 && selected.contains(fx_idx) {
-                selected
-            } else {
-                vec![*fx_idx]
-            };
+            let ids: Vec<manifold_core::EffectId> =
+                if selected.len() > 1 && selected.contains(clicked) {
+                    selected
+                } else {
+                    vec![clicked.clone()]
+                };
             // New state = inverse of the clicked card, applied to every selected.
-            let new_enabled = super::resolve_effect_id(
-                ctx.editor_target,
-                tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-                *fx_idx,
-            )
-            .and_then(|eid| ctx.project.find_effect_by_id(&eid).map(|fx| !fx.enabled))
-            .unwrap_or(true);
-            // Resolve every affected card to its stable id + current state. The
-            // editor toggles its single watched effect (id wins over `idx`); the
-            // inspector resolves each selected index against its own context.
-            let targets: Vec<(manifold_core::EffectId, bool)> = indices
-                .iter()
-                .filter_map(|&idx| {
-                    let eid = super::resolve_effect_id(
-                        ctx.editor_target,
-                        tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                        idx,
-                    )?;
-                    let enabled = ctx.project.find_effect_by_id(&eid)?.enabled;
-                    Some((eid, enabled))
-                })
-                .collect();
+            let Some(new_enabled) = ctx.project.find_effect_by_id(clicked).map(|fx| !fx.enabled)
+            else {
+                return DispatchResult::handled();
+            };
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-            for (eid, old_enabled) in &targets {
-                if *old_enabled != new_enabled {
+            for eid in &ids {
+                let Some(fx) = ctx.project.find_effect_by_id(eid) else {
+                    continue;
+                };
+                if fx.enabled != new_enabled {
                     commands.push(Box::new(ToggleEffectCommand::new(
                         eid.clone(),
-                        *old_enabled,
+                        fx.enabled,
                         new_enabled,
                     )));
                 }
@@ -377,54 +347,35 @@ pub(crate) fn dispatch_params(
             }
             DispatchResult::handled()
         }
-        ParamsAction::EffectCollapseToggle(fx_idx) => {
-            let tab = effective_tab;
-            let selected = ctx.ui.inspector.get_selected_effect_indices();
+        ParamsAction::EffectCollapseToggle(clicked) => {
+            let selected = ctx.ui.inspector.selected_effect_ids();
             // If clicked effect is part of multi-selection, apply to all selected
-            let indices: Vec<usize> = if selected.len() > 1 && selected.contains(fx_idx) {
-                selected
-            } else {
-                vec![*fx_idx]
-            };
-            let new_collapsed =
-                resolve_effects_read(tab, &ctx.project, active_layer, ctx.selection)
-                    .0
-                    .and_then(|effects| effects.get(*fx_idx).map(|fx| !fx.collapsed))
-                    .unwrap_or(true);
-            let target = super::resolve_effect_target(tab, active_layer, &ctx.project);
-            ctx.mutate(crate::content_command::touch::EFFECTS, move |p| {
-                let effects = match &target {
-                    EffectTarget::Master => Some(&mut p.settings.master_effects),
-                    EffectTarget::Layer { layer_id } => p
-                        .timeline
-                        .find_layer_by_id_mut(layer_id)
-                        .map(|(_, l)| l.effects_mut()),
+            let ids: Vec<manifold_core::EffectId> =
+                if selected.len() > 1 && selected.contains(clicked) {
+                    selected
+                } else {
+                    vec![clicked.clone()]
                 };
-                if let Some(effects) = effects {
-                    for &idx in &indices {
-                        if let Some(fx) = effects.get_mut(idx) {
-                            fx.collapsed = new_collapsed;
-                        }
+            let Some(clicked_fx) = ctx.project.find_effect_by_id(clicked) else {
+                return DispatchResult::handled();
+            };
+            let new_collapsed = !clicked_fx.collapsed;
+            ctx.mutate(crate::content_command::touch::EFFECTS, move |p| {
+                for id in &ids {
+                    if let Some(fx) = p.find_effect_by_id_mut(id) {
+                        fx.collapsed = new_collapsed;
                     }
                 }
             });
             DispatchResult::handled()
         }
-        ParamsAction::SetAllCardsCollapsed { collapsed } => {
-            // Collapse/expand every effect card in the active column at once.
-            let tab = effective_tab;
+        ParamsAction::SetCardsCollapsed { ids, collapsed } => {
+            // Collapse/expand the shown column's cards at once.
+            let ids = ids.clone();
             let collapsed = *collapsed;
-            let target = super::resolve_effect_target(tab, active_layer, &ctx.project);
             ctx.mutate(crate::content_command::touch::EFFECTS, move |p| {
-                let effects = match &target {
-                    EffectTarget::Master => Some(&mut p.settings.master_effects),
-                    EffectTarget::Layer { layer_id } => p
-                        .timeline
-                        .find_layer_by_id_mut(layer_id)
-                        .map(|(_, l)| l.effects_mut()),
-                };
-                if let Some(effects) = effects {
-                    for fx in effects.iter_mut() {
+                for id in &ids {
+                    if let Some(fx) = p.find_effect_by_id_mut(id) {
                         fx.collapsed = collapsed;
                     }
                 }
@@ -588,23 +539,6 @@ pub(crate) fn dispatch_params(
         // (PRESET_BROWSER_AUDITION D2), so there is nothing to re-resolve.
         ParamsAction::AddEffectClicked { .. } => DispatchResult::handled(),
         ParamsAction::BrowserSearchClicked => DispatchResult::handled(),
-        ParamsAction::RemoveEffect(fx_idx) => {
-            let tab = effective_tab;
-            let (effects_ref, target) =
-                resolve_effects_read(tab, &ctx.project, active_layer, ctx.selection);
-            if let Some(effects) = effects_ref
-                && let Some(fx) = effects.get(*fx_idx)
-            {
-                let cmd = RemoveEffectCommand::new(target, fx.clone(), *fx_idx);
-                {
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::ExecuteOnContent(Box::new(cmd)),
-                    );
-                }
-            }
-            DispatchResult::handled()
-        }
         ParamsAction::EffectMove {
             tab,
             layer_id,
@@ -667,67 +601,11 @@ pub(crate) fn dispatch_params(
             group_id,
             enabled,
         } => super::super::rack_controls::dispatch_bypass(*tab, layer_id, group_id, *enabled, ctx),
-        ParamsAction::EffectReorder(from_idx, to_idx) => {
-            let tab = effective_tab;
-            let target = super::resolve_effect_target(tab, active_layer, &ctx.project);
-            let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
-            {
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::ExecuteOnContent(Box::new(cmd)),
-                );
-            }
-            // Selection follows automatically (ID-based, no remapping needed)
-            DispatchResult::handled()
-        }
         // `ParamsAction::ToggleNodeParamExpose` is handled in
         // `app_render.rs` alongside the other graph commands so it can
         // access `watched_graph_target` + `watched_catalog_default`
         // directly. No fork on Effect vs Generator at the dispatch
         // layer — the command itself handles both.
-        ParamsAction::EffectReorderGroup(source_indices, target_idx) => {
-            // Multi-select reorder: move a group of effects to the target position.
-            let tab = effective_tab;
-            let target = super::resolve_effect_target(tab, active_layer, &ctx.project);
-            let (effects_ref, _target) =
-                resolve_effects_read(tab, &ctx.project, active_layer, ctx.selection);
-            if let Some(original) = effects_ref {
-                let mut effects = original.to_vec();
-                // Snapshot before
-                let old_effects = effects.clone();
-
-                // Remove selected effects in reverse order (preserving relative order)
-                let mut moving: Vec<(usize, PresetInstance)> = Vec::new();
-                let mut sorted_sources = source_indices.clone();
-                sorted_sources.sort_unstable();
-                for &idx in sorted_sources.iter().rev() {
-                    if idx < effects.len() {
-                        moving.push((idx, effects.remove(idx)));
-                    }
-                }
-                moving.reverse(); // Restore original relative order
-
-                // Compute adjusted insertion point (account for removed items before target)
-                let removed_before = sorted_sources.iter().filter(|&&i| i < *target_idx).count();
-                let insert_at = target_idx.saturating_sub(removed_before).min(effects.len());
-
-                // Insert the group at the target position
-                for (offset, (_, fx)) in moving.into_iter().enumerate() {
-                    let pos = (insert_at + offset).min(effects.len());
-                    effects.insert(pos, fx);
-                }
-
-                // Snapshot after and create undoable command
-                let new_effects = effects.clone();
-                let cmd = ReorderEffectGroupCommand::new(target, old_effects, new_effects);
-                // The content thread validates and applies the proposed order.
-                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(boxed));
-            }
-            // Selection follows automatically (ID-based, no remapping needed)
-            DispatchResult::handled()
-        }
-
         // ── Generator card actions ─────────────────────────────────
         ParamsAction::EffectStringParamDropdownClicked(effect_id, binding_id, index) => {
             let Some(info) = ctx

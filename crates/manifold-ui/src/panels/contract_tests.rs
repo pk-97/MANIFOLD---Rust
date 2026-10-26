@@ -151,7 +151,8 @@ fn every_chevron_click_emits_its_collapse_toggle() {
         ("param card", super::param_card::tests::chevron_click, |a| {
             matches!(
                 a,
-                PanelAction::Params(crate::ParamsAction::EffectCollapseToggle(0))
+                PanelAction::Params(crate::ParamsAction::EffectCollapseToggle(id))
+                    if id.as_str() == "test-effect-0"
             )
         }),
         (

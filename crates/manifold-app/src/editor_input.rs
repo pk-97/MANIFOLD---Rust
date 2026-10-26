@@ -770,9 +770,8 @@ pub(crate) struct CardLane<'a> {
 /// What the card lane's actions ask of the caller.
 #[derive(Default)]
 pub(crate) struct CardLaneOutcome {
-    /// A card click retargets the canvas to that effect's graph (row index in
-    /// the editor's inspector tab).
-    pub retarget_effect: Option<usize>,
+    /// A card click retargets the canvas to that effect's graph.
+    pub retarget_effect: Option<manifold_core::EffectId>,
     /// A generator card click retargets the canvas to the generator's graph.
     pub retarget_generator: bool,
     pub save_preset: Option<(
@@ -795,8 +794,8 @@ pub(crate) fn dispatch_card_lane(
     let mut out = CardLaneOutcome::default();
     for action in actions {
         match action {
-            PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => {
-                out.retarget_effect = Some(*ei)
+            PanelAction::Params(ParamsAction::EffectCardClicked(eid)) => {
+                out.retarget_effect = Some(eid.clone())
             }
             PanelAction::Params(ParamsAction::GenCardClicked) => out.retarget_generator = true,
             _ => {}

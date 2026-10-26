@@ -249,7 +249,6 @@ impl InspectorCompositePanel {
             self.card_drag_effect_index = fx_idx;
             self.card_drag_target_index = card_idx;
             self.card_drag_label = name;
-            self.last_effect_tab = tab;
 
             self.dim_dragged_cards(tree);
             self.rebuild_card_drag_overlay(tree);

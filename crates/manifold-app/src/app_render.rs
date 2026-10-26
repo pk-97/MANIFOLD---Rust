@@ -863,24 +863,9 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
-                PanelAction::Root(RootAction::OpenGraphEditor(ei)) => {
-                    // Resolve `ei` (effect index in the active inspector tab) to
-                    // the effect's stable `EffectId`, then start snapshotting
-                    // that specific instance's graph. Keyed by instance id — not
-                    // type id — so two cards of the same effect type produce
-                    // independent snapshots. `watched_graph_target` is the sole
-                    // identity for every editor-card edit and the exposure panel,
-                    // so clip-scoped effects are addressed with no positional
-                    // fallback. Shared with selection-follows via
-                    // `watch_effect_graph`; the cog additionally opens the window.
-                    match self.resolve_effect_card_id(*ei) {
-                        Some(eid) => self.watch_effect_graph(eid),
-                        None => {
-                            self.watched_graph_target = None;
-                            self.watched_catalog_default = None;
-                            self.editor_graph.catalog_default_changed();
-                        }
-                    }
+                PanelAction::Root(RootAction::OpenGraphEditor(eid)) => {
+                    // The cog opens the editor on this card's effect.
+                    self.watch_effect_graph(eid.clone());
                     self.pending_open_graph_editor = true;
                     continue;
                 }
@@ -1074,16 +1059,12 @@ impl Application {
                 // open, this is a no-op and opening stays a deliberate cog
                 // action (keeps the authoring/perform boundary intact).
                 //
-                // Gated to the MAIN-window segment (`action_idx <
-                // editor_card_seg_start`): the editor's own card lane emits the
-                // same two actions, and resolving those against the main
-                // inspector's tab/selection would retarget to the wrong graph.
-                PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => {
-                    if action_idx < editor_card_seg_start
-                        && self.graph_editor_window_id.is_some()
-                        && let Some(eid) = self.resolve_effect_card_id(*ei)
-                    {
-                        self.watch_effect_graph(eid);
+                // Gated to the main-window segment (`action_idx <
+                // editor_card_seg_start`): the editor's own card lane retargets
+                // through its outcome, so only main-window clicks are handled here.
+                PanelAction::Params(ParamsAction::EffectCardClicked(eid)) => {
+                    if action_idx < editor_card_seg_start && self.graph_editor_window_id.is_some() {
+                        self.watch_effect_graph(eid.clone());
                     }
                 }
                 PanelAction::Params(ParamsAction::GenCardClicked) => {
@@ -1185,10 +1166,8 @@ impl Application {
             // Retarget the canvas to the clicked card's graph (opening the window
             // stays a deliberate cog action, so only retarget when it's open).
             if self.graph_editor_window_id.is_some() {
-                if let Some(ei) = outcome.retarget_effect {
-                    if let Some(eid) = self.resolve_effect_card_id(ei) {
-                        self.watch_effect_graph(eid);
-                    }
+                if let Some(eid) = outcome.retarget_effect {
+                    self.watch_effect_graph(eid);
                 } else if outcome.retarget_generator
                     && let Some(lid) = self.active_layer_id.clone()
                 {

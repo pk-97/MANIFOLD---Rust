@@ -109,7 +109,7 @@ pub(crate) fn clip_trigger_shape_dual_edit<F>(
 /// `Project::with_preset_graph_mut` and the GraphTarget-keyed editing
 /// commands. The single resolver behind every collapsed param/modulation
 /// dispatch arm: effects address by stable `EffectId` (editor-aware via
-/// `resolve_effect_id`), generators by the active layer's `LayerId`.
+/// `resolve_effect_by_id`), generators by the active layer's `LayerId`.
 pub(crate) fn resolve_graph_target(
     gpt: &GraphParamTarget,
     editor_target: Option<&manifold_core::GraphTarget>,
@@ -343,7 +343,7 @@ mod tests {
     use manifold_core::layer::Layer;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::{LayerId, PresetTypeId};
-    use manifold_ui::{GraphParamTarget, InspectorTab};
+    use manifold_ui::GraphParamTarget;
 
     fn local_graph() -> EffectGraphDef {
         serde_json::from_value(serde_json::json!({
@@ -424,13 +424,8 @@ mod tests {
             Some(GraphTarget::Generator(layer_a.clone()))
         );
         assert_eq!(
-            super::super::editor_dispatch_context(
-                Some(&target),
-                &project,
-                InspectorTab::Master,
-                &Some(layer_b),
-            ),
-            (InspectorTab::Layer, Some(layer_a))
+            super::super::editor_active_layer(Some(&target), &project, &Some(layer_b)),
+            Some(layer_a)
         );
     }
 

@@ -2373,7 +2373,7 @@ pub(super) mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(
             actions[0],
-            PanelAction::Params(ParamsAction::EffectToggle(0))
+            PanelAction::Params(ParamsAction::EffectToggle(ref id)) if id.as_str() == "test-effect-0"
         ));
     }
 

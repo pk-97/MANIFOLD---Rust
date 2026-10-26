@@ -110,10 +110,10 @@ mod scene_card_convergence_tests {
 
         /// `dispatch`'s twin with an explicit `editor_target` — the graph
         /// editor's own identity-addressed entry point
-        /// (`resolve_effect_id`/`editor_dispatch_context`, `ui_bridge/mod.rs`):
-        /// a `Some(GraphTarget::Effect(id))` resolves that exact instance
+        /// (`editor_active_layer`, `ui_bridge/mod.rs`): a
+        /// `Some(GraphTarget::Effect(id))` resolves that exact instance
         /// (master, layer, or clip) regardless of `GraphParamTarget`'s
-        /// positional index or the ambient `last_effect_tab`. `row_dispatch`
+        /// positional index or the ambient inspector tab. `row_dispatch`
         /// uses this to reach a master effect and a layer effect through the
         /// identical dispatch call — the only production path that can
         /// address a specific scope without driving a real pointer-down
@@ -159,6 +159,59 @@ mod scene_card_convergence_tests {
             ))
         });
         (project, layer_id, ids)
+    }
+
+    #[test]
+    fn toggling_a_selected_card_toggles_every_selected_effect() {
+        let (mut project, layer_id) = scene_layer_project();
+        let mut effect_ids = Vec::new();
+        for _ in 0..3 {
+            let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+            fx.init_defaults();
+            fx.enabled = true;
+            effect_ids.push(fx.id.clone());
+            project
+                .timeline
+                .find_layer_by_id_mut(&layer_id)
+                .expect("fixture layer resolves")
+                .1
+                .effects_mut()
+                .push(fx);
+        }
+        let [a, b, c] = [
+            effect_ids[0].clone(),
+            effect_ids[1].clone(),
+            effect_ids[2].clone(),
+        ];
+        let mut h = Harness::new(Some(layer_id.clone()));
+        let layer_index = project.timeline.find_layer_index_by_id(&layer_id);
+        crate::ui_bridge::projection::inspector::sync_inspector_data(
+            &mut h.ui,
+            &project,
+            layer_index,
+            &h.selection,
+            &[],
+            None,
+        );
+        h.ui.inspector
+            .configure_tabs(&[InspectorTab::Layer], InspectorTab::Layer);
+        h.ui.inspector
+            .select_effect_ids(InspectorTab::Layer, &[a.clone(), c.clone()]);
+
+        h.dispatch(
+            &PanelAction::Params(ParamsAction::EffectToggle(c.clone())),
+            &mut project,
+        );
+
+        let enabled = |id: &manifold_core::EffectId| {
+            project
+                .find_effect_by_id(id)
+                .expect("fixture effect resolves")
+                .enabled
+        };
+        assert!(!enabled(&a), "selected A toggles off with the clicked C");
+        assert!(enabled(&b), "unselected B is left alone");
+        assert!(!enabled(&c), "clicked C toggles off");
     }
 
     #[test]
@@ -2978,13 +3031,11 @@ mod scene_card_convergence_tests {
         /// Master and layer targets are reached via `Harness::
         /// dispatch_with_editor`'s `editor_target = Some(GraphTarget::
         /// Effect(id))` — the graph editor's own identity-addressed entry
-        /// point (`resolve_effect_id`/`editor_dispatch_context`, `ui_bridge/
-        /// mod.rs`). That is the only production path that can select a
-        /// SPECIFIC effect instance from a bridge-level test: the ambient
-        /// route (`editor_target: None`) resolves positionally through
-        /// `ui.inspector.last_effect_tab()`, a field only a real
-        /// pointer-down sets (`InspectorPanel::update_last_effect_tab`,
-        /// private to `manifold-ui`) — driving that is P2's own click-
+        /// point (`editor_active_layer`, `ui_bridge/mod.rs`). That is the only
+        /// production path that can select a SPECIFIC effect instance from a
+        /// bridge-level test: the ambient route (`editor_target: None`)
+        /// resolves positionally through `ui.inspector.active_tab()`, which a
+        /// real click on the card sets — driving that is P2's own click-
         /// routing test surface, not this bridge's.
         mod row_dispatch {
             use super::*;

@@ -23,12 +23,8 @@ pub(crate) fn dispatch_mapping(
     action: &MappingAction,
     ctx: &mut super::super::DispatchCtx,
 ) -> DispatchResult {
-    let (_, effective_active_layer) = super::editor_dispatch_context(
-        ctx.editor_target,
-        &ctx.project,
-        ctx.ui.inspector.last_effect_tab(),
-        ctx.active_layer,
-    );
+    let effective_active_layer =
+        super::editor_active_layer(ctx.editor_target, &ctx.project, ctx.active_layer);
     let active_layer = &effective_active_layer;
     match action {
         MappingAction::MapParamToMacro(gpt, param_id, macro_idx) => {

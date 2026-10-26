@@ -730,44 +730,6 @@ pub(crate) fn watch_editor_graph(
     true
 }
 
-/// An effect card's stable id from its row index in an inspector tab, keyed
-/// by instance id and tab-aware (Master, Layer or Group, Clip).
-pub(crate) fn effect_card_id(
-    tab: manifold_ui::InspectorTab,
-    project: &manifold_core::project::Project,
-    active_layer: Option<&manifold_core::LayerId>,
-    selection: &crate::app::SelectionState,
-    ei: usize,
-) -> Option<manifold_core::EffectId> {
-    match tab {
-        manifold_ui::InspectorTab::Master => project
-            .settings
-            .master_effects
-            .get(ei)
-            .map(|e| e.id.clone()),
-        manifold_ui::InspectorTab::Layer
-        | manifold_ui::InspectorTab::Group
-        | manifold_ui::InspectorTab::Scene => active_layer
-            .and_then(|id| project.timeline.find_layer_by_id(id))
-            .and_then(|(_, l)| l.effects.as_ref())
-            .and_then(|effects| effects.get(ei))
-            .map(|e| e.id.clone()),
-        manifold_ui::InspectorTab::Clip => selection
-            .primary_selected_clip_id()
-            .as_ref()
-            .and_then(|cid| {
-                project
-                    .timeline
-                    .layers
-                    .iter()
-                    .flat_map(|l| l.clips.iter())
-                    .find(|c| c.id == **cid)
-            })
-            .and_then(|c| c.effects.get(ei))
-            .map(|e| e.id.clone()),
-    }
-}
-
 /// Mapping controls resolve their captured owner, independently of canvas selection.
 pub(crate) fn target_full_reshape(
     project: &manifold_core::project::Project,
@@ -1525,19 +1487,6 @@ impl Application {
             .set_level(rfd::MessageLevel::Warning)
             .show()
             == rfd::MessageDialogResult::Yes
-    }
-
-    /// Resolve an effect card's row index (in the active inspector tab) to its
-    /// stable [`EffectId`]. Mirrors the cog's `OpenGraphEditor` resolution:
-    /// keyed by instance id, tab-aware (Master / Layer|Group / Clip).
-    pub(crate) fn resolve_effect_card_id(&self, ei: usize) -> Option<manifold_core::EffectId> {
-        effect_card_id(
-            self.ws.ui_root.inspector.last_effect_tab(),
-            &self.local_project,
-            self.active_layer_id.as_ref(),
-            &self.selection,
-            ei,
-        )
     }
 
     /// Point the graph editor at an effect instance: push the watched identity

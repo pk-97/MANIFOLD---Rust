@@ -379,13 +379,13 @@ pub enum ParamsAction {
     LayerChromeCollapseToggle,
     // LayerOpacity scrub trio migrated to `PanelAction::Scrub`
     // (`ValueRef::LayerOpacity`, P-I / D4).
-    EffectToggle(usize),
-    EffectCollapseToggle(usize),
-    /// Collapse or expand every effect card in the active inspector column at
-    /// once (the collapse-all / expand-all control in the tab strip). The UI
-    /// resolves the target state — collapse if any card is currently open, else
-    /// expand them all.
-    SetAllCardsCollapsed {
+    EffectToggle(EffectId),
+    EffectCollapseToggle(EffectId),
+    /// Collapse or expand these effect cards at once (the collapse-all /
+    /// expand-all control sends the shown column's cards). The UI resolves the
+    /// target state — collapse if any card is currently open, else expand them.
+    SetCardsCollapsed {
+        ids: Vec<EffectId>,
         collapsed: bool,
     },
     /// A modulation-config tab was clicked on a param row (the card already
@@ -428,7 +428,7 @@ pub enum ParamsAction {
     /// inspector already flipped its own UI-only flag; this routes to a
     /// structural rebuild so every card's drawers hide/show. No model mutation.
     ModsCompactToggled,
-    EffectCardClicked(usize),
+    EffectCardClicked(EffectId),
     EffectSelectionChanged,
     EditCards(CardEditAction),
     EffectGroupRightClicked(manifold_foundation::EffectGroupId),
@@ -444,11 +444,6 @@ pub enum ParamsAction {
     /// Fire a monotonic `isTrigger` param's "▶" button — increments the
     /// underlying counter by one instead of flipping it.
     ParamFire(GraphParamTarget, ParamId),
-    /// Reorder effect card: move from_index to to_index.
-    /// Unity: EffectsListBitmapPanel.onCardReorder.
-    EffectReorder(usize, usize),
-    /// Reorder multiple effect cards as a group: (sorted source indices, target index).
-    EffectReorderGroup(Vec<usize>, usize),
     /// Move stable card identities to an explicit stack/group boundary.
     EffectMove {
         tab: InspectorTab,
@@ -588,7 +583,6 @@ pub enum ParamsAction {
         tab: InspectorTab,
         layer_id: Option<LayerId>,
     },
-    RemoveEffect(usize),
     BrowserSearchClicked,
     PasteEffects,
     /// The browser's pick: `tab` + `layer_id` echo the open request
@@ -833,7 +827,7 @@ pub enum RootAction {
     /// Open the node-graph editor for this effect (cog icon click).
     /// Currently shows a hardcoded test graph regardless of which effect
     /// triggered it; live data sync lands in a future phase.
-    OpenGraphEditor(usize),
+    OpenGraphEditor(EffectId),
     /// Open any graph target, including a modifier instance nested in its
     /// owning generator graph.
     OpenGraphTarget(UiGraphTarget),

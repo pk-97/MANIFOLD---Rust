@@ -89,11 +89,7 @@ impl<'a> AppInputHost<'a> {
             .inspected_layer_id()
             .cloned()
             .or_else(|| self.active_layer.clone());
-        resolve_effect_target(
-            self.ui_root.inspector.last_effect_tab(),
-            &layer,
-            self.selection,
-        )
+        resolve_effect_target(self.ui_root.inspector.active_tab(), &layer, self.selection)
     }
 
     pub(super) fn copy_effect_selection(&mut self) -> bool {

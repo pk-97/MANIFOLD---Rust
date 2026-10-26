@@ -326,12 +326,12 @@ fn run_flow(
     // The fixture's values are what the content thread captured last.
     runner.values_capture.capture_into(&data.project);
     data.content.modulation_snapshot = Some(runner.mod_published.publish(&runner.values_capture));
-    // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
+    // The effect target falls back to `timeline.layers.first()`
     // when `Runner.active_layer` is None, silently mutating the wrong layer's
     // effect chain for structural PanelActions dispatched before any
     // `LayerClicked` gesture. Seed it from the fixture's actual active layer
     // (`data.active`) so a script's first structural dispatch (e.g.
-    // `EffectReorder`) targets the layer the display is actually showing.
+    // `EffectMove`) targets the layer the display is actually showing.
     runner.active_layer = data.active.and_then(|i| {
         data.project
             .timeline
@@ -797,12 +797,7 @@ impl Runner {
     }
 
     /// The watch each open-editor action makes in the App's action loop.
-    fn watch_for_open(
-        &mut self,
-        ui: &UIRoot,
-        data: &mut SceneData,
-        action: &manifold_ui::RootAction,
-    ) {
+    fn watch_for_open(&mut self, data: &mut SceneData, action: &manifold_ui::RootAction) {
         use manifold_core::GraphTarget;
         use manifold_ui::RootAction;
         match action {
@@ -814,22 +809,8 @@ impl Runner {
                     self.watch(data, GraphTarget::Generator(layer));
                 }
             }
-            RootAction::OpenGraphEditor(ei) => {
-                let tab = ui.inspector.last_effect_tab();
-                match crate::editor_bridge::effect_card_id(
-                    tab,
-                    &data.project,
-                    self.active_layer.as_ref(),
-                    &data.selection,
-                    *ei,
-                ) {
-                    Some(eid) => self.watch(data, GraphTarget::Effect(eid)),
-                    None => {
-                        self.watched = None;
-                        self.catalog_default = None;
-                        self.editor_graph.catalog_default_changed();
-                    }
-                }
+            RootAction::OpenGraphEditor(eid) => {
+                self.watch(data, GraphTarget::Effect(eid.clone()));
             }
             _ => {}
         }
@@ -1194,7 +1175,7 @@ impl Runner {
             AutomationAction::SetParam { param, value } => {
                 self.set_param(ui, data, index, action_desc, param, *value, render)
             }
-            AutomationAction::SetSliderRange { param, range } => match flow_value_ref(data, &|ei| crate::editor_bridge::effect_card_id(ui.inspector.last_effect_tab(), &data.project, self.active_layer.as_ref(), &data.selection, ei), param) {
+            AutomationAction::SetSliderRange { param, range } => match flow_value_ref(data, &|ei| effect_card_id(ui.inspector.active_tab(), &data.project, self.active_layer.as_ref(), &data.selection, ei), param) {
                 Ok((manifold_ui::panels::ValueRef::Param(target, id), _)) => {
                     let action = PanelAction::Params(manifold_ui::panels::ParamsAction::SetSliderRange(target, id, *range));
                     self.apply_panel_actions(ui, data, &[action]);
@@ -1944,17 +1925,8 @@ impl Runner {
                     "Save preset opens its name prompt on Application, not reached headless".into(),
                 );
             }
-            let tab = ui.inspector.last_effect_tab();
-            if let Some(ei) = outcome.retarget_effect {
-                if let Some(eid) = crate::editor_bridge::effect_card_id(
-                    tab,
-                    &data.project,
-                    self.active_layer.as_ref(),
-                    &data.selection,
-                    ei,
-                ) {
-                    self.watch(data, manifold_core::GraphTarget::Effect(eid));
-                }
+            if let Some(eid) = outcome.retarget_effect {
+                self.watch(data, manifold_core::GraphTarget::Effect(eid));
             } else if outcome.retarget_generator
                 && let Some(layer) = self.active_layer.clone()
             {
@@ -3185,7 +3157,7 @@ impl Runner {
                 | manifold_ui::RootAction::OpenGraphTarget(_)),
             ) = action
             {
-                self.watch_for_open(ui, data, root);
+                self.watch_for_open(data, root);
                 let opened = self.open_editor(data);
                 println!(
                     "ui-snap --script: {action:?} -> graph editor {}",
@@ -3271,17 +3243,8 @@ impl Runner {
             // graph, then still dispatches for the card's own selection.
             if self.editor.is_some() {
                 match action {
-                    PanelAction::Params(manifold_ui::ParamsAction::EffectCardClicked(ei)) => {
-                        let tab = ui.inspector.last_effect_tab();
-                        if let Some(eid) = crate::editor_bridge::effect_card_id(
-                            tab,
-                            &data.project,
-                            self.active_layer.as_ref(),
-                            &data.selection,
-                            *ei,
-                        ) {
-                            self.watch(data, manifold_core::GraphTarget::Effect(eid));
-                        }
+                    PanelAction::Params(manifold_ui::ParamsAction::EffectCardClicked(eid)) => {
+                        self.watch(data, manifold_core::GraphTarget::Effect(eid.clone()));
                     }
                     PanelAction::Params(manifold_ui::ParamsAction::GenCardClicked) => {
                         if let Some(layer) = self.active_layer.clone() {
@@ -3435,8 +3398,8 @@ impl Runner {
         let (value_ref, range) = match flow_value_ref(
             data,
             &|ei| {
-                crate::editor_bridge::effect_card_id(
-                    ui.inspector.last_effect_tab(),
+                effect_card_id(
+                    ui.inspector.active_tab(),
                     &data.project,
                     self.active_layer.as_ref(),
                     &data.selection,
@@ -3494,8 +3457,8 @@ impl Runner {
         let (value_ref, range) = match flow_value_ref(
             data,
             &|ei| {
-                crate::editor_bridge::effect_card_id(
-                    ui.inspector.last_effect_tab(),
+                effect_card_id(
+                    ui.inspector.active_tab(),
                     &data.project,
                     self.active_layer.as_ref(),
                     &data.selection,
@@ -4024,6 +3987,44 @@ pub(super) fn click_by_text(
 /// branch (no `Runner`/script run in progress there).
 pub(super) fn write_fail_dump(ui: &UIRoot, path: &std::path::Path) {
     Runner::new().write_dump(ui, path);
+}
+
+/// The effect a flow step names by its row in an inspector tab (Master, Layer
+/// or Group, Clip).
+fn effect_card_id(
+    tab: manifold_ui::InspectorTab,
+    project: &manifold_core::project::Project,
+    active_layer: Option<&manifold_core::LayerId>,
+    selection: &crate::app::SelectionState,
+    ei: usize,
+) -> Option<manifold_core::EffectId> {
+    match tab {
+        manifold_ui::InspectorTab::Master => project
+            .settings
+            .master_effects
+            .get(ei)
+            .map(|e| e.id.clone()),
+        manifold_ui::InspectorTab::Layer
+        | manifold_ui::InspectorTab::Group
+        | manifold_ui::InspectorTab::Scene => active_layer
+            .and_then(|id| project.timeline.find_layer_by_id(id))
+            .and_then(|(_, l)| l.effects.as_ref())
+            .and_then(|effects| effects.get(ei))
+            .map(|e| e.id.clone()),
+        manifold_ui::InspectorTab::Clip => selection
+            .primary_selected_clip_id()
+            .as_ref()
+            .and_then(|cid| {
+                project
+                    .timeline
+                    .layers
+                    .iter()
+                    .flat_map(|l| l.clips.iter())
+                    .find(|c| c.id == **cid)
+            })
+            .and_then(|c| c.effects.get(ei))
+            .map(|e| e.id.clone()),
+    }
 }
 
 #[cfg(test)]

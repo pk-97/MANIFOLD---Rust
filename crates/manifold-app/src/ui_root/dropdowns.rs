@@ -592,7 +592,7 @@ impl UIRoot {
         self.browser_popup.open_actions(
             BrowserPopupRequest {
                 mode: BrowserPopupMode::Actions,
-                tab: self.inspector.last_effect_tab(),
+                tab: self.inspector.active_tab(),
                 layer_id: None,
                 items,
                 category_names: Vec::new(),
@@ -1047,7 +1047,7 @@ impl UIRoot {
                 self.browser_popup.open_actions(
                     BrowserPopupRequest {
                         mode: BrowserPopupMode::Actions,
-                        tab: self.inspector.last_effect_tab(),
+                        tab: self.inspector.active_tab(),
                         layer_id: layer_id.clone(),
                         items,
                         category_names: categories,
@@ -1081,7 +1081,7 @@ impl UIRoot {
                 self.browser_popup.open_actions(
                     BrowserPopupRequest {
                         mode: BrowserPopupMode::Actions,
-                        tab: self.inspector.last_effect_tab(),
+                        tab: self.inspector.active_tab(),
                         layer_id: Some(layer_id.clone()),
                         items: picker.items,
                         category_names: picker.categories,
@@ -1762,7 +1762,7 @@ impl UIRoot {
                     param_id,
                     range_anchor,
                 ));
-                if self.inspector.last_effect_tab().is_layer_scope()
+                if self.inspector.active_tab().is_layer_scope()
                     || matches!(gpt, GraphParamTarget::GeneratorOf(_))
                 {
                     items.push(DropdownItem::new("Show Automation").with_action(

@@ -1986,6 +1986,10 @@ mod automation_clipboard_host_tests {
             h.ui_root
                 .inspector
                 .configure_layer_effects(&surfaces, Some(&layer_id));
+            h.ui_root.inspector.configure_tabs(
+                &[manifold_ui::InspectorTab::Layer],
+                manifold_ui::InspectorTab::Layer,
+            );
             assert!(h.ui_root.inspector.select_all_effects());
             let mut input = crate::input_handler::InputHandler::new();
             input.inspector_has_focus = true;
@@ -2163,6 +2167,10 @@ mod automation_clipboard_host_tests {
         h.ui_root
             .inspector
             .configure_layer_effects(&surfaces, Some(&layer_id));
+        h.ui_root.inspector.configure_tabs(
+            &[manifold_ui::InspectorTab::Layer],
+            manifold_ui::InspectorTab::Layer,
+        );
         assert!(h.ui_root.inspector.select_all_effects());
 
         let before = serde_json::to_vec(&h.project).expect("project serializes");

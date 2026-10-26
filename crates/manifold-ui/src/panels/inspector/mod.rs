@@ -283,10 +283,6 @@ pub struct InspectorCompositePanel {
 
     // Event routing
     pressed_target: Option<PressedTarget>,
-    /// Remembers which inspector tab (Master/Layer/Clip) the last effect
-    /// interaction targeted. Survives across drag_end so dispatch can
-    /// route effect actions to the correct data location.
-    last_effect_tab: InspectorTab,
 
     // Background
     bg_panel_id: Option<NodeId>,
@@ -461,7 +457,6 @@ impl InspectorCompositePanel {
             dragging_scrollbar_master: false,
             scrolled_in_place: false,
             pressed_target: None,
-            last_effect_tab: InspectorTab::Layer,
             bg_panel_id: None,
             selected_master_ids: HashSet::new(),
             selected_layer_ids: HashSet::new(),
@@ -613,7 +608,6 @@ impl InspectorCompositePanel {
             self.view_version += 1;
         }
         self.active_tab = tab;
-        self.last_effect_tab = tab;
     }
 
     fn set_mods_compact(&mut self, compact: bool) {
@@ -921,13 +915,6 @@ impl InspectorCompositePanel {
     pub fn scroll_offset(&self) -> f32 {
         self.layer_scroll.scroll_offset()
     }
-    /// Which inspector tab the last effect interaction targeted.
-    /// Dispatch uses this to route EffectParamChanged etc. to the
-    /// correct data location (master / layer / clip effects).
-    pub fn last_effect_tab(&self) -> InspectorTab {
-        self.last_effect_tab
-    }
-
     pub fn macros_panel(&self) -> &MacrosPanel {
         &self.macros_panel
     }
@@ -1046,29 +1033,6 @@ impl InspectorCompositePanel {
     fn update_scrollbar(&self, tree: &mut UITree) {
         self.master_scroll.update_scrollbar(tree);
         self.layer_scroll.update_scrollbar(tree);
-    }
-
-    // ── Tab tracking for dispatch routing ────────────────────────
-
-    fn update_last_effect_tab(&mut self, target: &PressedTarget) {
-        match target {
-            PressedTarget::MasterChrome | PressedTarget::MasterEffect(_) => {
-                self.last_effect_tab = InspectorTab::Master;
-            }
-            // The generator card is part of the layer scope (it sits in the
-            // layer section, above the layer effects), so it resolves to the
-            // Layer tab — not Clip.
-            PressedTarget::LayerChrome
-            | PressedTarget::LayerEffect(_)
-            | PressedTarget::GenParam
-            | PressedTarget::AudioTriggers => {
-                self.last_effect_tab = InspectorTab::Layer;
-            }
-            PressedTarget::ClipChrome => {
-                self.last_effect_tab = InspectorTab::Clip;
-            }
-            PressedTarget::Macros | PressedTarget::RackWetDry | PressedTarget::Scrollbar => {}
-        }
     }
 
     // ── Effect selection (Unity EffectSelectionManager) ─────────
@@ -1196,7 +1160,7 @@ impl InspectorCompositePanel {
     /// Converts selected EffectIds back to card indices (sorted ascending).
     /// Commands (delete, reorder) still operate on indices.
     pub fn get_selected_effect_indices(&self) -> Vec<usize> {
-        let (set, cards) = self.selection_for_tab(self.last_effect_tab);
+        let (set, cards) = self.selection_for_tab(self.active_tab);
         let mut indices: Vec<usize> = cards
             .iter()
             .enumerate()
@@ -1356,9 +1320,6 @@ impl Panel for InspectorCompositePanel {
                 {
                     let target = self.find_target_for_node(tree, node_id);
                     self.pressed_target = target;
-                    if let Some(ref t) = target {
-                        self.update_last_effect_tab(t);
-                    }
                 }
                 Vec::new()
             }
@@ -1542,7 +1503,6 @@ mod tests {
             InspectorTab::Master,
         );
         assert!(panel.select_all_effects());
-        assert_eq!(panel.last_effect_tab(), InspectorTab::Master);
         assert_eq!(
             panel.selected_effect_ids(),
             vec![

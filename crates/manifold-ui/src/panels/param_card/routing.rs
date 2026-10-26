@@ -12,15 +12,20 @@ impl ParamCardPanel {
         // row lookup, rather than migrated into `RowIndex`).
         match self.kind {
             ParamCardKind::Effect => {
-                let ei = self.effect_index;
                 if self.toggle_btn_id == Some(id) {
-                    return vec![PanelAction::Params(ParamsAction::EffectToggle(ei))];
+                    return vec![PanelAction::Params(ParamsAction::EffectToggle(
+                        self.effect_id.clone(),
+                    ))];
                 }
                 if self.chevron_btn_id == Some(id) {
-                    return vec![PanelAction::Params(ParamsAction::EffectCollapseToggle(ei))];
+                    return vec![PanelAction::Params(ParamsAction::EffectCollapseToggle(
+                        self.effect_id.clone(),
+                    ))];
                 }
                 if self.cog_btn_id == Some(id) {
-                    return vec![PanelAction::Root(RootAction::OpenGraphEditor(ei))];
+                    return vec![PanelAction::Root(RootAction::OpenGraphEditor(
+                        self.effect_id.clone(),
+                    ))];
                 }
                 for (si, &btn_id) in self.string_param_btn_ids.iter().enumerate() {
                     if btn_id == Some(id)
@@ -43,7 +48,9 @@ impl ParamCardPanel {
                     || self.drag_icon_id == Some(id)
                     || self.name_label_id == Some(id)
                 {
-                    return vec![PanelAction::Params(ParamsAction::EffectCardClicked(ei))];
+                    return vec![PanelAction::Params(ParamsAction::EffectCardClicked(
+                        self.effect_id.clone(),
+                    ))];
                 }
             }
             ParamCardKind::Generator => {

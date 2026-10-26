@@ -696,12 +696,8 @@ pub(crate) fn dispatch_scrub(
 ) -> DispatchResult {
     // The active layer the params dispatcher resolves against, so the graph
     // editor's watched target wins over the main window's selection.
-    let (_, effective_active_layer) = super::editor_dispatch_context(
-        ctx.editor_target,
-        &ctx.project,
-        ctx.ui.inspector.last_effect_tab(),
-        ctx.active_layer,
-    );
+    let effective_active_layer =
+        super::editor_active_layer(ctx.editor_target, &ctx.project, ctx.active_layer);
     let active_layer = &effective_active_layer;
 
     if let ValueRef::Param(gpt, param_id) = value_ref

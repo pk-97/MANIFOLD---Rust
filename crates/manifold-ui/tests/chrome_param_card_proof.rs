@@ -54,11 +54,12 @@ struct ProofCard {
 }
 
 impl ProofCard {
+    fn effect_id(&self) -> manifold_foundation::EffectId {
+        manifold_foundation::EffectId::new(format!("fx-{}", self.effect_index))
+    }
+
     fn target(&self) -> GraphParamTarget {
-        GraphParamTarget::Effect(manifold_foundation::EffectId::new(format!(
-            "fx-{}",
-            self.effect_index
-        )))
+        GraphParamTarget::Effect(self.effect_id())
     }
 
     /// The whole card, described once. This is the method a migrated panel
@@ -109,7 +110,7 @@ impl ProofCard {
                 View::button(if self.enabled { "ON" } else { "OFF" })
                     .fixed(36.0, 18.0)
                     .on_click(PanelAction::Params(ParamsAction::EffectToggle(
-                        self.effect_index,
+                        self.effect_id(),
                     ))),
             )
     }
@@ -356,11 +357,11 @@ fn intents_resolve_and_fold_up() {
     let mut reg = IntentRegistry::new();
     card.host.register_intents(&mut reg);
 
-    // Click the ON/OFF toggle → EffectToggle(3).
+    // Click the ON/OFF toggle → EffectToggle(fx-3), the card's own effect id.
     let toggle = card.host.node_id(5).unwrap();
     assert!(matches!(
         reg.resolve(&t, Some(toggle), Gesture::Click),
-        Some(PanelAction::Params(ParamsAction::EffectToggle(3)))
+        Some(PanelAction::Params(ParamsAction::EffectToggle(id))) if id.as_str() == "fx-3"
     ));
 
     // Click the D button → DriverToggle for param 0.

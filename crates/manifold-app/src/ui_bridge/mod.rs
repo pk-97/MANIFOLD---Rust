@@ -41,9 +41,7 @@ pub(crate) use scrub::ScrubState;
 pub(crate) use state_sync::SceneImpulseToast;
 
 use manifold_core::LayerId;
-use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
-use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_ui::{InspectorTab, PanelAction, RootAction};
 
 use crate::app::SelectionState;
@@ -579,100 +577,6 @@ pub(crate) fn resolve_active_layer_index(
         .and_then(|id| project.timeline.find_layer_index_by_id(id))
 }
 
-/// Build an EffectTarget for the given tab.
-pub(crate) fn resolve_effect_target(
-    tab: InspectorTab,
-    active_layer: &Option<LayerId>,
-    project: &Project,
-) -> EffectTarget {
-    match tab {
-        InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => {
-            let layer_id = active_layer.clone().unwrap_or_else(|| {
-                project
-                    .timeline
-                    .layers
-                    .first()
-                    .map(|l| l.layer_id.clone())
-                    .unwrap_or_default()
-            });
-            EffectTarget::Layer { layer_id }
-        }
-    }
-}
-
-/// Get a read-only reference to the effects list and the EffectTarget.
-pub(crate) fn resolve_effects_read<'a>(
-    tab: InspectorTab,
-    project: &'a Project,
-    active_layer: &Option<LayerId>,
-    selection: &SelectionState,
-) -> (Option<&'a [PresetInstance]>, EffectTarget) {
-    match tab {
-        InspectorTab::Master => (Some(&project.settings.master_effects), EffectTarget::Master),
-        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
-            let target = resolve_effect_target(tab, active_layer, project);
-            let effects = resolve_active_layer_index(active_layer, project)
-                .and_then(|idx| project.timeline.layers.get(idx))
-                .and_then(|l| l.effects.as_deref());
-            (effects, target)
-        }
-        InspectorTab::Clip => {
-            let target = resolve_effect_target(tab, active_layer, project);
-            let effects = selection.primary_selected_clip_id().and_then(|cid| {
-                project
-                    .timeline
-                    .layers
-                    .iter()
-                    .flat_map(|l| l.clips.iter())
-                    .find(|c| c.id == *cid)
-                    .map(|c| c.effects.as_slice())
-            });
-            (effects, target)
-        }
-    }
-}
-
-/// Get a read-only reference to effects (simpler version for snapshot/commit).
-pub(crate) fn resolve_effects_ref<'a>(
-    tab: InspectorTab,
-    project: &'a Project,
-    active_layer: &Option<LayerId>,
-    selection: &SelectionState,
-) -> Option<&'a [PresetInstance]> {
-    resolve_effects_read(tab, project, active_layer, selection).0
-}
-
-/// Resolve "which effect instance" a single-effect card edit targets, as a
-/// stable [`EffectId`].
-///
-/// Position-payload actions only (card actions address by `EffectId` through
-/// [`resolve_effect_by_id`]). Two callers, one rule:
-/// - **Graph editor** (`editor_target == Some(Effect(id))`): the edited card IS
-///   one effect, named by identity. Its id wins outright — the positional `idx`
-///   from the action payload is ignored, and the resolution reaches master /
-///   layer / clip effects uniformly (so clip-scoped effects edit correctly).
-/// - **Inspector / perform path** (`editor_target == None`, or a `Generator`
-///   target that an effect arm never sees): resolve the host's OWN active
-///   context — the inspector tab + active layer + selected clip — to the effect
-///   list, then read `effects[idx].id`. This is legitimate context, not the
-///   ambient-mis-targeting bug: the inspector edits exactly what it is showing.
-pub(crate) fn resolve_effect_id(
-    editor_target: Option<&manifold_core::GraphTarget>,
-    tab: InspectorTab,
-    active_layer: &Option<LayerId>,
-    selection: &SelectionState,
-    project: &Project,
-    idx: usize,
-) -> Option<manifold_core::EffectId> {
-    if let Some(manifold_core::GraphTarget::Effect(eid)) = editor_target {
-        return Some(eid.clone());
-    }
-    resolve_effects_ref(tab, project, active_layer, selection)?
-        .get(idx)
-        .map(|fx| fx.id.clone())
-}
-
 /// Resolve a card's `EffectId` address for dispatch. The editor's watched
 /// effect wins outright (it IS the card); otherwise the id is looked up across
 /// master, layer and clip effects, so a stale id (effect deleted mid-gesture)
@@ -688,35 +592,20 @@ pub(crate) fn resolve_effect_by_id(
     project.find_effect_by_id(id).map(|fx| fx.id.clone())
 }
 
-/// The `(inspector tab, active layer)` a card edit dispatched from the graph
-/// editor must use so it reaches the editor's WATCHED effect, not the main
-/// window's current selection.
-///
-/// Card actions address effects by `EffectId`, and the modulation arms match on
-/// that id too. This context only places the editor's effect in the right
-/// container for the arms that still read `(tab, active_layer)`; the editor is
-/// a separate window whose watched effect routinely diverges from the main
-/// window's selection.
+/// The layer a dispatch resolves against: the graph editor's watched target
+/// names its own layer, otherwise the main window's active layer.
 ///
 /// - **Generator** target → the generator's layer.
-/// - **Effect** target → the effect's *container*: `Master` for a master
-///   effect, its owning `Layer` for a layer-scoped effect, or `Clip` for a
-///   clip-scoped effect. The `Clip` mapping is deliberate: layer envelopes are
-///   keyed by `(effect_type, param_id)` and cannot represent a clip effect
-///   without colliding with a same-type layer effect, so the layer-envelope
-///   arms (whose `Clip` branch is `None`) safely no-op.
-/// - **`None`** (inspector / perform path) → the inspector's own ambient
-///   context, byte-identical to before.
-pub(crate) fn editor_dispatch_context(
+/// - **Effect** target → the effect's owning layer, or `None` for a master
+///   effect. A clip-scoped or unresolved effect keeps the main window's layer.
+/// - **`None`** (inspector / perform path) → the main window's active layer.
+pub(crate) fn editor_active_layer(
     editor_target: Option<&manifold_core::GraphTarget>,
     project: &Project,
-    inspector_tab: InspectorTab,
     active_layer: &Option<LayerId>,
-) -> (InspectorTab, Option<LayerId>) {
+) -> Option<LayerId> {
     match editor_target.and_then(manifold_core::GraphTarget::host_target) {
-        Some(manifold_core::GraphTarget::Generator(lid)) => {
-            (InspectorTab::Layer, Some(lid.clone()))
-        }
+        Some(manifold_core::GraphTarget::Generator(lid)) => Some(lid.clone()),
         Some(manifold_core::GraphTarget::Effect(eid)) => {
             if project
                 .settings
@@ -724,22 +613,21 @@ pub(crate) fn editor_dispatch_context(
                 .iter()
                 .any(|fx| &fx.id == eid)
             {
-                (InspectorTab::Master, None)
+                None
             } else if let Some(lid) = project.timeline.layers.iter().find_map(|l| {
                 l.effects
                     .as_deref()
                     .filter(|e| e.iter().any(|fx| &fx.id == eid))
                     .map(|_| l.layer_id.clone())
             }) {
-                (InspectorTab::Layer, Some(lid))
+                Some(lid)
             } else {
-                // Clip-scoped or unresolved: layer modulation no-ops safely.
-                (InspectorTab::Clip, active_layer.clone())
+                active_layer.clone()
             }
         }
-        Some(manifold_core::GraphTarget::SceneModifier { .. }) => (InspectorTab::Layer, None),
-        None if editor_target.is_some() => (InspectorTab::Layer, None),
-        None => (inspector_tab, active_layer.clone()),
+        Some(manifold_core::GraphTarget::SceneModifier { .. }) => None,
+        None if editor_target.is_some() => None,
+        None => active_layer.clone(),
     }
 }
 
