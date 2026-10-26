@@ -15,9 +15,14 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_storage::TILE_GRID;
 
-// The kernel after the grid helpers it indexes through.
+use super::PARTICLE_SPLAT;
+
+// The kernel after the grid helpers it indexes through and the shared splat shape.
 static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!("{TILE_GRID}\n{}", include_str!("shaders/foam_cover.wgsl"))
+    format!(
+        "{TILE_GRID}\n{PARTICLE_SPLAT}\n{}",
+        include_str!("shaders/foam_cover.wgsl")
+    )
 });
 const THREADS: u32 = 64;
 

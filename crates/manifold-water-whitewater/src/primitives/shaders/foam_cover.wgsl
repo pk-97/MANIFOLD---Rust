@@ -34,23 +34,11 @@ struct Particle {
 @group(0) @binding(2) var<storage, read_write> accum: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read_write> cover: array<f32>;
 
-// Fixed-point scale of the accumulator (2^20). A disc of a few millimetres on
-// centimetre cells adds about 0.04 to a node, and a node's sum saturates the
-// cover (1 - exp(-sum)) long before 4096 (the u32 range at this scale).
-const FOAM_FIXED_SCALE: f32 = 1048576.0;
 const PI: f32 = 3.14159265358979;
 
 // The 2D cubic-spline kernel, normalised over a plane: 10 / (7 pi h^2) f(q).
 fn kernel(distance: f32, h: f32) -> f32 {
-    let q = distance / h;
-    var f = 0.0;
-    if q < 1.0 {
-        f = 1.0 - 1.5 * q * q + 0.75 * q * q * q;
-    } else if q < 2.0 {
-        let t = 2.0 - q;
-        f = 0.25 * t * t * t;
-    }
-    return 10.0 / (7.0 * PI * h * h) * f;
+    return 10.0 / (7.0 * PI * h * h) * splat_spline(distance / h);
 }
 
 @compute @workgroup_size(64)
@@ -85,7 +73,7 @@ fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if d >= reach {
                     continue;
                 }
-                let add = u32(round(area * kernel(d, params.h) * FOAM_FIXED_SCALE));
+                let add = u32(round(area * kernel(d, params.h) * SPLAT_FIXED_SCALE));
                 let index = ts_grid_index(vec3<i32>(i, j, k), vec3<i32>(params.nodes));
                 atomicAdd(&accum[index], add);
             }
@@ -98,6 +86,6 @@ fn cs_resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gid.x >= params.node_count {
         return;
     }
-    let tau = params.strength * f32(atomicLoad(&accum[gid.x])) / FOAM_FIXED_SCALE;
+    let tau = params.strength * f32(atomicLoad(&accum[gid.x])) / SPLAT_FIXED_SCALE;
     cover[gid.x] = 1.0 - exp(-tau);
 }

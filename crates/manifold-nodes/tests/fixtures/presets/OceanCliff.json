@@ -3027,6 +3027,30 @@
         }
       },
       "typeId": "node.foam_cover"
+    },
+    {
+      "handle": "Mist",
+      "id": 2027,
+      "nodeId": "water_mist",
+      "params": {
+        "strength": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "typeId": "node.spray_mist"
+    },
+    {
+      "handle": "Wetness",
+      "id": 2028,
+      "nodeId": "water_wetness",
+      "params": {
+        "drying": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "typeId": "node.surface_wetness"
     }
   ],
   "wires": [
@@ -5069,6 +5093,150 @@
       "fromPort": "cover",
       "toNode": 442,
       "toPort": "field_foam"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "out",
+      "toNode": 2027,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set",
+      "toNode": 2028,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "display_time",
+      "toNode": 2028,
+      "toPort": "time"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 2028,
+      "toPort": "epoch"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_x",
+      "toNode": 2027,
+      "toPort": "center_x"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_x",
+      "toNode": 2027,
+      "toPort": "size_x"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_x",
+      "toNode": 2027,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_y",
+      "toNode": 2027,
+      "toPort": "center_y"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_y",
+      "toNode": 2027,
+      "toPort": "size_y"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_y",
+      "toNode": 2027,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_z",
+      "toNode": 2027,
+      "toPort": "center_z"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_z",
+      "toNode": 2027,
+      "toPort": "size_z"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_z",
+      "toNode": 2027,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_x",
+      "toNode": 2028,
+      "toPort": "center_x"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_x",
+      "toNode": 2028,
+      "toPort": "size_x"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_x",
+      "toNode": 2028,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_y",
+      "toNode": 2028,
+      "toPort": "center_y"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_y",
+      "toNode": 2028,
+      "toPort": "size_y"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_y",
+      "toNode": 2028,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_z",
+      "toNode": 2028,
+      "toPort": "center_z"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_z",
+      "toNode": 2028,
+      "toPort": "size_z"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set_nodes_z",
+      "toNode": 2028,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 2027,
+      "fromPort": "mist",
+      "toNode": 442,
+      "toPort": "field_mist"
+    },
+    {
+      "fromNode": 2028,
+      "fromPort": "wetness",
+      "toNode": 442,
+      "toPort": "field_wetness"
     }
   ],
   "presetMetadata": {
@@ -5447,6 +5615,34 @@
         "convert": {
           "type": "Float"
         },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 1.0,
+        "id": "surface_mist",
+        "label": "Mist",
+        "target": {
+          "kind": "node",
+          "nodeId": "water_mist",
+          "param": "strength"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 1.0,
+        "id": "surface_drying",
+        "label": "Drying",
+        "target": {
+          "kind": "node",
+          "nodeId": "water_wetness",
+          "param": "drying"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
         "defaultValue": 0.003000000026077032,
         "id": "spray_radius",
         "label": "Spray Size",
@@ -5723,6 +5919,48 @@
         "max": 4.0,
         "min": 0.0,
         "name": "Foam",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
+        "section": "Water Detail",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 1.0,
+        "formatString": "F3",
+        "id": "surface_mist",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 4.0,
+        "min": 0.0,
+        "name": "Mist",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
+        "section": "Water Detail",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 1.0,
+        "formatString": "F3",
+        "id": "surface_drying",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1000.0,
+        "min": 0.0,
+        "name": "Drying",
         "scene": {
           "band": null,
           "cardLabel": "param",

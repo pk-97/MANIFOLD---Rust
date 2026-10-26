@@ -40,6 +40,8 @@ pub(super) fn particles_draw(b: &mut Builder) {
         "water_ripple_detail",
         "water_foam_cover",
         "foam_blend",
+        "water_mist",
+        "water_wetness",
     ]);
     b.remove(&PHYSICS_VIEW_SWITCHES);
     let water = b.id("water_object") as u32;

@@ -112,9 +112,10 @@ pub const DOMAIN_ROLE: &str = "domain";
 /// The template's Physics View switches: the field's inputs (its level set,
 /// its velocity lattice and its node counts, which come from the surface's
 /// volume), the water's visibility, the dots' visibility, the dots' two
-/// inputs and the water's foam cover. Each follows the World's Render Mode, on only in Physics View, so
-/// the side that is off is never computed.
-pub const PHYSICS_VIEW_SWITCHES: [&str; 10] = [
+/// inputs, the water's foam cover, its mist and its wetness. Each follows the
+/// World's Render Mode, on only in Physics View, so the side that is off is
+/// never computed.
+pub const PHYSICS_VIEW_SWITCHES: [&str; 12] = [
     "water_field_switch",
     "water_velocity_switch",
     "water_nodes_x_switch",
@@ -125,6 +126,8 @@ pub const PHYSICS_VIEW_SWITCHES: [&str; 10] = [
     "dots_instances_switch",
     "dots_mesh_switch",
     "water_foam_switch",
+    "water_mist_switch",
+    "water_wet_switch",
 ];
 
 /// The template nodes Surface Detail sets together.
@@ -160,6 +163,8 @@ const BLOBS: Reach = Reach::Own("liquid_blobs");
 const SMOOTHNESS: Reach = Reach::Own("liquid_smoothness");
 const RIPPLES: Reach = Reach::Own("water_ripple_detail");
 const FOAM: Reach = Reach::Own("water_foam_cover");
+const MIST: Reach = Reach::Own("water_mist");
+const WETNESS: Reach = Reach::Own("water_wetness");
 use ControlGroup::{Domain, Simulation, Surface, Whitewater};
 
 /// The domain box is axis-aligned: the solvers take no rotation.
@@ -190,12 +195,13 @@ fn surface(fields: &ItemFields) -> bool {
     water(fields).is_some_and(|water| water.draw == WaterDraw::Surface)
 }
 
-/// A drawn surface on the solver that makes whitewater, which is where foam is.
-fn foam_surface(fields: &ItemFields) -> bool {
+/// A drawn surface on the solver that makes whitewater, which is where foam,
+/// spray mist and wetness are.
+fn flip_surface(fields: &ItemFields) -> bool {
     flip(fields) && surface(fields)
 }
 
-pub static WATER_ROWS: [PropertyRow; 36] = [
+pub static WATER_ROWS: [PropertyRow; 38] = [
     row("pos_x", T, Domain, setup())
         .unit(Unit::Metres)
         .limit(HardLimit::Unlimited),
@@ -340,7 +346,21 @@ pub static WATER_ROWS: [PropertyRow; 36] = [
         .name("Foam")
         .default(1.0)
         .range(0.0, 4.0)
-        .when(foam_surface),
+        .when(flip_surface),
+    // Times the spray's droplet extinction: 1 is the mist the spray makes, 0 none.
+    row("surface_mist", MIST, Surface, setup())
+        .param("strength")
+        .name("Mist")
+        .default(1.0)
+        .range(0.0, 4.0)
+        .when(flip_surface),
+    // Times still-air evaporation: 1 dries a soaked floor in about half an hour, 100 in about 17 s, 0 never.
+    row("surface_drying", WETNESS, Surface, setup())
+        .param("drying")
+        .name("Drying")
+        .default(1.0)
+        .range(0.0, 1000.0)
+        .when(flip_surface),
     row(
         "whitewater_amount",
         Reach::Own("whitewater"),

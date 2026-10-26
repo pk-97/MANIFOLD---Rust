@@ -710,6 +710,8 @@ const DOTS_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[6];
 const DOTS_INSTANCES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[7];
 const DOTS_MESH_SWITCH: &str = PHYSICS_VIEW_SWITCHES[8];
 const FOAM_SWITCH: &str = PHYSICS_VIEW_SWITCHES[9];
+const MIST_SWITCH: &str = PHYSICS_VIEW_SWITCHES[10];
+const WETNESS_SWITCH: &str = PHYSICS_VIEW_SWITCHES[11];
 /// The Platonic shape a physics dot is drawn with, scaled by the particle's radius.
 const TETRAHEDRON: usize = 0;
 
@@ -890,6 +892,7 @@ impl WaterScene {
             }
         }
         display_foam(&mut b, frame, surface, water);
+        display_mist_and_wetness(&mut b, surface, water);
         let dots = display_dots(&mut b, frame, surface, water);
         b.wire((dots, "object"), output, DOTS_OUTPUT);
         // Resolve durations inside the domain-owning scope before it is wrapped.
@@ -913,6 +916,8 @@ impl WaterScene {
                 "bubble_material" => Some("Bubble Material"),
                 "bubble_copies" => Some("Bubble Copies"),
                 "water_foam_cover" => Some("Foam Cover"),
+                "water_mist" => Some("Mist"),
+                "water_wetness" => Some("Wetness"),
                 "dots_object" => Some("Physics Dots"),
                 _ => None,
             }
@@ -1216,7 +1221,7 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
 /// how the surface is built, set once per scene: the Scene tab shows them,
 /// the card does not (card
 /// projection), the Scene band's setup-role surface row).
-pub const SURFACE_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlGroup); 6] = {
+pub const SURFACE_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlGroup); 8] = {
     use manifold_foundation::scene_surface::ControlGroup::{Look, Whitewater};
     [
         ("surface_detail", Look),
@@ -1224,6 +1229,8 @@ pub const SURFACE_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlG
         ("surface_smoothness", Look),
         ("surface_ripple_detail", Look),
         ("surface_foam", Look),
+        ("surface_mist", Look),
+        ("surface_drying", Look),
         ("whitewater_capacity", Whitewater),
     ]
 };
@@ -1722,6 +1729,56 @@ fn display_foam(b: &mut Builder, frame: usize, surface: usize, water: usize) {
     );
     b.wire((cover, "cover"), switch, "in_0");
     b.wire((switch, "out"), water, "field_foam");
+}
+
+/// The water's mist and wetness: the spray's extinction and the surface's
+/// remembered wetness on the water field's lattice, each behind the switch that
+/// feeds it to the water object (off in Physics View, which hides the water).
+fn display_mist_and_wetness(b: &mut Builder, surface: usize, water: usize) {
+    let lattice_box = b.id("display_lattice_box");
+    let spray = b.id("spray_blend");
+    let domain = b.id("domain");
+    let mist = b.node(
+        "water_mist",
+        "node.spray_mist",
+        json!({"strength": float(1.0)}),
+    );
+    let wetness = b.node(
+        "water_wetness",
+        "node.surface_wetness",
+        json!({"drying": float(1.0)}),
+    );
+    b.wire((spray, "out"), mist, "particles");
+    b.wire((surface, "level_set"), wetness, "field");
+    b.wire((domain, "display_time"), wetness, "time");
+    b.wire((domain, "epoch"), wetness, "epoch");
+    for node in [mist, wetness] {
+        for axis in ["x", "y", "z"] {
+            b.wire(
+                (lattice_box, &format!("pos_{axis}")),
+                node,
+                &format!("center_{axis}"),
+            );
+            b.wire(
+                (lattice_box, &format!("scale_{axis}")),
+                node,
+                &format!("size_{axis}"),
+            );
+            b.wire(
+                (surface, &format!("level_set_nodes_{axis}")),
+                node,
+                &format!("nodes_{axis}"),
+            );
+        }
+    }
+    for (name, from, port, to) in [
+        (MIST_SWITCH, mist, "mist", "field_mist"),
+        (WETNESS_SWITCH, wetness, "wetness", "field_wetness"),
+    ] {
+        let switch = b.node(name, "node.switch_array", json!({"selector": float(0.0)}));
+        b.wire((from, port), switch, "in_0");
+        b.wire((switch, "out"), water, to);
+    }
 }
 
 /// Physics View: the switches between the surface and the particle dots,

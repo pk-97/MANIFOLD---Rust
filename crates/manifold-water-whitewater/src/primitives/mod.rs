@@ -1,3 +1,6 @@
+/// The fixed-point scale and cubic-spline shape the particle-splatting nodes share.
+pub(crate) const PARTICLE_SPLAT: &str = include_str!("shaders/particle_splat.wgsl");
+
 mod advect_whitewater;
 mod age_whitewater;
 manifold_core::testkit_visible! { pub(crate) mod crossing_distance; }
@@ -16,6 +19,7 @@ mod preserve_foam;
 mod retype_whitewater;
 manifold_core::testkit_visible! { pub(crate) mod sample_faces_at_particles; }
 manifold_core::testkit_visible! { pub(crate) mod spawn_whitewater; }
+mod spray_mist;
 manifold_core::testkit_visible! { pub(crate) mod surface_crossings; }
 mod turbulence_emission_count;
 mod turbulence_field;
