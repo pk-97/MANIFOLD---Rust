@@ -7,10 +7,10 @@ use super::*;
 use half::f16;
 
 const N: usize = RIPPLE_TEXELS as usize;
-const NODES: [u32; 3] = [33, 33, 33];
-const SIZE: [f32; 3] = [1.6, 1.6, 1.6];
+pub(super) const NODES: [u32; 3] = [33, 33, 33];
+pub(super) const SIZE: [f32; 3] = [1.6, 1.6, 1.6];
 
-fn read_f32(buffer: &GpuBuffer, count: usize) -> Vec<f32> {
+pub(super) fn read_f32(buffer: &GpuBuffer, count: usize) -> Vec<f32> {
     let ptr = buffer.mapped_ptr().expect("shared buffer");
     unsafe { std::slice::from_raw_parts(ptr as *const f32, count) }.to_vec()
 }
@@ -77,12 +77,12 @@ fn slopes_of_a_sine_are_its_derivative() {
     }
 }
 
-fn identity() -> [[f32; 4]; 4] {
+pub(super) fn identity() -> [[f32; 4]; 4] {
     model_matrix([0.0; 3], [0.0; 3], [1.0; 3])
 }
 
 /// Level-set and velocity lattices for the test field; the velocity is `flow` everywhere.
-fn lattices(device: &GpuDevice, flow: [f32; 3]) -> (GpuBuffer, GpuBuffer) {
+pub(super) fn lattices(device: &GpuDevice, flow: [f32; 3]) -> (GpuBuffer, GpuBuffer) {
     let count = (NODES[0] * NODES[1] * NODES[2]) as usize;
     let levelset = device.create_buffer_shared((count * 4) as u64);
     let velocity = device.create_buffer_shared((count * 12) as u64);
@@ -93,11 +93,14 @@ fn lattices(device: &GpuDevice, flow: [f32; 3]) -> (GpuBuffer, GpuBuffer) {
     (levelset, velocity)
 }
 
-fn field<'a>(levelset: &'a GpuBuffer, velocity: &'a GpuBuffer) -> FieldObject<'a> {
+pub(super) fn field<'a>(levelset: &'a GpuBuffer, velocity: &'a GpuBuffer) -> FieldObject<'a> {
     FieldObject {
         slot: 0,
         levelset,
         velocity: Some(velocity),
+        foam: None,
+        mist: None,
+        wetness: None,
         center: [0.0; 3],
         size: SIZE,
         nodes: NODES,
@@ -109,7 +112,7 @@ fn field<'a>(levelset: &'a GpuBuffer, velocity: &'a GpuBuffer) -> FieldObject<'a
 }
 
 /// A tile made by `RippleDetail::encode` for one field, finished on the GPU.
-fn made_tile(device: &GpuDevice, field: &FieldObject) -> RippleDetail {
+pub(super) fn made_tile(device: &GpuDevice, field: &FieldObject) -> RippleDetail {
     let mut ripples = RippleDetail::default();
     let mut enc = device.create_encoder("ripple tile");
     ripples.encode(device, &mut enc, std::slice::from_ref(field), 2.0);
@@ -165,12 +168,12 @@ fn a_tile_has_ripples_and_repeats() {
     }
 }
 
-const PROBE_STUB: &str = "struct SceneStub { camera_pos: vec4<f32> };\n\
+pub(super) const PROBE_STUB: &str = "struct SceneStub { camera_pos: vec4<f32> };\n\
 @group(0) @binding(0) var<uniform> u: SceneStub;\n";
 
 /// Evaluates the look at 64 x 64 points on y = 0 with the normal up.
 const PROBE_KERNEL: &str = "\n\
-@group(0) @binding(66) var<storage, read_write> probe_out: array<vec4<f32>>;\n\
+@group(0) @binding(90) var<storage, read_write> probe_out: array<vec4<f32>>;\n\
 @compute @workgroup_size(64)\n\
 fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
     let i = id.x;\n\
@@ -179,19 +182,22 @@ fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
     probe_out[i] = vec4<f32>(look_ripple_detail(p, vec3<f32>(0.0, 1.0, 0.0)), 0.0);\n\
 }\n";
 
-const PROBES: usize = 4096;
+pub(super) const PROBES: usize = 4096;
 
-/// The look's normals at the probe points at each of `times`.
-fn probe_normals(
+/// The look's normals at the probe points at each of `times`, with the foam
+/// field `foam` bound when there is one.
+pub(super) fn probe_normals(
     device: &GpuDevice,
     ripples: &RippleDetail,
     field: &FieldObject,
     velocity: &GpuBuffer,
+    foam: Option<&GpuBuffer>,
     times: &[f32],
 ) -> Vec<Vec<[f32; 3]>> {
     let wgsl = format!(
-        "{PROBE_STUB}{}{PROBE_KERNEL}",
-        include_str!("../shaders/look_ripple_detail.wgsl")
+        "{PROBE_STUB}{}{}{PROBE_KERNEL}",
+        include_str!("../shaders/look_ripple_detail.wgsl"),
+        include_str!("../shaders/foam_field.wgsl"),
     );
     let pipeline = device.create_compute_pipeline(&wgsl, "cs_probe", "ripple probe");
     let tile = ripples.tile(field.slot).expect("the field has a tile");
@@ -203,8 +209,14 @@ fn probe_normals(
     let mut enc = device.create_encoder("ripple probe");
     for (&time, out) in times.iter().zip(&outs) {
         // A pixel is far smaller than a texel, so the finest mip is read.
-        let uniforms = ripple_uniforms(field, Some(tile.tile_metres), time, [0.001, 0.0])
-            .expect("a real model inverts");
+        let uniforms = ripple_uniforms(
+            field,
+            Some(tile.tile_metres),
+            foam.is_some(),
+            time,
+            [0.001, 0.0],
+        )
+        .expect("a real model inverts");
         enc.dispatch_compute(
             &pipeline,
             &[
@@ -229,8 +241,17 @@ fn probe_normals(
                     buffer: velocity,
                     offset: 0,
                 },
+                // Without a foam field the stand-in is never read.
                 GpuBinding::Buffer {
                     binding: 66,
+                    buffer: match foam {
+                        Some(foam) => foam,
+                        None => velocity,
+                    },
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 90,
                     buffer: out,
                     offset: 0,
                 },
@@ -250,7 +271,7 @@ fn probe_normals(
         .collect()
 }
 
-fn angle(a: [f32; 3], b: [f32; 3]) -> f64 {
+pub(super) fn angle(a: [f32; 3], b: [f32; 3]) -> f64 {
     let (a, b) = (a.map(f64::from), b.map(f64::from));
     let cross = [
         a[1] * b[2] - a[2] * b[1],
@@ -287,7 +308,7 @@ fn the_crossfade_swap_is_not_seen() {
         .iter()
         .flat_map(|t| [t - dt / 2.0, t + dt / 2.0])
         .collect();
-    let normals = probe_normals(&device, &ripples, &field, &velocity, &times);
+    let normals = probe_normals(&device, &ripples, &field, &velocity, None, &times);
 
     let change = |i: usize| mean_change(&normals[2 * i], &normals[2 * i + 1]);
     let swap = (change(0) + change(1)) / 2.0;

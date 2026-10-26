@@ -85,6 +85,7 @@ mod water_march;
 use water_march::{FieldDraw, FieldView};
 mod ripple_detail;
 mod water_shade;
+mod wetness;
 use frustum::box_outside_clip;
 use prepasses::ShadowUniforms;
 use water_shade::shade_uniforms;
@@ -104,6 +105,7 @@ const RENDER_SCENE_WGSL: &str = concat!(
     include_str!("shaders/instance_transform.wgsl"),
     include_str!("shaders/scene_shading.wgsl"),
     include_str!("shaders/look_ripple_detail.wgsl"),
+    include_str!("shaders/foam_field.wgsl"),
     include_str!("shaders/look_foam.wgsl"),
     include_str!("shaders/look_mist.wgsl"),
     include_str!("shaders/look_thin_water_light.wgsl"),
@@ -3377,6 +3379,10 @@ mod gpu_tests;
 mod subsurface;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod water_march_gpu_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod water_mist_gpu_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod wetness_gpu_tests;
 
 mod scene_viewport;
 

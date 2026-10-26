@@ -46,6 +46,9 @@ manifold_node_engine::primitive! {
         field: Array(f32) optional,
         field_velocity: Array(f32) optional,
         field_bricks: Array(u32) optional,
+        field_foam: Array(f32) optional,
+        field_mist: Array(f32) optional,
+        field_wetness: Array(f32) optional,
         field_center_x: ScalarF32 optional,
         field_center_y: ScalarF32 optional,
         field_center_z: ScalarF32 optional,
@@ -325,6 +328,9 @@ fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<
         levelset,
         velocity: ctx.inputs.slot_of("field_velocity"),
         bricks: ctx.inputs.slot_of("field_bricks"),
+        foam: ctx.inputs.slot_of("field_foam"),
+        mist: ctx.inputs.slot_of("field_mist"),
+        wetness: ctx.inputs.slot_of("field_wetness"),
         center,
         size,
         nodes: nodes.map(|n| n.round() as u32),
@@ -590,14 +596,25 @@ mod tests {
             None,
             (0, 0),
         );
+        let [foam, mist, wetness] = [4, 5, 6].map(|id| {
+            backend.acquire(
+                ResourceId(id),
+                PortType::Array(ArrayType::of_known::<f32>()),
+                None,
+                (0, 0),
+            )
+        });
         let mut bindings = vec![
             ("field", levelset),
             ("field_velocity", velocity),
             ("field_bricks", bricks),
+            ("field_foam", foam),
+            ("field_mist", mist),
+            ("field_wetness", wetness),
         ];
         bindings.extend(wire_scalars(
             &mut backend,
-            4,
+            7,
             &[
                 ("field_center_x", 1.5),
                 ("field_center_y", -2.0),
@@ -622,6 +639,9 @@ mod tests {
                 levelset,
                 velocity: Some(velocity),
                 bricks: Some(bricks),
+                foam: Some(foam),
+                mist: Some(mist),
+                wetness: Some(wetness),
                 center: [1.5, -2.0, 0.25],
                 size: [3.0, 1.5, 2.25],
                 nodes: [49, 25, 37],

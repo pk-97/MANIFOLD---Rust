@@ -1,12 +1,13 @@
 //! Pass 2, the main draw: per-draw binding sets, the opaque MSAA batch with its aux attachments, and the glass Pass B over the opaque scene copy.
 
-use super::water_shade::{RippleBindings, ripple_uniforms};
+use super::water_shade::{LookBindings, RippleUniforms, ripple_uniforms};
+use super::wetness::wet_uniforms;
 use super::*;
 use manifold_node_engine::scene::camera::CameraMode;
 
 impl RenderScene {
     /// BUG-trh7 stage 2, pass 8: the draw — target/resolve-target selection,
-    /// the 46-binding sets, opaque/blend split, aux attachments, Pass A,
+    /// the 56-binding sets, opaque/blend split, aux attachments, Pass A,
     /// the depth resolve copy, and the E2a seam (snapshot blit + Pass B).
     /// Returns the targets the shafts/firefly/tails pass through
     /// (resolve_target is where everything above landed; target is the
@@ -307,9 +308,24 @@ impl RenderScene {
                 },
             ]
         };
+        // One wetness field per scene: the first water that has one wets every
+        // mesh inside its lattice. A scene without it binds the one-record
+        // stand-in, which the shader never reads while the uniforms are off.
+        let wet_field = fields.iter().find(|f| f.wetness.is_some());
+        let wet = match wet_uniforms(wet_field) {
+            Ok(wet) => wet,
+            Err(error) => {
+                Self::fail_frame(ctx, None, error);
+                return None;
+            }
+        };
+        let wet_buffer = match wet_field.and_then(|f| f.wetness) {
+            Some(buffer) => buffer,
+            None => prev_positions_dummy,
+        };
         // Indexed by draw, so a draw wholly outside the camera's clip volume
         // keeps its place with no binding set built for it.
-        let binding_sets: Vec<Option<[GpuBinding; 54]>> = draws
+        let binding_sets: Vec<Option<[GpuBinding; 56]>> = draws
             .iter()
             .enumerate()
             .map(|(draw_index, draw)| {
@@ -574,6 +590,15 @@ impl RenderScene {
                     GpuBinding::Texture {
                         binding: 52,
                         texture: self.subsurface_pass.output.as_ref().unwrap_or(dummy),
+                    },
+                    GpuBinding::Bytes {
+                        binding: 68,
+                        data: bytemuck::bytes_of(&wet),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 69,
+                        buffer: wet_buffer,
+                        offset: 0,
                     },
                 ])
             })
@@ -893,6 +918,8 @@ impl RenderScene {
                 // writes the depth and velocity outputs there, after Pass A's
                 // depth copy above.
                 let mut failure: Option<(u32, &'static str)> = None;
+                // The first field with mist draws it; the buffer sums them all.
+                let mut mist_field: Option<&FieldObject> = None;
                 let seconds = ctx.time.seconds.0 as f32;
                 {
                     let gpu = ctx.gpu_encoder();
@@ -907,22 +934,33 @@ impl RenderScene {
                         if let Err(error) = self.water_march.encode(
                             gpu.native_enc,
                             &view,
-                            &FieldDraw {
-                                levelset: field.levelset,
-                                velocity: field.velocity,
-                                center: field.center,
-                                size: field.size,
-                                nodes: field.nodes,
-                                model: field.model,
-                                prev_model: field.prev_model,
-                                slot: field.slot,
-                            },
+                            &field_draw(field),
                             opaque_depth_snapshot,
                             depth_resolve_target,
                             velocity_resolve_target,
                         ) {
                             failure = Some((field.slot, error));
                             break;
+                        }
+                    }
+                    // The mist integrates up to the nearest surface, so it runs
+                    // once every hit is final.
+                    if failure.is_none() {
+                        for field in fields {
+                            match self.water_march.encode_mist(
+                                gpu.device,
+                                gpu.native_enc,
+                                &view,
+                                &field_draw(field),
+                                opaque_depth_snapshot,
+                            ) {
+                                Ok(true) => mist_field = mist_field.or(Some(field)),
+                                Ok(false) => {}
+                                Err(error) => {
+                                    failure = Some((field.slot, error));
+                                    break;
+                                }
+                            }
                         }
                     }
                     // The water refracts the opaque scene, so snapshot it as
@@ -953,6 +991,9 @@ impl RenderScene {
                             [0.0, 2.0 * half_height / height as f32]
                         }
                     };
+                    // The ripple uniforms of the mist field, for the mist draw's
+                    // unread look bindings.
+                    let mut mist_ripple: Option<RippleUniforms> = None;
                     for field in fields {
                         let shade = match shade_uniforms(pre.view_proj, width, height, field.slot) {
                             Ok(shade) => shade,
@@ -965,6 +1006,7 @@ impl RenderScene {
                         let ripple_data = match ripple_uniforms(
                             field,
                             tile.map(|tile| tile.tile_metres),
+                            field.foam.is_some(),
                             seconds,
                             footprint,
                         ) {
@@ -974,8 +1016,11 @@ impl RenderScene {
                                 break;
                             }
                         };
+                        if mist_field.is_some_and(|mist| mist.slot == field.slot) {
+                            mist_ripple = Some(ripple_data);
+                        }
                         // A field without a tile reads no ripples, so the stand-ins are never sampled.
-                        let ripple = RippleBindings {
+                        let look = LookBindings {
                             uniforms: &ripple_data,
                             slopes: match tile {
                                 Some(tile) => &tile.texture,
@@ -984,6 +1029,10 @@ impl RenderScene {
                             sampler: self.ripple_detail.sampler(),
                             velocity: match field.velocity {
                                 Some(velocity) => velocity,
+                                None => self.ripple_detail.dummy_velocity(),
+                            },
+                            foam: match field.foam {
+                                Some(foam) => foam,
                                 None => self.ripple_detail.dummy_velocity(),
                             },
                         };
@@ -1000,8 +1049,41 @@ impl RenderScene {
                             bytemuck::bytes_of(&field.uniforms),
                             hits,
                             &shade,
-                            &ripple,
+                            &look,
                         );
+                    }
+                    if failure.is_none()
+                        && let (Some(field), Some(ripple_data), Some(mist)) =
+                            (mist_field, mist_ripple.as_ref(), self.water_march.mist())
+                    {
+                        match shade_uniforms(pre.view_proj, width, height, field.slot) {
+                            Ok(shade) => {
+                                // The mist shader reads none of the look inputs,
+                                // so the stand-ins fill them.
+                                let look = LookBindings {
+                                    uniforms: ripple_data,
+                                    slopes: self.ripple_detail.dummy_slopes(),
+                                    sampler: self.ripple_detail.sampler(),
+                                    velocity: self.ripple_detail.dummy_velocity(),
+                                    foam: self.ripple_detail.dummy_velocity(),
+                                };
+                                #[cfg(feature = "fluid-perf-proofs")]
+                                gpu.native_enc
+                                    .profile_next_encoder("node.render_scene water mist");
+                                self.water_shade.encode_mist(
+                                    gpu.device,
+                                    gpu.native_enc,
+                                    resolve_target,
+                                    opaque_depth_snapshot,
+                                    &scene_bindings(opaque_scene_color),
+                                    bytemuck::bytes_of(&field.uniforms),
+                                    mist,
+                                    &shade,
+                                    &look,
+                                );
+                            }
+                            Err(error) => failure = Some((field.slot, error)),
+                        }
                     }
                 }
                 if let Some((slot, error)) = failure {
@@ -1147,5 +1229,20 @@ impl RenderScene {
             depth_resolve_target.cloned(),
             velocity_resolve_target.cloned(),
         ))
+    }
+}
+
+/// What the march and the mist integration read of one water field.
+fn field_draw<'a>(field: &'a FieldObject<'_>) -> FieldDraw<'a> {
+    FieldDraw {
+        levelset: field.levelset,
+        velocity: field.velocity,
+        mist: field.mist,
+        center: field.center,
+        size: field.size,
+        nodes: field.nodes,
+        model: field.model,
+        prev_model: field.prev_model,
+        slot: field.slot,
     }
 }

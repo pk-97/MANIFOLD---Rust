@@ -11,6 +11,9 @@
 // The mip level is chosen by the size of a pixel on the water, so far water
 // averages its ripples out instead of shimmering.
 //
+// Foam damps the small capillary ripples, so the strength is also scaled by
+// one minus the foam cover (`foam_field.wgsl`, included right after this file).
+//
 // Binds 62-65 itself; the mesh shader includes this file but never calls the
 // hook, so meshes bind none of them.
 
@@ -19,7 +22,7 @@ struct RippleUniforms {
     local_to_world: mat4x4<f32>,
     lattice_min: vec4<f32>,  // xyz object-space min corner, w tile side in metres (0: no ripples)
     spacing: vec4<f32>,      // xyz node spacing, w strength override
-    nodes: vec4<u32>,        // xyz node counts, w unused
+    nodes: vec4<u32>,        // xyz node counts, w = 1 if a foam field is bound
     time: vec4<f32>,         // x seconds, y flow period, z metres per pixel per metre of distance, w metres per pixel flat
 };
 
@@ -99,7 +102,7 @@ fn look_ripple_detail(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
 
     let local = (ripple.world_to_local * vec4<f32>(world_pos, 1.0)).xyz - ripple.lattice_min.xyz;
     let v = (ripple.local_to_world * vec4<f32>(ripple_velocity_at(local), 0.0)).xyz;
-    let strength = ripple.spacing.w * ripple_flow_strength(length(v));
+    let strength = ripple.spacing.w * ripple_flow_strength(length(v)) * (1.0 - foam_coverage_at(world_pos));
     if strength <= 0.0 {
         return normal;
     }

@@ -6,6 +6,9 @@
 
 @group(0) @binding(60) var<storage, read> hits: array<FieldHit>;
 @group(0) @binding(61) var<uniform> shade: ShadeUniforms;
+// Per pixel (tau, m) from `water_mist.wgsl`: the mist's optical depth along the
+// camera ray and its first moment about the ray origin. Read by `fs_mist` only.
+@group(0) @binding(67) var<storage, read> mist_depth: array<vec2<f32>>;
 
 struct ShadeUniforms {
     inv_view_proj: mat4x4<f32>,  // clip -> world, the same matrix the march uses
@@ -86,12 +89,35 @@ fn fs_water(@builtin(position) pos: vec4<f32>) -> WaterOut {
         * background * tint * u.base_color.rgb;
 
     var lit = look_thin_water_light(thickness, reflection + transmitted);
-    lit = look_foam(world, lit);
-    lit = look_mist(u.camera_pos.xyz, world, lit);
+    lit = look_foam(world, pos.xy, view, n, lit);
     let rgb = apply_fog(lit, world) * exp2(u.scene_params.z);
 
     var out: WaterOut;
     out.color = vec4<f32>(rgb, 1.0);
     out.depth = hit.depth;
     return out;
+}
+
+fn shade_unproject(ndc: vec2<f32>, raw_depth: f32) -> vec3<f32> {
+    let w = shade.inv_view_proj * vec4<f32>(ndc, raw_depth, 1.0);
+    return w.xyz / w.w;
+}
+
+// The mist over everything drawn so far, as premultiplied colour and coverage
+// for the blend `dst * (1 - a) + colour`, which is `behind * T + L_in * (1 - T)`.
+@fragment
+fn fs_mist(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let pix = vec2<u32>(pos.xy);
+    let depth = mist_depth[pix.y * u32(shade.target_size.x) + pix.x];
+    let tau = depth.x;
+    if tau <= 0.0 {
+        discard;
+    }
+    let uv = pos.xy / shade.target_size.xy;
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let origin = shade_unproject(ndc, 1.0);
+    let dir = normalize(shade_unproject(ndc, 0.5) - origin);
+    let mean_pos = origin + dir * (depth.y / tau);
+    let mist = look_mist(dir, mean_pos, pos.xy, tau);
+    return vec4<f32>(apply_fog(mist.rgb, mean_pos) * exp2(u.scene_params.z), mist.a);
 }

@@ -1,7 +1,8 @@
 //! Per-pixel ray march that draws water straight from its level set.
 //! One dispatch per field, nearest hit wins through the shared `hits`
 //! G-buffer. Buffers grow only when the target size changes, and `reset`
-//! drops them so a frame with no water costs nothing.
+//! drops them so a frame with no water costs nothing. A field with a mist
+//! lattice then integrates its optical depth per pixel up to the nearest hit.
 use manifold_gpu::*;
 
 use super::mat4_inverse;
@@ -12,8 +13,17 @@ const MARCH_WGSL: &str = concat!(
     include_str!("../shaders/water_march.wgsl")
 );
 
+const MIST_WGSL: &str = concat!(
+    include_str!("../shaders/water_field_common.wgsl"),
+    include_str!("../shaders/water_march_core.wgsl"),
+    include_str!("../shaders/water_mist.wgsl")
+);
+
 /// Bytes of one `FieldHit` in the G-buffer.
 pub(super) const FIELD_HIT_BYTES: u64 = 12;
+
+/// Bytes of one pixel of the mist buffer: `(tau, m)` as two `f32`.
+const MIST_PIXEL_BYTES: u64 = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -36,6 +46,8 @@ pub(super) struct MarchUniforms {
 pub(super) struct FieldDraw<'a> {
     pub levelset: &'a GpuBuffer,
     pub velocity: Option<&'a GpuBuffer>,
+    /// Mist extinction per node, per metre.
+    pub mist: Option<&'a GpuBuffer>,
     pub center: [f32; 3],
     pub size: [f32; 3],
     pub nodes: [u32; 3],
@@ -60,6 +72,12 @@ pub(super) struct WaterMarch {
     pipeline: Option<GpuComputePipeline>,
     hits: Option<GpuBuffer>,
     hits_size: (u32, u32),
+    mist_pipeline: Option<GpuComputePipeline>,
+    /// `(tau, m)` per pixel, 8 bytes each, summed over this frame's mist fields.
+    mist: Option<GpuBuffer>,
+    mist_size: (u32, u32),
+    /// Whether this frame's mist buffer has been cleared yet.
+    mist_cleared: bool,
     dummy_depth_out: Option<GpuTexture>,
     dummy_velocity_out: Option<GpuTexture>,
 }
@@ -159,6 +177,7 @@ impl WaterMarch {
     /// Compile the march ahead of the first water frame.
     pub(super) fn prewarm(device: &GpuDevice) {
         device.create_compute_pipeline(MARCH_WGSL, "cs_march", "water level-set march");
+        device.create_compute_pipeline(MIST_WGSL, "cs_mist", "water mist optical depth");
     }
 
     /// Start a frame: make sure the pipeline, the dummies and a zeroed
@@ -195,6 +214,7 @@ impl WaterMarch {
             self.hits_size = (width, height);
         }
         enc.clear_buffer(self.hits.as_ref().expect("ensured"));
+        self.mist_cleared = false;
     }
 
     /// March one field into `hits`, keeping whatever nearer field an earlier
@@ -278,6 +298,95 @@ impl WaterMarch {
         Ok(())
     }
 
+    /// Adds one field's mist optical depth to the mist buffer, up to the
+    /// nearest of the opaque scene and the water already in `hits`, so every
+    /// march must have run first. `Ok(false)` and nothing done when the field
+    /// has no mist.
+    pub(super) fn encode_mist(
+        &mut self,
+        device: &GpuDevice,
+        enc: &mut GpuEncoder,
+        view: &FieldView,
+        field: &FieldDraw,
+        opaque_depth: &GpuTexture,
+    ) -> Result<bool, &'static str> {
+        let Some(mist_field) = field.mist else {
+            return Ok(false);
+        };
+        let uniforms = march_uniforms(view, &FieldGeometry::of(field))?;
+        let hits = self
+            .hits
+            .as_ref()
+            .ok_or("Water mist: begin was not called")?;
+        if self.hits_size != (view.width, view.height) {
+            return Err("Water mist: view size differs from begin");
+        }
+        if self.mist_pipeline.is_none() {
+            self.mist_pipeline = Some(device.create_compute_pipeline(
+                MIST_WGSL,
+                "cs_mist",
+                "water mist optical depth",
+            ));
+        }
+        if self.mist.is_none() || self.mist_size != (view.width, view.height) {
+            self.mist =
+                Some(device.create_buffer(
+                    u64::from(view.width) * u64::from(view.height) * MIST_PIXEL_BYTES,
+                ));
+            self.mist_size = (view.width, view.height);
+            self.mist_cleared = false;
+        }
+        let mist = self.mist.as_ref().expect("ensured");
+        if !self.mist_cleared {
+            enc.clear_buffer(mist);
+            self.mist_cleared = true;
+        }
+        let pipeline = self.mist_pipeline.as_ref().expect("ensured");
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: field.levelset,
+                offset: 0,
+            },
+            GpuBinding::Texture {
+                binding: 3,
+                texture: opaque_depth,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: hits,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 7,
+                buffer: mist_field,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 8,
+                buffer: mist,
+                offset: 0,
+            },
+        ];
+        enc.dispatch_compute(
+            pipeline,
+            &bindings,
+            [view.width.div_ceil(8), view.height.div_ceil(8), 1],
+            "water mist optical depth",
+        );
+        Ok(true)
+    }
+
+    /// The per-pixel `(tau, m)` this frame's mist fields summed, once any
+    /// field's `encode_mist` returned `true`.
+    pub(super) fn mist(&self) -> Option<&GpuBuffer> {
+        self.mist.as_ref()
+    }
+
     /// The G-buffer this frame's marches wrote, if `begin` ran.
     pub(super) fn hits(&self) -> Option<&GpuBuffer> {
         self.hits.as_ref()
@@ -286,6 +395,7 @@ impl WaterMarch {
     /// Drop the G-buffer so a frame with no water holds nothing.
     pub(super) fn reset(&mut self) {
         self.hits = None;
+        self.mist = None;
     }
 }
 
@@ -306,6 +416,20 @@ mod tests {
             panic!("water march validation failed:\n{}", e.emit_to_string(src));
         }
         assert!(module.entry_points.iter().any(|ep| ep.name == "cs_march"));
+    }
+
+    #[test]
+    fn mist_wgsl_parses_and_validates() {
+        let src = MIST_WGSL;
+        let module = naga::front::wgsl::parse_str(src).expect("water mist must naga-parse");
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!("water mist validation failed:\n{}", e.emit_to_string(src));
+        }
+        assert!(module.entry_points.iter().any(|ep| ep.name == "cs_mist"));
     }
 
     #[test]

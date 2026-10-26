@@ -479,6 +479,7 @@ fn scene_shading_validates_without_the_mesh_shader() {
     let shading = concat!(
         include_str!("../shaders/scene_shading.wgsl"),
         include_str!("../shaders/look_ripple_detail.wgsl"),
+        include_str!("../shaders/foam_field.wgsl"),
         include_str!("../shaders/look_foam.wgsl"),
         include_str!("../shaders/look_mist.wgsl"),
         include_str!("../shaders/look_thin_water_light.wgsl"),

@@ -60,6 +60,7 @@ const PARTIAL_SHADERS: &[&str] = &[
     "instance_transform.wgsl",
     "scene_shading.wgsl",
     "look_ripple_detail.wgsl",
+    "foam_field.wgsl",
     "look_foam.wgsl",
     "look_mist.wgsl",
     "look_thin_water_light.wgsl",
@@ -86,6 +87,8 @@ const SCENE_SHADING: &str =
 const LOOK_RIPPLE_DETAIL: &str = include_str!(
     "../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_ripple_detail.wgsl"
 );
+const FOAM_FIELD: &str =
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/foam_field.wgsl");
 const LOOK_FOAM: &str =
     include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_foam.wgsl");
 const LOOK_MIST: &str =
@@ -136,6 +139,7 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             INSTANCE_TRANSFORM,
             SCENE_SHADING,
             LOOK_RIPPLE_DETAIL,
+            FOAM_FIELD,
             LOOK_FOAM,
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,
@@ -148,6 +152,10 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
         "water_march.wgsl",
         [WATER_FIELD_COMMON, WATER_MARCH_CORE].join("\n"),
     ));
+    composed.push((
+        "water_mist.wgsl",
+        [WATER_FIELD_COMMON, WATER_MARCH_CORE].join("\n"),
+    ));
     composed.push(("water_cover.wgsl", WATER_MARCH_CORE.to_owned()));
     // The water shade (`WATER_SHADE_WGSL`): the scene shading and the five
     // look hooks, then the field helpers.
@@ -156,6 +164,7 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
         [
             SCENE_SHADING,
             LOOK_RIPPLE_DETAIL,
+            FOAM_FIELD,
             LOOK_FOAM,
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,

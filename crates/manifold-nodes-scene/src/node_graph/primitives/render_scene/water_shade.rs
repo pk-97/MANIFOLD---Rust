@@ -12,6 +12,7 @@ use super::{FieldObject, mat4_inverse};
 pub(super) const WATER_SHADE_WGSL: &str = concat!(
     include_str!("../shaders/scene_shading.wgsl"),
     include_str!("../shaders/look_ripple_detail.wgsl"),
+    include_str!("../shaders/foam_field.wgsl"),
     include_str!("../shaders/look_foam.wgsl"),
     include_str!("../shaders/look_mist.wgsl"),
     include_str!("../shaders/look_thin_water_light.wgsl"),
@@ -56,27 +57,40 @@ pub(super) struct RippleUniforms {
     time: [f32; 4],
 }
 
+/// A water lattice's object-space min corner and node spacing (xyz, w 0), the
+/// frame every look that reads a per-node field of the water shares.
+pub(super) fn lattice_frame(
+    center: [f32; 3],
+    size: [f32; 3],
+    nodes: [u32; 3],
+) -> Result<([f32; 4], [f32; 4]), &'static str> {
+    let mut lattice_min = [0.0f32; 4];
+    let mut spacing = [0.0f32; 4];
+    for axis in 0..3 {
+        if nodes[axis] < 2 {
+            return Err("Water shade: lattice needs at least 2 nodes per axis");
+        }
+        lattice_min[axis] = center[axis] - size[axis] * 0.5;
+        spacing[axis] = size[axis] / (nodes[axis] - 1) as f32;
+    }
+    Ok((lattice_min, spacing))
+}
+
 /// Uniforms for the ripple detail on one field. `tile` is the slope tile's
 /// side in metres, `None` for a field without ripples. `footprint` is the
 /// size of a pixel on the water: metres per pixel per metre of distance, then
-/// metres per pixel flat (perspective and orthographic cameras).
+/// metres per pixel flat (perspective and orthographic cameras). `has_foam` is
+/// whether a foam field is bound, which the foam sampling reads from `nodes.w`.
 pub(super) fn ripple_uniforms(
     field: &FieldObject,
     tile: Option<f32>,
+    has_foam: bool,
     seconds: f32,
     footprint: [f32; 2],
 ) -> Result<RippleUniforms, &'static str> {
     let world_to_local =
         mat4_inverse(field.model).ok_or("Water shade: singular water model matrix")?;
-    let mut lattice_min = [0.0f32; 4];
-    let mut spacing = [0.0f32; 4];
-    for axis in 0..3 {
-        if field.nodes[axis] < 2 {
-            return Err("Water shade: lattice needs at least 2 nodes per axis");
-        }
-        lattice_min[axis] = field.center[axis] - field.size[axis] * 0.5;
-        spacing[axis] = field.size[axis] / (field.nodes[axis] - 1) as f32;
-    }
+    let (mut lattice_min, mut spacing) = lattice_frame(field.center, field.size, field.nodes)?;
     // 0 is the shader's off value for the tile side.
     lattice_min[3] = tile.unwrap_or(0.0);
     spacing[3] = field.ripple_detail;
@@ -85,22 +99,43 @@ pub(super) fn ripple_uniforms(
         local_to_world: field.model,
         lattice_min,
         spacing,
-        nodes: [field.nodes[0], field.nodes[1], field.nodes[2], 0],
+        nodes: [
+            field.nodes[0],
+            field.nodes[1],
+            field.nodes[2],
+            u32::from(has_foam),
+        ],
         time: [seconds, FLOW_PERIOD_SECONDS, footprint[0], footprint[1]],
     })
 }
 
-/// The ripple detail inputs one water draw binds at 62-65.
-pub(super) struct RippleBindings<'a> {
+/// The look inputs one water draw binds at 62-66.
+pub(super) struct LookBindings<'a> {
     pub uniforms: &'a RippleUniforms,
     pub slopes: &'a GpuTexture,
     pub sampler: &'a GpuSampler,
     pub velocity: &'a GpuBuffer,
+    pub foam: &'a GpuBuffer,
 }
+
+/// The mist composites over the colour with `dst * (1 - a) + colour`, the
+/// colour premultiplied by the mist's coverage `a`.
+const MIST_BLEND: GpuBlendState = GpuBlendState {
+    src_factor: GpuBlendFactor::One,
+    dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
+    operation: GpuBlendOp::Add,
+    src_alpha_factor: GpuBlendFactor::One,
+    dst_alpha_factor: GpuBlendFactor::OneMinusSrcAlpha,
+    alpha_operation: GpuBlendOp::Add,
+};
 
 #[derive(Default)]
 pub(super) struct WaterShade {
     pipeline: Option<(GpuRenderPipeline, GpuTextureFormat)>,
+    mist_pipeline: Option<(GpuRenderPipeline, GpuTextureFormat)>,
+    /// Always passes and writes nothing: the mist's full-screen triangle sits at
+    /// depth 0, and the march already stopped the mist at the nearest surface.
+    mist_depth_state: Option<GpuDepthStencilState>,
 }
 
 impl WaterShade {
@@ -119,6 +154,23 @@ impl WaterShade {
         )
     }
 
+    /// The mist pipeline for one colour format, through the same shared cache.
+    fn build_mist_pipeline(
+        device: &GpuDevice,
+        color_format: GpuTextureFormat,
+    ) -> GpuRenderPipeline {
+        device.create_render_pipeline_depth(
+            WATER_SHADE_WGSL,
+            "vs_water",
+            "fs_mist",
+            color_format,
+            GpuTextureFormat::Depth32Float,
+            Some(MIST_BLEND),
+            1,
+            "node.render_scene water mist",
+        )
+    }
+
     fn pipeline(
         &mut self,
         device: &GpuDevice,
@@ -133,6 +185,7 @@ impl WaterShade {
     /// Builds the pipeline into the device's shared cache ahead of the first draw.
     pub(super) fn prewarm(device: &GpuDevice, color_format: GpuTextureFormat) {
         Self::build_pipeline(device, color_format);
+        Self::build_mist_pipeline(device, color_format);
     }
 
     /// Shades one slot's water over `target`, writing its depth into `depth`.
@@ -150,10 +203,10 @@ impl WaterShade {
         object_uniforms: &[u8],
         hits: &GpuBuffer,
         shade: &ShadeUniforms,
-        ripple: &RippleBindings,
+        look: &LookBindings,
     ) {
         let pipeline = self.pipeline(device, target.format);
-        let mut bindings = [scene[0]; 23];
+        let mut bindings = [scene[0]; 24];
         bindings[..16].copy_from_slice(scene);
         bindings[16] = GpuBinding::Bytes {
             binding: 0,
@@ -170,19 +223,24 @@ impl WaterShade {
         };
         bindings[19] = GpuBinding::Texture {
             binding: 62,
-            texture: ripple.slopes,
+            texture: look.slopes,
         };
         bindings[20] = GpuBinding::Sampler {
             binding: 63,
-            sampler: ripple.sampler,
+            sampler: look.sampler,
         };
         bindings[21] = GpuBinding::Bytes {
             binding: 64,
-            data: bytemuck::bytes_of(ripple.uniforms),
+            data: bytemuck::bytes_of(look.uniforms),
         };
         bindings[22] = GpuBinding::Buffer {
             binding: 65,
-            buffer: ripple.velocity,
+            buffer: look.velocity,
+            offset: 0,
+        };
+        bindings[23] = GpuBinding::Buffer {
+            binding: 66,
+            buffer: look.foam,
             offset: 0,
         };
         let draw = GpuEncoder::depth_msaa_draw(pipeline, &bindings, 3, 1);
@@ -194,6 +252,86 @@ impl WaterShade {
             GpuLoadAction::Load,
             GpuLoadAction::Load,
             "node.render_scene water shade",
+        );
+    }
+
+    /// Draws the mist the march integrated into `mist` over `target`: one
+    /// full-screen blend that attenuates what is there and adds the in-scattered
+    /// light. `object_uniforms` is the first mist-bearing water object's, which
+    /// carries the scene's fog and exposure. The look inputs at 62-66 are bound
+    /// as the shade draw binds them, because the module declares them.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn encode_mist(
+        &mut self,
+        device: &GpuDevice,
+        enc: &mut GpuEncoder,
+        target: &GpuTexture,
+        depth: &GpuTexture,
+        scene: &[GpuBinding; 16],
+        object_uniforms: &[u8],
+        mist: &GpuBuffer,
+        shade: &ShadeUniforms,
+        look: &LookBindings,
+    ) {
+        if !matches!(&self.mist_pipeline, Some((_, f)) if *f == target.format) {
+            self.mist_pipeline = Some((
+                Self::build_mist_pipeline(device, target.format),
+                target.format,
+            ));
+        }
+        let pipeline = &self.mist_pipeline.as_ref().expect("built above").0;
+        let depth_state = self.mist_depth_state.get_or_insert_with(|| {
+            device.create_depth_stencil_state(&GpuDepthStencilDesc {
+                compare: GpuCompareFunction::Always,
+                write_enabled: false,
+            })
+        });
+        let mut bindings = [scene[0]; 24];
+        bindings[..16].copy_from_slice(scene);
+        bindings[16] = GpuBinding::Bytes {
+            binding: 0,
+            data: object_uniforms,
+        };
+        bindings[17] = GpuBinding::Bytes {
+            binding: 61,
+            data: bytemuck::bytes_of(shade),
+        };
+        bindings[18] = GpuBinding::Texture {
+            binding: 62,
+            texture: look.slopes,
+        };
+        bindings[19] = GpuBinding::Sampler {
+            binding: 63,
+            sampler: look.sampler,
+        };
+        bindings[20] = GpuBinding::Bytes {
+            binding: 64,
+            data: bytemuck::bytes_of(look.uniforms),
+        };
+        bindings[21] = GpuBinding::Buffer {
+            binding: 65,
+            buffer: look.velocity,
+            offset: 0,
+        };
+        bindings[22] = GpuBinding::Buffer {
+            binding: 66,
+            buffer: look.foam,
+            offset: 0,
+        };
+        bindings[23] = GpuBinding::Buffer {
+            binding: 67,
+            buffer: mist,
+            offset: 0,
+        };
+        let draw = GpuEncoder::depth_msaa_draw(pipeline, &bindings, 3, 1);
+        enc.draw_instanced_depth_batch(
+            target,
+            depth,
+            depth_state,
+            &[draw],
+            GpuLoadAction::Load,
+            GpuLoadAction::Load,
+            "node.render_scene water mist",
         );
     }
 }

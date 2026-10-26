@@ -137,6 +137,16 @@ pub struct FieldSurface {
     /// Optional `Array<u32>`: `node.lattice_bricks`' brick list, for
     /// skipping empty space. `None` marches the whole lattice.
     pub bricks: Option<Slot>,
+    /// Optional `Array<f32>`: foam coverage per node, the fraction of the
+    /// surface foam covers, 0 to 1. `None` draws no foam.
+    pub foam: Option<Slot>,
+    /// Optional `Array<f32>`: mist extinction per node, per metre: the spray
+    /// droplets in the air, which the march integrates under Beer-Lambert.
+    /// `None` draws no mist.
+    pub mist: Option<Slot>,
+    /// Optional `Array<f32>`: wetness per node, 0 dry to 1 soaked, which every
+    /// mesh inside the lattice reads by world position. `None` wets nothing.
+    pub wetness: Option<Slot>,
     /// Lattice centre in object space.
     pub center: [f32; 3],
     /// Lattice extent per axis, metres.

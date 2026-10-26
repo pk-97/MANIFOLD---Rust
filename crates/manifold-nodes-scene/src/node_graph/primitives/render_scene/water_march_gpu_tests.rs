@@ -6,13 +6,13 @@ use super::{mat4_inverse, model_matrix};
 use half::f16;
 use manifold_gpu::*;
 
-type M4 = [[f32; 4]; 4];
+pub(super) type M4 = [[f32; 4]; 4];
 
-const W: u32 = 96;
-const H: u32 = 72;
-const NODES: [u32; 3] = [37, 33, 41];
-const SIZE: [f32; 3] = [1.8, 1.6, 2.0];
-const CENTER: [f32; 3] = [0.1, -0.05, 0.2];
+pub(super) const W: u32 = 96;
+pub(super) const H: u32 = 72;
+pub(super) const NODES: [u32; 3] = [37, 33, 41];
+pub(super) const SIZE: [f32; 3] = [1.8, 1.6, 2.0];
+pub(super) const CENTER: [f32; 3] = [0.1, -0.05, 0.2];
 const SCALE: f32 = 1.25;
 const RADIUS: f32 = 0.5;
 
@@ -26,7 +26,7 @@ fn mul(a: M4, b: M4) -> M4 {
     out
 }
 
-fn mul_point(m: M4, p: [f32; 3], w: f32) -> [f32; 4] {
+pub(super) fn mul_point(m: M4, p: [f32; 3], w: f32) -> [f32; 4] {
     let v = [p[0], p[1], p[2], w];
     let mut out = [0.0f32; 4];
     for (r, o) in out.iter_mut().enumerate() {
@@ -76,7 +76,7 @@ fn camera(eye: [f32; 3], target: [f32; 3], fov_y_deg: f32, aspect: f32) -> M4 {
     mul(proj, view)
 }
 
-fn model() -> M4 {
+pub(super) fn model() -> M4 {
     model_matrix(
         [0.3, 0.2, -0.4],
         [0.0, 20.0f32.to_radians(), 0.0],
@@ -84,7 +84,7 @@ fn model() -> M4 {
     )
 }
 
-fn cell() -> f32 {
+pub(super) fn cell() -> f32 {
     (SIZE[0] / (NODES[0] - 1) as f32)
         .min(SIZE[1] / (NODES[1] - 1) as f32)
         .min(SIZE[2] / (NODES[2] - 1) as f32)
@@ -125,7 +125,7 @@ fn sphere_levelset(offset: [f32; 3], radius: f32) -> Vec<f32> {
     out
 }
 
-fn shared_buffer(device: &GpuDevice, data: &[f32]) -> GpuBuffer {
+pub(super) fn shared_buffer(device: &GpuDevice, data: &[f32]) -> GpuBuffer {
     let buf = device.create_buffer_shared((data.len() * 4) as u64);
     unsafe { buf.write(0, bytemuck::cast_slice(data)) };
     buf
@@ -158,12 +158,12 @@ fn unpack_hit(words: [u32; 3]) -> Hit {
     }
 }
 
-struct Scene {
-    view_proj: M4,
-    inv: M4,
+pub(super) struct Scene {
+    pub(super) view_proj: M4,
+    pub(super) inv: M4,
 }
 
-fn scene() -> Scene {
+pub(super) fn scene() -> Scene {
     let m = model();
     let sphere_local = [CENTER[0] + 0.05, CENTER[1], CENTER[2] - 0.1];
     let c = mul_point(m, sphere_local, 1.0);
@@ -196,7 +196,7 @@ fn pixel_ndc(x: u32, y: u32) -> [f32; 2] {
 }
 
 /// The same ray the shader builds: two finite points of the pixel's clip line.
-fn pixel_ray(inv: M4, x: u32, y: u32) -> ([f32; 3], [f32; 3]) {
+pub(super) fn pixel_ray(inv: M4, x: u32, y: u32) -> ([f32; 3], [f32; 3]) {
     let ndc = pixel_ndc(x, y);
     let o = unproject(inv, ndc, 1.0);
     let far = unproject(inv, ndc, 0.5);
@@ -223,7 +223,7 @@ fn ndc_of(view_proj: M4, p: [f32; 3]) -> [f32; 2] {
     [c[0] / c[3], c[1] / c[3]]
 }
 
-fn depth_target(device: &GpuDevice, enc: &mut GpuEncoder) -> GpuTexture {
+pub(super) fn depth_target(device: &GpuDevice, enc: &mut GpuEncoder) -> GpuTexture {
     let tex = device.create_texture(&GpuTextureDesc {
         width: W,
         height: H,
@@ -291,6 +291,7 @@ fn run(fields: &[TestField], wants_velocity: bool, frame_seconds: f32) -> Run {
         let draw = FieldDraw {
             levelset: &levelset,
             velocity: velocity.as_ref(),
+            mist: None,
             center: CENTER,
             size: SIZE,
             nodes: NODES,
