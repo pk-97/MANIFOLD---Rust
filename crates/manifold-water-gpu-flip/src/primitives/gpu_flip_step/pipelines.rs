@@ -1,6 +1,7 @@
 //! The step's pipelines and the shader text they build from.
 
 use super::*;
+use manifold_water_liquid::tile_storage::TILE_STORAGE;
 
 pub(super) struct Pipelines {
     pub(super) gather: GpuComputePipeline,
@@ -59,13 +60,13 @@ pub(super) struct Pipelines {
 pub(super) fn step_source() -> String {
     let source = STEP_SHADER.replace("return narrow_mask[index] != 0u;", "return true;");
     with_stats_layout(&format!(
-        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{source}"
+        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_STORAGE}\n{source}"
     ))
 }
 
 pub(super) fn band_source() -> String {
     with_stats_layout(&format!(
-        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{STEP_SHADER}"
+        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_STORAGE}\n{STEP_SHADER}"
     ))
 }
 

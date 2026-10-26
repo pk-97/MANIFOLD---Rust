@@ -37,19 +37,17 @@ struct FaceSample {
 // with no time to step builds nothing.
 @group(0) @binding(4) var<storage, read> slot_plan: array<u32>;
 
-fn coords(c: u32) -> vec3<i32> {
-    return vec3<i32>(
-        i32(c % u.nodes_x),
-        i32((c / u.nodes_x) % u.nodes_y),
-        i32(c / (u.nodes_x * u.nodes_y)),
-    );
+// The coarsest level's dense lattice; it indexes through `ts_grid_*`, not as
+// the FLIP cells.
+fn ts_cells() -> vec3<i32> {
+    return vec3<i32>(i32(u.nodes_x), i32(u.nodes_y), i32(u.nodes_z));
 }
 
 // The open fraction of the face between c and its neighbour d steps along
 // axis a, or 0 past the box.
 fn face_weight(c: u32, a: i32, d: i32) -> f32 {
-    let p = coords(c);
-    let n = vec3<i32>(i32(u.nodes_x), i32(u.nodes_y), i32(u.nodes_z));
+    let n = ts_cells();
+    let p = ts_grid_coord(c, n);
     let m = n + vec3<i32>(1);
     var q = p;
     q[a] = p[a] + d;
@@ -58,7 +56,7 @@ fn face_weight(c: u32, a: i32, d: i32) -> f32 {
     }
     var face = p;
     face[a] = max(p[a], q[a]);
-    return solid_faces[u32(face.x + m.x * (face.y + m.y * face.z))].weight[a];
+    return solid_faces[ts_grid_index(face, m)].weight[a];
 }
 
 // Σ w over c's faces: A's diagonal on water.
@@ -77,7 +75,8 @@ fn entry(i: u32, j: u32) -> f32 {
     if i == j {
         return diagonal(i);
     }
-    let d = coords(j) - coords(i);
+    let n = ts_cells();
+    let d = ts_grid_coord(j, n) - ts_grid_coord(i, n);
     let steps = abs(d);
     if steps.x + steps.y + steps.z != 1 {
         return 0.0;

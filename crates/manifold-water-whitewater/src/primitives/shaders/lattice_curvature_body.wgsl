@@ -9,7 +9,7 @@
 // Ported from FLIP Fluids particlelevelset.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 fn lk_phi(c: vec3<i32>, cells: vec3<u32>) -> f32 {
-    return buf_distance[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, cell_size: f32) -> Element {
@@ -24,7 +24,7 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, cell_siz
     if idx >= total || total > arrayLength(&buf_distance) {
         return unknown;
     }
-    let u = ww_cell(idx, cells);
+    let u = vec3<u32>(ts_grid_coord(idx, vec3<i32>(cells)));
     if ww_on_border(u, cells) {
         return unknown;
     }

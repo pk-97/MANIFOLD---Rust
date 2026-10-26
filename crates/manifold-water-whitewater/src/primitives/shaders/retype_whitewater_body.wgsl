@@ -24,7 +24,7 @@ fn rt_distance(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_distance[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn rt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
@@ -35,7 +35,7 @@ fn rt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
                 if (dx == 0 && dy == 0 && dz == 0) || !ww_in_grid(n, cells) {
                     continue;
                 }
-                if buf_cells[ww_cell_index(vec3<u32>(n), cells)] == 0u {
+                if buf_cells[ts_grid_index(vec3<i32>(vec3<u32>(n)), vec3<i32>(cells))] == 0u {
                     return true;
                 }
             }
@@ -79,7 +79,7 @@ fn rt_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>) -> vec3<f3
         let len = rt_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_index(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
+            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
             if i != LF_NONE && i < len {
                 sum = sum + ww_corner_weight(f, corner) * rt_face(axis, i);
             }

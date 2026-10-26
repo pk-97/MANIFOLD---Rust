@@ -577,61 +577,6 @@ pub(super) fn preserve(
         .collect()
 }
 
-/// FLIP's `_removeDiffuseParticles` with every side colliding and every
-/// boundary closed, as the lifecycle runs it: 1 for each slot the tick
-/// keeps, and per slot the smallest gap between a deciding value and its
-/// threshold, metres. A slot goes when it is empty, its
-/// lifetime is at or below 0, its position is not finite, it sits outside
-/// the boundary box or inside the solid, or its cell already holds `cap`
-/// kept particles earlier in the pool.
-pub(super) fn keep(
-    pool: &[WhitewaterParticle],
-    solid: &[f32],
-    grid: &Box3,
-    cap: u32,
-) -> (Vec<u32>, Vec<f32>) {
-    let h = grid.cell_size();
-    let origin: [f32; 3] = std::array::from_fn(|a| grid.center[a] - 0.5 * grid.size[a]);
-    let lo = [BOX_INSET * h + BOX_EPSILON; 3];
-    let hi: [f32; 3] = std::array::from_fn(|a| grid.cells[a] as f32 * h - lo[a]);
-    let mut counts = std::collections::HashMap::<[i64; 3], u32>::new();
-    let mut flags = Vec::with_capacity(pool.len());
-    let mut margins = Vec::with_capacity(pool.len());
-    for p in pool {
-        let local: [f32; 3] = std::array::from_fn(|a| p.position_lifetime[a] - origin[a]);
-        let finite = local.iter().all(|v| v.is_finite());
-        if (p.kind == 3 || p.kind > 4) || p.position_lifetime[3] <= 0.0 || !finite {
-            flags.push(0);
-            margins.push(f32::INFINITY);
-            continue;
-        }
-        let phi = solid_at(solid, grid, local.map(|c| c / h));
-        let box_gap = (0..3)
-            .map(|a| (local[a] - lo[a]).abs().min((local[a] - hi[a]).abs()))
-            .fold(f32::INFINITY, f32::min);
-        let face_gap = local
-            .iter()
-            .map(|v| (v / h - (v / h).round()).abs() * h)
-            .fold(f32::INFINITY, f32::min);
-        margins.push(box_gap.min(phi.abs()).min(face_gap));
-        let inside = (0..3).all(|a| local[a] >= lo[a] && local[a] < hi[a]);
-        if !inside || phi < 0.0 {
-            flags.push(0);
-            continue;
-        }
-        let count = counts
-            .entry(local.map(|v| (v / h).floor() as i64))
-            .or_default();
-        if *count >= cap {
-            flags.push(0);
-            continue;
-        }
-        *count += 1;
-        flags.push(1);
-    }
-    (flags, margins)
-}
-
 /// An empty pool slot.
 use super::whitewater_step::empty_slot;
 

@@ -72,9 +72,8 @@ fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
 }
 
-fn dims() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
-fn in_range(c: vec3<i32>) -> bool { return all(c >= vec3<i32>(0)) && all(c < dims()); }
-fn flat(c: vec3<i32>) -> u32 { return u32(c.x) + u.nx * (u32(c.y) + u.ny * u32(c.z)); }
+fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
+fn in_range(c: vec3<i32>) -> bool { return all(c >= vec3<i32>(0)) && all(c < ts_cells()); }
 // Grid3d::positionToGridIndex floors the f64 product of the widened position
 // and the f64 reciprocal. Emulated exactly in integers: the 24-bit mantissa
 // times the 53-bit one, rounded to 53 bits nearest-even, then floored.
@@ -173,7 +172,7 @@ fn sub_case(s: vec3<i32>) -> u32 { return u32(s.x & 1) | (u32(s.y & 1) << 1u) | 
 fn local(p: FluidParticle) -> vec3<f32> { return p.position_radius.xyz - vec3<f32>(u.ox, u.oy, u.oz); }
 
 fn corner(c: vec3<i32>) -> f32 {
-    if in_range(c) { return phi[flat(c)]; }
+    if in_range(c) { return phi[ts_cell_at(c)]; }
     return 0.0;
 }
 
@@ -222,7 +221,7 @@ fn sample(p: vec3<f32>) -> f32 { return trilinear(p - vec3<f32>(u.half_h)); }
 fn unit(v: vec3<f32>) -> vec3<f32> { return v * (1.0 / length(v)); }
 
 fn in_grid(p: vec3<f32>) -> bool {
-    return all(p >= vec3<f32>(0.0)) && all(p < vec3<f32>(dims()) * u.h);
+    return all(p >= vec3<f32>(0.0)) && all(p < vec3<f32>(ts_cells()) * u.h);
 }
 
 @compute @workgroup_size(256)
@@ -230,7 +229,7 @@ fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
     if c == 0u { atomicStore(&birth_count[1], 0u); }
-    if c >= u.nx * u.ny * u.nz { return; }
+    if c >= ts_cell_count() { return; }
     atomicStore(&sheet_a[c], 0u);
     sheet_b[c] = 0u;
     atomicStore(&mask[c], 0u);
@@ -252,8 +251,8 @@ fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     let p = local(particles[s]);
     let g = cell_of(p);
     if !in_range(g) { return; }
-    atomicOr(&mask[flat(g)], 1u << sub_case(sub_of(p)));
-    if ranges[flat(g)].count >= MAX_PARTICLES_PER_CELL { return; }
+    atomicOr(&mask[ts_cell_at(g)], 1u << sub_case(sub_of(p)));
+    if ranges[ts_cell_at(g)].count >= MAX_PARTICLES_PER_CELL { return; }
     let value = sample(p);
     if value >= u.max_depth || value < -u.max_depth { return; }
     var dir = -gradient(p - vec3<f32>(u.half_h));
@@ -263,7 +262,7 @@ fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var step = 0u; step < u.steps; step = step + 1u) {
         let next = sample(p + (f32(step) * u.step_distance) * dir);
         if next > current || next >= 0.0 {
-            atomicStore(&sheet_a[flat(g)], 1u);
+            atomicStore(&sheet_a[ts_cell_at(g)], 1u);
             return;
         }
         current = next;
@@ -277,8 +276,8 @@ fn grown(source: u32, c: vec3<i32>) -> u32 {
             var q = c;
             q[a] = q[a] + d;
             if in_range(q) {
-                var v = sheet_b[flat(q)];
-                if source == 0u { v = atomicLoad(&sheet_a[flat(q)]); }
+                var v = sheet_b[ts_cell_at(q)];
+                if source == 0u { v = atomicLoad(&sheet_a[ts_cell_at(q)]); }
                 hit = max(hit, v);
             }
         }
@@ -286,17 +285,13 @@ fn grown(source: u32, c: vec3<i32>) -> u32 {
     return hit;
 }
 
-fn cell_coord(c: u32) -> vec3<i32> {
-    return vec3<i32>(i32(c % u.nx), i32(c / u.nx % u.ny), i32(c / (u.nx * u.ny)));
-}
-
 // GridUtils::featherGrid6, first pass: a into b.
 @compute @workgroup_size(256)
 fn feather(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
-    if c >= u.nx * u.ny * u.nz { return; }
-    sheet_b[c] = grown(0u, cell_coord(c));
+    if c >= ts_cell_count() { return; }
+    sheet_b[c] = grown(0u, ts_cell_coord(c));
 }
 
 // The second feather pass, b into a, then the 3-cell border band cleared.
@@ -304,9 +299,9 @@ fn feather(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn feather_border(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
-    if c >= u.nx * u.ny * u.nz { return; }
-    let q = cell_coord(c);
-    let border = any(q < vec3<i32>(3)) || any(q >= dims() - vec3<i32>(3));
+    if c >= ts_cell_count() { return; }
+    let q = ts_cell_coord(c);
+    let border = any(q < vec3<i32>(3)) || any(q >= ts_cells() - vec3<i32>(3));
     atomicStore(&sheet_a[c], select(grown(1u, q), 0u, border));
 }
 
@@ -316,21 +311,21 @@ fn feather_border(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
-    if c >= u.nx * u.ny * u.nz || atomicLoad(&sheet_a[c]) == 0u { return; }
+    if c >= ts_cell_count() || atomicLoad(&sheet_a[c]) == 0u { return; }
     let range = ranges[c];
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
         let p = local(particles[s]);
         let value = sample(p);
         if value >= u.max_depth || value < -u.max_depth { continue; }
-        selected[segment_base(cell_coord(c)) + n] = vec4<f32>(p, bitcast<f32>(order[s]));
+        selected[segment_base(ts_cell_coord(c)) + n] = vec4<f32>(p, bitcast<f32>(order[s]));
         n = n + 1u;
     }
     cell_counts[c] = n;
 }
 
 fn bucket_flat(b: vec3<i32>) -> u32 {
-    return u32(b.x) + u.bx * (u32(b.y) + u.by * u32(b.z));
+    return ts_grid_index(b, bucket_dims());
 }
 
 fn segment_base(c: vec3<i32>) -> u32 {
@@ -350,7 +345,7 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
         heads[l] = 0u;
         counts[l] = 0u;
         if in_range(c) {
-            cells[l] = flat(c);
+            cells[l] = ts_cell_at(c);
             counts[l] = cell_counts[cells[l]];
         }
     }
@@ -405,7 +400,7 @@ fn evaluate(site: u32) -> Evaluation {
     let c = site / 8u;
     if atomicLoad(&sheet_a[c]) == 0u { return e; }
     let o = site % 8u;
-    let q = cell_coord(c);
+    let q = ts_cell_coord(c);
     // Offsets in the engine's order, k fastest.
     let d = vec3<i32>(i32((o >> 2u) & 1u), i32((o >> 1u) & 1u), i32(o & 1u));
     let s = 2 * q + d;
@@ -463,7 +458,7 @@ fn evaluate(site: u32) -> Evaluation {
     let p = seed + (0.75 * distance) * normal;
     if !in_grid(p) { return e; }
     let ps = sub_of(p);
-    if (atomicLoad(&mask[flat(ps / 2)]) & (1u << sub_case(ps))) != 0u { return e; }
+    if (atomicLoad(&mask[ts_cell_at(ps / 2)]) & (1u << sub_case(ps))) != 0u { return e; }
     var cdir = centroid - p;
     if length(cdir) < EPS { return e; }
     cdir = unit(cdir);
@@ -497,7 +492,7 @@ fn evaluate(site: u32) -> Evaluation {
 fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let site = gid.x;
-    if site >= 8u * u.nx * u.ny * u.nz { return; }
+    if site >= 8u * ts_cell_count() { return; }
     let e = evaluate(site);
     if e.state == 0u { return; }
     let c = site / 8u;
@@ -506,7 +501,7 @@ fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
     if e.state == 2u {
         atomicOr(&flags[c], 1u << (8u + o));
         let ps = sub_of(e.p);
-        atomicMin(&claims[8u * flat(ps / 2) + sub_case(ps)], e.rank);
+        atomicMin(&claims[8u * ts_cell_at(ps / 2) + sub_case(ps)], e.rank);
     }
 }
 
@@ -518,10 +513,10 @@ fn site_of_rank(r: u32) -> u32 {
     let o = r % 8u;
     let in_bucket = (r / 8u) % 8u;
     let bucket = r / 64u;
-    let b = vec3<i32>(i32(bucket % u.bx), i32(bucket / u.bx % u.by), i32(bucket / (u.bx * u.by)));
+    let b = ts_grid_coord(bucket, bucket_dims());
     let q = 2 * b + vec3<i32>(i32(in_bucket & 1u), i32((in_bucket >> 1u) & 1u), i32((in_bucket >> 2u) & 1u));
     if !in_range(q) { return NO_CLAIM; }
-    return 8u * flat(q) + o;
+    return 8u * ts_cell_at(q) + o;
 }
 
 // A claimant that holds its sub-cell, recomputed: state 2 and its claim;
@@ -533,7 +528,7 @@ fn holds(site: u32) -> Evaluation {
     e = evaluate(site);
     if e.state != 2u { return e; }
     let ps = sub_of(e.p);
-    if atomicLoad(&claims[8u * flat(ps / 2) + sub_case(ps)]) != e.rank { e.state = 3u; }
+    if atomicLoad(&claims[8u * ts_cell_at(ps / 2) + sub_case(ps)]) != e.rank { e.state = 3u; }
     return e;
 }
 
@@ -616,7 +611,7 @@ fn finite3(v: vec3<f32>) -> bool {
 // gpu_flip_step/move.wgsl `sample` on the saved faces: q in cells from the grid's
 // minimum, missing corners contributing zero.
 fn saved_velocity(q: vec3<f32>) -> vec3<f32> {
-    let n = dims();
+    let n = ts_cells();
     if !finite3(q) || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(n)) {
         return vec3<f32>(0.0);
     }
@@ -656,7 +651,7 @@ fn write(@builtin(global_invocation_id) gid: vec3<u32>) {
     if birth_identity[3] != 0u { return; }
     let r = gid.x;
     let total = rank_total();
-    let last = ranges[u.nx * u.ny * u.nz - 1u];
+    let last = ranges[ts_cell_count() - 1u];
     let live = last.start + last.count;
     let room = select(0u, u.slots - live, live <= u.slots);
     if r == 0u {

@@ -10,6 +10,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::float_param;
+use crate::tile_storage::TILE_GRID;
 use crate::whitewater::{WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -53,7 +54,7 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/liquid_cells_body.wgsl"),
     input_access: [BufferGather, BufferGather],
-    wgsl_includes: [WHITEWATER_COMMON],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
 }
 
 impl Primitive for LiquidCells {

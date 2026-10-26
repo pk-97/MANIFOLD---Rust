@@ -96,7 +96,7 @@ fn body(
         f32(buf_accum[word + 2u]),
     ) / m_norm * (momentum_unit * (65536.0 / 134217728.0));
     let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
-    let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
+    let coord = vec3<u32>(ts_node_coord(idx, vec3<i32>(n)));
     let origin = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let x = origin + vec3<f32>(coord) * cell_size;
     let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));

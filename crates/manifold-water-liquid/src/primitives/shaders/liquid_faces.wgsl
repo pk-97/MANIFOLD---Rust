@@ -18,15 +18,14 @@ fn lf_stencil(q: vec3<f32>, axis: u32) -> vec3<f32> {
 
 // The seam array index of the `axis` face at whitewater face coordinates f,
 // or LF_NONE where FLIP's padded array holds 0.
-fn lf_face_index(f: vec3<i32>, axis: u32, pad: vec3<i32>, face_cells: vec3<u32>) -> u32 {
+fn lf_face_at(f: vec3<i32>, axis: u32, pad: vec3<i32>, face_cells: vec3<u32>) -> u32 {
     var dims = face_cells;
     dims[axis] = dims[axis] + 1u;
     let g = f - pad;
     if any(g < vec3<i32>(0)) || any(g >= vec3<i32>(dims)) {
         return LF_NONE;
     }
-    let u = vec3<u32>(g);
-    return u.x + dims.x * (u.y + dims.y * u.z);
+    return ts_grid_index(g, vec3<i32>(dims));
 }
 
 // Cells from the whitewater grid's first cell to the face grid's, per axis.

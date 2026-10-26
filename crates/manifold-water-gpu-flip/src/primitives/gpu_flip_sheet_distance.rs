@@ -18,7 +18,15 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 
 use super::gpu_flip_sheeting::SHEET_DISTANCE_CELLS;
 
-const SHADER: &str = include_str!("shaders/gpu_flip_sheet_distance.wgsl");
+const SHADER_BODY: &str = include_str!("shaders/gpu_flip_sheet_distance.wgsl");
+
+/// The kernels with the storage helpers they index the lattice through.
+fn shader() -> String {
+    format!(
+        "{}\n{SHADER_BODY}",
+        manifold_water_liquid::tile_storage::TILE_STORAGE
+    )
+}
 const ENTRIES: [&str; 2] = ["seed", "sweep"];
 
 /// Jacobi sweeps: a sweep carries the distance one cell along an axis, and a
@@ -64,9 +72,10 @@ impl SheetDistance {
     /// compile on the content thread.
     pub(crate) fn prepare(&mut self, device: &GpuDevice) {
         if self.pipelines.is_empty() {
+            let source = shader();
             for entry in ENTRIES {
                 self.pipelines.push(device.create_compute_pipeline(
-                    SHADER,
+                    &source,
                     entry,
                     "gpu_flip.sheet_distance",
                 ));

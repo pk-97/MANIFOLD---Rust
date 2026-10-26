@@ -13,12 +13,13 @@ use manifold_node_engine::testkit::array_harness::read;
 use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
 use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use manifold_water_gpu_flip::primitives::gpu_flip_step::{
-    CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass,
-    ring_max, set_all_tiles, set_poison, tile_counts, tile_total,
+    CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, band_layers, dispatch_pass, ring_max,
+    set_all_tiles, set_poison,
 };
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
 use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_water_liquid::primitives::liquid_stats::with_stats_layout;
+use manifold_water_liquid::tile_storage::{TILE, TILE_STORAGE, tile_counts, tile_total};
 
 fn gather_sources() -> [String; 2] {
     let source = manifold_water_gpu_flip::primitives::gpu_flip_step::STEP_SHADER;
@@ -76,7 +77,7 @@ fn gather_sources() -> [String; 2] {
     let original = source.replace(unrolled, inner).replace(&centres, "");
     [original.as_str(), source].map(|shader| {
         with_stats_layout(&format!(
-            "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{shader}"
+            "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_STORAGE}\n{shader}"
         ))
     })
 }
@@ -943,4 +944,3 @@ fn gpu_flip_sparse_step_survives_poison() {
         );
     }
 }
-

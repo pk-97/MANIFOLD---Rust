@@ -19,6 +19,7 @@ use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, Li
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::{CellRange, bin_counts, searched_bins};
 use manifold_water_liquid::primitives::sort_particles_into_cells::bin_param;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 use manifold_water_liquid::whitewater::{
     WHITEWATER_COMMON, WhitewaterParticle, cell_total, particle_grid,
 };
@@ -103,7 +104,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/keep_whitewater_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "pool" },
-    wgsl_includes: [WHITEWATER_COMMON, LIQUID_POSE, LIQUID_COLLIDER],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON, LIQUID_POSE, LIQUID_COLLIDER],
 }
 
 impl Primitive for KeepWhitewater {

@@ -17,12 +17,11 @@ fn surface_phi(cell: u32) -> f32 {
 fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = gid.x;
-    if idx >= face_total() {
+    if idx >= ts_record_count() {
         return;
     }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     let here = faces_rw[idx];
     let open = solid_faces[idx];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
@@ -37,8 +36,8 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         var below = p;
         below[a] = p[a] - 1;
-        let upper = flatten(p, n);
-        let lower = flatten(below, n);
+        let upper = ts_cell_at(p);
+        let lower = ts_cell_at(below);
         let wet_upper = water[upper] > 0.5;
         let wet_lower = water[lower] > 0.5;
         if open.face_weight[a] > 0.0 && (wet_upper || wet_lower) {
@@ -66,12 +65,11 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = gid.x;
-    if idx >= face_total() {
+    if idx >= ts_record_count() {
         return;
     }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     var out = faces_rw[idx];
     let open = solid_faces[idx];
     let solid_here = solid_velocity[idx];

@@ -20,7 +20,7 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> Eleme
         return Element(0.0, 0.0);
     }
     let own = buf_values[idx];
-    let c = ww_cell(idx, cells);
+    let c = vec3<u32>(ts_grid_coord(idx, vec3<i32>(cells)));
     if own.known > 0.0 || ww_on_border(c, cells) {
         return own;
     }
@@ -29,7 +29,7 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> Eleme
     var reached = false;
     for (var face = 0u; face < 6u; face = face + 1u) {
         let n = vec3<u32>(vec3<i32>(c) + ww_face_step(face));
-        let other = buf_values[ww_cell_index(n, cells)];
+        let other = buf_values[ts_grid_index(vec3<i32>(n), vec3<i32>(cells))];
         let border = ww_on_border(n, cells);
         if other.known > 0.0 && !border {
             reached = true;

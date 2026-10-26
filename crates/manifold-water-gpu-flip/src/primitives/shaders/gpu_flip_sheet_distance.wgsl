@@ -20,18 +20,15 @@ fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
 }
 
-fn dims() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
-fn coords(i: u32) -> vec3<i32> {
-    return vec3<i32>(i32(i % u.nx), i32((i / u.nx) % u.ny), i32(i / (u.nx * u.ny)));
-}
+fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
 fn sign_of(v: f32) -> f32 { return select(-1.0, 1.0, v >= 0.0); }
 // The face neighbour of `c` along `axis` by `d` (-1 or 1) as a flat index, or
 // -1 off the grid.
 fn neighbour(c: vec3<i32>, axis: u32, d: i32) -> i32 {
     var q = c;
     q[axis] = q[axis] + d;
-    if any(q < vec3<i32>(0)) || any(q >= dims()) { return -1; }
-    return q.x + i32(u.nx) * (q.y + i32(u.ny) * q.z);
+    if any(q < vec3<i32>(0)) || any(q >= ts_cells()) { return -1; }
+    return i32(ts_cell_at(q));
 }
 // Distance from the cell centre to the nearest zero crossing between it and a
 // face neighbour of the other sign, or -1 when there is none.
@@ -57,7 +54,7 @@ fn seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if i >= u.count { return; }
     let p = source[i];
-    let t = crossing(coords(i), p);
+    let t = crossing(ts_cell_coord(i), p);
     field_out[i] = sign_of(p) * select(u.depth, t, t >= 0.0);
 }
 
@@ -66,7 +63,7 @@ fn sweep(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let i = gid.x;
     if i >= u.count { return; }
-    let c = coords(i);
+    let c = ts_cell_coord(i);
     let p = source[i];
     if crossing(c, p) >= 0.0 {
         field_out[i] = field_in[i];

@@ -120,7 +120,7 @@ fn body(
                 let weight = wx * wy * wz;
                 let d = (vec3<f32>(f32(a), f32(b), f32(c)) - f) * cell_size;
                 let node = base_i + vec3<i32>(a, b, c);
-                let g = buf_grid[u32((node.z * nodes.y + node.y) * nodes.x + node.x)];
+                let g = buf_grid[ts_node_at(node, nodes)];
                 let vi = g.velocity_mass.xyz;
                 v_pic = v_pic + weight * vi;
                 flip_delta = flip_delta + weight * (vi - g.velocity_before.xyz);

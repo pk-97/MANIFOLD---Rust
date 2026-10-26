@@ -30,8 +30,19 @@ use manifold_gpu::{
 use super::gpu_flip_bodies::{Bodies, BodyGate, BodyPasses};
 use manifold_water_liquid::fluid_particles::FaceSample;
 
-const SHADER: &str = include_str!("shaders/gpu_flip_pressure.wgsl");
-const INVERSE_SHADER: &str = include_str!("shaders/coarse_inverse.wgsl");
+use manifold_water_liquid::tile_storage::TILE_STORAGE;
+
+const SHADER_BODY: &str = include_str!("shaders/gpu_flip_pressure.wgsl");
+const INVERSE_SHADER_BODY: &str = include_str!("shaders/coarse_inverse.wgsl");
+
+/// The solve's kernels with the storage helpers they index the lattice through.
+pub(super) fn shader() -> String {
+    format!("{TILE_STORAGE}\n{SHADER_BODY}")
+}
+
+fn inverse_shader() -> String {
+    format!("{TILE_STORAGE}\n{INVERSE_SHADER_BODY}")
+}
 
 /// The coarsest level's largest side: at most 4³ = 64 cells, the one
 /// workgroup the coarse inverse runs in.
@@ -327,8 +338,9 @@ struct Pipelines {
 
 impl Pipelines {
     fn new(device: &GpuDevice) -> Self {
+        let source = shader();
         let pipeline =
-            |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
+            |entry: &str, label: &str| device.create_compute_pipeline(&source, entry, label);
         Self {
             classify: pipeline("classify_main", "gpu_flip.pressure.classify"),
             lists: pipeline("lists_main", "gpu_flip.pressure.lists"),
@@ -342,7 +354,7 @@ impl Pipelines {
             coarsen_faces: pipeline("coarsen_faces_main", "gpu_flip.pressure.coarsen_faces"),
             rows: pipeline("rows_main", "gpu_flip.pressure.rows"),
             inverse: device.create_compute_pipeline(
-                INVERSE_SHADER,
+                &inverse_shader(),
                 "inverse_main",
                 "gpu_flip.pressure.coarse_inverse",
             ),
@@ -2052,8 +2064,9 @@ mod tests {
 
     #[test]
     fn pressure_shader_validates_with_every_entry() {
-        let module = naga::front::wgsl::parse_str(SHADER)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
+        let source = shader();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),

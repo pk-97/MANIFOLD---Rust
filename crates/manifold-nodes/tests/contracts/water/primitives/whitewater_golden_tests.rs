@@ -90,7 +90,6 @@ fn compaction_moves_a_survivor() -> (usize, u32) {
     let nodes = [13u32; 3];
     let shape = StepShape::new(
         nodes,
-        nodes,
         cells,
         1.0,
         Some(Transform {
@@ -145,8 +144,7 @@ fn compaction_moves_a_survivor() -> (usize, u32) {
         faces: manifold_water_whitewater::primitives::whitewater_step::FaceSource::Axes([
             &faces[0], &faces[1], &faces[2],
         ]),
-        level_set: &distance,
-        distance: Some(&distance),
+        distance: &distance,
     };
     let settings = StepFrame {
         shape,

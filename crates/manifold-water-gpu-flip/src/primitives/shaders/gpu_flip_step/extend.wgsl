@@ -12,12 +12,11 @@
 fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = gid.x;
-    if idx >= face_total() {
+    if idx >= ts_record_count() {
         return;
     }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let here = faces_in[idx];
     for (var a = 0; a < 3; a = a + 1) {
@@ -42,7 +41,7 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if q[b] < 0 || q[b] > top[b] {
                     continue;
                 }
-                let neighbour = faces_in[flatten(q, m)];
+                let neighbour = faces_in[ts_face(q)];
                 let border = solid_border(q, a, n);
                 if border || neighbour.face_weight[a] > 0.0 {
                     sum = sum + neighbour.face_velocity[a];

@@ -14,6 +14,7 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::grid::{LIQUID_FACES, face_len};
+use manifold_water_liquid::tile_storage::TILE_GRID;
 use manifold_water_liquid::whitewater::{
     WHITEWATER_COMMON, WhitewaterParticle, cell_total, face_offset, grid_cells, particle_grid,
 };
@@ -87,7 +88,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/retype_whitewater_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "pool" },
-    wgsl_includes: [WHITEWATER_COMMON, LIQUID_FACES],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON, LIQUID_FACES],
 }
 
 impl Primitive for RetypeWhitewater {

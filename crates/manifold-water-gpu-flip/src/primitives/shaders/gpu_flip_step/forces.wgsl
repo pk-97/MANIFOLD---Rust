@@ -85,12 +85,11 @@ fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {
 fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = gid.x;
-    if idx >= face_total() {
+    if idx >= ts_record_count() {
         return;
     }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     let here = faces_in[idx];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let origin = u.box_min;

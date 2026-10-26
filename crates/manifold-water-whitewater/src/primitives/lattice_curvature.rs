@@ -8,12 +8,15 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::whitewater::{KnownValue, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_storage::TILE_GRID;
+use manifold_water_liquid::whitewater::{
+    KnownValue, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes,
+};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -57,33 +60,52 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/lattice_curvature_body.wgsl"),
     input_access: [BufferGather],
-    wgsl_includes: [WHITEWATER_COMMON],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
 }
 
 impl Primitive for LatticeCurvature {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "distance").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "distance")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let nodes = grid_nodes(ctx);
         let Some(cells) = grid_cells(nodes) else {
-            ctx.error(format!("Lattice Curvature: a {nodes:?} solid lattice has too few or too many nodes"));
+            ctx.error(format!(
+                "Lattice Curvature: a {nodes:?} solid lattice has too few or too many nodes"
+            ));
             return;
         };
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         if !(cell_size > 0.0 && cell_size.is_finite()) {
-            ctx.error(format!("Lattice Curvature: cell size {cell_size} is not a length"));
+            ctx.error(format!(
+                "Lattice Curvature: cell size {cell_size} is not a length"
+            ));
             return;
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(distance), Some(out)) = (ctx.inputs.array("distance"), ctx.outputs.array("out")) else {
+        let (Some(distance), Some(out)) = (ctx.inputs.array("distance"), ctx.outputs.array("out"))
+        else {
             return;
         };
         let count = cell_total(cells);
         if count * 4 > distance.size || count * 8 > out.size {
-            ctx.error(format!("Lattice Curvature: a {nodes:?}-node grid is larger than its arrays"));
+            ctx.error(format!(
+                "Lattice Curvature: a {nodes:?}-node grid is larger than its arrays"
+            ));
             return;
         }
         let uniforms = CurvatureUniforms {
@@ -100,9 +122,20 @@ impl Primitive for LatticeCurvature {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: distance, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: distance,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [(count as u32).div_ceil(256), 1, 1],
             "node.lattice_curvature",

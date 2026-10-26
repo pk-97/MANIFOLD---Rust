@@ -26,11 +26,7 @@ struct NbRange { start: u32, count: u32 }
 fn nb_step_dt() -> f32 {
     return select(nb.dt, bitcast<f32>(nb_clock_plan[0]), nb_clock_plan[11] != 0u);
 }
-fn nb_total() -> u32 { return nb.n.x * nb.n.y * nb.n.z; }
-fn nb_index(p: vec3<i32>, n: vec3<i32>) -> u32 { return u32(p.x + n.x * (p.y + n.y * p.z)); }
-fn nb_coords(i: u32, n: vec3<u32>) -> vec3<i32> {
-    return vec3<i32>(i32(i % n.x), i32((i / n.x) % n.y), i32(i / (n.x * n.y)));
-}
+fn ts_cells() -> vec3<i32> { return vec3<i32>(nb.n); }
 fn nb_scalar(q: vec3<f32>, solid: bool) -> f32 {
     let offset = select(vec3<f32>(0.5), vec3<f32>(0.0), solid);
     let size = vec3<i32>(nb.n) + select(vec3<i32>(0), vec3<i32>(1), solid);
@@ -39,7 +35,7 @@ fn nb_scalar(q: vec3<f32>, solid: bool) -> f32 {
     var result = 0.0;
     for (var k = 0; k < 8; k++) {
         let bit = vec3<i32>(k & 1, (k >> 1) & 1, (k >> 2) & 1);
-        let i = nb_index(min(base + bit, size - vec3<i32>(1)), size);
+        let i = ts_grid_index(min(base + bit, size - vec3<i32>(1)), size);
         let w = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
         var value: f32;
         if solid { value = nb_solid[i]; } else { value = nb_phi[i]; }
@@ -57,7 +53,7 @@ fn nb_velocity(q: vec3<f32>) -> vec3<f32> {
         var weight = 0.0;
         for (var k = 0; k < 8; k++) {
             let bit = vec3<i32>(k & 1, (k >> 1) & 1, (k >> 2) & 1);
-            let face = nb_faces[nb_index(min(base + bit, top), n + vec3<i32>(1))];
+            let face = nb_faces[ts_face(min(base + bit, top))];
             let w = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
             if face.weight[a] > 0.0 {
                 v[a] += w.x * w.y * w.z * face.velocity[a]; weight += w.x * w.y * w.z;
@@ -76,15 +72,14 @@ fn nb_backtrace(q: vec3<f32>) -> vec3<f32> {
 }
 @compute @workgroup_size(256)
 fn nb_advect_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= nb_total() { return; }
-    let q = vec3<f32>(nb_coords(gid.x, nb.n)) + vec3<f32>(0.5);
+    if gid.x >= ts_cell_count() { return; }
+    let q = vec3<f32>(ts_cell_coord(gid.x)) + vec3<f32>(0.5);
     nb_out[gid.x] = nb_scalar(nb_backtrace(q), false);
 }
 @compute @workgroup_size(256)
 fn nb_advect_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = nb.n + vec3<u32>(1u);
-    if gid.x >= size.x * size.y * size.z { return; }
-    let p = nb_coords(gid.x, size); let n = vec3<i32>(nb.n);
+    if gid.x >= ts_record_count() { return; }
+    let p = ts_face_coord(gid.x); let n = vec3<i32>(nb.n);
     var out = NbFace(vec4<f32>(0.0), vec4<f32>(0.0));
     for (var a = 0; a < 3; a++) {
         var other = p; other[a] = 0;
@@ -101,7 +96,7 @@ fn nb_advect_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 @compute @workgroup_size(256)
 fn nb_union(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= nb_total() { return; }
+    if gid.x >= ts_cell_count() { return; }
     var value = nb_particle_phi[gid.x];
     if nb.initialized != 0u { value = min(value, nb_phi[gid.x] + nb.h); }
     nb_out[gid.x] = value;
@@ -109,15 +104,15 @@ fn nb_union(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Seed subcell zero crossings before the separable Manhattan transform.
 @compute @workgroup_size(256)
 fn nb_distance_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= nb_total() { return; }
-    let n = vec3<i32>(nb.n); let p = nb_coords(gid.x, nb.n); let here = nb_phi[gid.x];
+    if gid.x >= ts_cell_count() { return; }
+    let n = vec3<i32>(nb.n); let p = ts_cell_coord(gid.x); let here = nb_phi[gid.x];
     var distance = f32(nb.n.x + nb.n.y + nb.n.z) * nb.h;
     if here == 0.0 { distance = 0.0; }
     for (var a = 0; a < 3; a++) {
         for (var d = -1; d <= 1; d += 2) {
             var q = p; q[a] += d;
             if any(q < vec3<i32>(0)) || any(q >= n) { continue; }
-            let other = nb_phi[nb_index(q, n)];
+            let other = nb_phi[ts_cell_at(q)];
             if (here < 0.0) != (other < 0.0) {
                 distance = min(distance, nb.h * abs(here) / (abs(here) + abs(other)));
             }
@@ -133,19 +128,19 @@ fn nb_distance_sweep(@builtin(global_invocation_id) gid: vec3<u32>) {
     var p = vec3<i32>(0); p[b] = i32(gid.x % nb.n[b]); p[c] = i32(gid.x / nb.n[b]);
     var last = f32(nb.n.x + nb.n.y + nb.n.z) * nb.h;
     for (var k = 0; k < i32(nb.n[a]); k++) {
-        p[a] = k; let i = nb_index(p, vec3<i32>(nb.n)); let v = nb_out[i];
+        p[a] = k; let i = ts_cell_at(p); let v = nb_out[i];
         last = min(abs(v), last + nb.h); nb_out[i] = select(last, -last, v < 0.0);
     }
     last = f32(nb.n.x + nb.n.y + nb.n.z) * nb.h;
     for (var k = i32(nb.n[a]) - 1; k >= 0; k--) {
-        p[a] = k; let i = nb_index(p, vec3<i32>(nb.n)); let v = nb_out[i];
+        p[a] = k; let i = ts_cell_at(p); let v = nb_out[i];
         last = min(abs(v), last + nb.h); nb_out[i] = select(last, -last, v < 0.0);
     }
 }
 @compute @workgroup_size(256)
 fn nb_band_mask(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= nb_total() { return; }
-    let q = vec3<f32>(nb_coords(gid.x, nb.n)) + vec3<f32>(0.5); let liquid = nb_phi[gid.x];
+    if gid.x >= ts_cell_count() { return; }
+    let q = vec3<f32>(ts_cell_coord(gid.x)) + vec3<f32>(0.5); let liquid = nb_phi[gid.x];
     nb_mask[gid.x] = select(0u, 1u, abs(liquid) < 3.0 * nb.h ||
         (liquid < 0.0 && nb_scalar(q, true) <= 3.0 * nb.h));
 }
@@ -154,8 +149,8 @@ fn nb_band_mask(@builtin(global_invocation_id) gid: vec3<u32>) {
 // support using cell counts; never infer liquid from the old distance alone.
 @compute @workgroup_size(256)
 fn nb_distance_support(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x; if i >= nb_total() { return; }
-    let p = nb_coords(i, nb.n); let n = vec3<i32>(nb.n);
+    let i = gid.x; if i >= ts_cell_count() { return; }
+    let p = ts_cell_coord(i); let n = vec3<i32>(nb.n);
     let q = vec3<f32>(p) + vec3<f32>(0.5);
     var supported = abs(nb_phi[i]) < 3.0 * nb.h ||
         (nb_phi[i] < 0.0 && nb_scalar(q, true) <= 3.0 * nb.h);
@@ -164,7 +159,7 @@ fn nb_distance_support(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var z = first.z; z <= last.z && !supported; z++) {
         for (var y = first.y; y <= last.y && !supported; y++) {
             for (var x = first.x; x <= last.x && !supported; x++) {
-                supported = nb_ranges[nb_index(vec3<i32>(x,y,z), n)].count != 0u;
+                supported = nb_ranges[ts_cell_at(vec3<i32>(x,y,z))].count != 0u;
             }
         }
     }
@@ -173,9 +168,8 @@ fn nb_distance_support(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Destination holds the particle gather; source holds the advected grid.
 @compute @workgroup_size(256)
 fn nb_combine_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = nb.n + vec3<u32>(1u);
-    if gid.x >= size.x * size.y * size.z { return; }
-    let p = nb_coords(gid.x, size); let n = vec3<i32>(nb.n); var out = nb_face_out[gid.x];
+    if gid.x >= ts_record_count() { return; }
+    let p = ts_face_coord(gid.x); let n = vec3<i32>(nb.n); var out = nb_face_out[gid.x];
     for (var a = 0; a < 3; a++) {
         var other = p; other[a] = 0;
         if any(other >= n) { continue; }
@@ -213,12 +207,12 @@ fn nb_restore_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
     nb_flags(gid.x, true);
 }
 fn nb_flags(i: u32, restore: bool) {
-    if i >= nb_total() { return; }
+    if i >= ts_cell_count() { return; }
     for (var k = 0u; k < 8u; k++) { nb_scan[8u * i + k] = 0u; }
     if nb_phi[i] > -nb.h { return; }
     if !restore && (nb_previous_phi[i] > -3.0 * nb.h || nb_phi[i] <= -3.0 * nb.h) { return; }
     let range = nb_ranges[i]; if range.count >= 8u { return; }
-    let cell = nb_coords(i, nb.n);
+    let cell = ts_cell_coord(i);
     var occupied = 0u;
     for (var j = 0u; j < range.count; j++) {
         let p = nb_particles[range.start + j];
@@ -238,8 +232,8 @@ fn nb_flags(i: u32, restore: bool) {
 // no partial reseed and is explicitly exposed to the liquid failure path.
 @compute @workgroup_size(1)
 fn nb_reseed_status() {
-    let last = nb_ranges[nb_total() - 1u]; let live = last.start + last.count;
-    let added = nb_scan[8u * nb_total() - 1u];
+    let last = nb_ranges[ts_cell_count() - 1u]; let live = last.start + last.count;
+    let added = nb_scan[8u * ts_cell_count() - 1u];
     // Branch before subtracting: a malformed live count must not wrap capacity.
     nb_status[0] = 0u;
     if live > nb.slots {
@@ -254,11 +248,11 @@ fn nb_reseed_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if nb_clock_plan[11] != 0u && bitcast<f32>(nb_clock_plan[0]) <= 0.0 { return; }
     if birth_identity[3] != 0u { return; }
-    if i >= 8u * nb_total() || nb_status[0] != 0u { return; }
+    if i >= 8u * ts_cell_count() || nb_status[0] != 0u { return; }
     var before = 0u; if i > 0u { before = nb_scan[i - 1u]; }
     if nb_scan[i] == before { return; }
-    let last = nb_ranges[nb_total() - 1u]; let slot = last.start + last.count + before;
-    let q = nb_site(nb_coords(i / 8u, nb.n), i % 8u);
+    let last = nb_ranges[ts_cell_count() - 1u]; let slot = last.start + last.count + before;
+    let q = nb_site(ts_cell_coord(i / 8u), i % 8u);
     nb_particles[slot] = NbParticle(vec4<f32>(nb.minimum + q * nb.h, 0.31017524 * nb.h), nb_velocity(q), birth_identity[2] + before);
 }
 

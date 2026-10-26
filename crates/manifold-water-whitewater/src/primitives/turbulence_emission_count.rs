@@ -71,7 +71,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/turbulence_emission_count_body.wgsl"),
     input_access: [Coincident, Coincident, Coincident, Coincident, BufferGather],
     output_capacity: manifold_node_engine::freeze::classify::FusedOutputCapacity::FromInput { input: "particles" },
-    wgsl_includes: [manifold_water_liquid::whitewater::WHITEWATER_COMMON],
+    wgsl_includes: [manifold_water_liquid::tile_storage::TILE_GRID, manifold_water_liquid::whitewater::WHITEWATER_COMMON],
 }
 
 impl Primitive for TurbulenceEmissionCount {

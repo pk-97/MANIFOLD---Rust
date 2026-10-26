@@ -5,12 +5,15 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::whitewater::{SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_storage::TILE_GRID;
+use manifold_water_liquid::whitewater::{
+    SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes,
+};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -53,28 +56,46 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/nearest_crossing_body.wgsl"),
     input_access: [BufferGather],
-    wgsl_includes: [WHITEWATER_COMMON],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
 }
 
 impl Primitive for NearestCrossing {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "crossings").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "crossings")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let nodes = grid_nodes(ctx);
         let Some(cells) = grid_cells(nodes) else {
-            ctx.error(format!("Nearest Crossing: a {nodes:?} solid lattice has too few or too many nodes"));
+            ctx.error(format!(
+                "Nearest Crossing: a {nodes:?} solid lattice has too few or too many nodes"
+            ));
             return;
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(crossings), Some(out)) = (ctx.inputs.array("crossings"), ctx.outputs.array("out")) else {
+        let (Some(crossings), Some(out)) =
+            (ctx.inputs.array("crossings"), ctx.outputs.array("out"))
+        else {
             return;
         };
         let count = cell_total(cells);
         if count * SURFACE_CROSSING_BYTES > crossings.size.min(out.size) {
-            ctx.error(format!("Nearest Crossing: a {nodes:?}-node grid is larger than its arrays"));
+            ctx.error(format!(
+                "Nearest Crossing: a {nodes:?}-node grid is larger than its arrays"
+            ));
             return;
         }
         let uniforms = NearestUniforms {
@@ -91,9 +112,20 @@ impl Primitive for NearestCrossing {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: crossings, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: crossings,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [(count as u32).div_ceil(256), 1, 1],
             "node.nearest_crossing",

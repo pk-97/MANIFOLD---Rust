@@ -12,6 +12,7 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, cell_total, grid_cells, particle_grid};
 
 /// FLIP turbulence normalization defaults; dust uses 0.75 times the minimum.
@@ -85,7 +86,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/inside_turbulence_potential_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "particles" },
-    wgsl_includes: [WHITEWATER_COMMON],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
 }
 
 impl Primitive for InsideTurbulencePotential {

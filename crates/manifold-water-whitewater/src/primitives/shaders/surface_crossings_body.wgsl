@@ -112,7 +112,7 @@ fn body(
         || levels.x * levels.y * levels.z > arrayLength(&buf_level_set) {
         return out;
     }
-    let c = ww_cell(idx, cells);
+    let c = vec3<u32>(ts_grid_coord(idx, vec3<i32>(cells)));
     let side = s + 1u;
     let base = c * s;
     // Which footprint nodes lie in the liquid, one bit each at

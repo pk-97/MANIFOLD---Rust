@@ -7,19 +7,22 @@
 
 use std::borrow::Cow;
 
-use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 use manifold_gpu::GpuBinding;
+use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use super::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
-use manifold_water_liquid::grid::{LIQUID_FACES, face_len};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, cell_total, face_offset, particle_grid};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::grid::{LIQUID_FACES, face_len};
+use manifold_water_liquid::tile_storage::TILE_GRID;
+use manifold_water_liquid::whitewater::{
+    WHITEWATER_COMMON, cell_total, face_offset, particle_grid,
+};
 
 /// FLIP's lifetime rule (`_minDiffuseParticleLifetime`,
 /// `_maxDiffuseParticleLifetime`, `_lifetimeVariance`), seconds.
@@ -122,7 +125,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/spawn_whitewater_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::ParamProduct { params: &CAPACITY_PARAMS, plus: 0 },
-    wgsl_includes: [WHITEWATER_COMMON, LIQUID_FACES],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON, LIQUID_FACES],
 }
 
 /// Spawn slots for a param set: the Capacity param as the fused kernel
@@ -135,13 +138,20 @@ fn spawn_slots(params: &ParamValues) -> u32 {
 }
 
 impl Primitive for SpawnWhitewater {
-    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        params: &ParamValues,
+        _inputs: &[(&str, u32)],
+    ) -> Option<u32> {
         (port == "out").then(|| spawn_slots(params))
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let face_cells = ["face_cells_x", "face_cells_y", "face_cells_z"].map(|name| ctx.scalar_or_param(name, 64.0).round().max(0.0) as u32);
-        let placed = particle_grid(ctx).and_then(|grid| face_offset(grid.nodes, face_cells).map(|_| grid));
+        let face_cells = ["face_cells_x", "face_cells_y", "face_cells_z"]
+            .map(|name| ctx.scalar_or_param(name, 64.0).round().max(0.0) as u32);
+        let placed =
+            particle_grid(ctx).and_then(|grid| face_offset(grid.nodes, face_cells).map(|_| grid));
         let grid = match placed {
             Ok(grid) => grid,
             Err(refusal) => {
@@ -167,7 +177,9 @@ impl Primitive for SpawnWhitewater {
         ) else {
             return;
         };
-        let [Some(u), Some(v), Some(w)] = FACE_PORTS.map(|port| ctx.inputs.array(port)) else { return };
+        let [Some(u), Some(v), Some(w)] = FACE_PORTS.map(|port| ctx.inputs.array(port)) else {
+            return;
+        };
         for (axis, buffer) in [u, v, w].into_iter().enumerate() {
             if buffer.size < face_len(face_cells, axis) * 4 {
                 ctx.error(format!(
@@ -179,10 +191,14 @@ impl Primitive for SpawnWhitewater {
             }
         }
         if cell_total(grid.nodes) * 4 > solid.size {
-            ctx.error(format!("Spawn Whitewater: solid holds fewer than the {:?}-node lattice", grid.nodes));
+            ctx.error(format!(
+                "Spawn Whitewater: solid holds fewer than the {:?}-node lattice",
+                grid.nodes
+            ));
             return;
         }
-        let count = u64::from(slots).min(out.size / std::mem::size_of::<WhitewaterSpawn>() as u64) as u32;
+        let count =
+            u64::from(slots).min(out.size / std::mem::size_of::<WhitewaterSpawn>() as u64) as u32;
         if count == 0 || offsets.size == 0 || particles.size == 0 || energy.size == 0 {
             return;
         }
@@ -220,15 +236,50 @@ impl Primitive for SpawnWhitewater {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: offsets, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: particles, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: energy, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: u, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: v, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: w, offset: 0 },
-                GpuBinding::Buffer { binding: 7, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 8, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: offsets,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: energy,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: u,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: v,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: w,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: solid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.spawn_whitewater",

@@ -1,14 +1,7 @@
 // Shared by the whitewater grid atoms.
 // The grid is the solid lattice read as cells: cells = nodes − 1 a side, cell
 // c at c.x + cells.x·(c.y + cells.y·c.z), its corners the solid nodes c..c+1.
-
-fn ww_cell(idx: u32, cells: vec3<u32>) -> vec3<u32> {
-    return vec3<u32>(idx % cells.x, (idx / cells.x) % cells.y, idx / (cells.x * cells.y));
-}
-
-fn ww_cell_index(c: vec3<u32>, cells: vec3<u32>) -> u32 {
-    return c.x + cells.x * (c.y + cells.y * c.z);
-}
+// Cell indexing is `ts_grid_index` / `ts_grid_coord` in `tile_grid.wgsl`.
 
 fn ww_on_border(c: vec3<u32>, cells: vec3<u32>) -> bool {
     return any(c == vec3<u32>(0u)) || any(c + vec3<u32>(1u) == cells);

@@ -16,6 +16,7 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -113,7 +114,7 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_grid_update_body.wgsl"),
     input_access: [BufferGather, Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS, FORCE_LATTICE],
+    wgsl_includes: [TILE_GRID, LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS, FORCE_LATTICE],
 }
 
 impl Primitive for MatterGridUpdate {

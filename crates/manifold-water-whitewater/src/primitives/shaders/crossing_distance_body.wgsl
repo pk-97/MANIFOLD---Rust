@@ -29,7 +29,7 @@ fn body(
     if idx >= cells.x * cells.y * cells.z || nodes.x * nodes.y * nodes.z > arrayLength(&buf_solid) {
         return 4.0 * h;
     }
-    let c = ww_cell(idx, cells);
+    let c = vec3<u32>(ts_grid_coord(idx, vec3<i32>(cells)));
     let centre = vec3<f32>(c) + vec3<f32>(0.5);
     let offset = centre - e_crossings.crossing;
     let n = e_crossings.normal;

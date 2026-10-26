@@ -1,7 +1,7 @@
 // FLIP Fluids turbulencefield.cpp:100-171 (MIT); THIRD_PARTY_NOTICES.md.
 // The asymmetric loop and excluded final boundary index are intentional.
 fn tf_face(c: vec3<i32>, axis: u32, pad: vec3<i32>, dims: vec3<u32>) -> f32 {
-    let i = lf_face_index(c, axis, pad, dims);
+    let i = lf_face_at(c, axis, pad, dims);
     if i == LF_NONE { return 0.0; }
     if axis == 0u { return buf_face_u[i]; }
     if axis == 1u { return buf_face_v[i]; }

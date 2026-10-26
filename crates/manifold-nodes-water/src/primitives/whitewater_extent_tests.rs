@@ -137,7 +137,6 @@ fn whitewater_extents_at_64() {
     use manifold_water_whitewater::primitives::whitewater_step::StepShape;
     let tick = StepShape::new(
         [68; 3],
-        [68; 3],
         [67; 3],
         1.0,
         Some(manifold_node_engine::scene::transform::Transform {
@@ -149,24 +148,19 @@ fn whitewater_extents_at_64() {
     .expect("tick grid");
     let particles = u64::from(PARTICLE_SLOTS);
     assert_eq!(
-        tick.held_bytes(particles, true),
-        275_854_872,
+        tick.held_bytes(particles),
+        218_205_932,
         "67-cubed grid, particle/pool/scan/output storage and reinitialisation scratch"
     );
     // Packed input adds three adapter-sized 68³ float arrays: 3 * 68³ * 4
-    // = 3,773,184 bytes to the axis baseline, 275,854,872 + 3,773,184.
+    // = 3,773,184 bytes to the axis baseline, 218,205,932 + 3,773,184.
     assert_eq!(tick.unpacked_face_bytes(), 3_773_184);
     assert_eq!(
-        tick.held_bytes(particles, true) + tick.unpacked_face_bytes(),
-        279_628_056
-    );
-    assert_eq!(
-        tick.held_bytes(particles, false) - tick.held_bytes(particles, true),
-        2_406_104
+        tick.held_bytes(particles) + tick.unpacked_face_bytes(),
+        221_979_116
     );
     assert_eq!(2 * 67u64.pow(3) * 4, 2_406_104);
     let padded = StepShape::new(
-        [68; 3],
         [68; 3],
         [63; 3],
         1.0,
@@ -177,9 +171,12 @@ fn whitewater_extents_at_64() {
         DEFAULT_CAPACITY,
     )
     .expect("padded tick grid");
+    // Padding owns the distance and surface copies, 8 bytes a cell; the
+    // face-sized reinitialisation scratch follows the face grid.
+    use manifold_water_liquid::primitives::whitewater_distance::scratch_bytes;
     assert_eq!(
-        padded.held_bytes(particles, false),
-        padded.held_bytes(particles, true)
+        padded.held_bytes(particles) + scratch_bytes([67; 3]),
+        tick.held_bytes(particles) + scratch_bytes([63; 3]) + 2_406_104
     );
 }
 
@@ -881,10 +878,8 @@ fn whitewater_step_extents_at_64() {
     use manifold_water_whitewater::primitives::whitewater_step::StepShape;
     let lattice = lattice_at_64();
     let nodes = lattice.nodes();
-    let level = refined_nodes(nodes.map(|n| n as f32), 3);
     let bounds = Some(lattice.bounds());
-    let step =
-        StepShape::new(nodes, level, [64; 3], 1.0, bounds, DEFAULT_CAPACITY).expect("placed");
+    let step = StepShape::new(nodes, [64; 3], 1.0, bounds, DEFAULT_CAPACITY).expect("placed");
     assert_eq!(step.cells, [70; 3]);
     assert_eq!(step.cell_count(), 343_000);
     assert_eq!(step.bins, [70; 3], "one sort bin a cell");
@@ -895,9 +890,8 @@ fn whitewater_step_extents_at_64() {
     assert_eq!(step.pool_bytes(), 4_800_000);
     assert_eq!(step.slot_scan_values(), 400_000);
     assert_eq!([0, 1, 2].map(|a| step.face_bytes(a)), [266_240 * 4; 3]);
-    assert_eq!(step.level_bytes(), cell_total(level) * 4);
     assert_eq!(step.solid_bytes(), 357_911 * 4);
-    let held = step.held_bytes(u64::from(PARTICLE_SLOTS), false);
+    let held = step.held_bytes(u64::from(PARTICLE_SLOTS));
     println!("whitewater_step holds {held} bytes at 64 over {PARTICLE_SLOTS} particle slots");
     // Account for the turbulence/influence fields, inside potential and
     // fourth population. The former 256 MiB assertion was a budget for the
@@ -908,37 +902,33 @@ fn whitewater_step_extents_at_64() {
     let engine_distance = 4 * 70u64.pow(3) + 12 * 64u64.pow(3) + 4 * 11u64.pow(3) + 16 + 16 + 48;
     assert_eq!(
         held,
-        278_878_580 + engine_distance,
+        218_526_472 + engine_distance,
         "all emitter and engine-distance storage is accounted for"
     );
 
     let refusals = [
         (
-            StepShape::new([0; 3], level, [64; 3], 1.0, bounds, DEFAULT_CAPACITY),
+            StepShape::new([0; 3], [64; 3], 1.0, bounds, DEFAULT_CAPACITY),
             "solid lattice is missing",
         ),
         (
-            StepShape::new(nodes, level, [64; 3], 1.0, None, DEFAULT_CAPACITY),
+            StepShape::new(nodes, [64; 3], 1.0, None, DEFAULT_CAPACITY),
             "grid_bounds is not wired",
         ),
         (
-            StepShape::new(nodes, [212; 3], [64; 3], 1.0, bounds, DEFAULT_CAPACITY),
-            "is not a whole refinement",
-        ),
-        (
-            StepShape::new(nodes, level, [63, 64, 64], 1.0, bounds, DEFAULT_CAPACITY),
+            StepShape::new(nodes, [63, 64, 64], 1.0, bounds, DEFAULT_CAPACITY),
             "does not sit centred",
         ),
         (
-            StepShape::new(nodes, level, [64; 3], 0.0, bounds, DEFAULT_CAPACITY),
+            StepShape::new(nodes, [64; 3], 0.0, bounds, DEFAULT_CAPACITY),
             "whitewater needs at least 1",
         ),
         (
-            StepShape::new(nodes, level, [64; 3], 1.0, bounds, 0),
+            StepShape::new(nodes, [64; 3], 1.0, bounds, 0),
             "capacity 0 is outside",
         ),
         (
-            StepShape::new(nodes, level, [64; 3], 1.0, bounds, MAX_CAPACITY + 1),
+            StepShape::new(nodes, [64; 3], 1.0, bounds, MAX_CAPACITY + 1),
             "is outside 1 to",
         ),
     ];

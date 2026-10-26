@@ -11,7 +11,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
-use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass, tile_total};
+use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass};
 use super::liquid_fill::LiquidFill;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
@@ -28,21 +28,22 @@ use manifold_water_liquid::bodies::{
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
 use manifold_water_liquid::primitives::liquid_stats::{INFLOW_BIRTHS_TAIL, with_stats_layout};
-mod face_gravity;
+use manifold_water_liquid::tile_storage::tile_total;
 mod cells;
 mod density;
 mod emit;
+mod face_gravity;
 mod motion;
 mod pockets;
 mod solids;
 mod step_order;
 
 use emit::*;
-pub(super) use motion::*;
-use solids::*;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
 use manifold_water_liquid::lattice::PADDING_NODES;
+pub(super) use motion::*;
+use solids::*;
 
 /// A lattice with unequal sides, so a swapped axis shows.
 const N: [usize; 3] = [6, 5, 4];

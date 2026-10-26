@@ -4,7 +4,7 @@ fn open_at(f: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> f32 {
     if f[a] == 0 || f[a] == n[a] {
         return 0.0;
     }
-    return solid_faces[flatten(f, m)].face_weight[a];
+    return solid_faces[ts_face(f)].face_weight[a];
 }
 
 // (c − w)·v_s on an inner face; 0 on a box wall, which no solid moves.
@@ -12,7 +12,7 @@ fn solid_flux(f: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>, c: f32) -> f32 {
     if f[a] == 0 || f[a] == n[a] {
         return 0.0;
     }
-    let at = flatten(f, m);
+    let at = ts_face(f);
     return (c - solid_faces[at].face_weight[a]) * solid_velocity[at].face_velocity[a];
 }
 
@@ -25,24 +25,24 @@ fn solid_flux(f: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>, c: f32) -> f32 {
 fn divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
-    if idx == NO_CELL {
+    if idx == TS_NONE {
         return;
     }
     if !(water[idx] > 0.5) {
         cell_out[idx] = 0.0;
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let m = n + vec3<i32>(1);
-    let p = unflatten(idx, n);
-    let at = flatten(p, m);
+    let p = ts_cell_coord(idx);
+    let at = ts_face(p);
     let here = faces_in[at].face_velocity;
     let open_volume = solid_faces[at].face_weight.w;
     var outflow = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
         var q = p;
         q[a] = p[a] + 1;
-        let upper = open_at(q, a, n, m) * faces_in[flatten(q, m)].face_velocity[a];
+        let upper = open_at(q, a, n, m) * faces_in[ts_face(q)].face_velocity[a];
         outflow = outflow + upper - open_at(p, a, n, m) * here[a]
             + solid_flux(q, a, n, m, open_volume) - solid_flux(p, a, n, m, open_volume);
     }

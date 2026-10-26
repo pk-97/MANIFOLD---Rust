@@ -598,7 +598,6 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
     let state = h.array(&[0u32; 8], 8);
     let shape = StepShape::new(
         [9; 3],
-        [9; 3],
         [8; 3],
         1.0,
         Some(Transform {
@@ -641,8 +640,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             solid: &solid.1,
             obstacle_source: Some(&source.1),
             faces: super::whitewater_step::FaceSource::Axes([&f[0].1, &f[1].1, &f[2].1]),
-            level_set: &phi.1,
-            distance: Some(&phi.1),
+            distance: &phi.1,
         };
         let mut native = h.device.create_encoder("whitewater-dust-population");
         step.advance_tick(

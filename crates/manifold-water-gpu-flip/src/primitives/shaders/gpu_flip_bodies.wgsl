@@ -112,37 +112,17 @@ fn mobility_at(b: u32, i: u32, j: u32) -> f32 {
 }
 
 const THREADS: u32 = 256u;
-const TILE: i32 = 8;
-// A thread of an active tile whose cell runs past the lattice.
-const NO_CELL: u32 = 0xffffffffu;
 
 var<workgroup> scratch: array<array<f32, 256>, 6>;
 
-fn lattice() -> vec3<i32> {
+fn ts_cells() -> vec3<i32> {
     return vec3<i32>(u.n);
-}
-
-// The tile helpers as gpu_flip_pressure.wgsl has them (WGSL has no include).
-fn tile_dims(n: vec3<i32>) -> vec3<i32> {
-    return (n + vec3<i32>(TILE - 1)) / TILE;
-}
-
-fn tile_cell(tile: u32, local: u32, n: vec3<i32>) -> u32 {
-    let p = unflatten(tile, tile_dims(n)) * TILE + unflatten(local, vec3<i32>(TILE));
-    if any(p >= n) {
-        return NO_CELL;
-    }
-    return flatten(p, n);
 }
 
 // Whether thread gid's workgroup is inside the fine level's active list; a
 // workgroup past it returns before any barrier, whole.
 fn listed(gid: u32) -> bool {
     return (gid >> 8u) < armed[0];
-}
-
-fn listed_cell(gid: u32, n: vec3<i32>) -> u32 {
-    return tile_cell(lists[gid >> 9u], gid & 511u, n);
 }
 
 // Thread gid's partial slot: its tile's two, by workgroup.
@@ -152,19 +132,6 @@ fn listed_partial(gid: u32) -> u32 {
 
 fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
-}
-
-
-fn unflatten(idx: u32, m: vec3<i32>) -> vec3<i32> {
-    return vec3<i32>(
-        i32(idx % u32(m.x)),
-        i32((idx / u32(m.x)) % u32(m.y)),
-        i32(idx / (u32(m.x) * u32(m.y))),
-    );
-}
-
-fn flatten(p: vec3<i32>, m: vec3<i32>) -> u32 {
-    return u32(p.x + m.x * (p.y + m.y * p.z));
 }
 
 // The body owning axis a's face, or −1.
@@ -210,8 +177,8 @@ fn sums_dw(b: u32) -> vec3<f32> {
 }
 
 // x in a water cell, 0 elsewhere.
-fn wet_x(q: vec3<i32>, n: vec3<i32>) -> f32 {
-    let cell = flatten(q, n);
+fn wet_x(q: vec3<i32>) -> f32 {
+    let cell = ts_cell_at(q);
     return select(0.0, x[cell], water[cell] > 0.5);
 }
 
@@ -223,15 +190,15 @@ fn wet_x(q: vec3<i32>, n: vec3<i32>) -> f32 {
 // the engine (rigidfluidcoupling.cpp): the solid constraint's friction acts
 // on the water alone. An explicit friction reaction diverges once
 // ρ·h·f·A_wet/m passes 2, which any light body does.
-fn face_impulse(p: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> f32 {
-    let at = flatten(p, m);
+fn face_impulse(p: vec3<i32>, a: i32) -> f32 {
+    let at = ts_face(p);
     let w = open[at].face_weight[a];
     var lo = p;
     lo[a] = p[a] - 1;
     let h = u.cell_size;
     let c_hi = open[at].face_weight.w;
-    let c_lo = open[flatten(lo, m)].face_weight.w;
-    return u.density * h * h * ((c_lo - w) * wet_x(lo, n) - (c_hi - w) * wet_x(p, n));
+    let c_lo = open[ts_face(lo)].face_weight.w;
+    return u.density * h * h * ((c_lo - w) * wet_x(lo) - (c_hi - w) * wet_x(p));
 }
 
 // Workgroup (g, b): body b's linear and angular impulse over the three low
@@ -254,22 +221,20 @@ fn impulse_partial(
         return;
     }
     let b = wg.y;
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let idx = listed_cell(gid, n);
+    let idx = ts_list_cell(lists[gid >> 9u], gid);
     var linear = vec3<f32>(0.0);
     var angular = vec3<f32>(0.0);
-    if idx != NO_CELL && b < u.body_count && dynamic_body(b) {
+    if idx != TS_NONE && b < u.body_count && dynamic_body(b) {
         let c = body_centre(b);
-        let p = unflatten(idx, n);
-        let e = flatten(p, m);
+        let p = ts_cell_coord(idx);
+        let e = ts_face(p);
         let code = solid[e].face_velocity.w;
         for (var a = 0; a < 3; a = a + 1) {
             if p[a] == 0 || solid_owner(code, a) != i32(b) {
                 continue;
             }
             var push = vec3<f32>(0.0);
-            push[a] = face_impulse(p, a, n, m);
+            push[a] = face_impulse(p, a);
             linear = linear + push;
             angular = angular + cross(face_centre(p, a) - c, push);
         }
@@ -382,14 +347,13 @@ fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !listed(gid.x) {
         return;
     }
-    let n = lattice();
-    let idx = listed_cell(gid.x, n);
-    if idx == NO_CELL || !(water[idx] > 0.5) {
+    let n = ts_cells();
+    let idx = ts_list_cell(lists[gid.x >> 9u], gid.x);
+    if idx == TS_NONE || !(water[idx] > 0.5) {
         return;
     }
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, n);
-    let c = open[flatten(p, m)].face_weight.w;
+    let p = ts_cell_coord(idx);
+    let c = open[ts_face(p)].face_weight.w;
     var total = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
         for (var side = 0; side < 2; side = side + 1) {
@@ -398,7 +362,7 @@ fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
             if f[a] == 0 || f[a] == n[a] {
                 continue;
             }
-            let at = flatten(f, m);
+            let at = ts_face(f);
             let owner = solid_owner(solid[at].face_velocity.w, a);
             if owner < 0 || u32(owner) >= u.body_count {
                 continue;
@@ -422,12 +386,11 @@ fn velocity_change(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let idx = gid.x;
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    if idx >= u32(m.x) * u32(m.y) * u32(m.z) {
+    let n = ts_cells();
+    if idx >= ts_record_count() {
         return;
     }
-    let p = unflatten(idx, m);
+    let p = ts_face_coord(idx);
     var out = solid_rw[idx];
     for (var a = 0; a < 3; a = a + 1) {
         var other = p;

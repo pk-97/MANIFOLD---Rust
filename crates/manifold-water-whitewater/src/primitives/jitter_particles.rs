@@ -8,13 +8,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
@@ -55,18 +56,32 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/jitter_particles_body.wgsl"),
     output_capacity: FusedOutputCapacity::FromInput { input: "particles" },
-    wgsl_includes: [WHITEWATER_COMMON],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
 }
 
 impl Primitive for JitterParticles {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "particles")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         if !(cell_size > 0.0 && cell_size.is_finite()) {
-            ctx.error(format!("Jitter Particles: cell size {cell_size} is not a length"));
+            ctx.error(format!(
+                "Jitter Particles: cell size {cell_size} is not a length"
+            ));
             return;
         }
         let uniforms = JitterUniforms {
@@ -77,21 +92,38 @@ impl Primitive for JitterParticles {
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(particles), Some(out)) = (ctx.inputs.array("particles"), ctx.outputs.array("out")) else {
+        let (Some(particles), Some(out)) =
+            (ctx.inputs.array("particles"), ctx.outputs.array("out"))
+        else {
             return;
         };
-        let count = (particles.size.min(out.size) / std::mem::size_of::<FluidParticle>() as u64) as u32;
+        let count =
+            (particles.size.min(out.size) / std::mem::size_of::<FluidParticle>() as u64) as u32;
         if count == 0 {
             return;
         }
-        let uniforms = JitterUniforms { dispatch_count: count, ..uniforms };
+        let uniforms = JitterUniforms {
+            dispatch_count: count,
+            ..uniforms
+        };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.jitter_particles",

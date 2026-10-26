@@ -3,7 +3,7 @@
 /// Restore the pre-stage-1 selection and both per-site merges. The surrounding
 /// indexing, arithmetic, draw and write stay shared; no production switch exists.
 pub(super) fn reference_shader() -> String {
-    let source = include_str!("shaders/gpu_flip_sheeting.wgsl");
+    let source = super::gpu_flip_sheeting::source();
     let start = source.find("// Phase 2:").unwrap();
     let end = source.find("fn bucket_dims()").unwrap();
     let mut source = format!(
@@ -34,9 +34,9 @@ pub(super) fn reference_shader() -> String {
 #[test]
 fn sheeting_bucket_shaders_validate_on_cpu() {
     for source in [
-        manifold_water_liquid::primitives::liquid_stats::with_stats_layout(include_str!(
-            "shaders/gpu_flip_sheeting.wgsl"
-        )),
+        manifold_water_liquid::primitives::liquid_stats::with_stats_layout(
+            &super::gpu_flip_sheeting::source(),
+        ),
         reference_shader(),
     ] {
         let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");
@@ -136,7 +136,7 @@ const OLD_SELECTION: &str = r#"// Phase 2: the first four markers of each sheet 
 fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
-    if c >= u.nx * u.ny * u.nz || atomicLoad(&sheet_a[c]) == 0u { return; }
+    if c >= ts_cell_count() || atomicLoad(&sheet_a[c]) == 0u { return; }
     let range = ranges[c];
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
@@ -161,7 +161,7 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
         heads[l] = 0u;
         counts[l] = 0u;
         if in_range(c) {
-            cells[l] = flat(c);
+            cells[l] = ts_cell_at(c);
             counts[l] = selected_count[cells[l]];
         }
     }

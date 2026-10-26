@@ -96,7 +96,7 @@ fn sw_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>) -> vec3<f3
         let len = sw_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_index(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
+            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
             if i != LF_NONE && i < len {
                 sum = sum + ww_corner_weight(f, corner) * sw_face(axis, i);
             }

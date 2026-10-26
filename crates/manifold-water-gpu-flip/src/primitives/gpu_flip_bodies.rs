@@ -31,7 +31,14 @@ use super::gpu_flip_pressure::Sink;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 pub(crate) use manifold_water_liquid::coupling::REACTION_FLOATS;
 
-const SHADER: &str = include_str!("shaders/gpu_flip_bodies.wgsl");
+use manifold_water_liquid::tile_storage::TILE_STORAGE;
+
+const SHADER_BODY: &str = include_str!("shaders/gpu_flip_bodies.wgsl");
+
+/// The kernels with the storage helpers they index the lattice through.
+fn shader() -> String {
+    format!("{TILE_STORAGE}\n{SHADER_BODY}")
+}
 
 const THREADS: u64 = 256;
 const SUM_FLOATS: u64 = 16;
@@ -129,7 +136,10 @@ fn records(n: [u32; 3]) -> u64 {
 /// Partial slots per body: two a fine tile (gpu_flip_pressure.rs
 /// `partial_count`).
 fn partial_slots(n: [u32; 3]) -> u64 {
-    2 * n.iter().map(|&side| u64::from(side.div_ceil(super::gpu_flip_step::TILE))).product::<u64>()
+    2 * n
+        .iter()
+        .map(|&side| u64::from(side.div_ceil(manifold_water_liquid::tile_storage::TILE)))
+        .product::<u64>()
 }
 
 /// Bytes the partials hold for `count` bodies on lattice `n`.
@@ -145,7 +155,11 @@ pub(crate) fn held_bytes(n: [u32; 3], count: u32) -> u64 {
 }
 
 fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
-    GpuBinding::Buffer { binding, buffer, offset: 0 }
+    GpuBinding::Buffer {
+        binding,
+        buffer,
+        offset: 0,
+    }
 }
 
 fn groups(threads: u64) -> [u32; 3] {
@@ -160,7 +174,8 @@ fn tile_groups(n: [u32; 3]) -> u32 {
 
 impl BodyPasses {
     fn pipelines(device: &GpuDevice) -> Pipelines {
-        let pipe = |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
+        let source = shader();
+        let pipe = |entry: &str, label: &str| device.create_compute_pipeline(&source, entry, label);
         Pipelines {
             partial: pipe("impulse_partial", "gpu_flip.bodies.partial"),
             finalize: pipe("impulse_finalize", "gpu_flip.bodies.finalize"),
@@ -171,47 +186,50 @@ impl BodyPasses {
         }
     }
 
-manifold_core::testkit_visible! {
-    /// Build the passes' pipelines; the owning node calls this at install.
-    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
-        if self.pipelines.is_none() {
-            self.pipelines = Some(Self::pipelines(device));
-        }
-        if self.clock_plan.is_none() {
-            let plan = device.create_buffer_shared(48);
-            plan.zero_fill();
-            self.clock_plan = Some(plan);
+    manifold_core::testkit_visible! {
+        /// Build the passes' pipelines; the owning node calls this at install.
+        pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
+            if self.pipelines.is_none() {
+                self.pipelines = Some(Self::pipelines(device));
+            }
+            if self.clock_plan.is_none() {
+                let plan = device.create_buffer_shared(48);
+                plan.zero_fill();
+                self.clock_plan = Some(plan);
+            }
         }
     }
-}
 
-manifold_core::testkit_visible! {
-    pub(crate) fn set_clock_plan(&mut self, plan: &GpuBuffer) {
-        self.clock_plan = Some(plan.clone());
+    manifold_core::testkit_visible! {
+        pub(crate) fn set_clock_plan(&mut self, plan: &GpuBuffer) {
+            self.clock_plan = Some(plan.clone());
+        }
     }
-}
 
     fn clock_binding(&self) -> GpuBinding<'_> {
-        buffer(15, self.clock_plan.as_ref().expect("body clock plan prepared"))
+        buffer(
+            15,
+            self.clock_plan.as_ref().expect("body clock plan prepared"),
+        )
     }
 
-manifold_core::testkit_visible! {
-    /// Allocate the sums once and the partials for `count` bodies on
-    /// lattice `n`, growing them when a larger lattice or more bodies
-    /// arrive. The pipelines come from `prepare_pipelines` at install.
-    pub(crate) fn prepare(&mut self, device: &GpuDevice, n: [u32; 3], count: u32) -> Result<(), String> {
-        assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
-        let need = partial_bytes(n, count);
-        if self.partials.as_ref().is_none_or(|p| p.size < need) {
-            self.partials = Some(device.try_create_buffer(need)?);
+    manifold_core::testkit_visible! {
+        /// Allocate the sums once and the partials for `count` bodies on
+        /// lattice `n`, growing them when a larger lattice or more bodies
+        /// arrive. The pipelines come from `prepare_pipelines` at install.
+        pub(crate) fn prepare(&mut self, device: &GpuDevice, n: [u32; 3], count: u32) -> Result<(), String> {
+            assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
+            let need = partial_bytes(n, count);
+            if self.partials.as_ref().is_none_or(|p| p.size < need) {
+                self.partials = Some(device.try_create_buffer(need)?);
+            }
+            if self.sums.is_none() {
+                // Shared so the value proofs can read the last impulse's sums.
+                self.sums = Some(device.try_create_buffer_shared(SUM_BYTES)?);
+            }
+            Ok(())
         }
-        if self.sums.is_none() {
-            // Shared so the value proofs can read the last impulse's sums.
-            self.sums = Some(device.try_create_buffer_shared(SUM_BYTES)?);
-        }
-        Ok(())
     }
-}
 
     /// The last impulse's sums record per body, for the value proofs.
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -228,7 +246,13 @@ manifold_core::testkit_visible! {
         let params = Self::params(bodies, false);
         enc.dispatch_compute(
             &pipes.poison,
-            &[GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) }, buffer(7, partials)],
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                buffer(7, partials),
+            ],
             groups(u64::from(bodies.count) * partial_slots(bodies.lattice) * PARTIAL_FLOATS),
             "gpu_flip.bodies.poison",
         );
@@ -251,9 +275,7 @@ manifold_core::testkit_visible! {
 
     fn parts(&self) -> Result<(&Pipelines, &GpuBuffer, &GpuBuffer), String> {
         match (&self.pipelines, &self.partials, &self.sums) {
-            (Some(pipes), Some(partials), Some(sums)) => {
-                Ok((pipes, partials, sums))
-            }
+            (Some(pipes), Some(partials), Some(sums)) => Ok((pipes, partials, sums)),
             _ => Err("the body passes were not prepared".into()),
         }
     }
@@ -271,9 +293,15 @@ manifold_core::testkit_visible! {
     ) -> Result<(), String> {
         let (pipes, partials, sums) = self.parts()?;
         if partials.size < partial_bytes(bodies.lattice, bodies.count) {
-            return Err(format!("the body partials were prepared for fewer than {} bodies on {:?}", bodies.count, bodies.lattice));
+            return Err(format!(
+                "the body partials were prepared for fewer than {} bodies on {:?}",
+                bodies.count, bodies.lattice
+            ));
         }
-        let params = Params { live: gate.map_or(0, |g| g.live), ..Self::params(bodies, reaction.is_some()) };
+        let params = Params {
+            live: gate.map_or(0, |g| g.live),
+            ..Self::params(bodies, reaction.is_some())
+        };
         let data = bytemuck::bytes_of(&params);
         let partial = [
             GpuBinding::Bytes { binding: 0, data },
@@ -289,7 +317,14 @@ manifold_core::testkit_visible! {
         ];
         let groups = [tile_groups(bodies.lattice), bodies.count.max(1), 1];
         match gate {
-            Some(gate) => enc.gated(&pipes.partial, &partial, groups, gate.buffer, gate.partial, "gpu_flip.bodies.partial"),
+            Some(gate) => enc.gated(
+                &pipes.partial,
+                &partial,
+                groups,
+                gate.buffer,
+                gate.partial,
+                "gpu_flip.bodies.partial",
+            ),
             None => enc.plain(&pipes.partial, &partial, groups, "gpu_flip.bodies.partial"),
         }
         // A fixed array, not a Vec: this runs every step. Without a reaction
@@ -309,27 +344,39 @@ manifold_core::testkit_visible! {
         ];
         let groups = [bodies.count.max(1), 1, 1];
         match gate {
-            Some(gate) => enc.gated(&pipes.finalize, &finalize, groups, gate.buffer, gate.finalize, "gpu_flip.bodies.finalize"),
-            None => enc.plain(&pipes.finalize, &finalize, groups, "gpu_flip.bodies.finalize"),
+            Some(gate) => enc.gated(
+                &pipes.finalize,
+                &finalize,
+                groups,
+                gate.buffer,
+                gate.finalize,
+                "gpu_flip.bodies.finalize",
+            ),
+            None => enc.plain(
+                &pipes.finalize,
+                &finalize,
+                groups,
+                "gpu_flip.bodies.finalize",
+            ),
         }
         Ok(())
     }
 
-manifold_core::testkit_visible! {
-    /// Inside a conjugate gradient iteration: the bodies' share of the
-    /// operator on the search direction `direction`, added to `s`, over the
-    /// solver's fine active `tiles`.
-    pub(crate) fn apply<S: Sink>(
-        &self,
-        enc: &mut S,
-        bodies: &Bodies<'_>,
-        tiles: Tiles<'_>,
-        direction: &GpuBuffer,
-        s: &GpuBuffer,
-    ) -> Result<(), String> {
-        self.apply_on(enc, bodies, tiles, direction, s, None)
+    manifold_core::testkit_visible! {
+        /// Inside a conjugate gradient iteration: the bodies' share of the
+        /// operator on the search direction `direction`, added to `s`, over the
+        /// solver's fine active `tiles`.
+        pub(crate) fn apply<S: Sink>(
+            &self,
+            enc: &mut S,
+            bodies: &Bodies<'_>,
+            tiles: Tiles<'_>,
+            direction: &GpuBuffer,
+            s: &GpuBuffer,
+        ) -> Result<(), String> {
+            self.apply_on(enc, bodies, tiles, direction, s, None)
+        }
     }
-}
 
     /// [`Self::apply`] on the solve's gate: a round the stop switched off,
     /// or an inactive clock slot, runs none of its three passes.
@@ -358,7 +405,10 @@ manifold_core::testkit_visible! {
         let (pipes, _, sums) = self.parts()?;
         let params = Self::params(bodies, false);
         let product = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&params),
+            },
             buffer(1, bodies.water),
             buffer(2, bodies.open),
             buffer(3, bodies.solid),
@@ -371,56 +421,66 @@ manifold_core::testkit_visible! {
         ];
         let groups = [tile_groups(bodies.lattice), 1, 1];
         match gate {
-            Some(gate) => enc.gated(&pipes.product, &product, groups, gate.buffer, gate.product, "gpu_flip.bodies.product"),
+            Some(gate) => enc.gated(
+                &pipes.product,
+                &product,
+                groups,
+                gate.buffer,
+                gate.product,
+                "gpu_flip.bodies.product",
+            ),
             None => enc.plain(&pipes.product, &product, groups, "gpu_flip.bodies.product"),
         }
         Ok(())
     }
 
-manifold_core::testkit_visible! {
-    /// After the projection, as the engine finishes its pressure stage: the
-    /// pressure's impulse into `reaction` and its velocity change into the
-    /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`).
-    pub(crate) fn react(
-        &self,
-        enc: &mut GpuEncoder,
-        bodies: &Bodies<'_>,
-        tiles: Tiles<'_>,
-        pressure: &GpuBuffer,
-        reaction: &GpuBuffer,
-    ) -> Result<(), String> {
-        self.impulse(enc, bodies, tiles, pressure, Some(reaction), None)?;
-        let (pipes, _, sums) = self.parts()?;
-        let params = Self::params(bodies, false);
-        enc.dispatch_compute(
-            &pipes.velocity,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                buffer(4, bodies.bodies),
-                buffer(8, sums),
-                buffer(11, bodies.solid),
-                self.clock_binding(),
-            ],
-            groups(records(bodies.lattice)),
-            "gpu_flip.bodies.velocity_change",
-        );
-        Ok(())
+    manifold_core::testkit_visible! {
+        /// After the projection, as the engine finishes its pressure stage: the
+        /// pressure's impulse into `reaction` and its velocity change into the
+        /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`).
+        pub(crate) fn react(
+            &self,
+            enc: &mut GpuEncoder,
+            bodies: &Bodies<'_>,
+            tiles: Tiles<'_>,
+            pressure: &GpuBuffer,
+            reaction: &GpuBuffer,
+        ) -> Result<(), String> {
+            self.impulse(enc, bodies, tiles, pressure, Some(reaction), None)?;
+            let (pipes, _, sums) = self.parts()?;
+            let params = Self::params(bodies, false);
+            enc.dispatch_compute(
+                &pipes.velocity,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+                    buffer(4, bodies.bodies),
+                    buffer(8, sums),
+                    buffer(11, bodies.solid),
+                    self.clock_binding(),
+                ],
+                groups(records(bodies.lattice)),
+                "gpu_flip.bodies.velocity_change",
+            );
+            Ok(())
+        }
     }
-}
 }
 
 /// Why a step's dynamic bodies are refused, or None: every body's owner code
 /// must fit a byte, and the reaction must hold every body.
 pub(crate) fn body_refusal(count: u32, reaction: Option<&GpuBuffer>) -> Option<String> {
     if count as usize > MAX_LIQUID_BODIES {
-        return Some(format!("{count} bodies exceed the {MAX_LIQUID_BODIES} a liquid holds"));
+        return Some(format!(
+            "{count} bodies exceed the {MAX_LIQUID_BODIES} a liquid holds"
+        ));
     }
     let need = u64::from(count) * REACTION_FLOATS as u64 * 4;
     match reaction {
         None => Some("dynamic bodies need the domain's reaction wired".into()),
-        Some(buffer) if buffer.size < need => {
-            Some(format!("the reaction holds {} bytes, under the {need} {count} bodies need", buffer.size))
-        }
+        Some(buffer) if buffer.size < need => Some(format!(
+            "the reaction holds {} bytes, under the {need} {count} bodies need",
+            buffer.size
+        )),
         Some(_) => None,
     }
 }
@@ -431,12 +491,27 @@ mod tests {
 
     #[test]
     fn body_shader_validates_with_every_entry() {
-        let module = naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("{e:?}"));
-        let entries: Vec<&str> = module.entry_points.iter().map(|e| e.name.as_str()).collect();
-        for entry in ["impulse_partial", "impulse_finalize", "body_product", "velocity_change", "poison_partials"] {
+        let source = shader();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let entries: Vec<&str> = module
+            .entry_points
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        for entry in [
+            "impulse_partial",
+            "impulse_finalize",
+            "body_product",
+            "velocity_change",
+            "poison_partials",
+        ] {
             assert!(entries.contains(&entry), "missing entry {entry}");
         }
     }

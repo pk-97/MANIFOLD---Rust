@@ -145,10 +145,7 @@ const REDUCE: u32 = 2u;
 var<workgroup> sums: array<f32, 256>;
 var<workgroup> scan: array<u32, 256>;
 
-const TILE: i32 = 8;
-// A thread of an active tile whose cell runs past the lattice (a partial
-// edge tile).
-const NO_CELL: u32 = 0xffffffffu;
+const TILE: i32 = i32(TS_TILE);
 
 fn tile_dims(n: vec3<i32>) -> vec3<i32> {
     return (n + vec3<i32>(TILE - 1)) / TILE;
@@ -159,13 +156,13 @@ fn tile_total(n: vec3<i32>) -> u32 {
     return u32(t.x * t.y * t.z);
 }
 
-// Cell `local` (0..512) of `tile`, flattened in the lattice, or NO_CELL.
+// Cell `local` (0..512) of `tile`, flattened in the lattice, or TS_NONE.
 fn tile_cell(tile: u32, local: u32, n: vec3<i32>) -> u32 {
-    let p = coords(tile, tile_dims(n)) * TILE + coords(local, vec3<i32>(TILE));
+    let p = ts_grid_coord(tile, tile_dims(n)) * TILE + ts_grid_coord(local, vec3<i32>(TILE));
     if any(p >= n) {
-        return NO_CELL;
+        return TS_NONE;
     }
-    return cell(p, n);
+    return ts_grid_index(p, n);
 }
 
 // Whether thread gid's workgroup is inside the dispatched level's active
@@ -263,24 +260,12 @@ fn max_of_partials(li: u32, count: u32) -> f32 {
     return sums[0];
 }
 
-fn lattice() -> vec3<i32> {
+fn ts_cells() -> vec3<i32> {
     return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz));
 }
 
 fn coarse_lattice() -> vec3<i32> {
     return vec3<i32>(i32(u.cx), i32(u.cy), i32(u.cz));
-}
-
-fn coords(idx: u32, n: vec3<i32>) -> vec3<i32> {
-    return vec3<i32>(
-        i32(idx % u32(n.x)),
-        i32((idx / u32(n.x)) % u32(n.y)),
-        i32(idx / (u32(n.x) * u32(n.y))),
-    );
-}
-
-fn cell(p: vec3<i32>, n: vec3<i32>) -> u32 {
-    return u32(p.x + n.x * (p.y + n.y * p.z));
 }
 
 fn is_water(at: u32) -> bool {
@@ -297,7 +282,7 @@ fn face_weight(p: vec3<i32>, a: i32, d: i32, n: vec3<i32>) -> f32 {
     }
     var face = p;
     face[a] = max(p[a], q[a]);
-    return faces[cell(face, n + vec3<i32>(1))].weight[a];
+    return faces[ts_grid_index(face, n + vec3<i32>(1))].weight[a];
 }
 
 // The ghost ratio θ an air neighbour `air` of water cell `own` puts on the
@@ -320,14 +305,14 @@ fn rows_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if slot_inactive() {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let idx = gid.x;
-    if idx >= u.nx * u.ny * u.nz {
+    if idx >= ts_cell_count() {
         return;
     }
     var row = Row(vec4<f32>(0.0), vec4<f32>(0.0));
     if is_water(idx) {
-        let p = coords(idx, n);
+        let p = ts_grid_coord(idx, n);
         var ghost = 0.0;
         var plain = 0.0;
         for (var k = 0u; k < 6u; k = k + 1u) {
@@ -339,7 +324,7 @@ fn rows_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 plain = plain + w;
                 var q = p;
                 q[a] = p[a] + d;
-                let at = cell(q, n);
+                let at = ts_grid_index(q, n);
                 if is_water(at) {
                     if k < 4u {
                         row.lo[k] = w;
@@ -407,14 +392,14 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
     if !listed(pair) {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     // Tile origins are multiples of 8 and pair.x is even, so y/z alone
     // determine which member has the requested global checkerboard color.
     let offset = u.color ^ (((pair >> 3u) ^ (pair >> 6u)) & 1u);
     let idx = listed_cell(pair + offset, n);
     let other = listed_cell(pair + (offset ^ 1u), n);
     var product = 0.0;
-    if idx != NO_CELL {
+    if idx != TS_NONE {
         var e = out[idx];
         if is_water(idx) {
             let h2 = u.cell_size * u.cell_size;
@@ -428,7 +413,7 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
         product = src[idx] * e;
     }
     var other_product = 0.0;
-    if other != NO_CELL {
+    if other != TS_NONE {
         if from_zero() {
             out[other] = 0.0;
         }
@@ -461,9 +446,9 @@ fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     if !listed(gid.x) {
         return;
     }
-    let idx = listed_cell(gid.x, lattice());
+    let idx = listed_cell(gid.x, ts_cells());
     var product = 0.0;
-    if idx != NO_CELL {
+    if idx != TS_NONE {
         var result = 0.0;
         if is_water(idx) {
             let s = stencil(idx, 1u);
@@ -512,7 +497,7 @@ var<workgroup> coarse_patch: array<f32, 144>;
 fn half_tile_origin(gid: u32, n: vec3<i32>) -> vec3<i32> {
     let tile = lists[u.list_base + (gid >> 9u)];
     let half = i32((gid >> 8u) & 1u);
-    return coords(tile, tile_dims(n)) * TILE + vec3<i32>(0, 0, 4 * half);
+    return ts_grid_coord(tile, tile_dims(n)) * TILE + vec3<i32>(0, 0, 4 * half);
 }
 
 // Whether fine cell `at` keeps its right-hand side at the gradient's start
@@ -521,7 +506,7 @@ fn open_water(at: u32, n: vec3<i32>) -> bool {
     if !is_water(at) {
         return false;
     }
-    let p = coords(at, n);
+    let p = ts_grid_coord(at, n);
     var diagonal = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
         diagonal = diagonal + face_weight(p, a, -1, n) + face_weight(p, a, 1, n);
@@ -542,17 +527,17 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if slot_inactive() || !listed(gid.x) {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let c = coarse_lattice();
     let masked = (u.mode & 1u) != 0u;
     let adds = (u.mode & 4u) != 0u;
     let origin = half_tile_origin(gid.x, c);
     let base = 2 * origin - vec3<i32>(1);
     for (var k = gid.x & 255u; k < RESTRICT_FOOT_CELLS; k = k + 256u) {
-        let q = base + coords(k, RESTRICT_FOOT);
+        let q = base + ts_grid_coord(k, RESTRICT_FOOT);
         var v = 0.0;
         if all(q >= vec3<i32>(0)) && all(q < n) {
-            let at = cell(q, n);
+            let at = ts_grid_index(q, n);
             if !masked || open_water(at, n) {
                 v = src[at];
             }
@@ -561,7 +546,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     workgroupBarrier();
     let idx = listed_cell(gid.x, c);
-    if idx == NO_CELL {
+    if idx == TS_NONE {
         return;
     }
     if !(coarse_water[idx] > 0.5) {
@@ -570,7 +555,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         return;
     }
-    let p = coords(idx, c);
+    let p = ts_grid_coord(idx, c);
     let at = 2 * (p - origin) + vec3<i32>(1);
     var sum = 0.0;
     for (var dz = -1; dz <= 2; dz = dz + 1) {
@@ -590,7 +575,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if fx < 0 || fx >= n.x {
                     continue;
                 }
-                let tap = fine_patch[cell(at + vec3<i32>(dx, dy, dz), RESTRICT_FOOT)];
+                let tap = fine_patch[ts_grid_index(at + vec3<i32>(dx, dy, dz), RESTRICT_FOOT)];
                 sum = sum + wy * transfer_weight(fx, p.x, c.x) * tap;
             }
         }
@@ -606,7 +591,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // prolongation chain, so a prolonged vector is 0 off the water.
 @compute @workgroup_size(256, 1, 1)
 fn zero_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !slot_inactive() && !stopped() && gid.x < u.nx * u.ny * u.nz {
+    if !slot_inactive() && !stopped() && gid.x < ts_cell_count() {
         out[gid.x] = 0.0;
     }
 }
@@ -620,25 +605,25 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if slot_inactive() || !listed(gid.x) {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let c = coarse_lattice();
     let origin = half_tile_origin(gid.x, n);
     let base = origin / 2 - vec3<i32>(1);
     let k = gid.x & 255u;
     if k < PROLONG_FOOT_CELLS {
-        let q = base + coords(k, PROLONG_FOOT);
+        let q = base + ts_grid_coord(k, PROLONG_FOOT);
         var v = 0.0;
         if all(q >= vec3<i32>(0)) && all(q < c) {
-            v = src[cell(q, c)];
+            v = src[ts_grid_index(q, c)];
         }
         coarse_patch[k] = v;
     }
     workgroupBarrier();
     let idx = listed_cell(gid.x, n);
-    if idx == NO_CELL || !is_water(idx) {
+    if idx == TS_NONE || !is_water(idx) {
         return;
     }
-    let f = coords(idx, n);
+    let f = ts_grid_coord(idx, n);
     let parent = f / 2;
     let odd = (f % vec3<i32>(2)) == vec3<i32>(1);
     let other = clamp(select(parent - vec3<i32>(1), parent + vec3<i32>(1), odd), vec3<i32>(0), c - vec3<i32>(1));
@@ -646,7 +631,7 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var corner = 0; corner < 8; corner = corner + 1) {
         let pick = vec3<bool>((corner & 1) != 0, (corner & 2) != 0, (corner & 4) != 0);
         let w = select(vec3<f32>(0.75), vec3<f32>(0.25), pick);
-        let tap = coarse_patch[cell(select(parent, other, pick) - base, PROLONG_FOOT)];
+        let tap = coarse_patch[ts_grid_index(select(parent, other, pick) - base, PROLONG_FOOT)];
         sum = sum + w.x * w.y * w.z * tap;
     }
     out[idx] = out[idx] + sum;
@@ -660,7 +645,7 @@ const KIND_WATER: u32 = 1u;
 const KIND_SOLID: u32 = 2u;
 
 fn kind(p: vec3<i32>, n: vec3<i32>) -> u32 {
-    let at = cell(p, n);
+    let at = ts_grid_index(p, n);
     if water[at] > 0.5 {
         return KIND_WATER;
     }
@@ -689,13 +674,13 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if slot_inactive() {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let c = coarse_lattice();
     let idx = gid.x;
     if idx >= u.cx * u.cy * u.cz {
         return;
     }
-    let p = 2 * coords(idx, c);
+    let p = 2 * ts_grid_coord(idx, c);
     var any_air = false;
     var all_solid = true;
     var touched = false;
@@ -705,7 +690,7 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let k = kind(q, n);
             any_air = any_air || k == KIND_AIR;
             all_solid = all_solid && k == KIND_SOLID;
-            if aux[cell(q, n)] > 0.5 {
+            if aux[ts_grid_index(q, n)] > 0.5 {
                 touched = true;
             }
         }
@@ -722,7 +707,7 @@ fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     if slot_inactive() {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     // Eight tiles per workgroup, with 32 lanes sharing each tile's 10³ halo.
     // Invalid edge tiles contribute zero and still reach every barrier.
     let t = gid.x >> 5u;
@@ -730,11 +715,11 @@ fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     let valid = t < tile_total(n);
     var lit = valid && u.all_tiles != 0u;
     if valid && !lit {
-        let origin = coords(t, tile_dims(n)) * TILE;
+        let origin = ts_grid_coord(t, tile_dims(n)) * TILE;
         for (var k = lane; k < 1000u && !lit; k = k + 32u) {
-            let p = origin - vec3<i32>(1) + coords(k, vec3<i32>(10));
+            let p = origin - vec3<i32>(1) + ts_grid_coord(k, vec3<i32>(10));
             if all(p >= vec3<i32>(0)) && all(p < n) {
-                lit = is_water(cell(p, n));
+                lit = is_water(ts_grid_index(p, n));
             }
         }
     }
@@ -762,7 +747,7 @@ fn lists_main(@builtin(local_invocation_index) li: u32) {
     if slot_inactive() {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let total = tile_total(n);
     let run = (total + 255u) / 256u;
     let first = min(li * run, total);
@@ -802,14 +787,14 @@ fn lists_main(@builtin(local_invocation_index) li: u32) {
 // outside the proofs (gpu_flip_pressure_tests.rs).
 @compute @workgroup_size(256, 1, 1)
 fn poison_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let n = lattice();
+    let n = ts_cells();
     let tile = gid.x >> 9u;
     if tile >= tile_total(n) || flags[u.list_base + tile] != 0u {
         return;
     }
     let nan = bitcast<f32>(0x7fc00000u);
     let idx = tile_cell(tile, gid.x & 511u, n);
-    if idx != NO_CELL {
+    if idx != TS_NONE {
         out[idx] = nan;
     }
     if (gid.x & 511u) == 0u && u.color == 1u {
@@ -827,7 +812,7 @@ fn coarsen_faces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if slot_inactive() {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let c = coarse_lattice();
     let m = c + vec3<i32>(1);
     let idx = gid.x;
@@ -835,7 +820,7 @@ fn coarsen_faces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     var record = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    let p = coords(idx, m);
+    let p = ts_grid_coord(idx, m);
     for (var a = 0; a < 3; a = a + 1) {
         var across = p;
         across[a] = 0;
@@ -855,7 +840,7 @@ fn coarsen_faces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var inside = q;
             inside[a] = 0;
             if all(inside < n) {
-                sum = sum + faces[cell(q, n + vec3<i32>(1))].weight[a];
+                sum = sum + faces[ts_grid_index(q, n + vec3<i32>(1))].weight[a];
             }
         }
         record.weight[a] = 0.25 * sum;
@@ -872,14 +857,14 @@ fn coarsen_faces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // including internal (c_low - c_high) v_s terms. weight.xyz is open area.
 @compute @workgroup_size(256, 1, 1)
 fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let n = lattice();
+    let n = ts_cells();
     let c = coarse_lattice();
     let m = c + vec3<i32>(1);
     let idx = gid.x;
     if idx >= u32(m.x * m.y * m.z) {
         return;
     }
-    let p = coords(idx, m);
+    let p = ts_grid_coord(idx, m);
     let fm = n + vec3<i32>(1);
     var record = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     for (var a = 0; a < 3; a = a + 1) {
@@ -902,7 +887,7 @@ fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var inside = q;
             inside[a] = 0;
             if all(inside < n) {
-                let face = cell(q, fm);
+                let face = ts_grid_index(q, fm);
                 let w = faces[face].weight[a];
                 area = area + w;
                 flux = flux + w * src[8u * face + u32(a)];
@@ -915,11 +900,11 @@ fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var solid_source = 0.0;
         var volume = 0.0;
         for (var k = 0u; k < 8u; k = k + 1u) {
-            let q = 2 * p + coords(k, vec3<i32>(2));
-            if any(q >= n) || !(water[cell(q, n)] > 0.5) {
+            let q = 2 * p + ts_grid_coord(k, vec3<i32>(2));
+            if any(q >= n) || !(water[ts_grid_index(q, n)] > 0.5) {
                 continue;
             }
-            let open_volume = faces[cell(q, fm)].weight.w;
+            let open_volume = faces[ts_grid_index(q, fm)].weight.w;
             volume = volume + open_volume;
             for (var a = 0; a < 3; a = a + 1) {
                 for (var side = 0; side < 2; side = side + 1) {
@@ -928,7 +913,7 @@ fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if f[a] == 0 || f[a] == n[a] {
                         continue;
                     }
-                    let face = cell(f, fm);
+                    let face = ts_grid_index(f, fm);
                     let sign = f32(2 * side - 1);
                     solid_source = solid_source + sign *
                         (open_volume - faces[face].weight[a]) * aux[8u * face + u32(a)];
@@ -948,7 +933,7 @@ fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
     if stopped() {
         return;
     }
-    let cells = u.nx * u.ny * u.nz;
+    let cells = ts_cell_count();
     if i >= cells {
         return;
     }
@@ -972,17 +957,17 @@ fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invoc
     if slot_inactive() {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let tile = gid.x >> 9u;
     if tile >= tile_total(n) {
         return;
     }
     let idx = tile_cell(tile, gid.x & 511u, n);
     var r = 0.0;
-    if idx != NO_CELL {
+    if idx != TS_NONE {
         var diagonal = 0.0;
         if is_water(idx) {
-            let p = coords(idx, n);
+            let p = ts_grid_coord(idx, n);
             for (var a = 0; a < 3; a = a + 1) {
                 diagonal = diagonal + face_weight(p, a, -1, n) + face_weight(p, a, 1, n);
             }
@@ -1005,9 +990,9 @@ fn dot_partial_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(loca
     if !listed(gid.x) {
         return;
     }
-    let idx = listed_cell(gid.x, lattice());
+    let idx = listed_cell(gid.x, ts_cells());
     var product = 0.0;
-    if idx != NO_CELL {
+    if idx != TS_NONE {
         product = src[idx] * aux[idx];
     }
     fold_sum(li, listed_partial(gid.x), product);
@@ -1038,8 +1023,8 @@ fn direction_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !listed(gid.x) {
         return;
     }
-    let idx = listed_cell(gid.x, lattice());
-    if idx == NO_CELL {
+    let idx = listed_cell(gid.x, ts_cells());
+    if idx == TS_NONE {
         return;
     }
     let k = u32(progress[1]);
@@ -1060,9 +1045,9 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
     if !listed(gid.x) {
         return;
     }
-    let idx = listed_cell(gid.x, lattice());
+    let idx = listed_cell(gid.x, ts_cells());
     var r = 0.0;
-    if idx != NO_CELL {
+    if idx != TS_NONE {
         let k = u32(progress[1]);
         let alpha = ratio(scalars[2u * k], scalars[2u * k + 1u]);
         let x = select(out[idx], 0.0, k == 0u);

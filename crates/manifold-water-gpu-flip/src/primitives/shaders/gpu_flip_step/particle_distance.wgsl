@@ -9,15 +9,15 @@
 fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
-    if idx == NO_CELL {
+    if idx == TS_NONE {
         return;
     }
     if u.narrow_band == 2u && !narrow_cell(idx) {
         cell_out[idx] = 3.0 * u.cell_size;
         return;
     }
-    let n = lattice();
-    let p = unflatten(idx, n);
+    let n = ts_cells();
+    let p = ts_cell_coord(idx);
     let h = u.cell_size;
     let centre = u.box_min + (vec3<f32>(p) + vec3<f32>(0.5)) * h;
     let radius = 0.8660254 * h;
@@ -37,7 +37,7 @@ fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if ring == 2 && max(max(offset.x, offset.y), offset.z) < 2 {
                         continue;
                     }
-                    let range = ranges[flatten(vec3<i32>(x, y, z), n)];
+                    let range = ranges[ts_cell_at(vec3<i32>(x, y, z))];
                     let start = min(range.start, slots);
                     let end = start + min(range.count, slots - start);
                     for (var s = start; s < end; s = s + 1u) {

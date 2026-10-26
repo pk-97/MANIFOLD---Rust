@@ -16,6 +16,7 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -108,7 +109,7 @@ manifold_node_engine::primitive! {
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/grid_to_matter_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
+    wgsl_includes: [TILE_GRID, LIQUID_POSE, LIQUID_COLLIDER],
     atomic_outputs: ["reaction_out"],
 }
 

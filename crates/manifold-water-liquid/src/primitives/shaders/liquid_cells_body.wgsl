@@ -16,7 +16,7 @@ fn lc_kind(c: vec3<u32>, cells: vec3<u32>, nodes: vec3<u32>) -> u32 {
     if 0.125 * solid < 0.0 {
         return 2u;
     }
-    return select(0u, 1u, buf_distance[ww_cell_index(c, cells)] < 0.0);
+    return select(0u, 1u, buf_distance[ts_grid_index(vec3<i32>(c), vec3<i32>(cells))] < 0.0);
 }
 
 fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> u32 {
@@ -29,7 +29,7 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> u32 {
     if idx >= total || total > arrayLength(&buf_distance) || nodes.x * nodes.y * nodes.z > arrayLength(&buf_solid) {
         return 0u;
     }
-    let c = ww_cell(idx, cells);
+    let c = vec3<u32>(ts_grid_coord(idx, vec3<i32>(cells)));
     let own = lc_kind(c, cells, nodes);
     if own != 1u {
         return own;

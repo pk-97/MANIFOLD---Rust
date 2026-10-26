@@ -18,7 +18,7 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, step: f3
         return none;
     }
     let reach = i32(max(round(step), 1.0));
-    let c = ww_cell(idx, cells);
+    let c = vec3<u32>(ts_grid_coord(idx, vec3<i32>(cells)));
     let own = buf_crossings[idx];
     let centre = vec3<f32>(c) + vec3<f32>(0.5);
     var best = own;
@@ -31,7 +31,7 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, step: f3
                 if (dx == 0 && dy == 0 && dz == 0) || any(n < vec3<i32>(0)) || any(n >= vec3<i32>(cells)) {
                     continue;
                 }
-                let other = buf_crossings[ww_cell_index(vec3<u32>(n), cells)];
+                let other = buf_crossings[ts_grid_index(vec3<i32>(vec3<u32>(n)), vec3<i32>(cells))];
                 let e = other.crossing - centre;
                 let ee = dot(e, e);
                 if ee < nearest {

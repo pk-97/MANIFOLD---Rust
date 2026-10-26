@@ -7,12 +7,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::whitewater::{SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes, refinement};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_storage::TILE_GRID;
+use manifold_water_liquid::whitewater::{
+    SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes,
+    refinement,
+};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -66,11 +70,16 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/surface_crossings_body.wgsl"),
     input_access: [BufferGather, BufferGather],
-    wgsl_includes: [WHITEWATER_COMMON],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
 }
 
 impl Primitive for SurfaceCrossings {
-    fn array_output_capacity(&self, port: &str, params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
         if port != "out" {
             return None;
         }
@@ -85,7 +94,8 @@ impl Primitive for SurfaceCrossings {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let nodes = grid_nodes(ctx);
-        let levels = ["level_nodes_x", "level_nodes_y", "level_nodes_z"].map(|name| ctx.scalar_or_param(name, 211.0).round().max(0.0) as u32);
+        let levels = ["level_nodes_x", "level_nodes_y", "level_nodes_z"]
+            .map(|name| ctx.scalar_or_param(name, 211.0).round().max(0.0) as u32);
         let s = match refinement(nodes, levels) {
             Ok(s) => s,
             Err(message) => {
@@ -95,13 +105,20 @@ impl Primitive for SurfaceCrossings {
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(level_set), Some(solid), Some(out)) = (ctx.inputs.array("level_set"), ctx.inputs.array("solid"), ctx.outputs.array("out")) else {
+        let (Some(level_set), Some(solid), Some(out)) = (
+            ctx.inputs.array("level_set"),
+            ctx.inputs.array("solid"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
         let cells = nodes.map(|n| n - 1);
         let count = cell_total(cells);
         let level_count = cell_total(levels);
-        if count * SURFACE_CROSSING_BYTES > out.size || cell_total(nodes) * 4 > solid.size || level_count * 4 > level_set.size {
+        if count * SURFACE_CROSSING_BYTES > out.size
+            || cell_total(nodes) * 4 > solid.size
+            || level_count * 4 > level_set.size
+        {
             ctx.error(format!("Surface Crossings: a {nodes:?}-node grid at refinement {s} is larger than its arrays"));
             return;
         }
@@ -119,10 +136,25 @@ impl Primitive for SurfaceCrossings {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: level_set, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: level_set,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: solid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [(count as u32).div_ceil(256), 1, 1],
             "node.surface_crossings",

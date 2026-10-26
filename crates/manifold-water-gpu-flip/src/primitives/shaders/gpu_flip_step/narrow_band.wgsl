@@ -8,7 +8,7 @@ fn narrow_move(@builtin(global_invocation_id) gid: vec3<u32>) {
     var out = sorted[i];
     if u.step_in_tick == 0 { capped[2u*i] = 0u; capped[2u*i+1u] = 0u; }
     if out.position_radius.w <= 0.0 { particles_out[i] = out; return; }
-    let n = lattice();
+    let n = ts_cells();
     let q = (out.position_radius.xyz - u.box_min) / u.cell_size;
     let dt = adaptive_step_dt() / u.cell_size;
     let a = sample(q, n, 0u);
@@ -52,5 +52,5 @@ fn narrow_tally() {
 
 @compute @workgroup_size(256)
 fn narrow_disabled(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x < cell_total() { cell_out[gid.x] = f32(u.n.x + u.n.y + u.n.z) * u.cell_size; }
+    if gid.x < ts_cell_count() { cell_out[gid.x] = f32(u.n.x + u.n.y + u.n.z) * u.cell_size; }
 }

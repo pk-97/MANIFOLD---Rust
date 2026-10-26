@@ -61,7 +61,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/turbulence_field_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: manifold_node_engine::freeze::classify::FusedOutputCapacity::FromInput { input: "distance" },
-    wgsl_includes: [WHITEWATER_COMMON, manifold_water_liquid::grid::LIQUID_FACES],
+    wgsl_includes: [manifold_water_liquid::tile_storage::TILE_GRID, WHITEWATER_COMMON, manifold_water_liquid::grid::LIQUID_FACES],
 }
 
 impl Primitive for TurbulenceField {

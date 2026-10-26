@@ -5,15 +5,16 @@
 
 use std::borrow::Cow;
 
-use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 use manifold_gpu::GpuBinding;
+use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, cell_total, grid_cells, particle_grid};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`,
@@ -81,12 +82,24 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/whitewater_type_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "spawns" },
-    wgsl_includes: [WHITEWATER_COMMON],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
 }
 
 impl Primitive for WhitewaterType {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "spawns").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "spawns")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -99,14 +112,20 @@ impl Primitive for WhitewaterType {
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(spawns), Some(distance), Some(cells), Some(out)) =
-            (ctx.inputs.array("spawns"), ctx.inputs.array("distance"), ctx.inputs.array("cells"), ctx.outputs.array("out"))
-        else {
+        let (Some(spawns), Some(distance), Some(cells), Some(out)) = (
+            ctx.inputs.array("spawns"),
+            ctx.inputs.array("distance"),
+            ctx.inputs.array("cells"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
         let total = grid_cells(grid.nodes).map_or(0, cell_total);
         if total * 4 > distance.size.min(cells.size) {
-            ctx.error(format!("Whitewater Type: a {:?}-node grid is larger than its distance or cells", grid.nodes));
+            ctx.error(format!(
+                "Whitewater Type: a {:?}-node grid is larger than its distance or cells",
+                grid.nodes
+            ));
             return;
         }
         let record = std::mem::size_of::<WhitewaterSpawn>() as u64;
@@ -128,7 +147,8 @@ impl Primitive for WhitewaterType {
             nodes_y,
             nodes_z,
             spray_speed: ctx.scalar_or_param("spray_speed", 1.0),
-            seed: ctx.scalar_or_param("seed", 0.0), epoch: ctx.scalar_or_param("epoch", 0.0),
+            seed: ctx.scalar_or_param("seed", 0.0),
+            epoch: ctx.scalar_or_param("epoch", 0.0),
             dust: ctx.scalar_or_param("dust", 0.0),
             dispatch_count: count,
             _pad0: 0,
@@ -138,11 +158,30 @@ impl Primitive for WhitewaterType {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: spawns, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: distance, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: cells, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: spawns,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: distance,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: cells,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.whitewater_type",

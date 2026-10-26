@@ -18,14 +18,14 @@ fn wc_distance(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_distance[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn wc_curvature(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_curvature[ww_cell_index(vec3<u32>(c), cells)].value;
+    return buf_curvature[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))].value;
 }
 
 fn wc_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
@@ -36,7 +36,7 @@ fn wc_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
                 if (dx == 0 && dy == 0 && dz == 0) || !ww_in_grid(n, cells) {
                     continue;
                 }
-                if buf_cells[ww_cell_index(vec3<u32>(n), cells)] == 0u {
+                if buf_cells[ts_grid_index(vec3<i32>(vec3<u32>(n)), vec3<i32>(cells))] == 0u {
                     return true;
                 }
             }

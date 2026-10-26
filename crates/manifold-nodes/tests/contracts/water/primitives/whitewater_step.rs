@@ -17,7 +17,7 @@ mod fused_tests {
         );
     }
 
-    fn face_refusal(packed: bool, axes: [bool; 3], tick: bool, phrase: &str) {
+    fn face_refusal(packed: bool, axes: [bool; 3], phrase: &str) {
         use manifold_node_engine::exec::extent::ExtentError;
         use manifold_node_engine::{
             bindings::NodeInputs, bindings::NodeOutputs, bindings::Slot,
@@ -27,10 +27,7 @@ mod fused_tests {
         use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
         use manifold_nodes_water::testkit::preset_extents::check_preset_extents;
         let backend = MockBackend::new();
-        let mut inputs = Vec::new();
-        if tick {
-            inputs.push(("distance", Slot(0)));
-        }
+        let mut inputs = vec![("distance", Slot(0))];
         if packed {
             inputs.push(("faces", Slot(1)));
         }
@@ -108,9 +105,6 @@ mod fused_tests {
             if w.to_node != whitewater {
                 return true;
             }
-            if !tick && w.to_port == "distance" {
-                return false;
-            }
             ["face_u", "face_v", "face_w"]
                 .iter()
                 .position(|p| *p == w.to_port)
@@ -154,7 +148,6 @@ mod fused_tests {
             face_refusal(
                 true,
                 std::array::from_fn(|a| mask & (1 << a) != 0),
-                true,
                 "not both",
             );
         }
@@ -162,25 +155,16 @@ mod fused_tests {
 
     #[test]
     fn whitewater_refuses_no_face_source() {
-        for tick in [false, true] {
-            face_refusal(false, [false; 3], tick, "neither");
-        }
+        face_refusal(false, [false; 3], "neither");
     }
 
     #[test]
     fn whitewater_refuses_partial_axes() {
         for mask in 1..7 {
             let axes = std::array::from_fn(|a| mask & (1 << a) != 0);
-            for tick in [false, true] {
-                face_refusal(false, axes, tick, "partial axes");
-            }
-            face_refusal(true, axes, true, "not both");
+            face_refusal(false, axes, "partial axes");
+            face_refusal(true, axes, "not both");
         }
-    }
-
-    #[test]
-    fn whitewater_legacy_refuses_packed_faces() {
-        face_refusal(true, [false; 3], false, "legacy level-set interface");
     }
 
     #[cfg(feature = "gpu-proofs")]
@@ -409,7 +393,6 @@ mod fused_tests {
             assert!(stage.unpacked_faces_for_test().is_none());
             let resized = StepShape::new(
                 [15; 3],
-                [15; 3],
                 [10; 3],
                 1.0,
                 Some(Transform {
@@ -421,7 +404,7 @@ mod fused_tests {
             )
             .unwrap();
             stage.reserve_faces(&device, true).unwrap();
-            stage.reserve(&device, resized, 8, true).unwrap();
+            stage.reserve(&device, resized, 8).unwrap();
             assert!(
                 stage.unpacked_faces_for_test().is_none(),
                 "shape changes drop the old arrays"

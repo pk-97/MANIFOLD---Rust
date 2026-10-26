@@ -2,58 +2,31 @@
 // table)). Built every step from the sort's ranges, on the GPU, never read
 // back; the parity and the lists live here so a replayed encode stays
 // right. ----
-const TILE: u32 = 8u;
 
 // The cell passes' reach from a particle-holding cell.
 const CELL_REACH: u32 = 2u;
-
-fn tile_dims() -> vec3<u32> {
-    return (u.n + vec3<u32>(TILE - 1u)) / TILE;
-}
-
-fn tile_total() -> u32 {
-    let t = tile_dims();
-    return t.x * t.y * t.z;
-}
 
 fn tile_parity_word() -> u32 {
     return u.ring_max + 3u;
 }
 
-// A thread of a tile list with no cell: the tile's box runs past the lattice
-// (a partial edge tile).
-const NO_CELL: u32 = 0xffffffffu;
-
-// Thread `gid` of a list dispatched at 512 threads a tile: the cell at local
-// index gid & 511 of the tile at list index gid >> 9, flattened, or NO_CELL.
-fn list_cell(tile: u32, gid: u32) -> u32 {
-    let n = lattice();
-    let origin = unflatten(tile, vec3<i32>(tile_dims())) * i32(TILE);
-    let cell = origin + unflatten(gid & 511u, vec3<i32>(i32(TILE)));
-    if any(cell >= n) {
-        return NO_CELL;
-    }
-    return flatten(cell, n);
-}
-
 // The cell passes run over the cell set C, the first `tile_counts[0]` tiles
 // of `tiles_by_ring`, through the triple at `tile_args[0]`.
 fn c_cell_index(gid: u32) -> u32 {
-    if u.narrow_band != 0u { return select(NO_CELL, gid, gid < cell_total()); }
-    return list_cell(tiles_by_ring[gid >> 9u], gid);
+    if u.narrow_band != 0u { return select(TS_NONE, gid, gid < ts_cell_count()); }
+    return ts_list_cell(tiles_by_ring[gid >> 9u], gid);
 }
 
 // The gather runs over C's cells too: cell p owns face record p. A record
 // past the lattice (p[a] == n[a]) belongs to no cell and is a constant: wall
 // faces closed, the others absent (canonical_face), written by tiles_fill.
 fn c_face_index(gid: u32) -> u32 {
-    if u.narrow_band != 0u { return select(NO_CELL, gid, gid < face_total()); }
+    if u.narrow_band != 0u { return select(TS_NONE, gid, gid < ts_record_count()); }
     let cell = c_cell_index(gid);
-    if cell == NO_CELL {
-        return NO_CELL;
+    if cell == TS_NONE {
+        return TS_NONE;
     }
-    let n = lattice();
-    return flatten(unflatten(cell, n), n + vec3<i32>(1));
+    return ts_face(ts_cell_coord(cell));
 }
 
 // The gather's output at record p with no particle within reach: every face
@@ -82,14 +55,14 @@ fn canonical_cell(idx: u32) {
 @compute @workgroup_size(256)
 fn tiles_fill(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
-    if idx >= face_total() {
+    if idx >= ts_record_count() {
         return;
     }
-    let n = lattice();
-    let p = unflatten(idx, n + vec3<i32>(1));
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     faces_out[idx] = canonical_face(p, n);
     if all(p < n) {
-        canonical_cell(flatten(p, n));
+        canonical_cell(ts_cell_at(p));
     }
 }
 
@@ -99,14 +72,14 @@ fn tiles_fill(@builtin(global_invocation_id) gid: vec3<u32>) {
 // never written by the C passes and keep their fill.
 @compute @workgroup_size(256)
 fn tiles_retire(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = list_cell(tiles_retired[gid.x >> 9u], gid.x);
-    if idx == NO_CELL {
+    let idx = ts_list_cell(tiles_retired[gid.x >> 9u], gid.x);
+    if idx == TS_NONE {
         return;
     }
-    let n = lattice();
-    let p = unflatten(idx, n);
+    let n = ts_cells();
+    let p = ts_cell_coord(idx);
     canonical_cell(idx);
-    faces_out[flatten(p, n + vec3<i32>(1))] = canonical_face(p, n);
+    faces_out[ts_face(p)] = canonical_face(p, n);
 }
 
 // Test-only (gpu_flip_tile_tests.rs): one thread per cell, after
@@ -116,12 +89,11 @@ fn tiles_retire(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
-    if idx >= cell_total() {
+    if idx >= ts_cell_count() {
         return;
     }
-    let n = lattice();
-    let tile = flatten(unflatten(idx, n) / i32(TILE), vec3<i32>(tile_dims()));
-    let half = tile_counts[tile_parity_word()] * tile_total();
+    let tile = ts_grid_index(ts_cell_coord(idx) / i32(TS_TILE), ts_tile_dims());
+    let half = tile_counts[tile_parity_word()] * ts_tile_count();
     if tile_rank[half + tile] < 2u {
         return;
     }
@@ -145,7 +117,7 @@ fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_
     if !clock_active() { return; }
     let t = gid.x >> 5u;
     let lane = gid.x & 31u;
-    let valid = t < tile_total();
+    let valid = t < ts_tile_count();
     if gid.x == 0u {
         tile_counts[tile_parity_word()] = 1u - tile_counts[tile_parity_word()];
     }
@@ -153,15 +125,15 @@ fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_
     if valid && u.all_tiles != 0u {
         near = 0u;
     } else if valid {
-        let n = lattice();
+        let n = ts_cells();
         let reach = i32(CELL_REACH);
-        let origin = unflatten(t, vec3<i32>(tile_dims())) * i32(TILE);
-        let box_last = min(origin + vec3<i32>(i32(TILE) - 1), n - vec3<i32>(1));
-        let side = TILE + 2u * CELL_REACH;
+        let origin = ts_grid_coord(t, ts_tile_dims()) * i32(TS_TILE);
+        let box_last = min(origin + vec3<i32>(i32(TS_TILE) - 1), n - vec3<i32>(1));
+        let side = TS_TILE + 2u * CELL_REACH;
         for (var k = lane; k < side * side * side && near != 0u; k = k + 32u) {
-            let c = origin - vec3<i32>(reach) + unflatten(k, vec3<i32>(i32(side)));
+            let c = origin - vec3<i32>(reach) + ts_grid_coord(k, vec3<i32>(i32(side)));
             if all(c >= vec3<i32>(0)) && all(c < n) {
-                if ranges[flatten(c, n)].count != 0u {
+                if ranges[ts_cell_at(c)].count != 0u {
                     // Distance to the original clipped tile box, unchanged.
                     let d = max(max(origin - c, c - box_last), vec3<i32>(0));
                     near = min(near, u32(max(max(d.x, d.y), d.z)));
@@ -190,7 +162,7 @@ fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_
 fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let t = gid.x;
-    let total = tile_total();
+    let total = ts_tile_count();
     if t >= total {
         return;
     }
@@ -199,8 +171,8 @@ fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
         tile_rank[at] = 0u;
         return;
     }
-    let dims = vec3<i32>(tile_dims());
-    let p = unflatten(t, dims);
+    let dims = ts_tile_dims();
+    let p = ts_grid_coord(t, dims);
     let r = i32(u.ring_max);
     let first = max(p - vec3<i32>(r), vec3<i32>(0));
     let last = min(p + vec3<i32>(r), dims - vec3<i32>(1));
@@ -209,7 +181,7 @@ fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
         for (var y = first.y; y <= last.y; y = y + 1) {
             for (var x = first.x; x <= last.x; x = x + 1) {
                 let q = vec3<i32>(x, y, z);
-                if tile_near[flatten(q, dims)] != 0u {
+                if tile_near[ts_grid_index(q, dims)] != 0u {
                     continue;
                 }
                 let d = abs(q - p);
@@ -239,7 +211,7 @@ fn rank_of(ring: u32, near: u32) -> u32 {
 // `capped` bound at the solver words): |C| / T³.
 @compute @workgroup_size(1)
 fn tiles_lists() {
-    let total = tile_total();
+    let total = ts_tile_count();
     let r = u.ring_max;
     // An inactive clock slot keeps the last step's table (the parity was not
     // flipped) and switches every list triple off, including retired and

@@ -1,32 +1,13 @@
 //! The step's tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3): its sizes, storage and per-step build.
 
 use super::*;
-
-manifold_core::testkit_visible! {
-/// Cells per tile side (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
-/// table)). Partial edge tiles are allowed: no lattice side rule.
-pub(crate) const TILE: u32 = 8;
-}
+use manifold_water_liquid::tile_storage::{TILE, tile_total};
 
 /// The cell passes' reach from a particle-holding cell, in cells: the tile
 /// set C is every tile within it (`tiles_classify` writes the distance).
 /// The shader holds its own copy; the proofs' CPU model reads this one.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub const CELL_REACH: u32 = 2;
-
-manifold_core::testkit_visible! {
-/// Tiles per axis, the last one partial when the side is not a multiple of
-/// [`TILE`].
-pub(crate) fn tile_counts(cells: [u32; 3]) -> [u32; 3] {
-    cells.map(|n| n.div_ceil(TILE))
-}
-}
-
-manifold_core::testkit_visible! {
-pub(crate) fn tile_total(cells: [u32; 3]) -> u64 {
-    tile_counts(cells).iter().map(|&t| u64::from(t)).product()
-}
-}
 
 manifold_core::testkit_visible! {
 /// The farthest tile ring any extend layer reaches at `band` layers: a
@@ -63,7 +44,8 @@ pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
 /// occupied and `tiles_rings` writes ring 0 everywhere, so the sparse passes
 /// run dense through the same kernels and lists (design D-6).
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub(super) static ALL_TILES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(super) static ALL_TILES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub fn set_all_tiles(on: bool) {
@@ -120,7 +102,10 @@ pub(super) fn extension_range_index(ring_max: u32) -> u32 {
 
 /// `bound` plus the arrays the fill, the retire and the poison write: the
 /// gathered faces and the C passes' cell arrays.
-pub(super) fn canonical<'a>(l: &'a LatticeBuffers, mut bound: Vec<GpuBinding<'a>>) -> Vec<GpuBinding<'a>> {
+pub(super) fn canonical<'a>(
+    l: &'a LatticeBuffers,
+    mut bound: Vec<GpuBinding<'a>>,
+) -> Vec<GpuBinding<'a>> {
     bound.extend([
         buffer(4, &l.g),
         buffer(33, &l.water),

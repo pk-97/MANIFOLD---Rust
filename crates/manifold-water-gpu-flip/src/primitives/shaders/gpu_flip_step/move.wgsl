@@ -53,7 +53,6 @@ fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
     if !finite(q) || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(n)) {
         return vec3<f32>(0.0);
     }
-    let m = n + vec3<i32>(1);
     var v = vec3<f32>(0.0);
     for (var a = 0; a < 3; a = a + 1) {
         var offset = vec3<f32>(0.5);
@@ -68,7 +67,7 @@ fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
             let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
             let c = base + bit;
             if all(c >= vec3<i32>(0)) && all(c <= top) {
-                let face = face_record(flatten(c, m), grid);
+                let face = face_record(ts_face(c), grid);
                 let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
                 let w = w3.x * w3.y * w3.z;
                 sum = sum + w * face.face_velocity[a];
@@ -95,7 +94,7 @@ const SOLID_PUSH: f32 = 5.0;
 const SOLID_SLOPE: f32 = 1.7320508;
 
 fn solid_corner(c: vec3<i32>, n: vec3<i32>) -> f32 {
-    return solid[flatten(clamp(c, vec3<i32>(0), n), n + vec3<i32>(1))];
+    return solid[ts_face(clamp(c, vec3<i32>(0), n))];
 }
 
 // The solid distance in cells at q (cells from the box minimum), trilinear
@@ -267,7 +266,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
         particles_out[idx] = out;
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let lo = u.box_min;
     let per_cell = adaptive_step_dt() / u.cell_size;
     let q0 = (particle.position_radius.xyz - lo) / u.cell_size;

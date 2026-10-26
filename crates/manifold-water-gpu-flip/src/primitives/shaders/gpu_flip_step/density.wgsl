@@ -35,7 +35,7 @@ const MAX_DENSITY_ERROR: f32 = 0.5;
 fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
-    if idx == NO_CELL {
+    if idx == TS_NONE {
         return;
     }
     if u.narrow_band == 2u && !narrow_cell(idx) {
@@ -46,9 +46,9 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
         cell_out[idx] = 0.0;
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let m = n + vec3<i32>(1);
-    let p = unflatten(idx, n);
+    let p = ts_cell_coord(idx);
     let centre = vec3<f32>(p) + vec3<f32>(0.5);
     let slots = u.capacity;
     var density = 0.0;
@@ -57,7 +57,7 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var z = first.z; z <= last.z; z = z + 1) {
         for (var y = first.y; y <= last.y; y = y + 1) {
             for (var x = first.x; x <= last.x; x = x + 1) {
-                let range = ranges[flatten(vec3<i32>(x, y, z), n)];
+                let range = ranges[ts_cell_at(vec3<i32>(x, y, z))];
                 let start = min(range.start, slots);
                 let end = start + min(range.count, slots - start);
                 for (var s = start; s < end; s = s + 1u) {
@@ -117,7 +117,7 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                         }
                     }
                 }
-                if face && !inside_body && ranges[flatten(q, n)].count == 0u {
+                if face && !inside_body && ranges[ts_cell_at(q)].count == 0u {
                     beside_air = true;
                 }
             }

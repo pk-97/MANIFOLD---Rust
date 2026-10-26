@@ -16,8 +16,15 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::active_elements;
 use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 
-const SHADER: &str = include_str!("shaders/matter_to_grid.wgsl");
+// The kernel after the tile grid helpers it indexes its nodes through.
+static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{TILE_GRID}\n{}",
+        include_str!("shaders/matter_to_grid.wgsl")
+    )
+});
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -106,8 +113,11 @@ manifold_node_engine::primitive! {
 impl Primitive for MatterToGrid {
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.kernel.is_none() {
-            self.kernel =
-                Some(device.create_compute_pipeline(SHADER, "scatter_main", "node.matter_to_grid"));
+            self.kernel = Some(device.create_compute_pipeline(
+                SHADER.as_str(),
+                "scatter_main",
+                "node.matter_to_grid",
+            ));
         }
     }
 

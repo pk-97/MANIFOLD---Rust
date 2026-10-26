@@ -13,9 +13,8 @@ fn emit_site(idx: u32) -> vec3<u32> {
 // engine skips a site whose subcell of its particle mask is set
 // (_addNewFluidCells), so a source tops its volume up and never stacks.
 fn emit_site_taken(j: vec3<u32>) -> bool {
-    let n = lattice();
     let cell = vec3<i32>(j / 2u);
-    let range = ranges[flatten(cell, n)];
+    let range = ranges[ts_cell_at(cell)];
     for (var k = 0u; k < range.count; k = k + 1u) {
         let x = sorted[range.start + k].position_radius.xyz;
         let sub = vec3<i32>(floor(2.0 * (x - u.box_min) / u.cell_size));
@@ -71,7 +70,7 @@ fn emit_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
     if inflow >= 0 && !emit_site_taken(j) {
         // The solid test is at the jittered position, as the engine's.
         let p = emit_position(idx, inflow);
-        if solid_at((p - u.box_min) / u.cell_size, lattice()) > 0.0 {
+        if solid_at((p - u.box_min) / u.cell_size, ts_cells()) > 0.0 {
             flag = 1u;
         }
     }
@@ -97,8 +96,8 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     if emit_scan[idx] == before {
         return;
     }
-    let n = lattice();
-    let last = ranges[flatten(n - vec3<i32>(1), n)];
+    let n = ts_cells();
+    let last = ranges[ts_cell_at(n - vec3<i32>(1))];
     let slot = last.start + last.count + before;
     if slot >= u.capacity {
         return;
@@ -131,8 +130,8 @@ fn emit_tally() {
     if !clock_active() || birth_identity[3] != 0u { return; }
     let s = emit_sites();
     let requested = emit_scan[s.x * s.y * s.z - 1u];
-    let n = lattice();
-    let last = ranges[flatten(n - vec3<i32>(1), n)];
+    let n = ts_cells();
+    let last = ranges[ts_cell_at(n - vec3<i32>(1))];
     let live = last.start + last.count;
     let room = select(0u, u.capacity - live, u.capacity > live);
     let births = min(requested, room);

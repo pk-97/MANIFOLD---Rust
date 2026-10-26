@@ -35,7 +35,7 @@ fn body(idx: u32, count: u32, axis: u32, nodes_x: i32, nodes_y: i32, nodes_z: i3
             var q = f;
             q[b] = f[b] + db;
             q[c] = f[c] + dc;
-            let node = buf_grid[u32(q.x + nodes.x * (q.y + nodes.y * q.z))].velocity_mass;
+            let node = buf_grid[ts_node_at(q, nodes)].velocity_mass;
             if node.w > 0.0 {
                 sum = sum + node[a];
                 hits = hits + 1.0;

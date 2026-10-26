@@ -10,15 +10,14 @@
 fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = c_face_index(gid.x);
-    if idx == NO_CELL {
+    if idx == TS_NONE {
         return;
     }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     if u.narrow_band == 2u {
         let cell = clamp(p, vec3<i32>(0), n - vec3<i32>(1));
-        if !narrow_cell(flatten(cell, n)) {
+        if !narrow_cell(ts_cell_at(cell)) {
             faces_out[idx] = canonical_face(p, n);
             return;
         }
@@ -51,7 +50,7 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var z = first.z; z <= last.z; z = z + 1) {
         for (var y = first.y; y <= last.y; y = y + 1) {
             for (var x = first.x; x <= last.x; x = x + 1) {
-                let range = ranges[flatten(vec3<i32>(x, y, z), n)];
+                let range = ranges[ts_cell_at(vec3<i32>(x, y, z))];
                 let start = min(range.start, slots);
                 let end = start + min(range.count, slots - start);
                 for (var s = start; s < end; s = s + 1u) {

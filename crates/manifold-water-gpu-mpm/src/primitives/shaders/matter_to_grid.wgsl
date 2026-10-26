@@ -101,8 +101,7 @@ fn nodes() -> vec3<i32> {
 }
 
 fn global_slot(node: vec3<i32>) -> u32 {
-    let n = nodes();
-    return u32((node.z * n.y + node.y) * n.x + node.x) * 4u;
+    return ts_node_at(node, nodes()) * 4u;
 }
 
 // Adds one point to the grid: to the workgroup tile when its whole stencil

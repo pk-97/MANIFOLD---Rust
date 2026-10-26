@@ -84,7 +84,7 @@ fn wc_distance(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_distance[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn wc_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
@@ -95,7 +95,7 @@ fn wc_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
                 if (dx == 0 && dy == 0 && dz == 0) || !ww_in_grid(n, cells) {
                     continue;
                 }
-                if buf_cells[ww_cell_index(vec3<u32>(n), cells)] == 0u {
+                if buf_cells[ts_grid_index(vec3<i32>(vec3<u32>(n)), vec3<i32>(cells))] == 0u {
                     return true;
                 }
             }
@@ -108,21 +108,21 @@ fn wc_curvature(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_curvature[ww_cell_index(vec3<u32>(c), cells)].value;
+    return buf_curvature[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))].value;
 }
 
 fn wc_turbulence(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_turbulence[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_turbulence[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn dust_solid(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_solid[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_solid[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn ww_phase_jitter(idx: u32, count: u32, e_particles: Element, cell_size: f32, seed: f32, epoch: f32) -> Element {
@@ -188,7 +188,7 @@ fn ww_phase_sample(
         let len = sf_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_index(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
+            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
             if i != LF_NONE && i < len {
                 sum = sum + ww_corner_weight(f, corner) * sf_face(axis, i);
             }
@@ -412,7 +412,7 @@ fn ww_phase_count(
     let cells = nodes - vec3<u32>(1u);
     let q = ww_grid_position(e_particles.position_radius.xyz, vec3<f32>(center_x, center_y, center_z), vec3<f32>(size_x, size_y, size_z), cells);
     if any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(cells)) { return 0u; }
-    let node = ww_cell_index(vec3<u32>(q), nodes);
+    let node = ts_grid_index(vec3<i32>(vec3<u32>(q)), vec3<i32>(nodes));
     if node >= arrayLength(&buf_influence) { return 0u; }
     let per_tick = buf_influence[node] * e_energy * (rate * e_wavecrest + turbulence_rate * e_turbulence) * dt * 8.0 / points_per_cell;
     if !(per_tick > 0.0) {
@@ -454,7 +454,7 @@ fn ww_phase_dust(
     let h = size.x / f32(cells.x);
     let q = ww_grid_position(e_particles.position_radius.xyz, vec3<f32>(center_x, center_y, center_z), size, cells);
     if dust_enabled < 0.5 || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(cells)) { return 0.0; }
-    let source = buf_source[ww_cell_index(vec3<u32>(q), nodes)];
+    let source = buf_source[ts_grid_index(vec3<i32>(vec3<u32>(q)), vec3<i32>(nodes))];
     if source.kind == 0u || source.dust_strength <= 0.0 { return 0.0; }
     if source.kind == 1u && (boundary_dust < 0.5 || q.z > 3.0) { return 0.0; }
     let solid_base = vec3<i32>(floor(q));
@@ -695,7 +695,7 @@ fn sw_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>) -> vec3<f3
         let len = sw_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_index(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
+            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
             if i != LF_NONE && i < len {
                 sum = sum + ww_corner_weight(f, corner) * sw_face(axis, i);
             }
@@ -838,7 +838,7 @@ fn wt_distance(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_distance[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn wt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
@@ -849,7 +849,7 @@ fn wt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
                 if (dx == 0 && dy == 0 && dz == 0) || !ww_in_grid(n, cells) {
                     continue;
                 }
-                if buf_cells[ww_cell_index(vec3<u32>(n), cells)] == 0u {
+                if buf_cells[ts_grid_index(vec3<i32>(vec3<u32>(n)), vec3<i32>(cells))] == 0u {
                     return true;
                 }
             }
@@ -1006,7 +1006,7 @@ fn aw_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>, step: u32)
         let len = aw_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_index(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
+            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
             if i != LF_NONE && i < len {
                 sum = sum + ww_corner_weight(f, corner) * aw_face(axis, i, step, face_cells);
             }
@@ -1305,7 +1305,7 @@ fn rt_distance(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_distance[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn rt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
@@ -1316,7 +1316,7 @@ fn rt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
                 if (dx == 0 && dy == 0 && dz == 0) || !ww_in_grid(n, cells) {
                     continue;
                 }
-                if buf_cells[ww_cell_index(vec3<u32>(n), cells)] == 0u {
+                if buf_cells[ts_grid_index(vec3<i32>(vec3<u32>(n)), vec3<i32>(cells))] == 0u {
                     return true;
                 }
             }
@@ -1360,7 +1360,7 @@ fn rt_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>) -> vec3<f3
         let len = rt_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_index(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
+            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
             if i != LF_NONE && i < len {
                 sum = sum + ww_corner_weight(f, corner) * rt_face(axis, i);
             }
@@ -1503,7 +1503,7 @@ struct TurbulenceParams {
 // FLIP Fluids turbulencefield.cpp:100-171 (MIT); THIRD_PARTY_NOTICES.md.
 // The asymmetric loop and excluded final boundary index are intentional.
 fn tf_face(c: vec3<i32>, axis: u32, pad: vec3<i32>, dims: vec3<u32>) -> f32 {
-    let i = lf_face_index(c, axis, pad, dims);
+    let i = lf_face_at(c, axis, pad, dims);
     if i == LF_NONE { return 0.0; }
     if axis == 0u { return buf_face_u[i]; }
     if axis == 1u { return buf_face_v[i]; }

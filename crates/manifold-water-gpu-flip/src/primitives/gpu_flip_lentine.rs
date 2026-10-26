@@ -6,7 +6,14 @@
 //! sign to the step pressure. Projection outputs leave caller inputs unchanged.
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-const SHADER: &str = include_str!("shaders/gpu_flip_lentine.wgsl");
+use manifold_water_liquid::tile_storage::TILE_STORAGE;
+
+const SHADER_BODY: &str = include_str!("shaders/gpu_flip_lentine.wgsl");
+
+/// The kernels with the storage helpers they index the lattice through.
+fn shader() -> String {
+    format!("{TILE_STORAGE}\n{SHADER_BODY}")
+}
 const ENTRIES: [&str; 10] = [
     "labels_main",
     "gather_main",
@@ -86,6 +93,7 @@ impl ComponentSolver {
                 format!("component lattice has empty or overflowing cell count: {lattice:?}")
             })?;
         let bytes = u64::from(count) * 4;
+        let wgsl = shader();
         Ok(Self {
             params: Params {
                 n: lattice,
@@ -93,7 +101,7 @@ impl ComponentSolver {
                 tolerance: super::gpu_flip_pressure::TOLERANCE,
                 padding: [0; 3],
             },
-            pipelines: ENTRIES.map(|entry| device.create_compute_pipeline(SHADER, entry, entry)),
+            pipelines: ENTRIES.map(|entry| device.create_compute_pipeline(&wgsl, entry, entry)),
             labels: device.create_buffer_shared(bytes),
             pressure: device.create_buffer_shared(bytes),
             rhs: device.create_buffer_shared(bytes),
@@ -253,6 +261,7 @@ impl ComponentProjection {
     pub fn new(device: &GpuDevice, lattice: [u32; 3]) -> Result<Self, String> {
         let coarse = ComponentSolver::new(device, lattice)?;
         let bytes = u64::from(coarse.params.count) * 4;
+        let wgsl = shader();
         Ok(Self {
             coarse,
             boundary_velocity: device.create_buffer_shared(bytes * 4),
@@ -261,7 +270,7 @@ impl ComponentProjection {
             progress: device.create_buffer_shared(16),
             local_status: device.create_buffer_shared(bytes),
             pipelines: PROJECTION_ENTRIES
-                .map(|entry| device.create_compute_pipeline(SHADER, entry, entry)),
+                .map(|entry| device.create_compute_pipeline(&wgsl, entry, entry)),
         })
     }
 
@@ -885,8 +894,9 @@ mod tests {
 
     #[test]
     fn component_shader_validates() {
-        let module = naga::front::wgsl::parse_str(SHADER)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
+        let source = shader();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -900,6 +910,6 @@ mod tests {
         assert_eq!(ComponentProjection::scratch_bytes([7, 3, 2]), 42 * 120 + 80);
         assert_eq!(size_of::<Params>(), 32);
         assert_eq!(ComponentSolver::scratch_bytes([7, 3, 2]), 42 * 80 + 64);
-        assert!(super::super::gpu_flip_step::atomic_sites_outside(SHADER, &[]).is_empty());
+        assert!(super::super::gpu_flip_step::atomic_sites_outside(&source, &[]).is_empty());
     }
 }

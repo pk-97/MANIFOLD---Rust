@@ -31,7 +31,7 @@ fn body(
     let cells = nodes - vec3<u32>(1u);
     let q = ww_grid_position(e_particles.position_radius.xyz, vec3<f32>(center_x, center_y, center_z), vec3<f32>(size_x, size_y, size_z), cells);
     if any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(cells)) { return 0u; }
-    let node = ww_cell_index(vec3<u32>(q), nodes);
+    let node = ts_grid_index(vec3<i32>(vec3<u32>(q)), vec3<i32>(nodes));
     if node >= arrayLength(&buf_influence) { return 0u; }
     let per_tick = buf_influence[node] * e_energy * (rate * e_wavecrest + turbulence_rate * e_turbulence) * dt * 8.0 / points_per_cell;
     if !(per_tick > 0.0) {

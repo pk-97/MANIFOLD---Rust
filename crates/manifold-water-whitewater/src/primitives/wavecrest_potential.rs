@@ -7,14 +7,17 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::whitewater::{KnownValue, WHITEWATER_COMMON, cell_total, grid_cells, particle_grid};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_storage::TILE_GRID;
+use manifold_water_liquid::whitewater::{
+    KnownValue, WHITEWATER_COMMON, cell_total, grid_cells, particle_grid,
+};
 
 /// FLIP's defaults: curvature × cell size from which a crest starts to
 /// emit, where it emits fully, and the least cosine between the particle's
@@ -89,12 +92,24 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/wavecrest_potential_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "particles" },
-    wgsl_includes: [WHITEWATER_COMMON],
+    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
 }
 
 impl Primitive for WavecrestPotential {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "particles")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -107,7 +122,10 @@ impl Primitive for WavecrestPotential {
         };
         let min_curvature = ctx.scalar_or_param("min_curvature", MIN_CURVATURE);
         let max_curvature = ctx.scalar_or_param("max_curvature", MAX_CURVATURE);
-        if !(max_curvature > min_curvature && min_curvature.is_finite() && max_curvature.is_finite()) {
+        if !(max_curvature > min_curvature
+            && min_curvature.is_finite()
+            && max_curvature.is_finite())
+        {
             ctx.error(format!(
                 "Wavecrest Potential: Max Curvature {max_curvature} does not lie above Min Curvature {min_curvature}"
             ));
@@ -116,19 +134,29 @@ impl Primitive for WavecrestPotential {
         let sharpness = ctx.scalar_or_param("sharpness", SHARPNESS);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let Some(particles) = ctx.inputs.array("particles") else { return };
-        let (Some(distance), Some(curvature), Some(cells)) =
-            (ctx.inputs.array("distance"), ctx.inputs.array("curvature"), ctx.inputs.array("cells"))
-        else {
+        let Some(particles) = ctx.inputs.array("particles") else {
             return;
         };
-        let Some(out) = ctx.outputs.array("out") else { return };
+        let (Some(distance), Some(curvature), Some(cells)) = (
+            ctx.inputs.array("distance"),
+            ctx.inputs.array("curvature"),
+            ctx.inputs.array("cells"),
+        ) else {
+            return;
+        };
+        let Some(out) = ctx.outputs.array("out") else {
+            return;
+        };
         let total = cell_total(grid_cells(grid.nodes).expect("particle_grid checked the lattice"));
         if total * 4 > distance.size || total * 8 > curvature.size || total * 4 > cells.size {
-            ctx.error(format!("Wavecrest Potential: a {:?}-node grid is larger than its arrays", grid.nodes));
+            ctx.error(format!(
+                "Wavecrest Potential: a {:?}-node grid is larger than its arrays",
+                grid.nodes
+            ));
             return;
         }
-        let count = (particles.size / std::mem::size_of::<FluidParticle>() as u64).min(out.size / 4) as u32;
+        let count =
+            (particles.size / std::mem::size_of::<FluidParticle>() as u64).min(out.size / 4) as u32;
         if count == 0 {
             return;
         }
@@ -157,12 +185,35 @@ impl Primitive for WavecrestPotential {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: distance, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: curvature, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: cells, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: distance,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: curvature,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: cells,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.wavecrest_potential",

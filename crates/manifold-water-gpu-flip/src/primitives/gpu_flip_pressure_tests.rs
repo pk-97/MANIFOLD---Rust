@@ -10,7 +10,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuEncoder, GpuReplayCache, ProfileGra
 
 use super::gpu_flip_pressure::{
     MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water,
-    level_lattices, max_solve_level, passes,
+    level_lattices, max_solve_level, passes, shader,
 };
 use manifold_node_engine::testkit::array_harness::read;
 
@@ -385,7 +385,7 @@ fn assert_lentine_close(actual: impl Into<f64>, expected: f64, what: &str) {
 /// prove that a virtual child contributes no fluid or solid source.
 #[test]
 fn pressure_module_lentine_flux_conserves_blocks() {
-    let shader = include_str!("shaders/gpu_flip_pressure.wgsl");
+    let shader = shader();
     for n in lentine_cases() {
         let c = n.map(|side| side.div_ceil(2));
         let output_n = c.map(|side| side + 1);
@@ -393,7 +393,7 @@ fn pressure_module_lentine_flux_conserves_blocks() {
         let (water_values, face_values, fluid_values, solid_values) = lentine_fixture(n);
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(
-            shader,
+            &shader,
             "lentine_flux_main",
             "gpu-flip-pressure-lentine-flux",
         );
@@ -1068,10 +1068,10 @@ fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
         }
     }
     let device = manifold_gpu::testkit::test_device();
-    let shader = include_str!("shaders/gpu_flip_pressure.wgsl");
+    let shader = shader();
     let classify =
-        device.create_compute_pipeline(shader, "classify_main", "pressure.classify.proof");
-    let lists = device.create_compute_pipeline(shader, "lists_main", "pressure.lists.proof");
+        device.create_compute_pipeline(&shader, "classify_main", "pressure.classify.proof");
+    let lists = device.create_compute_pipeline(&shader, "lists_main", "pressure.lists.proof");
     const BASE: usize = 3;
     const SENTINEL: u32 = 0xa17e_5afe;
     for n in [
@@ -1573,7 +1573,7 @@ fn stencil(idx: u32, source: u32) -> Stencil {
 }
 
 "#;
-    let shader = include_str!("shaders/gpu_flip_pressure.wgsl");
+    let shader = shader();
     let start = shader
         .find("fn stencil_add(")
         .expect("unrolled stencil helper");
@@ -1669,11 +1669,11 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
     if !listed(gid.x) {
         return;
     }
-    let n = lattice();
+    let n = ts_cells();
     let idx = listed_cell(gid.x, n);
     var product = 0.0;
-    if idx != NO_CELL {
-        let p = coords(idx, n);
+    if idx != TS_NONE {
+        let p = ts_grid_coord(idx, n);
         let swept = is_water(idx) && u32(p.x + p.y + p.z) % 2u == u.color;
         var e = out[idx];
         if swept {
@@ -1807,7 +1807,7 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
         }
     }
 
-    let shader = include_str!("shaders/gpu_flip_pressure.wgsl");
+    let shader = shader();
     let declaration = shader.find("fn smooth_main(").expect("current smoother");
     let start = shader[..declaration]
         .rfind("@compute")

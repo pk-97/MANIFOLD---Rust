@@ -244,29 +244,8 @@ fn clock_active() -> bool {
     return !clock_live() || clock_plan[0].step_dt > 0.0;
 }
 
-fn lattice() -> vec3<i32> {
+fn ts_cells() -> vec3<i32> {
     return vec3<i32>(u.n);
-}
-
-fn cell_total() -> u32 {
-    return u.n.x * u.n.y * u.n.z;
-}
-
-fn face_total() -> u32 {
-    let m = u.n + vec3<u32>(1u);
-    return m.x * m.y * m.z;
-}
-
-fn unflatten(idx: u32, m: vec3<i32>) -> vec3<i32> {
-    return vec3<i32>(
-        i32(idx % u32(m.x)),
-        i32((idx / u32(m.x)) % u32(m.y)),
-        i32(idx / (u32(m.x) * u32(m.y))),
-    );
-}
-
-fn flatten(p: vec3<i32>, m: vec3<i32>) -> u32 {
-    return u32(p.x + m.x * (p.y + m.y * p.z));
 }
 
 // Face a of record p exists when every other coordinate is inside the cells.

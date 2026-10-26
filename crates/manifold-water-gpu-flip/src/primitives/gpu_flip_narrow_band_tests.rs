@@ -10,7 +10,7 @@
 //! set.  The unconditional naga test still catches malformed WGSL and checks
 //! the complete binding/uniform contract.
 
-const SHADER: &str = include_str!("shaders/gpu_flip_narrow_band.wgsl");
+use super::gpu_flip_narrow_band::shader;
 
 #[cfg(test)]
 #[repr(C)]
@@ -55,7 +55,7 @@ struct NbRange {
 mod cpu_tests {
     use std::collections::BTreeSet;
 
-    use super::{NbParams, SHADER};
+    use super::{NbParams, shader};
     use manifold_node_engine::particles::FluidParticle;
     use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 
@@ -475,8 +475,9 @@ mod cpu_tests {
 
     #[test]
     fn gpu_flip_narrow_band_shader_validates() {
-        let module = naga::front::wgsl::parse_str(SHADER)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
+        let source = shader();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -580,7 +581,7 @@ mod gpu_tests {
         STEP_CELLS, cells, coords, quarter_pool, runtime_expected_retained, runtime_grid,
         runtime_pool_initial_phi, runtime_seeded_pool, stationary_pool_particle_phi,
     };
-    use super::{NbFace, NbParams, NbParticle, NbRange, SHADER};
+    use super::{NbFace, NbParams, NbParticle, NbRange, shader};
     use manifold_gpu::{GpuBinding, GpuBuffer};
     use manifold_node_engine::particles::FluidParticle;
     use manifold_node_engine::primitive::Primitive;
@@ -763,7 +764,8 @@ mod gpu_tests {
         output: &GpuBuffer,
         count: usize,
     ) -> Vec<T> {
-        let pipeline = device.create_compute_pipeline(SHADER, entry, "gpu-flip-narrow-band-proof");
+        let pipeline =
+            device.create_compute_pipeline(&shader(), entry, "gpu-flip-narrow-band-proof");
         let mut all = vec![GpuBinding::Bytes {
             binding: 0,
             data: bytemuck::bytes_of(uniform),
@@ -1213,7 +1215,7 @@ mod gpu_tests {
             );
             assert_eq!(result, vec![16_u32.saturating_sub(capacity), 16]);
             let pipeline =
-                device.create_compute_pipeline(SHADER, "nb_reseed_write", "nb-reseed-write");
+                device.create_compute_pipeline(&shader(), "nb_reseed_write", "nb-reseed-write");
             let mut encoder = device.create_encoder("nb-reseed-write");
             encoder.dispatch_compute(
                 &pipeline,
@@ -1367,7 +1369,7 @@ mod gpu_tests {
         assert_eq!(status_values, [8, 16]);
         let before = read(&particles, input.len());
         let pipeline =
-            device.create_compute_pipeline(SHADER, "nb_reseed_write", "nb-restore-write");
+            device.create_compute_pipeline(&shader(), "nb_reseed_write", "nb-restore-write");
         let mut encoder = device.create_encoder("narrow-band-restore-overflow-write");
         encoder.dispatch_compute(
             &pipeline,

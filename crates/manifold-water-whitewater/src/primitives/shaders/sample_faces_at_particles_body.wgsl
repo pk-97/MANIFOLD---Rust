@@ -77,7 +77,7 @@ fn body(
         let len = sf_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_index(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
+            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
             if i != LF_NONE && i < len {
                 sum = sum + ww_corner_weight(f, corner) * sf_face(axis, i);
             }

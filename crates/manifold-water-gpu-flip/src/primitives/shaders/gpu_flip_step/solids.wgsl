@@ -166,12 +166,11 @@ fn cross_axes(a: i32) -> vec2<i32> {
 fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = gid.x;
-    if idx >= face_total() {
+    if idx >= ts_record_count() {
         return;
     }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let tolerance = 8.0 * 1.1920929e-7 * (u.cell_size * f32(max(n.x, max(n.y, n.z))) + u.box_offset);
     for (var a = 0; a < 3; a = a + 1) {
@@ -183,10 +182,10 @@ fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
         var e2 = vec3<i32>(0);
         e1[axes.x] = 1;
         e2[axes.y] = 1;
-        let c0 = solid[flatten(p, m)];
-        let c1 = solid[flatten(p + e1, m)];
-        let c2 = solid[flatten(p + e2, m)];
-        let c3 = solid[flatten(p + e1 + e2, m)];
+        let c0 = solid[ts_face(p)];
+        let c1 = solid[ts_face(p + e1)];
+        let c2 = solid[ts_face(p + e2)];
+        let c3 = solid[ts_face(p + e1 + e2)];
         var inside = solid_square_inside(c0, c1, c2, c3);
         if abs(c0) <= tolerance && abs(c1) <= tolerance && abs(c2) <= tolerance && abs(c3) <= tolerance {
             inside = 0.5;
@@ -196,7 +195,7 @@ fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
     if all(p < n) {
         var corners: array<f32, 8>;
         for (var k = 0; k < 8; k = k + 1) {
-            corners[k] = solid[flatten(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1), m)];
+            corners[k] = solid[ts_face(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
         }
         out.face_weight.w = clamp(1.0 - solid_cube_inside(corners), 0.0, 1.0);
     }
@@ -212,7 +211,7 @@ fn liquid_atlas_half(index: u32) -> f32 {
 // cells in, as the solid distance takes them.
 fn wall_distance(x: vec3<f32>) -> f32 {
     let lo = u.box_min + vec3<f32>(u.wall_inset * u.cell_size);
-    let hi = u.box_min + (vec3<f32>(lattice()) - vec3<f32>(u.wall_inset)) * u.cell_size;
+    let hi = u.box_min + (vec3<f32>(ts_cells()) - vec3<f32>(u.wall_inset)) * u.cell_size;
     let gap = min(x - lo, hi - x);
     return min(gap.x, min(gap.y, gap.z));
 }
@@ -321,12 +320,11 @@ fn closest_body(x: vec3<f32>) -> i32 {
 fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = gid.x;
-    if idx >= face_total() {
+    if idx >= ts_record_count() {
         return;
     }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     let open = solid_faces[idx];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let lattice_min = u.box_min;
@@ -400,12 +398,11 @@ fn solid_known(s: FaceSample, a: i32) -> bool {
 fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = gid.x;
-    if idx >= face_total() {
+    if idx >= ts_record_count() {
         return;
     }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let n = ts_cells();
+    let p = ts_face_coord(idx);
     var out = faces_in[idx];
     var known = u32(out.face_weight.w);
     var code = u32(out.face_velocity.w);
@@ -426,7 +423,7 @@ fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if q[b] < 0 || q[b] > top[b] {
                     continue;
                 }
-                let s = faces_in[flatten(q, m)];
+                let s = faces_in[ts_face(q)];
                 let border = solid_border(q, a, n);
                 if border || solid_known(s, a) {
                     sum = sum + s.face_velocity[a];
@@ -457,7 +454,7 @@ fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn solid_centre(p: vec3<i32>, m: vec3<i32>) -> f32 {
     var sum = 0.0;
     for (var k = 0; k < 8; k = k + 1) {
-        sum = sum + solid[flatten(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1), m)];
+        sum = sum + solid[ts_face(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
     }
     return 0.125 * sum;
 }
@@ -473,11 +470,11 @@ fn solid_centre(p: vec3<i32>, m: vec3<i32>) -> f32 {
 fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
-    if idx == NO_CELL {
+    if idx == TS_NONE {
         return;
     }
-    let n = lattice();
-    if cell_out[idx] < 0.5 * u.cell_size && solid_centre(unflatten(idx, n), n + vec3<i32>(1)) < 0.0 {
+    let n = ts_cells();
+    if cell_out[idx] < 0.5 * u.cell_size && solid_centre(ts_cell_coord(idx), n + vec3<i32>(1)) < 0.0 {
         cell_out[idx] = -0.5 * u.cell_size;
     }
 }
@@ -490,7 +487,7 @@ fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
-    if idx == NO_CELL {
+    if idx == TS_NONE {
         return;
     }
     cell_out[idx] = select(0.0, 1.0, phi[idx] < 0.0);

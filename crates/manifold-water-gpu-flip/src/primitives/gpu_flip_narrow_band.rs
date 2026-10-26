@@ -13,7 +13,15 @@ use manifold_water_liquid::fluid_particles::FaceSample;
 
 use manifold_water_liquid::primitives::prefix_scan::PrefixScan;
 
-const SHADER: &str = include_str!("shaders/gpu_flip_narrow_band.wgsl");
+const SHADER_BODY: &str = include_str!("shaders/gpu_flip_narrow_band.wgsl");
+
+/// The kernels with the storage helpers they index the lattice through.
+pub(super) fn shader() -> String {
+    format!(
+        "{}\n{SHADER_BODY}",
+        manifold_water_liquid::tile_storage::TILE_STORAGE
+    )
+}
 const PIPELINE_LABEL: &str = "node.gpu_flip_narrow_band";
 
 /// The common uniform for every narrow-band pass.  This is deliberately kept
@@ -51,7 +59,8 @@ pub(crate) struct BandPipelines {
 
 impl BandPipelines {
     fn prepare(device: &GpuDevice) -> Self {
-        let pipe = |entry: &str| device.create_compute_pipeline(SHADER, entry, PIPELINE_LABEL);
+        let source = shader();
+        let pipe = |entry: &str| device.create_compute_pipeline(&source, entry, PIPELINE_LABEL);
         Self {
             advect_phi: pipe("nb_advect_phi"),
             advect_faces: pipe("nb_advect_faces"),

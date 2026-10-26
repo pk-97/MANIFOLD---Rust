@@ -41,11 +41,18 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
+/// The kernel with the storage helpers it indexes the lattice through.
+pub(super) fn source() -> String {
+    format!(
+        "{}\n{}",
+        manifold_water_liquid::tile_storage::TILE_STORAGE,
+        include_str!("shaders/gpu_flip_sheeting.wgsl")
+    )
+}
+
 /// The kernel with the stats layout constants (`SHEET_REFUSED_TAIL`) ahead of it.
 fn shader() -> String {
-    manifold_water_liquid::primitives::liquid_stats::with_stats_layout(include_str!(
-        "shaders/gpu_flip_sheeting.wgsl"
-    ))
+    manifold_water_liquid::primitives::liquid_stats::with_stats_layout(&source())
 }
 const ENTRIES: [&str; 10] = [
     "clear",

@@ -2,14 +2,14 @@ fn dust_solid(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_solid[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_solid[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn wc_turbulence(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {
         return 0.0;
     }
-    return buf_turbulence[ww_cell_index(vec3<u32>(c), cells)];
+    return buf_turbulence[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
 }
 
 fn body(
@@ -45,7 +45,7 @@ fn body(
     let h = size.x / f32(cells.x);
     let q = ww_grid_position(e_particles.position_radius.xyz, vec3<f32>(center_x, center_y, center_z), size, cells);
     if dust_enabled < 0.5 || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(cells)) { return 0.0; }
-    let source = buf_source[ww_cell_index(vec3<u32>(q), nodes)];
+    let source = buf_source[ts_grid_index(vec3<i32>(vec3<u32>(q)), vec3<i32>(nodes))];
     if source.kind == 0u || source.dust_strength <= 0.0 { return 0.0; }
     if source.kind == 1u && (boundary_dust < 0.5 || q.z > 3.0) { return 0.0; }
     let solid_base = vec3<i32>(floor(q));

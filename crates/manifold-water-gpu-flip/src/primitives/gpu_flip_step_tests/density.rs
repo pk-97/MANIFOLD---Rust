@@ -1,6 +1,7 @@
 //! The density support source against the original.
 
 use super::*;
+use manifold_water_liquid::tile_storage::TILE_STORAGE;
 
 pub(super) fn density_support_sources() -> [String; 2] {
     const CULL: &str = "                    if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {\n                        continue;\n                    }\n";
@@ -13,7 +14,7 @@ pub(super) fn density_support_sources() -> [String; 2] {
     let original = source.replacen(CULL, "", 1);
     [original.as_str(), source].map(|shader| {
         with_stats_layout(&format!(
-            "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{shader}"
+            "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_STORAGE}\n{shader}"
         ))
     })
 }
