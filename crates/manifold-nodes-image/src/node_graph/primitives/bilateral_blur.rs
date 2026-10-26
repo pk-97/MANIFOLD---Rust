@@ -293,6 +293,10 @@ pub(crate) mod cpu_reference {
             behind
         };
         let center = fx.color_at(cx, cy);
+        // Empty-sky fast path (mirrors the WGSL body).
+        if raw_center <= 1e-6 && ahead == 0.0 && behind == 0.0 {
+            return [center[0], center[1], center[2], center[3]];
+        }
 
         let mut acc = [center[0] * K9[0], center[1] * K9[0], center[2] * K9[0]];
         let mut wsum = K9[0];

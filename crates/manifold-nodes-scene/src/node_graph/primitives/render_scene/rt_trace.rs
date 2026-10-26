@@ -522,7 +522,7 @@ impl RenderScene {
                 // sample) and does nothing to reduce variance. step=2
                 // is the smallest offset guaranteed to cross into an
                 // adjacent (independently-sampled) half-res block.
-                let step = 2u32 << pass;
+                let step = 1u32 << pass;
                 let (
                     src_sv,
                     src_irr,

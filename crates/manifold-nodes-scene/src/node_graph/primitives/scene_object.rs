@@ -131,6 +131,16 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 2.0)),
             enum_values: &["Object", "Group", "World"],
         },
+        ParamDef {
+            name: Cow::Borrowed("closed"),
+            label: "Closed Mesh",
+            // On only for meshes known closed and outward-wound (the
+            // built-in solids): an opaque draw then skips back faces.
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. Optional live_count is an Array(u32) whose first GPU word is how many leading vertices are live (a fragment cut map's live_count); an unindexed draw stops there when the vertices carry no live extent of their own. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
@@ -147,6 +157,7 @@ impl Primitive for SceneObjectNode {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let visible = ctx.scalar_or_param("visible", 1.0) > 0.5;
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
+        let closed = matches!(ctx.params.get("closed"), Some(ParamValue::Bool(true)));
         let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
         let gain = ctx.scalar_or_param("gain", 1.0);
         let mut transform = ctx.inputs.transform("transform").unwrap_or_default();
@@ -196,6 +207,7 @@ impl Primitive for SceneObjectNode {
         let object = SceneObject {
             visible: visible && parent_visible,
             cast_shadows,
+            closed,
             transform,
             parent_transform,
             material,

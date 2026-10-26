@@ -311,6 +311,9 @@ pub(crate) mod cpu_reference {
         let dims = [color.w as f32, color.h as f32];
         let uv = [(cx as f32 + 0.5) / dims[0], (cy as f32 + 0.5) / dims[1]];
 
+        if shutter_angle <= 0.0 {
+            return color.sample(uv[0], uv[1]);
+        }
         let smear_px_raw = [
             velocity_ndc[0] * 0.5 * dims[0] * (shutter_angle / 360.0),
             velocity_ndc[1] * 0.5 * dims[1] * (shutter_angle / 360.0),
@@ -319,6 +322,9 @@ pub(crate) mod cpu_reference {
             smear_px_raw[0].clamp(-max_blur_px, max_blur_px),
             smear_px_raw[1].clamp(-max_blur_px, max_blur_px),
         ];
+        if smear_px[0] * smear_px[0] + smear_px[1] * smear_px[1] < 1e-4 {
+            return color.sample(uv[0], uv[1]);
+        }
         let smear_uv = [smear_px[0] / dims[0], smear_px[1] / dims[1]];
 
         let mut acc = [0.0f32; 4];

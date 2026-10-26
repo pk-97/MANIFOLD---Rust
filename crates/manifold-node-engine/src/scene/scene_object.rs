@@ -40,6 +40,9 @@ pub struct SceneObject {
     /// mirrors `node.light`'s `cast_shadows` param
     /// (`primitives/light.rs`), same "float 0..1, modulatable" shape.
     pub cast_shadows: bool,
+    /// The mesh is closed and outward-wound, so an opaque draw may skip its
+    /// back faces. Set by the scene compiler for built-in solids.
+    pub closed: bool,
     /// Local TRS. Identity ([`Transform::default`]) when the `transform`
     /// input port is unwired.
     pub transform: Transform,

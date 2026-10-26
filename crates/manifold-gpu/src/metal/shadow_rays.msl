@@ -920,13 +920,22 @@ static float4 rt_map_texel(texture2d<float> tex, int2 p, uint2 wrap) {
     return tex.read(uint2(rt_map_address(p.x,size.x,wrap.x),rt_map_address(p.y,size.y,wrap.y)),0);
 }
 
-// Ray hits currently have no ray-cone footprint. Sample level zero with the
-// authored magnification/addressing rules, rather than inventing derivatives.
+// Ray hits currently have no ray-cone footprint. Sample with hardware
+// mip filtering when wrap/linear modes allow; software fallback otherwise.
 static float4 rt_sample_map(texture2d<float> tex, float2 uv,
-    device RtNormalSource& src, uint map) {
-    uint2 wrap = uint2(src.material_attributes.sampling[map][1],src.material_attributes.sampling[map][2]);
+    device RtNormalSource& src, uint map, float lod = 0.0f) {
+    uint2 wrap = uint2(src.material_attributes.sampling[map][1], src.material_attributes.sampling[map][2]);
+    uint linear_flag = src.material_attributes.sampling[map][3];
+    if (wrap.x == 1u && wrap.y == 1u && linear_flag != 0u) {
+        constexpr sampler s_rep(coord::normalized, s_address::repeat, t_address::repeat, filter::linear, mip_filter::linear);
+        return tex.sample(s_rep, uv, level(lod));
+    }
+    if (wrap.x == 0u && wrap.y == 0u && linear_flag != 0u) {
+        constexpr sampler s_clamp(coord::normalized, s_address::clamp_to_edge, t_address::clamp_to_edge, filter::linear, mip_filter::linear);
+        return tex.sample(s_clamp, uv, level(lod));
+    }
     float2 p = uv*float2(tex.get_width(),tex.get_height());
-    if (src.material_attributes.sampling[map][3] == 0u) return rt_map_texel(tex,int2(floor(p)),wrap);
+    if (linear_flag == 0u) return rt_map_texel(tex,int2(floor(p)),wrap);
     int2 base = int2(floor(p-0.5f));
     float2 t = fract(p-0.5f);
     return mix(mix(rt_map_texel(tex,base,wrap),rt_map_texel(tex,base+int2(1,0),wrap),t.x),
@@ -1704,19 +1713,19 @@ struct RtSurface {
     float4 coat,sheen,film,transmission,attenuation,translucency;
 };
 static RtSurface rt_surface(device GiMaterial& material,device RtNormalSource* sources,
-    array<texture2d<float>,MAX_RT_MATERIAL_TEXTURES> textures,uint instance,uint pid,float2 bary,float3 view) {
+    array<texture2d<float>,MAX_RT_MATERIAL_TEXTURES> textures,uint instance,uint pid,float2 bary,float3 view,float lod = 0.0f) {
     device RtNormalSource& src=sources[instance];
     RtSurface m;
     m.albedo=float3(material.albedo)*color_at_hit(src,pid,bary).rgb;
     if(src.base_color_tex_index<MAX_RT_MATERIAL_TEXTURES) {
         float2 uv=rt_apply_uv_transform(map_uv_at_hit(src,pid,bary,0u),src.base_color_uv_transform);
-        m.albedo*=rt_sample_map(textures[src.base_color_tex_index],uv,src,0u).rgb;
+        m.albedo*=rt_sample_map(textures[src.base_color_tex_index],uv,src,0u,lod).rgb;
     }
     m.emission=emissive_at_hit(float3(material.emissive),src,sources,textures,instance,pid,bary);
     float4 mr=material.metallic_roughness;
     if(src.mr_tex_index<MAX_RT_MATERIAL_TEXTURES) {
         float2 uv=rt_apply_uv_transform(map_uv_at_hit(src,pid,bary,2u),src.mr_uv_transform);
-        float4 texel=rt_sample_map(textures[src.mr_tex_index],uv,src,2u); mr.xy*=texel.bg;
+        float4 texel=rt_sample_map(textures[src.mr_tex_index],uv,src,2u,lod); mr.xy*=texel.bg;
     }
     m.metallic=clamp(mr.x,0.0f,1.0f); m.roughness=clamp(mr.y,0.01f,1.0f);
     float3 ng=fetch_interpolated_normal(sources,instance,pid,bary);
@@ -1790,11 +1799,11 @@ static float rt_coat_ggx(float rough,float nv,float nl,float nh) {
     float gv=nv/(nv*(1.0f-k)+k),gl=nl/(nl*(1.0f-k)+k);
     return rt_ggx_distribution(rough,nh)*gv*gl/(4.0f*nv*nl+0.0001f);
 }
-static float3 rt_direct_brdf(thread const RtSurface& m,float3 v,float3 l,float sheen_scale) {
+static float3 rt_direct_brdf(thread const RtSurface& m,float3 v,float3 l,float sheen_scale,bool fast_bounce = false) {
     float half_length=length(v+l);
     float3 h=(v+l)/max(half_length,1e-6f);
     float nv=max(dot(m.n,v),0.001f),nl=max(dot(m.n,l),0.0f),nh=max(dot(m.n,h),0.0f),vh=max(dot(v,h),0.001f);
-    float3 f=rt_surface_fresnel(m,vh);
+    float3 f=fast_bounce ? rt_fresnel(m.f0,m.f90,vh) : rt_surface_fresnel(m,vh);
     float kd=(1.0f-max(f.x,max(f.y,f.z)))*(1.0f-m.metallic);
     float dv=0.0f;
     // Do not evaluate a reflection distribution for an absent hemisphere or
@@ -1806,7 +1815,7 @@ static float3 rt_direct_brdf(thread const RtSurface& m,float3 v,float3 l,float s
         float lv_iso=nl*sqrt(a2*(1.0f-nv2)+nv2);
         float ll_iso=nv*sqrt(a2*(1.0f-nl2)+nl2);
         dv=rt_ggx_distribution(m.roughness,nh)*0.5f/max(lv_iso+ll_iso,1e-7f);
-        if(m.anisotropy>0.0f) {
+        if(m.anisotropy>0.0f && !fast_bounce) {
             float ab=m.roughness*m.roughness,at=mix(ab,1.0f,m.anisotropy*m.anisotropy);
             float3 scaled_h=float3(dot(m.t,h)/at,dot(m.b,h)/ab,nh);
             float d_denom=dot(scaled_h,scaled_h);
@@ -1823,13 +1832,13 @@ static float3 rt_direct_brdf(thread const RtSurface& m,float3 v,float3 l,float s
     float cnv=max(dot(m.nc,v),0.001f),cnl=max(dot(m.nc,l),0.0f),cnh=max(dot(m.nc,h),0.0f);
     float coat_f=0.04f+0.96f*pow(1.0f-cnv,5.0f);
     float coat_d=0.0f;
-    if(m.coat.x>0.0f && cnl>0.0f && dot(m.nc,v)>0.0f && half_length>1e-6f) coat_d=rt_coat_ggx(m.coat.y,cnv,cnl,cnh)*(0.04f+0.96f*pow(1.0f-vh,5.0f))*cnl;
-    return ((diffuse*(1.0f-m.transmission.x)+dv*f*nl)*sheen_scale+m.sheen.rgb*ds*vs*nl)*(1.0f-m.coat.x*coat_f)+m.coat.x*coat_d;
+    if(!fast_bounce && m.coat.x>0.0f && cnl>0.0f && dot(m.nc,v)>0.0f && half_length>1e-6f) coat_d=rt_coat_ggx(m.coat.y,cnv,cnl,cnh)*(0.04f+0.96f*pow(1.0f-vh,5.0f))*cnl;
+    return ((diffuse*(1.0f-m.transmission.x)+dv*f*nl)*sheen_scale+(fast_bounce ? 0.0f : m.sheen.rgb*ds*vs*nl))*(1.0f-m.coat.x*coat_f)+m.coat.x*coat_d;
 }
 static float3 rt_direct_lights(instance_acceleration_structure accel,device RtNormalSource* sources,
     device GiMaterial* materials,array<texture2d<float>,MAX_RT_MATERIAL_TEXTURES> textures,
     constant ShadowRayParams& p,thread const RtSurface& m,float3 position,float3 view,float eps,
-    uint2 pixel,uint seed,float sheen_scale,device RtTraceDiagnostics* diagnostics) {
+    uint2 pixel,uint seed,float sheen_scale,device RtTraceDiagnostics* diagnostics,bool fast_bounce = false) {
     // Older low-level callers supply caster-only data. Production supplies the
     // complete raster light table, including lights with shadows disabled.
     if(p.light_data_addr==0ul) {
@@ -1867,7 +1876,7 @@ static float3 rt_direct_lights(instance_acceleration_structure accel,device RtNo
             }else { q.reset(r,accel,RT_MASK_SHADOW_CASTER);float brightness;
                 if(walk_with_alpha_test(q,sources,textures,true,pixel,p.frame_index,seed+i,brightness))vis=float3(0.0f); }
         }
-        total+=rt_direct_brdf(m,view,l,sheen_scale)*color.rgb*attenuation*vis;
+        total+=rt_direct_brdf(m,view,l,sheen_scale,fast_bounce)*color.rgb*attenuation*vis;
     }
     return total;
 }
@@ -1923,8 +1932,9 @@ static float2 r2_sequence(uint index) {
 static float2 blue_noise_sample(uint2 p, uint frame, uint ray, uint spp) {
     uint index = frame * spp + ray;
     float2 base = r2_sequence(index);
-    uint h = pcg(p.x ^ pcg(p.y));
-    float2 offset = float2((h & 0xFFFFu) / 65536.0, ((h >> 16u) & 0xFFFFu) / 65536.0);
+    uint h1 = pcg(p.x * 1664525u + p.y * 1013904223u);
+    uint h2 = pcg(h1 ^ (p.y * 22695477u + 1u));
+    float2 offset = float2(float(h1 & 0xFFFFu) / 65536.0f, float(h2 & 0xFFFFu) / 65536.0f);
     float2 u = base + offset;
     return u - floor(u);
 }
@@ -2425,7 +2435,11 @@ kernel void trace_shadow_rays(
         // clamp never fires — env samples there are 0 too).
         float3 env_anchor = refl_env_sample(p.env_rotation, prefiltered_env, shading_n, 1.0);
         float env_cap = RT_GI_ENV_FIREFLY_GAIN * max(luma(env_anchor), 1e-6);
+        float3 gi_sum = float3(0.0);
+        float3 gi_karis = float3(0.0);
+        float gi_kw = 0.0;
         for (uint s = 0; s < p.gi_spp; s++) {
+            float3 sample_gi = float3(0.0);
             ray gr;
             gr.origin = sec_origin;
             gr.min_distance = bias_eps * 0.5;
@@ -2443,7 +2457,7 @@ kernel void trace_shadow_rays(
                     // scaled by the path's throughput at extension depths.
                     float3 env_miss = refl_env_sample(p.env_rotation, prefiltered_env, gr.direction, 0.0);
                     float env_l = luma(env_miss);
-                    gi += throughput * ((env_l > env_cap && env_l > 1e-6)
+                    sample_gi += throughput * ((env_l > env_cap && env_l > 1e-6)
                         ? env_miss * (env_cap / env_l) : env_miss);
                     break;
                 }
@@ -2452,7 +2466,7 @@ kernel void trace_shadow_rays(
                 float2 gi_bary = gi_q.get_committed_triangle_barycentric_coord();
                 float gi_dist = gi_q.get_committed_distance();
                 RtSurface surface = rt_surface(slot_materials[oi],slot_sources,material_textures,
-                    oi,gi_pid,gi_bary,-gr.direction);
+                    oi,gi_pid,gi_bary,-gr.direction,2.0f);
                 float3 hit_emissive = surface.emission;
                 float3 hit_albedo = surface.albedo;
                 // Unlit is a terminal transport mode: preserve the material's
@@ -2463,7 +2477,7 @@ kernel void trace_shadow_rays(
                 if (slot_materials[oi].kind == 0.0f) {
                     float3 unlit_emission = (sampler_active && bounce == 0u)
                         ? float3(0.0) : hit_emissive;
-                    gi += throughput * (hit_albedo + unlit_emission) * gi_brightness;
+                    sample_gi += throughput * (hit_albedo + unlit_emission) * gi_brightness;
                     break;
                 }
                 float3 hit_pos = gr.origin + gr.direction * gi_dist;
@@ -2472,7 +2486,7 @@ kernel void trace_shadow_rays(
                 float hit_kd = (1.0f - max(hit_f.r,max(hit_f.g,hit_f.b))) * (1.0f-surface.metallic);
                 float sheen_scale = p.light_data_addr != 0ul ? rt_sheen_scale(surface,-gr.direction,secondary_brdf) : 1.0f;
                 float3 bounce_term = rt_direct_lights(accel,slot_sources,slot_materials,material_textures,p,
-                    surface,hit_pos,-gr.direction,bias_eps,tid,400u+s*RT_CASTER_SEED_STRIDE,sheen_scale,diagnostics);
+                    surface,hit_pos,-gr.direction,bias_eps,tid,400u+s*RT_CASTER_SEED_STRIDE,sheen_scale,diagnostics,true);
                 // RS7: the bounce-0 direct-emissive term is owned by the
                 // emissive direct-light sampler when active (substitution,
                 // never addition — the 818a06b0 double-count trap).
@@ -2482,7 +2496,7 @@ kernel void trace_shadow_rays(
                 // P4b: brightness of the accepted hit scales its evaluated
                 // radiance once; coverage was already applied stochastically
                 // by the walk and must not multiply again here.
-                gi += throughput * (bounce_emissive + bounce_term) * gi_brightness;
+                sample_gi += throughput * (bounce_emissive + bounce_term) * gi_brightness;
                 if (bounce + 1u < RT_GI_MAX_BOUNCES) {
                     // ED4: the cosine-weighted estimator's 1/pi cancels, so
                     // carry the hit's diffuse albedo energy only. Metals and
@@ -2502,9 +2516,14 @@ kernel void trace_shadow_rays(
                     // Extension directions use the plain hash stream (seed
                     // base 600u), NOT blue_noise_sample — the blue-noise
                     // sequence is budgeted per first-bounce sample index.
-                    gr.direction = cosine_hemisphere(hit_n, rand2(tid, p.frame_index, 600u + s * RT_CASTER_SEED_STRIDE + bounce));
+                    gr.direction = cosine_hemisphere(hit_n, blue_noise_sample(tid + uint2(17u, 31u), p.frame_index, s, p.gi_spp));
                 }
             }
+                float sl = luma(sample_gi);
+                float kw = 1.0f / (1.0f + max(sl - 1.0f, 0.0f) * 0.5f);
+                gi_sum += sample_gi;
+                gi_karis += sample_gi * kw;
+                gi_kw += kw;
         }
         // RS-C (RAYTRACING_DESIGN.md section 15.3): emissive-geometry RIS
         // sampler — alias draw one triangle, area-uniform point sample,
@@ -2654,8 +2673,8 @@ kernel void trace_shadow_rays(
                 }
             }
         }
-        gi += emissive_direct * float(p.gi_spp);
-        gi /= float(p.gi_spp);
+        gi = (p.gi_spp > 1u && gi_kw > 0.0f) ? (gi_karis / gi_kw) : (gi_sum / float(p.gi_spp));
+        gi += emissive_direct;
     }
 
     // RT-R1 (RAYTRACING_DESIGN.md section 9.3 kernel flow): traced specular for
@@ -2742,7 +2761,12 @@ kernel void trace_shadow_rays(
             // attacks the variance at the source; `RT_REFL_FIREFLY_GAIN`
             // below attacks the tail.
             uint rspp = p.refl_spp;
-            float3 rsamples[MAX_RT_REFL_SPP];
+            float3 traced_sum = float3(0.0);
+            float3 traced_karis_sum = float3(0.0);
+            float karis_w_sum = 0.0;
+            float min_luma = 1e30f;
+            float max_luma = 0.0f;
+            float3 max_sample = float3(0.0);
             float hit_dist_sum = 0.0;
             uint hit_count = 0u;
             for (uint rs = 0u; rs < rspp; ++rs) {
@@ -2779,7 +2803,7 @@ kernel void trace_shadow_rays(
                 hit_dist = refl_q.get_committed_distance();
                 float3 view = -rr.direction;
                 float3 position = rr.origin + rr.direction * hit_dist;
-                RtSurface surface = rt_surface(slot_materials[hoi],slot_sources,material_textures,hoi,hpid,hbary,view);
+                RtSurface surface = rt_surface(slot_materials[hoi],slot_sources,material_textures,hoi,hpid,hbary,view,clamp(roughness * 5.0f, 0.0f, 4.0f));
                 if (slot_materials[hoi].kind == 0.0f) {
                     traced = (surface.albedo + surface.emission) * refl_hit_brightness;
                 } else {
@@ -2795,7 +2819,13 @@ kernel void trace_shadow_rays(
                 // GGX-perturbed) direction, roughness mip.
                 traced = refl_env_sample(p.env_rotation, prefiltered_env, rdir, roughness);
             }
-            rsamples[rs] = traced;
+            float sl = luma(traced);
+            traced_sum += traced;
+            float kw = 1.0f / (1.0f + sl * 0.25f);
+            traced_karis_sum += traced * kw;
+            karis_w_sum += kw;
+            if (sl < min_luma) { min_luma = sl; }
+            if (sl > max_luma) { max_luma = sl; max_sample = traced; }
             if (hit_dist > RT_REFL_MISS_HIT_DIST) { hit_dist_sum += hit_dist; hit_count += 1u; }
             }
             // Firefly clamp, anchored on this batch's OWN median luminance.
@@ -2810,19 +2840,19 @@ kernel void trace_shadow_rays(
             // higher = closer to ground truth, noisier. A 1-sample dispatch
             // has no median to anchor on, so the clamp is inert there.
             const float RT_REFL_FIREFLY_GAIN = 8.0;
-            float3 traced_sum = float3(0.0);
+            float3 traced_avg;
             if (rspp > 2u) {
-                float med = median_luma(rsamples, rspp);
-                float cap = RT_REFL_FIREFLY_GAIN * med;
-                for (uint rs = 0u; rs < rspp; ++rs) {
-                    float3 s = rsamples[rs];
-                    float sl = luma(s);
-                    traced_sum += (sl > cap && sl > 1e-6) ? s * (cap / sl) : s;
+                float anchor = luma(traced_karis_sum / max(karis_w_sum, 1e-6f));
+                float cap = RT_REFL_FIREFLY_GAIN * anchor;
+                float avg_l = luma(traced_sum / float(rspp));
+                if (avg_l > cap && avg_l > 1e-6f) {
+                    traced_avg = (traced_sum / float(rspp)) * (cap / avg_l);
+                } else {
+                    traced_avg = traced_sum / float(rspp);
                 }
             } else {
-                for (uint rs = 0u; rs < rspp; ++rs) { traced_sum += rsamples[rs]; }
+                traced_avg = traced_sum / float(rspp);
             }
-            float3 traced_avg = traced_sum / float(rspp);
             // R2's reprojection needs ONE surface's distance; the mean over
             // the samples that actually hit is the lobe's representative
             // depth. All-miss keeps the env-miss sentinel.
@@ -3126,8 +3156,8 @@ kernel void atrous_filter(
     // to a near-infinitely-sharp (effectively unfiltered) luma weight.
     const float ATROUS_DEPTH_SIGMA = 3e-3;
     const float ATROUS_NORMAL_POWER = 16.0;
-    const float ATROUS_LUMA_SIGMA_SCALE = 8.0;
-    const float ATROUS_LUMA_SIGMA_FLOOR = 0.15;
+    const float ATROUS_LUMA_SIGMA_SCALE = 4.0;
+    const float ATROUS_LUMA_SIGMA_FLOOR = 0.05;
     // RT-R2: reflection-channel luma edge-stop — narrows as roughness
     // falls: shiny surfaces reject differing taps sharply (the mirror
     // image stays crisp), rough surfaces blur wide (their reflections
@@ -3812,7 +3842,9 @@ kernel void accumulate_irradiance(
                     // as a cut, no wild-sample guard needed. Per-texel and
                     // gesture gates snap to 2 — one frame of history so a
                     // single wild sample cannot define the pixel.
-                    float n = cpu_lighting_changed ? 1.0 : (texel_or_gesture ? 2.0 : n_full);
+                    float excess = saturate((dluma - change_gate) / max(change_gate * 2.0f, 1e-4f));
+                    float texel_n = mix(min(n_full, 16.0f), 2.0f, excess);
+                    float n = cpu_lighting_changed ? 1.0f : (cpu_gesture ? 2.0f : (texel_fired ? texel_n : n_full));
                     float alpha = max(1.0 / n, alpha_floor);
                     hist_len = min(n, 1.0 / max(alpha_floor, 1e-6));
                     blended = mix(hist, cur.xyz, alpha);

@@ -135,51 +135,52 @@ impl RenderScene {
         }
         self.selection.cache_key = cacheable.then_some(selection_key);
 
-        let mut load = manifold_gpu::GpuLoadAction::Clear;
-        for d in selected_draws {
-            let uniforms = ShadowUniforms::for_draw(view_proj, d);
-            let bindings = [
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: d.vertices,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: d.instances.unwrap_or(identity_stub),
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: d.weights.unwrap_or(d.vertices),
-                    offset: 0,
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: d.base_color_map.unwrap_or(dummy),
-                },
-                GpuBinding::Sampler {
-                    binding: 5,
-                    sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])],
-                },
-            ];
-            gpu.native_enc.draw_instanced(
-                &pipeline,
-                mask,
-                &bindings,
-                d.draw_count(),
-                load,
-                "node.render_scene selection mask",
-            );
-            load = manifold_gpu::GpuLoadAction::Load;
-        }
-        if load == manifold_gpu::GpuLoadAction::Clear {
+        if selected_draws.is_empty() {
             // Nothing selected drew this frame: an empty mask, not last frame's.
             gpu.native_enc.clear_texture(mask, 0.0, 0.0, 0.0, 0.0);
+        } else {
+            let mut load = manifold_gpu::GpuLoadAction::Clear;
+            for d in selected_draws {
+                let uniforms = ShadowUniforms::for_draw(view_proj, d);
+                let bindings = [
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: d.vertices,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: d.instances.unwrap_or(identity_stub),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: d.weights.unwrap_or(d.vertices),
+                        offset: 0,
+                    },
+                    GpuBinding::Texture {
+                        binding: 4,
+                        texture: d.base_color_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Sampler {
+                        binding: 5,
+                        sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])],
+                    },
+                ];
+                gpu.native_enc.draw_instanced(
+                    &pipeline,
+                    mask,
+                    &bindings,
+                    d.draw_count(),
+                    load,
+                    "node.render_scene selection mask",
+                );
+                load = manifold_gpu::GpuLoadAction::Load;
+            }
         }
         self.selection.drawn = true;
     }

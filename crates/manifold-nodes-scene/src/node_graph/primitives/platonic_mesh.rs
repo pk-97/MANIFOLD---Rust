@@ -4,17 +4,19 @@
 //! This is an IO bridge: the reusable topology and flat normals live in
 //! `generators::platonic_geometry`; this node only selects the cached source,
 //! applies the port-shadowed radius on GPU, and writes the fixed-capacity
-//! `Array<MeshVertex>` output.
+//! `Array<MeshVertex>` output. It publishes the shape's live extent, so a
+//! tetrahedron draws its 12 vertices, not the 108-vertex capacity.
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuComputePipeline};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::{MeshVertex, PLATONIC_SHAPES};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::platonic::{PLATONIC_MESH_CAPACITY, platonic_mesh_upload_bytes};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::live_extent::LiveExtent;
 use manifold_node_engine::scene::mesh_source::MeshSource;
 
 manifold_node_engine::primitive! {
@@ -58,6 +60,7 @@ manifold_node_engine::primitive! {
     boundary_reason: IoBridge,
     extra_fields: {
         upload_pipeline: Option<GpuComputePipeline> = None,
+        live_triangles: Option<GpuBuffer> = None,
     },
 }
 
@@ -109,6 +112,10 @@ impl Primitive for PlatonicMesh {
             radius,
             _pad: 0,
         };
+        let live_triangles = self
+            .live_triangles
+            .get_or_insert_with(|| gpu.device.create_buffer(16))
+            .clone();
         let source = platonic_mesh_upload_bytes(shape);
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -129,9 +136,23 @@ impl Primitive for PlatonicMesh {
                     buffer: dst,
                     offset: 0,
                 },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: &live_triangles,
+                    offset: 0,
+                },
             ],
             [capacity.div_ceil(64), 1, 1],
             "node.platonic_solid_mesh",
+        );
+        ctx.outputs.set_live_extent(
+            "vertices",
+            LiveExtent {
+                counts: live_triangles,
+                offset: 0,
+                per_item: 3,
+                bound: uniforms.count.min(capacity),
+            },
         );
     }
 }

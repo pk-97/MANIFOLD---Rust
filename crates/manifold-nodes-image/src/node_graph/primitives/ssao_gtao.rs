@@ -570,6 +570,15 @@ pub(crate) mod cpu_reference {
         let radius = radius * RADIUS_MULTIPLIER;
         let slices = slices.max(1);
         let steps = steps.max(1);
+        if intensity <= 0.0 {
+            return 1.0;
+        }
+        if !heightfield {
+            let raw = depth.load(cx, cy);
+            if raw <= 1e-6 {
+                return 1.0;
+            }
+        }
         let tan_half_fov = (fov_y * 0.5).tan();
         let aspect = depth.w as f32 / depth.h as f32;
         let pos = |cx: i32, cy: i32| -> [f32; 3] {

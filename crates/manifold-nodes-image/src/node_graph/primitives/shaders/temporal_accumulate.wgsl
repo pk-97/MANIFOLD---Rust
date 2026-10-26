@@ -95,6 +95,17 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dp = texel_at(uv, depth_dims);
     let current = textureLoad(in_tex, p, 0);
 
+    // Empty-sky fast path: depth is the far-plane sentinel (raw 0), the input
+    // is constant, and the normal is the camera-facing flat plane. Skip the
+    // expensive view/normal/history/variance work entirely.
+    let raw_depth_center = textureLoad(depth_tex, dp, 0).r;
+    if (raw_depth_center <= 1e-6) {
+        textureStore(output_tex, p, current);
+        textureStore(next_color, p, current);
+        textureStore(next_meta, p, vec4<f32>(u.far, 1.0, oct_encode(-u.cam_fwd.xyz)));
+        return;
+    }
+
     let v = view_pos_at(dp, depth_dims);
     let v_l = view_pos_at(dp - vec2<i32>(1, 0), depth_dims);
     let v_r = view_pos_at(dp + vec2<i32>(1, 0), depth_dims);

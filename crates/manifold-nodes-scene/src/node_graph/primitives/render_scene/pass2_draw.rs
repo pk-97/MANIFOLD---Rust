@@ -507,7 +507,7 @@ impl RenderScene {
         // right after (occlusion by opaque geometry falls out of the shared,
         // still-live MSAA depth buffer; no separate resolve/reclear).
         let mut draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = Vec::with_capacity(draws.len());
-        let mut blend_entries: Vec<(f32, usize, manifold_gpu::DepthMsaaDraw)> = Vec::new();
+        let mut blend_entries: Vec<(f32, usize, manifold_gpu::DepthMsaaDraw)> = Vec::with_capacity(draws.len());
         for (draw_index, (draw, bindings)) in draws.iter().zip(&binding_sets).enumerate() {
             // SCENE_RENDER_MODE_DESIGN.md D6/D8: the color pass carries each
             // draw's fill mode (Lines under wireframe) and topology (Point
@@ -808,48 +808,49 @@ impl RenderScene {
                 if nearest_surface {
                     water_perf::record(*draw_index, draw);
                 }
-                let shadow_uniforms = ShadowUniforms::for_draw(pre.view_proj, draw);
-                let shadow_bindings = [
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&shadow_uniforms),
-                    },
-                    GpuBinding::Buffer {
-                        binding: 1,
-                        buffer: draw.vertices,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 2,
-                        buffer: draw.instances.unwrap_or(identity_stub),
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 3,
-                        buffer: draw.weights.unwrap_or(draw.vertices),
-                        offset: 0,
-                    },
-                    GpuBinding::Texture {
-                        binding: 4,
-                        texture: draw.base_color_map.unwrap_or(dummy),
-                    },
-                    GpuBinding::Sampler {
-                        binding: 5,
-                        sampler: &self.material_samplers
-                            [&Self::sampler_cache_key(draw.sampler_descs[0])],
-                    },
-                ];
-                let depth_draw = draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
-                    &shadow_pipeline,
-                    &shadow_bindings,
-                    draw.vertex_count,
-                    draw.instance_count,
-                ));
                 let gpu = ctx.gpu_encoder();
                 // The layer prepass starts from opaque depth, so a solid mesh
                 // cannot reveal a triangle behind an opaque surface and depth
                 // testing within the mesh selects its nearest surface.
                 if nearest_surface {
+                    let shadow_uniforms = ShadowUniforms::for_draw(pre.view_proj, draw);
+                    let shadow_bindings = [
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&shadow_uniforms),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: draw.vertices,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: draw.instances.unwrap_or(identity_stub),
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 3,
+                            buffer: draw.weights.unwrap_or(draw.vertices),
+                            offset: 0,
+                        },
+                        GpuBinding::Texture {
+                            binding: 4,
+                            texture: draw.base_color_map.unwrap_or(dummy),
+                        },
+                        GpuBinding::Sampler {
+                            binding: 5,
+                            sampler: &self.material_samplers
+                                [&Self::sampler_cache_key(draw.sampler_descs[0])],
+                        },
+                    ];
+                    let depth_draw = draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
+                        &shadow_pipeline,
+                        &shadow_bindings,
+                        draw.vertex_count,
+                        draw.instance_count,
+                    ));
+
                     #[cfg(feature = "fluid-perf-proofs")]
                     gpu.native_enc
                         .profile_next_encoder("node.render_scene water opaque-depth seed");

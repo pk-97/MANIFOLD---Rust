@@ -183,6 +183,16 @@ fn body(
     let tan_half_fov = tan(fov_y * 0.5);
     let aspect = dims.x / dims.y;
 
+    if (intensity <= 0.0) {
+        return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    }
+    if (projection == 0u) {
+        let cc = clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
+        let raw_d = textureLoad(depth, cc, 0).r;
+        if (raw_d <= 1e-6) {
+            return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+        }
+    }
     let p_c = gtao_pos(depth, c, dims_i, tan_half_fov, aspect, near, far, hf, relief);
 
     // Edge-aware normal (view_normal_common.wgsl), so pixels beside a

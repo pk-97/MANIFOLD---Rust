@@ -11,9 +11,9 @@ use objc2_metal::{
     MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor,
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLBuffer, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineState,
-    MTLIndexType, MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
+    MTLCullMode, MTLIndexType, MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
-    MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
+    MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport, MTLWinding,
 };
 
 use super::profiling::{self, ProfileState};
@@ -90,6 +90,26 @@ impl RenderBindCache {
         self.buffers = [(std::ptr::null(), 0); CACHE_SLOTS];
         self.vertex_buf_30 = std::ptr::null();
         self.bytes = [(std::ptr::null(), 0); CACHE_SLOTS];
+    }
+}
+
+pub(super) struct BatchRenderCache {
+    textures: [*const c_void; 64],
+    samplers: [*const c_void; 32],
+    buffers: [(*const c_void, u64); 32],
+    last_pipeline: *const c_void,
+    last_fill_mode: Option<crate::GpuTriangleFillMode>,
+}
+
+impl BatchRenderCache {
+    pub(super) fn new() -> Self {
+        Self {
+            textures: [std::ptr::null(); 64],
+            samplers: [std::ptr::null(); 32],
+            buffers: [(std::ptr::null(), 0); 32],
+            last_pipeline: std::ptr::null(),
+            last_fill_mode: None,
+        }
     }
 }
 
@@ -219,9 +239,19 @@ pub struct DepthMsaaDraw<'a> {
     /// force `Triangle` — same INV-R3 argument as `fill_mode` (point-only
     /// depth would break occlusion and shadows).
     primitive: crate::GpuPrimitiveType,
+    /// Skip back faces (counter-clockwise front). Only for closed,
+    /// outward-wound, opaque meshes: their nearest surface is always a front
+    /// face, so colour and depth match the two-sided draw at half the work.
+    cull_back: bool,
 }
 
 impl<'a> DepthMsaaDraw<'a> {
+    /// Skip back faces when `cull` (see [`DepthMsaaDraw::cull_back`]).
+    pub fn cull_back_faces(mut self, cull: bool) -> Self {
+        self.cull_back = cull;
+        self
+    }
+
     /// Use `indices` as the `u32` index buffer, preserving whether this draw's
     /// count is direct or GPU-written. Direct counts use the constructor's
     /// vertex count as the index count.
@@ -278,6 +308,15 @@ impl<'a> DepthMsaaDraw<'a> {
             },
         };
         self
+    }
+}
+
+/// Skip back faces (counter-clockwise front) when `cull`, else draw both.
+/// Set per draw: one pass mixes closed and open meshes.
+fn set_cull(enc: &ProtocolObject<dyn MTLRenderCommandEncoder>, cull: bool) {
+    unsafe {
+        enc.setFrontFacingWinding(MTLWinding::CounterClockwise);
+        enc.setCullMode(if cull { MTLCullMode::Back } else { MTLCullMode::None });
     }
 }
 
@@ -756,8 +795,9 @@ impl GpuEncoder {
                 return;
             }
         }
-        let isolate_rt_stage = label.starts_with(RT_STAGE_PREFIX);
-        if isolate_rt_stage && super::gpu_fault::diagnostics_enabled() {
+        let isolate_rt_stage = label.starts_with(RT_STAGE_PREFIX)
+            && super::gpu_fault::diagnostics_enabled();
+        if isolate_rt_stage {
             let groups = match grid {
                 DispatchGrid::Groups(groups) => format!("{groups:?}"),
                 DispatchGrid::Indirect { .. } => "indirect".to_owned(),
@@ -767,6 +807,17 @@ impl GpuEncoder {
                 pipeline.workgroup_size,
                 bindings.len()
             );
+        }
+        if label.starts_with(RT_STAGE_PREFIX)
+            && !isolate_rt_stage
+            && self.profile.is_none()
+            && let EncoderState::Compute(ref enc) = self.state
+        {
+            unsafe {
+                enc.memoryBarrierWithScope(
+                    objc2_metal::MTLBarrierScope::Textures | objc2_metal::MTLBarrierScope::Buffers,
+                );
+            }
         }
         if isolate_rt_stage {
             self.end_current();
@@ -1156,9 +1207,8 @@ impl GpuEncoder {
             );
             enc.popDebugGroup();
         }
-        // Keep the RT dispatch in its own labelled encoder. Besides making
-        // the failure boundary visible, end_current clears the ordinary
-        // compute binding cache before the next dispatch reuses this slot.
+        // End the encoder after an acceleration-structure dispatch so a
+        // subsequent pass starts with a clean encoder and completed TLAS reads.
         self.end_current();
     }
 
@@ -1407,6 +1457,7 @@ impl GpuEncoder {
             },
             fill_mode: crate::GpuTriangleFillMode::Fill,
             primitive: crate::GpuPrimitiveType::Triangle,
+            cull_back: false,
         }
     }
 
@@ -1429,6 +1480,7 @@ impl GpuEncoder {
             },
             fill_mode,
             primitive: crate::GpuPrimitiveType::Triangle,
+            cull_back: false,
         }
     }
 
@@ -1452,6 +1504,7 @@ impl GpuEncoder {
             },
             fill_mode: crate::GpuTriangleFillMode::Fill,
             primitive: crate::GpuPrimitiveType::Point,
+            cull_back: false,
         }
     }
 
@@ -1589,19 +1642,33 @@ impl GpuEncoder {
             });
         }
 
+        let mut batch_cache = BatchRenderCache::new();
         for draw in draws {
             if draw.count.is_empty() {
                 continue;
             }
-            unsafe {
-                self.bind_render_pipeline(&enc, draw.pipeline);
-                // SCENE_RENDER_MODE_DESIGN.md D6: per-draw fill mode (wireframe
-                // = Lines). Encoder state, not a pipeline variant.
-                enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
+            let pipeline_ptr = &*draw.pipeline.state as *const _ as *const c_void;
+            if batch_cache.last_pipeline != pipeline_ptr {
+                unsafe {
+                    self.bind_render_pipeline(&enc, draw.pipeline);
+                }
+                batch_cache.last_pipeline = pipeline_ptr;
             }
-            apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
+            if batch_cache.last_fill_mode != Some(draw.fill_mode) {
+                unsafe {
+                    enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
+                }
+                batch_cache.last_fill_mode = Some(draw.fill_mode);
+            }
+            apply_bindings_draw_both_stages_cached(
+                &enc,
+                draw.pipeline,
+                draw.bindings,
+                &mut batch_cache,
+            );
             // D8: per-draw topology (Points mode = point primitives) — colour
             // batches only; depth-only batches force Triangle.
+            set_cull(&enc, draw.cull_back);
             encode_draw(
                 &enc,
                 format::to_mtl_primitive_type(draw.primitive),
@@ -1623,11 +1690,26 @@ impl GpuEncoder {
                 if draw.count.is_empty() {
                     continue;
                 }
-                unsafe {
-                    self.bind_render_pipeline(&enc, draw.pipeline);
-                    enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
+                let pipeline_ptr = &*draw.pipeline.state as *const _ as *const c_void;
+                if batch_cache.last_pipeline != pipeline_ptr {
+                    unsafe {
+                        self.bind_render_pipeline(&enc, draw.pipeline);
+                    }
+                    batch_cache.last_pipeline = pipeline_ptr;
                 }
-                apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
+                if batch_cache.last_fill_mode != Some(draw.fill_mode) {
+                    unsafe {
+                        enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
+                    }
+                    batch_cache.last_fill_mode = Some(draw.fill_mode);
+                }
+                apply_bindings_draw_both_stages_cached(
+                    &enc,
+                    draw.pipeline,
+                    draw.bindings,
+                    &mut batch_cache,
+                );
+                set_cull(&enc, draw.cull_back);
                 encode_draw(
                     &enc,
                     format::to_mtl_primitive_type(draw.primitive),
@@ -1704,19 +1786,35 @@ impl GpuEncoder {
             });
         }
 
+        let mut batch_cache = BatchRenderCache::new();
         for draw in draws {
             if draw.count.is_empty() {
                 continue;
             }
-            unsafe {
-                self.bind_render_pipeline(&enc, draw.pipeline);
-                // SCENE_RENDER_MODE_DESIGN.md D6: per-draw fill mode (wireframe
-                // = Lines), same as the MSAA colour batch.
-                enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
+            let pipeline_ptr = &*draw.pipeline.state as *const _ as *const c_void;
+            if batch_cache.last_pipeline != pipeline_ptr {
+                unsafe {
+                    self.bind_render_pipeline(&enc, draw.pipeline);
+                }
+                batch_cache.last_pipeline = pipeline_ptr;
             }
-            apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
+            if batch_cache.last_fill_mode != Some(draw.fill_mode) {
+                unsafe {
+                    // SCENE_RENDER_MODE_DESIGN.md D6: per-draw fill mode (wireframe
+                    // = Lines), same as the MSAA colour batch.
+                    enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
+                }
+                batch_cache.last_fill_mode = Some(draw.fill_mode);
+            }
+            apply_bindings_draw_both_stages_cached(
+                &enc,
+                draw.pipeline,
+                draw.bindings,
+                &mut batch_cache,
+            );
             // D8: per-draw topology (Points mode = point primitives) — colour
             // batches only; depth-only batches force Triangle.
+            set_cull(&enc, draw.cull_back);
             encode_draw(
                 &enc,
                 format::to_mtl_primitive_type(draw.primitive),
@@ -1990,23 +2088,39 @@ impl GpuEncoder {
             });
         }
 
+        let mut batch_cache = BatchRenderCache::new();
         for draw in draws {
             if draw.count.is_empty() {
                 continue;
             }
-            unsafe {
-                self.bind_render_pipeline(&enc, draw.pipeline);
-                // INV-R3 (SCENE_RENDER_MODE_DESIGN.md): shadow maps and depth
-                // prepasses ALWAYS fill AND always draw triangles — lines-only
-                // or point-only depth would break occlusion, shadows, and
-                // every downstream depth reader. Both forced here, not at the
-                // call site, so a `DepthMsaaDraw` carrying `Lines`/`Point`
-                // can never leak into a depth-only pass.
-                enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(
-                    crate::GpuTriangleFillMode::Fill,
-                ));
+            let pipeline_ptr = &*draw.pipeline.state as *const _ as *const c_void;
+            if batch_cache.last_pipeline != pipeline_ptr {
+                unsafe {
+                    self.bind_render_pipeline(&enc, draw.pipeline);
+                }
+                batch_cache.last_pipeline = pipeline_ptr;
             }
-            apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
+            if batch_cache.last_fill_mode != Some(crate::GpuTriangleFillMode::Fill) {
+                unsafe {
+                    // INV-R3 (SCENE_RENDER_MODE_DESIGN.md): shadow maps and depth
+                    // prepasses ALWAYS fill AND always draw triangles — lines-only
+                    // or point-only depth would break occlusion, shadows, and
+                    // every downstream depth reader. Both forced here, not at the
+                    // call site, so a `DepthMsaaDraw` carrying `Lines`/`Point`
+                    // can never leak into a depth-only pass.
+                    enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(
+                        crate::GpuTriangleFillMode::Fill,
+                    ));
+                }
+                batch_cache.last_fill_mode = Some(crate::GpuTriangleFillMode::Fill);
+            }
+            apply_bindings_draw_both_stages_cached(
+                &enc,
+                draw.pipeline,
+                draw.bindings,
+                &mut batch_cache,
+            );
+            set_cull(&enc, draw.cull_back);
             encode_draw(&enc, MTLPrimitiveType::Triangle, &draw.count);
         }
 
@@ -3893,6 +4007,143 @@ fn apply_bindings_draw_both_stages(
 /// usage on this pass — one half of the BUG-l7t4 sub-question (does
 /// retention-via-render-path matter?). Cheap no-op-ish Metal calls; kept
 /// regardless of the answer because the declaration is correct.
+fn apply_bindings_draw_both_stages_cached(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    pipeline: &GpuRenderPipeline,
+    bindings: &[GpuBinding],
+    cache: &mut BatchRenderCache,
+) {
+    let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
+
+    for binding in bindings {
+        match binding {
+            GpuBinding::Buffer {
+                binding: b,
+                buffer,
+                offset,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                let idx = slot.metal_index as usize;
+                let id = buffer_identity(&buffer.raw);
+                if idx >= 32 || cache.buffers[idx] != (id, *offset) {
+                    unsafe {
+                        enc.setVertexBuffer_offset_atIndex(
+                            Some(&buffer.raw),
+                            *offset as usize,
+                            slot.metal_index as usize,
+                        );
+                        enc.setFragmentBuffer_offset_atIndex(
+                            Some(&buffer.raw),
+                            *offset as usize,
+                            slot.metal_index as usize,
+                        );
+                        let () = msg_send![
+                            enc,
+                            useResource: &*buffer.raw,
+                            usage: objc2_metal::MTLResourceUsage::Read
+                        ];
+                    }
+                    if idx < 32 {
+                        cache.buffers[idx] = (id, *offset);
+                    }
+                }
+            }
+            GpuBinding::Texture {
+                binding: b,
+                texture,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                debug_check_write_usage(slot, texture, &pipeline.label);
+                let idx = slot.metal_index as usize;
+                let id = texture_identity(&texture.raw);
+                if idx >= 64 || cache.textures[idx] != id {
+                    unsafe {
+                        enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                        enc.setFragmentTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                        let () = msg_send![
+                            enc,
+                            useResource: &*texture.raw,
+                            usage: objc2_metal::MTLResourceUsage::Read
+                        ];
+                    }
+                    if idx < 64 {
+                        cache.textures[idx] = id;
+                    }
+                }
+            }
+            GpuBinding::Sampler {
+                binding: b,
+                sampler,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                let idx = slot.metal_index as usize;
+                let id = sampler_identity(&sampler.raw);
+                if idx >= 32 || cache.samplers[idx] != id {
+                    unsafe {
+                        enc.setVertexSamplerState_atIndex(
+                            Some(&sampler.raw),
+                            slot.metal_index as usize,
+                        );
+                        enc.setFragmentSamplerState_atIndex(
+                            Some(&sampler.raw),
+                            slot.metal_index as usize,
+                        );
+                    }
+                    if idx < 32 {
+                        cache.samplers[idx] = id;
+                    }
+                }
+            }
+            GpuBinding::Bytes { binding: b, data } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                let idx = slot.metal_index as usize;
+                unsafe {
+                    enc.setVertexBytes_length_atIndex(
+                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                        data.len(),
+                        slot.metal_index as usize,
+                    );
+                    enc.setFragmentBytes_length_atIndex(
+                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                        data.len(),
+                        slot.metal_index as usize,
+                    );
+                }
+                if idx < 32 {
+                    cache.buffers[idx] = (std::ptr::null(), 0);
+                }
+            }
+        }
+    }
+
+    if pipeline.needs_sizes_buffer {
+        bind_sizes_buffer_render(
+            enc,
+            pipeline,
+            &buffer_sizes,
+            buffer_sizes_len,
+            RenderStages::Both,
+        );
+        let slot_idx = pipeline
+            .slot_map
+            .get(SIZES_BUFFER_BINDING)
+            .expect("sizes buffer slot missing in render pipeline despite needs_sizes_buffer")
+            .metal_index as usize;
+        if slot_idx < 32 {
+            cache.buffers[slot_idx] = (std::ptr::null(), 0);
+        }
+    }
+}
+
+
 fn declare_render_resource_usage(
     enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     bindings: &[GpuBinding],

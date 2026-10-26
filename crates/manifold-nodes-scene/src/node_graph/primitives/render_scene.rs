@@ -1931,6 +1931,8 @@ struct ObjectDraw<'ctx> {
     /// structure, AO, GI, reflections, and primary hits on both
     /// paths.
     cast_shadows: bool,
+    /// `node.scene_object`'s `closed`: the mesh is closed and outward-wound.
+    closed: bool,
     /// PBR with
     /// `transmission_factor > 0`. Routes to Pass B, takes the opaque-scene-
     /// color snapshot before its draw and samples it at @binding(27). A
@@ -1965,12 +1967,26 @@ impl ObjectDraw<'_> {
         self.alpha_mode == AlphaMode::Blend || self.is_transmissive
     }
 
+    /// A closed, filled, opaque mesh whose model matrix keeps its winding:
+    /// its nearest surface is always a front face, so back faces are skipped.
+    fn culls_back_faces(&self) -> bool {
+        let m = self.uniforms.model;
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[2][1] * m[1][2])
+            - m[1][0] * (m[0][1] * m[2][2] - m[2][1] * m[0][2])
+            + m[2][0] * (m[0][1] * m[1][2] - m[1][1] * m[0][2]);
+        self.closed
+            && !self.routes_to_transparent()
+            && self.fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
+            && det > 0.0
+    }
+
     /// `draw`, switched to this object's GPU-written arguments when it has
-    /// them.
+    /// them, skipping back faces when [`Self::culls_back_faces`].
     fn live<'a>(
         &'a self,
         draw: manifold_gpu::DepthMsaaDraw<'a>,
     ) -> manifold_gpu::DepthMsaaDraw<'a> {
+        let draw = draw.cull_back_faces(self.culls_back_faces());
         let draw = match self.indices {
             Some(indices) => draw.indexed(indices),
             None => draw,
@@ -2674,6 +2690,7 @@ impl RenderScene {
         let object = SceneObject {
             visible: true,
             cast_shadows: true,
+            closed: false,
             transform: manifold_node_engine::scene::transform::Transform::default(),
             parent_transform: None,
             material: inputs.material("material"),

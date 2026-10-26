@@ -49,6 +49,12 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             near_rgba += textureLoad(near,p,0)*bilinear;
         }
     }
+    // Empty-sky fast path: no far reach and no near coverage, so the result is
+    // zero regardless of the (expensive) small-blur/reconstruction below.
+    if original.a <= 1e-6 && near_rgba.a == 0.0 && far_reach < 0.5 {
+        textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(0.0));
+        return;
+    }
     // Half-resolution gathers resolve radii of at least one source pixel.
     // Blend only above that support; smaller near radii have no gathered
     // coverage and must not fade the original silhouette toward transparent.

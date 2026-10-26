@@ -182,6 +182,10 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
                 b.set(mesh, "shape", SerializedParamValue::Enum { value: solid });
             }
             let object = b.add(owner, "object", "node.scene_object");
+            if solid.is_some() {
+                // Platonic solids are closed and outward-wound.
+                b.set(object, "closed", SerializedParamValue::Bool { value: true });
+            }
             b.wire(mesh, "vertices", object, "vertices");
             b.wire(copies, "copies", object, "instances");
             b.wire(live, "out", object, "instance_count");

@@ -648,6 +648,7 @@ impl RenderScene {
                 sort_depth,
                 is_transmissive,
                 cast_shadows: object.cast_shadows,
+                closed: object.closed,
                 kind: material.kind,
                 fill_mode: color_pass_fill_mode(&render_mode),
                 points,

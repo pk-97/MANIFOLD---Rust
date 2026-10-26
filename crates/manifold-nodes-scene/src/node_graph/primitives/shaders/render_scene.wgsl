@@ -2072,11 +2072,14 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let occlusion = resolve_occlusion(in.uv);
     let diffuse_ibl = kd_ibl * albedo.rgb * irradiance * occlusion;
 
-    let back_uv = env_lookup_uv(-N);
-    let back_irradiance = textureSampleLevel(irradiance_map, envmap_sampler, back_uv, 0.0).rgb;
     let diffuse_transmission = translucency.a;
-    let translucent_ibl = kd_ibl * translucency.rgb * back_irradiance
-        * diffuse_transmission * occlusion;
+    var translucent_ibl = vec3<f32>(0.0);
+    if diffuse_transmission > 0.0 {
+        let back_uv = env_lookup_uv(-N);
+        let back_irradiance = textureSampleLevel(irradiance_map, envmap_sampler, back_uv, 0.0).rgb;
+        translucent_ibl = kd_ibl * translucency.rgb * back_irradiance
+            * diffuse_transmission * occlusion;
+    }
     var diffuse_component = (direct_diffuse + diffuse_ibl) * (1.0 - diffuse_transmission)
         + direct_translucent + translucent_ibl;
     if subsurface_binding.x > 0.0 {

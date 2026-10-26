@@ -84,6 +84,14 @@ fn body(
     let behind = raw_center - bb_depth_at(depth_tex, c - axis_dir_texel, dims_i);
     let raw_slope = select(behind, ahead, abs(ahead) < abs(behind));
 
+    // Empty-sky fast path: a flat far plane (raw depth 0) with no depth
+    // variation contributes an identity (all weights collapse to K9 on a
+    // constant input) — skip the per-tap depth loads/exp. Matches the
+    // CPU reference below.
+    if (raw_center <= 1e-6 && ahead == 0.0 && behind == 0.0) {
+        return center;
+    }
+
     var acc = center.rgb * BB_K9_0;
     var wsum = BB_K9_0;
 

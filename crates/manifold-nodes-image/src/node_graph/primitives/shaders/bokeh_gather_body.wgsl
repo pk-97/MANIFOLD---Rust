@@ -376,6 +376,9 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32, aperture:
     // square patches even when enough taps were available to resolve them.
     let footprint = radius * sqrt(3.141592654 / f32(sample_count));
     let lod = max(log2(footprint),0.0);
+    // LOOP-INVARIANT: guide lod/dims depend only on `lod`, computed above.
+    let guide_lod = i32(min(ceil(lod),f32(textureNumLevels(tex_width)-1u)));
+    let guide_dims = vec2<i32>(textureDimensions(tex_width,guide_lod));
     var rgb = vec3<f32>(0.0);
     var coverage = 0.0;
     var weights = 0.0;
@@ -384,11 +387,19 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32, aperture:
         let offset = aperture_offset(sample_base+i,aperture) * radius;
         let tap_uv = uv + offset/dims;
         let sample = textureSampleLevel(tex_in, samp, tap_uv, lod);
+        // The aperture-distance uses the disc coordinate before polygon
+        // shaping so polygon corners are not clipped by a circular weight.
+        let distance = length(BOKEH_OFFSETS[sample_base+i])*radius;
+        aperture_weight += clamp(radius-distance+0.5,0.0,1.0);
+        // Empty taps contribute nothing to rgb/coverage on the near_field or
+        // blur_alpha paths (weights is unused there) and never need
+        // tap_radius, so skip the 4-texel guide loads entirely.
+        if (near_field || blur_alpha != 0u) && all(sample == vec4<f32>(0.0)) {
+            continue;
+        }
         // Match source-radius support to the coarse color footprint. Use a
         // conservative four-texel max; interpolating against an empty texel
         // would falsely shrink the radius of a thin foreground silhouette.
-        let guide_lod = i32(min(ceil(lod),f32(textureNumLevels(tex_width)-1u)));
-        let guide_dims = vec2<i32>(textureDimensions(tex_width,guide_lod));
         let gp = vec2<i32>(floor(tap_uv*vec2<f32>(guide_dims)-0.5));
         var tap_guide = vec4<f32>(0.0);
         for(var gy=0;gy<2;gy++) {
@@ -397,10 +408,6 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32, aperture:
             }
         }
         let tap_radius = select(tap_guide.r,tap_guide.g,near_field)*max_radius;
-        // The aperture-distance uses the disc coordinate before polygon
-        // shaping so polygon corners are not clipped by a circular weight.
-        let distance = length(BOKEH_OFFSETS[sample_base+i])*radius;
-        aperture_weight += clamp(radius-distance+0.5,0.0,1.0);
         var weight = clamp(tap_radius-distance+0.5,0.0,1.0);
         if !near_field && guide.g * max_radius >= 0.5 {
             // Background extrapolation beneath defocused foreground.

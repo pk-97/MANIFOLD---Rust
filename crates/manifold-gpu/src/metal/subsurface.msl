@@ -17,21 +17,34 @@ struct SubsurfaceParams {
     float env_rotation;
 };
 constant float SSS_PI = 3.14159265358979323846f;
-constant uint SSS_MAX_EVENTS = 256u;
-constant uint SSS_MAX_BOUNDARIES = 32u;
+constant uint SSS_MAX_EVENTS = 64u;
+constant uint SSS_MAX_BOUNDARIES = 16u;
 
-// Force candidate delivery even for opaque BLASes: a ray inside one object
-// must not stop at a different instance which happens to overlap its bounds.
+// Fast path: a hardware-accelerated default query (opaque BLASes auto-commit)
+// finds the nearest boundary in the common case where no foreign instance
+// overlaps this object's bounds. Only when that committed hit belongs to a
+// different instance do we fall back to the forced non-opaque candidate walk,
+// which can skip the foreign triangle and reach this instance's boundary.
 static bool sss_boundary(
     instance_acceleration_structure accel, ray r, uint instance,
     thread intersection_query<triangle_data, instancing>& q)
 {
+    // Fast path: let the hardware BVH commit the nearest opaque hit (and skip
+    // non-opaque candidates) without per-candidate instance filtering.
+    q.reset(r, accel, RT_MASK_VISIBLE);
+    while (q.next()) {
+        // Non-opaque candidates are intentionally left uncommitted so traversal
+        // continues past them; the committed opaque hit (if any) stands.
+    }
+    if (q.get_committed_intersection_type() == intersection_type::triangle &&
+        q.get_committed_instance_id() == instance) {
+        return true;
+    }
+    // Fallback: force candidate delivery so a foreign instance overlapping
+    // this object's bounds can be skipped and this instance's boundary found.
     intersection_params options;
     options.force_opacity(forced_opacity::non_opaque);
     q.reset(r, accel, RT_MASK_VISIBLE, options);
-    // Forced non-opaque makes every scene triangle on the ray a candidate, so
-    // this walk shares the alpha walks' cap. Past it the nearest own-instance
-    // boundary found so far stands; none found reads as an invalid sample.
     uint tested = 0u;
     while (q.next()) {
         if (tested++ >= RT_WALK_MAX_CANDIDATES) { q.abort(); break; }

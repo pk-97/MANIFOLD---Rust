@@ -62,12 +62,15 @@ fn body(
     enabled: u32,
     shutter_angle: f32,
 ) -> vec4<f32> {
-    if (enabled == 0u) {
+    if (enabled == 0u || shutter_angle <= 0.0) {
         return fetch_in(uv);
     }
     let velocity_ndc = c_velocity.rg;
     let smear_px_raw = velocity_ndc * 0.5 * dims * (shutter_angle / 360.0);
     let smear_px = clamp(smear_px_raw, vec2<f32>(-max_blur_px), vec2<f32>(max_blur_px));
+    if (dot(smear_px, smear_px) < 1e-4) {
+        return fetch_in(uv);
+    }
     let smear_uv = smear_px / dims;
 
     var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);

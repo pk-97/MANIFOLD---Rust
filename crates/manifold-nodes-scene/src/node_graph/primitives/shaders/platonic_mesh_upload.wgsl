@@ -35,10 +35,15 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<uniform> src: array<UploadVertex, PLATONIC_MESH_CAPACITY>;
 @group(0) @binding(2) var<storage, read_write> out_vertices: array<MeshVertex>;
+// The published live extent: triangles in the current shape.
+@group(0) @binding(3) var<storage, read_write> live_triangles: array<u32>;
 
 @compute @workgroup_size(64)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
+    if i == 0u {
+        live_triangles[0] = min(u.count, u.capacity) / 3u;
+    }
     if i >= u.capacity {
         return;
     }
