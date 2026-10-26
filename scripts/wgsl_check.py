@@ -22,6 +22,13 @@ FLIP = C / "manifold-water-gpu-flip/src/primitives/shaders"
 WW = C / "manifold-water-whitewater/src/primitives/shaders"
 
 TILE_STORAGE = [LIQ / "tile_grid.wgsl", LIQ / "tile_storage.wgsl"]
+WORLD_READ = C / "manifold-node-engine/src/scene/world_tiles_read.wgsl"
+# The read side's includer contract, as a hand shader defines it.
+WORLD_READ_STUB = """@group(0) @binding(0) var<storage, read> ts_table: array<u32>;
+fn ts_pool_tiles() -> u32 { return 3u; }
+fn ts_table_entries() -> u32 { return 16u; }
+fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
+"""
 STEP_PARTS = [
     "common", "transfer", "extend", "forces", "solids", "pocket_bindings",
     "tile_bindings", "pockets", "divergence", "particle_distance",
@@ -58,11 +65,16 @@ STACKS = {
                          LIQ / "liquid_faces.wgsl",
                          C / "manifold-nodes-physics/src/shaders/force_lattice.wgsl",
                          WW / "whitewater_fused.wgsl"]),
+    "world_tiles_read": (False, [WORLD_READ, WORLD_READ_STUB]),
+    "world_tiles": (False, [WORLD_READ, LIQ / "world_tiles_liquid.wgsl", LIQ / "world_tiles.wgsl"]),
+    "world_tiles_parents": (False, [WORLD_READ, LIQ / "world_tiles_parents.wgsl",
+                                    LIQ / "world_tiles.wgsl"]),
 }
 
 
-def check(name: str, stats: bool, files: list[Path], tmp: Path) -> bool:
-    source = "\n".join(f.read_text() for f in files)
+def check(name: str, stats: bool, files: list[Path | str], tmp: Path) -> bool:
+    # A str part is inline source (an includer stub), a Path a file.
+    source = "\n".join(f if isinstance(f, str) else f.read_text() for f in files)
     if stats:
         source = stats_layout() + source
     out = tmp / f"{name}.wgsl"

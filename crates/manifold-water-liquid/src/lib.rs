@@ -24,6 +24,7 @@ pub mod grid;
 pub mod lattice;
 pub mod tile_storage;
 pub mod world_pose;
+pub mod world_tiles;
 
 use crate::fluid_role::FluidRole;
 use manifold_node_engine::bindings::NodeInputs;

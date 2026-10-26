@@ -19,5 +19,6 @@ pub mod scene_viewport;
 pub mod source_asset;
 pub mod transform;
 pub mod viewport_camera;
+pub mod world_tiles;
 
 pub mod viewport_outputs;
