@@ -23,7 +23,7 @@ pub(crate) struct Uniforms {
 manifold_node_engine::primitive! {
     name: SwarmToCopies,
     type_id: "node.swarm_to_copies",
-    purpose: "Turn each 3D particle into a copy transform: positioned at the particle, uniformly scaled by `size`, unrotated. Dead particles (life <= 0) become zero-scale holes.",
+    purpose: "Turn each 3D particle into a copy transform: positioned at the particle, uniformly scaled by `size`, turned so its +Z points along the particle's velocity (XYZ Euler, no roll; a particle at rest stays unturned). Dead particles (life <= 0) become zero-scale holes.",
     inputs: {
         particles: Array(Particle) required,
         size: ScalarF32 optional,

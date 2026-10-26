@@ -727,3 +727,56 @@ fn move_swarm_kicks_past_its_lattice_by_its_distance() {
         "{outside} particles take the kick past the lattice, {differs} of them unlike the edge's"
     );
 }
+
+/// Each copy's +Z, turned by the render's XYZ Euler (Rz·Ry·Rx), lands on
+/// its particle's direction of travel at any speed and heading, straight up
+/// and down included; a particle at rest stays unturned.
+#[test]
+fn swarm_copies_point_along_their_velocity() {
+    let velocities: [[f32; 3]; 7] = [
+        [3.0, 0.0, 0.0],
+        [0.0, 0.0, -0.02],
+        [-1.0, 2.0, 0.5],
+        [0.3, -4.0, -2.0],
+        [0.0, 7.0, 0.0],
+        [0.0, -0.5, 0.0],
+        [0.0, 0.0, 0.0],
+    ];
+    let start: Vec<Particle> = velocities
+        .iter()
+        .map(|&velocity| Particle {
+            velocity,
+            life: 1.0,
+            ..bytemuck::Zeroable::zeroed()
+        })
+        .collect();
+    let mut h = Harness::new();
+    let (particles, _) = h.array(&start, start.len());
+    let (copies, copies_buffer) = h.array::<InstanceTransform>(&[], start.len());
+    let (_, errors) = h.run(
+        &mut SwarmToCopies::new(),
+        &[("particles", particles)],
+        &[("copies", copies)],
+        &params(&[("size", 0.1)]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let got: Vec<InstanceTransform> = read(&copies_buffer, start.len());
+    for (v, copy) in velocities.iter().zip(&got) {
+        let [a, b, c] = [copy.rot_pad[0], copy.rot_pad[1], copy.rot_pad[2]];
+        // Rz(c)·Ry(b)·Rx(a) applied to +Z.
+        let (x, y, z) = (0.0, -a.sin(), a.cos());
+        let (x, z) = (x * b.cos() + z * b.sin(), -x * b.sin() + z * b.cos());
+        let forward = [x * c.cos() - y * c.sin(), x * c.sin() + y * c.cos(), z];
+        let speed = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if speed == 0.0 {
+            assert_eq!(copy.rot_pad, [0.0; 4], "a copy at rest stays unturned");
+            continue;
+        }
+        for k in 0..3 {
+            assert!(
+                (forward[k] - v[k] / speed).abs() < 1e-5,
+                "velocity {v:?}: copy faces {forward:?}"
+            );
+        }
+    }
+}
