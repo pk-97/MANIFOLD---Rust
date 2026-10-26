@@ -64,7 +64,8 @@ struct ClockPlan {
 @group(0) @binding(19) var<storage, read_write> capped: array<u32>;
 // The tile pool's slot and tile table. `phi`, `sheet_a`, `sheet_b` (as the
 // feather's cells), `mask`, `cell_counts`, `claims` (eight a cell), `flags`
-// and `old` are pooled fields; `ranges` and the bucket rows are dense.
+// and `old` are pooled fields, and so are the sort's `ranges` (keyed by
+// the pool index of the cell); the bucket rows are dense.
 @group(0) @binding(20) var<storage, read> ts_table: array<u32>;
 
 const NO_CLAIM: u32 = 0xffffffffu;
@@ -261,7 +262,7 @@ fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     let g = cell_of(p);
     if !in_range(g) { return; }
     atomicOr(&mask[ts_cell_at(g)], 1u << sub_case(sub_of(p)));
-    if ranges[ts_dense_cell(g)].count >= MAX_PARTICLES_PER_CELL { return; }
+    if ranges[ts_cell_at(g)].count >= MAX_PARTICLES_PER_CELL { return; }
     let value = sample(p);
     if value >= u.max_depth || value < -u.max_depth { return; }
     var dir = -gradient(p - vec3<f32>(u.half_h));
@@ -326,7 +327,7 @@ fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !ts_cell_stored(q) { return; }
     let at = ts_cell_at(q);
     if atomicLoad(&sheet_a[at]) == 0u { return; }
-    let range = ranges[ts_dense_cell(q)];
+    let range = ranges[ts_cell_at(q)];
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
         let p = local(particles[s]);
@@ -666,7 +667,7 @@ fn write(@builtin(global_invocation_id) gid: vec3<u32>) {
     if birth_identity[3] != 0u { return; }
     let r = gid.x;
     let total = rank_total();
-    let last = ranges[ts_cell_count() - 1u];
+    let last = ranges[ts_pool_len() - 1u];
     let live = last.start + last.count;
     let room = select(0u, u.slots - live, live <= u.slots);
     if r == 0u {

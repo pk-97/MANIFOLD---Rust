@@ -686,12 +686,6 @@ impl Show {
         self.runtime.set_dump_arrays(None, &held);
     }
 
-    /// The runtime still warming up, as `restart` leaves it when its frame
-    /// bound ran out.
-    pub(super) fn warmup_pending(&self) -> bool {
-        self.runtime.warmup_pending()
-    }
-
     /// Every byte of the storage the named node provides on `port`, the
     /// whole buffer, read after the frame completed. The array dump never
     /// holds a tick region's body, so per-tick results are read from the

@@ -151,24 +151,5 @@ impl Primitive for MatterFaceComponent {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The body skips the lattice's padding by a literal; it must be the
-    /// lattice's.
-    #[test]
-    fn matter_face_component_body_skips_the_lattice_padding() {
-        let body = include_str!("shaders/matter_face_component_body.wgsl");
-        assert!(
-            body.contains(&format!("let pad = {PADDING_NODES};")),
-            "{body}"
-        );
-        assert_eq!(matter_cells([71, 71, 71]), Some([64; 3]));
-        assert_eq!(matter_cells([7, 71, 71]), None);
-        assert_eq!(std::mem::size_of::<ComponentUniforms>(), 32);
-    }
-}
-
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

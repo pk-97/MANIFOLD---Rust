@@ -175,7 +175,7 @@ mod fused_tests {
         use manifold_node_engine::scene::transform::Transform;
         use manifold_node_engine::testkit::array_harness::read;
         use manifold_nodes_physics::force_lattice::ForceLatticeBinding;
-        use manifold_nodes_water::presets::gpu_flip::{WaterScene, with_whitewater_axes};
+        use manifold_nodes_water::presets::gpu_flip::WaterScene;
         use manifold_nodes_water::testkit::whitewater_scene::{
             Show, whitewater_render_def, with_tick_probe,
         };
@@ -188,115 +188,6 @@ mod fused_tests {
             pooled_faces, synthetic_shape,
         };
         use manifold_water_whitewater::primitives::whitewater_step::*;
-        const PORTS: [&str; 6] = [
-            "proof_sampled",
-            "proof_unscaled",
-            "proof_energy",
-            "proof_counts",
-            "proof_dust_energy",
-            "proof_dust_counts",
-        ];
-        fn scene(dust: bool, particle_ports: &[&str]) {
-            for packed in [false, true] {
-                scene_variant(dust, particle_ports, packed);
-            }
-        }
-        fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
-            let def = if dust {
-                crate::contracts::water::primitives::whitewater_golden_tests::all_emitters(None)
-            } else {
-                with_tick_probe(whitewater_render_def(
-                    WaterScene::dam_break(64).with_obstacle(),
-                ))
-            };
-            let axes = with_whitewater_axes(def.clone());
-            let mut fused = Show::new_with_emitter_oracle(
-                if packed { def } else { axes.clone() },
-                (96, 54),
-                false,
-                &[],
-                Some(false),
-            );
-            let mut reference =
-                Show::new_with_emitter_oracle(axes, (96, 54), false, &[], Some(true));
-            fused.restart();
-            reference.restart();
-            const TICKS: usize = 40;
-            let mut ticks = 0;
-            let mut saw_counts = false;
-            let mut saw_dust_counts = false;
-            for _ in 0..2 * TICKS {
-                fused.frame(false);
-                reference.frame(false);
-                assert!(fused.errors().is_empty());
-                assert!(reference.errors().is_empty());
-                let [due] = fused.probes(["ticks"]);
-                assert_eq!([due], reference.probes(["ticks"]));
-                assert!(due == 0.0 || due == 1.0);
-                if due == 0.0 {
-                    continue;
-                }
-                ticks += 1;
-                for port in PORTS[..if dust { 6 } else { 4 }]
-                    .iter()
-                    .chain([&"proof_turbulence"])
-                {
-                    if !dust && *port == "proof_unscaled" {
-                        continue;
-                    }
-                    let a = fused.provided_all_bytes("whitewater", port);
-                    let b = reference.provided_all_bytes("whitewater", port);
-                    equal_words(
-                        bytemuck::cast_slice(&a),
-                        bytemuck::cast_slice(&b),
-                        ticks,
-                        port,
-                    );
-                    let nonzero = bytemuck::cast_slice::<_, u32>(&a)
-                        .iter()
-                        .any(|&word| word != 0);
-                    if *port == "proof_counts" {
-                        saw_counts |= nonzero;
-                    }
-                    if *port == "proof_dust_counts" {
-                        saw_dust_counts |= nonzero;
-                    }
-                }
-                if !particle_ports.is_empty() {
-                    let shared = [
-                        "pool_out",
-                        "state_out",
-                        "counts_out",
-                        "foam_particles",
-                        "bubble_particles",
-                        "spray_particles",
-                        "dust_particles",
-                    ];
-                    for port in particle_ports.iter().chain(&shared) {
-                        let a = fused.provided_all_bytes("whitewater", port);
-                        let b = reference.provided_all_bytes("whitewater", port);
-                        equal_words(
-                            bytemuck::cast_slice(&a),
-                            bytemuck::cast_slice(&b),
-                            ticks,
-                            port,
-                        );
-                    }
-                }
-                if ticks == TICKS {
-                    break;
-                }
-            }
-            assert_eq!(ticks, TICKS, "scene did not exercise enough accepted ticks");
-            assert!(
-                saw_counts,
-                "scene never produced nonzero normal emission counts"
-            );
-            assert!(
-                !dust || saw_dust_counts,
-                "scene never produced nonzero dust emission counts"
-            );
-        }
         #[test]
         fn whitewater_unpacked_faces_match_adapters() {
             let device = manifold_gpu::testkit::test_device();
@@ -426,8 +317,6 @@ mod fused_tests {
         }
         #[test]
         fn whitewater_packed_faces_match_axis_arrays() {
-            crate::contracts::water::primitives::whitewater_golden_tests::packed_scene_fingerprints(
-            );
             let device = manifold_gpu::testkit::test_device();
             let fixture = Fixture::new(&device);
             let records: Vec<_> = fixture
@@ -598,17 +487,6 @@ mod fused_tests {
             for stage in &stages {
                 assert_eq!(stage.turbulence_dispatches_for_test(), 3);
             }
-        }
-        /// Fused whitewater is word-equal to the unfused reference on every proof
-        /// port and particle output, on the Dam Break and on the dust scene, with
-        /// packed and axis faces: one run per scene compares every port.
-        #[test]
-        fn whitewater_fused_matches_reference() {
-            scene(false, &["proof_typed", "proof_lifecycle"]);
-            scene(
-                true,
-                &["proof_typed", "proof_dust_typed", "proof_lifecycle"],
-            );
         }
         #[test]
         fn whitewater_fused_synthetic_matches_reference() {

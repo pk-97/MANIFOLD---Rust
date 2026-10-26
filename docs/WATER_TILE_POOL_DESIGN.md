@@ -31,17 +31,15 @@ An absent tile reads its field's defined value; writers never touch it.
 ## 4. The allocator (GPU, no readback)
 
 Per active step, after `tiles_rings`:
-1. `tiles_free` (one thread per box tile): a tile with a slot whose ring is past `ring_max` pushes its slot onto the free stack (`free_list`, `free_top` atomic) and writes `TS_NONE` into `slot_of[tile]` and `tile_of[slot]`.
-2. `tiles_alloc` (one thread per box tile): a tile with ring ≤ `ring_max` and no slot takes one: `k = atomicAdd(&pop, 1)`, slot `free_list[top_after_free - 1 - k]` when `k < top_after_free`, else the tile stays absent and `exhausted` is set. It writes `slot_of[tile]` and `tile_of[slot]` and records the tile on the `fresh` list.
-3. `tiles_settle` (one thread): `free_top = top_after_free - min(pop, top_after_free)`, `pop = 0`; writes the `fresh` list's indirect triple.
-4. `tiles_fresh` (512 threads a fresh tile, indirect): every pooled field's cells and records of the tile set to the canonical values (what `tiles_fill` does today for the whole box, now per new tile).
-5. `tiles_lists` as today, plus the list A (ring ≤ `ring_max` and allocated) and its triple; C keeps its rule and is filtered to allocated tiles.
+1. `tiles_allocate` (one thread, tile order, no atomics): every held tile whose ring is past `alloc_ring` (= `ring_max`) pushes its slot onto the free stack (`free_list`, `free_top`) and leaves `slot_of` and `tile_of`; then every absent tile with ring ≤ 1 pops a slot, then every absent tile with ring 2..=`alloc_ring`, so a short pool keeps the water's own tiles. A tile that finds the stack empty stays absent and sets `exhausted`. Each newly held tile joins the `fresh` list; the list's indirect triple is written last (zero groups on an inactive clock slot).
+2. `tiles_fresh` (512 threads a fresh tile, indirect): every pooled field's cells and records of the tile set to the canonical values.
+3. `tiles_lists` as before; every list tile is held.
 
-Slot numbers depend on atomic order; no value does: reductions are indexed by box tile (the pressure partials, `2 · tile + half`), the sort keys on box cells until S3.3. So runs stay bitwise reproducible.
+Slot numbers follow tile order, so runs are bitwise reproducible even where an order follows the slots (the S3.3 sort); reductions stay indexed by box tile (the pressure partials, `2 · tile + half`).
 
-- **Allocated set.** A = tiles with ring ≤ `ring_max` (the extension band's reach, 2 at 64 and 128). C ⊆ ring ≤ 1 ⊆ A. Every read a pass over A or C makes lands in A or reads canonical at A's far edge, at least `8 · ring_max - CELL_REACH` cells from any particle.
-- **Capacity and the exhausted word.** `P = min(T³, POOL_BUDGET_BYTES / tile_bytes)`, `tile_bytes` the pooled fields' bytes per tile, `POOL_BUDGET_BYTES` the D4 live budget for the lattice (1.5 GiB: 128 live under 2 GB total, the rest particles and the render). At 64 and 128 in today's box `P = T³`. `exhausted` is a word in `tile_counts`; S3.4 makes sources stop and the card say why.
-- **First step after a pool build:** every slot free, every tile absent; the first `tiles_alloc` allocates A and `tiles_fresh` fills it. `tiles_fill` (the dense fill) and the dense `filled` flag are deleted.
+- **Allocated set.** A = tiles with ring ≤ `ring_max` (the extension band's reach: 2 at 64, 3 at 128). C ⊆ ring ≤ 1 ⊆ A. Every read a pass over A or C makes lands in A or reads canonical at A's far edge, at least `8 · ring_max - CELL_REACH` cells from any particle.
+- **Capacity and the exhausted word.** `P = min(T³, POOL_BUDGET_BYTES / tile_bytes)`, `tile_bytes` = 512 × the pooled bytes per cell summed over the step, solver, sheeting and sheet distance (372 bytes, so 8,456 tiles), `POOL_BUDGET_BYTES` the D4 live budget for the lattice (1.5 GiB: 128 live under 2 GB total, the rest particles and the render). At 64 and 128 in today's box `P = T³`. `exhausted` is a word in `tile_counts`; S3.4 makes sources stop and the card say why.
+- **First step after a pool build:** every slot free, every tile absent; the first `tiles_allocate` allocates A and `tiles_fresh` fills it.
 
 ## 5. Passes and consumers
 

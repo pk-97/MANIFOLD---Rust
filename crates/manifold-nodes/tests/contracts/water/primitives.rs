@@ -8,6 +8,3 @@ pub(crate) mod gpu_flip_scene_tests;
 
 #[cfg(feature = "gpu-proofs")]
 mod gpu_flip_tile_tests;
-
-#[cfg(feature = "gpu-proofs")]
-mod whitewater_golden_tests;

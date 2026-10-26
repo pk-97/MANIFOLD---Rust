@@ -27,6 +27,9 @@ fn shader() -> String {
         manifold_water_liquid::tile_storage::TILE_STORAGE
     )
 }
+/// Bytes per fine cell of the two pooled distance fields.
+pub(crate) const POOLED_BYTES_PER_CELL: u64 = 2 * 4;
+
 const ENTRIES: [&str; 2] = ["seed", "sweep"];
 
 /// Jacobi sweeps: a sweep carries the distance one cell along an axis, and a
@@ -97,7 +100,7 @@ impl SheetDistance {
         let bytes = manifold_water_liquid::tile_storage::pool_len(pool_tiles) * 4;
         manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(),
-            2 * bytes,
+            manifold_water_liquid::tile_storage::pool_len(pool_tiles) * POOLED_BYTES_PER_CELL,
         )
         .map_err(|e| e.to_string())?;
         self.buffers = Some([

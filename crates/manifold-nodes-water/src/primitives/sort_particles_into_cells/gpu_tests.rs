@@ -10,6 +10,7 @@ use manifold_water_gpu_mpm::matter::MatterPoint;
 use manifold_water_liquid::fluid_particles::{CellRange, bin_total};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::*;
+use manifold_water_liquid::tile_storage::{pool_len, tile_counts, tile_total};
 
 const LABELS: SortLabels = SortLabels {
     clear: "sort proof clear",
@@ -659,6 +660,137 @@ fn sort_particles_into_cells_matches_the_cpu_sort_for_matter_and_whitewater() {
                     order: Some(n),
                     gate,
                 },
+            );
+        }
+    }
+}
+
+const NO_SLOT: u32 = u32::MAX;
+
+/// The slot table words for `bins` cells: `slot_of` per box tile, then
+/// `tile_of` per pool slot, from the slot each tile holds.
+fn slot_table(bins: [u32; 3], slot_of: &[u32], pool: u32) -> Vec<u32> {
+    assert_eq!(slot_of.len() as u64, tile_total(bins));
+    let mut words = slot_of.to_vec();
+    words.extend(std::iter::repeat_n(NO_SLOT, pool as usize));
+    for (tile, &slot) in slot_of.iter().enumerate() {
+        if slot != NO_SLOT {
+            words[slot_of.len() + slot as usize] = tile as u32;
+        }
+    }
+    words
+}
+
+/// The pooled sort puts each cell's particles in the range at the cell's pool
+/// index, whatever slot its tile holds, with the same members in the same
+/// order as the dense sort's range for that cell; the particles of a tile
+/// with no slot share the canonical bucket, in input order. Three tables over
+/// a lattice of 3 x 2 x 2 tiles, the last of each axis partial: the identity,
+/// a permutation, and one with two tiles absent from a short pool.
+#[test]
+fn sort_particles_into_cells_pooled_matches_the_dense_sort_per_cell() {
+    let device = manifold_gpu::testkit::test_device();
+    let n = 20_000;
+    let grid = Grid {
+        min: [-1.0, 0.0, -1.0],
+        cell: 0.125,
+        bins: [20, 13, 9],
+    };
+    let input = Input::build(LIQUID_PARTICLE_READ, grid, n, 6, &[1, 33, 250], 0x5eed_0006);
+    input.check_fixture();
+    let particles = input.upload(&device);
+    let (dense_ranges, members) = input.cpu_sort(n);
+    let bins = grid.bins;
+    let tiles = tile_counts(bins);
+    let total = tile_total(bins) as u32;
+    assert_eq!(total, 12);
+    let identity: Vec<u32> = (0..total).collect();
+    let permuted: Vec<u32> = (0..total).map(|t| (5 * t + 3) % total).collect();
+    let mut short = vec![NO_SLOT; total as usize];
+    for (i, t) in (0..total).filter(|&t| t != 4 && t != 7).enumerate() {
+        short[t as usize] = 9 - i as u32;
+    }
+    for (name, slot_of, pool) in [
+        ("identity", identity, total),
+        ("permuted", permuted, total),
+        ("short pool", short, 10),
+    ] {
+        let words = slot_table(bins, &slot_of, pool);
+        let table = device.create_buffer_shared(4 * words.len() as u64);
+        // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
+        unsafe { table.write(0, bytemuck::cast_slice(&words)) };
+        let order = untouched_buffer(&device, n);
+        let mut sorter = ParticleSorter::default();
+        sorter.prepare_pooled(&device);
+        sorter
+            .reserve_keys(&device, pool_len(pool))
+            .expect("the cell ranges");
+        let mut encoder = device.create_encoder("pooled sort proof");
+        sorter
+            .encode_pooled(
+                &device,
+                &mut encoder,
+                &SortJob {
+                    particles: &particles,
+                    read: input.read,
+                    capacity: n as u32,
+                    count: n as u32,
+                    bin_min: grid.min,
+                    inv_cell: 1.0 / grid.cell,
+                    bins,
+                    sorted: None,
+                    order: Some(&order),
+                    gate: None,
+                },
+                &table,
+                pool,
+                &LABELS,
+            )
+            .expect("the pooled sort encodes");
+        encoder.commit_and_wait_completed();
+        let ranges = read_words(sorter.ranges().expect("the cell ranges"));
+        let order = read_words(&order);
+        let range = |key: u32| (ranges[2 * key as usize] as usize, ranges[2 * key as usize + 1] as usize);
+        let canonical = pool * 512;
+        let mut canonical_members = Vec::new();
+        let mut keyed = 0;
+        for z in 0..bins[2] {
+            for y in 0..bins[1] {
+                for x in 0..bins[0] {
+                    let dense = dense_ranges[(x + bins[0] * (y + bins[1] * z)) as usize];
+                    let want = &members[dense.start as usize..(dense.start + dense.count) as usize];
+                    let tile = (x >> 3) + tiles[0] * ((y >> 3) + tiles[1] * (z >> 3));
+                    let slot = slot_of[tile as usize];
+                    if slot == NO_SLOT {
+                        canonical_members.extend_from_slice(want);
+                        continue;
+                    }
+                    let local = (x & 7) + 8 * ((y & 7) + 8 * (z & 7));
+                    let (start, count) = range(slot * 512 + local);
+                    assert_eq!(
+                        &order[start..start + count],
+                        want,
+                        "{name}: cell ({x}, {y}, {z}) in slot {slot}"
+                    );
+                    keyed += count;
+                }
+            }
+        }
+        canonical_members.sort_unstable();
+        let (start, count) = range(canonical);
+        assert_eq!(
+            &order[start..start + count],
+            &canonical_members[..],
+            "{name}: the canonical bucket holds the absent tiles' particles in input order"
+        );
+        assert_eq!(keyed + count, members.len(), "{name}: every live particle is keyed");
+        // The last key ends where the live particles do.
+        let (start, count) = range(pool_len(pool) as u32 - 1);
+        assert_eq!(start + count, members.len(), "{name}: the last range's end");
+        if name == "short pool" {
+            assert!(
+                !canonical_members.is_empty(),
+                "{name}: the absent tiles hold particles"
             );
         }
     }

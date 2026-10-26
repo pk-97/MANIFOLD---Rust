@@ -125,7 +125,7 @@ struct Params {
 
 /// Bytes per pooled cell excluding padded bucket rows: two sheet flags (the
 /// second becomes row lengths), mask, cell count, flags and eight claims.
-const BYTES_PER_CELL: u64 = 5 * 4 + 8 * 4;
+pub(crate) const POOLED_BYTES_PER_CELL: u64 = 5 * 4 + 8 * 4;
 
 fn bucket_bytes(cells: [u32; 3]) -> u64 {
     // 32 vec4 markers per bucket, including padded cells on odd sides.
@@ -140,7 +140,7 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], capacity: u32, pool_tiles: u32) -> 
     let scan =
         4 * manifold_water_liquid::primitives::prefix_scan::storage_words(ranks(cells) as usize)
             as u64;
-    BYTES_PER_CELL * n
+    POOLED_BYTES_PER_CELL * n
         + bucket_bytes(cells)
         + 16 * u64::from(capacity.max(1))
         + 16

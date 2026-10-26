@@ -38,7 +38,6 @@ Initial P1 snapshot: slot-1, `feat/live-sim-clock`, base `cbb4be66f`. Execution 
 | Whitewater CPU oracles | `node_graph/primitives/whitewater_particle_cpu.rs:319`, `:414`; `node_graph/primitives/whitewater_pool_cpu.rs:50`, `:423`, `:449` | Exists. Spawn/emission use literal 60; lifecycle defaults use fixed dt. Parameterize live oracles alongside WGSL. |
 | Display publication and ring | `node_graph/primitives/liquid_frame.rs:114`, `:147`, `:211`, `:216`; `node_graph/liquid/frame_ring.rs:42`, `:77`, `:117` | Exists. Timestamped frames already interpolate unequal spacing. Retire to actual completed time, never new interval count × TICK. |
 | Existing HUD | repo `crates/manifold-app/src/content_state.rs:133`, `crates/manifold-app/src/app_render.rs:3201`, `:3209`, `crates/manifold-ui/src/panels/perf_hud.rs:42`, `:186`, `:237` | Exists. Snapshot/PerfMetrics have physics_backlog_seconds; row displays seconds. Extend coverage and display “sim behind by X ms”. BUG-az3 records that the editor's own HUD never ticks. |
-| CPU specification | `live_sim_clock_reference.rs` (Clock, Frame, Step, cfl_step) | Genuinely new, test-only. Reuses typed Seconds and compares unaffected behaviour against LiquidClock; no runtime alternate path. |
 
 Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_time|display_time|ticks_done|accumulator' crates/manifold-nodes-water/src/{liquid,primitives,physics.rs}` and follow GPU FLIP dependencies. Use `rg -n 'LiquidClock|TickSamples|PendingTick'` for callers. The caller inventory must be frozen before editing; new/missing consumers stop the brief for lead review. Integration planning here is conformance-level: pending upstream signatures are explicitly not executable migration instructions.
 
@@ -86,7 +85,7 @@ An inactive slot's solve, pocket sweeps, over-C passes, tile retire and history 
 
 Source-speed prediction follows the engine's startup-only rule (`_currentFrame == 0 && _currentFrameTimeStepNumber == 0`). Only that first numerical slot records source reductions; later intervals and slots use current marker velocities. Newly emitted particles join those measurements on the next step, after emission. A source's later authored row therefore cannot require a new source-CFL clock or host exchange.
 
-The test-only `live_sim_clock_reference.rs` remains a CPU specification oracle. It is not a second runtime clock. GPU FLIP retains the reference maximum of six numerical steps even if authored Steps requests a larger minimum; the native final-step rule then owns the remainder.
+GPU FLIP retains the reference maximum of six numerical steps even if authored Steps requests a larger minimum; the native final-step rule then owns the remainder.
 
 ## 4. Variable-step solver plan
 
@@ -211,7 +210,7 @@ Timestamped hits observed beyond the accepted ceiling map to its closing simulat
 
 Production uses the shared physics clock with at most two fixed Sim Rate intervals per displayed live frame, one after a late frame. Excess complete intervals cause the remaining elapsed time to be discarded and the transport anchor to advance. GPU FLIP and coupled Box3D consume the same accepted intervals; retired completion and reaction receipts keep their endpoints. Timestamped impulses preserve order across discarded transport, and body samples cover accepted motion only. Graph installation gives existing graphs their duration and status wires, including accepted-duration pose sampling for the whitewater obstacle-source grid. No project-format fields, locks or channels were added. Export retains all required fixed intervals.
 
-`liquid/clock.rs` is a small compatibility adapter and `live_sim_clock_reference.rs` a test-only oracle; neither is a second runtime clock. The main and editor HUDs share `perf_metrics_from_content_state`; a CPU flow test drives both from `ContentState` through play and pause, lag, cap and nonfinite flags.
+`liquid/clock.rs` is a small compatibility adapter, not a second runtime clock. The main and editor HUDs share `perf_metrics_from_content_state`; a CPU flow test drives both from `ContentState` through play and pause, lag, cap and nonfinite flags.
 
 Each GPU FLIP interval follows the reference CFL schedule within that fixed duration; its speed-removal limit also measures one accepted interval. The existing pressure/density policies, particle identities, blending and publication sort remain. Focused proofs cover a 0.7-second overloaded 128³ resting pool, exact grouped 20/30/60 FPS force/impulse/coupling results at equal accepted progress, and relevant exports.
 

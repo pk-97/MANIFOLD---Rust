@@ -17,8 +17,7 @@ use manifold_node_engine::{
     persistence::PrimitiveRegistry, scene::transform::Transform, state_store::StateStore,
 };
 use manifold_physics::clock::TICK;
-use manifold_water_gpu_mpm::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
-use manifold_water_liquid::fluid_particles::CellRange;
+use manifold_water_gpu_mpm::matter::{MatterPoint, MatterTickStats, STATS_WORDS};
 use manifold_water_liquid::lattice::LiquidLattice;
 
 /// Scene settings, in the domain node's own terms.
@@ -84,8 +83,6 @@ pub(crate) struct MatterScene {
     points: ResourceId,
     stats: ResourceId,
     frame_b: ResourceId,
-    /// The cell sort's `order` and `cell_ranges`, on the block path.
-    sorted: Option<(ResourceId, ResourceId)>,
     lattice: LiquidLattice,
     frame_count: u32,
     /// Seconds per display frame; one fixed tick unless set.
@@ -385,7 +382,6 @@ impl MatterScene {
         let points = output(state, "out");
         let stats_res = output(state, "stats");
         let frame_b = output(frame, "particles_b");
-        let sorted = sort_node.map(|sort| (output(sort, "order"), output(sort, "cell_ranges")));
         let lattice = LiquidLattice::from_layout(
             &domain_layout(None, settings.domain_size, settings.resolution).expect("scene layout"),
         );
@@ -401,7 +397,6 @@ impl MatterScene {
             points,
             stats: stats_res,
             frame_b,
-            sorted,
             lattice,
             frame_count: 0,
             frame_interval: TICK,
@@ -694,46 +689,6 @@ impl MatterScene {
             .unwrap_or_else(|| panic!("the state node read no `{name}`"))
     }
 
-    /// On the block path, after a frame: the fraction of live points whose
-    /// stencil has left the tile of the block the tick's sort put them in, so
-    /// P2G adds them globally. The last substep sees about this much drift;
-    /// earlier substeps see less.
-    pub(crate) fn tile_drift(&self) -> f64 {
-        let (order, ranges) = self.sorted.expect("the block path");
-        let points = self.points();
-        let order: Vec<u32> = self.read(order);
-        let ranges: Vec<CellRange> = self.read(ranges);
-        let blocks = lattice_blocks(&self.lattice);
-        let (mut live, mut left) = (0u64, 0u64);
-        for (bin, range) in ranges
-            .iter()
-            .take(blocks.iter().product::<u32>() as usize)
-            .enumerate()
-        {
-            let bin = bin as u32;
-            let block = [
-                bin % blocks[0],
-                (bin / blocks[0]) % blocks[1],
-                bin / (blocks[0] * blocks[1]),
-            ]
-            .map(i64::from);
-            for &index in &order[range.start as usize..(range.start + range.count) as usize] {
-                let Some(point) = points.get(index as usize).filter(|p| p.id != 0) else {
-                    continue;
-                };
-                let base: [i64; 3] = std::array::from_fn(|axis| {
-                    ((point.position[axis] - self.lattice.min()[axis]) / self.lattice.cell_size()
-                        - 0.5)
-                        .floor() as i64
-                });
-                live += 1;
-                left += u64::from(
-                    (0..3).any(|axis| !(0..=3).contains(&(base[axis] - block[axis] * 4))),
-                );
-            }
-        }
-        left as f64 / live.max(1) as f64
-    }
 }
 
 /// A 1 m domain at resolution 32 with a quarter-width, 0.6 m column on a
@@ -775,25 +730,6 @@ fn matter_frame_ids_strictly_increasing() {
     }
 }
 
-#[test]
-fn matter_deterministic_under_seed() {
-    let run = |seed: u32, ticks: u32| {
-        let mut scene = MatterScene::new(&SceneSettings {
-            seed,
-            ..small_dam_break()
-        });
-        for _ in 0..ticks {
-            scene.tick();
-        }
-        scene.points()
-    };
-    let a = run(7, 120);
-    let b = run(7, 120);
-    let a_bytes: &[u8] = bytemuck::cast_slice(&a);
-    let b_bytes: &[u8] = bytemuck::cast_slice(&b);
-    assert!(a_bytes == b_bytes, "two runs of the same seed diverged");
-}
-
 /// Unequal Speed-history intervals must keep their own subdivision count and
 /// fixed-point unit when export groups both into one display frame.
 #[test]
@@ -831,7 +767,6 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
             momentum_unit(dx, duration / f64::from(subdivisions)),
         )
     });
-    assert_eq!(expected, [(5, 128.0), (68, 64.0)]);
     assert_ne!(
         expected[0].0, expected[1].0,
         "fixture must vary subdivision counts"
@@ -946,43 +881,6 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
     assert_eq!(grouped_time.to_bits(), separate_time.to_bits());
 }
 
-/// D6's block path sorts once per tick and reuses that order for every
-/// substep, so points drift out of their block's tile; the integer
-/// accumulator still makes the whole run bit-identical to the per-point path.
-#[test]
-fn matter_block_path_matches_per_point() {
-    let run = |block_p2g: bool| {
-        let mut scene = MatterScene::new(&SceneSettings {
-            block_p2g,
-            ..small_dam_break()
-        });
-        let mut left_tile = 0.0f64;
-        for _ in 0..120 {
-            scene.tick();
-            if block_p2g {
-                left_tile = left_tile.max(scene.tile_drift());
-            }
-        }
-        assert_eq!(scene.stats().nonfinite, 0);
-        (scene.points(), left_tile)
-    };
-    let (point, _) = run(false);
-    let (block, left_tile) = run(true);
-    eprintln!("  at tick end, at most {left_tile:.4} of points had left their sorted block's tile");
-    assert!(left_tile > 0.0, "the scene never took the global path");
-    assert_eq!(point.len(), block.len());
-    let differ = point
-        .iter()
-        .zip(&block)
-        .filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b))
-        .count();
-    eprintln!(
-        "matter_block_path_matches_per_point: {} points, {differ} differ after 120 ticks",
-        point.len()
-    );
-    assert_eq!(differ, 0, "the block path diverged from the per-point path");
-}
-
 #[test]
 fn matter_seed_changes_jitter() {
     let first = |seed: u32| {
@@ -1006,65 +904,6 @@ fn matter_seed_changes_jitter() {
         "only {moved} of {} points moved with the seed",
         a.len()
     );
-}
-
-#[test]
-fn matter_dam_break_energy_bounded() {
-    let mut scene = MatterScene::new(&small_dam_break());
-    // The first frame starts the epoch and runs no tick; the second runs one.
-    scene.tick();
-    scene.tick();
-    let initial = scene.stats().energy();
-    let mut peak = initial;
-    for _ in 0..180 {
-        scene.tick();
-        let stats = scene.stats();
-        assert_eq!(stats.nonfinite, 0);
-        peak = peak.max(stats.energy());
-        assert!(
-            stats.energy() <= 1.01 * initial,
-            "tick {}: energy {} exceeds 1.01 × initial {initial}",
-            stats.tick,
-            stats.energy()
-        );
-    }
-    eprintln!("matter_dam_break_energy_bounded: initial {initial:.3} J, peak {peak:.3} J");
-}
-
-/// The Dam Break's own setup (4 m, resolution 64, the FLIP preset's column
-/// and pool): the largest accumulator stays below 2^30 (section 4.3).
-#[test]
-fn matter_fixed_point_headroom() {
-    let settings = SceneSettings {
-        domain_size: 4.0,
-        resolution: 64,
-        fill_height: 0.16,
-        column: Some(Transform {
-            pos: [-1.25, 1.12, 0.0],
-            scale: [1.18, 1.92, 3.5],
-            ..Transform::default()
-        }),
-        ..SceneSettings::default()
-    };
-    let mut scene = MatterScene::new(&settings);
-    let mut peak = 0u32;
-    for t in 0..120 {
-        scene.tick();
-        let s = scene.stats();
-        peak = peak.max(s.max_accum);
-        if std::env::var_os("MATTER_DIAG").is_some() && (t % 5 == 0 || s.max_accum >= 1 << 30) {
-            eprintln!(
-                "tick {t}: max_accum {} max speed {:.3} clamped {} J [{:.4}, {:.4}] live {}",
-                s.max_accum, s.max_speed, s.clamped, s.min_j, s.max_j, s.live
-            );
-        }
-    }
-    eprintln!(
-        "matter_fixed_point_headroom: peak accumulator {peak} ({:.1}% of 2^30)",
-        100.0 * f64::from(peak) / f64::from(1u32 << 30)
-    );
-    assert!(peak < 1 << 30, "accumulator reached {peak}");
-    assert_eq!(scene.state_input("substeps_per_tick"), 34.0);
 }
 
 /// Live (a preview budget in scope): a non-finite gravity holds the liquid

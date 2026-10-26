@@ -1,8 +1,9 @@
 // The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
 // table)): 8³ tiles, T = ceil(n / 8) per axis, x fastest, partial edge tiles.
 // Per tile, the Chebyshev cell distance from its box to the nearest
-// particle-holding cell, 0..=CELL_REACH, or CELL_REACH + 1 beyond.
-@group(0) @binding(27) var<storage, read_write> tile_near: array<u32>;
+// particle-holding cell, 0..=CELL_REACH, or CELL_REACH + 1 beyond
+// (`tiles_clear` starts it, `tiles_mark` lowers it).
+@group(0) @binding(27) var<storage, read_write> tile_near: array<atomic<u32>>;
 
 // Two halves of one tile each: the tile's list rank (rank_of), 0 in the
 // cell set C, 1 for the rest of rings 0 and 1, else its ring (ring_max + 1
@@ -15,14 +16,15 @@
 
 // Word 0 |C|, word k = 1..=ring_max + 1 the tiles with ring <= k (the last
 // is every tile), the retired count at ring_max + 2, the parity at
-// ring_max + 3, then the allocator's words: the free stack's top, this
-// step's pop count, the exhausted flag and the fresh list's length
+// ring_max + 3, then the allocator's words: the free stack's top, the
+// exhausted flag and the fresh list's length
 // (`tile_free_top_word` ...). Atomic: the allocator's threads share them.
 @group(0) @binding(30) var<storage, read_write> tile_counts: array<atomic<u32>>;
 
 // Indirect triples [2 · count, 1, 1] (512 threads a tile, 256 a group): one
-// per count word k = 0..=ring_max, then the retired list, the full-face
-// dispatch, an aligned replay range and the fresh list's triple.
+// per count word k = 0..=ring_max (the one at ring_max covers every allocated
+// tile), then the retired list, an aligned replay range and the fresh list's
+// triple.
 @group(0) @binding(31) var<storage, read_write> tile_args: array<u32>;
 
 // Tiles in C on the previous step and not on this one.
@@ -41,7 +43,7 @@
 // word `tile_free_top_word`). Starts as every slot.
 @group(0) @binding(52) var<storage, read_write> tile_free: array<u32>;
 
-// The tiles allocated this step, in no order (`tiles_alloc`); their number
+// The tiles allocated this step, in tile order (`tiles_allocate`); their number
 // is counts word `tile_fresh_word`.
 @group(0) @binding(53) var<storage, read_write> tiles_fresh_list: array<u32>;
 

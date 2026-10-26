@@ -1,5 +1,5 @@
 use super::*;
-use manifold_water_liquid::tile_storage::tile_counts;
+use manifold_water_liquid::tile_storage::{TILE, tile_counts, tile_total};
 
 /// Max Iterations rounds and is refused outside 1..=MAX_ITERATIONS or
 /// non-finite; Auto converges within it; a fixed count runs as saved even
@@ -181,11 +181,10 @@ fn step_shader_validates_with_every_entry() {
         "remove_crowded_markers",
         "density_source",
         "faces_to_particles",
-        "tiles_classify",
+        "tiles_clear",
+        "tiles_mark",
         "tiles_rings",
-        "tiles_free",
-        "tiles_alloc",
-        "tiles_settle",
+        "tiles_allocate",
         "tiles_fresh",
         "tiles_lists",
         "tiles_retire",
@@ -210,6 +209,7 @@ fn step_params_match_the_shader_uniform() {
     assert_eq!(std::mem::offset_of!(StepParams, coupled_h), 160);
     assert_eq!(std::mem::offset_of!(StepParams, pool_tiles), 164);
     assert_eq!(std::mem::offset_of!(StepParams, alloc_ring), 168);
+    assert_eq!(std::mem::offset_of!(StepParams, inv_cell), 172);
 }
 
 /// The tile table's bytes, by an independent count: five words a tile
@@ -234,10 +234,10 @@ fn gpu_flip_tile_table_bytes_follow_the_lattice() {
     ] {
         for r in 1..5u32 {
             // Counts: |C|, the rings 1..=r + 1, the retired count, the parity,
-            // then the free top, the pop count, the exhausted flag and the
+            // then the free top, the exhausted flag and the
             // fresh count.
-            let counts = u64::from(r) + 2 + 1 + 1 + 4;
-            let triples = 3 * (u64::from(r) + 1 + 1 + 1);
+            let counts = u64::from(r) + 2 + 1 + 1 + 3;
+            let triples = 3 * (u64::from(r) + 1 + 1);
             // The triples, the aligned replay range, the fresh triple.
             let arguments = triples + triples % 2 + 2 + 3;
             assert_eq!(
@@ -276,4 +276,26 @@ fn band_layers_match_configured_engine_cfl() {
     assert_eq!(band_layers(8), 17);
     assert_eq!(band_layers(0), 3);
     assert_eq!(band_layers(ENGINE_CFL), 12);
+}
+
+/// The pool holds the whole box at Matter/FLIP resolution 64 and 128 (the
+/// solver lattice is resolution + 3 cells a side) and what the budget buys
+/// when it is short.
+#[test]
+fn pool_size_follows_the_budget() {
+    let tile_bytes = u64::from(TILE).pow(3) * pooled_bytes_per_cell();
+    assert_eq!(tile_bytes, 512 * 372);
+    for resolution in [64u32, 128] {
+        let cells = [resolution + 3; 3];
+        assert_eq!(
+            u64::from(pool_tiles(cells)),
+            tile_total(cells),
+            "resolution {resolution}"
+        );
+        assert!(tile_total(cells) * tile_bytes <= POOL_BUDGET_BYTES);
+    }
+    assert_eq!(pool_capacity(4913, tile_bytes, 10 * tile_bytes), 10);
+    assert_eq!(pool_capacity(4913, tile_bytes, 10 * tile_bytes + tile_bytes - 1), 10);
+    assert_eq!(pool_capacity(4913, tile_bytes, u64::MAX / 2), 4913);
+    assert_eq!(pool_capacity(7, tile_bytes, 10 * tile_bytes), 7);
 }

@@ -43,7 +43,7 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var z = first.z; z <= last.z; z = z + 1) {
         for (var y = first.y; y <= last.y; y = y + 1) {
             for (var x = first.x; x <= last.x; x = x + 1) {
-                let range = ranges[ts_dense_cell(vec3<i32>(x, y, z))];
+                let range = ranges[ts_cell_at(vec3<i32>(x, y, z))];
                 let start = min(range.start, slots);
                 let end = start + min(range.count, slots - start);
                 for (var s = start; s < end; s = s + 1u) {

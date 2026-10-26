@@ -141,7 +141,7 @@ fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !ts_cell_stored(q) { return; }
     let at = ts_cell_at(q);
     if atomicLoad(&sheet_a[at]) == 0u { return; }
-    let range = ranges[ts_dense_cell(q)];
+    let range = ranges[ts_cell_at(q)];
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
         let p = local(particles[s]);

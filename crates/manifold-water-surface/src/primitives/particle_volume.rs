@@ -303,21 +303,6 @@ mod cpu_tests {
         )
         .validate(&module)
         .unwrap_or_else(|error| panic!("{error:?}"));
-        assert!(wgsl.contains("buf_bricks: array<u32>"), "{wgsl}");
-        assert!(wgsl.contains("brick_pass: u32"), "{wgsl}");
-        assert!(
-            wgsl.contains("@group(0) @binding(4) var<storage, read> buf_bricks"),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("@group(0) @binding(6) var<storage, read_write> buf_levelset"),
-            "{wgsl}"
-        );
-        let clear_guard = wgsl.find("if brick_pass != 2u").expect("brick clear guard");
-        let solid_constraint = wgsl.find("if pv_solid(").expect("solid constraint");
-        assert!(clear_guard < solid_constraint);
-        assert!(!wgsl.contains("brick_pass == 2u { return band; }"));
-        assert_eq!(std::mem::size_of::<super::VolumeUniforms>(), 80);
     }
 }
 

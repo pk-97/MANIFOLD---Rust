@@ -7,7 +7,7 @@ use manifold_water_liquid::tile_storage::{TILE, tile_total};
 const TS_NONE: u32 = u32::MAX;
 
 /// The cell passes' reach from a particle-holding cell, in cells: the tile
-/// set C is every tile within it (`tiles_classify` writes the distance).
+/// set C is every tile within it (`tiles_mark` writes the distance).
 /// The shader holds its own copy; the proofs' CPU model reads this one.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub const CELL_REACH: u32 = 2;
@@ -21,22 +21,43 @@ pub(crate) fn ring_max(band: u32) -> u32 {
 }
 }
 
-/// Tiles with ring at most this are allocated. Every ring in S3.1, so every
-/// tile; S3.2 lowers it to `ring_max`. The step passes it in its uniforms
-/// (`alloc_ring`).
-pub(crate) const ALLOC_RING: u32 = u32::MAX;
+/// Bytes the pool budget covers for the fine lattice: the D4 live budget
+/// (docs/GPU_FLIP_END_GAME_DESIGN.md), 1.5 GiB.
+pub(crate) const POOL_BUDGET_BYTES: u64 = 3 << 29;
 
-/// Tiles the pool holds for `cells` (`P`): every tile of the box in S3.1.
+/// Bytes per fine cell of every pooled field: the step's own (the lattice's
+/// cell arrays and face grids and the saved distance), the solver's vectors
+/// and rows, the sheeting's arrays and the sheet distance's two fields. The
+/// bodies hold none (their partials are per tile).
+pub(crate) fn pooled_bytes_per_cell() -> u64 {
+    STEP_POOLED_BYTES_PER_CELL
+        + crate::primitives::gpu_flip_pressure::POOLED_BYTES_PER_CELL
+        + crate::primitives::gpu_flip_sheeting::POOLED_BYTES_PER_CELL
+        + crate::primitives::gpu_flip_sheet_distance::POOLED_BYTES_PER_CELL
+}
+
+/// Tiles a pool of `budget` bytes holds when a tile costs `tile_bytes`,
+/// at most the box's `box_tiles`.
+pub(crate) fn pool_capacity(box_tiles: u64, tile_bytes: u64, budget: u64) -> u32 {
+    box_tiles.min(budget / tile_bytes) as u32
+}
+
+/// Tiles the pool holds for `cells` (`P`): the whole box, or what the budget
+/// buys.
 pub(crate) fn pool_tiles(cells: [u32; 3]) -> u32 {
-    tile_total(cells) as u32
+    pool_capacity(
+        tile_total(cells),
+        u64::from(TILE).pow(3) * pooled_bytes_per_cell(),
+        POOL_BUDGET_BYTES,
+    )
 }
 
 /// Words of the tile counts: word 0 the cell set C's size, word k in
 /// 1..=ring_max + 1 the tiles with ring ≤ k, then the retired count, the
-/// ring halves' parity, and the allocator's four: the free stack's top, this
-/// step's pop count, the exhausted flag and the fresh list's length.
+/// ring halves' parity, and the allocator's three: the free stack's top, the
+/// exhausted flag and the fresh list's length.
 pub(super) fn tile_count_words(ring_max: u32) -> u64 {
-    u64::from(ring_max) + 8
+    u64::from(ring_max) + 7
 }
 
 /// Word of the counts holding the free stack's top (the other allocator
@@ -45,9 +66,9 @@ pub(super) fn free_top_word(ring_max: u32) -> usize {
     ring_max as usize + 4
 }
 
-/// Indirect triples for C, each ring cap, retired tiles and full faces,
-/// followed by one aligned replay range for the extension layers and the
-/// fresh list's triple.
+/// Indirect triples for C, each ring cap and the retired tiles, followed by
+/// one aligned replay range for the extension layers and the fresh list's
+/// triple.
 pub(super) fn tile_args_words(ring_max: u32) -> u64 {
     2 * (u64::from(extension_range_index(ring_max)) + 1) + 3
 }
@@ -70,7 +91,7 @@ pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
 }
 
 /// Test-only lever, approved 2026-10-02 lead; un-suppressed when the executor
-/// exposes node access. With it set, `tiles_classify` marks every tile
+/// exposes node access. With it set, `tiles_clear` marks every tile
 /// occupied and `tiles_rings` writes ring 0 everywhere, so the sparse passes
 /// run dense through the same kernels and lists (design D-6).
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -94,8 +115,8 @@ pub(crate) fn all_tiles() -> bool {
 }
 
 /// The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
-/// table)), built on the GPU every step from the sort's ranges and never
-/// read back. Sized for one `ring_max`.
+/// table)), built on the GPU every step from the particles and never read
+/// back. Sized for one `ring_max`.
 pub(super) struct TileTable {
     pub(super) ring_max: u32,
     /// Per tile, the Chebyshev cell distance from its box to the nearest
@@ -131,8 +152,10 @@ pub(super) fn retired_args_offset(ring_max: u32) -> u64 {
     12 * (u64::from(ring_max) + 1)
 }
 
-pub(super) fn face_args_offset(ring_max: u32) -> u64 {
-    retired_args_offset(ring_max) + 12
+/// Byte offset of the triple over every allocated tile (ring at most
+/// `ring_max`) in `args`.
+pub(super) fn allocated_args_offset(ring_max: u32) -> u64 {
+    12 * u64::from(ring_max)
 }
 
 /// Byte offset of the fresh list's indirect triple in `args`, after the
@@ -143,7 +166,7 @@ pub(super) fn fresh_args_offset(ring_max: u32) -> u64 {
 
 /// Index of the 8-byte replay range after the indirect triples.
 pub(super) fn extension_range_index(ring_max: u32) -> u32 {
-    (3 * (ring_max + 3)).div_ceil(2)
+    (3 * (ring_max + 2)).div_ceil(2)
 }
 
 /// `bound` plus the table and the arrays the retire and the poison write:
@@ -223,35 +246,45 @@ impl TileTable {
     }
 }
 
-/// The table for this step, after the sort: nearness per tile, rings, the
-/// pool's allocation (tiles past `alloc_ring` freed, absent ones within it
-/// allocated and set to their canonical values), then the lists, counts,
-/// triples and the active-fraction stats word (`capped` at the solver
-/// words). An inactive slot of `plan` keeps the last active step's table
-/// and zeroes its triples.
-pub(super) fn encode_tiles(
+/// The table's first half for this step, from the particles: nearness per
+/// tile (`tiles_clear`, then `tiles_mark` over the first `count` slots of
+/// `particles`), rings, then the pool's allocation (`tiles_allocate`: tiles
+/// past `alloc_ring` freed, absent ones within it allocated, rings 0 and 1
+/// first) and the new tiles set to their canonical values. The sort keys on
+/// the table this leaves. An inactive slot of `plan` keeps the last active
+/// step's table.
+pub(super) fn encode_tile_allocation(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
     params: &StepParams,
     l: &LatticeBuffers,
     t: &TileTable,
-    ranges: &GpuBuffer,
-    capped: &GpuBuffer,
-    tally: u64,
+    particles: &GpuBuffer,
+    count: u32,
     plan: &GpuBuffer,
 ) {
     let tiles = groups(tile_total(params.n));
     enc.dispatch_compute(
-        &pipes.tiles_classify,
+        &pipes.tiles_clear,
         &[
             uniform(params),
-            buffer(1, ranges),
             buffer(27, &t.near),
             buffer(30, &t.counts),
             buffer(46, plan),
         ],
-        groups(tile_total(params.n) * 32),
-        "gpu_flip.step.tiles.classify",
+        tiles,
+        "gpu_flip.step.tiles.clear",
+    );
+    enc.dispatch_compute(
+        &pipes.tiles_mark,
+        &[
+            uniform(params),
+            buffer(2, particles),
+            buffer(27, &t.near),
+            buffer(46, plan),
+        ],
+        groups(u64::from(count)),
+        "gpu_flip.step.tiles.mark",
     );
     enc.dispatch_compute(
         &pipes.tiles_rings,
@@ -266,42 +299,19 @@ pub(super) fn encode_tiles(
         "gpu_flip.step.tiles.rings",
     );
     enc.dispatch_compute(
-        &pipes.tiles_free,
+        &pipes.tiles_allocate,
         &[
             uniform(params),
             buffer(28, &t.rank),
             buffer(30, &t.counts),
-            buffer(46, plan),
-            buffer(52, &t.free_list),
-            buffer(54, &t.table),
-        ],
-        tiles,
-        "gpu_flip.step.tiles.free",
-    );
-    enc.dispatch_compute(
-        &pipes.tiles_alloc,
-        &[
-            uniform(params),
-            buffer(28, &t.rank),
-            buffer(30, &t.counts),
+            buffer(31, &t.args),
             buffer(46, plan),
             buffer(52, &t.free_list),
             buffer(53, &t.fresh),
             buffer(54, &t.table),
         ],
-        tiles,
-        "gpu_flip.step.tiles.alloc",
-    );
-    enc.dispatch_compute(
-        &pipes.tiles_settle,
-        &[
-            uniform(params),
-            buffer(30, &t.counts),
-            buffer(31, &t.args),
-            buffer(46, plan),
-        ],
         [1, 1, 1],
-        "gpu_flip.step.tiles.settle",
+        "gpu_flip.step.tiles.allocate",
     );
     enc.dispatch_compute_indirect(
         &pipes.tiles_fresh,
@@ -313,6 +323,35 @@ pub(super) fn encode_tiles(
         fresh_args_offset(t.ring_max),
         "gpu_flip.step.tiles.fresh",
     );
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    if POISON.load(std::sync::atomic::Ordering::SeqCst) {
+        enc.dispatch_compute(
+            &pipes.poison_free,
+            &pooled(
+                l,
+                vec![
+                    uniform(params),
+                    buffer(30, &t.counts),
+                    buffer(52, &t.free_list),
+                ],
+            ),
+            groups(u64::from(t.pool_tiles) * 512),
+            "gpu_flip.step.tiles.poison_free",
+        );
+    }
+}
+
+/// The table's second half, after the sort: the lists, counts, triples and
+/// the active-fraction stats word (`capped` at the solver words).
+pub(super) fn encode_tile_lists(
+    enc: &mut GpuEncoder,
+    pipes: &Pipelines,
+    params: &StepParams,
+    t: &TileTable,
+    capped: &GpuBuffer,
+    tally: u64,
+    plan: &GpuBuffer,
+) {
     enc.dispatch_compute(
         &pipes.tiles_lists,
         &[

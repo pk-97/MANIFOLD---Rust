@@ -60,7 +60,8 @@ struct Params {
     // Bit 0: smooth starts from zero; residual has no rhs (−L value); check
     // is the start; restrict masks its fine taps to open water. Bit 1
     // (REDUCE): the pass also folds its per-cell product into one partial
-    // per workgroup. Bit 2: restrict adds into `out`.
+    // per workgroup. Bit 2: restrict adds into `out`; init keeps the
+    // pressure (WARM, the warm start); check is the warm start's.
     mode: u32,
     cell_size: f32,
     // The conjugate gradient iteration, or the scalar a dot product writes.
@@ -158,6 +159,17 @@ const DIVISOR_FLOOR: f32 = 1e-30;
 // Rounds a solve may run: the solver's MAX_ITERATIONS.
 const ROUNDS: u32 = 900u;
 const REDUCE: u32 = 2u;
+// init: x starts from the pressure it holds; check: the warm start's test.
+const WARM: u32 = 4u;
+
+fn warm() -> bool {
+    return (u.mode & WARM) != 0u;
+}
+
+// Neither infinite nor NaN, read from the bits so fast math keeps the test.
+fn finite(v: f32) -> bool {
+    return (bitcast<u32>(v) & 0x7f800000u) != 0x7f800000u;
+}
 
 var<workgroup> sums: array<f32, 256>;
 var<workgroup> scan: array<u32, 256>;
@@ -1035,12 +1047,14 @@ fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
 
 // The conjugate gradient's start, over every tile (512 threads a tile in
 // tile order, no list): r = f (`src`) on water with an open face, else 0,
-// into `out`, and the pressure x = 0 into `out2`, so a solve that stops
-// before its first iteration leaves zero pressure, and both are the dense
-// solve's zero outside the active tiles, which the solve never writes. The
-// ghost rows only add to a diagonal, so an open face is the whole test.
-// With REDUCE each thread folds |r| into its tile's partial, for the
-// start's |f|∞.
+// into `out`, and the pressure x into `out2`: 0, or with WARM (the warm
+// start) the pressure `out2` already holds on water with an open face, a
+// non-finite value counting as no guess. Off those cells both are 0, so
+// outside the active tiles, which the solve never writes, they are the
+// dense solve's zero. A cold solve that stops before its first iteration
+// leaves zero pressure; warm_main finishes a warm start. The ghost rows only
+// add to a diagonal, so an open face is the whole test. With REDUCE each
+// thread folds |r| into its tile's partial, for the start's |f|∞.
 @compute @workgroup_size(256, 1, 1)
 fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     if slot_inactive() {
@@ -1063,10 +1077,45 @@ fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invoc
         }
         r = select(0.0, src[idx], diagonal > 0.0);
         out[idx] = r;
-        out2[idx] = 0.0;
+        var x = 0.0;
+        if warm() && diagonal > 0.0 && finite(out2[idx]) {
+            x = out2[idx];
+        }
+        out2[idx] = x;
     }
     if reduces() {
         fold_max(li, 2u * tile + ((gid.x >> 8u) & 1u), abs(r));
+    }
+}
+
+// The warm start's residual, one thread per cell of the fine level's
+// active tiles, after the start's check: r = f − L x0 into `out2` on water
+// with an open face (f in `src`, x0 in place in `out` as init kept it),
+// residual_main's arithmetic, so x0 = 0 gives init's r bit for bit. A start
+// the check stopped (|f|∞ under START_FLOOR: no divergence, no pressure)
+// zeroes x instead. With REDUCE each thread folds |r| into its tile's
+// partial, for the warm start's check.
+@compute @workgroup_size(256, 1, 1)
+fn warm_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if slot_inactive() || !listed(gid.x) {
+        return;
+    }
+    let no_divergence = progress[2] > 0.5;
+    let idx = listed_cell(gid.x, ts_cells());
+    var r = 0.0;
+    if idx != TS_NONE && is_water(idx) {
+        if no_divergence {
+            out[idx] = 0.0;
+        } else {
+            let s = stencil(idx, 0u);
+            if s.diagonal > 0.0 {
+                r = src[idx] - (s.sum - s.diagonal * out[idx]) / (u.cell_size * u.cell_size);
+                out2[idx] = r;
+            }
+        }
+    }
+    if reduces() {
+        fold_max(li, listed_partial(gid.x), abs(r));
     }
 }
 
@@ -1126,7 +1175,7 @@ fn direction_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // x −= α p into `out`, r −= α s into `out2`, α = rz_k / (p·s)_k; p in `src`,
-// s in `aux`. The first iteration starts x from zero and never reads it.
+// s in `aux`. x starts where init left it: zero, or the warm start's guess.
 // With REDUCE each thread folds |r| of its cell into the workgroup's
 // partial, for the stop's |r|∞.
 @compute @workgroup_size(256, 1, 1)
@@ -1139,8 +1188,7 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
     if idx != TS_NONE {
         let k = u32(progress[1]);
         let alpha = ratio(scalars[2u * k], scalars[2u * k + 1u]);
-        let x = select(out[idx], 0.0, k == 0u);
-        out[idx] = x - alpha * src[idx];
+        out[idx] = out[idx] - alpha * src[idx];
         r = out2[idx] - alpha * aux[idx];
         out2[idx] = r;
     }
@@ -1153,12 +1201,15 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
 // pressuresolver.cpp; MIT, see THIRD_PARTY_NOTICES.md): the residual's
 // infinity norm |r|∞ in the right-hand side's units (the divergence, 1/s).
 // A solve stops before its first iteration when |f|∞ is under START_FLOOR,
-// and after iteration k when |r|∞ ≤ min(tolerance · |f|∞, ACCEPTABLE).
+// or, started warm, when the guess's |r0|∞ already meets the rule below;
+// and after iteration k when |r|∞ ≤ min(tolerance · |f|∞, ACCEPTABLE). The
+// rule is relative to |f|∞, never |r0|∞, so a better guess stops sooner.
 // progress: [0] |f|∞, [1] iterations run, [2] 1 once stopped by the
 // tolerance, [4 + k] |r|∞ after iteration k. Stopping zeroes every gate
 // triple (`cx` of them) and the range entries of every round from `first`
 // on, so the solve's later dispatches run no groups direct or replayed.
-// The norm's partials come folded from init (the start) or update.
+// The norm's partials come folded from init (the start), warm_main (the
+// warm start) or update.
 const START_FLOOR: f32 = 1e-9;
 const ACCEPTABLE: f32 = 1.0;
 // The chunked rounds' range entries follow the per-round ones, one an
@@ -1169,17 +1220,10 @@ const CHUNK_ENTRIES: u32 = 2u * ROUNDS;
 fn chunk_rounds(j: u32, chunk: u32) -> u32 {
     return min(1u << min(j, 31u), max(chunk, 1u));
 }
-const KEEP_RANGES: u32 = 8u;
-
 fn stop(first: u32) {
     progress[2] = 1.0;
     for (var t = 0u; t < u.cx; t = t + 1u) {
         gate[3u * t] = 0u;
-    }
-    // KEEP_RANGES (the proofs' lever) leaves later rounds executing, as a
-    // chunk does, so the guards must make them write nothing.
-    if (u.mode & KEEP_RANGES) != 0u {
-        return;
     }
     for (var r = first; r < ROUNDS; r = r + 1u) {
         ranges[4u * r + 1u] = 0u;
@@ -1196,8 +1240,10 @@ fn stop(first: u32) {
     }
 }
 
-// The `color` partials' max; mode 1 is the start (|f|∞), else the round
-// progress[1] counts: its |r|∞, the count advanced, and the stop test.
+// The `color` partials' max; mode 1 is the start (|f|∞), WARM the warm
+// start's |r0|∞ (its test, after the start's; nothing is recorded), else
+// the round progress[1] counts: its |r|∞, the count advanced, and the stop
+// test.
 @compute @workgroup_size(256, 1, 1)
 fn check_main(@builtin(local_invocation_index) li: u32) {
     if slot_inactive() {
@@ -1215,6 +1261,12 @@ fn check_main(@builtin(local_invocation_index) li: u32) {
         progress[1] = 0.0;
         progress[2] = 0.0;
         if u.tolerance >= 0.0 && norm < START_FLOOR {
+            stop(0u);
+        }
+        return;
+    }
+    if warm() {
+        if progress[2] < 0.5 && u.tolerance >= 0.0 && norm <= min(u.tolerance * progress[0], ACCEPTABLE) {
             stop(0u);
         }
         return;

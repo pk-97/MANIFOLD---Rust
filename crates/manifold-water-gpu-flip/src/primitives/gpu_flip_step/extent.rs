@@ -13,13 +13,12 @@ use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::REACTION_FLOATS;
 use manifold_water_liquid::extent::liquid_lattice;
-use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, search_fits, whole};
+use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, whole};
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::fluid_particles::bin_total;
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::FlipSolverGrid;
 use manifold_water_liquid::primitives::prefix_scan::storage_words;
-use manifold_water_liquid::primitives::sort_particles_into_cells::range_storage_bytes;
+use manifold_water_liquid::primitives::sort_particles_into_cells::key_storage_bytes;
 use manifold_water_liquid::tile_storage::{pool_len, tile_total};
 use std::mem::size_of;
 
@@ -76,10 +75,10 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             storage_words(crate::primitives::gpu_flip_step::emit_sites(cells) as usize) as u64 * 4,
         );
     }
-    let ranges = range_storage_bytes(cells);
-    search_fits(x, cells, ranges)?;
-    // The sort's ranges, cell counts, rank and slot scratch.
-    x.hold(ranges + bin_total(cells) * 4 + 2 * slots.max(1) * 4);
+    // The sort is keyed on the pool: a range and a count per element of a
+    // pooled field, then rank and slot scratch.
+    let keys = pool_len(pool);
+    x.hold(key_storage_bytes(keys) + keys * 4 + 2 * slots.max(1) * 4);
     // Same configured CFL as the step, never particle travel.
     let ring = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
     // The pooled fields (the published faces and distance among them): the

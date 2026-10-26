@@ -16,6 +16,12 @@
 // position is finite.
 // `sorted` is only bound for liquid particle records, so it copies whole
 // records word for word.
+//
+// A bin's key is `sort_key(coord)`, defined by the source composed before this
+// body: the dense grid index of the bin, or (the step's tile pool) the pool
+// index `ts_cell_at(coord)` of its cell, with `bin_total` keys either way. A
+// pooled bin whose tile has no slot keys to the canonical index, the bucket
+// no stored cell reads.
 
 struct CellRange {
     start: u32,
@@ -35,6 +41,11 @@ struct SortParams {
     position_word: u32,
     live_word: u32,
     live_rule: u32,
+    // Tiles of the pool a pooled key indexes (`ts_pool_tiles`); 0 when dense.
+    pool_tiles: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: SortParams;
@@ -81,7 +92,7 @@ fn is_live(i: u32) -> bool {
 fn bin_of(p: vec3<f32>) -> u32 {
     let last = vec3<i32>(params.bins) - vec3<i32>(1);
     let b = clamp(vec3<i32>(floor((p - params.bin_min) * params.inv_cell)), vec3<i32>(0), last);
-    return u32(b.x) + params.bins.x * (u32(b.y) + params.bins.y * u32(b.z));
+    return sort_key(b);
 }
 
 fn bin_start(b: u32) -> u32 {

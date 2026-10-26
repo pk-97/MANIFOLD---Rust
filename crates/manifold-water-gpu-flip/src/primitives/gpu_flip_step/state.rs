@@ -1,6 +1,7 @@
 //! The step state's install, storage reservation and commit mask.
 
 use super::*;
+use manifold_water_liquid::tile_storage::pool_len;
 
 impl StepState {
     /// Build every pipeline a step dispatches, at install.
@@ -15,7 +16,7 @@ impl StepState {
                 "gpu_flip.commit_mask",
             ));
         }
-        self.sorter.prepare(device);
+        self.sorter.prepare_pooled(device);
         self.identity_ops.prepare(device);
         self.emit_scan.prepare(device);
         self.solver.prepare_pipelines(device);
@@ -67,7 +68,9 @@ impl StepState {
         {
             self.saved_capped = Some(allocate(device, saved_capped_bytes)?);
         }
-        self.sorter.reserve_ranges(device, cells)?;
+        // One range per element of a pooled field: the sort is keyed on the
+        // pool index of each cell.
+        self.sorter.reserve_keys(device, pool_len(pool))?;
         if self.lattice.as_ref().is_none_or(|l| l.cells != cells) {
             self.lattice = None;
             self.tiles = None;

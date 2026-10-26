@@ -14,7 +14,7 @@ fn emit_site(idx: u32) -> vec3<u32> {
 // (_addNewFluidCells), so a source tops its volume up and never stacks.
 fn emit_site_taken(j: vec3<u32>) -> bool {
     let cell = vec3<i32>(j / 2u);
-    let range = ranges[ts_dense_cell(cell)];
+    let range = ranges[ts_cell_at(cell)];
     for (var k = 0u; k < range.count; k = k + 1u) {
         let x = sorted[range.start + k].position_radius.xyz;
         let sub = vec3<i32>(floor(2.0 * (x - u.box_min) / u.cell_size));
@@ -96,8 +96,8 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     if emit_scan[idx] == before {
         return;
     }
-    let n = ts_cells();
-    let last = ranges[ts_dense_cell(n - vec3<i32>(1))];
+    // The last key's range ends at the live total.
+    let last = ranges[ts_pool_len() - 1u];
     let slot = last.start + last.count + before;
     if slot >= u.capacity {
         return;
@@ -130,8 +130,7 @@ fn emit_tally() {
     if !clock_active() || birth_identity[3] != 0u { return; }
     let s = emit_sites();
     let requested = emit_scan[s.x * s.y * s.z - 1u];
-    let n = ts_cells();
-    let last = ranges[ts_dense_cell(n - vec3<i32>(1))];
+    let last = ranges[ts_pool_len() - 1u];
     let live = last.start + last.count;
     let room = select(0u, u.capacity - live, u.capacity > live);
     let births = min(requested, room);

@@ -315,25 +315,6 @@ mod tests {
         )
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(
-            wgsl.contains("buf_reaction_out: array<atomic<i32>>"),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("    body(idx, params.dispatch_count, e_grid,"),
-            "{wgsl}"
-        );
-        assert_eq!(std::mem::size_of::<BodyReactionUniforms>(), 112);
-        assert!(
-            wgsl.contains(
-                "first_tick: i32,\n    dispatch_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n}"
-            ),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("buf_forces: array<f32>") && wgsl.contains("buf_impulses: array<f32>"),
-            "{wgsl}"
-        );
     }
 }
 

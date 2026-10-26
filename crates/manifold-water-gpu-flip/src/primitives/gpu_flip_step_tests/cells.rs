@@ -40,7 +40,7 @@ pub(super) fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
         let threads = pass.every_tile();
         let filled = canonical_faces();
         let got: Vec<FaceSample> = pass
-            .bind(1, &ranges, Layout::Dense)
+            .bind_ranges(&ranges)
             .bind(2, &sorted, Layout::Dense)
             .bind(4, &filled, Layout::Records)
             .run("particles_to_faces", &step, 4, face_len(), threads);
@@ -560,7 +560,7 @@ pub(super) fn gpu_flip_particle_distance_is_the_engines_level_set() {
         let mut pass = Pass::new();
         let threads = pass.every_tile();
         let got: Vec<f32> = pass
-            .bind(1, &ranges, Layout::Dense)
+            .bind_ranges(&ranges)
             .bind(2, &sorted, Layout::Dense)
             .run("particle_distance", &step, 5, cell_len(), threads);
         let empty = ranges.iter().filter(|r| r.count == 0).count();
@@ -614,10 +614,11 @@ pub(super) fn gpu_flip_particle_distance_is_the_engines_level_set() {
 #[test]
 pub(super) fn gpu_flip_extend_faces_fills_one_layer() {
     let faces = random_faces(0xe7e, true);
-    let got: Vec<FaceSample> = Pass::new()
-        .bind(3, &faces, Layout::Records)
-        .bind(4, &faces, Layout::Records)
-        .run("extend_faces", &lattice(), 4, face_len(), face_len());
+    let mut pass = Pass::new();
+    pass.bind(3, &faces, Layout::Records)
+        .bind(4, &faces, Layout::Records);
+    let threads = pass.allocated_tiles(&lattice());
+    let got: Vec<FaceSample> = pass.run("extend_faces", &lattice(), 4, face_len(), threads);
     let want = super::super::gpu_flip_extension_tests::cpu_extend(&faces, N);
     let mut filled = 0;
     for (i, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -644,10 +645,12 @@ pub(super) fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
             let (mut faces, target) = wall_gap(N, axis, high);
             for layer in 0..2 {
                 let want = cpu_extend(&faces, N);
-                let got: Vec<FaceSample> = Pass::new()
-                    .bind(3, &faces, Layout::Records)
-                    .bind(4, &faces, Layout::Records)
-                    .run("extend_faces", &lattice(), 4, face_len(), face_len());
+                let mut pass = Pass::new();
+                pass.bind(3, &faces, Layout::Records)
+                    .bind(4, &faces, Layout::Records);
+                let threads = pass.allocated_tiles(&lattice());
+                let got: Vec<FaceSample> =
+                    pass.run("extend_faces", &lattice(), 4, face_len(), threads);
                 for (i, (g, w)) in got.iter().zip(&want).enumerate() {
                     for a in 0..3 {
                         close(
@@ -680,10 +683,11 @@ pub(super) fn gpu_flip_extend_faces_holds_border_rows_as_native() {
         let mut averaged = 0;
         for layer in 0..2 {
             let want = cpu_extend(&faces, N);
-            let got: Vec<FaceSample> = Pass::new()
-                .bind(3, &faces, Layout::Records)
-                .bind(4, &faces, Layout::Records)
-                .run("extend_faces", &lattice(), 4, face_len(), face_len());
+            let mut pass = Pass::new();
+            pass.bind(3, &faces, Layout::Records)
+                .bind(4, &faces, Layout::Records);
+            let threads = pass.allocated_tiles(&lattice());
+            let got: Vec<FaceSample> = pass.run("extend_faces", &lattice(), 4, face_len(), threads);
             for (i, (g, w)) in got.iter().zip(&want).enumerate() {
                 for a in 0..3 {
                     close(
@@ -753,13 +757,10 @@ pub(super) fn gpu_flip_pressure_clear_precedes_face_extension() {
         0.0,
         "open air-only velocity is cleared before extension"
     );
-    let extended: Vec<FaceSample> = Pass::new().bind(3, &projected, Layout::Records).run(
-        "extend_faces",
-        &lattice(),
-        4,
-        face_len(),
-        face_len(),
-    );
+    let mut pass = Pass::new();
+    pass.bind(3, &projected, Layout::Records);
+    let threads = pass.allocated_tiles(&lattice());
+    let extended: Vec<FaceSample> = pass.run("extend_faces", &lattice(), 4, face_len(), threads);
     for x in [target[0] - 1, target[0], target[0] + 1] {
         let index = pad_index([x, target[1], target[2]]);
         assert_eq!(

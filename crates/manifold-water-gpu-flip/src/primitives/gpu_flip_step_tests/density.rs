@@ -109,7 +109,7 @@ pub(super) fn gpu_flip_density_support_matches_original() {
             pass.bound.clear();
             pass.layouts.clear();
             let threads = pass.every_tile();
-            pass.bind(1, &ranges, Layout::Dense)
+            pass.bind_ranges(&ranges)
                 .bind(2, &sorted, Layout::Dense)
                 .bind(6, &water, Layout::Cells)
                 .bind(9, &vec![distance; face_len()], Layout::Dense)

@@ -17,6 +17,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 
 use super::prefix_scan::{PrefixScan, ScanLabels};
 use crate::fluid_particles::{CellRange, MAX_BINS, bin_counts, bin_total, searched_bins};
+use crate::tile_storage::{TILE_STORAGE, pool_len};
 use crate::whitewater::WHITEWATER_EMPTY;
 use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -25,7 +26,31 @@ use manifold_node_engine::particles::{FLUID_PARTICLE_SPECS, FluidParticle};
 use manifold_node_engine::ports::{ArrayType, ChannelElementType, std430_channel};
 use manifold_node_engine::primitive::Primitive;
 
+/// The sort's passes. Composed after a key source: [`DENSE_KEYS`] or
+/// [`POOLED_KEYS`] (with `TILE_STORAGE` before it), which define `sort_key`.
 pub const SHADER: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
+
+/// A bin's key is its grid index: one range per bin of the grid.
+const DENSE_KEYS: &str = "fn sort_key(b: vec3<i32>) -> u32 {\n\
+    return u32(b.x) + params.bins.x * (u32(b.y) + params.bins.y * u32(b.z));\n\
+}\n";
+
+/// A bin's key is its cell's index in the tile pool (`ts_cell_at`): one
+/// range per element of a pooled field, the canonical block's included. The
+/// table is the step's slot table; the bins are the lattice's cells.
+const POOLED_KEYS: &str = "@group(0) @binding(9) var<storage, read> ts_table: array<u32>;\n\
+fn ts_cells() -> vec3<i32> { return vec3<i32>(params.bins); }\n\
+fn ts_pool_tiles() -> u32 { return params.pool_tiles; }\n\
+fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }\n\
+fn sort_key(b: vec3<i32>) -> u32 { return ts_cell_at(b); }\n";
+
+fn dense_source() -> String {
+    format!("{DENSE_KEYS}\n{SHADER}")
+}
+
+fn pooled_source() -> String {
+    format!("{TILE_STORAGE}\n{POOLED_KEYS}\n{SHADER}")
+}
 const ENTRIES: [&str; 6] = [
     "clear_counts",
     "count_particles",
@@ -61,6 +86,10 @@ struct SortParams {
     position_word: u32,
     live_word: u32,
     live_rule: u32,
+    pool_tiles: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 /// Where the sort reads a record's position and liveness, in 4-byte words.
@@ -126,9 +155,13 @@ pub struct SortJob<'a> {
 manifold_core::testkit_visible! {
 /// The counting sort itself, shared by `node.sort_particles_into_cells` and
 /// the stage nodes that sort inside one dispatch chain (`node.gpu_flip_step`).
-/// Owns the cell ranges and its scratch.
+/// Owns the cell ranges and its scratch. Built for one key rule: dense bins
+/// ([`ParticleSorter::prepare`], [`ParticleSorter::encode`]) or the tile pool's
+/// cell indices ([`ParticleSorter::prepare_pooled`],
+/// [`ParticleSorter::encode_pooled`]).
 #[derive(Default)]
 pub struct ParticleSorter {
+    pooled: bool,
     pipelines: Vec<GpuComputePipeline>,
     scan: PrefixScan,
     rank: Option<GpuBuffer>,
@@ -140,12 +173,28 @@ pub struct ParticleSorter {
 }
 
 impl ParticleSorter {
-    /// Create the pipelines. Call before any early return (compile contract).
+    /// Create the pipelines for dense bins. Call before any early return
+    /// (compile contract).
     pub fn prepare(&mut self, device: &GpuDevice) {
+        self.create_pipelines(device, false);
+    }
+
+    /// Create the pipelines for bins keyed by the tile pool's cell indices.
+    pub fn prepare_pooled(&mut self, device: &GpuDevice) {
+        self.create_pipelines(device, true);
+    }
+
+    fn create_pipelines(&mut self, device: &GpuDevice, pooled: bool) {
         if self.pipelines.is_empty() {
+            self.pooled = pooled;
+            let source = if pooled {
+                pooled_source()
+            } else {
+                dense_source()
+            };
             for entry in ENTRIES {
                 self.pipelines.push(device.create_compute_pipeline(
-                    SHADER,
+                    &source,
                     entry,
                     "node.sort_particles_into_cells",
                 ));
@@ -157,14 +206,20 @@ impl ParticleSorter {
         }
     }
 
-    /// One range per bin of `bins`, at `range_storage_bytes(bins)` or more.
+    /// One range per key: per bin of the grid when dense, per element of a
+    /// pooled field (`pool_len`) when pooled; at `key_storage_bytes` or more.
     pub fn ranges(&self) -> Option<&GpuBuffer> {
         self.ranges.as_ref()
     }
 
     /// Size the cell ranges for `bins` before anything reads them.
     pub fn reserve_ranges(&mut self, device: &GpuDevice, bins: [u32; 3]) -> Result<(), String> {
-        let range_bytes = range_storage_bytes(bins);
+        self.reserve_keys(device, bin_total(bins))
+    }
+
+    /// Size the ranges for `keys` ranges before anything reads them.
+    pub fn reserve_keys(&mut self, device: &GpuDevice, keys: u64) -> Result<(), String> {
+        let range_bytes = key_storage_bytes(keys);
         if self
             .ranges
             .as_ref()
@@ -184,8 +239,9 @@ impl ParticleSorter {
         Ok(())
     }
 
-    /// Encode the six passes. `prepare` and `reserve_ranges(job.bins)` first.
-    /// Fails before any dispatch when the scan storage cannot be had.
+    /// Encode the six passes over dense bins. `prepare` and
+    /// `reserve_ranges(job.bins)` first. Fails before any dispatch when the
+    /// scan storage cannot be had.
     pub fn encode(
         &mut self,
         device: &GpuDevice,
@@ -193,7 +249,45 @@ impl ParticleSorter {
         job: &SortJob<'_>,
         labels: &SortLabels,
     ) -> Result<(), String> {
-        let bin_total = bin_total(job.bins) as u32;
+        if self.pooled {
+            return Err("a pooled sorter needs the slot table: use encode_pooled".into());
+        }
+        self.encode_keyed(device, encoder, job, None, labels)
+    }
+
+    /// Encode the six passes keyed by the tile pool: `job.bins` are the
+    /// lattice's cells, a particle's key is `ts_cell_at` of its clamped bin
+    /// through `table` (`T + P` words, `P` = `pool_tiles`). A particle whose
+    /// tile has no slot lands in the canonical bucket, which no stored cell
+    /// reads. `prepare_pooled` and `reserve_keys(pool_len(pool_tiles))` first.
+    pub fn encode_pooled(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut GpuEncoder,
+        job: &SortJob<'_>,
+        table: &GpuBuffer,
+        pool_tiles: u32,
+        labels: &SortLabels,
+    ) -> Result<(), String> {
+        if !self.pooled {
+            return Err("a dense sorter has no slot table: use encode".into());
+        }
+        self.encode_keyed(device, encoder, job, Some((table, pool_tiles)), labels)
+    }
+
+    fn encode_keyed(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut GpuEncoder,
+        job: &SortJob<'_>,
+        pool: Option<(&GpuBuffer, u32)>,
+        labels: &SortLabels,
+    ) -> Result<(), String> {
+        let keys = match pool {
+            Some((_, pool_tiles)) => pool_len(pool_tiles),
+            None => bin_total(job.bins),
+        };
+        let bin_total = keys as u32;
         let cell_counts = self.scan.buffer(device, bin_total as usize)?.clone();
         let particle_size = std::mem::size_of::<FluidParticle>() as u64;
         let sorted_capacity = [
@@ -219,6 +313,9 @@ impl ParticleSorter {
             .ranges
             .as_ref()
             .ok_or("the cell ranges were not reserved")?;
+        if ranges.size < key_storage_bytes(keys) {
+            return Err("the cell ranges were reserved for fewer keys".into());
+        }
         let gate = job
             .gate
             .or(self.open.as_ref())
@@ -239,8 +336,12 @@ impl ParticleSorter {
             position_word: read.position_word,
             live_word: read.live_word,
             live_rule: read.live_rule,
+            pool_tiles: pool.map_or(0, |(_, pool_tiles)| pool_tiles),
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
-        let bindings = [
+        let mut bindings = vec![
             GpuBinding::Bytes {
                 binding: 0,
                 data: bytemuck::bytes_of(&uniforms),
@@ -287,6 +388,13 @@ impl ParticleSorter {
                 offset: 0,
             },
         ];
+        if let Some((table, _)) = pool {
+            bindings.push(GpuBinding::Buffer {
+                binding: 9,
+                buffer: table,
+                offset: 0,
+            });
+        }
         let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
         let [
             clear,
@@ -495,7 +603,12 @@ manifold_node_engine::primitive! {
 /// Bytes of `cell_ranges` storage for a grid of `bins`: one range per bin,
 /// and at least one so an empty grid still binds.
 pub fn range_storage_bytes(bins: [u32; 3]) -> u64 {
-    bin_total(bins).max(1) * std::mem::size_of::<CellRange>() as u64
+    key_storage_bytes(bin_total(bins))
+}
+
+/// Bytes of range storage for `keys` keys, at least one range so it binds.
+pub fn key_storage_bytes(keys: u64) -> u64 {
+    keys.max(1) * std::mem::size_of::<CellRange>() as u64
 }
 
 impl Primitive for SortParticlesIntoCells {

@@ -1,5 +1,6 @@
-// One thread per face record, `faces_in` to `faces_out`: one layer of the
-// fluid velocity's extrapolation (GridUtils::extrapolateGrid). A valid face
+// 512 threads per allocated tile (the first `tile_counts[ring_max]` tiles of
+// `tiles_by_ring`), one per cell and its own record, `faces_in` to
+// `faces_out`: one layer of the fluid velocity's extrapolation (GridUtils::extrapolateGrid). A valid face
 // (weight > 0) is copied. Every face on the border of its component's
 // lattice (solid_border) is held done, as GridUtils::
 // _initializeStatusGridThread holds it: kept as it is, counted with its
@@ -7,20 +8,27 @@
 // inner face with a valid inner neighbour takes the mean of its valid and
 // border neighbours and becomes valid (weight 1). The border rows lie in
 // the solid padding, so their zeros slow the extrapolated velocity at the
-// walls as the engine's do.
+// walls as the engine's do. The records past the lattice belong to no cell,
+// are never written and stay canonical. A dispatch that covers every tile
+// (the replayed one) has its threads past the list return; a listed tile
+// the pool had no slot for (an exhausted pool) is skipped.
 @compute @workgroup_size(256)
 fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_record_count() {
+    let listed = gid.x >> 9u;
+    if listed >= counts_load(u.ring_max) {
+        return;
+    }
+    let tile = tiles_by_ring[listed];
+    if ts_slot(tile) == TS_NONE {
+        return;
+    }
+    let at = ts_list_cell(tile, gid.x);
+    if at == TS_NONE {
         return;
     }
     let n = ts_cells();
-    let p = ts_box_record(idx);
-    if !ts_record_stored(p) {
-        return;
-    }
-    let at = ts_face(p);
+    let p = ts_face_coord(at);
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let here = faces_in[at];
     for (var a = 0; a < 3; a = a + 1) {

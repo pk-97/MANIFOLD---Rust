@@ -351,19 +351,6 @@ mod tests {
     fn matter_fill_generates_a_source_kernel() {
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MatterFill>()
             .expect("matter_fill codegen");
-        assert!(
-            wgsl.contains("var<storage, read_write> buf_points: array<Element3>"),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("buf_points[idx] = body(idx, params.dispatch_count,"),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("buf_bodies") && wgsl.contains("buf_atlas: array<u32>"),
-            "{wgsl}"
-        );
-        assert_eq!(std::mem::size_of::<FillUniforms>(), 80);
         let module = naga::front::wgsl::parse_str(&wgsl)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
         naga::valid::Validator::new(

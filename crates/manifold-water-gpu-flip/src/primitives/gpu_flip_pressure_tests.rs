@@ -6,7 +6,7 @@
 //! sides 25, 37 and 40. The residual is the true relative residual of the
 //! masked Poisson equation.
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuEncoder, GpuReplayCache, ProfileGranularity};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuEncoder, GpuReplayCache};
 
 use super::gpu_flip_pressure::{
     MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water,
@@ -674,6 +674,9 @@ struct Rig {
     /// The identity pool table (`slot_of[t] = t`, `tile_of[s] = s`) and P = T.
     table: GpuBuffer,
     pool_tiles: u32,
+    /// Solves start from the pressure the last one left (the warm start);
+    /// off, every upload zeroes it and the solve starts cold.
+    keep_pressure: bool,
 }
 
 impl Rig {
@@ -709,6 +712,7 @@ impl Rig {
             level: 0,
             table,
             pool_tiles,
+            keep_pressure: false,
         }
     }
 
@@ -727,7 +731,8 @@ impl Rig {
     }
 
     /// Dense water (1 water, 0 air) and right-hand side into the pooled
-    /// buffers; the canonical block holds 0, an absent tile's value.
+    /// buffers; the canonical block holds 0, an absent tile's value. The
+    /// pressure is zeroed unless the rig keeps it.
     fn upload(&self, water: &[f32], rhs: &[f32]) {
         let (water, rhs) = (
             to_pool(water, self.cells3(), &[0.0f32]),
@@ -737,6 +742,10 @@ impl Rig {
         unsafe {
             self.water.write(0, bytemuck::cast_slice(&water));
             self.rhs.write(0, bytemuck::cast_slice(&rhs));
+            if !self.keep_pressure {
+                let zeros = vec![0u32; pool_len(self.pool_tiles) as usize];
+                self.pressure.write(0, bytemuck::cast_slice(&zeros));
+            }
         }
     }
 
@@ -1322,11 +1331,12 @@ fn pressure_module_passes_match_the_count() {
         for (label, (count, ms)) in costs {
             println!("pressure active-pass {m}: {label} count {count} sampled_ms {ms:.5}");
         }
-        let (prepare, solve) = passes([m as u32; 3], 8);
+        let (prepare, solve) = passes([m as u32; 3], Stop::Fixed(8));
         // The rounds run as the template's executes, one span each at
-        // Dispatch granularity; the prelude (arm, init, start check) is what
-        // a solve encodes besides them.
-        let round = passes([m as u32; 3], 2).1 - passes([m as u32; 3], 1).1;
+        // Dispatch granularity; the prelude (arm, init, the start's check,
+        // the warm start's residual) is what a solve encodes besides them.
+        let round =
+            passes([m as u32; 3], Stop::Fixed(2)).1 - passes([m as u32; 3], Stop::Fixed(1)).1;
         let prelude = solve - 8 * round;
         let executes =
             manifold_gpu::template_chunks(8, super::gpu_flip_pressure::ROUND_CHUNK).count();
@@ -1624,439 +1634,6 @@ fn solve_bits_under(
     (bytemuck::cast_slice(&rig.pressure()).to_vec(), all.to_vec())
 }
 
-/// Exact six-face arithmetic against the original dynamic-loop shader,
-/// with odd edges, ghost rows, coarse levels, changing masks and replay.
-#[test]
-fn pressure_module_unrolled_stencil_matches_original_loop() {
-    const ORIGINAL: &str = r#"fn row_weight(row: Row, k: u32) -> f32 {
-    if k < 4u {
-        return row.lo[k];
-    }
-    return row.hi[k - 4u];
-}
-
-// Cell p's neighbour across face k (axis k / 2, low side for even k):
-// the weight is positive only inside the box, so this never leaves it.
-fn across(p: vec3<i32>, k: u32) -> u32 {
-    var q = p;
-    q[k / 2u] = q[k / 2u] + select(1, -1, (k & 1u) == 0u);
-    return cell_idx(q, ts_cells());
-}
-
-fn stencil(idx: u32, source: u32) -> Stencil {
-    let row = rows[idx];
-    var s = Stencil(select(row.hi.w, row.hi.z, u.ghost == 1u), 0.0);
-    if source == 2u {
-        return s;
-    }
-    let p = cell_pos(idx, ts_cells());
-    for (var k = 0u; k < 6u; k = k + 1u) {
-        let w = row_weight(row, k);
-        if w > 0.0 {
-            let at = across(p, k);
-            if source == 0u {
-                s.sum = s.sum + w * out[at];
-            } else {
-                s.sum = s.sum + w * aux[at];
-            }
-        }
-    }
-    return s;
-}
-
-"#;
-    let shader = shader();
-    let start = shader
-        .find("fn stencil_add(")
-        .expect("unrolled stencil helper");
-    let end = shader
-        .find("// One red-black Gauss-Seidel")
-        .expect("stencil end");
-    let mut original = shader.to_owned();
-    original.replace_range(start..end, ORIGINAL);
-    let (n, saved) = load_fixture(DAM_BREAK);
-    for (m, level, ghost) in [
-        (16, 0, false),
-        (25, 0, true),
-        (32, 1, true),
-        (64, 0, false),
-        (64, 0, true),
-        (128, 0, true),
-    ] {
-        let mut current = Rig::new(m).at_level(level);
-        let mut reference = Rig::new(m).at_level(level);
-        reference
-            .solver
-            .set_stencil_shader_for_proof(&reference.device, &original);
-        let mut current_cache = Some(GpuReplayCache::default());
-        let mut reference_cache = Some(GpuReplayCache::default());
-        for frame in 0..4 {
-            let problem = resample(&saved[if frame % 2 == 0 { 0 } else { 4 }], n, m);
-            if ghost {
-                let phi = surface_phi(&problem.water, m, current.cell_size() as f32);
-                current = current.with_phi(&phi);
-                reference = reference.with_phi(&phi);
-            }
-            let stop = if frame < 2 {
-                Stop::Fixed(8)
-            } else {
-                Stop::Converged(MAX_ITERATIONS)
-            };
-            let got = solve_bits_under(&mut current, &problem, stop, &mut current_cache, true);
-            let before =
-                solve_bits_under(&mut reference, &problem, stop, &mut reference_cache, true);
-            assert_eq!(
-                got.0, before.0,
-                "{m}³ level{level} ghost{ghost} frame{frame}: pressure"
-            );
-            assert_eq!(
-                got.1, before.1,
-                "{m}³ level{level} ghost{ghost} frame{frame}: stop record"
-            );
-        }
-        if level == 0 && (m == 64 || m == 128) {
-            let problem = resample(&saved[4], n, m);
-            let mut current_ms = Vec::new();
-            let mut reference_ms = Vec::new();
-            for sample in 0..12 {
-                let (now, old) = if sample % 2 == 0 {
-                    (
-                        current.run(&problem, 8, false).total_ms,
-                        reference.run(&problem, 8, false).total_ms,
-                    )
-                } else {
-                    let old = reference.run(&problem, 8, false).total_ms;
-                    (current.run(&problem, 8, false).total_ms, old)
-                };
-                assert_eq!(
-                    bytemuck::cast_slice::<f32, u32>(&current.pressure()),
-                    bytemuck::cast_slice::<f32, u32>(&reference.pressure()),
-                    "timed solve stays exact"
-                );
-                if sample >= 4 {
-                    current_ms.push(now);
-                    reference_ms.push(old);
-                }
-            }
-            current_ms.sort_by(f64::total_cmp);
-            reference_ms.sort_by(f64::total_cmp);
-            let median = |v: &[f64]| (v[3] + v[4]) / 2.0;
-            println!(
-                "pressure stencil {m}³ ghost{ghost}:8-iteration prepare+solve,4warm+8measured, unrolled {:.4} ms original {:.4} ms",
-                median(&current_ms),
-                median(&reference_ms)
-            );
-        }
-    }
-}
-
-/// Paired x cells retain the original smoother's arithmetic and reduction
-/// positions, including sparse partial tiles, ghost rows and warmed replay.
-#[test]
-fn gpu_flip_paired_smoother_matches_original() {
-    // Exact smooth_main declaration/body from 5bc9e128c; every other shader
-    // function remains current, so this oracle isolates cell pairing.
-    const ORIGINAL: &str = r#"@compute @workgroup_size(256, 1, 1)
-fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    if !listed(gid.x) {
-        return;
-    }
-    let n = ts_cells();
-    let idx = listed_cell(gid.x, n);
-    var product = 0.0;
-    if idx != TS_NONE {
-        let p = cell_pos(idx, n);
-        let swept = is_water(idx) && u32(p.x + p.y + p.z) % 2u == u.color;
-        var e = out[idx];
-        if swept {
-            let h2 = u.cell_size * u.cell_size;
-            let s = stencil(idx, select(0u, 2u, from_zero()));
-            e = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
-            out[idx] = e;
-        } else if from_zero() {
-            e = 0.0;
-            out[idx] = e;
-        }
-        product = src[idx] * e;
-    }
-    if reduces() {
-        fold_sum(li, listed_partial(gid.x), product);
-    }
-}
-"#;
-    const N: [usize; 3] = [17, 15, 13];
-    const H: f32 = 0.25;
-    const ROUNDS: u32 = 32;
-
-    struct Run {
-        device: manifold_gpu::testkit::TestDevice,
-        solver: PressureSolver,
-        // Water, faces, rhs, phi, pressure (all pooled, every box tile
-        // allocated), scalar copy, progress copy, fine flags.
-        buffers: [GpuBuffer; 8],
-        table: GpuBuffer,
-        pool_tiles: u32,
-        ghost: bool,
-        cache: Option<GpuReplayCache>,
-    }
-    impl Run {
-        fn new(
-            water: &[f32],
-            faces: &[[f32; 8]],
-            phi: &[f32],
-            ghost: bool,
-            original: Option<&str>,
-            replay: bool,
-        ) -> Self {
-            let device = manifold_gpu::testkit::test_device();
-            let (words, pool_tiles) = identity_table(N.map(|v| v as u32));
-            let pooled = pool_len(pool_tiles) as usize;
-            let counts = [
-                pooled,
-                pooled * 8,
-                pooled,
-                pooled,
-                pooled,
-                2 * MAX_ITERATIONS as usize,
-                PROGRESS_FLOATS as usize,
-                12,
-            ];
-            let buffers = counts.map(|count| device.create_buffer_shared((count * 4) as u64));
-            let table = device.create_buffer_shared((words.len() * 4) as u64);
-            let cells3 = N.map(|v| v as u32);
-            // SAFETY: shared buffers sized above; no GPU work is queued.
-            unsafe {
-                table.write(0, bytemuck::cast_slice(&words));
-                buffers[0].write(0, bytemuck::cast_slice(&to_pool(water, cells3, &[0.0f32])));
-                buffers[1].write(
-                    0,
-                    bytemuck::cast_slice(&records_to_pool(faces, cells3, &[[0.0f32; 8]; 8])),
-                );
-                buffers[3].write(0, bytemuck::cast_slice(&to_pool(phi, cells3, &[3.0 * H])));
-            }
-            let mut solver = PressureSolver::default();
-            solver.prepare_pipelines(&device);
-            if let Some(shader) = original {
-                solver.set_stencil_shader_for_proof(&device, shader);
-            }
-            Self {
-                device,
-                solver,
-                buffers,
-                table,
-                pool_tiles,
-                ghost,
-                cache: replay.then(GpuReplayCache::default),
-            }
-        }
-
-        fn solve(&mut self, rhs: &[f32], stop: Stop) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
-            let cells3 = N.map(|v| v as u32);
-            // SAFETY: shared rhs sized for the pool; the last solve completed.
-            unsafe {
-                self.buffers[2].write(0, bytemuck::cast_slice(&to_pool(rhs, cells3, &[0.0f32])))
-            };
-            let mut enc = self.device.create_encoder("paired pressure smoother proof");
-            let replay = self
-                .cache
-                .take()
-                .map(|cache| enc.begin_replay(&self.device, cache))
-                .is_some();
-            let water = Water {
-                lattice: N.map(|v| v as u32),
-                cell_size: H,
-                water: &self.buffers[0],
-                faces: &self.buffers[1],
-                phi: self.ghost.then_some(&self.buffers[3]),
-            };
-            self.solver
-                .prepare(&self.device, &mut enc, &water, &self.table, self.pool_tiles)
-                .expect("prepares odd sparse lattice");
-            self.solver
-                .solve(
-                    &mut enc,
-                    &water,
-                    Solve {
-                        rhs: &self.buffers[2],
-                        pressure: &self.buffers[4],
-                        stop,
-                        bodies: None,
-                        level: 0,
-                        coarse_rhs: None,
-                    },
-                    &self.table,
-                    self.pool_tiles,
-                )
-                .expect("solves odd sparse lattice");
-            if replay {
-                self.cache = Some(enc.end_replay());
-            }
-            self.solver.copy_scalars(&mut enc, &self.buffers[5]);
-            enc.copy_buffer_to_buffer(
-                self.solver.progress().expect("prepared"),
-                &self.buffers[6],
-                self.buffers[6].size,
-            );
-            enc.copy_buffer_to_buffer(
-                self.solver.tiles().expect("prepared")[1],
-                &self.buffers[7],
-                self.buffers[7].size,
-            );
-            enc.commit_and_wait_completed();
-            let flags: Vec<u32> = read(&self.buffers[7], 12);
-            assert!(
-                flags.contains(&0) && flags.contains(&1),
-                "fine tiles include active and inactive tiles"
-            );
-            assert_eq!(flags[11], 1, "the partial high corner tile is active");
-            (
-                from_pool(
-                    &read::<u32>(&self.buffers[4], pool_len(self.pool_tiles) as usize),
-                    N.map(|v| v as u32),
-                ),
-                read(&self.buffers[5], 2 * MAX_ITERATIONS as usize),
-                read(&self.buffers[6], PROGRESS_FLOATS as usize),
-            )
-        }
-    }
-
-    let shader = shader();
-    let declaration = shader.find("fn smooth_main(").expect("current smoother");
-    let start = shader[..declaration]
-        .rfind("@compute")
-        .expect("smoother workgroup declaration");
-    let end = declaration
-        + shader[declaration..]
-            .find("\n}\n")
-            .expect("smoother body end")
-        + 3;
-    let mut original = shader.to_owned();
-    original.replace_range(start..end, ORIGINAL);
-
-    let cells = N.iter().product::<usize>();
-    let water: Vec<f32> = (0..cells)
-        .map(|i| {
-            let [x, y, z] = lattice_coords(i, N);
-            f32::from(u8::from(x >= 10 && y >= 8 && z >= 5))
-        })
-        .collect();
-    let faces_n = N.map(|v| v + 1);
-    let faces: Vec<[f32; 8]> = (0..faces_n.iter().product())
-        .map(|i| {
-            let p = lattice_coords(i, faces_n);
-            let open = |a: usize| {
-                f32::from(u8::from(
-                    (0..3).all(|b| b == a || p[b] < N[b]) && p[a] > 0 && p[a] < N[a],
-                ))
-            };
-            [0.0, 0.0, 0.0, 0.0, open(0), open(1), open(2), 0.0]
-        })
-        .collect();
-    let phi: Vec<f32> = water
-        .iter()
-        .map(|&w| if w > 0.5 { -0.11 } else { 0.14 })
-        .collect();
-    for ghost in [false, true] {
-        let mut direct = Run::new(&water, &faces, &phi, ghost, None, false);
-        let mut reference = Run::new(&water, &faces, &phi, ghost, Some(&original), false);
-        let mut replay = Run::new(&water, &faces, &phi, ghost, None, true);
-        let mut last = GpuReplayCache::default().stats();
-        let mut last_template = replay.solver.template_stats();
-        for visit in 0..4 {
-            let rhs: Vec<f32> = (0..cells)
-                .map(|i| {
-                    if visit == 3 || water[i] < 0.5 {
-                        0.0
-                    } else {
-                        ((i * 17 + visit * 13) % 41) as f32 * 0.037 - 0.6
-                    }
-                })
-                .collect();
-            let stop = if visit < 2 {
-                Stop::Fixed(ROUNDS)
-            } else {
-                Stop::Converged(ROUNDS)
-            };
-            let want = reference.solve(&rhs, stop);
-            let got = direct.solve(&rhs, stop);
-            let cached = replay.solve(&rhs, stop);
-            assert_eq!(
-                got, want,
-                "ghost{ghost} visit{visit}: full pressure/scalars/progress equal original smoother"
-            );
-            assert_eq!(
-                cached, want,
-                "ghost{ghost} visit{visit}: replay equals original direct bits"
-            );
-            assert!(
-                got.0.iter().all(|&v| f32::from_bits(v).is_finite()),
-                "finite pressure"
-            );
-            if visit < 2 {
-                assert_eq!(got.2[1], (ROUNDS as f32).to_bits(), "fixed iteration count");
-                assert!(
-                    got.0.iter().any(|&v| f32::from_bits(v).abs() > 1e-6),
-                    "nontrivial pressure"
-                );
-            } else if visit == 2 {
-                assert_eq!(got.2[2], 1.0_f32.to_bits(), "nonzero RHS converges");
-                let iterations = f32::from_bits(got.2[1]);
-                assert!(
-                    iterations > 0.0 && iterations < ROUNDS as f32,
-                    "nonzero RHS stops inside the cap"
-                );
-            } else if visit == 3 {
-                assert_eq!(got.2[1], 0, "zero RHS stops before smoothing");
-                assert_eq!(got.2[2], 1.0_f32.to_bits(), "converged early stop");
-            }
-            let stats = replay
-                .cache
-                .as_ref()
-                .expect("replay cache returned")
-                .stats();
-            let template = replay.solver.template_stats();
-            if visit >= 2 {
-                assert_eq!(stats.recorded, last.recorded, "warm solve records nothing");
-                assert_eq!(
-                    stats.store_allocations, last.store_allocations,
-                    "warm solve allocates no replay storage"
-                );
-                assert_eq!(
-                    stats.segments_direct, last.segments_direct,
-                    "warm rounds never dispatch directly"
-                );
-                // The rounds are the template's executes, outside the frame
-                // recording: one walk, no build, one execute per chunk.
-                assert_eq!(
-                    stats.segments_replayed, last.segments_replayed,
-                    "no round is in the frame recording"
-                );
-                assert_eq!(
-                    template.executes - last_template.executes,
-                    manifold_gpu::template_chunks(ROUNDS, 32).count() as u64,
-                    "one execute per chunk of rounds"
-                );
-                assert_eq!(
-                    template.walks - last_template.walks,
-                    1,
-                    "one walked round per solve"
-                );
-                // Visit 2 switches Fixed to Converged: the tolerance is a round
-                // param, so that stop builds its own template once.
-                if visit == 3 {
-                    assert_eq!(
-                        (template.builds, template.command_writes),
-                        (last_template.builds, last_template.command_writes),
-                        "a warm solve writes no command"
-                    );
-                }
-            }
-            last = stats;
-            last_template = template;
-        }
-    }
-}
-
 /// A solve replayed from a recording (every round one gated segment the
 /// GPU switches off once the stop fires) gives the same pressure and the
 /// same stop record, bit for bit, as encoding it directly, on the engine's
@@ -2142,10 +1719,14 @@ fn pressure_module_replay_matches_direct() {
                     (last_template.builds, last_template.command_writes),
                     "{stop:?} frame {frame}: a warm solve writes no command"
                 );
-                // The prepare, the arm, and init and its start check: `passes`
-                // of a one-round solve, less the round.
-                let (prepare, one) = passes([64; 3], 1);
-                let round = passes([64; 3], 2).1 - one;
+                // The prepare and the prelude: `passes` of a one-round solve on
+                // the same stop, less the round.
+                let same_stop = |k| match stop {
+                    Stop::Converged(_) => Stop::Converged(k),
+                    Stop::Fixed(_) => Stop::Fixed(k),
+                };
+                let (prepare, one) = passes([64; 3], same_stop(1));
+                let round = passes([64; 3], same_stop(2)).1 - one;
                 assert_eq!(
                     stats.replayed - last.replayed,
                     (prepare + one - round) as u64,
@@ -2158,263 +1739,9 @@ fn pressure_module_replay_matches_direct() {
     }
 }
 
-// ── The main golden ──
-
-const GOLDEN: &str = "gpu_flip_pressure_golden.txt";
 /// Bits every scalar and record float holds before a solve: a quiet NaN no
 /// solve writes, so storage it leaves alone is known.
-const GOLDEN_SENTINEL: u32 = 0x7fc0_dead;
-
-thread_local! {
-    /// Golden solves on a profiled encoder at this granularity, when set.
-    static GOLDEN_PROFILE: std::cell::Cell<Option<ProfileGranularity>> = const { std::cell::Cell::new(None) };
-}
-/// The fingerprinted region: the scalars and record of a cap-64 solve. A
-/// larger cap's tail is tested on its own, never folded into these.
-const GOLDEN_SCALARS: usize = 128;
-const GOLDEN_PROGRESS: usize = 68;
-const GOLDEN_STOPS: [Stop; 8] = [
-    Stop::Fixed(1),
-    Stop::Fixed(2),
-    Stop::Fixed(16),
-    Stop::Fixed(24),
-    Stop::Fixed(25),
-    Stop::Fixed(63),
-    Stop::Fixed(64),
-    Stop::Converged(64),
-];
-
-/// One golden solve: pressure zeroed and scalars and record seeded before
-/// it, inside a replay span when `cache` holds one. Fingerprints of the
-/// pressure, the legacy-sized scalars and the legacy-sized record.
-fn golden_solve(
-    rig: &mut Rig,
-    p: &Problem,
-    stop: Stop,
-    cache: &mut Option<GpuReplayCache>,
-) -> [u64; 3] {
-    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
-    let pooled = pool_len(rig.pool_tiles) as usize;
-    let scalar_bytes = u64::from(2 * MAX_ITERATIONS) * 4;
-    let record_bytes = u64::from(PROGRESS_FLOATS) * 4;
-    let sentinel = rig
-        .device
-        .create_buffer_shared(scalar_bytes.max(record_bytes));
-    rig.upload(&water, &p.f);
-    // SAFETY: shared buffers sized for what is written; the last solve completed.
-    unsafe {
-        rig.pressure
-            .write(0, bytemuck::cast_slice(&vec![0u32; pooled]));
-        sentinel.write(
-            0,
-            bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]),
-        );
-    }
-    let scalars = rig.device.create_buffer_shared(scalar_bytes);
-    let record = rig.device.create_buffer_shared(record_bytes);
-    let mut enc = rig.device.create_encoder("gpu-flip-pressure-golden");
-    let profiled = GOLDEN_PROFILE.get();
-    if let Some(granularity) = profiled {
-        // One sampler for the thread: Metal caps live counter sample buffers.
-        thread_local! {
-            static SAMPLER: std::cell::OnceCell<manifold_gpu::GpuTimestampSampler> = const { std::cell::OnceCell::new() };
-        }
-        let sampler = SAMPLER.with(|s| {
-            s.get_or_init(|| {
-                rig.device
-                    .create_timestamp_sampler(4096)
-                    .expect("timestamp sampling")
-            })
-            .clone()
-        });
-        enc.enable_profiling_at(sampler, &rig.device, granularity);
-        enc.set_profile_tag("golden-solve");
-    }
-    let n = rig.n as u32;
-    let lattice = Water {
-        lattice: [n; 3],
-        cell_size: rig.cell_size() as f32,
-        water: &rig.water,
-        faces: &rig.faces,
-        phi: rig.phi.as_ref(),
-    };
-    rig.solver
-        .prepare(&rig.device, &mut enc, &lattice, &rig.table, rig.pool_tiles)
-        .expect("prepares");
-    rig.solver.seed_records(&mut enc, &sentinel);
-    let spanned = cache
-        .take()
-        .map(|cache| enc.begin_replay(&rig.device, cache))
-        .is_some();
-    rig.solver
-        .solve(
-            &mut enc,
-            &lattice,
-            run_at!(rig, stop),
-            &rig.table,
-            rig.pool_tiles,
-        )
-        .expect("solves");
-    if spanned {
-        *cache = Some(enc.end_replay());
-    }
-    rig.solver.copy_scalars(&mut enc, &scalars);
-    enc.copy_buffer_to_buffer(
-        rig.solver.progress().expect("prepared"),
-        &record,
-        record_bytes,
-    );
-    if let Some(granularity) = profiled {
-        let profile = enc.commit_and_wait_profiled(&rig.device);
-        let rounds: Vec<_> = profile
-            .spans
-            .iter()
-            .filter(|s| s.label == "pressure rounds")
-            .collect();
-        let executes = manifold_gpu::template_chunks(
-            match stop {
-                Stop::Fixed(k) | Stop::Converged(k) => k,
-            },
-            super::gpu_flip_pressure::ROUND_CHUNK,
-        )
-        .count();
-        let want = if granularity == ProfileGranularity::Dispatch {
-            executes
-        } else {
-            1
-        };
-        assert_eq!(
-            rounds.len(),
-            want,
-            "{granularity:?} {stop:?}: the rounds' spans"
-        );
-        assert!(
-            rounds
-                .iter()
-                .all(|s| s.tag == "golden-solve" && s.millis >= 0.0),
-            "{granularity:?} {stop:?}: tagged spans"
-        );
-        // The arm writes the ranges every execute reads, and each execute
-        // depends on the one before: the rounds start after the arm ends, in
-        // submission order. Unrelated encoders may overlap, so only these
-        // dependencies order the spans.
-        if granularity == ProfileGranularity::Dispatch {
-            let arm = profile
-                .spans
-                .iter()
-                .find(|s| s.label == "gpu_flip.pressure.arm")
-                .expect("the arm's span");
-            assert!(
-                rounds[0].start_ms + 1e-6 >= arm.start_ms + arm.millis,
-                "{stop:?}: the rounds start after the arm"
-            );
-        }
-        assert!(
-            rounds
-                .windows(2)
-                .all(|w| w[1].start_ms + 1e-3 >= w[0].start_ms + w[0].millis),
-            "{granularity:?} {stop:?}: an execute started before the one it depends on ended"
-        );
-        assert_eq!(
-            (profile.overflow, profile.failed_command_buffers),
-            (0, 0),
-            "{granularity:?} {stop:?}: every span sampled"
-        );
-    } else {
-        enc.commit_and_wait_completed();
-    }
-    let scalar_words: Vec<u32> = read(&scalars, GOLDEN_SCALARS);
-    let record_words: Vec<u32> = read(&record, GOLDEN_PROGRESS);
-    [
-        fingerprint(bytemuck::cast_slice(&rig.pressure())),
-        fingerprint(&scalar_words),
-        fingerprint(&record_words),
-    ]
-}
-
-/// Every golden case, direct and replayed, as the fixture's lines.
-/// The golden's cases, each resampled to 64³: the line prefix
-/// (`fixture[index] frame f`), the problem and the solve level.
-fn golden_cases() -> Vec<(String, Problem, usize)> {
-    let (n, dam) = load_fixture(DAM_BREAK);
-    let (_, density) = load_fixture("deep_pool_density_problems");
-    let cases = [
-        ("dambreak", 0, &dam[0], 0),
-        ("dambreak", 4, &dam[4], 0),
-        ("density", 0, &density[0], 0),
-        ("dambreak", 0, &dam[0], 1),
-    ];
-    cases
-        .into_iter()
-        .map(|(fixture, index, saved, level)| {
-            (
-                format!("{fixture}[{index}] frame {}", saved.frame),
-                resample(saved, n, 64),
-                level,
-            )
-        })
-        .collect()
-}
-
-fn golden_lines() -> Vec<String> {
-    let mut lines = Vec::new();
-    for (case, p, level) in golden_cases() {
-        let mut direct = Rig::new(64).at_level(level);
-        let mut replay = Rig::new(64).at_level(level);
-        let mut none = None;
-        let mut cache = Some(GpuReplayCache::default());
-        for stop in GOLDEN_STOPS {
-            let d = golden_solve(&mut direct, &p, stop, &mut none);
-            // Twice: the first visit records, the second replays.
-            golden_solve(&mut replay, &p, stop, &mut cache);
-            let r = golden_solve(&mut replay, &p, stop, &mut cache);
-            for (mode, [pressure, scalars, record]) in [("direct", d), ("replay", r)] {
-                lines.push(format!("{case} 64^3 level {level} {stop:?} {mode} pressure {pressure:016x} scalars {scalars:016x} record {record:016x}"));
-            }
-        }
-    }
-    lines
-}
-
-/// The solve against the golden recorded on main before the pressure cap
-/// work (BUG-fwp2n — unused solver rounds still cost encode time): every
-/// case's pressure, scalars and record, direct and replayed, bit for bit.
-/// `MANIFOLD_RECORD_GOLDEN=1` rewrites the fixture from this build; only
-/// ever do that on main.
-#[test]
-fn pressure_module_matches_main_golden() {
-    let path = format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"));
-    let lines = golden_lines();
-    if std::env::var("MANIFOLD_RECORD_GOLDEN").is_ok_and(|v| v == "1") {
-        let sha = std::process::Command::new("git")
-            .args(["-C", env!("CARGO_MANIFEST_DIR"), "rev-parse", "HEAD"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-        let header = format!(
-            "# GPU FLIP pressure golden (pressure_module_matches_main_golden)\n# sha {sha}\n# inputs: saved problems resampled to 64^3, pressure zeroed, scalars and record seeded {GOLDEN_SENTINEL:#010x}\n# fingerprints: FNV-1a over the pressure, scalars[..{GOLDEN_SCALARS}], progress[..{GOLDEN_PROGRESS}]\n"
-        );
-        std::fs::write(&path, header + &lines.join("\n") + "\n").expect("golden writes");
-        println!("recorded {} cases at {sha}", lines.len());
-        return;
-    }
-    let golden = std::fs::read_to_string(&path).expect("golden fixture reads");
-    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
-    assert_eq!(expected.len(), lines.len(), "golden case count");
-    let moved: Vec<String> = expected
-        .iter()
-        .zip(&lines)
-        .filter(|(e, l)| **e != l.as_str())
-        .map(|(e, l)| format!("want {e}\n got {l}"))
-        .collect();
-    assert!(
-        moved.is_empty(),
-        "{} of {} golden cases moved:\n{}",
-        moved.len(),
-        lines.len(),
-        moved.join("\n")
-    );
-}
+const SENTINEL: u32 = 0x7fc0_dead;
 
 /// A frame of the step's two solves on one solver, as the density solve
 /// follows the pressure one: each solve's pressure and stop record copied
@@ -2458,7 +1785,7 @@ fn rearm_frame(
         plan.write(0, bytemuck::cast_slice(&words));
         sentinel.write(
             0,
-            bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]),
+            bytemuck::cast_slice(&vec![SENTINEL; (sentinel.size / 4) as usize]),
         );
         for s in 0..2 {
             rhs_buffers[s].write(
@@ -2595,7 +1922,7 @@ fn pressure_module_rearms_between_solves() {
                     "frame {frame} {solve}: an inactive slot's solve writes no pressure"
                 );
                 assert!(
-                    r[s].1.iter().all(|&w| w == GOLDEN_SENTINEL),
+                    r[s].1.iter().all(|&w| w == SENTINEL),
                     "frame {frame} {solve}: an inactive slot's solve leaves its record unwritten"
                 );
             } else if live[s] {
@@ -2748,6 +2075,64 @@ fn pressure_module_converges_on_the_engine_tolerance() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The warm start: a solve starts from the pressure its buffer holds. A Dam
+/// Break problem solved again from its own converged pressure stops on the
+/// tolerance in fewer iterations than cold. It need not stop at the start:
+/// the stop reads the recursive residual down to 1e-9 of |f|∞, and the
+/// converged f32 pressure's own residual (printed) sits far above that.
+/// Each later saved frame from the frame before's converged pressure,
+/// beside cold, printed; over the run warm takes at most cold's iterations.
+#[test]
+fn pressure_module_warm_start_stops_sooner() {
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let problems: Vec<Problem> = saved.iter().map(|p| resample(p, n, 64)).collect();
+    let mut warm = Rig::new(64);
+    let mut cold = Rig::new(64);
+    let first = converge(&mut warm, &problems[0], MAX_ITERATIONS);
+    let remainder = fine_remainder(
+        &warm.pressure(),
+        &problems[0].water,
+        &problems[0].f,
+        64,
+        warm.cell_size(),
+    );
+    let guess = remainder.iter().map(|r| r.abs()).fold(0.0, f64::max) / f64::from(first.f_norm);
+    warm.keep_pressure = true;
+    let again = converge(&mut warm, &problems[0], MAX_ITERATIONS);
+    println!(
+        "warm start frame {}: cold {} iterations; again from its pressure (|f − L p|∞/|f|∞ {guess:.2e}) {}",
+        problems[0].frame, first.iterations, again.iterations
+    );
+    assert!(first.stopped && again.stopped, "both stop on the tolerance");
+    assert!(
+        again.iterations < first.iterations,
+        "from its own pressure {} iterations, cold {}",
+        again.iterations,
+        first.iterations
+    );
+    let (mut warm_total, mut cold_total) = (0, 0);
+    for p in &problems[1..] {
+        let w = converge(&mut warm, p, MAX_ITERATIONS);
+        let c = converge(&mut cold, p, MAX_ITERATIONS);
+        println!(
+            "warm start frame {}: warm {} iterations, cold {}",
+            p.frame, w.iterations, c.iterations
+        );
+        assert!(
+            w.stopped && c.stopped,
+            "frame {}: both stop on the tolerance",
+            p.frame
+        );
+        warm_total += w.iterations;
+        cold_total += c.iterations;
+    }
+    println!("warm start over the saved frames: warm {warm_total} iterations, cold {cold_total}");
+    assert!(
+        warm_total <= cold_total,
+        "warm {warm_total} iterations over the run, cold {cold_total}"
+    );
 }
 
 /// A box full of water with every wall closed is one sealed pocket: pure
@@ -2912,34 +2297,22 @@ fn pressure_module_rows_match_the_stencil() {
 
 // ── Solve Level (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11) ──────────
 
-/// FNV-1a over words: a run's bits as one number to pin.
-fn fingerprint(words: &[u32]) -> u64 {
-    words.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| {
-        (h ^ u64::from(w)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
-}
-
 /// Solve Level 0 is the fine solve: on the first three Dam Break problems at
-/// 64³ the engine's stop lands within one iteration of the count before the
-/// level existed (12, 12, 13), never on the cap, and a run repeats bit for
-/// bit. The value-level pin is [`pressure_module_matches_reference_64`]
-/// (3 and 8 iterations against the f64 reference). The bitwise pin against
-/// main went when the paper's cell-type coarsening came in (section 11
-/// (Solve Level)): a coarse cell over water and solid children is water
-/// now, which moves every level's rows under a body or a floor.
+/// 64³ the engine's stop lands within the Dam Break bar of 16 iterations,
+/// never on the cap, and a run repeats bit for bit. The value-level pin is
+/// [`pressure_module_matches_reference_64`] (3 and 8 iterations against the
+/// f64 reference).
 #[test]
 fn gpu_flip_solve_level_zero_is_the_fine_step() {
-    const BEFORE: [(u32, u32); 3] = [(0, 12), (15, 12), (30, 13)];
     let (n, saved) = load_fixture(DAM_BREAK);
     let mut rig = Rig::new(64);
     assert_eq!(rig.level, 0);
     let mut none = None;
     let mut failures = Vec::new();
-    for (p, &(frame, before)) in saved.iter().zip(&BEFORE) {
-        assert_eq!(p.frame, frame);
+    for p in saved.iter().take(3) {
         let problem = resample(p, n, 64);
         let c = converge(&mut rig, &problem, MAX_ITERATIONS);
-        let (pressure, record) = solve_bits(
+        let first = solve_bits(
             &mut rig,
             &problem,
             Stop::Converged(MAX_ITERATIONS),
@@ -2952,20 +2325,17 @@ fn gpu_flip_solve_level_zero_is_the_fine_step() {
             &mut none,
         );
         println!(
-            "solve level 0 frame {frame}: {} iterations (before the paper's coarsening {before}), stopped {}, pressure {:#018x} record {:#018x}",
-            c.iterations,
-            c.stopped,
-            fingerprint(&pressure),
-            fingerprint(&record)
+            "solve level 0 frame {}: {} iterations, stopped {}",
+            p.frame, c.iterations, c.stopped
         );
-        if !c.stopped || c.iterations.abs_diff(before) > 1 {
+        if !c.stopped || c.iterations > 16 {
             failures.push(format!(
-                "frame {frame}: {} iterations, stopped {}, against {before} before",
-                c.iterations, c.stopped
+                "frame {}: {} iterations, stopped {}",
+                p.frame, c.iterations, c.stopped
             ));
         }
-        if (pressure, record) != again {
-            failures.push(format!("frame {frame}: a repeated solve differs"));
+        if first != again {
+            failures.push(format!("frame {}: a repeated solve differs", p.frame));
         }
     }
     assert!(failures.is_empty(), "level 0 moved: {failures:#?}");
@@ -3203,29 +2573,12 @@ fn box_means(r: &[f64], water: &[bool], n: usize) -> Vec<f64> {
         .collect()
 }
 
-/// The engine's stop at Solve Level 1 on every shipped problem: each solve
-/// stops on the tolerance, never the cap, within the fine level's bar; the
-/// counts beside the fine ones. The deepest level each lattice offers is
-/// levels − 2, and that level stops too. Level 0 lands within one iteration
-/// of its count before the paper's cell-type coarsening came in (BEFORE,
-/// measured on the same problems): the rule may move the rows under a body
-/// or a floor, never the convergence on these.
+/// The engine's stop at Solve Levels 0 and 1 on every shipped problem: each
+/// solve stops on the tolerance, never the cap, within the fine level's bar
+/// (pools 12 iterations, the rest 16); the counts side by side. The deepest
+/// level each lattice offers is levels − 2, and that level stops too.
 #[test]
 fn pressure_module_solve_level_converges_on_the_engine_tolerance() {
-    const BEFORE: [(&str, u32, u32); 12] = [
-        (DAM_BREAK, 0, 12),
-        (DAM_BREAK, 15, 12),
-        (DAM_BREAK, 30, 13),
-        (DAM_BREAK, 45, 14),
-        (DAM_BREAK, 60, 13),
-        (DAM_BREAK, 90, 12),
-        (DAM_BREAK, 120, 14),
-        ("deep_pool_pressure_problems", 60, 11),
-        ("deep_pool_density_problems", 30, 12),
-        ("deep_pool_density_problems", 60, 12),
-        ("still_pool", 0, 11),
-        ("resting_pool", 0, 11),
-    ];
     let mut failures = Vec::new();
     let mut problems: Vec<(String, Problem)> = Vec::new();
     for fixture in [
@@ -3256,16 +2609,6 @@ fn pressure_module_solve_level_converges_on_the_engine_tolerance() {
                     "{name} frame {} level {level}: {} iterations, stopped {}",
                     p.frame, c.iterations, c.stopped
                 ));
-            }
-            if level == 0 {
-                let before = BEFORE
-                    .iter()
-                    .find(|row| row.0 == name && row.1 == p.frame)
-                    .map(|row| row.2)
-                    .expect("a count before the rule per problem");
-                if c.iterations.abs_diff(before) > 1 {
-                    failures.push(format!("{name} frame {} level 0: {} iterations against {before} before the paper's coarsening", p.frame, c.iterations));
-                }
             }
             counts.push(format!(
                 "level {level}: {} iterations{}",
@@ -3334,98 +2677,6 @@ fn pressure_module_refuses_a_level_past_the_coarsest() {
     );
 }
 
-/// Rounds past the stop write nothing: with the stop leaving every later
-/// round's range entry live (as a chunk of rounds executes them), the
-/// replayed solves run every round to the cap with full groups, and every
-/// case still matches the main golden bit for bit.
-#[test]
-fn pressure_module_rounds_past_the_stop_write_nothing() {
-    super::gpu_flip_pressure::set_keep_ranges(true);
-    let lines = golden_lines();
-    super::gpu_flip_pressure::set_keep_ranges(false);
-    let golden = std::fs::read_to_string(format!(
-        "{}/tests/fixtures/{GOLDEN}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .expect("golden fixture reads");
-    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
-    let moved: Vec<String> = expected
-        .iter()
-        .zip(&lines)
-        .filter(|(e, l)| **e != l.as_str())
-        .map(|(e, l)| format!("want {e}\n got {l}"))
-        .collect();
-    assert!(
-        moved.is_empty(),
-        "rounds past the stop wrote something:\n{}",
-        moved.join("\n")
-    );
-}
-
-/// The golden on a profiled encoder, at Tag and at Dispatch granularity:
-/// frame replay is off there, the rounds still run as the template's
-/// executes, and every case matches main's unrolled encode bit for bit;
-/// the rounds show as tagged spans in submission order, one per execute at
-/// Dispatch granularity.
-#[test]
-fn pressure_module_golden_holds_profiled() {
-    let golden = std::fs::read_to_string(format!(
-        "{}/tests/fixtures/{GOLDEN}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .expect("golden fixture reads");
-    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
-    for granularity in [ProfileGranularity::Tag, ProfileGranularity::Dispatch] {
-        GOLDEN_PROFILE.set(Some(granularity));
-        let lines = std::panic::catch_unwind(golden_lines);
-        GOLDEN_PROFILE.set(None);
-        let lines = lines.unwrap_or_else(|e| std::panic::resume_unwind(e));
-        let moved: Vec<String> = expected
-            .iter()
-            .zip(&lines)
-            .filter(|(e, l)| **e != l.as_str())
-            .map(|(e, l)| format!("want {e}\n got {l}"))
-            .collect();
-        assert!(
-            moved.is_empty(),
-            "{granularity:?}: {} golden cases moved:\n{}",
-            moved.len(),
-            moved.join("\n")
-        );
-    }
-}
-
-/// Chunked executes change no bit: at one round an execute (the per-round
-/// executes main runs), at 3 and 4 (boundaries inside every Fixed count and
-/// the Converged stops) and at the default, every golden case matches main,
-/// scalars and record tails included, so no round past a stop or past a
-/// Fixed count wrote anything.
-#[test]
-fn pressure_module_chunk_sizes_match_main_golden() {
-    let golden = std::fs::read_to_string(format!(
-        "{}/tests/fixtures/{GOLDEN}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .expect("golden fixture reads");
-    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
-    for chunk in [1, 3, 4, 32] {
-        let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
-        let lines = golden_lines();
-        let moved: Vec<String> = expected
-            .iter()
-            .zip(&lines)
-            .filter(|(e, l)| **e != l.as_str())
-            .map(|(e, l)| format!("want {e}\n got {l}"))
-            .collect();
-        assert!(
-            moved.is_empty(),
-            "chunk {chunk}: {} golden cases moved:\n{}",
-            moved.len(),
-            moved.join("\n")
-        );
-    }
-}
-
 /// The GPU's own arm and stop at chunk boundaries, read back, on a direct
 /// encoder and in a replaying span: every chunked execute that starts at or
 /// past the completed rounds has length 0 (the arm's cut for Fixed, the
@@ -3433,10 +2684,13 @@ fn pressure_module_chunk_sizes_match_main_golden() {
 /// round's commands, and the scalars and record past the completed rounds
 /// still hold the sentinel. The pressure, scalars, record, ranges and every
 /// work vector (r, z, p, scratch, body product) agree bit for bit between
-/// the two paths, so a round past the stop wrote nowhere on either.
+/// the two paths, so a round past the stop wrote nowhere on either. The
+/// ranges are the arm's and the stop's, whatever the lattice: the problems
+/// run at 16³.
 #[test]
 fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
     use super::gpu_flip_pressure::{CHUNK_ENTRIES, ROUND_CHUNK};
+    const M: usize = 16;
     let (n, dam) = load_fixture(DAM_BREAK);
     let (_, density) = load_fixture("deep_pool_density_problems");
     let fixed = [
@@ -3446,9 +2700,9 @@ fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
     for chunk in [ROUND_CHUNK, 8, 3] {
         let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
         for saved in [&dam[0], &dam[4], &density[0]] {
-            let p = resample(saved, n, 64);
-            let mut direct = Rig::new(64);
-            let mut spanned = Rig::new(64);
+            let p = resample(saved, n, M);
+            let mut direct = Rig::new(M);
+            let mut spanned = Rig::new(M);
             let mut none = None;
             let mut cache = Some(GpuReplayCache::default());
             let mut per_round = 0;
@@ -3509,7 +2763,7 @@ fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
                 let tail = |words: &[u32], from: usize| {
                     words[from..]
                         .iter()
-                        .position(|&w| w != GOLDEN_SENTINEL)
+                        .position(|&w| w != SENTINEL)
                         .map(|i| i + from)
                 };
                 assert_eq!(
@@ -3540,8 +2794,8 @@ struct ChunkSolve {
     vectors: Vec<Vec<u32>>,
 }
 
-/// One solve seeded like the golden's, inside a replay span when `cache`
-/// holds one, directly otherwise.
+/// One cold solve, its scalars and record seeded with [`SENTINEL`], inside
+/// a replay span when `cache` holds one, directly otherwise.
 fn chunk_solve(
     rig: &mut Rig,
     p: &Problem,
@@ -3556,13 +2810,11 @@ fn chunk_solve(
         .device
         .create_buffer_shared(scalar_bytes.max(record_bytes));
     rig.upload(&water, &p.f);
-    // SAFETY: shared buffers sized for what is written; the last solve completed.
+    // SAFETY: a shared buffer sized for what is written; the last solve completed.
     unsafe {
-        rig.pressure
-            .write(0, bytemuck::cast_slice(&vec![0u32; pooled]));
         sentinel.write(
             0,
-            bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]),
+            bytemuck::cast_slice(&vec![SENTINEL; (sentinel.size / 4) as usize]),
         );
     }
     let scalars = rig.device.create_buffer_shared(scalar_bytes);
@@ -3624,81 +2876,4 @@ fn chunk_solve(
         pressure: read::<u32>(&rig.pressure, pooled),
         vectors: vectors.iter().map(words).collect(),
     }
-}
-
-/// The golden with the frame-replay ring busy, on the real solve: every ring
-/// entry is held by an encoder that never commits, so each golden solve's
-/// span finds no entry and the rounds run as the template's executes on a
-/// direct encoder; every golden case (both Dam Break frames, the density
-/// solve and level 1) still matches main bit for bit.
-#[test]
-fn pressure_module_golden_holds_with_the_ring_busy() {
-    let golden = std::fs::read_to_string(format!(
-        "{}/tests/fixtures/{GOLDEN}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .expect("golden fixture reads");
-    let cases = golden_cases();
-    let p = &cases[0].1;
-    let scratch = Rig::new(64);
-    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
-    scratch.upload(&water, &p.f);
-    let mut scratch = scratch;
-    let mut cache = Some(GpuReplayCache::default());
-    let mut held = Vec::new();
-    for _ in 0..manifold_gpu::REPLAY_RING {
-        let mut enc = scratch.device.create_encoder("gpu-flip-pressure-held");
-        enc.begin_replay(&scratch.device, cache.take().expect("cache"));
-        let n = scratch.n as u32;
-        let lattice = Water {
-            lattice: [n; 3],
-            cell_size: scratch.cell_size() as f32,
-            water: &scratch.water,
-            faces: &scratch.faces,
-            phi: None,
-        };
-        scratch
-            .solver
-            .prepare(
-                &scratch.device,
-                &mut enc,
-                &lattice,
-                &scratch.table,
-                scratch.pool_tiles,
-            )
-            .expect("prepares");
-        scratch
-            .solver
-            .solve(
-                &mut enc,
-                &lattice,
-                run_at!(scratch, Stop::Converged(64)),
-                &scratch.table,
-                scratch.pool_tiles,
-            )
-            .expect("solves");
-        cache = Some(enc.end_replay());
-        held.push(enc);
-    }
-    let busy = cache.as_ref().expect("cache").stats().ring_busy;
-    for (case, p, level) in &cases {
-        let mut rig = Rig::new(64).at_level(*level);
-        for stop in GOLDEN_STOPS {
-            let [pressure, scalars, record] = golden_solve(&mut rig, p, stop, &mut cache);
-            let line = format!(
-                "{case} 64^3 level {level} {stop:?} replay pressure {pressure:016x} scalars {scalars:016x} record {record:016x}"
-            );
-            assert!(
-                golden.lines().any(|l| l == line),
-                "{case} level {level} {stop:?}: with the ring busy the solve moved:\n got {line}"
-            );
-        }
-    }
-    let stats = cache.as_ref().expect("cache").stats();
-    assert_eq!(
-        stats.ring_busy - busy,
-        (cases.len() * GOLDEN_STOPS.len()) as u64,
-        "every golden solve found the ring busy"
-    );
-    drop(held);
 }

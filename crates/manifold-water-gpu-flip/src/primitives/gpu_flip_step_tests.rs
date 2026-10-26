@@ -492,6 +492,20 @@ impl Pass {
         self
     }
 
+    /// Binds the sort's ranges at 1 as the step reads them: one per cell at
+    /// the cell's pool index, and the canonical block's last element ending
+    /// at the live total (the last key's range ends there).
+    fn bind_ranges(&mut self, ranges: &[CellRange]) -> &mut Self {
+        let live = ranges.iter().map(|range| range.count).sum();
+        let mut canon = [CellRange::default(); 8];
+        canon[7] = CellRange {
+            start: live,
+            count: 0,
+        };
+        let pooled = to_pool(ranges, self.cells, &canon);
+        self.bind(1, &pooled, Layout::Dense)
+    }
+
     /// Binds the tile list at 29 as every tile in order, so a pass over the
     /// cell set C covers the whole lattice; returns its thread count (512 a
     /// tile).
@@ -499,6 +513,18 @@ impl Pass {
         let tiles: Vec<u32> = (0..tile_total(self.cells) as u32).collect();
         self.bind(29, &tiles, Layout::Dense);
         tiles.len() * 512
+    }
+
+    /// Binds every tile as the allocated list `extend_faces` walks: the list
+    /// at 29 and its length in `tile_counts` (30) at `params.ring_max`;
+    /// returns its thread count (512 a tile).
+    fn allocated_tiles(&mut self, params: &StepParams) -> usize {
+        let threads = self.every_tile();
+        let mut counts = vec![0u32; params.ring_max as usize + 8];
+        counts[params.ring_max as usize] =
+            u32::try_from(tile_total(self.cells)).expect("the tile count fits a word");
+        self.bind(30, &counts, Layout::Dense);
+        threads
     }
 
     /// Runs `entry` over `threads` threads and reads `len` records of

@@ -42,11 +42,10 @@ pub(super) struct Pipelines {
     pub(super) emit_write: GpuComputePipeline,
     pub(super) emit_tally: GpuComputePipeline,
     pub(super) birth_tally_reset: GpuComputePipeline,
-    pub(super) tiles_classify: GpuComputePipeline,
+    pub(super) tiles_clear: GpuComputePipeline,
+    pub(super) tiles_mark: GpuComputePipeline,
     pub(super) tiles_rings: GpuComputePipeline,
-    pub(super) tiles_free: GpuComputePipeline,
-    pub(super) tiles_alloc: GpuComputePipeline,
-    pub(super) tiles_settle: GpuComputePipeline,
+    pub(super) tiles_allocate: GpuComputePipeline,
     pub(super) tiles_fresh: GpuComputePipeline,
     pub(super) tiles_lists: GpuComputePipeline,
     pub(super) tiles_retire: GpuComputePipeline,
@@ -55,6 +54,9 @@ pub(super) struct Pipelines {
     /// The proofs' poison entry, dispatched under [`POISON`].
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub(super) poison: GpuComputePipeline,
+    /// NaN into the free slots after `tiles_fresh`, under [`POISON`].
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub(super) poison_free: GpuComputePipeline,
 }
 
 pub(super) fn step_source() -> String {
@@ -110,17 +112,18 @@ impl Pipelines {
             emit_write: pipe("emit_write"),
             emit_tally: pipe("emit_tally"),
             birth_tally_reset: pipe("birth_tally_reset"),
-            tiles_classify: pipe("tiles_classify"),
+            tiles_clear: pipe("tiles_clear"),
+            tiles_mark: pipe("tiles_mark"),
             tiles_rings: pipe("tiles_rings"),
-            tiles_free: pipe("tiles_free"),
-            tiles_alloc: pipe("tiles_alloc"),
-            tiles_settle: pipe("tiles_settle"),
+            tiles_allocate: pipe("tiles_allocate"),
             tiles_fresh: pipe("tiles_fresh"),
             tiles_lists: pipe("tiles_lists"),
             tiles_retire: pipe("tiles_retire"),
             pool_canon: pipe("pool_canon"),
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             poison: pipe(super::super::gpu_flip_tile_tests::POISON_ENTRY),
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+            poison_free: pipe("poison_free"),
         }
     }
 }

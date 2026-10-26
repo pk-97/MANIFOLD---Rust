@@ -226,7 +226,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     let corners = vec![1.0f32; face_len()];
     let params = region_params();
     let got: Vec<u32> = Pass::new()
-        .bind(1, &ranges, Layout::Dense)
+        .bind_ranges(&ranges)
         .bind(2, &sorted, Layout::Dense)
         .bind(9, &corners, Layout::Dense)
         .bind(15, &[shape], Layout::Dense)
@@ -251,7 +251,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         ..params
     };
     let written: Vec<FluidParticle> = Pass::new()
-        .bind(1, &ranges, Layout::Dense)
+        .bind_ranges(&ranges)
         .bind(15, &[shape], Layout::Dense)
         .bind(16, &atlas, Layout::Dense)
         .bind(36, &[row], Layout::Dense)
@@ -325,7 +325,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
             );
         }
         let got: Vec<u32> = Pass::new()
-            .bind(1, &ranges, Layout::Dense)
+            .bind_ranges(&ranges)
             .bind(37, &scan, Layout::Dense)
             .bind(47, &[0u32, 0, 1000, 0], Layout::Dense)
             .bind(22, &words, Layout::Dense)
@@ -365,7 +365,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         ..params
     };
     let jittered: Vec<FluidParticle> = Pass::new()
-        .bind(1, &ranges, Layout::Dense)
+        .bind_ranges(&ranges)
         .bind(15, &[shape], Layout::Dense)
         .bind(16, &atlas, Layout::Dense)
         .bind(36, &[row], Layout::Dense)

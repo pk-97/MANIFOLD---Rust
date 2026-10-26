@@ -435,7 +435,7 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
         [0, (cell_len() - N[1] * N[2]) as u32, (N[1] * N[2]) as u32],
         "every cell water, the -X layer touching air"
     );
-    pass.bind(1, &vec![0u32; 2 * cell_len()], Layout::Dense)
+    pass.bind_ranges(&vec![CellRange::default(); cell_len()])
         .bind(7, &vec![0.0f32; cell_len()], Layout::Cells);
     pass.bind(
         22,

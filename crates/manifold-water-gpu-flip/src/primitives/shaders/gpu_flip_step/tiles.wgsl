@@ -1,6 +1,6 @@
 // ---- The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
 // table)) and the tile pool's allocator (WATER_TILE_POOL_DESIGN.md section
-// 4). Built every step from the sort's ranges, on the GPU, never read
+// 4). Built every step from the particles, on the GPU, never read
 // back; the parity and the lists live here so a replayed encode stays
 // right. ----
 
@@ -16,16 +16,12 @@ fn tile_free_top_word() -> u32 {
     return u.ring_max + 4u;
 }
 
-fn tile_pop_word() -> u32 {
+fn tile_exhausted_word() -> u32 {
     return u.ring_max + 5u;
 }
 
-fn tile_exhausted_word() -> u32 {
-    return u.ring_max + 6u;
-}
-
 fn tile_fresh_word() -> u32 {
-    return u.ring_max + 7u;
+    return u.ring_max + 6u;
 }
 
 fn counts_load(i: u32) -> u32 {
@@ -39,7 +35,7 @@ fn counts_store(i: u32, value: u32) {
 // The word of `tile_args` holding the fresh list's triple, after the
 // aligned replay range.
 fn fresh_args_word() -> u32 {
-    let end_triples = 3u * (u.ring_max + 3u);
+    let end_triples = 3u * (u.ring_max + 2u);
     return ((end_triples + 1u) & ~1u) + 2u;
 }
 
@@ -108,64 +104,18 @@ fn pool_canon(@builtin(global_invocation_id) gid: vec3<u32>) {
     fresh_fields(at, face);
 }
 
-// One thread per box tile, after the rings: a stored tile whose ring is
-// past `alloc_ring` returns its slot to the free stack and leaves the table.
-// Thread 0 clears the step's exhausted flag and fresh count first; the
-// allocation runs in the next dispatch.
-@compute @workgroup_size(256)
-fn tiles_free(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !clock_active() { return; }
-    if gid.x == 0u {
-        counts_store(tile_exhausted_word(), 0u);
-        counts_store(tile_fresh_word(), 0u);
-    }
-    let t = gid.x;
-    let total = ts_tile_count();
-    if t >= total {
-        return;
-    }
-    let slot = tile_table[t];
-    if slot == TS_NONE || tile_ring(t) <= u.alloc_ring {
-        return;
-    }
-    let at = atomicAdd(&tile_counts[tile_free_top_word()], 1u);
-    tile_free[at] = slot;
-    tile_table[t] = TS_NONE;
-    tile_table[total + slot] = TS_NONE;
-}
-
-// One thread per box tile, after `tiles_free`: an absent tile with ring at
-// most `alloc_ring` takes the free stack's k-th slot from the top (k the
-// order its thread asks in). Slot numbers follow that order; no value
-// depends on them. A tile finding the stack empty stays absent and sets the
-// exhausted flag. A taken tile joins the fresh list.
-@compute @workgroup_size(256)
-fn tiles_alloc(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !clock_active() { return; }
-    let t = gid.x;
-    let total = ts_tile_count();
-    if t >= total || tile_table[t] != TS_NONE || tile_ring(t) > u.alloc_ring {
-        return;
-    }
-    let top = counts_load(tile_free_top_word());
-    let k = atomicAdd(&tile_counts[tile_pop_word()], 1u);
-    if k >= top {
-        counts_store(tile_exhausted_word(), 1u);
-        return;
-    }
-    let slot = tile_free[top - 1u - k];
-    tile_table[t] = slot;
-    tile_table[total + slot] = t;
-    let at = atomicAdd(&tile_counts[tile_fresh_word()], 1u);
-    tiles_fresh_list[at] = t;
-}
-
-// One thread, after `tiles_alloc`: the stack loses the slots taken, the
-// pop count restarts, and the fresh list's triple is written (512 threads
-// a tile, 256 a group). An inactive clock slot allocates nothing: its
-// fresh triple is switched off.
+// One thread, after `tiles_rings`: the whole allocation, in tile order, so
+// slot numbers never depend on thread timing. (1) Every held tile whose ring
+// is past `alloc_ring` pushes its slot onto the free stack and leaves the
+// table. (2) Every absent tile with ring <= 1 (the cell set C lies in it) pops
+// the stack's top slot. (3) Then every absent tile with ring in 2..=alloc_ring
+// does. A tile finding the stack empty stays absent and sets the exhausted
+// word (rewritten every active step). Each newly held tile joins the fresh
+// list, whose indirect triple is written last (512 threads a tile, 256 a
+// group). An inactive clock slot allocates nothing: its fresh triple is
+// switched off and the table stays.
 @compute @workgroup_size(1)
-fn tiles_settle() {
+fn tiles_allocate() {
     let word = fresh_args_word();
     tile_args[word + 1u] = 1u;
     tile_args[word + 2u] = 1u;
@@ -173,11 +123,45 @@ fn tiles_settle() {
         tile_args[word] = 0u;
         return;
     }
-    let top = counts_load(tile_free_top_word());
-    let taken = min(counts_load(tile_pop_word()), top);
-    counts_store(tile_free_top_word(), top - taken);
-    counts_store(tile_pop_word(), 0u);
-    tile_args[word] = 2u * counts_load(tile_fresh_word());
+    let total = ts_tile_count();
+    var top = counts_load(tile_free_top_word());
+    var fresh = 0u;
+    var exhausted = 0u;
+    for (var t = 0u; t < total; t = t + 1u) {
+        let slot = tile_table[t];
+        if slot != TS_NONE && tile_ring(t) > u.alloc_ring {
+            tile_free[top] = slot;
+            top = top + 1u;
+            tile_table[t] = TS_NONE;
+            tile_table[total + slot] = TS_NONE;
+        }
+    }
+    for (var round = 0u; round < 2u; round = round + 1u) {
+        for (var t = 0u; t < total; t = t + 1u) {
+            if tile_table[t] != TS_NONE {
+                continue;
+            }
+            let ring = tile_ring(t);
+            let wanted = select(ring >= 2u && ring <= u.alloc_ring, ring <= 1u, round == 0u);
+            if !wanted {
+                continue;
+            }
+            if top == 0u {
+                exhausted = 1u;
+                continue;
+            }
+            top = top - 1u;
+            let slot = tile_free[top];
+            tile_table[t] = slot;
+            tile_table[total + slot] = t;
+            tiles_fresh_list[fresh] = t;
+            fresh = fresh + 1u;
+        }
+    }
+    counts_store(tile_free_top_word(), top);
+    counts_store(tile_exhausted_word(), exhausted);
+    counts_store(tile_fresh_word(), fresh);
+    tile_args[word] = 2u * fresh;
 }
 
 // 512 threads a fresh tile: every pooled field's cells and records of the
@@ -235,55 +219,87 @@ fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
     tile_rhs[at] = nan;
 }
 
-var<workgroup> tile_near_min: array<u32, 256>;
-
-// 32 lanes per tile, the sort's bin counts to `tile_near`: the Chebyshev
-// cell distance from the tile's box to the nearest particle-holding cell,
-// scanning the box grown by CELL_REACH (12³ cells at most); CELL_REACH + 1
-// when none. Thread 0 flips the ring halves' parity for this step first: no
-// other thread of this pass reads it, and `tiles_rings` runs after. An
-// inactive clock slot runs none of the table's passes, so the next active
-// step's retire measures against the last active step's C.
+// Test-only (gpu_flip_tile_tests.rs): one thread per pool element, after
+// tiles_fresh; NaN into every pooled field's cell and record of each slot on
+// the free stack, so a read through a stale or absent slot shows in the
+// particles or the faces.
 @compute @workgroup_size(256)
-fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+fn poison_free(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x >> 9u;
+    if i >= counts_load(tile_free_top_word()) {
+        return;
+    }
+    let idx = tile_free[i] * 512u + (gid.x & 511u);
+    let nan = bitcast<f32>(0x7fc00000u);
+    let bad = FaceSample(vec4<f32>(nan), vec4<f32>(nan));
+    tile_water[idx] = nan;
+    tile_phi[idx] = nan;
+    tile_rhs[idx] = nan;
+    faces_out[idx] = bad;
+    fresh_a[idx] = bad;
+    fresh_b[idx] = bad;
+    fresh_f[idx] = bad;
+    fresh_s[idx] = bad;
+    fresh_v[idx] = bad;
+    fresh_faces[idx] = bad;
+    fresh_pressure[idx] = nan;
+    fresh_solve_water[idx] = nan;
+    pocket[idx] = 0x7fc00000u;
+    pocket_label[idx] = 0x7fc00000u;
+    atomicStore(&pocket_leader[idx], 0x7fc00000u);
+}
+
+// One thread per tile: `tile_near` to its start value, CELL_REACH + 1 (no
+// particle within reach), or 0 under `all_tiles`. Thread 0 flips the ring
+// halves' parity for this step first: no other thread of this pass reads
+// it, and `tiles_rings` runs after. An inactive clock slot runs none of the
+// table's passes, so the next active step's retire measures against the last
+// active step's C.
+@compute @workgroup_size(256)
+fn tiles_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let t = gid.x >> 5u;
-    let lane = gid.x & 31u;
-    let valid = t < ts_tile_count();
     if gid.x == 0u {
         counts_store(tile_parity_word(), 1u - counts_load(tile_parity_word()));
     }
-    var near = CELL_REACH + 1u;
-    if valid && u.all_tiles != 0u {
-        near = 0u;
-    } else if valid {
-        let n = ts_cells();
-        let reach = i32(CELL_REACH);
-        let origin = ts_grid_coord(t, ts_tile_dims()) * i32(TS_TILE);
-        let box_last = min(origin + vec3<i32>(i32(TS_TILE) - 1), n - vec3<i32>(1));
-        let side = TS_TILE + 2u * CELL_REACH;
-        for (var k = lane; k < side * side * side && near != 0u; k = k + 32u) {
-            let c = origin - vec3<i32>(reach) + ts_grid_coord(k, vec3<i32>(i32(side)));
-            if all(c >= vec3<i32>(0)) && all(c < n) {
-                if ranges[ts_dense_cell(c)].count != 0u {
-                    // Distance to the original clipped tile box, unchanged.
-                    let d = max(max(origin - c, c - box_last), vec3<i32>(0));
-                    near = min(near, u32(max(max(d.x, d.y), d.z)));
-                }
+    if gid.x < ts_tile_count() {
+        atomicStore(&tile_near[gid.x], select(CELL_REACH + 1u, 0u, u.all_tiles != 0u));
+    }
+}
+
+// One thread per particle slot, after `tiles_clear`: a live particle (radius
+// positive, as the step's sort counts it) in cell c, binned as the sort bins
+// it (the same clamp), lowers `tile_near` of every tile within CELL_REACH
+// cells to the Chebyshev cell distance from c to the tile's box clipped to
+// the lattice. So a tile's value is the distance to the nearest
+// particle-holding cell within reach, CELL_REACH + 1 when none. Under
+// `all_tiles` every tile is already 0.
+@compute @workgroup_size(256)
+fn tiles_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() || u.all_tiles != 0u { return; }
+    let i = gid.x;
+    if i >= u.capacity { return; }
+    let particle = sorted[i];
+    if !(particle.position_radius.w > 0.0) { return; }
+    let n = ts_cells();
+    let c = clamp(
+        vec3<i32>(floor((particle.position_radius.xyz - u.box_min) * u.inv_cell)),
+        vec3<i32>(0),
+        n - vec3<i32>(1),
+    );
+    let reach = vec3<i32>(i32(CELL_REACH));
+    let dims = ts_tile_dims();
+    let first = max(c - reach, vec3<i32>(0)) >> vec3<u32>(3u);
+    let last = min(c + reach, n - vec3<i32>(1)) >> vec3<u32>(3u);
+    for (var z = first.z; z <= last.z; z = z + 1) {
+        for (var y = first.y; y <= last.y; y = y + 1) {
+            for (var x = first.x; x <= last.x; x = x + 1) {
+                let q = vec3<i32>(x, y, z);
+                let origin = q * i32(TS_TILE);
+                let box_last = min(origin + vec3<i32>(i32(TS_TILE) - 1), n - vec3<i32>(1));
+                let d = max(max(origin - c, c - box_last), vec3<i32>(0));
+                atomicMin(&tile_near[ts_grid_index(q, dims)], u32(max(max(d.x, d.y), d.z)));
             }
         }
-    }
-    // Eight independent min trees; invalid tiles still reach every barrier.
-    tile_near_min[li] = near;
-    workgroupBarrier();
-    for (var width = 16u; width > 0u; width = width >> 1u) {
-        if lane < width {
-            tile_near_min[li] = min(tile_near_min[li], tile_near_min[li + width]);
-        }
-        workgroupBarrier();
-    }
-    if lane == 0u && valid {
-        tile_near[t] = tile_near_min[li];
     }
 }
 
@@ -313,7 +329,7 @@ fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
         for (var y = first.y; y <= last.y; y = y + 1) {
             for (var x = first.x; x <= last.x; x = x + 1) {
                 let q = vec3<i32>(x, y, z);
-                if tile_near[ts_grid_index(q, dims)] != 0u {
+                if atomicLoad(&tile_near[ts_grid_index(q, dims)]) != 0u {
                     continue;
                 }
                 let d = abs(q - p);
@@ -321,7 +337,7 @@ fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
-    tile_rank[at] = rank_of(ring, tile_near[t]);
+    tile_rank[at] = rank_of(ring, atomicLoad(&tile_near[t]));
 }
 
 // The list rank of a tile: 0 in the cell set C, 1 for the rest of rings 0
@@ -346,13 +362,8 @@ fn tiles_lists() {
     let total = ts_tile_count();
     let r = u.ring_max;
     // An inactive clock slot keeps the last step's table (the parity was not
-    // flipped) and switches every list triple off, including retired and
-    // full-face dispatches. Active full-face passes retain the dense grid.
-    let m = u.n + vec3<u32>(1u);
-    tile_args[3u * (r + 2u)] = select(0u, (m.x * m.y * m.z + 255u) / 256u, clock_active());
-    tile_args[3u * (r + 2u) + 1u] = 1u;
-    tile_args[3u * (r + 2u) + 2u] = 1u;
-    let end_triples = 3u * (r + 3u);
+    // flipped) and switches every list triple off, the retired list's too.
+    let end_triples = 3u * (r + 2u);
     let range_word = (end_triples + 1u) & ~1u;
     if range_word != end_triples { tile_args[end_triples] = 0u; }
     tile_args[range_word] = 0u;

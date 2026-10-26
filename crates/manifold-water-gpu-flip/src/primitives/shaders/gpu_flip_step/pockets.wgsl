@@ -677,7 +677,7 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
         capped[POCKET_SEED_WORD + 3u] = why.z;
         if why.x != 0xffffffffu {
             capped[POCKET_SEED_WORD + 4u] = bitcast<u32>(phi[ts_cell_at(ts_box_cell(why.x))]);
-            capped[POCKET_SEED_WORD + 5u] = ranges[why.x].count;
+            capped[POCKET_SEED_WORD + 5u] = ranges[ts_cell_at(ts_box_cell(why.x))].count;
         }
     }
     let unresolved = pocket_gate[POCKET_UNRESOLVED];

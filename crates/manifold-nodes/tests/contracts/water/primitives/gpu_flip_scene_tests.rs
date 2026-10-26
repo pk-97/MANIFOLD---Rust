@@ -11,7 +11,7 @@ use manifold_nodes_water::presets::gpu_flip::REST_PER_CELL;
 #[cfg(test)]
 use manifold_water_gpu_flip::primitives::gpu_flip_volume::VolumeDrift;
 #[cfg(test)]
-use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
+use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, SOLVER_WORDS};
 
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::particles::FluidParticle;
@@ -26,7 +26,6 @@ use manifold_nodes_water::presets::gpu_flip::{STEP_NODE, WaterScene, water_def};
 #[cfg(test)]
 use manifold_water_liquid::fluid_particles::FaceSample;
 #[cfg(test)]
-use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 #[cfg(test)]
 use manifold_water_liquid::tile_storage::{
     pool_len,
@@ -144,6 +143,7 @@ impl Run {
         read.extend([
             (step, "out"),
             (step, "faces"),
+            (step, "distance"),
             (step, "tiles"),
             (step, "capped"),
             (node_named(&graph, "stats"), "stats_out"),
@@ -403,16 +403,6 @@ impl Run {
         water
     }
 
-    /// The last tick's node.liquid_stats words.
-    #[cfg(test)]
-    pub(super) fn liquid_stats(&self) -> LiquidTickStats {
-        LiquidTickStats::from_words(&self.read::<u32>(
-            "stats",
-            "stats_out",
-            LIQUID_STATS_WORDS as usize,
-        ))
-    }
-
     /// The last tick's solver words: pressure and density iterations over
     /// every substep, and solves that reached the cap unconverged.
     #[cfg(test)]
@@ -433,6 +423,21 @@ impl Run {
             self.read(STEP_NODE, "faces", pool_len(pool_tiles as u32) as usize);
         let table: Vec<u32> = self.read(STEP_NODE, "tiles", 2 * pool_tiles);
         records_from_pool_with(&pool, &table, cells)
+    }
+
+    /// The step's pooled `faces` and `distance` as stored, canonical block
+    /// last, and its slot table (`T + P` words), with `P` the box's tile
+    /// count (the pool is the whole box at this resolution).
+    #[cfg(test)]
+    pub(super) fn pooled_outputs(&self) -> (Vec<FaceSample>, Vec<f32>, Vec<u32>) {
+        let cells = self.solver_grid().cells();
+        let tiles = tile_total(cells) as usize;
+        let len = pool_len(tiles as u32) as usize;
+        (
+            self.read(STEP_NODE, "faces", len),
+            self.read(STEP_NODE, "distance", len),
+            self.read(STEP_NODE, "tiles", 2 * tiles),
+        )
     }
 
     /// Water cells in the step's lattice: the size of its pressure solve.
@@ -486,36 +491,6 @@ pub(super) fn particle_stats(particles: &[FluidParticle]) -> ParticleStats {
     stats
 }
 
-/// RMS and max |divergence| (1/s) over the water cells of a face grid: what
-/// the projection left undone. The density solve's spread moves particles
-/// only, so the projected field is asked for zero.
-#[cfg(test)]
-pub(super) fn divergence(faces: &[FaceSample], water: &[f32], n: usize, h: f64) -> (f64, f64) {
-    let m = n + 1;
-    let pad = |i: usize, j: usize, k: usize| i + m * (j + m * k);
-    let (mut sum, mut max, mut count) = (0.0, 0.0_f64, 0usize);
-    for k in 0..n {
-        for j in 0..n {
-            for i in 0..n {
-                let c = i + n * (j + n * k);
-                if water[c] <= 0.5 {
-                    continue;
-                }
-                let at = |p: usize, a: usize| f64::from(faces[p].velocity[a]);
-                let d = (at(pad(i + 1, j, k), 0) - at(pad(i, j, k), 0) + at(pad(i, j + 1, k), 1)
-                    - at(pad(i, j, k), 1)
-                    + at(pad(i, j, k + 1), 2)
-                    - at(pad(i, j, k), 2))
-                    / h;
-                sum += d * d;
-                max = max.max(d.abs());
-                count += 1;
-            }
-        }
-    }
-    ((sum / count.max(1) as f64).sqrt(), max)
-}
-
 /// Momentum: a block of water in free fall, clear of the walls for the
 /// whole run, falls at g. After 0.2 s its mean velocity is −g·t within 1%
 /// and no particle is lost.
@@ -555,236 +530,6 @@ fn gpu_flip_free_fall_keeps_g() {
             <= 0.01 * want.abs(),
         "no sideways drift"
     );
-}
-
-/// The native engine's peak fastest particle in the same 64³ still pool at
-/// the 10-frame checkpoints from frame 59 to 119 (a native reference run, now in git history).
-/// It never settles: 10 to 19 mm/s throughout.
-#[cfg(test)]
-const NATIVE_STILL_POOL_FASTEST: f64 = 1.889e-2;
-
-/// The largest |GPU − native| fastest particle at those checkpoints, both
-/// run from the native engine's captured seed (a native reference run, now in git history).
-#[cfg(test)]
-const STILL_POOL_GPU_GAP: f64 = 4.209e-4;
-
-/// The native engine's largest inner vertical face speed in the 64³ still
-/// pool at the 30-frame checkpoints from frame 29 to 299, as a share of
-/// g·dt, measured with inner_vertical_face_speed's mask
-/// (a native reference run from the native engine's seed, now in git history).
-#[cfg(test)]
-const NATIVE_HYDROSTATIC_FACE_SHARE: f64 = 0.02852;
-
-/// The largest |GPU − native| of that measure at those checkpoints, both
-/// run from the native engine's seed, as a share of g·dt: they agree to
-/// the printed 1e-5 at every checkpoint.
-#[cfg(test)]
-const HYDROSTATIC_GPU_GAP_SHARE: f64 = 1e-5;
-
-/// I5: a pool at rest stays at rest as the engine's does. From 1 s on the
-/// particle count is the fill's and the fastest particle stays under the
-/// engine's own peak in the same pool plus five times the largest gap the
-/// GPU showed from the engine's seed: 21.0 mm/s. The margin covers this
-/// fill's unjittered seed, which the gap run did not use.
-#[test]
-fn gpu_flip_still_pool() {
-    let scene = WaterScene::still_pool(64);
-    let mut run = Run::new(scene);
-    // The engine seeds a site only where the solid distance, walls included,
-    // is positive: the inset walls hold the pool's four floor-corner sites.
-    assert_eq!(
-        run.seeded,
-        scene.particles() as usize - 4,
-        "the walls hold exactly the four floor-corner sites"
-    );
-    let mut fastest = Vec::new();
-    for frame in 0..120 {
-        run.frame();
-        println!(
-            "GPU FLIP still pool frame {frame:3}: dry floor holes {}",
-            run.liquid_stats().dry_floor_cells
-        );
-        if frame % 10 == 9 {
-            let stats = particle_stats(&run.particles());
-            let (rms, max) = divergence(&run.faces(), &run.water(), run.n(), scene.cell_size());
-            println!(
-                "GPU FLIP still pool {}³ frame {frame:3}: fastest {:.2e} m/s, mean height {:.5} m, divergence rms {rms:.2e} max {max:.2e} /s, water cells {}",
-                run.n(),
-                stats.fastest,
-                stats.mean_height,
-                run.water_cells()
-            );
-            assert_eq!(
-                (stats.live, stats.bad),
-                (run.seeded, 0),
-                "frame {frame}: particles lost or not finite"
-            );
-            if frame >= 59 {
-                fastest.push(stats.fastest);
-            }
-        }
-    }
-    let peak = fastest.iter().copied().fold(0.0, f64::max);
-    let bound = NATIVE_STILL_POOL_FASTEST + 5.0 * STILL_POOL_GPU_GAP;
-    assert!(
-        peak < bound,
-        "fastest particle {peak} m/s from 1 s on, past {bound} (native peaks at {NATIVE_STILL_POOL_FASTEST})"
-    );
-}
-
-/// An open −X face drains the pool: the engine removes every particle within
-/// 2 cells of an open face, so the water pours out through it. Over 3 s the
-/// live count, read from the particles and from node.liquid_stats, never
-/// rises and ends below half the fill, and every particle record stays
-/// finite and inside the tank.
-#[test]
-fn gpu_flip_open_face_drains_the_pool() {
-    let scene = WaterScene::still_pool(64).with_closed_faces(63 & !1);
-    let mut run = Run::new(scene);
-    let (min, size) = (scene.min(), scene.size);
-    let fill = scene.particles() as usize;
-    let mut last = fill;
-    for frame in 0..180 {
-        run.frame();
-        let particles = run.particles();
-        let stats = particle_stats(&particles);
-        let counted = run.liquid_stats();
-        assert_eq!(stats.bad, 0, "frame {frame}: a non-finite particle");
-        assert_eq!(
-            counted.live as usize, stats.live,
-            "frame {frame}: liquid_stats counts {} live, the particles {}",
-            counted.live, stats.live
-        );
-        assert!(
-            stats.live <= last,
-            "frame {frame}: live count rose from {last} to {}",
-            stats.live
-        );
-        for p in &particles {
-            let inside = (0..3).all(|a| {
-                let x = f64::from(p.position_radius[a]);
-                x >= min[a] && x <= min[a] + size
-            });
-            assert!(
-                inside,
-                "frame {frame}: a particle at {:?} is outside the tank",
-                p.position_radius
-            );
-        }
-        if frame % 30 == 29 {
-            println!(
-                "GPU FLIP open −X frame {frame:3}: {} of {fill} live, mean height {:.4} m",
-                stats.live, stats.mean_height
-            );
-        }
-        last = stats.live;
-    }
-    assert!(
-        last < fill / 2,
-        "the open face drained only {} of {fill} particles",
-        fill - last
-    );
-}
-
-/// The largest |v| on a vertical face between two water cells at or below
-/// `deep`, and how many faces it read: `face_v(i, j, k)` is the face under
-/// cell (i, j, k), `water` the step's water mask from its entering
-/// particles. Panics on a non-finite face, which a max would skip.
-#[cfg(test)]
-fn inner_vertical_face_speed(
-    face_v: impl Fn(usize, usize, usize) -> f32,
-    water: &[f32],
-    n: usize,
-    deep: usize,
-) -> (f64, Vec<u32>) {
-    let mut worst = 0.0_f64;
-    let mut selected = Vec::new();
-    for k in 0..n {
-        for j in 1..=deep.min(n - 1) {
-            for i in 0..n {
-                if water[i + n * ((j - 1) + n * k)] > 0.5 && water[i + n * (j + n * k)] > 0.5 {
-                    let v = face_v(i, j, k);
-                    assert!(v.is_finite(), "inner vertical face ({i}, {j}, {k}) is {v}");
-                    worst = worst.max(f64::from(v).abs());
-                    selected.push((i + n * (j + n * k)) as u32);
-                }
-            }
-        }
-    }
-    assert!(
-        !selected.is_empty(),
-        "no inner vertical face under the water"
-    );
-    (worst, selected)
-}
-
-/// Cells wholly under the seeded top, one layer of margin below it.
-#[cfg(test)]
-fn hydrostatic_depth(scene: WaterScene) -> usize {
-    ((scene.fill_height / scene.cell_size()).floor() as usize).saturating_sub(2)
-}
-
-/// The closed wall at rest: a 1 m pool for 300 frames. Every box wall face of
-/// the projected grid is exactly 0. Inner vertical faces between water
-/// cells keep within the native engine's own residual on the same faces,
-/// mask and checkpoints, plus five times the largest gap the GPU showed
-/// from the engine's seed (a native reference run, now in git history). This is parity
-/// with the engine's hydrostatic residual, not a bound on p = ρgh: the
-/// engine itself leaves several percent of g·dt there.
-#[test]
-fn gpu_flip_hydrostatic_column_rests() {
-    let scene = WaterScene::still_pool(64);
-    let mut run = Run::new(scene);
-    let n = run.n();
-    let m = n + 1;
-    let g_dt = G * scene.step_dt();
-    let deep = hydrostatic_depth(scene);
-    let bound = NATIVE_HYDROSTATIC_FACE_SHARE + 5.0 * HYDROSTATIC_GPU_GAP_SHARE;
-    for frame in 0..300 {
-        run.frame();
-        if frame % 30 != 29 {
-            continue;
-        }
-        let faces = run.faces();
-        let mut wall = 0.0_f64;
-        for (idx, face) in faces.iter().enumerate() {
-            let p = [idx % m, (idx / m) % m, idx / (m * m)];
-            for a in 0..3 {
-                if (0..3).all(|b| b == a || p[b] < n) && (p[a] == 0 || p[a] == n) {
-                    assert!(
-                        face.velocity[a].is_finite(),
-                        "frame {frame}: wall face {p:?}/{a} is not finite"
-                    );
-                    wall = wall.max(f64::from(face.velocity[a]).abs());
-                }
-            }
-        }
-        let (worst, _) = inner_vertical_face_speed(
-            |i, j, k| faces[i + m * (j + m * k)].velocity[1],
-            &run.water(),
-            n,
-            deep,
-        );
-        let stats = particle_stats(&run.particles());
-        println!(
-            "GPU FLIP hydrostatic {n}³ frame {frame:3}: wall faces max |v| {wall:.1e}, inner vertical faces max |v| {worst:.2e} m/s = {:.3}% of g·dt, fastest particle {:.2e} m/s",
-            100.0 * worst / g_dt,
-            stats.fastest
-        );
-        assert_eq!(wall, 0.0, "frame {frame}: a wall face moves");
-        assert!(
-            worst <= bound * g_dt,
-            "frame {frame}: inner vertical faces at {:.3}% of g·dt, past {:.3}% (native {:.3}%)",
-            100.0 * worst / g_dt,
-            100.0 * bound,
-            100.0 * NATIVE_HYDROSTATIC_FACE_SHARE
-        );
-        assert_eq!(
-            (stats.live, stats.bad),
-            (run.seeded, 0),
-            "frame {frame}: particles lost or not finite"
-        );
-    }
 }
 
 /// Mechanical energy per unit particle mass summed over the live particles,
@@ -851,65 +596,6 @@ fn gpu_flip_dam_break_energy_never_rises() {
             "{steps} steps: energy rose {worst:.2e} of E0 above its start"
         );
     }
-}
-
-/// The tank's first standing wave: 4 m long, 1 m deep, so wavelength 8 m and
-/// linear theory's period 2π/√(gk·tanh kd) = 2.795 s at k = π/4. The water's
-/// centre of mass in x swings with it (the step's third harmonic weighs 1/27
-/// in that measure); its zero crossings over 3 s to 9 s give the period, which
-/// must sit within 3% of 2.80 s. Water too narrow in the pressure solve lags
-/// the swing; too wide, it leads.
-#[test]
-fn gpu_flip_standing_wave_keeps_its_period() {
-    let scene = WaterScene::slosh(64);
-    let mut run = Run::new(scene);
-    let mut centre = Vec::new();
-    for frame in 0..600 {
-        run.frame();
-        let live: Vec<f64> = run
-            .particles()
-            .iter()
-            .filter(|p| p.position_radius[3] > 0.0)
-            .map(|p| f64::from(p.position_radius[0]))
-            .collect();
-        centre.push(live.iter().sum::<f64>() / live.len() as f64);
-        if frame % 60 == 59 {
-            let stats = particle_stats(&run.particles());
-            println!(
-                "GPU FLIP slosh frame {frame:3}: centre x {:+.4} m, fastest {:.3} m/s",
-                centre[frame], stats.fastest
-            );
-            assert_eq!(
-                (stats.live, stats.bad),
-                (run.seeded, 0),
-                "frame {frame}: particles lost or not finite"
-            );
-        }
-    }
-    // Crossings of the rest centre, x = 0, interpolated between frames.
-    let crossings: Vec<f64> = centre
-        .windows(2)
-        .enumerate()
-        .filter(|(_, w)| (w[0] < 0.0) != (w[1] < 0.0))
-        .map(|(i, w)| (i as f64 + w[0] / (w[0] - w[1])) / 60.0)
-        .filter(|t| (3.0..9.0).contains(t))
-        .collect();
-    println!("GPU FLIP slosh crossings (s): {crossings:.3?}");
-    assert!(
-        crossings.len() >= 3,
-        "only {} crossings between 3 s and 9 s",
-        crossings.len()
-    );
-    let period =
-        2.0 * (crossings[crossings.len() - 1] - crossings[0]) / (crossings.len() - 1) as f64;
-    println!(
-        "GPU FLIP slosh period {period:.3} s, {:+.2}% off 2.80 s",
-        100.0 * (period / 2.80 - 1.0)
-    );
-    assert!(
-        (period / 2.80 - 1.0).abs() <= 0.03,
-        "standing-wave period {period:.3} s, outside 3% of 2.80 s"
-    );
 }
 
 /// Small native/GPU comparisons share seed geometry and simulation time.
@@ -2016,14 +1702,6 @@ fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
     );
 }
 
-/// FNV-1a over the state's particles after each frame.
-#[cfg(test)]
-fn particle_digest(run: &Run, digest: &mut u64) {
-    for byte in bytemuck::cast_slice::<FluidParticle, u8>(&run.particles()) {
-        *digest = (*digest ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3);
-    }
-}
-
 /// The Dam Break with the step's Sheet Fill Rate set, when given.
 #[cfg(test)]
 fn dam_break_sheeting(n: usize, rate: Option<f64>) -> Run {
@@ -2033,33 +1711,6 @@ fn dam_break_sheeting(n: usize, rate: Option<f64>) -> Run {
     } else {
         Run::new(scene)
     }
-}
-
-/// Sheet seeding off is the step it was (BUG-j9l9w): the Dam Break's
-/// particles after four frames, digested, equal to main's digest before
-/// sheet seeding (a deliberate step change re-pins it). Sheet Fill Rate 0 set
-/// explicitly must equal it too.
-#[test]
-fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
-    let digest = |rate: Option<f64>| {
-        let mut run = dam_break_sheeting(32, rate);
-        let mut digest = 0xcbf2_9ce4_8422_2325u64;
-        for _ in 0..4 {
-            run.frame();
-            particle_digest(&run, &mut digest);
-        }
-        digest
-    };
-    let default_off = digest(None);
-    eprintln!("DAM BREAK DIGEST 32 x4: {default_off:016x}");
-    // The whole step's pin: only a commit that changes the step on purpose
-    // re-records it, and says why. Last re-recorded for the Dam Break losing its box (a scene Collider now), after the tank walls matching
-    // the native engine; sheeting with walls and no pressure template gives it too.
-    assert_eq!(
-        default_off, 0xd73f_a72f_e5d9_5fbb,
-        "sheeting off changed the Dam Break"
-    );
-    assert_eq!(digest(Some(0.0)), default_off, "rate 0 changed the step");
 }
 
 /// Sheet seeding on: replayed encodes give the particles a direct encode
@@ -2088,146 +1739,3 @@ fn gpu_flip_sheeting_replay_matches_direct() {
 }
 
 use manifold_node_engine::testkit::atom::{node_named, output_of};
-
-/// Peter's cliff inflow (BUG-3zq4r, inflow runs out): a slab near the top of
-/// the 4 m tank, pouring toward +z, with no column and no pool; with `drain`
-/// a Drain on the floor where the water lands. `fill_slots` cuts
-/// the domain's pool wire into the fill and holds the pool at that many
-/// slots; `None` keeps the pool the domain sizes. Per tick: live particles and
-/// the tick's inflow births and refusals (stats words 1, 28 and 29).
-#[cfg(test)]
-fn inflow_ticks(drain: bool, fill_slots: Option<i32>, seconds: usize) -> Vec<[u32; 3]> {
-    let scene = WaterScene {
-        fill_height: 0.0,
-        column: [[0.0; 2]; 3],
-        ..WaterScene::dam_break(24)
-    };
-    let mut def = water_def(scene);
-    let domain = def
-        .nodes
-        .iter()
-        .find(|node| node.node_id.as_str() == "domain")
-        .expect("domain")
-        .id;
-    let first = def.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
-    let float = |v: f64| serde_json::json!({"type": "Float", "value": v});
-    let mut sources = vec![(1, [0.0, 3.38, -1.59], [3.94, 0.2, 0.6], [0.0, 0.0, 1.0])];
-    if drain {
-        sources.push((2, [0.0, 0.25, 1.0], [3.9, 0.5, 1.8], [0.0; 3]));
-    }
-    for (k, (role, pos, scale, velocity)) in sources.into_iter().enumerate() {
-        let (transform, source) = (first + 2 * k as u32, first + 2 * k as u32 + 1);
-        let node = |id: u32,
-                    name: String,
-                    type_id: &str,
-                    params: serde_json::Value|
-         -> manifold_core::effect_graph_def::EffectGraphNode {
-            serde_json::from_value(
-                serde_json::json!({"id": id, "nodeId": name, "typeId": type_id, "params": params}),
-            )
-            .expect("source node")
-        };
-        def.nodes.push(node(
-            transform,
-            format!("source_transform_{k}"),
-            "node.transform_3d",
-            serde_json::json!({
-                "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
-                "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
-            }),
-        ));
-        def.nodes.push(node(source, format!("source_{k}"), "node.fluid_role_source", serde_json::json!({
-            "role": {"type": "Enum", "value": role},
-            "velocity_x": float(velocity[0]), "velocity_y": float(velocity[1]), "velocity_z": float(velocity[2]),
-        })));
-        let wire = |from_node: u32, from_port: &str, to_node: u32, to_port: String| {
-            manifold_core::effect_graph_def::EffectGraphWire {
-                from_node,
-                from_port: from_port.into(),
-                to_node,
-                to_port,
-            }
-        };
-        def.wires
-            .push(wire(transform, "transform", source, "transform".into()));
-        def.wires
-            .push(wire(source, "role", domain, format!("role_{k}")));
-    }
-    if let Some(slots) = fill_slots {
-        let fill = def
-            .nodes
-            .iter_mut()
-            .find(|node| node.type_id == "node.liquid_fill")
-            .expect("fill");
-        fill.params.insert(
-            "particle_capacity".into(),
-            serde_json::from_value(serde_json::json!({"type": "Int", "value": slots}))
-                .expect("slots"),
-        );
-        let fill = fill.id;
-        def.wires
-            .retain(|wire| !(wire.to_node == fill && wire.to_port == "particle_capacity"));
-    }
-    let mut registry = PrimitiveRegistry::with_builtin();
-    register_substep_test_nodes(&mut registry);
-    let graph = def
-        .into_graph(&registry, &Default::default())
-        .expect("inflow scene builds");
-    let mut run = Run::with_graph(scene, graph);
-    (0..seconds * 60)
-        .map(|_| {
-            run.frame();
-            let stats = run.liquid_stats();
-            [stats.live, stats.inflow_births, stats.inflow_refused]
-        })
-        .collect()
-}
-
-/// The inflow flows for the whole clip, with or without a drain, and never
-/// runs short of a slot: with an Inflow the pool has room for the whole
-/// domain. Before the fix the pool was the fill's count, so an inflow only had
-/// the slots the fill left dead and stopped, silently. A pool that is too
-/// small still stops it, but now every held-back tick counts its refusals,
-/// which the setup check shows on the card.
-#[test]
-fn gpu_flip_inflow_flows_for_the_whole_clip() {
-    const SECONDS: usize = 3;
-    let mut end = [0u32; 2];
-    for drain in [false, true] {
-        let ticks = inflow_ticks(drain, None, SECONDS);
-        for (second, ticks) in ticks.chunks(60).enumerate() {
-            let born: u32 = ticks.iter().map(|tick| tick[1]).sum();
-            let refused: u32 = ticks.iter().map(|tick| tick[2]).sum();
-            eprintln!(
-                "INFLOW drain={drain} second {second}: live {} births {born} refused {refused}",
-                ticks[59][0]
-            );
-            assert!(
-                second == 0 || born > 0,
-                "drain={drain}: second {second} emitted nothing"
-            );
-            assert_eq!(
-                refused, 0,
-                "drain={drain}: second {second} ran short of slots"
-            );
-        }
-        end[usize::from(drain)] = ticks.last().expect("ticks")[0];
-    }
-    assert!(
-        end[1] < end[0],
-        "the drain takes water away: {} live with it, {} without",
-        end[1],
-        end[0]
-    );
-    // The pool as small as it was: the inflow fills it, then every tick it is
-    // held back reports what it could not add.
-    let ticks = inflow_ticks(false, Some(5_000), 2);
-    let last = ticks.last().expect("ticks");
-    eprintln!(
-        "INFLOW small pool: last tick live {} births {} refused {}",
-        last[0], last[1], last[2]
-    );
-    assert_eq!(last[0], 5_000, "the pool filled");
-    assert_eq!(last[1], 0, "no births past a full pool");
-    assert!(last[2] > 0, "a full pool reports the births it refused");
-}

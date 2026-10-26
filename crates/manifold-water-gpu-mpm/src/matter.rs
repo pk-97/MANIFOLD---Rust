@@ -199,7 +199,7 @@ pub fn momentum_unit_fits(unit: f32, cell_size: f32, step_dt: f32) -> bool {
 }
 
 /// The integer hash behind D5's unbiased rounding (lowbias32). The P2G
-/// kernel repeats it; `matter_to_grid_body_pins_fixed_point_constants` pins the two.
+/// kernel repeats it.
 pub fn rounding_hash(v: u32) -> u32 {
     let mut x = v;
     x ^= x >> 16;

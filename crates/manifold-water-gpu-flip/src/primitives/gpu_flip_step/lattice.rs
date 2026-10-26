@@ -44,13 +44,19 @@ pub(super) fn mask_saved_bytes(cells: [u32; 3], slots: u64) -> u64 {
 /// The lattice's pooled cell arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
 /// mask and the pocket leaders.
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(super) const LATTICE_CELL_ARRAYS: u64 = 8;
 
 /// The lattice's pooled face grids: the gathered, saved, scratch, forced,
 /// open-fraction and solid-velocity grids and the step's internal faces.
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(super) const LATTICE_FACE_GRIDS: u64 = 7;
+
+/// The saved (old) distance the commit mask restores: one more pooled cell
+/// array, held by the state beside the lattice.
+pub(super) const SAVED_CELL_ARRAYS: u64 = 1;
+
+/// Bytes per fine cell of the step's own pooled fields.
+pub(crate) const STEP_POOLED_BYTES_PER_CELL: u64 = (LATTICE_CELL_ARRAYS + SAVED_CELL_ARRAYS) * 4
+    + LATTICE_FACE_GRIDS * size_of::<FaceSample>() as u64;
 
 /// Scratch for one lattice.
 ///

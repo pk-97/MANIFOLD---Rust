@@ -1,6 +1,7 @@
 //! One step's passes, in order (module doc of `gpu_flip_step`).
 
 use super::*;
+use manifold_water_liquid::tile_storage::pool_len;
 
 impl StepState {
     pub(super) fn encode(
@@ -130,15 +131,6 @@ impl StepState {
         } else {
             None
         };
-        self.sorter.encode(
-            device,
-            enc,
-            &SortJob {
-                order: sheet_order,
-                ..sort_job(step.particles, sorted)
-            },
-            &SORT_LABELS,
-        )?;
         let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
         let face_count: u64 = cells.iter().map(|&n| u64::from(n) + 1).product();
         let ghost = StepParams {
@@ -148,28 +140,49 @@ impl StepState {
         let cells_groups = groups(cell_count);
         let face_groups = groups(face_count);
 
-        let ranges = self
-            .sorter
-            .ranges()
-            .ok_or("the cell ranges were not reserved")?;
-
-        // Which tiles hold water this step, from the sort's bin counts. The
-        // cell passes run over the cell set C through its indirect triple;
-        // every other tile holds the canonical values (design section 4 (The
-        // defined-value rule)): set when the tile is allocated, restored by
-        // the retire when a tile leaves C. A new pool's canonical block is
-        // written first.
+        // Which tiles hold water this step, from the particles themselves.
+        // The pool allocates the tiles within reach (design section 4 (The
+        // allocator)); the sort then keys each particle on its cell's pool
+        // index, so the ranges live in the pool like every other fine field;
+        // the lists follow. The cell passes run over the cell set C through
+        // its indirect triple; every other tile holds the canonical values
+        // (design section 4 (The defined-value rule)): set when the tile is
+        // allocated, restored by the retire when a tile leaves C. A new
+        // pool's canonical block is written first.
         if self.pool_canon_pending {
             encode_pool_canon(enc, pipes, &base, l);
             self.pool_canon_pending = false;
         }
-        encode_tiles(
+        encode_tile_allocation(
             enc,
             pipes,
             &base,
             l,
             tiles,
-            ranges,
+            step.particles,
+            step.count,
+            gate_plan,
+        );
+        self.sorter.encode_pooled(
+            device,
+            enc,
+            &SortJob {
+                order: sheet_order,
+                ..sort_job(step.particles, sorted)
+            },
+            table,
+            pool,
+            &SORT_LABELS,
+        )?;
+        let ranges = self
+            .sorter
+            .ranges()
+            .ok_or("the cell ranges were not reserved")?;
+        encode_tile_lists(
+            enc,
+            pipes,
+            &base,
+            tiles,
             step.capped,
             step.tally,
             gate_plan,
@@ -232,7 +245,6 @@ impl StepState {
             pipes,
             step.clock_plan,
             &base,
-            face_groups,
             tiles,
             [&l.g, &l.a, &l.b],
             step.band,
@@ -529,7 +541,6 @@ impl StepState {
             pipes,
             step.clock_plan,
             &base,
-            face_groups,
             tiles,
             [&l.f, out_faces, &l.b],
             step.band,
@@ -614,7 +625,6 @@ impl StepState {
                 pipes,
                 step.clock_plan,
                 &base,
-                face_groups,
                 tiles,
                 [&l.f, &l.f, &l.b],
                 step.band,
@@ -693,7 +703,7 @@ impl StepState {
                     plan: step.clock_plan,
                     params: [
                         base.particles,
-                        cells.iter().product(),
+                        pool_len(pool) as u32,
                         self.sheeting.ranks(),
                         1,
                     ],
@@ -727,13 +737,15 @@ impl StepState {
         // Native removal precedes inflow. Stable cell ranks predate speed
         // removal: an extreme marker still consumes a cell quota place.
         enc.compute_memory_barrier_buffers();
-        self.sorter.encode(
+        self.sorter.encode_pooled(
             device,
             enc,
             &SortJob {
                 count: base.particles,
                 ..sort_job(step.out, sorted)
             },
+            table,
+            pool,
             &SORT_LABELS,
         )?;
         enc.compute_memory_barrier_buffers();
@@ -753,18 +765,21 @@ impl StepState {
                 buffer(46, step.clock_plan),
                 buffer(1, ranges),
                 buffer(38, sorted),
+                buffer(51, table),
             ],
             cells_groups,
             "gpu_flip.step.remove_crowded",
         );
         enc.compute_memory_barrier_buffers();
-        self.sorter.encode(
+        self.sorter.encode_pooled(
             device,
             enc,
             &SortJob {
                 count: base.particles,
                 ..sort_job(sorted, step.out)
             },
+            table,
+            pool,
             &SORT_LABELS,
         )?;
         // New inflow is first transferred and advected by the following step.
@@ -792,6 +807,7 @@ impl StepState {
                     buffer(36, step.regions),
                     buffer(46, step.clock_plan),
                     buffer(37, &scan),
+                    buffer(51, table),
                 ],
                 groups(sites),
                 "gpu_flip.step.emit_flags",
@@ -814,7 +830,7 @@ impl StepState {
                     ranges,
                     scan: &scan,
                     plan: step.clock_plan,
-                    params: [emission.capacity, cells.iter().product(), sites as u32, 1],
+                    params: [emission.capacity, pool_len(pool) as u32, sites as u32, 1],
                 },
             );
             enc.dispatch_compute(

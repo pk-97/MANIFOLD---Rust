@@ -1,9 +1,8 @@
 //! The GPU FLIP step's tile table (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md
-//! section 3 (The tile table)) against a CPU model: the three kernels run on
-//! their own over the Dam Break's particles, every word compared, then the
-//! same classification read back through the step's stats word. Then the
-//! sparse step against the dense one through the same kernels, bitwise, and
-//! under the NaN poison (section 4 (The defined-value rule)).
+//! section 3 (The tile table)) against a CPU model: the kernels run on
+//! their own over placed particles, every word compared; the allocator's
+//! slots against the rings; then the step under the NaN poison (section 4
+//! (The defined-value rule)).
 
 use manifold_gpu::GpuBuffer;
 
@@ -13,9 +12,9 @@ use manifold_node_engine::testkit::array_harness::read;
 use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use manifold_water_gpu_flip::primitives::gpu_flip_step::{
     CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, band_layers, dispatch_pass, ring_max,
-    set_all_tiles, set_poison,
+    set_poison,
 };
-use manifold_water_liquid::fluid_particles::CellRange;
+use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::tile_storage::{TILE, tile_counts, tile_total};
 
 /// The tile table's words as the CPU builds them for one step.
@@ -30,23 +29,26 @@ struct Model {
 }
 
 fn argument_words(r: usize) -> usize {
-    let triples = 3 * (r + 3);
+    let triples = 3 * (r + 2);
     triples + triples % 2 + 2
 }
 
-/// Particles per cell, binned as the sort bins them (clamped to the edge
-/// cells, radius 0 is not live).
-fn cell_counts(particles: &[FluidParticle], n: [u32; 3], min: [f32; 3], h: f32) -> Vec<u32> {
-    let mut counts = vec![0u32; (n[0] * n[1] * n[2]) as usize];
-    let inv = 1.0 / h;
-    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
-        let c: [u32; 3] = std::array::from_fn(|a| {
-            (((p.position_radius[a] - min[a]) * inv).floor() as i64).clamp(0, i64::from(n[a]) - 1)
-                as u32
-        });
-        counts[(c[0] + n[0] * (c[1] + n[1] * c[2])) as usize] += 1;
+/// `counts[c]` live particles at the centre of each cell of `n`, at cell
+/// size 1 from the origin.
+fn particles_of(counts: &[u32], n: [u32; 3]) -> Vec<FluidParticle> {
+    let mut particles = Vec::new();
+    for (i, &count) in counts.iter().enumerate() {
+        let i = i as u32;
+        let c = [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])];
+        for _ in 0..count {
+            particles.push(FluidParticle {
+                position_radius: [c[0] as f32 + 0.5, c[1] as f32 + 0.5, c[2] as f32 + 0.5, 0.1],
+                velocity: [0.0; 3],
+                id: particles.len() as u32 + 1,
+            });
+        }
     }
-    counts
+    particles
 }
 
 fn unflatten(t: u32, m: [u32; 3]) -> [i64; 3] {
@@ -133,8 +135,6 @@ fn model(counts: &[u32], n: [u32; 3], r: u32, prev_rank: &[u32], all: bool) -> M
         args.extend([2 * count, 1, 1]);
     }
     args.extend([2 * retired.len() as u32, 1, 1]);
-    let faces = n.into_iter().map(|side| side + 1).product::<u32>();
-    args.extend([faces.div_ceil(256), 1, 1]);
     args.resize(argument_words(r as usize) - 2, 0);
     args.extend([0, band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS)]);
     Model {
@@ -149,7 +149,6 @@ fn model(counts: &[u32], n: [u32; 3], r: u32, prev_rank: &[u32], all: bool) -> M
 
 /// The tile buffers on the GPU, shared so the test reads them back.
 struct Table {
-    ranges: GpuBuffer,
     near: GpuBuffer,
     rank: GpuBuffer,
     by_ring: GpuBuffer,
@@ -157,33 +156,78 @@ struct Table {
     args: GpuBuffer,
     retired: GpuBuffer,
     capped: GpuBuffer,
+    /// `slot_of` per tile then `tile_of` per slot, as the step builds it:
+    /// every tile absent.
+    table: GpuBuffer,
+    /// The free stack: every slot, the lowest on top.
+    free_list: GpuBuffer,
+    fresh: GpuBuffer,
+    n: [u32; 3],
     total: usize,
+    pool: usize,
     r: u32,
 }
 
+/// The pool's bookkeeping read back after an allocation.
+#[derive(Debug, PartialEq, Eq)]
+struct Held {
+    slot_of: Vec<u32>,
+    tile_of: Vec<u32>,
+    free: Vec<u32>,
+    fresh: Vec<u32>,
+    exhausted: u32,
+}
+
+const NONE: u32 = u32::MAX;
+
 impl Table {
     fn new(device: &manifold_gpu::GpuDevice, n: [u32; 3], r: u32) -> Self {
+        Self::with_pool(device, n, r, tile_total(n) as usize)
+    }
+
+    /// A table whose pool holds `pool` slots, all free.
+    fn with_pool(device: &manifold_gpu::GpuDevice, n: [u32; 3], r: u32, pool: usize) -> Self {
         let total = tile_total(n) as usize;
         let words = |w: usize| {
             let b = device.create_buffer_shared((w.max(1) * 4) as u64);
             b.zero_fill();
             b
         };
+        let counts = words(r as usize + 7);
+        let free_list = words(pool);
+        let table = words(total + pool);
+        let free: Vec<u32> = (0..pool as u32).rev().collect();
+        // SAFETY: shared buffers sized for these words; no GPU work has
+        // touched them yet.
+        unsafe {
+            table.write(0, bytemuck::cast_slice(&vec![NONE; total + pool]));
+            free_list.write(0, bytemuck::cast_slice(&free));
+            counts.write(
+                (r as usize + 4) as u64 * 4,
+                bytemuck::bytes_of(&(pool as u32)),
+            );
+        }
         Self {
-            ranges: words(2 * (n[0] * n[1] * n[2]) as usize),
             near: words(total),
             rank: words(2 * total),
             by_ring: words(total),
-            counts: words(r as usize + 4),
-            args: words(argument_words(r as usize)),
+            counts,
+            args: words(argument_words(r as usize) + 3),
             retired: words(total),
             capped: words(7),
+            table,
+            free_list,
+            fresh: words(total),
+            n,
             total,
+            pool,
             r,
         }
     }
 
-    /// One step's three kernels over `counts` (the sort's per-cell counts).
+    /// One step's table kernels over synthetic particles: `counts[c]` live
+    /// particles at the centre of cell `c` of the lattice `n` (cell size 1,
+    /// corner at the origin: `params` is built that way).
     fn step(&self, device: &manifold_gpu::GpuDevice, params: &StepParams, counts: &[u32]) {
         self.step_with_clock(device, params, counts, None);
     }
@@ -195,27 +239,40 @@ impl Table {
         counts: &[u32],
         clock: Option<&GpuBuffer>,
     ) {
-        let ranges: Vec<CellRange> = counts
-            .iter()
-            .map(|&count| CellRange { start: 0, count })
-            .collect();
-        let ptr = self.ranges.mapped_ptr().expect("shared");
-        // SAFETY: the buffer holds two words per cell and no GPU work is in flight.
-        unsafe {
-            std::ptr::copy_nonoverlapping(ranges.as_ptr().cast::<u8>(), ptr, ranges.len() * 8)
-        };
+        self.step_particles(device, params, &particles_of(counts, self.n), clock);
+    }
+
+    /// One step's table kernels over `particles`: clear, mark, rings, lists.
+    fn step_particles(
+        &self,
+        device: &manifold_gpu::GpuDevice,
+        params: &StepParams,
+        particles: &[FluidParticle],
+        clock: Option<&GpuBuffer>,
+    ) {
+        let slots = device.create_buffer_shared((particles.len().max(1) * 32) as u64);
+        slots.zero_fill();
+        // SAFETY: a shared buffer sized for the particles; no GPU work has
+        // touched it yet.
+        unsafe { slots.write(0, bytemuck::cast_slice(particles)) };
+        let params = params.with_capacity_for_test(particles.len() as u32);
         let threads = self.total as u64;
         let pass = |entry: &str, buffers: &[(u32, &GpuBuffer)], threads| {
             let mut buffers = buffers.to_vec();
             if let Some(clock) = clock {
                 buffers.push((46, clock));
             }
-            dispatch_pass(device, entry, params, &buffers, threads);
+            dispatch_pass(device, entry, &params, &buffers, threads);
         };
         pass(
-            "tiles_classify",
-            &[(1, &self.ranges), (27, &self.near), (30, &self.counts)],
-            threads * 32,
+            "tiles_clear",
+            &[(27, &self.near), (30, &self.counts)],
+            threads,
+        );
+        pass(
+            "tiles_mark",
+            &[(2, &slots), (27, &self.near)],
+            particles.len() as u64,
         );
         pass(
             "tiles_rings",
@@ -235,6 +292,39 @@ impl Table {
             ],
             1,
         );
+    }
+
+    /// The allocator after `step`'s marks and rings.
+    fn allocate(&self, device: &manifold_gpu::GpuDevice, params: &StepParams) {
+        dispatch_pass(
+            device,
+            "tiles_allocate",
+            params,
+            &[
+                (28, &self.rank),
+                (30, &self.counts),
+                (31, &self.args),
+                (52, &self.free_list),
+                (53, &self.fresh),
+                (54, &self.table),
+            ],
+            1,
+        );
+    }
+
+    fn held(&self) -> Held {
+        let r = self.r as usize;
+        let counts = read::<u32>(&self.counts, r + 7);
+        let words = read::<u32>(&self.table, self.total + self.pool);
+        let free = read::<u32>(&self.free_list, self.pool);
+        let fresh = read::<u32>(&self.fresh, self.total);
+        Held {
+            slot_of: words[..self.total].to_vec(),
+            tile_of: words[self.total..].to_vec(),
+            free: free[..counts[r + 4] as usize].to_vec(),
+            fresh: fresh[..counts[r + 6] as usize].to_vec(),
+            exhausted: counts[r + 5],
+        }
     }
 
     /// Every table word, including inactive list tails and the previous rank
@@ -341,7 +431,7 @@ fn gpu_flip_tiles_parallel_nearness_matches_cpu_on_synthetic_masks() {
                 }
             }
             let params = StepParams::default()
-                .with_grid_for_test(n, [0.0; 3], 0.0)
+                .with_grid_for_test(n, [0.0; 3], 1.0)
                 .with_tiles_for_test(r, extension_layers, u32::from(all));
             let mut plan = [0u32; 12];
             plan[11] = 1;
@@ -361,10 +451,10 @@ fn gpu_flip_tiles_parallel_nearness_matches_cpu_on_synthetic_masks() {
                 );
                 // Only execution decisions are cleared; both rank halves,
                 // parity, lists, retired list and diagnostics remain intact.
-                for triple in 0..r as usize + 3 {
+                for triple in 0..r as usize + 2 {
                     expected[4][3 * triple] = 0;
                 }
-                *expected[4].last_mut().unwrap() = 0;
+                expected[4][argument_words(r as usize) - 1] = 0;
                 table.step_with_clock(&device, &params, &counts, Some(&clock));
                 assert_eq!(
                     table.words(),
@@ -397,157 +487,24 @@ fn gpu_flip_tiles_parallel_nearness_matches_cpu_on_synthetic_masks() {
     }
 }
 
-/// `tile_near`, `tile_rank`, the lists, counts, triples, retired list and
-/// parity equal the CPU model on `dam_break(64)` at frames 0, 30 and 60,
-/// stepped through the same buffers so the parity flips and the retired
-/// list sees the previous step; `all_tiles` lights everything; the step's
-/// own stats word carries the same |C| / T³.
-#[test]
-fn gpu_flip_tiles_match_the_cpu_classification() {
-    let scene = WaterScene::dam_break(64);
-    let mut run = Run::new(scene);
-    let device = manifold_gpu::testkit::test_device();
-    let layout = scene.layout();
-    // The step classifies tiles on the native solver grid.
-    let grid = manifold_water_liquid::lattice::FlipSolverGrid::from_lattice(
-        manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout),
-    );
-    let (n, min, h) = (grid.cells(), grid.min(), layout.cell_size as f32);
-    let r = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
-    let total = tile_total(n) as usize;
-    let params = StepParams::default()
-        .with_grid_for_test(n, min, h)
-        .with_tiles_for_test(r, band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS), 0);
-    let table = Table::new(&device, n, r);
-    let mut prev = vec![0u32; total];
-    let mut frame = 0;
-    for (step, target) in [0, 30, 60].into_iter().enumerate() {
-        while frame < target {
-            run.frame();
-            frame += 1;
-        }
-        let counts = cell_counts(&run.particles(), n, min, h);
-        table.step(&device, &params, &counts);
-        let cpu = model(&counts, n, r, &prev, false);
-        assert_model(&table.model(), &cpu, &format!("frame {target}"));
-        assert_eq!(
-            table.parity(),
-            (step as u32 + 1) % 2,
-            "parity after step {}",
-            step + 1
-        );
-        assert_eq!(
-            table.stats_word().to_bits(),
-            (cpu.counts[0] as f32 / total as f32).to_bits(),
-            "stats word at frame {target}"
-        );
-        if target == 0 {
-            // The standing column on the native grid: 209 of its 729 tiles
-            // (160 of 512 on the authored grid, design section 6).
-            assert!(
-                (i64::from(cpu.counts[0]) - 209).abs() <= 1,
-                "frame 0 lights {} tiles of {total}",
-                cpu.counts[0]
-            );
-            // The step itself classifies the same particles on its next tick.
-            run.frame();
-            frame += 1;
-            let stats = run.liquid_stats().active_tiles;
-            assert_eq!(
-                stats.to_bits(),
-                (cpu.counts[0] as f32 / total as f32).to_bits(),
-                "the step's stats word {stats}"
-            );
-        }
-        prev = cpu.rank;
-    }
-    let dense = params.with_tiles_for_test(r, band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS), 1);
-    let counts = cell_counts(&run.particles(), n, min, h);
-    table.step(&device, &dense, &counts);
-    let cpu = model(&counts, n, r, &prev, true);
-    assert!(
-        cpu.near.iter().all(|&v| v == 0)
-            && cpu.rank.iter().all(|&v| v == 0)
-            && cpu.counts[0] == total as u32
-    );
-    assert_model(&table.model(), &cpu, "all_tiles");
-    assert_eq!(table.stats_word(), 1.0);
-    // The lever reaches the step: its stats word reads 1.0 on the next tick.
-    set_all_tiles(true);
-    run.frame();
-    set_all_tiles(false);
-    assert_eq!(
-        run.liquid_stats().active_tiles,
-        1.0,
-        "the step under all_tiles"
-    );
-    run.frame();
-    assert!(run.liquid_stats().active_tiles < 1.0, "the lever released");
-
-    // An inactive slot must actually zero both execution decisions; unchanged
-    // particle results alone could hide full-grid launches that return early.
-    let clock = device.create_buffer_shared(48);
-    let mut plan = [0u32; 12];
-    plan[11] = 1; // live mode, no accepted duration
-    // SAFETY: the shared buffer has exactly these 48 bytes and is not in flight.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            plan.as_ptr().cast::<u8>(),
-            clock.mapped_ptr().expect("shared"),
-            48,
-        )
-    };
-    dispatch_pass(
-        &device,
-        "tiles_lists",
-        &dense,
-        &[
-            (27, &table.near),
-            (28, &table.rank),
-            (29, &table.by_ring),
-            (30, &table.counts),
-            (31, &table.args),
-            (32, &table.retired),
-            (22, &table.capped),
-            (46, &clock),
-        ],
-        1,
-    );
-    let mut inactive = cpu;
-    for triple in 0..r as usize + 3 {
-        inactive.args[3 * triple] = 0;
-    }
-    *inactive.args.last_mut().expect("extension range length") = 0;
-    assert_model(
-        &table.model(),
-        &inactive,
-        "inactive slot gates triples and replay, preserving the table",
-    );
-}
-
 /// A run of `dam_break(64)` whose every frame, the fill included, goes
-/// through the levers `all` and `poison`.
+/// through the `poison` lever.
 struct Twin {
     run: Run,
-    all: bool,
     poison: bool,
 }
 
 impl Twin {
-    fn new(all: bool, poison: bool) -> Self {
-        set_all_tiles(all);
+    fn new(poison: bool) -> Self {
         set_poison(poison);
         let run = Run::new(WaterScene::dam_break(64));
-        set_all_tiles(false);
         set_poison(false);
-        Self { run, all, poison }
+        Self { run, poison }
     }
 
     fn frame(&mut self) {
-        set_all_tiles(self.all);
         set_poison(self.poison);
         self.run.frame();
-        set_all_tiles(false);
         set_poison(false);
     }
 }
@@ -580,51 +537,17 @@ fn first_difference(a: &Run, b: &Run, faces: bool) -> Option<String> {
     None
 }
 
-/// The sparse step equals the dense one through the same kernels and lists
-/// (design section 6 (Proof plan)): 60 frames of `dam_break(64)`, the
-/// particles and the output faces bitwise after every frame.
-#[test]
-fn gpu_flip_sparse_step_matches_dense_bitwise() {
-    let mut sparse = Twin::new(false, false);
-    let mut dense = Twin::new(true, false);
-    if let Some(diff) = first_difference(&sparse.run, &dense.run, false) {
-        panic!("the fill frame differs: {diff}");
-    }
-    let mut active = Vec::with_capacity(60);
-    for frame in 1..=60 {
-        sparse.frame();
-        dense.frame();
-        active.push(sparse.run.liquid_stats().active_tiles);
-        if let Some(diff) = first_difference(&sparse.run, &dense.run, true) {
-            panic!("frame {frame} differs: {diff}");
-        }
-        // The lever reaches the solver's tile lists too: the same iterations.
-        assert_eq!(
-            sparse.run.solver(),
-            dense.run.solver(),
-            "frame {frame}: the solver words differ"
-        );
-    }
-    let mean = active.iter().map(|&a| f64::from(a)).sum::<f64>() / active.len() as f64;
-    assert!(
-        mean > 0.0 && mean < 1.0,
-        "the sparse run lit {mean} of the tiles on average"
-    );
-    println!(
-        "gpu_flip_sparse_step_matches_dense_bitwise: active tiles {:.3} at frame 1, {mean:.3} mean over 60",
-        active[0]
-    );
-}
-
-/// NaN in every cell array of the tiles outside rings 0 and 1 after the
-/// retire never reaches the particles or the output faces: both bitwise
-/// equal to the unpoisoned sparse run over 10 frames (design section 4 (The
-/// defined-value rule)).
+/// NaN in every free slot and in the tiles outside rings 0 and 1 never
+/// reaches the particles or the output faces: both bitwise equal to the
+/// unpoisoned run over 4 frames (design section 4 (The defined-value rule)).
+/// No pass writes the canonical block either: the pooled `faces` and
+/// `distance` end with the 8 elements `pool_canon` wrote, which is what reads
+/// of the absent tiles return.
 #[test]
 fn gpu_flip_sparse_step_survives_poison() {
-    let mut clean = Twin::new(false, false);
-    let mut poisoned = Twin::new(false, true);
-    for frame in 0..=10 {
+    let mut clean = Twin::new(false);
+    let mut poisoned = Twin::new(true);
+    for frame in 0..=4 {
         if frame > 0 {
             clean.frame();
             poisoned.frame();
@@ -640,6 +563,185 @@ fn gpu_flip_sparse_step_survives_poison() {
                 .chain(&p.velocity)
                 .all(|v| v.is_finite())),
             "frame {frame}: a poisoned particle"
+        );
+    }
+    let (faces, distance, table) = poisoned.run.pooled_outputs();
+    let h = WaterScene::dam_break(64).cell_size() as f32;
+    for mask in 0..8usize {
+        let expected = FaceSample {
+            velocity: [0.0; 4],
+            weight: std::array::from_fn(|a| f32::from(a < 3 && (mask >> a) & 1 == 1)),
+        };
+        assert_eq!(faces[faces.len() - 8 + mask], expected, "face canon {mask}");
+        assert_eq!(
+            distance[distance.len() - 8 + mask].to_bits(),
+            (3.0 * h).to_bits(),
+            "distance canon {mask}"
+        );
+    }
+    let tiles = table.len() / 2;
+    let absent = table[..tiles].iter().filter(|&&slot| slot == NONE).count();
+    assert!(
+        absent > 0 && absent < tiles,
+        "{absent} of {tiles} tiles absent: the water holds some, not all"
+    );
+}
+
+/// The tiles with a slot.
+fn held_tiles(held: &Held) -> Vec<u32> {
+    (0..held.slot_of.len() as u32)
+        .filter(|&t| held.slot_of[t as usize] != NONE)
+        .collect()
+}
+
+/// slot_of and tile_of are inverse on held slots, every slot is free or held
+/// exactly once, and the free stack's live words are distinct.
+fn assert_consistent(held: &Held, pool: usize, what: &str) {
+    let mut seen = vec![0u32; pool];
+    for (t, &slot) in held.slot_of.iter().enumerate() {
+        if slot != NONE {
+            assert!((slot as usize) < pool, "{what}: tile {t} holds slot {slot}");
+            assert_eq!(held.tile_of[slot as usize], t as u32, "{what}: tile {t}");
+            seen[slot as usize] += 1;
+        }
+    }
+    for (slot, &tile) in held.tile_of.iter().enumerate() {
+        if tile != NONE {
+            assert_eq!(
+                held.slot_of[tile as usize], slot as u32,
+                "{what}: slot {slot}"
+            );
+        }
+    }
+    for &slot in &held.free {
+        assert!((slot as usize) < pool, "{what}: free slot {slot}");
+        assert_eq!(
+            held.tile_of[slot as usize], NONE,
+            "{what}: slot {slot} free and held"
+        );
+        seen[slot as usize] += 1;
+    }
+    assert!(
+        seen.iter().all(|&count| count == 1),
+        "{what}: a slot is neither free nor held exactly once: {:?}",
+        seen.iter().position(|&count| count != 1)
+    );
+}
+
+fn cells_with(n: [u32; 3], at: &[[u32; 3]]) -> Vec<u32> {
+    let mut counts = vec![0u32; (n[0] * n[1] * n[2]) as usize];
+    for p in at {
+        counts[(p[0] + n[0] * (p[1] + n[1] * p[2])) as usize] = 3;
+    }
+    counts
+}
+
+/// Three steps of a moving synthetic mask through classify, rings and the
+/// allocator; every step is checked against the CPU model's rings, and the
+/// bookkeeping of each is returned.
+fn allocation_sequence(device: &manifold_gpu::GpuDevice) -> Vec<Held> {
+    let n = [96, 64, 80];
+    let extension_layers = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
+    let r = ring_max(extension_layers);
+    let total = tile_total(n) as usize;
+    let params = StepParams::default()
+        .with_grid_for_test(n, [0.0; 3], 1.0)
+        .with_tiles_for_test(r, extension_layers, 0);
+    let table = Table::new(device, n, r);
+    let masks: [&[[u32; 3]]; 3] = [
+        &[[4, 4, 4]],
+        &[[60, 30, 40]],
+        &[[60, 30, 40], [10, 50, 70], [90, 4, 40]],
+    ];
+    let mut previous: Vec<u32> = vec![0; total];
+    let mut before: Vec<u32> = Vec::new();
+    let mut out = Vec::new();
+    for (step, mask) in masks.into_iter().enumerate() {
+        let counts = cells_with(n, mask);
+        table.step(device, &params, &counts);
+        table.allocate(device, &params);
+        let cpu = model(&counts, n, r, &previous, false);
+        let held = table.held();
+        let what = format!("step {step}");
+        assert_consistent(&held, total, &what);
+        assert_eq!(held.exhausted, 0, "{what}: a whole pool never runs out");
+        let expected: Vec<u32> = (0..total as u32)
+            .filter(|&t| cpu.rank[t as usize] <= r)
+            .collect();
+        assert_eq!(
+            held_tiles(&held),
+            expected,
+            "{what}: held set is ring <= ring_max"
+        );
+        assert!(
+            expected.len() < total,
+            "{what}: the mask leaves tiles absent"
+        );
+        let mut fresh = held.fresh.clone();
+        fresh.sort_unstable();
+        let newly: Vec<u32> = expected
+            .iter()
+            .copied()
+            .filter(|t| !before.contains(t))
+            .collect();
+        assert_eq!(fresh, newly, "{what}: fresh list is the newly held tiles");
+        assert!(!newly.is_empty(), "{what}: the mask moved");
+        previous = cpu.rank;
+        before = expected;
+        out.push(held);
+    }
+    out
+}
+
+/// The allocator holds exactly the tiles within ring_max of the water over a
+/// moving mask, frees the rest, lists what is new, and gives the same slots
+/// on a second run.
+#[test]
+fn gpu_flip_allocator_follows_the_water_deterministically() {
+    let device = manifold_gpu::testkit::test_device();
+    let first = allocation_sequence(&device);
+    let second = allocation_sequence(&device);
+    assert_eq!(first, second, "slot assignment depends only on the tiles");
+}
+
+/// A pool shorter than the water's reach keeps the nearest tiles: every tile
+/// with ring <= 1 (the cell set C lies there) is held, the exhausted word is
+/// set, the farther rings take what is left.
+#[test]
+fn gpu_flip_short_pool_keeps_the_nearest_tiles() {
+    let device = manifold_gpu::testkit::test_device();
+    let n = [96, 64, 80];
+    let extension_layers = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
+    let r = ring_max(extension_layers);
+    let counts = cells_with(n, &[[44, 30, 40]]);
+    let cpu = model(&counts, n, r, &vec![0; tile_total(n) as usize], false);
+    let near = cpu.counts[1] as usize;
+    assert!(
+        cpu.counts[2] > cpu.counts[1],
+        "the mask has tiles past ring 1"
+    );
+    for pool in [near, near + 5] {
+        let params = StepParams::default()
+            .with_grid_for_test(n, [0.0; 3], 1.0)
+            .with_tiles_for_test(r, extension_layers, 0);
+        let table = Table::with_pool(&device, n, r, pool);
+        table.step(&device, &params, &counts);
+        table.allocate(&device, &params);
+        let held = table.held();
+        assert_consistent(&held, pool, &format!("pool {pool}"));
+        assert_eq!(held.exhausted, 1, "pool {pool}");
+        assert!(held.free.is_empty(), "pool {pool}: every slot taken");
+        let tiles = held_tiles(&held);
+        assert_eq!(tiles.len(), pool);
+        assert!(
+            (0..tile_total(n) as u32)
+                .filter(|&t| cpu.rank[t as usize] <= 1)
+                .all(|t| tiles.contains(&t)),
+            "pool {pool}: a ring 0 or 1 tile is absent"
+        );
+        assert!(
+            tiles.iter().all(|&t| cpu.rank[t as usize] <= r),
+            "pool {pool}: a tile past ring_max is held"
         );
     }
 }

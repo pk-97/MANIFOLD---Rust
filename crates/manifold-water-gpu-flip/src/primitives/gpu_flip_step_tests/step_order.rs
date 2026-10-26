@@ -12,13 +12,10 @@ pub(super) fn gpu_flip_step_order_extend_constraint_value_proof() {
         let mut got = initial.clone();
         for _ in 0..super::super::gpu_flip_step::band_layers(cfl) {
             want = cpu_extend(&want, N);
-            got = Pass::new().bind(3, &got, Layout::Records).run(
-                "extend_faces",
-                &lattice(),
-                4,
-                face_len(),
-                face_len(),
-            );
+            let mut pass = Pass::new();
+            pass.bind(3, &got, Layout::Records);
+            let threads = pass.allocated_tiles(&lattice());
+            got = pass.run("extend_faces", &lattice(), 4, face_len(), threads);
         }
         let mut open = vec![
             FaceSample {
@@ -88,7 +85,7 @@ pub(super) fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
     assert_eq!(ranges.iter().map(|r| r.count).sum::<u32>(), 300);
     let mut pass = Pass::new();
     let removed: Vec<FluidParticle> = pass
-        .bind(1, &ranges, Layout::Dense)
+        .bind_ranges(&ranges)
         .bind(38, &sorted, Layout::Dense)
         .run("remove_crowded_markers", &lattice(), 38, 300, cell_len());
     let mut speeds = [1.0; 300];

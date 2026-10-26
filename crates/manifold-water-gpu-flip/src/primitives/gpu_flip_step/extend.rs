@@ -1,6 +1,7 @@
-//! Face extension into air, dense or by the tile lists.
+//! Face extension into air over the allocated tiles.
 
 use super::*;
+use manifold_water_liquid::tile_storage::tile_total;
 
 /// `layers` extension passes from `source` into `target`, ping-ponging
 /// through `scratch` so the last pass lands in `target`. `source` may be
@@ -10,7 +11,6 @@ pub(super) fn extend(
     pipes: &Pipelines,
     clock_plan: &GpuBuffer,
     params: &StepParams,
-    face_groups: [u32; 3],
     table: &TileTable,
     [source, target, scratch]: [&GpuBuffer; 3],
     layers: u32,
@@ -23,6 +23,10 @@ pub(super) fn extend(
         enc.copy_buffer_to_buffer(source, scratch, source.size.min(scratch.size));
         from = scratch;
     }
+    // The replayed dispatch covers every tile and its threads past the
+    // allocated list return; the direct one reads the list's own triple.
+    let every_tile = groups(tile_total(params.n) * 512);
+    let allocated = allocated_args_offset(table.ring_max);
     let gate = (params.step_in_tick > 0 && indirect_extend()).then_some(table);
     if let Some(table) = gate {
         debug_assert_eq!(params.extension_layers, layers);
@@ -39,22 +43,24 @@ pub(super) fn extend(
             uniform(params),
             buffer(3, from),
             buffer(4, to),
+            buffer(29, &table.by_ring),
+            buffer(30, &table.counts),
             buffer(51, &table.table),
         ];
         if let Some(table) = gate {
             // The first slot is normally active and keeps ordinary replay.
-            // Later slots use the same full grid when active, zero groups
+            // Later slots run every tile's groups when active, zero groups
             // otherwise; tiles_lists already writes that decision each slot.
             enc.dispatch_compute_gated(
                 &pipes.extend,
                 &bindings,
-                face_groups,
+                every_tile,
                 &table.args,
-                face_args_offset(table.ring_max),
+                allocated,
                 label,
             );
         } else {
-            enc.dispatch_compute(&pipes.extend, &bindings, face_groups, label);
+            enc.dispatch_compute_indirect(&pipes.extend, &bindings, &table.args, allocated, label);
         }
         from = to;
     }

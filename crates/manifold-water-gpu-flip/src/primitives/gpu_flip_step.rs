@@ -269,9 +269,10 @@ pub(crate) struct StepParams {
     pub(crate) coupled_h: f32,
     /// Tiles the pool holds ([`pool_tiles`]).
     pub(crate) pool_tiles: u32,
-    /// Tiles with ring at most this are allocated ([`ALLOC_RING`]).
+    /// Tiles with ring at most this are allocated: the step's [`ring_max`].
     pub(crate) alloc_ring: u32,
-    pub(crate) _pad: u32,
+    /// `1.0 / cell_size`, the value the sort bins by (`SortJob::inv_cell`).
+    pub(crate) inv_cell: f32,
 }
 }
 
@@ -575,6 +576,13 @@ impl StepParams {
         self.n = n;
         self.box_min = min;
         self.cell_size = cell_size;
+        self.inv_cell = 1.0 / cell_size;
+        self
+    }
+
+    /// The particle slots `tiles_mark` reads.
+    pub fn with_capacity_for_test(mut self, capacity: u32) -> Self {
+        self.capacity = capacity;
         self
     }
     pub fn with_tiles_for_test(
@@ -584,6 +592,7 @@ impl StepParams {
         all_tiles: u32,
     ) -> Self {
         self.ring_max = ring_max;
+        self.alloc_ring = ring_max;
         self.extension_layers = extension_layers;
         self.all_tiles = all_tiles;
         self

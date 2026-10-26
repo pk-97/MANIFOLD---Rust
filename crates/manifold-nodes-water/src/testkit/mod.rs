@@ -13,9 +13,6 @@ pub mod liquid_extents;
 #[cfg(any(test, feature = "testkit"))]
 pub mod whitewater_scene;
 
-#[cfg(feature = "gpu-proofs")]
-#[cfg(any(test, feature = "testkit"))]
-pub mod whitewater_fingerprints;
 
 /// Couple liquid domain `fluid` with Physics World `rigid` as a scene's
 /// install hook does: the liquid pushes the `colliders` bodies and flows

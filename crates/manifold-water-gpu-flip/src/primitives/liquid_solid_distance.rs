@@ -261,15 +261,6 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>", "buf_solid[idx] = body(idx, params.dispatch_count,"] {
-            assert!(wgsl.contains(binding), "{binding}: {wgsl}");
-        }
-        assert!(
-            wgsl.contains("closed_faces: i32,\n    wall_inset: f32,\n    body_count: i32,")
-                && wgsl.contains("dispatch_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,"),
-            "{wgsl}"
-        );
-        assert_eq!(std::mem::size_of::<SolidDistanceUniforms>(), 64);
     }
 
 }

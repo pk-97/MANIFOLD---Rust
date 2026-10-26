@@ -13,7 +13,7 @@
 // `ts_cell_at` / `ts_face`, never written where `ts_cell_stored` /
 // `ts_record_stored` is false. The solid corner lattice is a dense
 // (n + 1)³ array from the box minimum, reached through `ts_corner`, and the
-// sort's ranges a dense box, through `ts_dense_cell`.
+// sort's ranges are keyed by the pool index of the cell, through `ts_cell_at`.
 //
 // The CPU sizes every buffer for the lattice and the particle slots before
 // it dispatches; each pass only checks its thread is inside its range.
@@ -98,9 +98,11 @@ struct Params {
     // Tiles the pool holds (P), the words after the lattice's tiles in
     // `ts_table`.
     pool_tiles: u32,
-    // Tiles with ring at most this are allocated (`ALLOC_RING` in tiles.rs).
+    // Tiles with ring at most this are allocated (the step's `ring_max`).
     alloc_ring: u32,
-    pad3: u32,
+    // 1 / cell_size as the host computes it, the sort's `inv_cell`: a particle
+    // bins to the same cell in `tiles_mark` as in the sort.
+    inv_cell: f32,
 };
 
 struct CellRange {

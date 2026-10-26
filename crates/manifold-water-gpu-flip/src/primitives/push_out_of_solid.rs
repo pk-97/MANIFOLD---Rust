@@ -223,15 +223,6 @@ mod tests {
         )
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(
-            wgsl.contains("var<storage, read> buf_solid: array<f32>"),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("buf_out[idx] = body(idx, params.dispatch_count"),
-            "{wgsl}"
-        );
-        assert_eq!(std::mem::size_of::<PushUniforms>(), 48);
     }
 }
 

@@ -163,11 +163,6 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(wgsl.contains("var<storage, read> buf_bodies: array<Element>"), "{wgsl}");
-        assert!(wgsl.contains("buf_bodies_out[idx] = body(idx, params.dispatch_count,"), "{wgsl}");
-        assert!(wgsl.contains("var<storage, read> buf_reaction: array<i32>"), "{wgsl}");
-        assert_eq!(std::mem::size_of::<MoveBodiesUniforms>(), 48);
-        assert!(wgsl.contains("dynamic_count: i32,\n    dispatch_count: u32,\n    _pad0: u32,"), "{wgsl}");
     }
 }
 

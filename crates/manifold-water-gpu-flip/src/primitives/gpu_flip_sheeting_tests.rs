@@ -11,6 +11,7 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels,
 };
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
+use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::tile_storage::testkit::{
     from_pool, identity_table, records_to_pool, to_pool,
 };
@@ -97,12 +98,16 @@ fn sort(device: &GpuDevice, markers: &[[f32; 3]], cells: [u32; 3], h: f32) -> So
     let source = shared(device, bytemuck::cast_slice(&records));
     let particles = device.create_buffer_shared(source.size);
     let order = device.create_buffer_shared((4 * records.len()) as u64);
+    // The ranges are keyed by the cell's pool index, in the identity pool.
+    let pool = pool(device, cells);
     let mut sorter = ParticleSorter::default();
-    sorter.prepare(device);
-    sorter.reserve_ranges(device, cells).expect("ranges");
+    sorter.prepare_pooled(device);
+    sorter
+        .reserve_keys(device, pool_len(pool.tiles))
+        .expect("ranges");
     let mut enc = device.create_encoder("sheeting proof sort");
     sorter
-        .encode(
+        .encode_pooled(
             device,
             &mut enc,
             &SortJob {
@@ -117,6 +122,8 @@ fn sort(device: &GpuDevice, markers: &[[f32; 3]], cells: [u32; 3], h: f32) -> So
                 order: Some(&order),
                 gate: None,
             },
+            &pool.table,
+            pool.tiles,
             &LABELS,
         )
         .expect("sort");
@@ -886,7 +893,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
                     ranges,
                     scan: stage.winners(),
                     plan: &plan,
-                    params: [capacity, cells.iter().product(), stage.ranks(), 1],
+                    params: [capacity, pool_len(pool.tiles) as u32, stage.ranks(), 1],
                 },
             );
             enc.compute_memory_barrier_buffers();

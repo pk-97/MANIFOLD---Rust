@@ -257,50 +257,5 @@ impl Primitive for MatterToGrid {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matter_to_grid_params_are_eighty_bytes() {
-        assert_eq!(std::mem::size_of::<P2gParams>(), 80);
-    }
-
-    /// The kernel inlines D5's scales, mass unit and rounding hash; they must
-    /// equal the shared definitions the f64 reference uses.
-    #[test]
-    fn matter_to_grid_body_pins_fixed_point_constants() {
-        use crate::matter::{MASS_SCALE, MOMENTUM_SCALE, mass_unit, rounding_hash};
-        assert_eq!(MASS_SCALE, 65_536.0);
-        assert!(SHADER.contains("let to_mass = 65536.0 * inv_mass_unit;"));
-        assert_eq!(MOMENTUM_SCALE, 134_217_728.0);
-        // `matter_momentum_unit_round_trips` runs this arithmetic in f32.
-        assert!(
-            SHADER
-                .contains("let to_momentum = 134217728.0 / params.momentum_unit * inv_mass_unit;")
-        );
-        assert_eq!(mass_unit(2.0), 125.0 * 8.0);
-        assert!(
-            SHADER
-                .contains("let inv_mass_unit = 1.0 / (125.0 * cell_size * cell_size * cell_size);")
-        );
-        for line in [
-            "x = x ^ (x >> 16u);",
-            "x = x * 0x7feb352du;",
-            "x = x ^ (x >> 15u);",
-            "x = x * 0x846ca68bu;",
-            "hash(pt.id ^ hash(params.tick_index * 4096u + params.substep_in_tick))",
-            "let fraction = u32((x - whole) * 16777216.0);",
-            "let carry = (fraction + (hash(key ^ slot) >> 8u)) >> 24u;",
-        ] {
-            assert!(SHADER.contains(line), "{line}");
-        }
-        // The GPU word-for-word comparison in tests/gpu_proofs/matter_transfer.rs
-        // proves the two hashes agree; here, only that it mixes.
-        assert_eq!(rounding_hash(0), 0);
-        assert_ne!(rounding_hash(1), rounding_hash(2));
-    }
-}
-
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

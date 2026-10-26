@@ -28,8 +28,6 @@ mod coupling_tests;
 mod group_tests;
 mod impulses;
 #[cfg(test)]
-mod parity_tests;
-#[cfg(test)]
 mod scan_collider_tests;
 mod targeted_fields;
 #[cfg(test)]

@@ -33,7 +33,7 @@ fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if ring == 2 && max(max(offset.x, offset.y), offset.z) < 2 {
                         continue;
                     }
-                    let range = ranges[ts_dense_cell(vec3<i32>(x, y, z))];
+                    let range = ranges[ts_cell_at(vec3<i32>(x, y, z))];
                     let start = min(range.start, slots);
                     let end = start + min(range.count, slots - start);
                     for (var s = start; s < end; s = s + 1u) {

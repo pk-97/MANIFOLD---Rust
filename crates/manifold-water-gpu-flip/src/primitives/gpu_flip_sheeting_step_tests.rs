@@ -26,6 +26,7 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels,
 };
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
+use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool, to_pool};
 
 const H: f32 = 0.25;
@@ -426,9 +427,12 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     let source = shared(bytemuck::cast_slice(&records), 32 * capacity);
     let particles = device.create_buffer_shared(32 * capacity as u64);
     let order = device.create_buffer_shared(4 * capacity as u64);
+    // The ranges are keyed by the cell's pool index, in the identity pool.
+    let (table_words, pool_tiles) = identity_table(cells);
+    let table = shared(bytemuck::cast_slice(&table_words), 4 * table_words.len());
     let mut sorter = ParticleSorter::default();
-    sorter.prepare(&device);
-    sorter.reserve_ranges(&device, cells).unwrap();
+    sorter.prepare_pooled(&device);
+    sorter.reserve_keys(&device, pool_len(pool_tiles)).unwrap();
     let labels = SortLabels {
         clear: "clear",
         count: "count",
@@ -443,7 +447,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     };
     let mut enc = device.create_encoder("sheeting step sort");
     sorter
-        .encode(
+        .encode_pooled(
             &device,
             &mut enc,
             &SortJob {
@@ -458,12 +462,12 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
                 order: Some(&order),
                 gate: None,
             },
+            &table,
+            pool_tiles,
             &labels,
         )
         .unwrap();
     enc.commit_and_wait_completed();
-    let (table_words, pool_tiles) = identity_table(cells);
-    let table = shared(bytemuck::cast_slice(&table_words), 4 * table_words.len());
     let pooled_phi = |phi: &[f32]| {
         let pooled = to_pool(phi, cells, &[3.0 * h]);
         shared(bytemuck::cast_slice(&pooled), 4 * pooled.len())
@@ -517,7 +521,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
                 ranges,
                 scan: stage.winners(),
                 plan,
-                params: [capacity as u32, 64000, stage.ranks(), 1],
+                params: [capacity as u32, pool_len(pool_tiles) as u32, stage.ranks(), 1],
             },
         );
         enc.compute_memory_barrier_buffers();

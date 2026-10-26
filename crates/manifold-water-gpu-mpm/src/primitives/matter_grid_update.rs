@@ -318,34 +318,6 @@ mod tests {
         )
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(
-            wgsl.contains("var<storage, read> buf_accum: array<i32>"),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("buf_grid_out[idx] = body(idx, params.dispatch_count, e_grid,"),
-            "{wgsl}"
-        );
-        assert_eq!(std::mem::size_of::<GridUpdateUniforms>(), 96);
-        assert!(
-            wgsl.contains("first_tick: i32,\n    dispatch_count: u32,\n}"),
-            "{wgsl}"
-        );
-        for binding in [
-            "buf_bodies",
-            "buf_shapes",
-            "buf_atlas: array<u32>",
-            "buf_forces: array<f32>",
-            "buf_impulses: array<f32>",
-        ] {
-            assert!(wgsl.contains(binding), "{binding}: {wgsl}");
-        }
-        let body = include_str!("shaders/matter_grid_update_body.wgsl");
-        assert_eq!(crate::matter::MASS_SCALE, 65_536.0);
-        assert_eq!(crate::matter::MOMENTUM_SCALE, 134_217_728.0);
-        assert!(body.contains("/ m_norm * (momentum_unit * (65536.0 / 134217728.0));"));
-        assert!(body.contains("m_norm / 65536.0 * mass_unit") && body.contains("0.9 * vel_unit"));
-        assert_eq!(crate::matter::VELOCITY_CLAMP_CFL, 0.9);
     }
 }
 

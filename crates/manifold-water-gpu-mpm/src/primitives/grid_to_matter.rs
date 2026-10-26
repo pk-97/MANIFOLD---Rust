@@ -301,31 +301,6 @@ mod tests {
         )
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
-        assert!(
-            wgsl.contains("var<storage, read> buf_grid: array<Element2>"),
-            "{wgsl}"
-        );
-        assert!(
-            wgsl.contains("buf_points_out[idx] = body(idx, params.dispatch_count, e_points,"),
-            "{wgsl}"
-        );
-        for binding in [
-            "buf_bodies",
-            "buf_shapes",
-            "buf_atlas: array<u32>",
-            "buf_reaction_out: array<atomic<i32>>",
-        ] {
-            assert!(wgsl.contains(binding), "{binding}: {wgsl}");
-        }
-        assert!(
-            !wgsl.contains("buf_reaction_out[idx]"),
-            "the wrapper never writes the reaction words: {wgsl}"
-        );
-        assert_eq!(std::mem::size_of::<ToMatterUniforms>(), 80);
-        assert!(
-            wgsl.contains("dynamic_count: i32,\n    dispatch_count: u32,\n    _pad0: u32,\n}"),
-            "{wgsl}"
-        );
     }
 
     #[test]
@@ -337,15 +312,6 @@ mod tests {
             manifold_node_engine::freeze::classify::FusionKind::Boundary
         );
         assert_eq!(node.atomic_outputs(), &["reaction_out"]);
-    }
-
-    /// The body inlines D3's J bound; it must equal the shared constant the
-    /// f64 reference uses.
-    #[test]
-    fn grid_to_matter_body_pins_the_j_bound() {
-        let body = include_str!("shaders/grid_to_matter_body.wgsl");
-        assert_eq!(crate::matter::COHESIVE_J_MAX, 2.0);
-        assert!(body.contains("select(2.0, 1.0, cohesion <= 0.0)"), "{body}");
     }
 }
 

@@ -14,6 +14,10 @@
 //! solid, so any Resolution runs and the V-cycle stays symmetric
 //! (`scripts/mgpcg_reference.py`, the oracle, proves both).
 //!
+//! A solve on the fine lattice without bodies starts from the pressure its
+//! buffer holds (the warm start): the last tick's answer is most of this
+//! tick's, so the stop, relative to |f|∞, comes sooner.
+//!
 //! A solve may run its gradient on a coarse level instead of the fine one
 //! ([`Solve::level`], docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11
 //! (Solve Level)): the right-hand side is restricted down to it by the
@@ -75,6 +79,9 @@ const REDUCE: u32 = 2;
 /// face); the sum is added to `out` instead of written.
 const RESTRICT_MASK: u32 = 1;
 const RESTRICT_ADD: u32 = 4;
+/// init's and check's mode bit (gpu_flip_pressure.wgsl WARM): init keeps the
+/// pressure as x0, check is the warm start's test.
+const WARM: u32 = 4;
 
 /// The V-cycle's lattices, finest first: halve every side, rounding up, while
 /// any side is over [`COARSEST_SIDE`].
@@ -143,8 +150,7 @@ pub(crate) fn scratch_bytes(lattice: [u32; 3], pool_tiles: u32) -> u64 {
         .sum();
     let last = cells(*levels.last().expect("at least the fine level"));
     let tiles = u64::from(*tile_bases(&levels).last().expect("the total"));
-    5 * pool_len(pool_tiles) * 4
-        + pool_len(pool_tiles) * ROW_BYTES
+    POOLED_BYTES_PER_CELL * pool_len(pool_tiles)
         + coarse
         + last * last * 4
         + 2 * tiles * 4
@@ -169,18 +175,28 @@ const FACE_BYTES: u64 = size_of::<FaceSample>() as u64;
 /// two diagonals.
 const ROW_BYTES: u64 = 32;
 
-/// Dispatches one [`PressureSolver::prepare`] and one
-/// [`PressureSolver::solve`] of `iterations` encode at `lattice`.
+/// Fine vectors the solver pools (`r z p scratch body`).
+const POOLED_VECTORS: u64 = 5;
+
+/// Bytes per fine cell of the solver's pooled fields: the vectors and the
+/// operator rows.
+pub(crate) const POOLED_BYTES_PER_CELL: u64 = POOLED_VECTORS * 4 + ROW_BYTES;
+
+/// Dispatches one [`PressureSolver::prepare`] and one fine-level
+/// [`PressureSolver::solve`] without bodies on `stop` (its cap's rounds)
+/// encode at `lattice`.
 #[cfg(test)]
-pub(crate) fn passes(lattice: [u32; 3], iterations: u32) -> (usize, usize) {
+pub(crate) fn passes(lattice: [u32; 3], stop: Stop) -> (usize, usize) {
     let coarse = level_lattices(lattice).len() - 1;
     let (before, after) = round_commands(coarse, BodyRound::Without);
     // Prepare: every level's rows, tile flags and list, each coarse level's
     // water and faces, the inverse. The solve: arming the gate, init and the
-    // start's check, then per iteration.
+    // start's check, the warm start's residual and, on the engine's stop,
+    // its check, then per iteration.
+    let prelude = 4 + usize::from(stop.tolerance() >= 0.0);
     (
         5 * coarse + 4,
-        3 + iterations as usize * (before + after) as usize,
+        prelude + stop.cap() as usize * (before + after) as usize,
     )
 }
 
@@ -339,6 +355,7 @@ struct Pipelines {
     inverse: GpuComputePipeline,
     coarse_solve: GpuComputePipeline,
     init: GpuComputePipeline,
+    warm: GpuComputePipeline,
     dot_partial: GpuComputePipeline,
     dot_finalize: GpuComputePipeline,
     direction: GpuComputePipeline,
@@ -377,6 +394,7 @@ impl Pipelines {
             ),
             coarse_solve: pipeline("coarse_solve_main", "gpu_flip.pressure.coarse_solve"),
             init: pipeline("init_main", "gpu_flip.pressure.init"),
+            warm: pipeline("warm_main", "gpu_flip.pressure.warm"),
             dot_partial: pipeline("dot_partial_main", "gpu_flip.pressure.dot_partial"),
             dot_finalize: pipeline("dot_finalize_main", "gpu_flip.pressure.dot_finalize"),
             direction: pipeline("direction_main", "gpu_flip.pressure.direction"),
@@ -716,6 +734,13 @@ manifold_core::testkit_visible! {
 /// One solve's inputs.
 pub(crate) struct Solve<'a> {
     pub rhs: &'a GpuBuffer,
+    /// The fine pressure, written with the answer. A solve on the fine
+    /// level without bodies reads it first as its guess (the warm start):
+    /// the step's buffer holds the last solve's answer, and a newly
+    /// allocated tile holds 0. The step's density solve writes the same
+    /// buffer, so it starts from the tick's pressure and the next tick's
+    /// pressure solve from its answer; any guess is valid, a closer one
+    /// stops sooner.
     pub pressure: &'a GpuBuffer,
     pub stop: Stop,
     pub bodies: Option<(&'a BodyPasses, &'a Bodies<'a>)>,
@@ -888,9 +913,13 @@ impl PressureSolver {
 
     manifold_core::testkit_visible! {
         /// Solve L p = `run.rhs` on the prepared water by conjugate gradient
-        /// iterations from zero, one V-cycle each; p into `run.pressure`.
-        /// `run.stop` says when it ends; the solve's record (iterations run,
-        /// stopped or not) is in [`Self::progress`] once the GPU is done.
+        /// iterations, one V-cycle each; p into `run.pressure`. At level 0
+        /// without bodies the iterations start from the pressure
+        /// `run.pressure` holds on water with an open face (0 elsewhere), and
+        /// a guess that already meets the stop runs none; otherwise they start
+        /// from zero. `run.stop` says when it ends; the solve's record
+        /// (iterations run, stopped or not) is in [`Self::progress`] once the
+        /// GPU is done.
         /// `water` must be what [`Self::prepare`] last saw. With bodies, the
         /// dynamic bodies sit inside the operator: every iteration's s = L p gains
         /// their ρh·G M⁻¹ Gᵀ p (`scripts/mgpcg_reference.py` `body_solve`). The
@@ -1032,11 +1061,15 @@ impl PressureSolver {
                 [1, 1, 1],
                 "gpu_flip.pressure.arm",
             );
+            // The warm start: the fine pressure is the guess. Above level 0 x is
+            // the level's own correction, which starts from zero; with bodies
+            // r0 would need their product on the guess, so they start from zero.
+            let warm = k == 0 && bodies.is_none();
             plain.dispatch(
                 enc,
                 &pipes.init,
                 &[
-                    bytes(&Params { mode: REDUCE, ..fine }),
+                    bytes(&Params { mode: REDUCE | if warm { WARM } else { 0 }, ..fine }),
                     buffer(1, top.water),
                     buffer(2, top.faces),
                     buffer(3, rhs_k),
@@ -1048,6 +1081,30 @@ impl PressureSolver {
                 "gpu_flip.pressure.init",
             );
             check(enc, pipes, b, plain, &Params { mode: 1, ..fine });
+            if warm {
+                // r = f − L x0; on the engine's stop its |r0|∞ folds for a check
+                // that ends the solve at once when the guess already meets it.
+                let converged = stop.tolerance() >= 0.0;
+                plain.dispatch(
+                    enc,
+                    &pipes.warm,
+                    &[
+                        bytes(&Params { mode: if converged { REDUCE } else { 0 }, ghost: top.ghost, ..fine }),
+                        buffer(1, top.water),
+                        buffer(3, rhs),
+                        buffer(5, x),
+                        buffer(6, &b.r),
+                        buffer(11, &b.progress),
+                        buffer(16, &b.partials),
+                        buffer(17, top.rows),
+                    ],
+                    slots.level(0),
+                    "gpu_flip.pressure.warm",
+                );
+                if converged {
+                    check(enc, pipes, b, plain, &Params { mode: WARM, ..fine });
+                }
+            }
             match (round, bodies) {
                 // The proofs' lever (gate off): a plain body product splits the
                 // round around an ungated chain, two segments a round, encoded
@@ -1259,26 +1316,6 @@ impl Stop {
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl PressureSolver {
-    /// Compare a changed stencil against its original shader in the full
-    /// solve, retaining every other production pipeline and buffer.
-    #[cfg(test)]
-    pub(crate) fn set_stencil_shader_for_proof(&mut self, device: &GpuDevice, shader: &str) {
-        let pipes = self
-            .pipelines
-            .as_mut()
-            .expect("pressure pipelines prepared");
-        pipes.smooth = device.create_compute_pipeline(
-            shader,
-            "smooth_main",
-            "gpu_flip.pressure.smooth.reference",
-        );
-        pipes.residual = device.create_compute_pipeline(
-            shader,
-            "residual_main",
-            "gpu_flip.pressure.residual.reference",
-        );
-    }
-
     /// Copies the last solve's scalars (iteration k's r·z at 2k, p·s at
     /// 2k + 1) into `into`, a shared buffer of 2 · MAX_ITERATIONS floats.
     pub fn copy_scalars(&self, enc: &mut GpuEncoder, into: &GpuBuffer) {
@@ -1943,36 +1980,13 @@ fn dot_finalize<S: Sink>(
     );
 }
 
-/// gpu_flip_pressure.wgsl KEEP_RANGES: the stop leaves later rounds' range
-/// entries live.
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-const KEEP_RANGES: u32 = 8;
-
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-static KEEP_RANGES_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Test-only: the stop leaves every later round executing, as a chunk of
-/// rounds would, so a proof sees whether rounds past the stop write anything.
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub fn set_keep_ranges(on: bool) {
-    KEEP_RANGES_ON.store(on, std::sync::atomic::Ordering::SeqCst);
-}
-
-fn keep_ranges() -> u32 {
-    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-    if KEEP_RANGES_ON.load(std::sync::atomic::Ordering::SeqCst) {
-        return KEEP_RANGES;
-    }
-    0
-}
-
 /// The folded partials' max, |r|∞, into the stop's record and the stop
-/// test: the start with `mode` 1, else after iteration `slot`.
+/// test: the start with `mode` 1, the warm start's with [`WARM`], else after
+/// the iteration the record counts.
 fn check<S: Sink>(enc: &mut S, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step: &Params) {
     let params = Params {
         color: partial_count([step.nx, step.ny, step.nz]),
         live: g.live,
-        mode: step.mode | keep_ranges(),
         slot: round_chunk(),
         ..*step
     };
@@ -2058,10 +2072,16 @@ mod tests {
         }
     }
 
+    /// The solve's prelude is the arm, init, the start's check and the warm
+    /// start's residual, and on the engine's stop the warm start's check.
     #[test]
     fn pass_counts_follow_the_levels() {
-        assert_eq!(passes([64; 3], 8), (24, 3 + 8 * (4 * 11 + 1 + 6)));
-        assert_eq!(passes([3; 3], 3), (4, 3 + 3 * 7));
+        assert_eq!(
+            passes([64; 3], Stop::Fixed(8)),
+            (24, 4 + 8 * (4 * 11 + 1 + 6))
+        );
+        assert_eq!(passes([64; 3], Stop::Converged(8)).1, 5 + 8 * (4 * 11 + 1 + 6));
+        assert_eq!(passes([3; 3], Stop::Fixed(3)), (4, 4 + 3 * 7));
         assert_eq!(round_commands(4, BodyRound::Without), (4 * 11 + 1 + 6, 0));
         assert_eq!(round_commands(4, BodyRound::Plain), (4 * 11 + 1 + 3, 4));
         assert_eq!(round_commands(4, BodyRound::Gated), (4 * 11 + 1 + 10, 0));
@@ -2146,6 +2166,7 @@ mod tests {
             "lists_main",
             "poison_main",
             "init_main",
+            "warm_main",
             "smooth_main",
             "restrict_main",
             "prolong_main",
