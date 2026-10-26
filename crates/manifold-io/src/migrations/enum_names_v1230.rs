@@ -431,7 +431,7 @@ mod tests {
     fn numbers_become_the_variants_the_old_tables_named() {
         let p = load(&project_json(true));
         assert_variants(&p);
-        assert_eq!(p.project_version, "1.23.0");
+        assert_eq!(p.project_version, "1.24.0");
     }
 
     #[test]
@@ -440,10 +440,10 @@ mod tests {
         let mut after: Value =
             serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap())
                 .unwrap();
-        assert_eq!(after["projectVersion"], "1.23.0");
+        assert_eq!(after["projectVersion"], "1.24.0");
         let mut expected = before;
-        expected["projectVersion"] = json!("1.23.0");
-        after["projectVersion"] = json!("1.23.0");
+        expected["projectVersion"] = json!("1.24.0");
+        after["projectVersion"] = json!("1.24.0");
         assert_eq!(after, expected);
         assert_variants(&load(&project_json(false)));
     }
@@ -505,9 +505,9 @@ mod tests {
         let on_disk: Value = serde_json::from_str(&json).unwrap();
         let reloaded = load(&on_disk);
         assert_variants(&reloaded);
-        assert_eq!(reloaded.project_version, "1.23.0");
+        assert_eq!(reloaded.project_version, "1.24.0");
         let v = on_disk;
-        assert_eq!(v["projectVersion"], "1.23.0");
+        assert_eq!(v["projectVersion"], "1.24.0");
         assert_eq!(v["settings"]["clockAuthority"], "MidiClock");
         assert_eq!(v["timeline"]["layers"][0]["layerType"], "Audio");
     }

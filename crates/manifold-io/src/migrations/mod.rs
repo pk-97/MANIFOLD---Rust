@@ -9,6 +9,7 @@ pub mod enum_names_v1230;
 pub mod pressure_cap_card_v1190;
 pub mod reversed_depth_v1160;
 pub mod rigid_body_density_v1170;
+pub mod scene_node_ids_v1240;
 pub mod scene_scale_coc_v1140;
 pub mod scene_transform_v1120;
 pub mod solve_level_card_v1180;

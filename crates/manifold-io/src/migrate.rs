@@ -107,6 +107,13 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.23.0".to_string());
     }
 
+    // Scene modifiers address nodes by plain node id, not a scoped
+    // `{scope, node}` reference; this rung rewrites the stored references.
+    if is_version_less_than(&version, "1.24.0") {
+        crate::migrations::scene_node_ids_v1240::migrate(&mut root);
+        root["projectVersion"] = Value::String("1.24.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 
