@@ -172,6 +172,14 @@ pub(super) struct DimForms {
     pub(super) uv_expr: &'static str,
     pub(super) dims_arg: &'static str,
     pub(super) store_coord: &'static str,
+    /// The `own_texel` helper every kernel with a `CoincidentTexel` input
+    /// defines once. It maps the fragment's normalized position `uv` to the
+    /// texel of a texture of any size that covers the same spot:
+    /// `clamp(floor(uv * dims_in), 0, dims_in - 1)`. A texture the size of the
+    /// output gives back exactly the fragment's own texel; a smaller one (the
+    /// render's depth and velocity under temporal upscale) gives the texel
+    /// under that spot instead of a different pixel or one past its edge.
+    pub(super) own_texel_fn: &'static str,
 }
 
 /// WGSL storage-texture format token for the formats a texture kernel can declare
@@ -195,6 +203,9 @@ pub(super) fn dim_forms(dim: TexDim) -> DimForms {
             uv_expr: "(vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims)",
             dims_arg: "vec2<f32>(dims)",
             store_coord: "vec2<i32>(id.xy)",
+            own_texel_fn: "fn own_texel(uv: vec2<f32>, tex_dims: vec2<u32>) -> vec2<i32> {\n    \
+                           return clamp(vec2<i32>(floor(uv * vec2<f32>(tex_dims))), \
+                           vec2<i32>(0), vec2<i32>(tex_dims) - vec2<i32>(1));\n}\n",
         },
         TexDim::D3 => DimForms {
             storage_ty: "texture_storage_3d<rgba16float, write>",
@@ -205,6 +216,9 @@ pub(super) fn dim_forms(dim: TexDim) -> DimForms {
             uv_expr: "(vec3<f32>(id) + 0.5) / vec3<f32>(dims)",
             dims_arg: "vec3<f32>(dims)",
             store_coord: "vec3<i32>(id)",
+            own_texel_fn: "fn own_texel(uv: vec3<f32>, tex_dims: vec3<u32>) -> vec3<i32> {\n    \
+                           return clamp(vec3<i32>(floor(uv * vec3<f32>(tex_dims))), \
+                           vec3<i32>(0), vec3<i32>(tex_dims) - vec3<i32>(1));\n}\n",
         },
     }
 }

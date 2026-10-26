@@ -192,3 +192,240 @@ fn generate_standalone_ext_expands_color_param_to_vec4() {
         "body call must reassemble the Color param as vec4<f32>:\n{generated}"
     );
 }
+
+/// Parses and validates generated WGSL the way the GPU compiler will.
+fn assert_valid_wgsl(wgsl: &str) {
+    let module = naga::front::wgsl::parse_str(wgsl)
+        .unwrap_or_else(|e| panic!("{}\n{wgsl}", e.emit_to_string(wgsl)));
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|e| panic!("{e:?}\n{wgsl}"));
+}
+
+/// A `CoincidentTexel` input is loaded at the texel under the fragment's spot in
+/// THAT texture's own grid, so a velocity or depth buffer smaller than the
+/// output (temporal upscale renders them at 2/3) is read where the fragment is.
+/// The sampler-read input beside it is untouched, and the helper is defined once.
+#[test]
+fn coincident_texel_input_reads_its_own_grid() {
+    use crate::freeze::classify::InputAccess;
+    use crate::ports::PortKind;
+    use std::borrow::Cow;
+
+    let input = |name| NodeInput {
+        name: Cow::Borrowed(name),
+        ty: PortType::Texture2D,
+        kind: PortKind::Input,
+        required: true,
+    };
+    let inputs = [input("in"), input("velocity")];
+    let outputs = [NodeOutput {
+        name: Cow::Borrowed("out"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    }];
+    let body = "fn body(c_in: vec4<f32>, c_velocity: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return c_in + c_velocity;\n}";
+
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: FusionKind::MultiInputCoincident,
+        body,
+        inputs: &inputs,
+        params: &[],
+        input_access: &[InputAccess::Coincident, InputAccess::CoincidentTexel],
+        derived_uniforms: &[],
+        outputs: &outputs,
+        stencil_fetch: false,
+        includes: &[],
+    })
+    .expect("a texel-read atom generates");
+    assert_valid_wgsl(&generated);
+
+    assert_eq!(
+        generated.matches("fn own_texel(").count(),
+        1,
+        "the helper is defined once:\n{generated}"
+    );
+    assert!(
+        generated.contains(
+            "let c_velocity = textureLoad(tex_velocity, \
+             own_texel(uv, textureDimensions(tex_velocity)), 0);"
+        ),
+        "the texel input loads at its own grid's texel:\n{generated}"
+    );
+    assert!(
+        generated.contains("let c_in = textureSampleLevel(tex_in, samp, uv, 0.0);"),
+        "the sampler-read input is unchanged:\n{generated}"
+    );
+    assert!(
+        !generated.contains("let coord"),
+        "no input reads at the fragment's pixel index:\n{generated}"
+    );
+}
+
+/// A volume atom's texel input maps by the same rule in three dimensions.
+#[test]
+fn coincident_texel_volume_input_reads_its_own_grid() {
+    use crate::freeze::classify::InputAccess;
+    use crate::ports::PortKind;
+    use std::borrow::Cow;
+
+    let inputs = [NodeInput {
+        name: Cow::Borrowed("gradient"),
+        ty: PortType::Texture3D,
+        kind: PortKind::Input,
+        required: true,
+    }];
+    let outputs = [NodeOutput {
+        name: Cow::Borrowed("force"),
+        ty: PortType::Texture3D,
+        kind: PortKind::Output,
+        required: false,
+    }];
+    let body = "fn body(c_gradient: vec4<f32>, uv: vec3<f32>, dims: vec3<f32>) -> vec4<f32> {\n    return c_gradient;\n}";
+
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: FusionKind::Pointwise,
+        body,
+        inputs: &inputs,
+        params: &[],
+        input_access: &[InputAccess::CoincidentTexel],
+        derived_uniforms: &[],
+        outputs: &outputs,
+        stencil_fetch: false,
+        includes: &[],
+    })
+    .expect("a texel-read volume atom generates");
+    assert_valid_wgsl(&generated);
+    assert!(
+        generated.contains("fn own_texel(uv: vec3<f32>, tex_dims: vec3<u32>) -> vec3<i32>"),
+        "the volume helper is three-dimensional:\n{generated}"
+    );
+    assert!(
+        generated.contains(
+            "let c_gradient = textureLoad(tex_gradient, \
+             own_texel(uv, textureDimensions(tex_gradient)), 0);"
+        ),
+        "the volume input loads at its own grid's texel:\n{generated}"
+    );
+}
+
+/// A kernel with no texel input carries no helper: the idle path costs nothing
+/// and its WGSL (the pipeline-cache key) is unchanged.
+#[test]
+fn kernel_without_texel_input_has_no_texel_helper() {
+    use crate::ports::PortKind;
+    use std::borrow::Cow;
+
+    let inputs = [NodeInput {
+        name: Cow::Borrowed("in"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Input,
+        required: true,
+    }];
+    let outputs = [NodeOutput {
+        name: Cow::Borrowed("out"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    }];
+    let body = "fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return c;\n}";
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: FusionKind::Pointwise,
+        body,
+        inputs: &inputs,
+        params: &[],
+        input_access: &[],
+        derived_uniforms: &[],
+        outputs: &outputs,
+        stencil_fetch: false,
+        includes: &[],
+    })
+    .expect("a sampler-read atom generates");
+    assert_valid_wgsl(&generated);
+    assert!(
+        !generated.contains("own_texel"),
+        "a sampler-read kernel has no texel helper:\n{generated}"
+    );
+}
+
+/// The fused kernel reads a `CoincidentTexel` external with the same rule as the
+/// standalone wrapper; a plain external still loads at the kernel's own coord.
+#[test]
+fn fused_texel_external_reads_its_own_grid() {
+    use super::{FusionRegion, InputSource, RegionNode, generate_fused};
+    use crate::exec::effect_node::NodeInstanceId;
+    use crate::freeze::classify::InputAccess;
+
+    let mix = "fn body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return mix(a, b, 0.5);\n}\n";
+    let gain = "fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return c * 2.0;\n}\n";
+    let id = NodeInstanceId;
+    let node = |i, kind, body, inputs, input_access| RegionNode {
+        node_id: id(i),
+        fusion_kind: kind,
+        body,
+        params: &[],
+        inputs,
+        input_access,
+        node_inputs: &[],
+        node_outputs: &[],
+        node_includes: &[],
+        derived_uniforms: &[],
+        type_id: String::new(),
+        derived_camera_ext: None,
+        output_storage: "rgba16float",
+        stencil_fetch: false,
+        quantize_f16: false,
+    };
+    let region = FusionRegion {
+        nodes: vec![
+            node(
+                0,
+                FusionKind::MultiInputCoincident,
+                mix,
+                vec![InputSource::External(0), InputSource::External(1)],
+                vec![InputAccess::Coincident, InputAccess::CoincidentTexel],
+            ),
+            node(
+                1,
+                FusionKind::Pointwise,
+                gain,
+                vec![InputSource::Node(id(0))],
+                vec![],
+            ),
+        ],
+        num_external_inputs: 2,
+        outputs: vec![(id(1), "out".to_string())],
+        in_place_alias: None,
+        sampler_address_mode: "clamp",
+        dispatch_count_field: None,
+        virtual_chains: Vec::new(),
+        sampled_externals: Vec::new(),
+        camera_externals: 0,
+        live_anchor: None,
+        output_capacity: None,
+    };
+    let g = generate_fused(&region).expect("a region with a texel external fuses");
+    assert_valid_wgsl(&g.wgsl);
+    assert_eq!(
+        g.wgsl.matches("fn own_texel(").count(),
+        1,
+        "the helper is defined once:\n{}",
+        g.wgsl
+    );
+    assert!(
+        g.wgsl.contains(
+            "let ext_1 = textureLoad(src_1, own_texel(uv, textureDimensions(src_1)), 0);"
+        ),
+        "the texel external loads at its own grid's texel:\n{}",
+        g.wgsl
+    );
+    assert!(
+        g.wgsl.contains("let ext_0 = textureLoad(src_0, coord, 0);"),
+        "a plain external still loads at the kernel's coord:\n{}",
+        g.wgsl
+    );
+}

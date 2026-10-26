@@ -278,7 +278,10 @@ the live outputs too); buffer regions single-output; member element spaces
 uniform; a space-mismatched Coincident external is admitted but marked
 *sampled* (read via `textureSampleLevel` at uv — the resolution-robust
 standalone read); a space-mismatched CoincidentTexel external ⇒ refuse (a
-rescaled sample corrupts texel-exact patterns like dither). `MIN_REGION_LEN=2`
+rescaled sample corrupts texel-exact patterns like dither). A CoincidentTexel
+read, standalone or fused, loads the texel under the fragment's spot in the
+input's own grid (`own_texel`: `clamp(floor(uv * dims_in), 0, dims_in - 1)`), so
+an equal-size input reads exactly the fragment's own texel. `MIN_REGION_LEN=2`
 unless a virtual chain was absorbed.
 
 **Install refusals (whole card falls back to unfused):** gather members

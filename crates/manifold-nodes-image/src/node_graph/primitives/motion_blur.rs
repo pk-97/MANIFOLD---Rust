@@ -691,6 +691,94 @@ mod gpu_tests {
         }
     }
 
+    /// A velocity buffer smaller than the colour (temporal upscale renders it
+    /// at 2/3) is read where the pixel is: the blur equals the one made from
+    /// the same buffer stretched to the colour's size by nearest texel. Sizes
+    /// are picked so no output pixel centre lands on a texel boundary of the
+    /// smaller buffer.
+    #[test]
+    fn smaller_velocity_buffer_is_read_where_the_pixel_is() {
+        let device = manifold_gpu::testkit::test_device();
+        let (w, h) = (24u32, 18u32);
+        let (vw, vh) = (15u32, 11u32);
+        let small = velocity_ramp(vw, vh);
+        let mut stretched = vec![[0.0f32; 2]; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let sx = (2 * x + 1) * vw / (2 * w);
+                let sy = (2 * y + 1) * vh / (2 * h);
+                stretched[(y * w + x) as usize] = small[(sy * vw + sx) as usize];
+            }
+        }
+        let small_tex = upload_velocity(&device, vw, vh, &small);
+        let stretched_tex = upload_velocity(&device, w, h, &stretched);
+        // A per-pixel checker: a linear gradient would average back to itself
+        // under any symmetric smear and hide a wrong velocity read.
+        let mut checker = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                checker[i] = f16::from_f32(((x + y) % 2) as f32);
+                checker[i + 1] = f16::from_f32((x % 3) as f32 * 0.5);
+                checker[i + 2] = f16::from_f32((y % 2) as f32);
+                checker[i + 3] = f16::from_f32(1.0);
+            }
+        }
+        let color_tex = upload_rgba16f(&device, w, h, "motion-blur-checker", &checker);
+
+        let uniforms = mb_uniforms(32.0, 180.0);
+        let bytes = bytemuck::bytes_of(&uniforms);
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MotionBlur>()
+            .expect("node.motion_blur standalone codegen");
+        let pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "motion-blur-small-velocity",
+        );
+        let from_small = dispatch(
+            &device,
+            &pipeline,
+            &sampler,
+            &color_tex,
+            &small_tex,
+            w,
+            h,
+            bytes,
+        );
+        let from_stretched = dispatch(
+            &device,
+            &pipeline,
+            &sampler,
+            &color_tex,
+            &stretched_tex,
+            w,
+            h,
+            bytes,
+        );
+        let unblurred = readback_rgba(&device, &color_tex, w, h);
+
+        let mut blurred_texels = 0;
+        for (i, (a, b)) in from_small.iter().zip(from_stretched.iter()).enumerate() {
+            for c in 0..4 {
+                assert!(
+                    (a[c] - b[c]).abs() < 1e-3,
+                    "texel {i} channel {c}: a smaller velocity buffer must read like its \
+                     nearest-texel stretch, small={} stretched={}",
+                    a[c],
+                    b[c]
+                );
+            }
+            if (0..4).any(|c| (a[c] - unblurred[i][c]).abs() > 1e-3) {
+                blurred_texels += 1;
+            }
+        }
+        assert!(
+            blurred_texels > 0,
+            "the fixture must actually blur, or the comparison proves nothing"
+        );
+    }
+
     /// A fused kernel retains the host node's disabled passthrough even though
     /// `skip_passthrough` is only available before the graph is fused.
     #[test]

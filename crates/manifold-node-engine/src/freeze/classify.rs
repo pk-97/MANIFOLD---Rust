@@ -79,12 +79,16 @@ pub enum InputAccess {
     /// seam safely.
     #[default]
     Coincident,
-    /// Read at the fragment's own integer texel, EXACT (`textureLoad`, no
-    /// filter). Correct only when the producer matches the output resolution —
-    /// sampling would blend neighbours and corrupt the value (e.g. dither's
-    /// ordered-threshold pattern, where each texel IS a distinct threshold). The
-    /// region-grower must refuse to fuse a `CoincidentTexel` input across a
-    /// resolution seam (design section 11.B / line 147).
+    /// Read at one integer texel, EXACT (`textureLoad`, no filter) — sampling
+    /// would blend neighbours and corrupt the value (e.g. dither's
+    /// ordered-threshold pattern, where each texel IS a distinct threshold, or a
+    /// velocity vector). The texel is the one under the fragment's spot in the
+    /// input's OWN grid, `clamp(floor(uv * dims_in), 0, dims_in - 1)`: an input
+    /// the size of the output is read at exactly the fragment's own texel, a
+    /// smaller one (the render's depth and velocity under temporal upscale) at
+    /// the texel covering the same spot. The region-grower still refuses to fuse
+    /// a `CoincidentTexel` input across a resolution seam (design section 11.B /
+    /// line 147): a differently sized producer is a different texel pattern.
     CoincidentTexel,
     /// Read at a coordinate the BODY computes — a dependent sample (the UV-warp
     /// family: remap, chromatic_displace, uv_displace_by_flow). The codegen

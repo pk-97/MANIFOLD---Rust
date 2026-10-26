@@ -7,8 +7,9 @@ use crate::parameters::ParamType;
 use crate::ports::{ChannelSpec, NodeInput, NodeOutput, PortType};
 
 use super::types::{
-    CodegenError, FusionRegion, GeneratedFusion, InputSource, RegionNode, buffer_element_type,
-    is_texture_input, is_texture_port, param_wgsl_type, param_word_count,
+    CodegenError, FusionRegion, GeneratedFusion, InputSource, RegionNode, TexDim,
+    buffer_element_type, dim_forms, is_texture_input, is_texture_port, param_wgsl_type,
+    param_word_count,
 };
 use super::uniforms::{emit_buffer_struct, emit_derived_uniform_markers};
 
@@ -427,6 +428,9 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // never load-into-register (the body samples it at a coord it computes). ---
     let mut needs_sampler = false;
     let mut coincident_ext: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    // Externals some cs_main-evaluated member reads `CoincidentTexel`: loaded
+    // at the texel under the fragment's spot in the external's own grid.
+    let mut texel_ext: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for (i, node) in region.nodes.iter().enumerate() {
         for (idx, src) in node.inputs.iter().enumerate() {
             let access = node
@@ -449,6 +453,9 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                 && let InputSource::External(e) = src
             {
                 coincident_ext.insert(*e);
+                if access == InputAccess::CoincidentTexel {
+                    texel_ext.insert(*e);
+                }
             }
         }
     }
@@ -688,6 +695,12 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         out.push_str("\n\n");
     }
 
+    // The own-texel helper, defined once when any external is texel-read.
+    if !texel_ext.is_empty() {
+        out.push_str(dim_forms(TexDim::D2).own_texel_fn);
+        out.push('\n');
+    }
+
     // --- cs_main: read external inputs once, thread registers, store output ---
     out.push_str("@compute @workgroup_size(16, 16)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n");
@@ -703,11 +716,20 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         // at a different element space — e.g. Watercolor's half-res mask field)
         // is sampled through the shared sampler at the fragment UV, exactly the
         // resolution-robust read the unfused atom makes; a textureLoad here would
-        // misread the wrong texel. The body receives `ext_{e}` either way.
+        // misread the wrong texel. A `CoincidentTexel` external is loaded
+        // texel-exact at the texel under the fragment's spot in its own grid
+        // (`own_texel`, the standalone wrapper's read). The body receives
+        // `ext_{e}` either way.
         if region.sampled_externals.contains(&e) {
             writeln!(
                 out,
                 "    let ext_{e} = textureSampleLevel(src_{e}, samp, uv, 0.0);"
+            )
+            .unwrap();
+        } else if texel_ext.contains(&e) {
+            writeln!(
+                out,
+                "    let ext_{e} = textureLoad(src_{e}, own_texel(uv, textureDimensions(src_{e})), 0);"
             )
             .unwrap();
         } else {

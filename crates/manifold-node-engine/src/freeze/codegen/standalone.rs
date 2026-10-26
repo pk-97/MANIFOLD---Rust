@@ -328,6 +328,12 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
     out.push_str(body.trim_end());
     out.push_str("\n\n");
 
+    // --- the own-texel helper, defined once for any CoincidentTexel input ---
+    if any_texel {
+        out.push_str(forms.own_texel_fn);
+        out.push('\n');
+    }
+
     // --- iteration wrapper: dims/guard, center-UV sample each input, call
     // body in (texture-inputs-then-params) order, store. ---
     writeln!(out, "@compute @workgroup_size({})", forms.workgroup).unwrap();
@@ -346,13 +352,14 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
     }
     writeln!(out, "    if {} {{\n        return;\n    }}", forms.guard).unwrap();
     writeln!(out, "    let uv = {};", forms.uv_expr).unwrap();
-    if any_texel {
-        writeln!(out, "    let coord = {};", forms.store_coord).unwrap();
-    }
     // Read each input by its access kind: Coincident → sampler at the fragment
     // UV (resolution-robust); CoincidentTexel → exact integer-texel load (no
     // filter — required when each texel is a distinct value, e.g. a dither
-    // threshold). Both read the fragment's own coordinate. A Gather input is NOT
+    // threshold) of the texel under the fragment's spot in THAT input's own
+    // grid (`own_texel`), so an input smaller than the output (the render's
+    // depth and velocity under temporal upscale) is read where the fragment
+    // is, not at the fragment's pixel index; an equal-size input is read at
+    // exactly the fragment's own texel. A Gather input is NOT
     // pre-read here — the body computes its own read coord, so it receives the
     // texture + sampler as args (below) and samples them itself.
     for (i, inp) in tex_inputs.iter().enumerate() {
@@ -365,8 +372,8 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
             .unwrap(),
             InputAccess::CoincidentTexel => writeln!(
                 out,
-                "    let c_{} = textureLoad(tex_{}, coord, 0);",
-                inp.name, inp.name
+                "    let c_{n} = textureLoad(tex_{n}, own_texel(uv, textureDimensions(tex_{n})), 0);",
+                n = inp.name
             )
             .unwrap(),
             // Gather / GatherTexel: no pre-read; passed as a texture handle (the

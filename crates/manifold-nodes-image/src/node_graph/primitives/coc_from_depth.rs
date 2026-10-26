@@ -168,6 +168,17 @@ inventory::submit! {
 }
 
 impl Primitive for CocFromDepth {
+    /// Canvas size whatever the depth's size: the circle of confusion is in
+    /// canvas pixels, the units `bokeh_gather` blurs in, so a render at a
+    /// fraction of the canvas (temporal upscale) keeps the same blur.
+    fn output_canvas_scale(
+        &self,
+        _port: &str,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        Some((1, 1))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let max_radius = ctx.param_f32("max_radius", 24.0);
 

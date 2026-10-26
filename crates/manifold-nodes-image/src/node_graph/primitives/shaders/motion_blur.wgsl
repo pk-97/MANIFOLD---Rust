@@ -7,7 +7,10 @@
 // Bindings match the generated MultiInputCoincident layout (`in` Gather,
 // `velocity` CoincidentTexel, in INPUTS declaration order): uniform(0),
 // in_tex(1, sampled), velocity_tex(2, textureLoad — no sampler), samp(3),
-// output_tex(4).
+// output_tex(4). `velocity` is loaded at the texel under the output pixel's
+// spot in the velocity texture's own grid (the generated kernel's
+// `own_texel`), so a smaller velocity buffer (temporal upscale) is read where
+// the pixel is.
 
 struct Uniforms {
     max_blur_px: f32,
@@ -17,6 +20,10 @@ struct Uniforms {
 }
 
 const MOTION_BLUR_SAMPLES: u32 = 8u;
+
+fn own_texel(uv: vec2<f32>, tex_dims: vec2<u32>) -> vec2<i32> {
+    return clamp(vec2<i32>(floor(uv * vec2<f32>(tex_dims))), vec2<i32>(0), vec2<i32>(tex_dims) - vec2<i32>(1));
+}
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var in_tex: texture_2d<f32>;
@@ -34,7 +41,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims_f = vec2<f32>(dims);
     let uv = (vec2<f32>(id.xy) + vec2<f32>(0.5, 0.5)) / dims_f;
 
-    let c_velocity = textureLoad(velocity_tex, vec2<i32>(id.xy), 0);
+    let c_velocity = textureLoad(velocity_tex, own_texel(uv, textureDimensions(velocity_tex)), 0);
     let velocity_ndc = c_velocity.rg;
     let smear_px_raw = velocity_ndc * 0.5 * dims_f * (u.shutter_angle / 360.0);
     let smear_px = clamp(smear_px_raw, vec2<f32>(-u.max_blur_px), vec2<f32>(u.max_blur_px));

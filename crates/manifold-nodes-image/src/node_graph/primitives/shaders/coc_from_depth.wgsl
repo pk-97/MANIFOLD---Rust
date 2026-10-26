@@ -4,7 +4,10 @@
 // the gpu_tests parity check is a real cross-check, not a tautology.
 //
 // Bindings match the generated CoincidentTexel-only layout: uniform(0),
-// depth_tex(1, textureLoad — no sampler), output_tex(2).
+// depth_tex(1, textureLoad — no sampler), output_tex(2). `depth` is loaded at
+// the texel under the output pixel's spot in the depth texture's own grid
+// (the generated kernel's `own_texel`), so a smaller depth buffer (temporal
+// upscale) is read where the pixel is.
 
 struct Uniforms {
     max_radius: f32,
@@ -27,6 +30,10 @@ fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
     return (near * far) / (near + raw * (far - near));
 }
 
+fn own_texel(uv: vec2<f32>, tex_dims: vec2<u32>) -> vec2<i32> {
+    return clamp(vec2<i32>(floor(uv * vec2<f32>(tex_dims))), vec2<i32>(0), vec2<i32>(tex_dims) - vec2<i32>(1));
+}
+
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output_tex);
@@ -34,7 +41,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    let raw_depth = textureLoad(depth_tex, vec2<i32>(id.xy), 0).r;
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let raw_depth = textureLoad(depth_tex, own_texel(uv, textureDimensions(depth_tex)), 0).r;
 
     let f_mm = SENSOR_H_MM / (2.0 * tan(u.fov_y * 0.5));
     let aperture_radius_mm = f_mm / (2.0 * u.f_stop);
