@@ -1,0 +1,8 @@
+{"name": "fast-t4-2026-10-26", "steps": [
+  {"compare": ["kick_v2_final", "kick_v2_fast_a0"], "args": ["--seeds", "0,1,2", "--exam-of", "kick-04f861efae29"]},
+  {"compare": ["kick_v2_final", "kick_v2_fast_t4"], "args": ["--seeds", "0,1,2", "--exam-of", "kick-04f861efae29"]},
+  {"compare": ["kick_v2_fast_a0", "kick_v2_fast_t4a0"], "args": ["--seeds", "0,1,2", "--exam-of", "kick-04f861efae29"]},
+  {"compare": ["snare_v2_hardneg_coincident_e24", "snare_v2_fast_a0"], "args": ["--seeds", "0,1,2", "--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_hardneg_coincident_e24", "snare_v2_fast_t4"], "args": ["--seeds", "0,1,2", "--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_fast_a0", "snare_v2_fast_t4a0"], "args": ["--seeds", "0,1,2", "--exam-of", "snare-994ddd8d5571"]}
+]}
