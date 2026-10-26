@@ -363,6 +363,42 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
         .map(|w| (w.from_node, w.to_node))
         .collect();
 
+    // A switch runs only its selected branch: the executor prunes every other
+    // input's producers each frame. Eligible producers feeding different
+    // inputs of one switch stay in separate regions, or the fused kernel would
+    // keep an unselected branch, and everything upstream of it, running.
+    let mut branch_producers: AHashMap<u32, Vec<(&str, u32)>> = AHashMap::default();
+    for w in &def.wires {
+        let to_switch = def.nodes.iter().any(|n| {
+            n.id == w.to_node
+                && matches!(
+                    n.type_id.as_str(),
+                    "node.switch_texture"
+                        | "node.switch_array"
+                        | "node.switch_mesh"
+                        | "node.switch_instances"
+                        | "node.switch_indices"
+                )
+        });
+        if to_switch && w.to_port != "selector" && eligible.contains(&w.from_node) {
+            branch_producers
+                .entry(w.to_node)
+                .or_default()
+                .push((w.to_port.as_str(), w.from_node));
+        }
+    }
+    let branch_pairs: Vec<(u32, u32)> = branch_producers
+        .values()
+        .flat_map(|inputs| {
+            inputs.iter().flat_map(move |&(port_a, a)| {
+                inputs
+                    .iter()
+                    .filter(move |&&(port_b, b)| port_a < port_b && a != b)
+                    .map(move |&(_, b)| (a, b))
+            })
+        })
+        .collect();
+
     let mut uf = UnionFind::new(&eligible);
     for (a, b) in candidates {
         if uf.find(a) == uf.find(b) {
@@ -381,7 +417,11 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
             }
         };
         let would_bridge_a_gather_wire = gather_pairs.iter().any(|&(gp, gc)| key(gp) == key(gc));
-        if !collapsed_has_cycle(&forward, &key) && !would_bridge_a_gather_wire {
+        let would_join_switch_branches = branch_pairs.iter().any(|&(x, y)| key(x) == key(y));
+        if !collapsed_has_cycle(&forward, &key)
+            && !would_bridge_a_gather_wire
+            && !would_join_switch_branches
+        {
             uf.union(a, b);
         }
     }
