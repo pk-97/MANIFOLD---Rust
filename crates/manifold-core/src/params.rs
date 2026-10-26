@@ -276,6 +276,10 @@ pub struct ParamManifest {
     /// a same-length reorder that the old `len == len` guard missed changes
     /// this, so the guard now catches it.
     topology: u32,
+    /// Id → position in `entries`, rebuilt on every topology change. Bindings
+    /// look params up by id every frame; a linear scan made that quadratic in
+    /// the param count (an imported model has thousands).
+    index: ahash::AHashMap<String, usize>,
 }
 
 impl ParamManifest {
@@ -293,20 +297,30 @@ impl ParamManifest {
             },
             "ParamManifest built with duplicate param ids"
         );
-        Self {
+        let mut manifest = Self {
             entries,
             topology: 0,
+            index: ahash::AHashMap::default(),
+        };
+        manifest.reindex();
+        manifest
+    }
+
+    fn reindex(&mut self) {
+        self.index.clear();
+        for (i, p) in self.entries.iter().enumerate() {
+            self.index.insert(p.spec.id.clone(), i);
         }
     }
 
     pub fn get(&self, id: &str) -> Option<&Param> {
-        self.entries.iter().find(|p| p.spec.id == id)
+        self.index.get(id).map(|&i| &self.entries[i])
     }
 
     /// Value/state writes only (value, base, exposed, touched, choices).
     /// Does NOT bump topology.
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Param> {
-        self.entries.iter_mut().find(|p| p.spec.id == id)
+        self.index.get(id).map(|&i| &mut self.entries[i])
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Param> {
@@ -335,13 +349,13 @@ impl ParamManifest {
     }
 
     pub fn contains(&self, id: &str) -> bool {
-        self.entries.iter().any(|p| p.spec.id == id)
+        self.index.contains_key(id)
     }
 
     /// Display position of `id`, or `None`. Used to capture undo restore
     /// position (D10) and by boundary code that needs the transient index.
     pub fn index_of(&self, id: &str) -> Option<usize> {
-        self.entries.iter().position(|p| p.spec.id == id)
+        self.index.get(id).copied()
     }
 
     /// Append a param at the end (card order). Bumps topology.
@@ -353,6 +367,7 @@ impl ParamManifest {
             "ParamManifest::push duplicate id {:?}",
             p.id()
         );
+        self.index.insert(p.spec.id.clone(), self.entries.len());
         self.entries.push(p);
         self.topology = self.topology.wrapping_add(1);
     }
@@ -362,7 +377,9 @@ impl ParamManifest {
     pub fn remove(&mut self, id: &str) -> Option<Param> {
         let i = self.index_of(id)?;
         self.topology = self.topology.wrapping_add(1);
-        Some(self.entries.remove(i))
+        let removed = self.entries.remove(i);
+        self.reindex();
+        Some(removed)
     }
 
     /// Undo restore at a captured display position (D10). `index` is clamped
@@ -375,6 +392,7 @@ impl ParamManifest {
         );
         let i = index.min(self.entries.len());
         self.entries.insert(i, p);
+        self.reindex();
         self.topology = self.topology.wrapping_add(1);
     }
 
@@ -384,6 +402,7 @@ impl ParamManifest {
     pub fn truncate(&mut self, len: usize) {
         if len < self.entries.len() {
             self.entries.truncate(len);
+            self.reindex();
             self.topology = self.topology.wrapping_add(1);
         }
     }
