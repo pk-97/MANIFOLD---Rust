@@ -58,7 +58,7 @@ impl RuntimeExtension for WaterRuntimeState {
         // domain; it joins the snapshot of the domain whose clock feeds it.
         for (_, instance) in slot.node_map {
             let held_back = graph.get_node(*instance).is_some_and(|node| {
-                manifold_water_gpu_flip::primitives::inflow_held_back(node.node.as_ref())
+                manifold_water_gpu_flip::primitives::births_held_back(node.node.as_ref())
             });
             if !held_back {
                 continue;
@@ -280,13 +280,13 @@ mod tests {
     use manifold_node_engine::runtime::extensions::RuntimeSlot;
     use manifold_water_liquid::primitives::liquid_stats::LiquidTickStats;
 
-    /// BUG-3zq4r (inflow runs out): a tick that refused inflow births marks
+    /// BUG-3zq4r (inflow runs out): a tick that refused inflow or sheet births marks
     /// the snapshot of the domain whose clock feeds that liquid, so the
     /// setup check shows Pool Full; a tick that refused none leaves it clear.
     #[test]
     fn a_refused_birth_marks_the_domain_pool_full() {
         let registry = PrimitiveRegistry::with_builtin();
-        let state_with = |refused: u32| {
+        let state_with = |refused: u32, sheet_refused: u32| {
             let mut graph = Graph::new();
             let domain = graph.add_node(
                 registry
@@ -304,6 +304,7 @@ mod tests {
             let stats = LiquidTickStats {
                 inflow_births: 3,
                 inflow_refused: refused,
+                sheet_refused,
                 ..LiquidTickStats::default()
             };
             manifold_water_gpu_flip::primitives::retire_stats_for_test(
@@ -338,7 +339,8 @@ mod tests {
             assert_eq!(output[0].0, NodeId::new("water"));
             output[0].1.fit.pool_full
         };
-        assert!(state_with(5), "refused births mark the pool full");
-        assert!(!state_with(0), "a tick with room leaves it clear");
+        assert!(state_with(5, 0), "refused inflow births mark the pool full");
+        assert!(state_with(0, 2), "refused sheet births mark it full too");
+        assert!(!state_with(0, 0), "a tick with room leaves it clear");
     }
 }

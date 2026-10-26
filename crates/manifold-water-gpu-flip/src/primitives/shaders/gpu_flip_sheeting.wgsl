@@ -58,6 +58,10 @@ struct ClockPlan {
 @group(0) @binding(17) var<storage, read> birth_identity: array<u32>;
 // The last active substep's requested and written births, then both summed.
 @group(0) @binding(18) var<storage, read_write> stats: array<u32>;
+// In the step only. The step's solver words (bound at their offset), where the
+// tick's refused births are summed at SHEET_REFUSED_TAIL (zeroed per tick by
+// the step's birth_tally_reset).
+@group(0) @binding(19) var<storage, read_write> capped: array<u32>;
 
 const NO_CLAIM: u32 = 0xffffffffu;
 const MAX_PARTICLES_PER_CELL: u32 = 6u;
@@ -662,6 +666,7 @@ fn write(@builtin(global_invocation_id) gid: vec3<u32>) {
         stats[1] = min(requested, room);
         stats[2] = stats[2] + requested;
         stats[3] = stats[3] + min(requested, room);
+        capped[SHEET_REFUSED_TAIL] += requested - min(requested, room);
     }
     if r >= total { return; }
     var before = 0u;

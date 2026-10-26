@@ -27,14 +27,16 @@ pub(super) fn reference_shader() -> String {
             "let np = bucket[m].xyz;",
         )
         .replace("cell_counts", "selected_count");
-    source
+    manifold_water_liquid::primitives::liquid_stats::with_stats_layout(&source)
 }
 
 /// CPU-only: validate both complete WGSL modules, including the test reference.
 #[test]
 fn sheeting_bucket_shaders_validate_on_cpu() {
     for source in [
-        include_str!("shaders/gpu_flip_sheeting.wgsl").to_owned(),
+        manifold_water_liquid::primitives::liquid_stats::with_stats_layout(include_str!(
+            "shaders/gpu_flip_sheeting.wgsl"
+        )),
         reference_shader(),
     ] {
         let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");

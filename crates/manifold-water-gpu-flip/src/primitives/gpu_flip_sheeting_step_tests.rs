@@ -7,6 +7,7 @@
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs, StepBirths};
 use super::gpu_flip_step::GpuFlipStep;
 use super::gpu_flip_step_tests::cpu_sample_on;
+use super::liquid_fill::LiquidFill;
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
@@ -15,6 +16,10 @@ use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, pack_distance_atlas};
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::lattice::PADDING_NODES;
+use manifold_water_liquid::primitives::liquid_stats::{
+    LIQUID_STATS_WORDS, LiquidTickStats, SHEET_REFUSED_TAIL, SHEET_REFUSED_WORD,
+    SOLVER_STATS_START, SOLVER_WORDS,
+};
 use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
@@ -195,6 +200,16 @@ impl Splash {
             identity: [identity[0], identity[1], identity[2], identity[3]],
             stats,
         }
+    }
+
+    /// The tick's refused sheet births: the capped tail word the step keeps
+    /// for the published stats.
+    fn refused_births(&self) -> u32 {
+        let words: Vec<u32> = read(
+            &self.h.buffer(self.capped),
+            2 * self.capacity + SOLVER_WORDS as usize,
+        );
+        words[2 * self.capacity + SHEET_REFUSED_TAIL as usize]
     }
 
     fn node_has_sheeting(&self) -> bool {
@@ -458,6 +473,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     ];
     let old = shared(bytemuck::cast_slice(&faces), 32 * faces.len());
     let identity = shared(bytemuck::cast_slice(&[5000u32, 1, 0, 0]), 16);
+    let capped = shared(&[], 4 * SOLVER_WORDS as usize);
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
     stage.reserve(&device, cells, capacity as u32).unwrap();
@@ -479,6 +495,8 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
             old: &old,
             identity: &identity,
             slots: capacity as u32,
+            capped: &capped,
+            capped_offset: 0,
             rate: 1.0,
             tick: 0,
             substep: 0,
@@ -541,4 +559,98 @@ fn gpu_flip_sheeting_rate_is_validated() {
         assert!(read_sheet_fill_rate(bad, false).is_err(), "{bad}");
     }
     assert!(read_sheet_fill_rate(1.0, true).is_err());
+}
+
+/// A full pool reports the sheet births it had no slot for: the step's capped
+/// tail word is the tick's requested minus written, restarted every tick, and
+/// the published word index it lands on is the stats' `sheet_refused`.
+#[test]
+fn a_full_pool_reports_refused_sheet_births() {
+    let mut room = Splash::new(8000, 4001, &[]);
+    let tick = room.tick(0, 1, 1.0);
+    assert!(tick.stats[1] > 100, "the splash seeds sheets");
+    assert_eq!(room.refused_births(), 0, "a pool with room refuses none");
+
+    let mut full = Splash::new(40, 4001, &[]);
+    for t in 0..2 {
+        let tick = full.tick(t, 1, 1.0);
+        let [requested, written, ..] = tick.stats;
+        assert!(requested > written, "tick {t}: the pool is out of room");
+        assert_eq!(
+            full.refused_births(),
+            requested - written,
+            "tick {t}: the tail word is this tick's refusals"
+        );
+    }
+    let mut words = [0u32; LIQUID_STATS_WORDS as usize];
+    words[(SOLVER_STATS_START + SHEET_REFUSED_TAIL) as usize] = full.refused_births();
+    assert_eq!(SOLVER_STATS_START + SHEET_REFUSED_TAIL, SHEET_REFUSED_WORD);
+    assert_eq!(
+        LiquidTickStats::from_words(&words).sheet_refused,
+        full.refused_births()
+    );
+}
+
+/// Water at rest seeds nothing: a jittered pool 12 cells deep, rate 0.5, many
+/// ticks, never requests a birth and never changes its live count. The sheeter
+/// must call only thin water thin, not water that is deep but noisy.
+#[test]
+fn a_resting_pool_seeds_nothing() {
+    const BOX: u32 = 24;
+    let pad = PADDING_NODES as f32;
+    let nodes = BOX as f32 + 1.0 + 2.0 * pad;
+    let min = 1.5 * H - pad * H;
+    let lattice = [
+        ("nodes_x", nodes),
+        ("nodes_y", nodes),
+        ("nodes_z", nodes),
+        ("lattice_min_x", min),
+        ("lattice_min_y", min),
+        ("lattice_min_z", min),
+        ("cell_size", H),
+    ];
+    let mut h = Harness::new();
+    let out = h.array::<FluidParticle>(&[], 1);
+    let count = h.scalar();
+    // Sites are half cells: 24 of them is 12 cells of water.
+    let mut fill_values = lattice.to_vec();
+    fill_values.extend([("pool_sites", 24.0), ("jitter", 1.0), ("seed", 5.0)]);
+    let mut fill = LiquidFill::new();
+    let (_, errors) = h.run(
+        &mut fill,
+        &[],
+        &[("particles", out.0), ("count", count)],
+        &params(&fill_values),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let placed = (h.buffer(out.0).size / std::mem::size_of::<FluidParticle>() as u64) as usize;
+    assert_eq!(placed, 2 * BOX as usize * 2 * BOX as usize * 24);
+
+    let solver = BOX as usize + 3;
+    let identity = h.array::<u32>(&[placed as u32 + 1, 1, 0, 0], 4);
+    let faces = h.array::<FaceSample>(&[], (solver + 1).pow(3)).0;
+    let capped = h.array::<u32>(&[], 2 * placed + SOLVER_WORDS as usize).0;
+    let mut node = GpuFlipStep::new();
+    node.prepare_pipelines(&h.device);
+    for tick in 0..20 {
+        let mut values = lattice.to_vec();
+        values.extend([
+            ("gravity_y", -9.81),
+            ("interval_duration", DT),
+            ("steps", 1.0),
+            ("flip", 0.95),
+            ("iterations", 0.0),
+            ("volume_projection", 0.0),
+            ("sheet_fill_rate", 0.5),
+            ("tick_index", tick as f32),
+        ]);
+        let inputs = [("particles", out.0), ("identity", identity.0)];
+        let outputs = [("out", out.0), ("faces", faces), ("capped", capped)];
+        let (_, errors) = h.run(&mut node, &inputs, &outputs, &params(&values));
+        assert!(errors.is_empty(), "tick {tick}: {errors:?}");
+        let stats: Vec<u32> = read(node.sheeting().stats(), 4);
+        assert_eq!(stats[2], 0, "tick {tick}: the pool requested a sheet birth");
+        let particles: Vec<FluidParticle> = read(&h.buffer(out.0), placed);
+        assert_eq!(alive(&particles).count(), placed, "tick {tick}: live count");
+    }
 }

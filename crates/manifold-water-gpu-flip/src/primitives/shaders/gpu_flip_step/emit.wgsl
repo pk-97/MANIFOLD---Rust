@@ -111,16 +111,23 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), birth_identity[2] + before);
 }
 
+// One thread, on the tick's first substep before any birth stage: the
+// tick's birth words (inflow births, inflow and sheet births the pool had no
+// slot for) start at zero, whether or not this tick runs inflows or sheeting,
+// so a stage switched off leaves no stale refusal on the card.
+@compute @workgroup_size(1)
+fn birth_tally_reset() {
+    capped[INFLOW_BIRTHS_TAIL] = 0u;
+    capped[INFLOW_REFUSED_TAIL] = 0u;
+    capped[SHEET_REFUSED_TAIL] = 0u;
+}
+
 // One thread, after emit_write: the substep's inflow births and the ones the
 // pool had no free slot for, summed over the tick into the solver tail
 // (stats words 28 and 29). A refusal is how a full pool reaches the setup
-// check; the tick's first substep starts both at zero.
+// check.
 @compute @workgroup_size(1)
 fn emit_tally() {
-    if u.step_in_tick == 0 {
-        capped[INFLOW_BIRTHS_TAIL] = 0u;
-        capped[INFLOW_BIRTHS_TAIL + 1u] = 0u;
-    }
     if !clock_active() || birth_identity[3] != 0u { return; }
     let s = emit_sites();
     let requested = emit_scan[s.x * s.y * s.z - 1u];
@@ -130,7 +137,7 @@ fn emit_tally() {
     let room = select(0u, u.capacity - live, u.capacity > live);
     let births = min(requested, room);
     capped[INFLOW_BIRTHS_TAIL] += births;
-    capped[INFLOW_BIRTHS_TAIL + 1u] += requested - births;
+    capped[INFLOW_REFUSED_TAIL] += requested - births;
 }
 
 @group(0) @binding(47) var<storage, read> birth_identity: array<u32>;

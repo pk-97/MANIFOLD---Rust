@@ -23,7 +23,7 @@ impl StepState {
         self.narrow.prepare(device);
         // Sheet seeding prepares even while its rate is 0: switching it on mid-show
         // must not compile pipelines on the content thread.
-        self.surface.prepare(device);
+        self.sheet_distance.prepare(device);
         self.sheeting.prepare(device);
     }
 
@@ -123,7 +123,7 @@ impl StepState {
         if sheeting {
             let slot_count = u32::try_from(slots)
                 .map_err(|_| "sheeting particle capacity exceeds u32".to_string())?;
-            self.surface.reserve(device, cells)?;
+            self.sheet_distance.reserve(device, cells)?;
             self.sheeting.reserve(device, cells, slot_count)?;
             if self
                 .sheet_order

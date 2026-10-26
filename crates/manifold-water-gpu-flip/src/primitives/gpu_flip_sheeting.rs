@@ -41,7 +41,12 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-const SHADER: &str = include_str!("shaders/gpu_flip_sheeting.wgsl");
+/// The kernel with the stats layout constants (`SHEET_REFUSED_TAIL`) ahead of it.
+fn shader() -> String {
+    manifold_water_liquid::primitives::liquid_stats::with_stats_layout(include_str!(
+        "shaders/gpu_flip_sheeting.wgsl"
+    ))
+}
 const ENTRIES: [&str; 10] = [
     "clear",
     "detect",
@@ -56,6 +61,19 @@ const ENTRIES: [&str; 10] = [
 ];
 /// gpu_flip_step/common.wgsl `ClockPlan`.
 const PLAN_BYTES: u64 = 48;
+/// A particle is a sheet candidate only within this many cells of the
+/// surface (particlesheeter.h:131-133 `_maxDepth`).
+const MAX_SHEET_DEPTH_CELLS: f64 = 2.0;
+/// How far inward the depth test walks from a candidate, in cells
+/// (particlesheeter.h:131-133 `_testDistance`).
+const DEPTH_TEST_CELLS: f64 = 3.0;
+/// The walk's step, in cells (particlesheeter.h:131-133 `_stepDistance`).
+const DEPTH_TEST_STEP_CELLS: f64 = 0.5;
+/// How deep the sheeter's distance must be true, in cells: a particle the
+/// test starts from is at most MAX_SHEET_DEPTH_CELLS deep, walks
+/// DEPTH_TEST_CELLS further, and the trilinear sample at the end of the walk
+/// reads the cells one beyond.
+pub(crate) const SHEET_DISTANCE_CELLS: f64 = MAX_SHEET_DEPTH_CELLS + DEPTH_TEST_CELLS + 1.0;
 /// The engine's `sheetFillThreshold` default; no user control yet.
 pub(crate) const FILL_THRESHOLD: f32 = -0.95;
 
@@ -146,7 +164,8 @@ pub(crate) struct SheetInputs<'a> {
     pub ranges: &'a GpuBuffer,
     /// Slots the marker pass visits; a slot at radius 0 is skipped.
     pub count: u32,
-    /// The surface level set at the cell centres, x fastest.
+    /// The signed distance to the surface at the cell centres, x fastest,
+    /// true to `SHEET_DISTANCE_CELLS` deep (gpu_flip_sheet_distance).
     pub phi: &'a GpuBuffer,
     /// The grid's minimum corner; positions are made grid-local by it.
     pub origin: [f32; 3],
@@ -163,6 +182,10 @@ pub(crate) struct StepBirths<'a> {
     pub identity: &'a GpuBuffer,
     /// The pool's slots: births past them are dropped and counted.
     pub slots: u32,
+    /// The step's `capped` buffer and the byte offset of its solver words:
+    /// the stage adds the births the pool refused to the tick's tally there.
+    pub capped: &'a GpuBuffer,
+    pub capped_offset: u64,
     /// The fill rate in (0, 1]; the caller encodes no pass at 0.
     pub rate: f32,
     pub tick: u32,
@@ -184,9 +207,10 @@ pub(crate) struct GpuSheeting {
 impl GpuSheeting {
     pub(crate) fn prepare(&mut self, device: &GpuDevice) {
         if self.pipelines.is_empty() {
+            let shader = shader();
             for entry in ENTRIES {
                 self.pipelines.push(device.create_compute_pipeline(
-                    SHADER,
+                    &shader,
                     entry,
                     "gpu_flip.sheeting",
                 ));
@@ -313,7 +337,7 @@ impl GpuSheeting {
         inputs: &SheetInputs<'_>,
     ) {
         let probe =
-            device.create_compute_pipeline(SHADER, "index_probe", "gpu_flip.sheeting.probe");
+            device.create_compute_pipeline(&shader(), "index_probe", "gpu_flip.sheeting.probe");
         self.dispatch_with(
             enc,
             inputs,
@@ -399,8 +423,8 @@ impl GpuSheeting {
         let h = inputs.h;
         let dx = f64::from(h);
         // The sheeter's constants, rounded as manifold_fluids::sheeter rounds them.
-        let test_distance = (3.0 * dx) as f32;
-        let step_distance = (0.5 * dx) as f32;
+        let test_distance = (DEPTH_TEST_CELLS * dx) as f32;
+        let step_distance = (DEPTH_TEST_STEP_CELLS * dx) as f32;
         let params = Params {
             nx: n[0],
             ny: n[1],
@@ -418,7 +442,7 @@ impl GpuSheeting {
             inv_sub: (1.0 / (0.5 * dx)) as f32,
             half_h: (0.5 * dx) as f32,
             sub_dx: (0.5 * dx) as f32,
-            max_depth: (2.0 * dx) as f32,
+            max_depth: (MAX_SHEET_DEPTH_CELLS * dx) as f32,
             step_distance,
             steps: (test_distance / step_distance).ceil() as u32,
             max_seed_depth: dx as f32,
@@ -466,6 +490,12 @@ impl GpuSheeting {
             buffer(16, step.map_or(zeros, |s| s.old)),
             buffer(17, step.map_or(zeros, |s| s.identity)),
             buffer(18, stats),
+            // Standalone never runs `write`, the one kernel that writes this.
+            GpuBinding::Buffer {
+                binding: 19,
+                buffer: step.map_or(stats, |s| s.capped),
+                offset: step.map_or(0, |s| s.capped_offset),
+            },
         ];
         let cells = n[0] * n[1] * n[2];
         let groups = |work: u32| [work.div_ceil(256).max(1), 1, 1];

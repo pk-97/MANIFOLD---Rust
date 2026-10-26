@@ -757,6 +757,10 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
         cells.into_iter().map(|n| (n + 1) as usize).product()
     ];
     let old = shared(&device, bytemuck::cast_slice(&faces));
+    let capped = shared(
+        &device,
+        &[0u8; 4 * manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize],
+    );
     let plan = live_plan(&device, 0.01);
     let mut ids = ParticleIdentity::default();
     ids.prepare(&device);
@@ -822,6 +826,8 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
                 old: &old,
                 identity,
                 slots: capacity,
+                capped: &capped,
+                capped_offset: 0,
                 rate,
                 tick: tick as u32,
                 substep: (tick % 3) as u32,

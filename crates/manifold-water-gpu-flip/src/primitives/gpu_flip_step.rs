@@ -345,9 +345,9 @@ pub(crate) struct StepState {
     narrow_reset_pending: bool,
     narrow_full_count: bool,
     interior: Option<GpuBuffer>,
-    /// Sheet seeding (BUG-j9l9w): the surface distance it reads, the stage,
+    /// Sheet seeding (BUG-j9l9w): the true distance it reads, the stage,
     /// and each sorted slot's input index. Reserved only when the rate is on.
-    surface: manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance,
+    sheet_distance: super::gpu_flip_sheet_distance::SheetDistance,
     sheeting: super::gpu_flip_sheeting::GpuSheeting,
     sheet_order: Option<GpuBuffer>,
 }

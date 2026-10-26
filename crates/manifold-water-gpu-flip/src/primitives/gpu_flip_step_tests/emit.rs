@@ -305,12 +305,21 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     );
 
     // The tally: the births and the two the full pool refused, summed over
-    // the tick's substeps from zero at its first, into stats words 28 and 29
-    // (the solver tail from INFLOW_BIRTHS_TAIL), so a full pool is reported.
+    // the tick's substeps into stats words 28 and 29 (the solver tail from
+    // INFLOW_BIRTHS_TAIL), so a full pool is reported. The step runs
+    // birth_tally_reset before the tick's first substep's births, which also
+    // clears the sheet refusals.
     let tail = INFLOW_BIRTHS_TAIL as usize;
-    let tally = |step_in_tick: i32, before: [u32; 2]| -> [u32; 2] {
-        let mut words = vec![0u32; tail + 2];
-        words[tail..].copy_from_slice(&before);
+    let sheet = manifold_water_liquid::primitives::liquid_stats::SHEET_REFUSED_TAIL as usize;
+    let tally = |first_substep: bool, before: [u32; 2]| -> ([u32; 2], u32) {
+        let mut words = vec![0u32; sheet + 1];
+        words[tail..tail + 2].copy_from_slice(&before);
+        words[sheet] = 3;
+        if first_substep {
+            words = Pass::new()
+                .bind(22, &words)
+                .run("birth_tally_reset", &params, 22, sheet + 1, 1);
+        }
         let got: Vec<u32> = Pass::new()
             .bind(1, &ranges)
             .bind(37, &scan)
@@ -319,25 +328,25 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
             .run(
                 "emit_tally",
                 &StepParams {
-                    step_in_tick,
+                    step_in_tick: i32::from(!first_substep),
                     ..params
                 },
                 22,
-                tail + 2,
+                sheet + 1,
                 1,
             );
-        [got[tail], got[tail + 1]]
+        ([got[tail], got[tail + 1]], got[sheet])
     };
     let births = (capacity - sorted.len()) as u32;
     assert_eq!(
-        tally(0, [5, 7]),
-        [births, 2],
-        "the first substep starts the tick's tally at zero"
+        tally(true, [5, 7]),
+        ([births, 2], 0),
+        "the tick's first substep starts its birth words at zero"
     );
     assert_eq!(
-        tally(1, [5, 7]),
-        [5 + births, 9],
-        "a later substep adds to it"
+        tally(false, [5, 7]),
+        ([5 + births, 9], 3),
+        "a later substep adds to them"
     );
 
     // Jitter factor 1, the region a full cell deep everywhere: each emitted

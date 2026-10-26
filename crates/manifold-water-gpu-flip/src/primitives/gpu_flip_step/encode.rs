@@ -1036,6 +1036,21 @@ impl StepState {
         } else {
             out_faces
         };
+        // The tick's birth words start at zero before its first birth stage,
+        // whether or not inflows or sheeting run this tick.
+        if p.step_in_tick == 0 {
+            enc.dispatch_compute(
+                &pipes.birth_tally_reset,
+                &[GpuBinding::Buffer {
+                    binding: 22,
+                    buffer: step.capped,
+                    offset: step.tally,
+                }],
+                [1, 1, 1],
+                "gpu_flip.step.birth_tally_reset",
+            );
+            enc.compute_memory_barrier_buffers();
+        }
         // Sheet seeding (fluidsimulation.cpp _updateSheetSeeding), after the
         // engine's own marker update for this substep and before the FLIP
         // update: births join the move, so they take this substep's velocity
@@ -1047,10 +1062,10 @@ impl StepState {
                 .ranges()
                 .ok_or("the cell ranges were not reserved")?;
             let order = sheet_order.ok_or("sheet seeding storage was not reserved")?;
-            // The engine's surface distance (its curvature grid's), from the
-            // liquid level set the pressure solve read.
+            // The sheeter's own distance, true to SHEET_DISTANCE_CELLS deep,
+            // from the liquid level set the pressure solve read.
             let phi = self
-                .surface
+                .sheet_distance
                 .encode_gated(enc, &l.phi, p.cell_size, step.clock_plan);
             enc.compute_memory_barrier_buffers();
             let inputs = super::super::gpu_flip_sheeting::SheetInputs {
@@ -1067,6 +1082,8 @@ impl StepState {
                 old: &l.a,
                 identity: step.identity,
                 slots: base.particles,
+                capped: step.capped,
+                capped_offset: step.tally,
                 rate: step.sheet_rate,
                 tick: p.tick_index.max(0) as u32,
                 substep: p.step_in_tick.max(0) as u32,

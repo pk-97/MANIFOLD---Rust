@@ -143,14 +143,15 @@ fn usable_speed(stats: &LiquidTickStats) -> Option<f32> {
         .then_some(stats.max_speed)
 }
 
-/// Whether `node` is a liquid state whose last read tick had an inflow
-/// wanting a slot the pool did not have: the pool is full and the inflow is
-/// held back. The water runtime puts it on the domain's setup report.
-pub fn inflow_held_back(node: &dyn manifold_node_engine::exec::effect_node::EffectNode) -> bool {
+/// Whether `node` is a liquid state whose last read tick had an inflow or a
+/// sheet birth wanting a slot the pool did not have: the pool is full and
+/// both are held back alike. The water runtime puts it on the domain's setup
+/// report.
+pub fn births_held_back(node: &dyn manifold_node_engine::exec::effect_node::EffectNode) -> bool {
     node.as_any()
         .downcast_ref::<LiquidState>()
         .and_then(|state| state.last_stats)
-        .is_some_and(|stats| stats.inflow_refused > 0)
+        .is_some_and(|stats| stats.inflow_refused > 0 || stats.sheet_refused > 0)
 }
 
 /// Leaves `stats` on a liquid state as its last retired tick, for tests of

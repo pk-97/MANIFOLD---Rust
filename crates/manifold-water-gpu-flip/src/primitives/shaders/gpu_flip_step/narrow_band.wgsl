@@ -48,11 +48,6 @@ fn narrow_tally() {
     if u.narrow_band != 0u { capped[6] = bitcast<u32>(1.0); }
     if u.step_in_tick == 0 { capped[NARROW_BAND_SHORTAGE_TAIL] = 0u; }
     capped[NARROW_BAND_SHORTAGE_TAIL] += narrow_status[0];
-    // Without regions no emit_tally runs: no births, none refused.
-    if u.region_count == 0 {
-        capped[INFLOW_BIRTHS_TAIL] = 0u;
-        capped[INFLOW_BIRTHS_TAIL + 1u] = 0u;
-    }
 }
 
 @compute @workgroup_size(256)
