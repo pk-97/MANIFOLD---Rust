@@ -7,10 +7,10 @@
 use manifold_core::effects::{ParamEnvelope, ParameterDriver, PresetInstance};
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
-use manifold_ui::{GraphParamTarget, InspectorTab};
+use manifold_editing::commands::effect_target::EffectTarget;
+use manifold_ui::GraphParamTarget;
 
 use super::super::DispatchResult;
-use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
 /// Live (non-undo) edit of the envelope matched by `param_id` on `target`,
@@ -113,16 +113,12 @@ pub(crate) fn clip_trigger_shape_dual_edit<F>(
 pub(crate) fn resolve_graph_target(
     gpt: &GraphParamTarget,
     editor_target: Option<&manifold_core::GraphTarget>,
-    tab: InspectorTab,
     active_layer: &Option<LayerId>,
-    selection: &SelectionState,
     project: &Project,
 ) -> Option<manifold_core::GraphTarget> {
     match gpt {
-        GraphParamTarget::Effect(id) => {
-            super::resolve_effect_by_id(editor_target, tab, active_layer, selection, project, id)
-                .map(manifold_core::GraphTarget::Effect)
-        }
+        GraphParamTarget::Effect(id) => super::resolve_effect_by_id(editor_target, project, id)
+            .map(manifold_core::GraphTarget::Effect),
         GraphParamTarget::Generator => {
             if let Some(editor_target) = editor_target
                 && matches!(
@@ -178,19 +174,10 @@ pub(crate) fn resolve_mod_target(
     gpt: &GraphParamTarget,
     param_id: &manifold_core::effects::ParamId,
     editor_target: Option<&manifold_core::GraphTarget>,
-    effective_tab: InspectorTab,
     active_layer: &Option<LayerId>,
-    selection: &SelectionState,
     _materialize: bool,
 ) -> Option<(manifold_core::GraphTarget, manifold_core::effects::ParamId)> {
-    let target = resolve_graph_target(
-        gpt,
-        editor_target,
-        effective_tab,
-        active_layer,
-        selection,
-        project,
-    )?;
+    let target = resolve_graph_target(gpt, editor_target, active_layer, project)?;
     if let Some(editor_target) = editor_target
         && matches!(
             editor_target,
@@ -207,15 +194,13 @@ pub(crate) fn resolve_mod_target(
     Some((target, param_id.clone()))
 }
 
-/// The `AbletonMappingTarget` for a resolved param `target` on `tab`, so the
-/// Ableton trim/invert arms route through the shared
+/// The `AbletonMappingTarget` for a resolved param `target`, so the Ableton
+/// trim/invert arms route through the shared
 /// `Project::ableton_param_mappings_mut` locate-fork (effects addressed by
 /// `effect_type` within master/layer — first match — generators by layer).
-/// `None` for the clip tab (no clip-scoped Ableton mappings).
+/// A clip effect has no clip-scoped Ableton mapping, so it gives `None`.
 pub(crate) fn ableton_mapping_target(
     target: &manifold_core::GraphTarget,
-    tab: InspectorTab,
-    active_layer: &Option<LayerId>,
     project: &Project,
     param_id: &manifold_core::effects::ParamId,
 ) -> Option<manifold_core::ableton_mapping::AbletonMappingTarget> {
@@ -224,19 +209,16 @@ pub(crate) fn ableton_mapping_target(
     match target {
         manifold_core::GraphTarget::Effect(eid) => {
             let effect_type = project.find_effect_by_id(eid)?.effect_type().clone();
-            match tab {
-                InspectorTab::Master => Some(T::MasterEffect {
+            match EffectTarget::of_effect(project, eid)? {
+                EffectTarget::Master => Some(T::MasterEffect {
                     effect_type,
                     param_id: param_id.clone(),
                 }),
-                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
-                    Some(T::LayerEffect {
-                        layer_id: active_layer.clone()?,
-                        effect_type,
-                        param_id: param_id.clone(),
-                    })
-                }
-                InspectorTab::Clip => None,
+                EffectTarget::Layer { layer_id } => Some(T::LayerEffect {
+                    layer_id,
+                    effect_type,
+                    param_id: param_id.clone(),
+                }),
             }
         }
         manifold_core::GraphTarget::Generator(lid) => Some(T::GenParam {
@@ -330,12 +312,10 @@ pub(crate) fn preset_source_def(
 pub(crate) fn resolve_preset_target(
     gpt: &GraphParamTarget,
     editor_target: Option<&GraphTarget>,
-    tab: InspectorTab,
     active_layer: &Option<LayerId>,
-    selection: &SelectionState,
     project: &Project,
 ) -> Option<GraphTarget> {
-    let host = resolve_graph_target(gpt, editor_target, tab, active_layer, selection, project)?;
+    let host = resolve_graph_target(gpt, editor_target, active_layer, project)?;
     if let Some(local @ GraphTarget::SceneModifier { .. }) = editor_target
         && local.host_target() == Some(&host)
     {
@@ -363,7 +343,7 @@ mod tests {
     use manifold_core::layer::Layer;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::{LayerId, PresetTypeId};
-    use manifold_ui::GraphParamTarget;
+    use manifold_ui::{GraphParamTarget, InspectorTab};
 
     fn local_graph() -> EffectGraphDef {
         serde_json::from_value(serde_json::json!({
@@ -418,13 +398,10 @@ mod tests {
     #[test]
     fn modifier_owner_resolves_exact_generator() {
         let (project, target, layer_a, layer_b) = project_with_modifier();
-        let selection = SelectionState::default();
         let resolved = resolve_graph_target(
             &GraphParamTarget::Generator,
             Some(&target),
-            InspectorTab::Layer,
             &Some(layer_b.clone()),
-            &selection,
             &project,
         );
         assert_eq!(resolved, Some(GraphTarget::Generator(layer_a.clone())));
@@ -432,10 +409,8 @@ mod tests {
             resolve_graph_target(
                 &GraphParamTarget::GeneratorOf(layer_b.clone()),
                 Some(&target),
-                InspectorTab::Layer,
                 &Some(layer_a.clone()),
-                &selection,
-                &project
+                &project,
             ),
             None
         );
@@ -443,10 +418,8 @@ mod tests {
             resolve_graph_target(
                 &GraphParamTarget::GeneratorOf(layer_a.clone()),
                 Some(&target),
-                InspectorTab::Layer,
                 &Some(layer_b.clone()),
-                &selection,
-                &project
+                &project,
             ),
             Some(GraphTarget::Generator(layer_a.clone()))
         );
@@ -464,7 +437,6 @@ mod tests {
     #[test]
     fn modifier_owner_rejects_invalid_and_dangling_controls() {
         let (project, target, _, layer_b) = project_with_modifier();
-        let selection = SelectionState::default();
         let invalid = GraphTarget::SceneModifier {
             owner: Box::new(target.host_target().unwrap().clone()),
             modifier_id: "missing".into(),
@@ -473,9 +445,7 @@ mod tests {
             resolve_graph_target(
                 &GraphParamTarget::Generator,
                 Some(&invalid),
-                InspectorTab::Layer,
                 &Some(layer_b.clone()),
-                &selection,
                 &project,
             )
             .is_none()
@@ -492,9 +462,7 @@ mod tests {
                 &GraphParamTarget::Generator,
                 &param,
                 Some(&target),
-                InspectorTab::Layer,
                 &Some(layer_b.clone()),
-                &selection,
                 false,
             )
             .is_some()
@@ -508,9 +476,7 @@ mod tests {
                 &GraphParamTarget::Generator,
                 &prep_only,
                 Some(&target),
-                InspectorTab::Layer,
                 &Some(layer_b),
-                &selection,
                 false,
             )
             .is_none()
@@ -530,16 +496,8 @@ mod tests {
         b.init_defaults();
         let (a_id, b_id) = (a.id.clone(), b.id.clone());
         project.settings.master_effects = vec![a, b];
-        let selection = SelectionState::default();
         let resolve = |project: &Project, id: &manifold_core::EffectId| {
-            resolve_graph_target(
-                &GraphParamTarget::Effect(id.clone()),
-                None,
-                InspectorTab::Master,
-                &None,
-                &selection,
-                project,
-            )
+            resolve_graph_target(&GraphParamTarget::Effect(id.clone()), None, &None, project)
         };
 
         assert_eq!(
@@ -567,5 +525,33 @@ mod tests {
             None,
             "a removed effect must not fall through to another"
         );
+    }
+
+    /// A layer effect's Ableton mapping names the layer that owns the effect,
+    /// with no active layer passed in.
+    #[test]
+    fn ableton_target_for_a_layer_effect_names_the_effects_own_layer() {
+        use manifold_core::ableton_mapping::AbletonMappingTarget;
+        use manifold_core::effects::{ParamId, PresetInstance};
+        let mut project = Project::default();
+        let mut layer_a = Layer::new_generator("A".into(), PresetTypeId::NONE, 0);
+        let mut layer_b = Layer::new_generator("B".into(), PresetTypeId::NONE, 1);
+        let layer_b_id = layer_b.layer_id.clone();
+        let fx_a = PresetInstance::new(PresetTypeId::new("Bloom"));
+        let fx_b = PresetInstance::new(PresetTypeId::new("Bloom"));
+        let fx_b_id = fx_b.id.clone();
+        layer_a.effects = Some(vec![fx_a]);
+        layer_b.effects = Some(vec![fx_b]);
+        project.timeline.layers.push(layer_a);
+        project.timeline.layers.push(layer_b);
+        let target = ableton_mapping_target(
+            &GraphTarget::Effect(fx_b_id),
+            &project,
+            &ParamId::from("amount"),
+        );
+        assert!(matches!(
+            target,
+            Some(AbletonMappingTarget::LayerEffect { layer_id, .. }) if layer_id == layer_b_id
+        ));
     }
 }

@@ -874,21 +874,14 @@ pub(crate) fn resolve_card_mapping(
     editor: &crate::ui_root::UIRoot,
     project: &manifold_core::project::Project,
     active_layer: &Option<manifold_core::LayerId>,
-    selection: &crate::app::SelectionState,
     watched: Option<&manifold_core::GraphTarget>,
     target: &manifold_ui::GraphParamTarget,
     param_id: &str,
     anchor_node_id: manifold_ui::node::NodeId,
     clip: manifold_ui::graph_canvas::Rect,
 ) -> Option<CardMapping> {
-    let resolved_owner = crate::ui_bridge::resolve_graph_target(
-        target,
-        None,
-        editor.inspector.last_effect_tab(),
-        active_layer,
-        selection,
-        project,
-    )?;
+    let resolved_owner =
+        crate::ui_bridge::resolve_graph_target(target, None, active_layer, project)?;
     let owner = watched
         .filter(|watched| watched.host_target() == Some(&resolved_owner))
         .cloned()
@@ -1282,19 +1275,13 @@ impl Application {
         action: &manifold_ui::panels::PanelAction,
         in_editor: bool,
     ) -> bool {
-        let tab = match self.graph_editor.as_ref() {
-            Some(ed) if in_editor => ed.ui_root.inspector.last_effect_tab(),
-            _ => self.ws.ui_root.inspector.last_effect_tab(),
-        };
         // An editor-owned field is a live surface of the editor's composite
         // while it is open, so opening one needs no repaint call.
         crate::text_session::begin_inspector_entry(
             &mut self.text_input,
             action,
             in_editor,
-            tab,
             &self.active_layer_id,
-            &self.selection,
             &self.local_project,
         )
     }
@@ -1315,7 +1302,6 @@ impl Application {
             &ed.ui_root,
             &self.local_project,
             &self.active_layer_id,
-            &self.selection,
             self.watched_graph_target.as_ref(),
             target,
             param_id,

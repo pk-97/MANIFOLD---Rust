@@ -41,7 +41,9 @@ mod scene_card_convergence_tests {
     use manifold_ui::{
         AudioSetupAction, EditingAction, MappingAction, ModulationAction, ParamsAction,
     };
-    use manifold_ui::{DriverConfigAction, PanelAction, ScrubPhase, ScrubValue, ValueRef};
+    use manifold_ui::{
+        DriverConfigAction, InspectorTab, PanelAction, ScrubPhase, ScrubValue, ValueRef,
+    };
 
     /// A fresh Scene generator layer holding the base scene, for the
     /// parameter routing checks below.
@@ -963,6 +965,36 @@ mod scene_card_convergence_tests {
             assert!(
                 h.scrub.active.is_none(),
                 "choosing must not begin a parameter touch"
+            );
+        }
+
+        /// Touching a scene slider picks its lane even while the inspector
+        /// shows Master: the lane's layer comes from the param's own layer.
+        #[test]
+        fn touching_a_scene_slider_picks_its_lane_with_the_inspector_on_master() {
+            let (mut project, layer_a, layer_b) = two_scene_layer_project();
+            let mut h = Harness::new(Some(layer_b));
+            h.ui.inspector.configure_tabs(
+                &[InspectorTab::Master, InspectorTab::Layer],
+                InspectorTab::Master,
+            );
+            let pid = materialized_param(&mut h, &mut project, &layer_a);
+            h.dispatch(
+                &PanelAction::Scrub(
+                    ValueRef::Param(
+                        manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone()),
+                        pid.clone(),
+                    ),
+                    ScrubPhase::Begin,
+                ),
+                &mut project,
+            );
+            assert_eq!(
+                h.selection.chosen_automation_params().get(&layer_a),
+                Some(&(
+                    manifold_ui::view::UiGraphTarget::Generator(layer_a.clone()),
+                    pid,
+                ))
             );
         }
 

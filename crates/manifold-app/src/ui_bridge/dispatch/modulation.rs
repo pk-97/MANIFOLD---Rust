@@ -25,7 +25,7 @@ use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::envelopes::{
     AddEnvelopeCommand, SetEnvelopeActionCommand, ToggleEnvelopeEnabledCommand,
 };
-use manifold_ui::{DriverConfigAction, InspectorTab, ModulationAction};
+use manifold_ui::{DriverConfigAction, ModulationAction};
 
 use super::super::DispatchResult;
 use super::resolve::resolve_mod_target;
@@ -34,7 +34,7 @@ pub(crate) fn dispatch_modulation(
     action: &ModulationAction,
     ctx: &mut super::super::DispatchCtx,
 ) -> DispatchResult {
-    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
+    let (_, effective_active_layer) = super::editor_dispatch_context(
         ctx.editor_target,
         &ctx.project,
         ctx.ui.inspector.last_effect_tab(),
@@ -53,9 +53,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 true,
             ) else {
                 return DispatchResult::handled();
@@ -113,9 +111,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 true,
             ) else {
                 return DispatchResult::handled();
@@ -185,9 +181,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 true,
             ) else {
                 return DispatchResult::handled();
@@ -232,9 +226,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) else {
                 return DispatchResult::handled();
@@ -256,9 +248,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) {
                 let param_id = &param_id;
@@ -298,9 +288,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) {
                 let param_id = &param_id;
@@ -345,9 +333,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) {
                 let param_id = &param_id;
@@ -391,9 +377,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) {
                 let param_id = &param_id;
@@ -458,9 +442,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) {
                 let param_id = &param_id;
@@ -506,9 +488,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) {
                 let param_id = &param_id;
@@ -566,9 +546,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) {
                 let param_id = &param_id;
@@ -625,9 +603,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 true,
             ) {
                 let param_id = &param_id;
@@ -638,7 +614,7 @@ pub(crate) fn dispatch_modulation(
                     manifold_core::GraphTarget::SceneModifier { .. } => false,
                     manifold_core::GraphTarget::Generator(_) => true,
                     manifold_core::GraphTarget::Effect(_) => {
-                        matches!(effective_tab, InspectorTab::Layer)
+                        super::params::automation_owner_layer_id(&ctx.project, env_target).is_some()
                     }
                 };
                 if env_allowed {
@@ -683,9 +659,7 @@ pub(crate) fn dispatch_modulation(
                 gpt,
                 param_id,
                 ctx.editor_target,
-                effective_tab,
                 active_layer,
-                ctx.selection,
                 false,
             ) else {
                 return DispatchResult::handled();

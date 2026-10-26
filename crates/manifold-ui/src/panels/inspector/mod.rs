@@ -812,14 +812,10 @@ impl InspectorCompositePanel {
     /// Returns true if the effect param at `(effect_id, param_id)` has an
     /// Ableton mapping. `param_id` is the unified id namespace shared across
     /// static + user-exposed bindings.
-    pub fn is_effect_ableton_mapped(
-        &self,
-        tab: InspectorTab,
-        effect_id: &EffectId,
-        param_id: &str,
-    ) -> bool {
-        self.cards_for_tab(tab)
+    pub fn is_effect_ableton_mapped(&self, effect_id: &EffectId, param_id: &str) -> bool {
+        self.effects
             .iter()
+            .flatten()
             .find(|card| card.effect_id() == effect_id)
             .is_some_and(|card| card.param_has_ableton_mapping(param_id))
     }
@@ -832,13 +828,13 @@ impl InspectorCompositePanel {
             .is_some_and(|gp| gp.param_has_ableton_mapping(param_id))
     }
 
-    /// Whether the effect at `(tab, fx_idx)` has diverged from its library
-    /// entry — same tab-resolution as
-    /// [`Self::is_effect_ableton_mapped`], read by the card context menu to
-    /// gate Revert/Push to Library.
-    pub fn effect_has_graph_mod(&self, tab: InspectorTab, effect_id: &EffectId) -> bool {
-        self.cards_for_tab(tab)
+    /// Whether the effect `effect_id` has diverged from its library entry,
+    /// read by the card context menu to gate Revert/Push to Library. Effects
+    /// are found in every scope, since an id names one effect.
+    pub fn effect_has_graph_mod(&self, effect_id: &EffectId) -> bool {
+        self.effects
             .iter()
+            .flatten()
             .find(|card| card.effect_id() == effect_id)
             .is_some_and(|card| card.has_graph_mod())
     }
@@ -867,11 +863,10 @@ impl InspectorCompositePanel {
     pub fn layer_effect_mut(&mut self, idx: usize) -> Option<&mut ParamCardPanel> {
         self.effects[Self::SCOPE_LAYER].get_mut(idx)
     }
-    /// `master_effect_mut`/`layer_effect_mut`, picked by `tab` — mirrors
-    /// `is_effect_ableton_mapped`'s Master vs Layer|Group|Clip split. The one
-    /// accessor a card-state dispatch arm needs when it
-    /// wants to reach into the specific card's own UI-only state rather than
-    /// just mutate the model.
+    /// `master_effect_mut`/`layer_effect_mut`, picked by `tab`: Master vs
+    /// Layer|Group|Clip. The one accessor a card-state dispatch arm needs when
+    /// it wants to reach into the specific card's own UI-only state rather
+    /// than just mutate the model.
     pub fn effect_card_mut(
         &mut self,
         tab: InspectorTab,

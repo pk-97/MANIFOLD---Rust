@@ -14,6 +14,33 @@ pub enum EffectTarget {
     Master,
 }
 
+impl EffectTarget {
+    /// The chain that holds effect `id`: the master chain or its layer's chain.
+    /// `None` for a clip-scoped effect or an unknown id.
+    pub fn of_effect(project: &Project, id: &EffectId) -> Option<Self> {
+        if project
+            .settings
+            .master_effects
+            .iter()
+            .any(|fx| &fx.id == id)
+        {
+            return Some(Self::Master);
+        }
+        project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| {
+                l.effects
+                    .as_ref()
+                    .is_some_and(|e| e.iter().any(|fx| &fx.id == id))
+            })
+            .map(|l| Self::Layer {
+                layer_id: l.layer_id.clone(),
+            })
+    }
+}
+
 /// Execute a closure with mutable access to a target's effects and groups.
 /// Returns None if the target doesn't exist.
 ///

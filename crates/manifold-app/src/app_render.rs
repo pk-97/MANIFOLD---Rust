@@ -1143,17 +1143,12 @@ impl Application {
                 })
                 .unwrap_or((1280.0, 720.0));
             let card_actions = &actions[editor_card_seg_start..];
-            let mappings = match self.graph_editor.as_mut() {
-                Some(ed) => crate::editor_input::card_lane_entries(
-                    &mut self.text_input,
-                    ed,
-                    &self.local_project,
-                    &self.selection,
-                    &self.active_layer_id,
-                    card_actions,
-                ),
-                None => Vec::new(),
-            };
+            let mappings = crate::editor_input::card_lane_entries(
+                &mut self.text_input,
+                &self.local_project,
+                &self.active_layer_id,
+                card_actions,
+            );
             for (target, param_id, anchor_node_id) in mappings {
                 self.open_card_mapping(
                     target,

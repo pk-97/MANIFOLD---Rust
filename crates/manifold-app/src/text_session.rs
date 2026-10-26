@@ -339,15 +339,13 @@ pub(crate) fn begin_for_action(
 }
 
 /// Opens a card's numeric or slider-range entry. Both inspector instances emit
-/// these; `in_editor` says which window hosts the field, and `tab` is that
-/// window's inspector tab. False when the action opens neither.
+/// these; `in_editor` says which window hosts the field. False when the action
+/// opens neither.
 pub(crate) fn begin_inspector_entry(
     text_input: &mut TextInputState,
     action: &PanelAction,
     in_editor: bool,
-    tab: manifold_ui::InspectorTab,
     active_layer: &Option<manifold_core::LayerId>,
-    selection: &SelectionState,
     project: &Project,
 ) -> bool {
     match action {
@@ -388,21 +386,14 @@ pub(crate) fn begin_inspector_entry(
             param_id,
             anchor,
         }) => {
-            let param = crate::ui_bridge::resolve_graph_target(
-                target,
-                None,
-                tab,
-                active_layer,
-                selection,
-                project,
-            )
-            .and_then(|owner| {
-                project
-                    .graph_target_owner(&owner)?
-                    .params
-                    .get(param_id.as_ref())
-                    .cloned()
-            });
+            let param = crate::ui_bridge::resolve_graph_target(target, None, active_layer, project)
+                .and_then(|owner| {
+                    project
+                        .graph_target_owner(&owner)?
+                        .params
+                        .get(param_id.as_ref())
+                        .cloned()
+                });
             // A param that no longer resolves opens nothing.
             let Some(param) = param else { return true };
             let degrees = param.spec.is_angle;

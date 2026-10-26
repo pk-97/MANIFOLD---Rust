@@ -721,29 +721,23 @@ pub(crate) fn drain(
     out
 }
 
-/// Opens the text session a card-lane action asks for, against the editor's
-/// own inspector tab, and returns the mapping drawers the lane asked for. The
-/// caller opens those (it watches the drawer's graph first) before
-/// [`dispatch_card_lane`].
+/// Opens the text session a card-lane action asks for and returns the mapping
+/// drawers the lane asked for. The caller opens those (it watches the drawer's
+/// graph first) before [`dispatch_card_lane`].
 pub(crate) fn card_lane_entries<'x>(
     text_input: &mut TextInputState,
-    ws: &mut Workspace,
     project: &Project,
-    selection: &SelectionState,
     active_layer: &Option<LayerId>,
     actions: &'x [PanelAction],
 ) -> Vec<(&'x manifold_ui::GraphParamTarget, &'x str, NodeId)> {
     let mut mappings = Vec::new();
     for action in actions {
-        let tab = ws.ui_root.inspector.last_effect_tab();
         // The opened field is a live surface of the editor's composite.
         if crate::text_session::begin_inspector_entry(
             text_input,
             action,
             true,
-            tab,
             active_layer,
-            selection,
             project,
         ) {
             continue;

@@ -857,7 +857,6 @@ impl Runner {
             &ed.ws.ui_root,
             &data.project,
             &self.active_layer,
-            &data.selection,
             self.watched.as_ref(),
             target,
             param_id,
@@ -1902,17 +1901,12 @@ impl Runner {
         let handled = drain.actions.len() + drain.card_actions.len() + drain.graph_edits.len();
         self.apply_panel_actions(ui, data, &drain.actions);
         if !drain.card_actions.is_empty() {
-            let mappings = match self.editor.as_mut() {
-                Some(ed) => crate::editor_input::card_lane_entries(
-                    &mut self.text_input,
-                    &mut ed.ws,
-                    &data.project,
-                    &data.selection,
-                    &self.active_layer,
-                    &drain.card_actions,
-                ),
-                None => Vec::new(),
-            };
+            let mappings = crate::editor_input::card_lane_entries(
+                &mut self.text_input,
+                &data.project,
+                &self.active_layer,
+                &drain.card_actions,
+            );
             for (target, param_id, anchor_node_id) in mappings {
                 self.open_card_mapping(data, target, param_id, anchor_node_id);
             }
@@ -3220,9 +3214,7 @@ impl Runner {
                 &mut self.text_input,
                 action,
                 false,
-                ui.inspector.last_effect_tab(),
                 &self.active_layer,
-                &data.selection,
                 &data.project,
             ) || crate::text_session::begin_for_action(
                 &mut self.text_input,

@@ -23,7 +23,7 @@ pub(crate) fn dispatch_mapping(
     action: &MappingAction,
     ctx: &mut super::super::DispatchCtx,
 ) -> DispatchResult {
-    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
+    let (_, effective_active_layer) = super::editor_dispatch_context(
         ctx.editor_target,
         &ctx.project,
         ctx.ui.inspector.last_effect_tab(),
@@ -34,14 +34,9 @@ pub(crate) fn dispatch_mapping(
         MappingAction::MapParamToMacro(gpt, param_id, macro_idx) => {
             use manifold_core::{MacroCurve, MacroMapping};
             let macro_idx = *macro_idx;
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) && manifest_holds(&ctx.project, &target, param_id.as_ref())
+            if let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                && manifest_holds(&ctx.project, &target, param_id.as_ref())
                 && let Some(mapping_target) = macro_mapping_target(&target, param_id)
             {
                 // Graph-authority-first range so a generator's (or graph-backed
@@ -112,21 +107,11 @@ pub(crate) fn dispatch_mapping(
         // the content command. Mirrors `UnmapParamAbleton` below exactly — the
         // only difference is AbletonMapParam (with address) vs AbletonUnmapParam.
         MappingAction::MapParamToAbleton(gpt, param_id, address) => {
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) && manifest_holds(&ctx.project, &target, param_id.as_ref())
-                && let Some(mapping_target) = ableton_mapping_target(
-                    &target,
-                    effective_tab,
-                    active_layer,
-                    &ctx.project,
-                    param_id,
-                )
+            if let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                && manifest_holds(&ctx.project, &target, param_id.as_ref())
+                && let Some(mapping_target) =
+                    ableton_mapping_target(&target, &ctx.project, param_id)
             {
                 ContentCommand::send(
                     ctx.content_tx,
@@ -139,15 +124,10 @@ pub(crate) fn dispatch_mapping(
             DispatchResult::handled()
         }
         MappingAction::UnmapParamAbleton(gpt, param_id) => {
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) && let Some(mapping_target) =
-                ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
+            if let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                && let Some(mapping_target) =
+                    ableton_mapping_target(&target, &ctx.project, param_id)
             {
                 ContentCommand::send(
                     ctx.content_tx,
@@ -195,15 +175,10 @@ pub(crate) fn dispatch_mapping(
         // target. The undo baseline `(min, max)` now lives in `ScrubState.active`
         // (the retired `trim_snapshot` field's last reader).
         MappingAction::AbletonInvertToggle(gpt, param_id) => {
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) && let Some(mapping_target) =
-                ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
+            if let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                && let Some(mapping_target) =
+                    ableton_mapping_target(&target, &ctx.project, param_id)
             {
                 let mt = mapping_target.clone();
                 let pid = param_id.clone();

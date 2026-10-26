@@ -411,10 +411,10 @@ impl InspectorCompositePanel {
 
     /// Whether the projected group currently owns a composable mask. The app
     /// uses this to add the destructive menu item only for masked groups.
-    pub fn rack_group_has_mask(&self, tab: InspectorTab, group_id: &EffectGroupId) -> bool {
-        let scope = Self::scope_idx(tab);
-        self.rack_groups[scope]
+    pub fn rack_group_has_mask(&self, group_id: &EffectGroupId) -> bool {
+        self.rack_groups
             .iter()
+            .flatten()
             .any(|group| &group.id == group_id && group.mask_effect_id.is_some())
     }
 

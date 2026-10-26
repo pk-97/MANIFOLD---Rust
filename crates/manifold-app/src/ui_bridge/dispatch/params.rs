@@ -95,14 +95,8 @@ pub(crate) fn dispatch_params(
     let active_layer = &effective_active_layer;
     if let ParamsAction::ParamEnumSet(gpt, param_id, _) | ParamsAction::ParamToggle(gpt, param_id) =
         action
-        && let Some(target) = resolve_graph_target(
-            gpt,
-            ctx.editor_target,
-            effective_tab,
-            active_layer,
-            ctx.selection,
-            &ctx.project,
-        )
+        && let Some(target) =
+            resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
         && let Some(reason) = crate::graph_target::macro_parameter_lock_reason(
             &ctx.project,
             &target,
@@ -214,14 +208,9 @@ pub(crate) fn dispatch_params(
             DispatchResult::handled()
         }
         ParamsAction::ClearAutomation(gpt, param_id) => {
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) {
+            if let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+            {
                 let target = crate::editing_host::to_ui_graph_target(&target);
                 super::super::project::remove_parameter_automation(
                     &mut ctx.project,
@@ -235,14 +224,9 @@ pub(crate) fn dispatch_params(
             DispatchResult::handled()
         }
         ParamsAction::ShowAutomation(gpt, param_id) => {
-            let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) else {
+            let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+            else {
                 return DispatchResult::handled();
             };
             show_automation_target(&target, param_id, ctx)
@@ -483,14 +467,9 @@ pub(crate) fn dispatch_params(
             // A scene card fold is a saved view choice, not an undo step: written to the local project so the
             // rebuild sees it, and through MutateProject so the next snapshot
             // keeps it, like EffectCollapseToggle.
-            let Some(target) = resolve_graph_target(
-                target,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) else {
+            let Some(target) =
+                resolve_graph_target(target, ctx.editor_target, active_layer, &ctx.project)
+            else {
                 return DispatchResult::handled();
             };
             let (section, folded) = (section.clone(), *folded);
@@ -509,14 +488,9 @@ pub(crate) fn dispatch_params(
             DispatchResult::handled()
         }
         ParamsAction::SetCardPin(gpt, param_id, pin) => {
-            let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) else {
+            let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+            else {
                 return DispatchResult::handled();
             };
             if let (
@@ -540,14 +514,9 @@ pub(crate) fn dispatch_params(
             DispatchResult::handled()
         }
         ParamsAction::SetSliderRange(gpt, param_id, range) => {
-            let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) else {
+            let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+            else {
                 return DispatchResult::handled();
             };
             ctx.execute(Box::new(
@@ -559,15 +528,11 @@ pub(crate) fn dispatch_params(
             ));
             DispatchResult::handled()
         }
-        ParamsAction::RevealInSceneTab(gpt, param_id) => reveal_in_scene_tab(
-            gpt,
-            vec![param_id.clone()],
-            effective_tab,
-            active_layer,
-            ctx,
-        ),
+        ParamsAction::RevealInSceneTab(gpt, param_id) => {
+            reveal_in_scene_tab(gpt, vec![param_id.clone()], active_layer, ctx)
+        }
         ParamsAction::RevealSectionInSceneTab(gpt, section) => {
-            reveal_in_scene_tab(gpt, section.clone(), effective_tab, active_layer, ctx)
+            reveal_in_scene_tab(gpt, section.clone(), active_layer, ctx)
         }
         ParamsAction::ModsCompactToggled => {
             // section 6b — the inspector flipped its compact flag in route_click
@@ -593,14 +558,9 @@ pub(crate) fn dispatch_params(
         // no drag. `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
         // shape, exactly as `ParamChanged`/`ParamToggle` already do.
         ParamsAction::ParamEnumSet(gpt, param_id, new_val) => {
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) {
+            if let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+            {
                 let old_val = ctx
                     .project
                     .with_preset_graph(&target, |inst| {
@@ -991,26 +951,15 @@ pub(crate) fn dispatch_params(
                     }
                 }
                 ParamsAction::AddMask { target: gpt, .. } => {
-                    let Some(GraphTarget::Effect(_)) = resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    ) else {
+                    let Some(GraphTarget::Effect(eid)) =
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                    else {
                         return DispatchResult::handled();
                     };
-                    match effective_tab {
-                        InspectorTab::Master => EffectTarget::Master,
-                        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
-                            let Some(layer_id) = active_layer.clone() else {
-                                return DispatchResult::handled();
-                            };
-                            EffectTarget::Layer { layer_id }
-                        }
-                        InspectorTab::Clip => return DispatchResult::handled(),
-                    }
+                    let Some(target) = EffectTarget::of_effect(&ctx.project, &eid) else {
+                        return DispatchResult::handled();
+                    };
+                    target
                 }
                 _ => unreachable!(),
             };
@@ -1107,14 +1056,7 @@ pub(crate) fn dispatch_params(
             DispatchResult::handled()
         }
         ParamsAction::MakePresetUnique(gpt) => {
-            let target = resolve_preset_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            );
+            let target = resolve_preset_target(gpt, ctx.editor_target, active_layer, &ctx.project);
             super::presets::dispatch_preset(
                 target,
                 manifold_ui::panels::actions::PresetActionKind::MakeUnique,
@@ -1122,14 +1064,7 @@ pub(crate) fn dispatch_params(
             )
         }
         ParamsAction::ExportPreset(gpt) => {
-            let target = resolve_preset_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            );
+            let target = resolve_preset_target(gpt, ctx.editor_target, active_layer, &ctx.project);
             super::presets::dispatch_preset(
                 target,
                 manifold_ui::panels::actions::PresetActionKind::Export,
@@ -1137,14 +1072,7 @@ pub(crate) fn dispatch_params(
             )
         }
         ParamsAction::ImportPreset(gpt) => {
-            let target = resolve_preset_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            );
+            let target = resolve_preset_target(gpt, ctx.editor_target, active_layer, &ctx.project);
             super::presets::dispatch_preset(
                 target,
                 manifold_ui::panels::actions::PresetActionKind::Import,
@@ -1152,14 +1080,7 @@ pub(crate) fn dispatch_params(
             )
         }
         ParamsAction::SaveToLibrary(gpt) => {
-            let target = resolve_preset_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            );
+            let target = resolve_preset_target(gpt, ctx.editor_target, active_layer, &ctx.project);
             super::presets::dispatch_preset(
                 target,
                 manifold_ui::panels::actions::PresetActionKind::SaveToLibrary,
@@ -1167,14 +1088,7 @@ pub(crate) fn dispatch_params(
             )
         }
         ParamsAction::SaveToProject(gpt) => {
-            let target = resolve_preset_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            );
+            let target = resolve_preset_target(gpt, ctx.editor_target, active_layer, &ctx.project);
             super::presets::dispatch_preset(
                 target,
                 manifold_ui::panels::actions::PresetActionKind::SaveToProject,
@@ -1182,14 +1096,7 @@ pub(crate) fn dispatch_params(
             )
         }
         ParamsAction::RevertToLibrary(gpt) => {
-            let target = resolve_preset_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            );
+            let target = resolve_preset_target(gpt, ctx.editor_target, active_layer, &ctx.project);
             super::presets::dispatch_preset(
                 target,
                 manifold_ui::panels::actions::PresetActionKind::RevertToLibrary,
@@ -1197,14 +1104,7 @@ pub(crate) fn dispatch_params(
             )
         }
         ParamsAction::PushToLibrary(gpt) => {
-            let target = resolve_preset_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            );
+            let target = resolve_preset_target(gpt, ctx.editor_target, active_layer, &ctx.project);
             super::presets::dispatch_preset(
                 target,
                 manifold_ui::panels::actions::PresetActionKind::PushToLibrary,
@@ -1230,14 +1130,9 @@ pub(crate) fn dispatch_params(
         // lookup — a click is atomic (no drag), so one command captures the
         // old value and writes the new one in the same arm.
         ParamsAction::ParamToggle(gpt, param_id) => {
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) {
+            if let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+            {
                 let old_val = ctx
                     .project
                     .with_preset_graph(&target, |inst| {
@@ -1256,14 +1151,9 @@ pub(crate) fn dispatch_params(
             DispatchResult::handled()
         }
         ParamsAction::ParamFire(gpt, param_id) => {
-            if let Some(target) = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            ) {
+            if let Some(target) =
+                resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+            {
                 ContentCommand::send(
                     ctx.content_tx,
                     ContentCommand::FireParameter {
@@ -1430,18 +1320,12 @@ fn expand_layer_ancestors(id: &manifold_core::LayerId, ctx: &mut super::super::D
 fn reveal_in_scene_tab(
     gpt: &manifold_ui::GraphParamTarget,
     params: Vec<manifold_core::effects::ParamId>,
-    effective_tab: InspectorTab,
     active_layer: &Option<manifold_core::LayerId>,
     ctx: &mut super::super::DispatchCtx,
 ) -> DispatchResult {
-    let Some(GraphTarget::Generator(layer)) = resolve_graph_target(
-        gpt,
-        ctx.editor_target,
-        effective_tab,
-        active_layer,
-        ctx.selection,
-        &ctx.project,
-    ) else {
+    let Some(GraphTarget::Generator(layer)) =
+        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+    else {
         return DispatchResult::handled();
     };
     ctx.selection.pin_scope(InspectorTab::Scene);

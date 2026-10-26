@@ -694,10 +694,9 @@ pub(crate) fn dispatch_scrub(
     phase: &ScrubPhase,
     ctx: &mut DispatchCtx,
 ) -> DispatchResult {
-    // The `(tab, active_layer)` resolution context, byte-identical to the
-    // params dispatcher's D-11 preamble so the graph editor's watched target
-    // wins over the main window's selection.
-    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
+    // The active layer the params dispatcher resolves against, so the graph
+    // editor's watched target wins over the main window's selection.
+    let (_, effective_active_layer) = super::editor_dispatch_context(
         ctx.editor_target,
         &ctx.project,
         ctx.ui.inspector.last_effect_tab(),
@@ -706,14 +705,8 @@ pub(crate) fn dispatch_scrub(
     let active_layer = &effective_active_layer;
 
     if let ValueRef::Param(gpt, param_id) = value_ref
-        && let Some(target) = resolve_graph_target(
-            gpt,
-            ctx.editor_target,
-            effective_tab,
-            active_layer,
-            ctx.selection,
-            &ctx.project,
-        )
+        && let Some(target) =
+            resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
         && let Some(reason) = crate::graph_target::macro_parameter_lock_reason(
             &ctx.project,
             &target,
@@ -751,39 +744,20 @@ pub(crate) fn dispatch_scrub(
             .scene_setup_panel
             .linked_scale_axes(layer, param_id.as_ref())
     {
-        let target = resolve_graph_target(
-            gpt,
-            ctx.editor_target,
-            effective_tab,
-            active_layer,
-            ctx.selection,
-            &ctx.project,
-        );
+        let target = resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project);
         return dispatch_linked_scale(target, ids, axis, phase, ctx);
     }
 
     match value_ref {
         ValueRef::ParamRgb(gpt, ids) => {
-            let target = resolve_graph_target(
-                gpt,
-                ctx.editor_target,
-                effective_tab,
-                active_layer,
-                ctx.selection,
-                &ctx.project,
-            );
+            let target = resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project);
             dispatch_rgb_scrub(target, ids, phase, ctx)
         }
         ValueRef::Param(gpt, param_id) => match phase {
             ScrubPhase::Begin => {
-                if let Some(target) = resolve_graph_target(
-                    gpt,
-                    ctx.editor_target,
-                    effective_tab,
-                    active_layer,
-                    ctx.selection,
-                    &ctx.project,
-                ) {
+                if let Some(target) =
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                {
                     let val = ctx
                         .project
                         .with_preset_graph(&target, |inst| {
@@ -796,13 +770,10 @@ pub(crate) fn dispatch_scrub(
                         // Touch-to-select: the
                         // one funnel every param drag fires through, once per
                         // touch. Layer-scoped only.
-                        if effective_tab.is_layer_scope()
-                            && let Some(layer_id) =
-                                super::dispatch::params::automation_owner_layer_id(
-                                    &ctx.project,
-                                    &target,
-                                )
-                        {
+                        if let Some(layer_id) = super::dispatch::params::automation_owner_layer_id(
+                            &ctx.project,
+                            &target,
+                        ) {
                             ctx.selection.set_chosen_automation_param(
                                 layer_id,
                                 crate::editing_host::to_ui_graph_target(&target),
@@ -833,14 +804,7 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let (Some(val), Some(target)) = (
                     sv.scalar(),
-                    resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    ),
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project),
                 ) {
                     // A typed or dragged value stops only at a declared hard
                     // limit .
@@ -876,14 +840,8 @@ pub(crate) fn dispatch_scrub(
                     _ => None,
                 };
                 if let Some(old_val) = baseline
-                    && let Some(target) = resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    )
+                    && let Some(target) =
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                 {
                     let new_val = ctx
                         .project
@@ -1158,28 +1116,15 @@ pub(crate) fn dispatch_scrub(
             use manifold_ui::panels::TrimKind;
             match phase {
                 ScrubPhase::Begin => {
-                    if let Some(target) = resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    ) {
+                    if let Some(target) =
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                    {
                         // The ValueRef→resolved mapping done ONCE, at Begin (FORK
                         // 1): resolve the Ableton mapping target for the restore
                         // payload, and read the pre-gesture range from the kind's
                         // store as the undo baseline.
                         let ableton_target = matches!(kind, TrimKind::Ableton)
-                            .then(|| {
-                                ableton_mapping_target(
-                                    &target,
-                                    effective_tab,
-                                    active_layer,
-                                    &ctx.project,
-                                    param_id,
-                                )
-                            })
+                            .then(|| ableton_mapping_target(&target, &ctx.project, param_id))
                             .flatten();
                         let baseline = match kind {
                             TrimKind::Driver => ctx
@@ -1224,14 +1169,7 @@ pub(crate) fn dispatch_scrub(
                 ScrubPhase::Move(sv) => {
                     if let (Some((mn, mx)), Some(target)) = (
                         sv.range(),
-                        resolve_graph_target(
-                            gpt,
-                            ctx.editor_target,
-                            effective_tab,
-                            active_layer,
-                            ctx.selection,
-                            &ctx.project,
-                        ),
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project),
                     ) {
                         if let Some(ResolvedScrub::Trim { live, .. }) = &mut ctx.scrub.active {
                             *live = (mn, mx);
@@ -1263,13 +1201,9 @@ pub(crate) fn dispatch_scrub(
                                 );
                             }
                             TrimKind::Ableton => {
-                                if let Some(mapping_target) = ableton_mapping_target(
-                                    &target,
-                                    effective_tab,
-                                    active_layer,
-                                    &ctx.project,
-                                    param_id,
-                                ) {
+                                if let Some(mapping_target) =
+                                    ableton_mapping_target(&target, &ctx.project, param_id)
+                                {
                                     // Local edit + content sync route through the
                                     // shared locate-fork so they can't split.
                                     let mt = mapping_target.clone();
@@ -1300,14 +1234,8 @@ pub(crate) fn dispatch_scrub(
                         _ => None,
                     };
                     if let Some((old_min, old_max)) = baseline
-                        && let Some(target) = resolve_graph_target(
-                            gpt,
-                            ctx.editor_target,
-                            effective_tab,
-                            active_layer,
-                            ctx.selection,
-                            &ctx.project,
-                        )
+                        && let Some(target) =
+                            resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                     {
                         match kind {
                             TrimKind::Driver => {
@@ -1375,13 +1303,9 @@ pub(crate) fn dispatch_scrub(
                                 }
                             }
                             TrimKind::Ableton => {
-                                if let Some(mt) = ableton_mapping_target(
-                                    &target,
-                                    effective_tab,
-                                    active_layer,
-                                    &ctx.project,
-                                    param_id,
-                                ) {
+                                if let Some(mt) =
+                                    ableton_mapping_target(&target, &ctx.project, param_id)
+                                {
                                     let new = ctx
                                         .project
                                         .ableton_param_mappings(&mt)
@@ -1412,14 +1336,9 @@ pub(crate) fn dispatch_scrub(
 
         ValueRef::EnvelopeTarget(gpt, param_id) => match phase {
             ScrubPhase::Begin => {
-                if let Some(target) = resolve_graph_target(
-                    gpt,
-                    ctx.editor_target,
-                    effective_tab,
-                    active_layer,
-                    ctx.selection,
-                    &ctx.project,
-                ) {
+                if let Some(target) =
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                {
                     let baseline = ctx
                         .project
                         .with_preset_graph(&target, |inst| {
@@ -1443,14 +1362,7 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let (Some(v), Some(target)) = (
                     sv.scalar(),
-                    resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    ),
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project),
                 ) {
                     if let Some(ResolvedScrub::EnvelopeTarget { live, .. }) = &mut ctx.scrub.active
                     {
@@ -1468,14 +1380,8 @@ pub(crate) fn dispatch_scrub(
                     _ => None,
                 };
                 if let Some(old_target) = baseline
-                    && let Some(target) = resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    )
+                    && let Some(target) =
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                 {
                     let info = ctx
                         .project
@@ -1506,14 +1412,9 @@ pub(crate) fn dispatch_scrub(
 
         ValueRef::EnvDecay(gpt, param_id) => match phase {
             ScrubPhase::Begin => {
-                if let Some(target) = resolve_graph_target(
-                    gpt,
-                    ctx.editor_target,
-                    effective_tab,
-                    active_layer,
-                    ctx.selection,
-                    &ctx.project,
-                ) {
+                if let Some(target) =
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                {
                     let baseline = ctx
                         .project
                         .with_preset_graph(&target, |inst| {
@@ -1537,14 +1438,7 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let (Some(v), Some(target)) = (
                     sv.scalar(),
-                    resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    ),
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project),
                 ) {
                     if let Some(ResolvedScrub::EnvDecay { live, .. }) = &mut ctx.scrub.active {
                         *live = v;
@@ -1561,14 +1455,8 @@ pub(crate) fn dispatch_scrub(
                     _ => None,
                 };
                 if let Some(old_decay) = baseline
-                    && let Some(target) = resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    )
+                    && let Some(target) =
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                 {
                     let info = ctx
                         .project
@@ -1597,14 +1485,9 @@ pub(crate) fn dispatch_scrub(
 
         ValueRef::AudioModShape(gpt, param_id, which) => match phase {
             ScrubPhase::Begin => {
-                if let Some(target) = resolve_graph_target(
-                    gpt,
-                    ctx.editor_target,
-                    effective_tab,
-                    active_layer,
-                    ctx.selection,
-                    &ctx.project,
-                ) {
+                if let Some(target) =
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                {
                     // Capture the WHOLE pre-drag shape as the undo baseline (the
                     // restore path re-stamps all three scalars, so a stomp on a
                     // one-scalar drag can't revert the others).
@@ -1631,14 +1514,7 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let (Some(v), Some(target)) = (
                     sv.scalar(),
-                    resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    ),
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project),
                 ) {
                     let which = *which;
                     if let Some(ResolvedScrub::AudioModShape { live, .. }) = &mut ctx.scrub.active {
@@ -1670,14 +1546,8 @@ pub(crate) fn dispatch_scrub(
                 };
                 ctx.scrub.active = None;
                 if let Some(old_shape) = old_shape
-                    && let Some(target) = resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    )
+                    && let Some(target) =
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                 {
                     let new_shape = ctx
                         .project
@@ -1707,14 +1577,9 @@ pub(crate) fn dispatch_scrub(
 
         ValueRef::AudioModStepAmount(gpt, param_id) => match phase {
             ScrubPhase::Begin => {
-                if let Some(target) = resolve_graph_target(
-                    gpt,
-                    ctx.editor_target,
-                    effective_tab,
-                    active_layer,
-                    ctx.selection,
-                    &ctx.project,
-                ) {
+                if let Some(target) =
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                {
                     // Capture the WHOLE pre-drag action as the undo baseline (the
                     // commit diffs it against the new action); the restore path
                     // re-stamps only the live amount, preserving wrap.
@@ -1742,14 +1607,7 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let (Some(v), Some(target)) = (
                     sv.scalar(),
-                    resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    ),
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project),
                 ) {
                     if let Some(ResolvedScrub::AudioModStepAmount { live_amount, .. }) =
                         &mut ctx.scrub.active
@@ -1783,14 +1641,8 @@ pub(crate) fn dispatch_scrub(
                 };
                 ctx.scrub.active = None;
                 if let Some(old_action) = old_action
-                    && let Some(target) = resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    )
+                    && let Some(target) =
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                 {
                     let new_action = ctx
                         .project
@@ -1817,14 +1669,9 @@ pub(crate) fn dispatch_scrub(
 
         ValueRef::EnvelopeStepAmount(gpt, param_id) => match phase {
             ScrubPhase::Begin => {
-                if let Some(target) = resolve_graph_target(
-                    gpt,
-                    ctx.editor_target,
-                    effective_tab,
-                    active_layer,
-                    ctx.selection,
-                    &ctx.project,
-                ) {
+                if let Some(target) =
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
+                {
                     let baseline = ctx
                         .project
                         .with_preset_graph(&target, |inst| {
@@ -1852,14 +1699,7 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let (Some(v), Some(target)) = (
                     sv.scalar(),
-                    resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    ),
+                    resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project),
                 ) {
                     if let Some(ResolvedScrub::EnvelopeStepAmount { live_amount, .. }) =
                         &mut ctx.scrub.active
@@ -1883,14 +1723,8 @@ pub(crate) fn dispatch_scrub(
                 };
                 ctx.scrub.active = None;
                 if let Some(old_action) = old_action
-                    && let Some(target) = resolve_graph_target(
-                        gpt,
-                        ctx.editor_target,
-                        effective_tab,
-                        active_layer,
-                        ctx.selection,
-                        &ctx.project,
-                    )
+                    && let Some(target) =
+                        resolve_graph_target(gpt, ctx.editor_target, active_layer, &ctx.project)
                 {
                     let info = ctx
                         .project

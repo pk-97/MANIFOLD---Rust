@@ -1812,11 +1812,9 @@ impl UIRoot {
                 // "Remove Ableton Mapping" when param is already mapped — the
                 // only kind-specific read; the menu + context are unified.
                 let is_ableton_mapped = match gpt {
-                    GraphParamTarget::Effect(effect_id) => self.inspector.is_effect_ableton_mapped(
-                        self.inspector.last_effect_tab(),
-                        effect_id,
-                        param_id.as_ref(),
-                    ),
+                    GraphParamTarget::Effect(effect_id) => self
+                        .inspector
+                        .is_effect_ableton_mapped(effect_id, param_id.as_ref()),
                     // `is_gen_ableton_mapped` reads the inspector's own
                     // generator card, which shows the Scene tab's layer too.
                     GraphParamTarget::Generator | GraphParamTarget::GeneratorOf(_) => {
@@ -1970,10 +1968,7 @@ impl UIRoot {
                         source_layer,
                     },
                 );
-                if self
-                    .inspector
-                    .rack_group_has_mask(self.inspector.last_effect_tab(), group_id)
-                {
+                if self.inspector.rack_group_has_mask(group_id) {
                     if let Some(last) = items.last_mut() {
                         last.separator_after = true;
                     }
@@ -2039,9 +2034,9 @@ impl UIRoot {
                     }
                 }
                 let has_graph_mod = match gpt {
-                    GraphParamTarget::Effect(effect_id) => self
-                        .inspector
-                        .effect_has_graph_mod(self.inspector.last_effect_tab(), effect_id),
+                    GraphParamTarget::Effect(effect_id) => {
+                        self.inspector.effect_has_graph_mod(effect_id)
+                    }
                     // Same rationale as `is_ableton_mapped` above: card-only
                     // state, `GeneratorOf` doesn't reach `CardRightClicked` in
                     // practice, same query applies if it ever does.
