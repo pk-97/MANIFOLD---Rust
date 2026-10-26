@@ -87,6 +87,13 @@ use manifold_node_engine::mesh::pipeline::mat4_mul;
 pub(crate) use matrix::{mat4_inverse, model_matrix};
 mod pipelines;
 mod resources;
+
+/// The scene shader as every pipeline compiles it: the instance transform
+/// helpers it shares with `cull_instances.wgsl`, then the shader itself.
+const RENDER_SCENE_WGSL: &str = concat!(
+    include_str!("shaders/instance_transform.wgsl"),
+    include_str!("shaders/render_scene.wgsl"),
+);
 #[cfg(feature = "gpu-proofs")]
 pub mod rt_proof;
 
@@ -1378,6 +1385,10 @@ pub struct RenderScene {
     opaque_depth_snapshot_height: u32,
     volume_optics: volume_optics::VolumeOptics,
     live_draw_args: live_draw_args::LiveDrawArgs,
+    /// Per-object-slot instance records that survived the camera cull, and
+    /// their previous-frame records. Grown when too small, never shrunk.
+    culled_instances: Vec<Option<manifold_gpu::GpuBuffer>>,
+    culled_prev: Vec<Option<manifold_gpu::GpuBuffer>>,
     /// E2b: per-layer camera depth scratch, seeded from the opaque snapshot
     /// before each transmissive draw. Allocated only when transmission is
     /// present.
@@ -1982,6 +1993,15 @@ struct ObjectDraw<'ctx> {
     /// one and the draw puts the vertices where the model matrix says: known
     /// content, no instances, no live extent, filled triangles.
     bounds: Option<MeshBounds>,
+    /// The box around the mesh in its own space for the per-copy camera cull:
+    /// `bounds` without the no-instances and no-live-extent conditions (a live
+    /// extent only drops vertices inside the producer's box, and each copy is
+    /// placed by its own transform).
+    copy_bounds: Option<MeshBounds>,
+    /// The instances that survive the camera cull and the arguments block
+    /// counting them, when the draw culls its copies. Camera passes read it
+    /// through the `camera_*` accessors; every other pass reads the full array.
+    camera_cull: Option<CameraCull>,
     /// False when `bounds` lies wholly outside the camera's clip volume,
     /// jitter included. Only the main pass and the camera depth snapshot skip
     /// such a draw; every other pass still sees it.
@@ -2034,7 +2054,35 @@ struct ObjectDraw<'ctx> {
     points: bool,
 }
 
+/// What a camera pass reads in place of the full instance array.
+struct CameraCull {
+    /// Byte offset of the draw's view block in the arguments buffer.
+    offset: u64,
+    /// The copies that reach the view, compacted.
+    instances: manifold_gpu::GpuBuffer,
+    /// Their previous-frame records, when the velocity pass reads them.
+    prev: Option<manifold_gpu::GpuBuffer>,
+}
+
 impl ObjectDraw<'_> {
+    /// An instanced triangle draw whose instance word the GPU trims to the
+    /// last copy that is not a hole. Points mode draws every vertex, which
+    /// the triangle-count arguments do not carry, so its instances stay direct.
+    fn trims_instances(&self) -> bool {
+        self.instances.is_some() && self.instance_count > 0 && !self.points
+    }
+
+    /// Whether camera passes draw only the copies that reach the view: a
+    /// trimmed draw of a large array with a known mesh box. A blended or
+    /// transmissive draw keeps every copy in order, and compaction reorders
+    /// them.
+    fn culls_copies(&self) -> bool {
+        self.trims_instances()
+            && !self.routes_to_transparent()
+            && self.instance_count >= live_draw_args::CULL_MIN_INSTANCES
+            && self.copy_bounds.is_some()
+    }
+
     /// Transmission is a separate raster route even when authored alpha stays
     /// Opaque. The shader still receives the authored alpha mode unchanged.
     fn routes_to_transparent(&self) -> bool {
@@ -2060,14 +2108,58 @@ impl ObjectDraw<'_> {
         &'a self,
         draw: manifold_gpu::DepthMsaaDraw<'a>,
     ) -> manifold_gpu::DepthMsaaDraw<'a> {
+        let args = self.live_args.as_ref().map(|(args, offset)| (args, *offset));
+        self.with_args(draw, args)
+    }
+
+    /// [`Self::live`] for a camera pass: the view block counts only the
+    /// copies that survived the cull.
+    fn camera_live<'a>(
+        &'a self,
+        draw: manifold_gpu::DepthMsaaDraw<'a>,
+    ) -> manifold_gpu::DepthMsaaDraw<'a> {
+        let args = self.live_args.as_ref().map(|(args, offset)| {
+            let offset = self.camera_cull.as_ref().map_or(*offset, |cull| cull.offset);
+            (args, offset)
+        });
+        self.with_args(draw, args)
+    }
+
+    fn with_args<'a>(
+        &'a self,
+        draw: manifold_gpu::DepthMsaaDraw<'a>,
+        args: Option<(&'a manifold_gpu::GpuBuffer, u64)>,
+    ) -> manifold_gpu::DepthMsaaDraw<'a> {
         let draw = draw.cull_back_faces(self.culls_back_faces());
         let draw = match self.indices {
             Some(indices) => draw.indexed(indices),
             None => draw,
         };
-        match &self.live_args {
-            Some((args, offset)) => draw.indirect(args, *offset),
+        match args {
+            Some((args, offset)) => draw.indirect(args, offset),
             None => draw,
+        }
+    }
+
+    /// The instance records a camera pass binds: the survivors of the cull,
+    /// else the wired array.
+    fn camera_instances(&self) -> Option<&manifold_gpu::GpuBuffer> {
+        match &self.camera_cull {
+            Some(cull) => Some(&cull.instances),
+            None => self.instances,
+        }
+    }
+
+    /// Last frame's instance records for a camera pass, when the velocity
+    /// pass reads them: those of the surviving copies when culled.
+    fn camera_prev_instances(&self) -> Option<&manifold_gpu::GpuBuffer> {
+        let bound = self
+            .prev_instances
+            .as_ref()
+            .and_then(prev_positions::PrevDraw::bound)?;
+        match &self.camera_cull {
+            Some(cull) => cull.prev.as_ref(),
+            None => Some(bound),
         }
     }
 
@@ -3014,6 +3106,7 @@ impl RenderScene {
         let (rt_just_resumed, will_rt_accumulate_this_frame) =
             self.author_rt_flags(ctx, &pre, &rt_ready, &mut draws, has_transmission);
         self.plan_prev_positions(ctx, &mut draws, pre.velocity_wired, has_transmission);
+        self.encode_copy_cull(ctx, &mut draws);
 
         // ---- Ensure cached GPU resources (mutable phase) — BUG-trh7 stage 2,
         // `ensure_gpu_resources`; the E2a format peek moved inside it, ahead

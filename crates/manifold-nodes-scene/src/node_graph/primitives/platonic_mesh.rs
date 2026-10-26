@@ -88,8 +88,9 @@ impl Primitive for PlatonicMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let shape = crate::node_graph::primitives::polytope_vertices::read_shape(ctx);
         let radius = ctx.scalar_or_param("radius", 1.0);
-        ctx.outputs
-            .set_mesh_source("source", MeshSource::Platonic { shape, radius });
+        let source = MeshSource::Platonic { shape, radius };
+        ctx.outputs.set_cpu_value("vertices", source.local_bounds());
+        ctx.outputs.set_mesh_source("source", source);
         let Some(dst) = ctx.outputs.array("vertices") else {
             log::warn!("node.platonic_solid_mesh: no GpuBuffer bound to output port `vertices`");
             return;

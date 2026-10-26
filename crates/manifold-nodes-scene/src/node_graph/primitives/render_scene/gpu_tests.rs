@@ -1088,7 +1088,7 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
 "#;
     let shader = format!(
         "{}\n{}",
-        include_str!("../shaders/render_scene.wgsl"),
+        RENDER_SCENE_WGSL,
         PROBE
     );
     let pipeline = device.create_render_pipeline(
@@ -1303,7 +1303,7 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
 "#;
     let shader = format!(
         "{}\n{}",
-        include_str!("../shaders/render_scene.wgsl"),
+        RENDER_SCENE_WGSL,
         PROBE
     );
     let pipeline = device.create_render_pipeline(
@@ -1530,7 +1530,7 @@ fn extension_map_mip_filters_follow_authored_choice() {
     // no mip = 0, nearest mip = 0.5, linear mip = 0.3.
     let shader = format!(
         "{}\n{}",
-        include_str!("../shaders/render_scene.wgsl"),
+        RENDER_SCENE_WGSL,
         r#"
 @vertex fn vs_mip_probe(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let x = f32((i << 1u) & 2u);

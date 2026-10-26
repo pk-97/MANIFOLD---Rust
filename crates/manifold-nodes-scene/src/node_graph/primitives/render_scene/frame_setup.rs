@@ -4,6 +4,21 @@
 
 use super::*;
 
+/// Bytes of one `InstanceTransform` record.
+const INSTANCE_RECORD_BYTES: u64 = std::mem::size_of::<InstanceTransform>() as u64;
+
+/// `slot`'s buffer, reallocated only when it holds fewer than `bytes`.
+fn grown_buffer(
+    slot: &mut Option<manifold_gpu::GpuBuffer>,
+    device: &manifold_gpu::GpuDevice,
+    bytes: u64,
+) -> manifold_gpu::GpuBuffer {
+    if slot.as_ref().is_none_or(|buffer| buffer.size < bytes) {
+        *slot = Some(device.create_buffer(bytes));
+    }
+    slot.clone().expect("buffer allocated")
+}
+
 impl RenderScene {
     /// BUG-trh7 stage 2, pass 0: the frame preamble — per-frame inputs, the
     /// light/caster tables, temporal-upscale resolution, RT toggle latches,
@@ -543,19 +558,24 @@ impl RenderScene {
             .into_iter()
             .flatten()
             .all(|slot| inputs.content_version_of(slot).is_some());
-            // The producer's box stands for the vertices only while nothing
-            // but the model matrix places them: no instances, no live extent,
-            // filled triangles (a line or a point reaches past its vertex).
-            // It is tested against the same jittered `view_proj` the draw
-            // uniforms carry, after the previous-model write above, which a
-            // skipped draw still needs for its velocity on re-entry.
-            let bounds = (object.instances.is_none()
-                && live_extent.is_none()
-                && geometry_content_known
+            // The producer's box stands for the vertices while the mesh is
+            // known content and filled triangles (a line or a point reaches
+            // past its vertex). The per-copy camera cull places it with each
+            // copy's own transform; a live extent only drops vertices inside
+            // it.
+            let copy_bounds = (geometry_content_known
                 && fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
                 && !points)
                 .then(|| mesh_slot.and_then(|s| inputs.cpu_value_slot::<Option<MeshBounds>>(s)))
                 .flatten()
+                .flatten();
+            // The whole-object test needs nothing but the model matrix to
+            // place the vertices: no instances, no live extent. It is tested
+            // against the same jittered `view_proj` the draw uniforms carry,
+            // after the previous-model write above, which a skipped draw
+            // still needs for its velocity on re-entry.
+            let bounds = (object.instances.is_none() && live_extent.is_none())
+                .then_some(copy_bounds)
                 .flatten();
             let in_view = !bounds.is_some_and(|b| box_outside_clip(view_proj, &model, &b));
 
@@ -673,26 +693,26 @@ impl RenderScene {
                 fill_mode,
                 points,
                 bounds,
+                copy_bounds,
+                camera_cull: None,
                 in_view,
             });
         }
 
-        // Points mode draws every vertex, which the triangle-count
-        // arguments do not carry, so its instances stay direct.
-        let trimmed = |d: &ObjectDraw| d.instances.is_some() && d.instance_count > 0 && !d.points;
         let live = draws
             .iter()
-            .filter(|d| d.live_extent.is_some() || trimmed(d))
+            .filter(|d| d.live_extent.is_some() || d.trims_instances())
             .count();
         if live > 0 {
+            let culled = draws.iter().filter(|d| d.culls_copies()).count();
             let gpu = ctx.gpu_encoder();
-            let args = self.live_draw_args.prepare(gpu.device, live);
+            let args = self.live_draw_args.prepare(gpu.device, live + culled);
             for (slot, draw) in draws
                 .iter_mut()
-                .filter(|d| d.live_extent.is_some() || trimmed(d))
+                .filter(|d| d.live_extent.is_some() || d.trims_instances())
                 .enumerate()
             {
-                let instances = if trimmed(draw) {
+                let instances = if draw.trims_instances() {
                     0
                 } else {
                     draw.instance_count
@@ -718,14 +738,14 @@ impl RenderScene {
                 }
                 draw.live_args = Some((args.clone(), slot as u64 * live_draw_args::ARGS_BYTES));
             }
-            if draws.iter().any(trimmed) {
+            if draws.iter().any(|d| d.trims_instances()) {
                 gpu.native_enc.compute_memory_barrier_buffers();
                 for (slot, draw) in draws
                     .iter()
-                    .filter(|d| d.live_extent.is_some() || trimmed(d))
+                    .filter(|d| d.live_extent.is_some() || d.trims_instances())
                     .enumerate()
                 {
-                    if let (true, Some(instances)) = (trimmed(draw), draw.instances) {
+                    if let (true, Some(instances)) = (draw.trims_instances(), draw.instances) {
                         self.live_draw_args.trim(
                             gpu.native_enc,
                             slot,
@@ -735,8 +755,76 @@ impl RenderScene {
                     }
                 }
             }
+            // Each culled draw's view block follows the live blocks; its
+            // survivors land in a per-slot buffer sized for every copy.
+            let mut view_block = live as u64;
+            for draw in draws.iter_mut().filter(|d| d.culls_copies()) {
+                let Some(buffer) = self.culled_instances.get_mut(draw.slot as usize) else {
+                    continue;
+                };
+                let bytes = u64::from(draw.instance_count) * INSTANCE_RECORD_BYTES;
+                draw.camera_cull = Some(CameraCull {
+                    offset: view_block * live_draw_args::ARGS_BYTES,
+                    instances: grown_buffer(buffer, gpu.device, bytes),
+                    prev: None,
+                });
+                view_block += 1;
+            }
         }
         Some((draws, has_transmission))
+    }
+
+    /// Cull each camera-culled draw's copies against the camera's clip volume
+    /// into its survivor buffers and view block. Runs after the trim and the
+    /// previous-record plan, which it reads, and before any pass draws.
+    pub(super) fn encode_copy_cull(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        draws: &mut [ObjectDraw<'_>],
+    ) {
+        if draws.iter().all(|d| d.camera_cull.is_none()) {
+            return;
+        }
+        let gpu = ctx.gpu_encoder();
+        // The trim wrote the instance words the view blocks copy.
+        gpu.native_enc.compute_memory_barrier_buffers();
+        for draw in draws.iter_mut() {
+            let (Some(cull), Some(bounds), Some(source), Some((_, live_offset))) = (
+                draw.camera_cull.as_mut(),
+                draw.copy_bounds.as_ref(),
+                draw.instances,
+                draw.live_args.as_ref(),
+            ) else {
+                continue;
+            };
+            let prev_source = draw
+                .prev_instances
+                .as_ref()
+                .and_then(prev_positions::PrevDraw::bound);
+            cull.prev = None;
+            if prev_source.is_some()
+                && let Some(buffer) = self.culled_prev.get_mut(draw.slot as usize)
+            {
+                let bytes = u64::from(draw.instance_count) * INSTANCE_RECORD_BYTES;
+                cull.prev = Some(grown_buffer(buffer, gpu.device, bytes));
+            }
+            self.live_draw_args.cull(
+                gpu.native_enc,
+                &live_draw_args::CullDraw {
+                    clip: &draw.uniforms.view_proj,
+                    model: &draw.uniforms.model,
+                    inner: &draw.uniforms.instance_inner,
+                    bounds,
+                    count: draw.instance_count,
+                    live_block: (live_offset / live_draw_args::ARGS_BYTES) as u32,
+                    view_block: (cull.offset / live_draw_args::ARGS_BYTES) as u32,
+                    instances: source,
+                    out_instances: &cull.instances,
+                    prev: prev_source.zip(cull.prev.as_ref()),
+                },
+            );
+        }
+        gpu.native_enc.compute_memory_barrier_buffers();
     }
 
     /// Abort the frame: report why, naming the render object at fault when

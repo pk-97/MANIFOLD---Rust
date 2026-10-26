@@ -196,7 +196,7 @@ fn wgsl_caster_struct_matches_the_rust_record() {
     for (name, src) in [
         (
             "render_scene.wgsl",
-            include_str!("../shaders/render_scene.wgsl"),
+            RENDER_SCENE_WGSL,
         ),
         (
             "shaft_march.wgsl",
@@ -456,7 +456,7 @@ fn world_space_places_instance_outside_parent_local() {
 //  exports it, and no stray 48-byte assumption survives in the source.
 #[test]
 fn render_scene_wgsl_parses_and_carries_tangent() {
-    let src = include_str!("../shaders/render_scene.wgsl");
+    let src = RENDER_SCENE_WGSL;
     let module = naga::front::wgsl::parse_str(src).expect("render_scene.wgsl must naga-parse");
     let mut validator = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
@@ -474,6 +474,33 @@ fn render_scene_wgsl_parses_and_carries_tangent() {
     );
 }
 
+/// The per-copy cull places a copy with the scene shader's own transform
+/// helpers, so it compiles against the same prelude.
+#[test]
+fn cull_instances_wgsl_validates_with_the_instance_transform_prelude() {
+    let src = concat!(
+        include_str!("../shaders/instance_transform.wgsl"),
+        include_str!("../shaders/cull_instances.wgsl"),
+    );
+    let module = naga::front::wgsl::parse_str(src).expect("cull_instances.wgsl must naga-parse");
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    if let Err(e) = validator.validate(&module) {
+        panic!(
+            "cull_instances.wgsl validation failed:\n{}",
+            e.emit_to_string(src)
+        );
+    }
+    for entry in ["view_args", "cull"] {
+        assert!(
+            module.entry_points.iter().any(|ep| ep.name == entry),
+            "cull_instances.wgsl must expose {entry}"
+        );
+    }
+}
+
 /// The solid-surface variants are text edits of the shader, so a shader edit
 /// that stops matching a pattern would silently keep the discards (and the
 /// tile-based hidden-surface removal they defeat). Every variant — plain and
@@ -481,7 +508,7 @@ fn render_scene_wgsl_parses_and_carries_tangent() {
 /// naga-validate.
 #[test]
 fn opaque_fast_variants_have_no_discard_and_validate() {
-    let base = include_str!("../shaders/render_scene.wgsl");
+    let base = RENDER_SCENE_WGSL;
     for (emit_velocity, emit_ao_mask, emit_denoise_feed) in [
         (false, false, false),
         (true, false, false),
@@ -543,7 +570,7 @@ fn velocity_variants_read_prev_positions_and_the_pack_kernel_validates() {
         (module, info)
     };
 
-    let base = include_str!("../shaders/render_scene.wgsl");
+    let base = RENDER_SCENE_WGSL;
     for (emit_ao_mask, emit_denoise_feed) in
         [(false, false), (true, false), (false, true), (true, true)]
     {

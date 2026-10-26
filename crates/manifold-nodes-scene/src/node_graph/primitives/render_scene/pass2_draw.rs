@@ -299,7 +299,7 @@ impl RenderScene {
                     // that object leaves it unwired.
                     GpuBinding::Buffer {
                         binding: 15,
-                        buffer: draw.instances.unwrap_or(identity_stub),
+                        buffer: draw.camera_instances().unwrap_or(identity_stub),
                         offset: 0,
                     },
                     // Split-sum IBL.
@@ -513,11 +513,7 @@ impl RenderScene {
                     // identity stub.
                     GpuBinding::Buffer {
                         binding: 57,
-                        buffer: draw
-                            .prev_instances
-                            .as_ref()
-                            .and_then(prev_positions::PrevDraw::bound)
-                            .unwrap_or(identity_stub),
+                        buffer: draw.camera_prev_instances().unwrap_or(identity_stub),
                         offset: 0,
                     },
                     GpuBinding::Bytes {
@@ -551,14 +547,14 @@ impl RenderScene {
                 // D8: points draw EVERY vertex in the buffer (one dot per
                 // vertex), not the triangle-multiple-of-3 count — the
                 // trailing-vertex truncation must not drop dots.
-                draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw_points(
+                draw.camera_live(manifold_gpu::GpuEncoder::depth_msaa_draw_points(
                     &draw.pipeline,
                     bindings,
                     draw.point_count,
                     draw.instance_count,
                 ))
             } else {
-                draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw_fill_mode(
+                draw.camera_live(manifold_gpu::GpuEncoder::depth_msaa_draw_fill_mode(
                     &draw.pipeline,
                     bindings,
                     draw.vertex_count,
@@ -875,7 +871,7 @@ impl RenderScene {
                         },
                         GpuBinding::Buffer {
                             binding: 2,
-                            buffer: draw.instances.unwrap_or(identity_stub),
+                            buffer: draw.camera_instances().unwrap_or(identity_stub),
                             offset: 0,
                         },
                         GpuBinding::Buffer {
@@ -893,7 +889,7 @@ impl RenderScene {
                                 [&Self::sampler_cache_key(draw.sampler_descs[0])],
                         },
                     ];
-                    let depth_draw = draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
+                    let depth_draw = draw.camera_live(manifold_gpu::GpuEncoder::depth_msaa_draw(
                         if shadow_uniforms.discard_free() {
                             &solid_depth_pipeline
                         } else {

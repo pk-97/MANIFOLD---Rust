@@ -295,7 +295,7 @@ impl RenderScene {
                         },
                         GpuBinding::Buffer {
                             binding: 2,
-                            buffer: d.instances.unwrap_or(identity_stub),
+                            buffer: d.camera_instances().unwrap_or(identity_stub),
                             offset: 0,
                         },
                         GpuBinding::Buffer {
@@ -323,7 +323,7 @@ impl RenderScene {
                 .zip(&cam_uniforms)
                 .zip(&cam_bindings)
                 .map(|((d, su), b)| {
-                    d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
+                    d.camera_live(manifold_gpu::GpuEncoder::depth_msaa_draw(
                         if su.discard_free() {
                             solid_depth_pipeline
                         } else {

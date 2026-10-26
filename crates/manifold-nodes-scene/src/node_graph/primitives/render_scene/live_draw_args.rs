@@ -3,10 +3,13 @@
 //! (GPU_FLUID_SURFACE_DESIGN.md P6b), so every raster pass draws only the
 //! live triangles, and from the instance array, so an instanced draw stops at
 //! its last instance that is not an all-zero hole (`live_instances.wgsl`).
+//! A camera pass reads a second block per culled draw: the live block with
+//! only the copies that can reach the view counted (`cull_instances.wgsl`).
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use manifold_node_engine::scene::live_extent::LiveExtent;
+use manifold_node_engine::scene::mesh_bounds::MeshBounds;
 
 /// Bytes of one object's draw arguments.
 pub(super) const ARGS_BYTES: u64 = 32;
@@ -34,17 +37,63 @@ struct TrimArgs {
     _pad: u32,
 }
 
+/// The scene shader's instance helpers, then the cull kernel that places a
+/// copy with them.
+const CULL_SHADER: &str = concat!(
+    include_str!("../shaders/instance_transform.wgsl"),
+    include_str!("../shaders/cull_instances.wgsl"),
+);
+
+/// Fewest copies worth a cull pass; a smaller array is cheaper to draw whole.
+pub(super) const CULL_MIN_INSTANCES: u32 = 1024;
+
+/// `CullArgs` in `cull_instances.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CullArgs {
+    clip: [[f32; 4]; 4],
+    model: [[f32; 4]; 4],
+    inner: [[f32; 4]; 4],
+    box_min: [f32; 4],
+    box_max: [f32; 4],
+    count: u32,
+    live_block: u32,
+    view_block: u32,
+    has_prev: u32,
+}
+
+/// One draw's cull: the matrices its uniforms carry, the mesh box, the copies
+/// to test and where the survivors go.
+pub(super) struct CullDraw<'a> {
+    pub clip: &'a [[f32; 4]; 4],
+    pub model: &'a [[f32; 4]; 4],
+    pub inner: &'a [[f32; 4]; 4],
+    pub bounds: &'a MeshBounds,
+    pub count: u32,
+    /// The draw's live block, copied into `view_block` with no instances.
+    pub live_block: u32,
+    pub view_block: u32,
+    pub instances: &'a GpuBuffer,
+    pub out_instances: &'a GpuBuffer,
+    /// Last frame's records and the buffer their survivors go to, when the
+    /// velocity pass reads them.
+    pub prev: Option<(&'a GpuBuffer, &'a GpuBuffer)>,
+}
+
 #[derive(Default)]
 pub(super) struct LiveDrawArgs {
     pipeline: Option<GpuComputePipeline>,
     fixed: Option<GpuComputePipeline>,
     trim: Option<GpuComputePipeline>,
+    view_args: Option<GpuComputePipeline>,
+    cull: Option<GpuComputePipeline>,
     buffer: Option<GpuBuffer>,
 }
 
 impl LiveDrawArgs {
-    /// The arguments buffer, holding at least `objects` blocks.
-    pub(super) fn prepare(&mut self, device: &GpuDevice, objects: usize) -> GpuBuffer {
+    /// The arguments buffer, holding at least `blocks` blocks: one per live
+    /// draw, then one per culled draw.
+    pub(super) fn prepare(&mut self, device: &GpuDevice, blocks: usize) -> GpuBuffer {
         if self.pipeline.is_none() {
             self.pipeline = Some(device.create_compute_pipeline(
                 include_str!("../shaders/live_draw_args.wgsl"),
@@ -61,8 +110,18 @@ impl LiveDrawArgs {
                 "trim_instances",
                 "node.render_scene live instances",
             ));
+            self.view_args = Some(device.create_compute_pipeline(
+                CULL_SHADER,
+                "view_args",
+                "node.render_scene view draw args",
+            ));
+            self.cull = Some(device.create_compute_pipeline(
+                CULL_SHADER,
+                "cull",
+                "node.render_scene cull instances",
+            ));
         }
-        let bytes = objects.max(1) as u64 * ARGS_BYTES;
+        let bytes = blocks.max(1) as u64 * ARGS_BYTES;
         if self
             .buffer
             .as_ref()
@@ -179,6 +238,83 @@ impl LiveDrawArgs {
             "node.render_scene live instances",
         );
     }
+
+    /// Fill view block `draw.view_block` from live block `draw.live_block`
+    /// (written and trimmed behind a buffer barrier) and move the copies of
+    /// the first `draw.count` whose box can reach the clip volume into
+    /// `draw.out_instances`, counting them into the view block's instance
+    /// word. Survivors keep their previous records alongside when `draw.prev`
+    /// is set.
+    pub(super) fn cull(&self, encoder: &mut GpuEncoder, draw: &CullDraw<'_>) {
+        let buffer = self.buffer.as_ref().expect("prepare before cull");
+        let params = CullArgs {
+            clip: *draw.clip,
+            model: *draw.model,
+            inner: *draw.inner,
+            box_min: [draw.bounds.min[0], draw.bounds.min[1], draw.bounds.min[2], 0.0],
+            box_max: [draw.bounds.max[0], draw.bounds.max[1], draw.bounds.max[2], 0.0],
+            count: draw.count,
+            live_block: draw.live_block,
+            view_block: draw.view_block,
+            has_prev: u32::from(draw.prev.is_some()),
+        };
+        encoder.dispatch_compute(
+            self.view_args.as_ref().expect("prepare before cull"),
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer,
+                    offset: 0,
+                },
+            ],
+            [1, 1, 1],
+            "node.render_scene view draw args",
+        );
+        encoder.compute_memory_barrier_buffers();
+        // Without previous records the two bindings take stand-ins the
+        // kernel never touches.
+        let (prev, out_prev) = draw.prev.unwrap_or((draw.instances, draw.out_instances));
+        encoder.dispatch_compute(
+            self.cull.as_ref().expect("prepare before cull"),
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: draw.instances,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: draw.out_instances,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: prev,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: out_prev,
+                    offset: 0,
+                },
+            ],
+            [draw.count.div_ceil(256).clamp(1, TRIM_GROUPS), 1, 1],
+            "node.render_scene cull instances",
+        );
+    }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -254,6 +390,120 @@ mod tests {
                 "{} instances, count {count}",
                 instances.len()
             );
+        }
+    }
+
+    /// A camera at the origin looking down -Z, 90 degrees across, Metal's
+    /// clip volume (`0 <= z <= w`).
+    fn camera_clip() -> [[f32; 4]; 4] {
+        let (near, far) = (0.1f32, 100.0f32);
+        let a = far / (near - far);
+        let b = far * near / (near - far);
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, a, -1.0],
+            [0.0, 0.0, b, 0.0],
+        ]
+    }
+
+    const IDENTITY: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    /// Five unit boxes: centred in view, far left, behind the camera, a hole,
+    /// and one straddling the left edge. Only the centred and straddling
+    /// copies survive, the live block is untouched, and with previous
+    /// records each survivor carries its own.
+    #[test]
+    fn cull_keeps_copies_that_reach_the_view() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut writer = LiveDrawArgs::default();
+        let copy = |x: f32, z: f32| [x, 0.0, z, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let instances = [
+            copy(0.0, -5.0),
+            copy(-50.0, -5.0),
+            copy(0.0, 5.0),
+            [0.0f32; 8],
+            copy(-5.0, -5.0),
+        ];
+        let prev: Vec<[f32; 8]> = (0..5)
+            .map(|i| [i as f32 + 0.25, 7.0, 8.0, 1.0, 0.0, 0.0, 0.0, 100.0 + i as f32])
+            .collect();
+        let bounds = MeshBounds {
+            min: [-0.5; 3],
+            max: [0.5; 3],
+        };
+        let clip = camera_clip();
+        for with_prev in [false, true] {
+            let source = device.create_buffer_shared(5 * 32);
+            let out = device.create_buffer_shared(5 * 32);
+            let prev_source = device.create_buffer_shared(5 * 32);
+            let out_prev = device.create_buffer_shared(5 * 32);
+            // SAFETY: fresh shared buffers, no GPU work in flight.
+            unsafe {
+                source.write(0, bytemuck::cast_slice(&instances));
+                prev_source.write(0, bytemuck::cast_slice(&prev));
+                out.write(0, &[0u8; 5 * 32]);
+                out_prev.write(0, &[0u8; 5 * 32]);
+            }
+            let args = writer.prepare(&device, 2);
+            let mut encoder = device.create_encoder("cull instances test");
+            writer.write_fixed(&mut encoder, 0, 36);
+            encoder.compute_memory_barrier_buffers();
+            writer.trim(&mut encoder, 0, &source, 5);
+            encoder.compute_memory_barrier_buffers();
+            writer.cull(
+                &mut encoder,
+                &CullDraw {
+                    clip: &clip,
+                    model: &IDENTITY,
+                    inner: &IDENTITY,
+                    bounds: &bounds,
+                    count: 5,
+                    live_block: 0,
+                    view_block: 1,
+                    instances: &source,
+                    out_instances: &out,
+                    prev: with_prev.then_some((&prev_source, &out_prev)),
+                },
+            );
+            encoder.commit_and_wait_completed();
+            let words = unsafe {
+                std::slice::from_raw_parts(args.mapped_ptr().expect("shared") as *const u32, 16)
+            };
+            assert_eq!(&words[0..5], &[36, 5, 0, 0, 0], "live block untouched");
+            assert_eq!(&words[8..13], &[36, 2, 0, 0, 0], "view block counts survivors");
+            let kept = unsafe {
+                std::slice::from_raw_parts(out.mapped_ptr().expect("shared") as *const [f32; 8], 2)
+            };
+            let kept_prev = unsafe {
+                std::slice::from_raw_parts(
+                    out_prev.mapped_ptr().expect("shared") as *const [f32; 8],
+                    2,
+                )
+            };
+            let mut seen = Vec::new();
+            for (k, record) in kept.iter().enumerate() {
+                let index = if *record == instances[0] {
+                    0
+                } else if *record == instances[4] {
+                    4
+                } else {
+                    panic!("unexpected survivor {record:?}");
+                };
+                seen.push(index);
+                if with_prev {
+                    assert_eq!(kept_prev[k], prev[index], "previous record of copy {index}");
+                } else {
+                    assert_eq!(kept_prev[k], [0.0; 8], "previous records stay untouched");
+                }
+            }
+            seen.sort_unstable();
+            assert_eq!(seen, [0, 4]);
         }
     }
 }

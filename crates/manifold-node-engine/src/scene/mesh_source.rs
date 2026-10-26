@@ -122,7 +122,7 @@ fn with_area(vertices: Vec<MeshVertex>) -> Vec<MeshVertex> {
 }
 
 impl MeshSource {
-    /// The box that contains every vertex the cube, sphere and plane nodes
+    /// The box that contains every vertex the cube, platonic, sphere and plane nodes
     /// write, from their parameters alone. `None` for every other source (its
     /// extent needs the vertices) and for non-finite parameters.
     pub fn local_bounds(&self) -> Option<MeshBounds> {
@@ -138,6 +138,12 @@ impl MeshSource {
             Self::Plane { width, height } => {
                 let (x, y) = (width.abs() * 0.5, height.abs() * 0.5);
                 MeshBounds::of_positions([[-x, -y, 0.0], [x, y, 0.0]])
+            }
+            // Circumradius one scaled by `radius`, so every vertex lies in
+            // the cube of that half-extent.
+            Self::Platonic { radius, .. } => {
+                let radius = radius.abs();
+                MeshBounds::of_positions([[-radius; 3], [radius; 3]])
             }
             _ => None,
         }
@@ -530,7 +536,12 @@ mod tests {
                 width: 3.0,
                 height: 0.4,
             },
-        ];
+        ]
+        .into_iter()
+        .chain((0..PLATONIC_SHAPES.len() as u32).map(|shape| MeshSource::Platonic {
+            shape,
+            radius: 1.7,
+        }));
         for source in sources {
             let bounds = source.local_bounds().expect("analytic source");
             for vertex in source.load_vertices().unwrap() {
@@ -553,10 +564,17 @@ mod tests {
         let flipped = MeshSource::Cube { size: -0.75 }.local_bounds().unwrap();
         assert_eq!((flipped.min, flipped.max), ([-0.375; 3], [0.375; 3]));
         assert_eq!(MeshSource::Cube { size: f32::NAN }.local_bounds(), None);
+        let solid = MeshSource::Platonic {
+            shape: 0,
+            radius: -1.7,
+        }
+        .local_bounds()
+        .unwrap();
+        assert_eq!((solid.min, solid.max), ([-1.7; 3], [1.7; 3]));
         assert_eq!(
             MeshSource::Platonic {
                 shape: 0,
-                radius: 1.0
+                radius: f32::NAN
             }
             .local_bounds(),
             None

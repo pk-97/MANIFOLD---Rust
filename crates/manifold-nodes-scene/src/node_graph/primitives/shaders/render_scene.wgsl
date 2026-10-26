@@ -602,35 +602,6 @@ fn clearcoat_family_flags() -> u32 {
     return u32(round(u.volume_attenuation_color.w));
 }
 
-// Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
-// Bit-for-bit the same as render_instanced_3d_mesh.wgsl's euler_xyz —
-// forked, not shared, per this file's header convention.
-fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
-    let cx = cos(angles.x);
-    let sx = sin(angles.x);
-    let cy = cos(angles.y);
-    let sy = sin(angles.y);
-    let cz = cos(angles.z);
-    let sz = sin(angles.z);
-
-    let rx = mat3x3<f32>(
-        vec3<f32>(1.0, 0.0, 0.0),
-        vec3<f32>(0.0, cx, sx),
-        vec3<f32>(0.0, -sx, cx),
-    );
-    let ry = mat3x3<f32>(
-        vec3<f32>(cy, 0.0, -sy),
-        vec3<f32>(0.0, 1.0, 0.0),
-        vec3<f32>(sy, 0.0, cy),
-    );
-    let rz = mat3x3<f32>(
-        vec3<f32>(cz, sz, 0.0),
-        vec3<f32>(-sz, cz, 0.0),
-        vec3<f32>(0.0, 0.0, 1.0),
-    );
-    return rz * ry * rx;
-}
-
 // Caster `slot`'s map coordinates `suv` ([0,1] over its own resolution)
 // scaled into its square of the layer, clamped half a texel inside so
 // filter taps never reach past the rendered square.
@@ -885,19 +856,6 @@ struct VsOut {
     @location(8) vertex_color: vec4<f32>,
     @location(9) @interpolate(flat) instance_scale: f32,
 };
-
-// SCENE_MIRROR (D5, P1-amended): instances minted by node.reflect_array
-// carry the mirror plane marker in rot_pad.w — 0 = original, k > 0 =
-// mirrored across the plane perpendicular to component k-1. Unmarked
-// instances take (1,1,1).
-fn mirror_sign(marker_w: f32) -> vec3<f32> {
-    let marker = u32(marker_w + 0.5);
-    return vec3<f32>(
-        select(1.0, -1.0, marker == 1u),
-        select(1.0, -1.0, marker == 2u),
-        select(1.0, -1.0, marker == 3u),
-    );
-}
 
 // world = model · T_instance · instance_inner. Object space passes an
 // identity `instance_inner`, so the instance TRS applies first and the
