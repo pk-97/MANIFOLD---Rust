@@ -7,18 +7,19 @@
 ## 1. Workflow
 
 - **Main checkout, no worktrees.** Every job edits main directly and commits its own paths (`CLAUDE.md`).
-- **The lead does the finding, workers do the edits.** Before a handoff the lead reads the code and writes the job: exact `file:line` anchors, the formula or the deletion list, and one scoped test command. No job says "whatever `rg` finds"; the lead runs the `rg` and hands over the list. `haiku` (the `lane` agent) takes splits, deletions, includes and wiring; `sonnet` takes a self-contained module or shader whose math the lead gives it.
+- **The lead does the finding, workers do the edits.** Before a handoff the lead reads the code and writes the job: exact `file:line` anchors, the formula or the deletion list, and the tests to write. Workers only read, write and edit code: they never run `cargo`, tests, captures or the GPU. No job says "whatever `rg` finds"; the lead runs the `rg` and hands over the list. `haiku` (the `lane` agent) takes splits, deletions, includes and wiring; `sonnet` takes a self-contained module or shader whose math the lead gives it.
 - **Clean cut and no magic numbers (D14, D15).** Replaced code, nodes, params and tests go in the same change. Every constant is physical in real units (cited), derived (one-line comment), or one named constant citing the paper or prototype.
-- **Checks per job.** `cargo nextest run -p <package> <filter>` and `cargo clippy -p <package> --tests -- -D warnings` on the packages the job touched, nothing wider. GPU tests go through `scripts/gpu_queue.py`, one at a time. The lead reads the diff and the test output, then commits. Screenshots only where the water looks different (named per job).
+- **Checks, by the lead only.** When a batch of workers has reported, the lead builds once: `cargo clippy -p <packages> --tests -- -D warnings`, then `cargo nextest run -p <package> <filter>` on the packages the batch touched, nothing wider. Compiler errors go back to the worker that wrote the file as a list to fix by editing; a fix of a few lines the lead makes directly. GPU tests go through `scripts/gpu_queue.py`, once per job. The lead reads the diff and the test output, then commits. Screenshots only where the water looks different (named per job).
 - **The MANIFOLD app is closed.** Every GPU run waits 8 minutes for the app to quit, then reports NOT RUN.
 - **Prototype.** `/Users/peterkiemann/MANIFOLD - Prototypes/levelset_proto/` (source in `src/`, captures in `cap64*`, `cap128*`, `clip128`, montages in `out*`). The 2026-10-24 lead's anchor notes for R0, R2, SB and RD and the SA probes are beside it in `water-wave-2026-10-24/`; their line numbers are from 3de11dc8e.
 
 ### What runs side by side
 
-Two jobs run at once only when neither can break the other's build. Builds share one `target/`, so compiles still queue; the gain is in edit time.
-- **Alone:** any job that edits `manifold-core`, `manifold-gpu` or `manifold-node-engine`. Every water and render package depends on all three.
-- **Side by side:** one render job in `manifold-nodes-scene` with one water job. Neither depends on the other. Two water jobs never run at once: `manifold-nodes-water` builds on every water package, and `water-liquid` builds on `manifold-fluids`.
-- **`manifold-nodes`** (the contract and GPU proof tests) depends on everything; its tests run only when no other job is mid-edit.
+Workers don't build, so writing runs in parallel: up to four workers at once, as long as no two touch the same file. What stays in order is the lead's build.
+- **A package is built** only when no worker is mid-edit in it or in anything it depends on.
+- **A jobs** (any job that edits `manifold-core`, `manifold-gpu` or `manifold-node-engine`) are built when every other worker has reported, because every water and render package depends on all three.
+- **Render and water** don't depend on each other: a render batch (`manifold-nodes-scene`) and a water batch build in one command. Within water, `manifold-nodes-water` builds on every water package and `water-liquid` builds on `manifold-fluids`, so water jobs that can be written at once are built together.
+- **`manifold-nodes`** (the contract and GPU proof tests) depends on everything; its tests run only at a quiet point, when no worker is mid-edit.
 
 ### The 2026-10-24 start
 
@@ -50,7 +51,7 @@ Track: **R** is the render track (`manifold-nodes-scene` only), **W** the water 
 | Job | Worker | What | Track | Needs |
 |---|---|---|---|---|
 | S0 | sonnet; the lead stages the cut by script | Split the step file, tests and WGSL, copying 554a4ae50's layout | W | — |
-| R0 | haiku | Shader helpers into an include, copying 3d426ca8d's layout; look hook stubs | R | — |
+| R0 | sonnet | Shader helpers into an include, copying 3d426ca8d's layout; look hook stubs | R | — |
 | R1a.1–R1a.4 | sonnet | Field build, additive: re-distance in cells, surface weights and velocity, weighted smoothing with the leash, carry into solids | W | — |
 | R2.0 | haiku | Optional `field` input on `scene_object` | A (`node-engine`) | — |
 | R2 | sonnet, lead gives the march math | The march pass, with light through thin water | R | R0, R2.0 |
@@ -75,13 +76,13 @@ Track: **R** is the render track (`manifold-nodes-scene` only), **W** the water 
 | S4b | sonnet | Surface, solids, wetness on world tiles | W | S4.5, R1b.2, R7w |
 | S5 | sonnet | Narrow Band on tiles | W | S4b, SA |
 
-**Order.** Each step lists what runs at once. A jobs run when both tracks are between commits.
+**Order.** Each step lists what runs at once. Jobs in one step with separate files are written at the same time and built together. A jobs are built when both tracks are between commits.
 0. Before any job starts, the lead builds the base `fluid_capture` (`scripts/dev.py capture` builds it) and copies the binary to the scratchpad, for the final speed check.
 1. R0 with S0. Meanwhile the lead diagnoses SA (read only).
-2. R2.0 alone. Then R2 with R1a.1 to R1a.4, one after another.
+2. R2.0, then R2, while R1a.1 to R1a.4 are written at once (separate files) and built together.
 3. R3 with SA.
 4. R1b.1, then R1b.2, both alone.
-5. RD.1, RD.2 and RD.4 one after another on W, while R runs R4r, R5r and R7r. RD.3 alone. RD.5 last.
+5. RD.1, RD.2 and RD.4 written at once (split by package), while R writes R4r, R5r and R7r. RD.3 built alone. RD.5 last.
 6. S1, then R4w, then S2, then M1.
 7. R5w, then R7w.
 8. SB alone, then SBm alone.
@@ -174,12 +175,12 @@ Five jobs, split by package. The (f8084ab59) inventory is 78 files from the `rg`
 - **RD.2** (haiku, W). `manifold-fluids`, per I5: `surface.rs`, `SurfaceOptions` (`lib.rs`, `particles.rs`), `decode_surface`, `meshing_ms`, the shims in `native/bridge.cpp` and `bridge.h`, `examples/boundary_probe.rs`, `examples/surface_tuning.rs`, `tests/boundary_regression.rs`.
 - **RD.3** (sonnet, A). Water's published-extent path only, in `manifold-node-engine` (`bindings.rs`, `exec/execution.rs`, `exec/backend.rs`, `exec/metal_backend.rs`, `testkit/array_harness.rs`, `scene/mod.rs`, `scene/live_extent.rs`), `manifold-nodes-image` (`switch_mesh.rs` and its `gpu_tests.rs`), `manifold-nodes-scene` (`scene_object.rs`, `render_scene.rs`, `render_scene/frame_setup.rs`, `render_scene/live_draw_args.rs`), `manifold-gpu/src/metal/shader_compiler.rs`, and `liquid_mesh` in `manifold-core/src/scene_schema/water.rs`. `LiveExtent` itself stays (W9): the platonic mesh publishes its extent (f8084ab59), and `switch_mesh` and the fragment cut read it. The lead marks the water-only lines.
 - **RD.4** (haiku, W). `manifold-nodes-water` (the mesh nodes in `assets/liquid_surface_group.json`, `mesh_sink` and `liquid_mesh` in `presets/gpu_flip.rs`, `primitives/liquid_bricks_consumer_tests.rs`, `primitives/liquid_surface_tests.rs`, and the I4 migration); the 22 `manifold-nodes` files (catalog and contract tests, and in `examples/fluid_capture.rs` the `--gpu-surface` and `--dump-mesh` flags, `dump_surface_meshes`, and the vertex count and meshing columns); `manifold-io/tests/fixtures/water_layer_graph_v1160.json` and its users; the mesh sections of `GPU_FLUID_SURFACE_DESIGN.md`.
-- **RD.5** (haiku, W). The six preset fixture JSONs and their thumbnails (`scripts/dev.py thumbnails`), regenerated once from the builders.
+- **RD.5** (lead, W). The six preset fixture JSONs and their thumbnails (`scripts/dev.py thumbnails`), regenerated once from the builders.
 
 Checks:
 1. `rg -n 'volume_surface_mesh|smooth_surface_mesh|relax_surface_mesh|count_surface_triangles|count_surface_edges|surface_mesh_normals|liquid_mesh|capture_surface_frame|SurfaceOptions' crates scripts tools assets docs .claude` returns only design-doc text that records the removal. `rg -l live_extent` returns only the non-water uses, listed by file in the report.
 2. Every test and GPU proof that wired the chain is converted to the field or deleted, and listed.
-3. Each job runs nextest and clippy on its own packages. After RD.5, one `cargo check --workspace --tests`, because RD touches thirteen packages.
+3. The lead runs nextest and clippy on each batch's packages. After RD.5, one `cargo check --workspace --tests`, because RD touches thirteen packages.
 
 ### R3 Ripple detail
 
