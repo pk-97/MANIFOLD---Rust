@@ -225,7 +225,9 @@ struct Uniforms {
     // is on, 0.0 when off). z = 1.0 when `prev_positions` holds last frame's
     // position for every vertex this draw reads (a mesh that deforms with the
     // same triangles), else 0.0; per draw, read by the velocity variant only.
-    // w reserved.
+    // w = 1.0 when `prev_instances` holds last frame's record for every
+    // instance this draw reads (an instance array that moves on its own), else
+    // 0.0; per draw, read by the velocity variant only.
     render_mode: vec4<f32>,
     volume_optics: vec4<f32>,
     volume_scattering_color: vec4<f32>,
@@ -299,6 +301,10 @@ const LIGHT_STRIDE: u32 = 4u;
 // `verts`, for a draw whose mesh deforms. Read only when `u.render_mode.z` is
 // set; every other draw binds a one-record stand-in.
 @group(0) @binding(56) var<storage, read> prev_positions: array<vec4<f32>>;
+// Last frame's instance records, one per instance this draw reads, for a draw
+// whose instance array moves on its own. Read only when `u.render_mode.w` is
+// set; every other draw binds the identity instance stub.
+@group(0) @binding(57) var<storage, read> prev_instances: array<Instance>;
 
 // Same Point meaning as Light::light_dir_at/attenuation_at and shaft_march:
 // return direction toward the light in xyz and distance attenuation in w.
@@ -880,6 +886,19 @@ struct VsOut {
     @location(9) @interpolate(flat) instance_scale: f32,
 };
 
+// SCENE_MIRROR (D5, P1-amended): instances minted by node.reflect_array
+// carry the mirror plane marker in rot_pad.w — 0 = original, k > 0 =
+// mirrored across the plane perpendicular to component k-1. Unmarked
+// instances take (1,1,1).
+fn mirror_sign(marker_w: f32) -> vec3<f32> {
+    let marker = u32(marker_w + 0.5);
+    return vec3<f32>(
+        select(1.0, -1.0, marker == 1u),
+        select(1.0, -1.0, marker == 2u),
+        select(1.0, -1.0, marker == 3u),
+    );
+}
+
 // world = model · T_instance · instance_inner. Object space passes an
 // identity `instance_inner`, so the instance TRS applies first and the
 // object's `model` second (D11); Group space passes the part's own
@@ -897,23 +916,16 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     let v = verts[vid];
     let inst = instances[iid];
     let rot = euler_xyz(inst.rot_pad.xyz);
-    // SCENE_MIRROR (D5, P1-amended): instances minted by node.reflect_array
-    // carry the mirror plane marker in rot_pad.w — 0 = original, k > 0 =
-    // mirrored across the plane perpendicular to component k-1. Stored:
-    // rotation R' = M R M, translation t' = M(t - d a) + d a, scale kept
-    // positive. Exactness (two lines): world' = R'(w M v) + t'
+    // Mirrored instances store rotation R' = M R M, translation
+    // t' = M(t - d a) + d a, scale kept positive. Exactness (two lines):
+    // world' = R'(w M v) + t'
     //             = (M R M)(M w v) + t' = M R (w v) + M(t - d a) + d a,
     // the true planar reflection; the normal follows identically,
     // R'(M n) = M R n — so the flip lands BEFORE the stored rotation
     // (flipped after, it would be R M n, wrong by the same conjugation).
     // Unmarked instances take msign = (1,1,1) — byte-identical to the
     // pre-mirror shader.
-    let marker = u32(inst.rot_pad.w + 0.5);
-    let msign = vec3<f32>(
-        select(1.0, -1.0, marker == 1u),
-        select(1.0, -1.0, marker == 2u),
-        select(1.0, -1.0, marker == 3u),
-    );
+    let msign = mirror_sign(inst.rot_pad.w);
     let inner = u.instance_inner;
     let inner_cofactor = mat3x3<f32>(
         cross(inner[1].xyz, inner[2].xyz),
@@ -932,8 +944,19 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     if u.render_mode.z > 0.5 {
         prev_vertex = prev_positions[vid].xyz;
     }
+    // An instance of an array that moves on its own starts from where it was
+    // last frame; any other instance has not moved in its own space.
+    var prev_rot = rot;
+    var prev_msign = msign;
+    var prev_pos_scale = inst.pos_scale;
+    if u.render_mode.w > 0.5 {
+        let prev_inst = prev_instances[iid];
+        prev_rot = euler_xyz(prev_inst.rot_pad.xyz);
+        prev_msign = mirror_sign(prev_inst.rot_pad.w);
+        prev_pos_scale = prev_inst.pos_scale;
+    }
     let prev_local_pos = (u.prev_instance_inner * vec4<f32>(prev_vertex, 1.0)).xyz;
-    let prev_inst_pos = rot * ((prev_local_pos * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
+    let prev_inst_pos = prev_rot * ((prev_local_pos * prev_msign) * prev_pos_scale.w) + prev_pos_scale.xyz;
     let scale_sign = select(1.0, -1.0, inst.pos_scale.w < 0.0);
     let inst_normal = rot * (local_normal * msign * scale_sign);
 
@@ -948,11 +971,10 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     // vec4<f32>(prev_inst_pos, 1.0); out.clip_prev = u.prev_view_proj *
     // prev_world;` here. `prev_inst_pos` carries the object's and the
     // instance space's previous transforms and, for a mesh that deforms, the
-    // vertex's own previous position. This frame's instance TRS is reused
-    // (there is no previous-frame instance buffer to diff against), so a
-    // moving instance array (e.g. scatter_on_mesh re-scattering per frame)
-    // contributes no per-instance velocity. Inert comment in the
-    // velocity-off compile.
+    // vertex's own previous position and, for an instance array that moves on
+    // its own (a swarm, physics copies, a scatter that re-scatters), the
+    // instance's own previous record. Any other instance reuses this frame's
+    // TRS. Inert comment in the velocity-off compile.
     // GBUFFER_VS_VELOCITY_BODY
     // Cofactors give the inverse transpose up to determinant magnitude.
     // Preserve its sign for reflected models, without dividing by a tiny scale.

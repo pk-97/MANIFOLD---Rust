@@ -199,6 +199,47 @@ mod tests {
         assert_eq!(after[0].1, "color");
     }
 
+    /// The World's Upscale Quality row binds the render's own param, lists its
+    /// four choices and starts at Quality, so a scene that never touched it
+    /// renders at the same two thirds it always did.
+    #[test]
+    fn world_upscale_quality_binds_the_render_param_and_starts_at_quality() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let def = compile(&SceneDoc::base()).unwrap();
+        let metadata = def.preset_metadata.as_ref().unwrap();
+        let spec = metadata
+            .params
+            .iter()
+            .find(|spec| spec.id == "world.upscale_quality")
+            .expect("the World has an Upscale Quality row");
+        assert_eq!(spec.name, "Upscale Quality");
+        assert_eq!(
+            spec.value_labels,
+            ["Ultra Quality", "Quality", "Balanced", "Performance"]
+        );
+        assert_eq!(spec.default_value, 1.0);
+        let binding = metadata
+            .bindings
+            .iter()
+            .find(|binding| binding.id == "world.upscale_quality")
+            .expect("the row is bound");
+        assert!(matches!(
+            &binding.target,
+            BindingTarget::Node { node_id, param }
+                if node_id.as_str() == "scene:render" && param == "upscale_quality"
+        ));
+        let render = def
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "scene:render")
+            .unwrap();
+        assert_eq!(
+            render.params.get("upscale_quality"),
+            Some(&SerializedParamValue::Enum { value: 1 })
+        );
+    }
+
     #[test]
     fn world_without_occlusion_has_no_switch() {
         let mut doc = SceneDoc::base();

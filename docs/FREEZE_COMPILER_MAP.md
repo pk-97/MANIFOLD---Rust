@@ -489,8 +489,8 @@ invariant a fused def must respect:
     follows: refusal always renders unfused, unfused is always correct.
 11. **Live render-resolution toggles** — `render_scene` uses the compiled
     depth/velocity attachment dimensions until the host rebuilds the runtime.
-    A pending `temporal_upscale` change must not resize the render beneath
-    existing attachments, in either direction. Merely checking that outputs
+    A pending `temporal_upscale` or `upscale_quality` change must not resize the
+    render beneath existing attachments, in either direction. Merely checking that outputs
     exist is insufficient; native and reduced attachments can both be present.
 12. **Substep regions** — the executor
     runs a boundary once, then its contracted body N times per frame through

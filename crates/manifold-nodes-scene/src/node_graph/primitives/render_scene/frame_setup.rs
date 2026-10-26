@@ -608,6 +608,7 @@ impl RenderScene {
                 vertices_content,
                 mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
                 prev_positions: None,
+                prev_instances: None,
                 topology_hint: object
                     .indices
                     .or(object.topology)
@@ -928,8 +929,8 @@ impl RenderScene {
         let aspect = width as f32 / height as f32;
         // RAYTRACING_DESIGN.md section 8.2 D22 point 1/3 (T2-B): the per-scene
         // MetalFX Temporal toggle. When on, the WHOLE render (Pass A/B,
-        // shafts, the RT half-res ray pass) draws at RENDER res —
-        // `native_dim * RT_TEMPORAL_RENDER_SCALE_NUM / _DEN` — into
+        // shafts, the RT half-res ray pass) draws at RENDER res — the
+        // `upscale_quality` fraction of native — into
         // `rt_temporal_color_scratch`, and MetalFX Temporal upscales that
         // scratch color to native res as this node's `color` output at the
         // very end of this fn. `width`/`height` (and everything downstream
@@ -944,31 +945,22 @@ impl RenderScene {
             ctx.params.get("temporal_upscale"),
             Some(ParamValue::Bool(true))
         );
-        // A live toggle cannot resize the compiled depth/velocity attachments
-        // (see PresetRuntime::refresh_plan_if_forced_outputs_changed). Their
-        // dimensions, rather than the pending parameter, determine whether
-        // this frame uses MetalFX's reduced-resolution render path.
-        let reduced_dims = (
-            scale_dim(
-                width,
-                RT_TEMPORAL_RENDER_SCALE_NUM,
-                RT_TEMPORAL_RENDER_SCALE_DEN,
-            ),
-            scale_dim(
-                height,
-                RT_TEMPORAL_RENDER_SCALE_NUM,
-                RT_TEMPORAL_RENDER_SCALE_DEN,
-            ),
-        );
-        // A live toggle does not resize the compiled graph's attachments.
-        // Keep drawing at their committed resolution until the host rebuilds,
-        // in BOTH directions (native -> reduced and reduced -> native).
-        let temporal_upscale = (temporal_upscale_param || reduced_dims != (width, height))
-            && ["depth", "velocity"].iter().all(|port| {
-                ctx.outputs
-                    .texture_2d(port)
-                    .is_some_and(|t| (t.width, t.height) == reduced_dims)
-            });
+        // A live change to `temporal_upscale` or `upscale_quality` cannot
+        // resize the compiled depth/velocity attachments (see
+        // PresetRuntime::refresh_plan_if_forced_outputs_changed). Their
+        // dimensions, rather than the pending params, set the render size:
+        // the frame keeps drawing at the committed resolution until the host
+        // rebuilds, whichever way the change goes. `output_canvas_scale` sized
+        // them, so they agree with each other and sit below the canvas exactly
+        // when the compiled plan renders reduced.
+        let attachment_dims =
+            |port: &str| ctx.outputs.texture_2d(port).map(|t| (t.width, t.height));
+        let (render_width, render_height) =
+            match (attachment_dims("depth"), attachment_dims("velocity")) {
+                (Some(depth), Some(velocity)) if depth == velocity => depth,
+                _ => (width, height),
+            };
+        let temporal_upscale = (render_width, render_height) != (width, height);
         if temporal_upscale_param != temporal_upscale && !self.rt_temporal_unavailable_logged {
             self.rt_temporal_unavailable_logged = true;
             log::warn!(
@@ -977,24 +969,8 @@ impl RenderScene {
         }
         let native_width = width;
         let native_height = height;
-        let width = if temporal_upscale {
-            scale_dim(
-                native_width,
-                RT_TEMPORAL_RENDER_SCALE_NUM,
-                RT_TEMPORAL_RENDER_SCALE_DEN,
-            )
-        } else {
-            width
-        };
-        let height = if temporal_upscale {
-            scale_dim(
-                native_height,
-                RT_TEMPORAL_RENDER_SCALE_NUM,
-                RT_TEMPORAL_RENDER_SCALE_DEN,
-            )
-        } else {
-            height
-        };
+        let width = render_width;
+        let height = render_height;
         let mut view_proj = cam.view_proj(aspect);
         // RAYTRACING_DESIGN.md section 5.2 P4: subpixel camera jitter, applied
         // only when `temporal_upscale` is on (default off = byte-identical

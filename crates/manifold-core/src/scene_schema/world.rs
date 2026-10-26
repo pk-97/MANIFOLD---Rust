@@ -69,7 +69,7 @@ const fn look(
     row(property, reach, section, perform(CardBand::Look, order))
 }
 
-pub static WORLD_ROWS: [PropertyRow; 59] = [
+pub static WORLD_ROWS: [PropertyRow; 60] = [
     // Camera: which camera renders. A cut is a param write, so it lands on
     // its frame and never recompiles; the choices are the cameras by name.
     // No top limit: a recorded cut past the highest live number is a
@@ -294,6 +294,9 @@ pub static WORLD_ROWS: [PropertyRow; 59] = [
     // Render. Each ray-traced term does nothing while Ray Tracing is off.
     ray_tracing("rt_enabled").switch(Feature::RayTracing),
     ray_tracing("temporal_upscale"),
+    // How far down Temporal Upscale renders: Ultra Quality, Quality (the
+    // default), Balanced or Performance. Read only while Temporal Upscale is on.
+    ray_tracing("upscale_quality"),
     ray_traced("rt_reflections"),
     ray_traced("rt_shadows"),
     // Its own name: the Ambient Occlusion section below is the screen-space kind.

@@ -72,11 +72,67 @@ fn live_scale_ports_are_the_render_res_ports() {
             "port `{name}` stays canvas-sized with temporal_upscale off"
         );
     }
+    // A scene that never set `upscale_quality` renders at the Quality scale.
     let no_feed = params(true, false);
     assert_eq!(scene.output_canvas_scale("depth", &no_feed), Some((2, 3)));
     assert_eq!(scene.output_canvas_scale("normals", &no_feed), Some((1, 1)));
     assert!(scene.output_canvas_scale_is_live("normals"));
     assert!(!scene.output_canvas_scale_is_live("color"));
+}
+
+/// Each `upscale_quality` choice sets the fraction depth, velocity, the AO mask
+/// and (with the denoiser feed on) the denoiser feeds render at, never the
+/// colour, and does nothing while the upscale is off.
+#[test]
+fn upscale_quality_sets_the_render_scale_of_the_ports_that_follow_the_upscale() {
+    let scene = RenderScene::new();
+    let params = |upscale: bool, quality: Option<u32>| {
+        let mut params = ParamValues::default();
+        params.insert("temporal_upscale".into(), ParamValue::Bool(upscale));
+        params.insert("rt_denoise_feed".into(), ParamValue::Bool(true));
+        if let Some(quality) = quality {
+            params.insert("upscale_quality".into(), ParamValue::Enum(quality));
+        }
+        params
+    };
+    for (quality, scale) in [(0, (3, 4)), (1, (2, 3)), (2, (3, 5)), (3, (1, 2))] {
+        let on = params(true, Some(quality));
+        assert_eq!(upscale_scale(&on), scale, "choice {quality}");
+        for port in ["depth", "velocity", "ao_mask", "normals"] {
+            assert_eq!(
+                scene.output_canvas_scale(port, &on),
+                Some(scale),
+                "port `{port}` at choice {quality}"
+            );
+        }
+        assert_eq!(scene.output_canvas_scale("color", &on), Some((1, 1)));
+        let off = params(false, Some(quality));
+        assert_eq!(scene.output_canvas_scale("depth", &off), Some((1, 1)));
+    }
+    // A scene that never set a quality keeps the scale it had before the
+    // choice existed; a choice past the last lands on the last.
+    assert_eq!(upscale_scale(&params(true, None)), (2, 3));
+    assert_eq!(upscale_scale(&params(true, Some(9))), (1, 2));
+}
+
+/// The param lists its four choices and starts at Quality, the scale old
+/// scenes rendered at.
+#[test]
+fn upscale_quality_param_lists_its_choices_and_defaults_to_quality() {
+    let scene = RenderScene::new();
+    let quality = scene
+        .parameters()
+        .iter()
+        .find(|param| param.name == "upscale_quality")
+        .expect("render_scene declares upscale_quality");
+    assert_eq!(
+        quality.enum_values,
+        ["Ultra Quality", "Quality", "Balanced", "Performance"]
+    );
+    assert_eq!(quality.default, ParamValue::Enum(1));
+    let mut defaults = ParamValues::default();
+    defaults.insert("upscale_quality".into(), quality.default.clone());
+    assert_eq!(upscale_scale(&defaults), (2, 3));
 }
 
 /// RAYTRACING_DESIGN.md section 16 TL5: the designated-sun slot pick —
@@ -466,9 +522,11 @@ fn opaque_fast_variants_have_no_discard_and_validate() {
 }
 
 /// Every velocity-writing variant is a text edit of the shader, and its
-/// vertex stage reads last frame's vertex positions from `@binding(56)`; the
-/// copy kernel that fills that buffer is its own shader. A shader edit that
-/// broke either would otherwise surface at the first draw of a deforming mesh.
+/// vertex stage reads last frame's vertex positions from `@binding(56)` and
+/// last frame's instance records from `@binding(57)`; the copy kernel that
+/// fills the first buffer is its own shader. A shader edit that broke any of
+/// them would otherwise surface at the first draw of a deforming mesh or a
+/// moving instance array.
 #[test]
 fn velocity_variants_read_prev_positions_and_the_pack_kernel_validates() {
     use naga::valid::GlobalUse;
@@ -496,33 +554,32 @@ fn velocity_variants_read_prev_positions_and_the_pack_kernel_validates() {
             src = src.replace(pattern, replacement);
         }
         let (module, info) = validate(&src);
-        let (handle, prev) = module
-            .global_variables
+        let vs_main = module
+            .entry_points
             .iter()
-            .find(|(_, global)| global.name.as_deref() == Some("prev_positions"))
-            .expect("the shader declares prev_positions");
-        assert_eq!(
-            prev.binding,
-            Some(naga::ResourceBinding {
-                group: 0,
-                binding: 56
-            })
-        );
+            .position(|ep| ep.name == "vs_main")
+            .expect("vs_main");
+        for (name, binding) in [("prev_positions", 56), ("prev_instances", 57)] {
+            let (handle, prev) = module
+                .global_variables
+                .iter()
+                .find(|(_, global)| global.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("the shader declares {name}"));
+            assert_eq!(
+                prev.binding,
+                Some(naga::ResourceBinding { group: 0, binding })
+            );
+            assert!(
+                info.get_entry_point(vs_main)[handle].contains(GlobalUse::READ),
+                "ao_mask={emit_ao_mask} denoise={emit_denoise_feed}: vs_main must read {name}"
+            );
+        }
         for entry in ["vs_main", "vs_points", "fs_unlit", "fs_pbr", "fs_cel"] {
             assert!(
                 module.entry_points.iter().any(|ep| ep.name == entry),
                 "ao_mask={emit_ao_mask} denoise={emit_denoise_feed}: lost entry point {entry}"
             );
         }
-        let vs_main = module
-            .entry_points
-            .iter()
-            .position(|ep| ep.name == "vs_main")
-            .expect("vs_main");
-        assert!(
-            info.get_entry_point(vs_main)[handle].contains(GlobalUse::READ),
-            "ao_mask={emit_ao_mask} denoise={emit_denoise_feed}: vs_main must read prev_positions"
-        );
     }
 
     let (module, _) = validate(include_str!("../shaders/pack_prev_positions.wgsl"));
@@ -533,6 +590,28 @@ fn velocity_variants_read_prev_positions_and_the_pack_kernel_validates() {
         .expect("the pack kernel keeps cs_main");
     assert_eq!(kernel.stage, naga::ShaderStage::Compute);
     assert_eq!(kernel.workgroup_size, [256, 1, 1]);
+}
+
+/// A draw starts with both previous-record lanes of `render_mode` clear (`z`
+/// for vertices, `w` for instances), so its velocity takes the plain path until
+/// the history planner sets one.
+#[test]
+fn a_new_draw_reads_no_previous_records() {
+    let uniforms = build_uniforms(
+        [[0.0; 4]; 4],
+        [[0.0; 4]; 4],
+        &Camera::default_perspective(),
+        &Material::default_unlit_white(),
+        0.0,
+        0.0,
+        &Atmosphere::default(),
+        [[0.0; 4]; 4],
+        [[0.0; 4]; 4],
+        1.0,
+        false,
+        6.0,
+    );
+    assert_eq!(uniforms.render_mode, [6.0, 0.0, 0.0, 0.0]);
 }
 
 /// The solid-surface pipeline has no `discard` and no alpha-to-coverage, so a
@@ -736,7 +815,7 @@ fn reconfigure_grows_and_shrinks_ports_and_params() {
     assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
     assert_eq!(
         node.parameters().len(),
-        12,
+        13,
         "object count never grows the fixed scene-level toggle set"
     );
 

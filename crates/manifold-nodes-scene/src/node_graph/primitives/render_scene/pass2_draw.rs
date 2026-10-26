@@ -226,7 +226,7 @@ impl RenderScene {
         let prev_positions_dummy = self.prev_positions_dummy.as_ref().expect("ensured");
         // Indexed by draw, so a draw wholly outside the camera's clip volume
         // keeps its place with no binding set built for it.
-        let binding_sets: Vec<Option<[GpuBinding; 53]>> = draws
+        let binding_sets: Vec<Option<[GpuBinding; 54]>> = draws
             .iter()
             .enumerate()
             .map(|(draw_index, draw)| {
@@ -507,6 +507,19 @@ impl RenderScene {
                             .unwrap_or(prev_positions_dummy),
                         offset: 0,
                     },
+                    // Last frame's instance records for an instance array that
+                    // moves on its own, read by the velocity variant only when
+                    // `render_mode.w` is set; every other draw binds the
+                    // identity stub.
+                    GpuBinding::Buffer {
+                        binding: 57,
+                        buffer: draw
+                            .prev_instances
+                            .as_ref()
+                            .and_then(prev_positions::PrevDraw::bound)
+                            .unwrap_or(identity_stub),
+                        offset: 0,
+                    },
                     GpuBinding::Bytes {
                         binding: 51,
                         data: bytemuck::bytes_of(&draw.subsurface_binding),
@@ -761,8 +774,8 @@ impl RenderScene {
         ctx.gpu_encoder()
             .native_enc
             .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
-        // Pass A's velocity read last frame's vertex positions; refresh them
-        // for the next frame.
+        // Pass A's velocity read last frame's vertex positions and instance
+        // records; refresh them for the next frame.
         self.encode_prev_position_copies(ctx, draws);
 
         if let Some(output) = depth_resolve_target {

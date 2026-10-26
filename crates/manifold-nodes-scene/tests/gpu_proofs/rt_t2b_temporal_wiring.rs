@@ -24,11 +24,11 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32;
 
-/// D22 point 1: `RT_TEMPORAL_RENDER_SCALE_NUM`/`_DEN` mirrored here as a
-/// plain oracle (not `use`d from `render_scene.rs` — that fn is private to
-/// the primitive module) so this test can independently compute the
-/// expected render-res dims with the SAME truncating formula
-/// `execution.rs::resolve_dims` and `render_scene.rs::scale_dim` share.
+/// D22 point 1: the default `upscale_quality` (Quality, 2/3) as a plain
+/// oracle (not `use`d from `render_scene.rs` — that table is private to the
+/// primitive module) so this test can independently compute the expected
+/// render-res dims with the SAME truncating formula
+/// `execution.rs::resolve_dims` applies to `output_canvas_scale`.
 fn expected_render_dim(native: u32) -> u32 {
     (u64::from(native) * 2 / 3).max(1) as u32
 }
@@ -204,8 +204,8 @@ fn temporal_upscale_color_output_is_exact_native_res() {
 /// D22 point 2: `depth`/`velocity` stay at RENDER res when
 /// `temporal_upscale` is on (MetalFX upscales color only; a bespoke
 /// depth/velocity upscaler is FORBIDDEN) — checked against the SAME
-/// truncating `native * 2 / 3` formula `render_scene.rs::scale_dim` and
-/// `execution.rs::resolve_dims` both use.
+/// truncating `native * 2 / 3` formula `execution.rs::resolve_dims` uses for
+/// the default Quality scale.
 #[test]
 fn temporal_upscale_depth_velocity_outputs_stay_render_res() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();

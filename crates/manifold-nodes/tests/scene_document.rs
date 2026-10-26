@@ -772,6 +772,23 @@ mod every_param_has_a_row {
             || (owner == "scene" && scene_level)
     }
 
+    /// Upscale Quality sits right after Temporal Upscale on the World, on the
+    /// render's own param.
+    #[test]
+    fn the_world_lists_upscale_quality_after_temporal_upscale() {
+        let rows = scene_schema::rows(ItemKind::World);
+        let at = |property: &str| {
+            rows.iter()
+                .position(|row| row.property == property)
+                .unwrap_or_else(|| panic!("no World row `{property}`"))
+        };
+        assert_eq!(at("upscale_quality"), at("temporal_upscale") + 1);
+        let row = &rows[at("upscale_quality")];
+        assert_eq!(row.reach, Reach::Scene("render"));
+        assert_eq!(row.param, "upscale_quality");
+        assert!(has_row(&SceneDoc::base(), "scene:render", "upscale_quality"));
+    }
+
     #[test]
     fn every_param_of_every_compiled_node_has_a_table_row() {
         let doc = doc_with_every_kind();

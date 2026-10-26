@@ -88,6 +88,8 @@ manifold_node_engine::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["plane", "quad", "sheet", "flat mesh", "Plane SOP"],
+    // Geometry depends only on size and capacity; no time, state or external inputs.
+    pure: true,
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/plane_mesh_body.wgsl"),
 }

@@ -57,6 +57,8 @@ manifold_node_engine::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["platonic mesh", "platonic solid mesh", "solid mesh", "polyhedron"],
+    // Geometry depends only on shape and radius; no time, state or external inputs.
+    pure: true,
     boundary_reason: IoBridge,
     extra_fields: {
         upload_pipeline: Option<GpuComputePipeline> = None,

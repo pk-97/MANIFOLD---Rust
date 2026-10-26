@@ -58,6 +58,7 @@ impl RenderScene {
             rt_temporal_unavailable_logged: false,
             prev_model: Vec::new(),
             prev_positions: Vec::new(),
+            prev_instances: Vec::new(),
             prev_positions_dummy: None,
             pack_prev_positions_pipeline: None,
             prev_view_proj: None,
@@ -343,7 +344,7 @@ impl RenderScene {
             // unaffected unless this is explicitly `true`). `true` drives the
             // real reduced-res-render + upscale path (D22): Pass A/B/shafts
             // render into `rt_temporal_color_scratch` at
-            // `RT_TEMPORAL_RENDER_SCALE`× native res, then
+            // `upscale_quality`'s fraction of native res, then
             // `rt_temporal_upscaler` upscales that scratch color (+ the
             // render-res `depth`/`velocity` graph outputs) to native res as
             // this node's `color` output.
@@ -354,6 +355,19 @@ impl RenderScene {
                 default: ParamValue::Bool(false),
                 range: None,
                 enum_values: &[],
+            },
+            // How far down `temporal_upscale` renders before MetalFX brings the
+            // picture back to native res. Inert while `temporal_upscale` is
+            // off. Changing it resizes the compiled `depth`/`velocity` outputs,
+            // so it rebuilds the scene like the toggle does. Quality is the
+            // default: the fixed scale scenes had before the choice existed.
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("upscale_quality"),
+                label: "Upscale Quality",
+                ty: ParamType::Enum,
+                default: ParamValue::Enum(DEFAULT_UPSCALE_QUALITY),
+                range: Some((0.0, (UPSCALE_QUALITIES.len() - 1) as f32)),
+                enum_values: &UPSCALE_QUALITY_LABELS,
             },
             // RAYTRACING_DESIGN.md section 9 RD9 (T4): per-scene reflection toggle.
             // Default ON (Q3). Inert when `rt_enabled` false — no reflection
@@ -443,6 +457,7 @@ impl RenderScene {
         // starts in.
         self.prev_model = vec![None; n_obj];
         self.prev_positions = (0..n_obj).map(|_| None).collect();
+        self.prev_instances = (0..n_obj).map(|_| None).collect();
         self.prev_view_proj = None;
         self.prev_cam_state = None;
 

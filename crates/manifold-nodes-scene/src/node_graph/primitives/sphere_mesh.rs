@@ -79,6 +79,8 @@ manifold_node_engine::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["sphere", "ball", "uv sphere", "globe", "Sphere SOP"],
+    // Geometry depends only on segments, rings and radius; no time, state or external inputs.
+    pure: true,
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/sphere_mesh_body.wgsl"),
 }

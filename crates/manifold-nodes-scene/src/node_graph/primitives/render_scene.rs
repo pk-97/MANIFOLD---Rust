@@ -475,25 +475,37 @@ const IRRADIANCE_ACCUM_ALPHA: f32 = 0.01;
 // (costs stack); reflection rays are the most expensive class — a hit
 // shades a full raster-parity surface, and 1 spp measured 4.7 sRGB levels
 // of frame-to-frame flicker on a static scene.
-/// RAYTRACING_DESIGN.md section 8.2 D22: reduced render resolution `temporal_upscale`
-/// draws color/depth/velocity at, relative to the scene's native (canvas)
-/// resolution — `render_dim = native_dim * NUM / DEN` (1/1.5 linear, D22
-/// point 1; Peter-amendable, not a lane knob). Kept as an exact integer
-/// fraction, not a `f32` scale, and applied with the SAME truncating
-/// `u64` arithmetic `output_canvas_scale`'s `(num, den)` declaration resolves
-/// through (`execution.rs::resolve_dims`) — the graph runtime sizes the
-/// `depth`/`velocity` outputs from that declaration, and this evaluate()-side
-/// computation must land on the IDENTICAL width/height or MetalFX Temporal's
-/// color/depth/motion inputs arrive at mismatched dims.
-const RT_TEMPORAL_RENDER_SCALE_NUM: u32 = 2;
-const RT_TEMPORAL_RENDER_SCALE_DEN: u32 = 3;
+/// The `upscale_quality` choices, in the order the param lists them. Each is
+/// the fraction of the scene's native (canvas) size `temporal_upscale` renders
+/// color, depth and velocity at, `render_dim = native_dim * num / den`, kept as
+/// an exact integer fraction because the graph runtime sizes the `depth` and
+/// `velocity` outputs from `output_canvas_scale`'s `(num, den)` with truncating
+/// `u64` arithmetic (`execution.rs::resolve_dims`).
+const UPSCALE_QUALITIES: [(&str, (u32, u32)); 4] = [
+    ("Ultra Quality", (3, 4)),
+    ("Quality", (2, 3)),
+    ("Balanced", (3, 5)),
+    ("Performance", (1, 2)),
+];
+/// The `upscale_quality` choice a scene that never set one keeps: Quality, the
+/// scale `temporal_upscale` had before the choice existed.
+const DEFAULT_UPSCALE_QUALITY: u32 = 1;
+static UPSCALE_QUALITY_LABELS: [&str; 4] = [
+    UPSCALE_QUALITIES[0].0,
+    UPSCALE_QUALITIES[1].0,
+    UPSCALE_QUALITIES[2].0,
+    UPSCALE_QUALITIES[3].0,
+];
 
-/// `execution.rs::resolve_dims`'s exact truncating formula, factored out so
-/// `output_canvas_scale` (which only declares the `(num, den)` fraction) and
-/// `evaluate()` (which needs the concrete pixel dims NOW, this frame) can
-/// never drift apart — see `RT_TEMPORAL_RENDER_SCALE_NUM`'s doc comment.
-fn scale_dim(native: u32, num: u32, den: u32) -> u32 {
-    (u64::from(native) * u64::from(num) / u64::from(den)).max(1) as u32
+/// The `(num, den)` fraction of native size the `upscale_quality` param picks
+/// for `temporal_upscale`'s render. The one place that maps the choice to a
+/// scale.
+fn upscale_scale(params: &ParamValues) -> (u32, u32) {
+    let choice = match params.get("upscale_quality") {
+        Some(ParamValue::Enum(choice)) => *choice,
+        _ => DEFAULT_UPSCALE_QUALITY,
+    };
+    UPSCALE_QUALITIES[(choice as usize).min(UPSCALE_QUALITIES.len() - 1)].1
 }
 
 /// Whether `temporal_upscale` sizes `port` at render res: depth, velocity and
@@ -866,7 +878,8 @@ struct RenderSceneUniforms {
     /// it, so Rendered/Solid/Wireframe renders are byte-identical whatever
     /// value rides here. `y` = texture mip bias under temporal upscale (0
     /// otherwise). `z` = 1 for a draw whose velocity reads `prev_positions`
-    /// (per draw, unlike the rest). `w` reserved.
+    /// and `w` = 1 for one whose velocity reads `prev_instances` (both per
+    /// draw, unlike the rest).
     render_mode: [f32; 4],
     /// Closed volume flag, homogeneous scattering density, embedded particle density, reserved.
     volume_optics: [f32; 4],
@@ -1081,7 +1094,7 @@ pub struct RenderScene {
     /// color target — the SAME format `msaa_color` always resolves as —
     /// that Pass A resolves into (instead of the graph's native-res `color`
     /// output) when `temporal_upscale` is on. Sized to render res
-    /// (`RT_TEMPORAL_RENDER_SCALE`× the native canvas), same
+    /// (`upscale_scale`× the native canvas), same
     /// `Option<GpuTexture>` + width/height idiom every other scratch target
     /// in this file uses (`opaque_scene_color`, `shaft_inscatter`, ...) — D22
     /// forbids a new render-target abstraction. `depth`/`velocity` need no
@@ -1157,8 +1170,14 @@ pub struct RenderScene {
     /// `prev_model`, and on every cut: a vertex has no earlier position to
     /// measure motion from there.
     prev_positions: Vec<Option<prev_positions::PrevPositions>>,
+    /// Per-object-slot previous-frame instance records, for instance arrays
+    /// whose content changes with the same buffer and count. Reset with
+    /// `prev_positions`.
+    prev_instances: Vec<Option<prev_positions::PrevInstances>>,
     /// The one-record buffer `@binding(56)` takes for a draw whose velocity
-    /// does not read previous positions.
+    /// does not read previous positions. (`@binding(57)` takes the identity
+    /// instance stub for a draw whose velocity does not read previous
+    /// instances.)
     prev_positions_dummy: Option<manifold_gpu::GpuBuffer>,
     /// Copies vertex positions into a `prev_positions` buffer after Pass A.
     pack_prev_positions_pipeline: Option<manifold_gpu::GpuComputePipeline>,
@@ -1947,6 +1966,9 @@ struct ObjectDraw<'ctx> {
     /// velocity: the velocity pass reads them when `motion` is set, and a
     /// compute pass after Pass A refreshes them either way.
     prev_positions: Option<prev_positions::PrevDraw>,
+    /// Last frame's instance records, when this draw's instance array moves on
+    /// its own and writes velocity: read and refreshed like `prev_positions`.
+    prev_instances: Option<prev_positions::PrevDraw>,
     topology_hint: Option<ContentVersion>,
     rt_texture_content: [Option<ContentVersion>; 19],
     instances_content: Option<ContentVersion>,
@@ -2604,8 +2626,7 @@ impl EffectNode for RenderScene {
     ///
     /// RAYTRACING_DESIGN.md section 8.2 D22 point 2: when `temporal_upscale` is on,
     /// `depth`/`velocity` are the exception — they stay at RENDER res (the
-    /// same fraction `evaluate()`'s `scale_dim` computes this frame),
-    /// because MetalFX Temporal upscales COLOR only and building a bespoke
+    /// `upscale_quality` fraction), because MetalFX Temporal upscales COLOR only and building a bespoke
     /// depth/velocity upscaler is FORBIDDEN. `color` (and every other/
     /// default port) stays canvas-sized: MetalFX's own upscale is what lands
     /// `color` back at native res, inside `evaluate()`, not this
@@ -2619,15 +2640,16 @@ impl EffectNode for RenderScene {
             matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
         let denoise_feed = matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
         if temporal_upscale && follows_temporal_upscale(port, denoise_feed) {
-            Some((RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN))
+            Some(upscale_scale(params))
         } else {
             Some((1, 1))
         }
     }
 
     /// The ports `output_canvas_scale` can put at render res, whichever way
-    /// `temporal_upscale` and `rt_denoise_feed` are set: both are live toggles,
-    /// so the freeze compiler must not treat these ports' sizes as fixed.
+    /// `temporal_upscale`, `upscale_quality` and `rt_denoise_feed` are set: all
+    /// three are live, so the freeze compiler must not treat these ports' sizes
+    /// as fixed.
     fn output_canvas_scale_is_live(&self, port: &str) -> bool {
         follows_temporal_upscale(port, true)
     }
