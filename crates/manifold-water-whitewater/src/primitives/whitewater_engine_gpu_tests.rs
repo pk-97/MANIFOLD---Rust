@@ -472,7 +472,7 @@ fn surface_on_gpu(
     read(&staged.1, n)
 }
 
-/// A clock plan (gpu_flip_step.wgsl ClockPlan): live, with `step_dt`.
+/// A clock plan (gpu_flip_step/common.wgsl ClockPlan): live, with `step_dt`.
 fn live_plan(h: &mut Harness, step_dt: f32) -> manifold_gpu::GpuBuffer {
     let mut words = [0u32; 12];
     words[0] = step_dt.to_bits();

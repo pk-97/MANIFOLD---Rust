@@ -41,7 +41,7 @@ fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     read(&staged, (buffer.size / 4) as usize)
 }
 
-/// A clock plan (gpu_flip_step.wgsl ClockPlan): live, with `step_dt`.
+/// A clock plan (gpu_flip_step/common.wgsl ClockPlan): live, with `step_dt`.
 fn live_plan(device: &GpuDevice, step_dt: f32) -> GpuBuffer {
     let mut words = [0u32; 12];
     words[0] = step_dt.to_bits();

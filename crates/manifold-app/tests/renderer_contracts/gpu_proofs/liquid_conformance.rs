@@ -1187,7 +1187,7 @@ fn liquid_floating_draft() {
             let columns = (size / dx).round() as usize;
             // GPU FLIP's liquid is the union of balls of radius √3·dx/2
             // around its particles (the engine's liquid distance,
-            // gpu_flip_step.wgsl particle_distance): over a flat layer on the
+            // gpu_flip_step/particle_distance.wgsl particle_distance): over a flat layer on the
             // half-cell seeding lattice it stands 0.54 to 0.62 cells above
             // the top particle. Matter's particle fills the half-cell cube
             // around it.

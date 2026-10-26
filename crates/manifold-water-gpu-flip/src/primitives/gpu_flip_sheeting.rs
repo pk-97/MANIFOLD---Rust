@@ -54,7 +54,7 @@ const ENTRIES: [&str; 10] = [
     "place",
     "write",
 ];
-/// gpu_flip_step.wgsl `ClockPlan`.
+/// gpu_flip_step/common.wgsl `ClockPlan`.
 const PLAN_BYTES: u64 = 48;
 /// The engine's `sheetFillThreshold` default; no user control yet.
 pub(crate) const FILL_THRESHOLD: f32 = -0.95;

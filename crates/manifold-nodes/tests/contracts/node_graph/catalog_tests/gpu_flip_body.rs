@@ -140,7 +140,7 @@ fn face_centre(p: [usize; 3], a: usize) -> [f64; 3] {
 }
 
 /// A row's centre of mass: the passes read rows the step has already posed
-/// (gpu_flip_step.wgsl pose_bodies).
+/// (gpu_flip_step/solids.wgsl pose_bodies).
 fn posed(row: &LiquidBody) -> [f64; 3] {
     std::array::from_fn(|b| f64::from(row.position_inv_mass[b]))
 }

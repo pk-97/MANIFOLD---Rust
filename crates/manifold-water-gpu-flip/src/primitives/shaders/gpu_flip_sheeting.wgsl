@@ -52,7 +52,7 @@ struct ClockPlan {
 @group(0) @binding(14) var<storage, read> clock_plan: array<ClockPlan>;
 // Per rank: 1 for a claimant holding its sub-cell, scanned in place (inclusive).
 @group(0) @binding(15) var<storage, read_write> winners: array<u32>;
-// In the step only. The constrained saved faces (gpu_flip_step.wgsl layout).
+// In the step only. The constrained saved faces (gpu_flip_step/common.wgsl layout).
 @group(0) @binding(16) var<storage, read> old: array<FaceSample>;
 // liquid_state's birth identity: next, epoch, reserved base, reset request.
 @group(0) @binding(17) var<storage, read> birth_identity: array<u32>;
@@ -609,7 +609,7 @@ fn finite3(v: vec3<f32>) -> bool {
     return all(bits != vec3<u32>(0x7f800000u));
 }
 
-// gpu_flip_step.wgsl `sample` on the saved faces: q in cells from the grid's
+// gpu_flip_step/move.wgsl `sample` on the saved faces: q in cells from the grid's
 // minimum, missing corners contributing zero.
 fn saved_velocity(q: vec3<f32>) -> vec3<f32> {
     let n = dims();

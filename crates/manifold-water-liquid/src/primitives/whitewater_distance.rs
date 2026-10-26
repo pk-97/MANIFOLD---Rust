@@ -7,7 +7,7 @@ use {
     manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline,
 };
 
-/// gpu_flip_step.wgsl `ClockPlan`.
+/// gpu_flip_step/common.wgsl `ClockPlan`.
 const PLAN_BYTES: u64 = 48;
 
 pub fn scratch_bytes(cells: [u32; 3]) -> u64 {

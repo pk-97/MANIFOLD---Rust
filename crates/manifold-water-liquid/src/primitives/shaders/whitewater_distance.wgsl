@@ -9,7 +9,7 @@ struct Params { nx: u32, ny: u32, nz: u32, count: u32, h: f32, iteration: u32, b
 @group(0) @binding(4) var<storage, read_write> valid: array<u32>;
 @group(0) @binding(5) var<storage, read_write> blocks: array<u32>;
 @group(0) @binding(6) var<storage, read_write> state: array<atomic<u32>>;
-// The FLIP clock plan (gpu_flip_step.wgsl ClockPlan). An inactive substep slot
+// The FLIP clock plan (gpu_flip_step/common.wgsl ClockPlan). An inactive substep slot
 // (live clock, zero step) does no work; a zero plan is always active.
 struct ClockPlan {
     step_dt: f32, elapsed: f32, remaining: f32, maximum_speed: f32,

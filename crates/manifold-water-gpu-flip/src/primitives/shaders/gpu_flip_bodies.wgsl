@@ -1,6 +1,6 @@
 // GPU FLIP's dynamic bodies inside the pressure solve.
 //
-// Faces and cells are laid out as in gpu_flip_step.wgsl. A face record's
+// Faces and cells are laid out as in gpu_flip_step/common.wgsl. A face record's
 // three faces each name the body that owns them in the solid face velocity's
 // w (the step's solid_face_velocity pass): Σ over the axes a of
 // (b_a + 1) · 256^a, b_a the body (0 to body_count − 1) or −1 for none.
@@ -181,7 +181,7 @@ fn face_centre(p: vec3<i32>, a: i32) -> vec3<f32> {
 }
 
 // Body b's centre of mass at this step's end. The step binds its posed rows
-// (gpu_flip_step.wgsl pose_bodies), the pose the solid distance takes.
+// (gpu_flip_step/solids.wgsl pose_bodies), the pose the solid distance takes.
 fn body_centre(b: u32) -> vec3<f32> {
     return bodies[u.first + b].position_inv_mass.xyz;
 }
