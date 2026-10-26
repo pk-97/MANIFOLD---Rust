@@ -16,11 +16,24 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 /// The six fields, in spectrum order: Dy, Dx, Dz, Dxx, Dzz, Dxz.
 pub const OCEAN_FIELDS: u32 = 6;
 
+/// Wind speed in m/s.
+pub(crate) const DEFAULT_WIND_SPEED: f32 = 10.0;
+/// Wind direction in degrees from +X toward +Z.
+pub(crate) const DEFAULT_WIND_DIRECTION: f32 = 0.0;
+/// Fetch, the distance the wind blows over open water, in km.
+pub(crate) const DEFAULT_FETCH_KM: f32 = 300.0;
+/// Wave height multiplier.
+pub(crate) const DEFAULT_WAVE_SIZE: f32 = 1.0;
+/// Multiplier on the spectrum's time.
+pub(crate) const DEFAULT_SWELL_SPEED: f32 = 1.0;
+/// Seed of the random phases.
+pub(crate) const DEFAULT_SEED: i32 = 1;
+
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`,
 /// padded to 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct SpectrumUniforms {
+pub(crate) struct SpectrumUniforms {
     size: i32,
     tile_size: f32,
     band_low: f32,
@@ -32,7 +45,29 @@ struct SpectrumUniforms {
     swell_speed: f32,
     seed: i32,
     time: f32,
-    dispatch_count: u32,
+    pub(crate) dispatch_count: u32,
+}
+
+impl SpectrumUniforms {
+    /// The height half spectrum of one tile for the water's ripple detail,
+    /// from the same sea as the Ocean's defaults. `dispatch_count` covers
+    /// field 0 (Dy) alone: the body puts field f at idx / (N·(N/2+1)).
+    pub(crate) fn ripple(n: u32, tile_size: f32, band_low: f32, time: f32) -> Self {
+        Self {
+            size: n as i32,
+            tile_size,
+            band_low,
+            band_high: 0.0,
+            wind_speed: DEFAULT_WIND_SPEED,
+            wind_direction: DEFAULT_WIND_DIRECTION,
+            fetch_km: DEFAULT_FETCH_KM,
+            wave_size: DEFAULT_WAVE_SIZE,
+            swell_speed: DEFAULT_SWELL_SPEED,
+            seed: DEFAULT_SEED,
+            time,
+            dispatch_count: n * (n / 2 + 1),
+        }
+    }
 }
 
 manifold_node_engine::primitive! {
@@ -54,12 +89,12 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("tile_size"), label: "Tile Size", ty: ParamType::Float, default: ParamValue::Float(167.0), range: Some((1.0, 10000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("band_low"), label: "Band Low", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("band_high"), label: "Band High", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("wind_speed"), label: "Wind Speed", ty: ParamType::Float, default: ParamValue::Float(10.0), range: Some((0.1, 40.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("wind_direction"), label: "Wind Direction", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-360.0, 360.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("fetch_km"), label: "Fetch (km)", ty: ParamType::Float, default: ParamValue::Float(300.0), range: Some((0.1, 5000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("wave_size"), label: "Wave Size", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("swell_speed"), label: "Swell Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((0.0, 65535.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wind_speed"), label: "Wind Speed", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_WIND_SPEED), range: Some((0.1, 40.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wind_direction"), label: "Wind Direction", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_WIND_DIRECTION), range: Some((-360.0, 360.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fetch_km"), label: "Fetch (km)", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_FETCH_KM), range: Some((0.1, 5000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wave_size"), label: "Wave Size", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_WAVE_SIZE), range: Some((0.0, 4.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("swell_speed"), label: "Swell Speed", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_SWELL_SPEED), range: Some((0.0, 4.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(DEFAULT_SEED as f32), range: Some((0.0, 65535.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("time"), label: "Time", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 100000.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
@@ -137,12 +172,12 @@ impl Primitive for OceanSpectrum {
             tile_size: param_f32(ctx.params, "tile_size", 167.0),
             band_low: param_f32(ctx.params, "band_low", 0.0),
             band_high: param_f32(ctx.params, "band_high", 0.0),
-            wind_speed: ctx.scalar_or_param("wind_speed", 10.0),
-            wind_direction: ctx.scalar_or_param("wind_direction", 0.0),
-            fetch_km: param_f32(ctx.params, "fetch_km", 300.0),
-            wave_size: ctx.scalar_or_param("wave_size", 1.0),
-            swell_speed: ctx.scalar_or_param("swell_speed", 1.0),
-            seed: param_f32(ctx.params, "seed", 1.0).round() as i32,
+            wind_speed: ctx.scalar_or_param("wind_speed", DEFAULT_WIND_SPEED),
+            wind_direction: ctx.scalar_or_param("wind_direction", DEFAULT_WIND_DIRECTION),
+            fetch_km: param_f32(ctx.params, "fetch_km", DEFAULT_FETCH_KM),
+            wave_size: ctx.scalar_or_param("wave_size", DEFAULT_WAVE_SIZE),
+            swell_speed: ctx.scalar_or_param("swell_speed", DEFAULT_SWELL_SPEED),
+            seed: param_f32(ctx.params, "seed", DEFAULT_SEED as f32).round() as i32,
             time,
             dispatch_count: spectrum_len(n),
         };

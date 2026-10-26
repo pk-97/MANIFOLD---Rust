@@ -65,6 +65,7 @@
 //! scene.
 
 mod construction;
+mod field_objects;
 mod frame_setup;
 mod frustum;
 mod item_pick;
@@ -78,8 +79,15 @@ mod rt_frame;
 mod rt_trace;
 mod selection_mask;
 mod volume_optics;
+use field_objects::{FieldObject, ObjectMaterial};
+mod water_cover;
+mod water_march;
+use water_march::{FieldDraw, FieldView};
+mod ripple_detail;
+mod water_shade;
 use frustum::box_outside_clip;
 use prepasses::ShadowUniforms;
+use water_shade::shade_uniforms;
 mod instance_space;
 use instance_space::{IDENTITY_M4, instance_space_pair};
 mod matrix;
@@ -89,9 +97,17 @@ mod pipelines;
 mod resources;
 
 /// The scene shader as every pipeline compiles it: the instance transform
-/// helpers it shares with `cull_instances.wgsl`, then the shader itself.
+/// helpers it shares with `cull_instances.wgsl`, the scene shading a
+/// full-screen pass shares (`scene_shading.wgsl`), the five look hooks, then
+/// the mesh shader itself.
 const RENDER_SCENE_WGSL: &str = concat!(
     include_str!("shaders/instance_transform.wgsl"),
+    include_str!("shaders/scene_shading.wgsl"),
+    include_str!("shaders/look_ripple_detail.wgsl"),
+    include_str!("shaders/look_foam.wgsl"),
+    include_str!("shaders/look_mist.wgsl"),
+    include_str!("shaders/look_thin_water_light.wgsl"),
+    include_str!("shaders/look_wet_surface.wgsl"),
     include_str!("shaders/render_scene.wgsl"),
 );
 #[cfg(feature = "gpu-proofs")]
@@ -1384,6 +1400,9 @@ pub struct RenderScene {
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
     volume_optics: volume_optics::VolumeOptics,
+    water_march: water_march::WaterMarch,
+    water_shade: water_shade::WaterShade,
+    ripple_detail: ripple_detail::RippleDetail,
     live_draw_args: live_draw_args::LiveDrawArgs,
     /// Per-object-slot instance records that survived the camera cull, and
     /// their previous-frame records. Grown when too small, never shrunk.
@@ -1958,7 +1977,7 @@ struct ObjectDraw<'ctx> {
     /// (identity stub). An unwired count preserves the capacity behavior.
     instance_count: u32,
     /// Whole-triangle vertex count for passes that need a CPU count: the
-    /// buffer's, or its live extent's bound (GPU_FLUID_SURFACE_DESIGN.md P6b).
+    /// buffer's, or its live extent's bound (`scene::live_extent`).
     vertex_count: u32,
     /// Points-mode count: every vertex the buffer holds, or the bound.
     point_count: u32,
@@ -2108,7 +2127,10 @@ impl ObjectDraw<'_> {
         &'a self,
         draw: manifold_gpu::DepthMsaaDraw<'a>,
     ) -> manifold_gpu::DepthMsaaDraw<'a> {
-        let args = self.live_args.as_ref().map(|(args, offset)| (args, *offset));
+        let args = self
+            .live_args
+            .as_ref()
+            .map(|(args, offset)| (args, *offset));
         self.with_args(draw, args)
     }
 
@@ -2119,7 +2141,10 @@ impl ObjectDraw<'_> {
         draw: manifold_gpu::DepthMsaaDraw<'a>,
     ) -> manifold_gpu::DepthMsaaDraw<'a> {
         let args = self.live_args.as_ref().map(|(args, offset)| {
-            let offset = self.camera_cull.as_ref().map_or(*offset, |cull| cull.offset);
+            let offset = self
+                .camera_cull
+                .as_ref()
+                .map_or(*offset, |cull| cull.offset);
             (args, offset)
         });
         self.with_args(draw, args)
@@ -2881,6 +2906,7 @@ impl RenderScene {
             indices: None,
             weights: None,
             topology: None,
+            field: None,
             base_color_map: inputs.slot_of("base_color_map"),
             normal_map: inputs.slot_of("normal_map"),
             mr_map: inputs.slot_of("mr_map"),
@@ -3033,12 +3059,12 @@ impl RenderScene {
         // its pipeline (BUG-trh7 stage 2, `collect_object_draws`). None =
         // abort frame: structured error + magenta clear. An empty draw list
         // is handled below so every connected output is cleared.
-        let Some((mut draws, has_transmission)) =
+        let Some((mut draws, fields, has_transmission)) =
             self.collect_object_draws(ctx, &pre, &port_index, single_object)
         else {
             return;
         };
-        if draws.is_empty() {
+        if draws.is_empty() && fields.is_empty() {
             self.clear_empty_frame(ctx);
             return;
         }
@@ -3253,6 +3279,7 @@ impl RenderScene {
                 ctx,
                 &pre,
                 &draws,
+                &fields,
                 has_transmission,
                 denoise_active,
                 rt_rendered_this_frame,
@@ -3261,8 +3288,8 @@ impl RenderScene {
         else {
             return;
         };
-        self.selection_mask_pass(ctx, &pre, &draws);
-        self.item_pick_pass(ctx, &pre, &draws);
+        self.selection_mask_pass(ctx, &pre, &draws, &fields);
+        self.item_pick_pass(ctx, &pre, &draws, &fields);
         let target = &target;
         let resolve_target = &resolve_target;
         let depth_resolve_target = depth_resolve_target.as_ref();
@@ -3348,6 +3375,8 @@ mod tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 mod subsurface;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod water_march_gpu_tests;
 
 mod scene_viewport;
 

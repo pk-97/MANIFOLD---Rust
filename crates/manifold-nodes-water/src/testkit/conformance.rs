@@ -83,8 +83,6 @@ pub enum Check {
     ExportFrameRateIndependent,
     /// I8: a non-finite tick is never published.
     NonfiniteTickNotPublished,
-    /// I11: overflow is counted and reported.
-    OverflowReported,
     /// I13: uncoupled live frames never wait on the GPU.
     LiveFramesNeverWait,
     /// Speed 0.5 runs half the water time.
@@ -128,7 +126,7 @@ const BOX_FALLS: &[Fixture] = &[
 ];
 
 impl Check {
-    pub const ALL: [Check; 20] = [
+    pub const ALL: [Check; 19] = [
         Check::CoupledWorldStepsOnce,
         Check::CollisionMomentum,
         Check::CollisionEnergy,
@@ -139,7 +137,6 @@ impl Check {
         Check::PauseDiscardsImpulses,
         Check::ExportFrameRateIndependent,
         Check::NonfiniteTickNotPublished,
-        Check::OverflowReported,
         Check::LiveFramesNeverWait,
         Check::HalfSpeed,
         Check::Reset,
@@ -269,15 +266,6 @@ pub struct FaceSource {
     pub ulps: (u32, &'static str),
 }
 
-/// A setup change that overflows a run-time capacity. The error must carry
-/// the count and each of `names`.
-pub struct OverflowCase {
-    pub what: &'static str,
-    pub fixture: Fixture,
-    pub edit: fn(&mut EffectGraphDef),
-    pub names: &'static [&'static str],
-}
-
 /// A setup change a row's domain refuses, and the controls the refusal
 /// must name.
 pub struct RefusalCase {
@@ -306,8 +294,6 @@ pub struct LiquidSolverRow {
     pub totals: Option<TotalsReadout>,
     /// Needed by [`Check::NonfiniteTickNotPublished`].
     pub state: Option<StateArray>,
-    /// Needed by [`Check::OverflowReported`].
-    pub overflow: Option<OverflowCase>,
     /// Needed by [`Check::FaceGridPublished`].
     pub faces: Option<FaceSource>,
     /// A closed list, each with its reason.

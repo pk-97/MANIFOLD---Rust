@@ -105,9 +105,9 @@ pub fn sort_and_shape(
     let mut shape_node = crate::primitives::testkit::surface::shape_particle_blobs();
     let (_, errors) = harness.run(
         &mut shape_node,
-        &[("sorted", sorted_slot), ("cell_ranges", ranges_slot)],
+        &[("sorted", sorted_slot)],
         &[("blobs", blobs_slot)],
-        &lattice.params(shape),
+        &params(shape),
     );
     assert!(errors.is_empty(), "{errors:?}");
     (
@@ -116,38 +116,6 @@ pub fn sort_and_shape(
         read(&blobs_buf, particles.len()),
         (sorted_slot, ranges_slot, blobs_slot),
     )
-}
-
-pub fn blob_matrix(blob: &FluidBlob) -> [[f64; 3]; 3] {
-    let d = blob.shape_diag.map(f64::from);
-    let o = blob.shape_off.map(f64::from);
-    [[d[0], o[0], o[1]], [o[0], d[1], o[2]], [o[1], o[2], d[2]]]
-}
-
-/// The clamp's wires as params: the box, the level-set lattice, the solid
-/// lattice and the bin size.
-pub fn clamp_params(
-    center: [f32; 3],
-    size: [f32; 3],
-    nodes: [u32; 3],
-    solid_nodes: [u32; 3],
-    cell: f32,
-) -> ParamValues {
-    params(&[
-        ("center_x", center[0]),
-        ("center_y", center[1]),
-        ("center_z", center[2]),
-        ("size_x", size[0]),
-        ("size_y", size[1]),
-        ("size_z", size[2]),
-        ("nodes_x", nodes[0] as f32),
-        ("nodes_y", nodes[1] as f32),
-        ("nodes_z", nodes[2] as f32),
-        ("solid_nodes_x", solid_nodes[0] as f32),
-        ("solid_nodes_y", solid_nodes[1] as f32),
-        ("solid_nodes_z", solid_nodes[2] as f32),
-        ("cell_size", cell),
-    ])
 }
 
 /// The level set's cap outside the liquid, as a fraction of a bin; the WGSL of
@@ -169,7 +137,7 @@ pub fn native_support(
 }
 
 /// f64 trilinear sample of a solid lattice spanning `min`..`min + size`: the
-/// rule node.particle_volume and node.clamp_liquid_to_solids share.
+/// rule node.particle_volume uses.
 pub fn solid_sample(
     solid: &[f32],
     nodes: [u32; 3],

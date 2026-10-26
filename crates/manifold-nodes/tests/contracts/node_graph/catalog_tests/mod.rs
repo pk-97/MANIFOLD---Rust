@@ -77,8 +77,6 @@ pub(crate) mod whitewater_emitters;
 
 mod gpu_flip_preset;
 
-mod liquid_bricks;
-
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod gpu_flip_body;
 
@@ -91,7 +89,6 @@ mod image_fused;
 #[cfg(feature = "gpu-proofs")]
 mod nested_cubes_geometry;
 
-mod blob_bounds;
 #[cfg(feature = "gpu-proofs")]
 mod face_grid_scene_tests;
 mod particle_frame_blend_tests;
@@ -104,5 +101,3 @@ mod gltf_animation_source;
 
 #[cfg(feature = "gpu-proofs")]
 mod copy_positions;
-
-mod surface_mesh_normals;

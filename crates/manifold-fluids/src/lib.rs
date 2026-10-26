@@ -3,8 +3,8 @@
 //! The upstream engine keeps mutable process-global thread and source state. The
 //! bridge serializes every native operation, so worlds can move to worker threads
 //! but cannot be shared concurrently. This is deliberately a CPU-reference
-//! limitation; surface decoding itself happens after the native call and does
-//! not hold that global lock.
+//! limitation. Surface reconstruction is off: the engine is a particle,
+//! whitewater and solids oracle.
 
 use manifold_foundation::Seconds;
 use manifold_physics::FieldInput;
@@ -17,8 +17,6 @@ mod mesh;
 pub use mesh::{InflowOptions, MeshHandle, MeshRole, validate_mesh};
 mod frame;
 pub use frame::FluidFrame;
-mod surface;
-pub use surface::SurfaceFrame;
 mod particles;
 pub use particles::{CaptureError, ParticleFrameInfo, ParticleRecord};
 mod coupling;
@@ -45,50 +43,7 @@ pub struct Config {
     /// least eight cells; expanded grids must fit native signed 32-bit indexing.
     pub cells: [u32; 3],
     pub cell_size: f64,
-    pub surface_subdivisions: u32,
     pub apic: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SurfaceOptions {
-    pub particle_scale: f64,
-    pub smoothing: f64,
-    pub smoothing_iterations: u32,
-}
-
-impl Default for SurfaceOptions {
-    fn default() -> Self {
-        Self {
-            particle_scale: 3.0,
-            smoothing: 0.5,
-            smoothing_iterations: 2,
-        }
-    }
-}
-
-impl SurfaceOptions {
-    pub fn validate(self) -> Result<(), FluidError> {
-        if !self.particle_scale.is_finite()
-            || self.particle_scale <= 0.0
-            || self.particle_scale > 10.0
-        {
-            return Err(FluidError::input(
-                "surface particle_scale must be finite and in (0, 10]",
-            ));
-        }
-        if !self.smoothing.is_finite() || !(0.0..=1.0).contains(&self.smoothing) {
-            return Err(FluidError::input(
-                "surface smoothing must be finite and in 0..=1",
-            ));
-        }
-        if self.smoothing_iterations > 100 {
-            return Err(FluidError::input(
-                "surface smoothing_iterations must be in 0..=100",
-            ));
-        }
-        Ok(())
-    }
 }
 
 /// Native FLIP coefficients; these are not calibrated physical material units.
@@ -223,12 +178,6 @@ pub struct Bounds {
     pub max: [f32; 3],
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SurfaceVertex {
-    pub position: [f32; 3],
-    pub normal: [f32; 3],
-}
-
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WhitewaterKind {
@@ -285,12 +234,10 @@ pub(crate) fn decode_whitewater(
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FrameStats {
     pub particles: u32,
-    pub triangles: u32,
     pub substeps: u32,
-    /// Total elapsed update time, including surface meshing. An owner-driven
-    /// frame also includes time the owner spends between substep calls.
+    /// Total elapsed update time. An owner-driven frame also includes time the
+    /// owner spends between substep calls.
     pub simulation_ms: f64,
-    pub meshing_ms: f64,
     /// The live frame reached its native substep cap and consumed the remainder.
     pub cap_hit: bool,
     /// The live frame recovered from a non-finite value or solver failure.
@@ -329,10 +276,8 @@ impl std::error::Error for FluidError {}
 #[derive(Clone, Copy, Debug, Default)]
 struct NativeFrameStats {
     particles: u32,
-    triangles: u32,
     substeps: u32,
     simulation_ms: f64,
-    meshing_ms: f64,
     cap_hit: u32,
     numerical_recovery: u32,
 }
@@ -341,10 +286,8 @@ impl From<NativeFrameStats> for FrameStats {
     fn from(stats: NativeFrameStats) -> Self {
         Self {
             particles: stats.particles,
-            triangles: stats.triangles,
             substeps: stats.substeps,
             simulation_ms: stats.simulation_ms,
-            meshing_ms: stats.meshing_ms,
             cap_hit: stats.cap_hit != 0,
             numerical_recovery: stats.numerical_recovery != 0,
         }
@@ -357,7 +300,6 @@ unsafe extern "C" {
         jsize: u32,
         ksize: u32,
         cell_size: f64,
-        surface_subdivisions: u32,
         apic: i32,
         seed: u64,
         world_out: *mut *mut std::ffi::c_void,
@@ -427,16 +369,6 @@ unsafe extern "C" {
         depth: u32,
         enabled: i32,
     ) -> i32;
-    fn manifold_fluids_world_set_surface_options(
-        world: *mut std::ffi::c_void,
-        particle_scale: f64,
-        smoothing: f64,
-        smoothing_iterations: u32,
-    ) -> i32;
-    fn manifold_fluids_world_set_surface_reconstruction(
-        world: *mut std::ffi::c_void,
-        enabled: i32,
-    ) -> i32;
     fn manifold_fluids_world_set_liquid_options(
         world: *mut std::ffi::c_void,
         viscosity: f64,
@@ -502,11 +434,6 @@ unsafe extern "C" {
         position_out: *mut f32,
         velocity_out: *mut f32,
     ) -> i32;
-    fn manifold_fluids_world_surface(
-        world: *mut std::ffi::c_void,
-        data_out: *mut *const u8,
-        len_out: *mut usize,
-    ) -> i32;
     fn manifold_fluids_world_whitewater_count(
         world: *mut std::ffi::c_void,
         count_out: *mut usize,
@@ -526,9 +453,6 @@ pub struct FluidWorld {
     field_dimensions: [u32; 3],
     field_cell_size: f32,
     field_scratch: Vec<f32>,
-    vertex_scratch: Vec<[f32; 3]>,
-    triangle_scratch: Vec<[u32; 3]>,
-    normal_scratch: Vec<[f32; 3]>,
     whitewater_scratch: Vec<NativeWhitewaterParticle>,
     mesh_state: mesh::MeshState,
     rigid_coupling: Option<coupling::RigidCouplingState>,
@@ -559,7 +483,6 @@ impl FluidWorld {
                 config.cells[1],
                 config.cells[2],
                 config.cell_size,
-                config.surface_subdivisions,
                 i32::from(config.apic),
                 seed,
                 &mut native,
@@ -577,39 +500,11 @@ impl FluidWorld {
             ],
             field_cell_size: config.cell_size as f32,
             field_scratch: Vec::new(),
-            vertex_scratch: Vec::new(),
-            triangle_scratch: Vec::new(),
-            normal_scratch: Vec::new(),
             whitewater_scratch: Vec::new(),
             mesh_state,
             rigid_coupling: None,
             _not_sync: PhantomData,
         })
-    }
-
-    pub fn set_surface_options(&mut self, options: SurfaceOptions) -> Result<(), FluidError> {
-        options.validate()?;
-        let ok = unsafe {
-            manifold_fluids_world_set_surface_options(
-                self.native,
-                options.particle_scale,
-                options.smoothing,
-                options.smoothing_iterations,
-            )
-        };
-        native_result(ok, "setting surface options")
-    }
-
-    /// Enable or disable per-step surface reconstruction. This must be called
-    /// before the first step; it defaults to enabled. Disabling reconstruction
-    /// skips mesh construction while physics and whitewater continue, and
-    /// makes [`Self::surface`] return an error. [`Self::capture_surface_frame`]
-    /// remains available for explicit reconstruction after capture.
-    pub fn set_surface_reconstruction_enabled(&mut self, enabled: bool) -> Result<(), FluidError> {
-        let ok = unsafe {
-            manifold_fluids_world_set_surface_reconstruction(self.native, i32::from(enabled))
-        };
-        native_result(ok, "setting surface reconstruction")
     }
 
     pub fn set_liquid_options(&mut self, options: LiquidOptions) -> Result<(), FluidError> {
@@ -915,32 +810,6 @@ impl FluidWorld {
         Ok(native_stats.into())
     }
 
-    /// Read the last production surface mesh. If per-step reconstruction was
-    /// disabled, use [`Self::capture_surface_frame`] and reconstruct the frame
-    /// explicitly, or enable reconstruction before the first step.
-    pub fn surface(&mut self, output: &mut Vec<SurfaceVertex>) -> Result<(), FluidError> {
-        let mut data = std::ptr::null();
-        let mut len = 0;
-        let ok = unsafe { manifold_fluids_world_surface(self.native, &mut data, &mut len) };
-        native_result(ok, "reading the fluid surface")?;
-        let bytes = if len == 0 {
-            &[]
-        } else if data.is_null() {
-            return Err(FluidError::native(
-                "FLIP Fluids returned a null surface buffer with nonzero length",
-            ));
-        } else {
-            unsafe { std::slice::from_raw_parts(data, len) }
-        };
-        decode_surface(
-            bytes,
-            output,
-            &mut self.vertex_scratch,
-            &mut self.triangle_scratch,
-            &mut self.normal_scratch,
-        )
-    }
-
     pub fn whitewater(&mut self, output: &mut Vec<WhitewaterParticle>) -> Result<(), FluidError> {
         let mut count = 0usize;
         let ok = unsafe { manifold_fluids_world_whitewater_count(self.native, &mut count) };
@@ -988,11 +857,10 @@ fn validate_config(config: Config) -> Result<(), FluidError> {
         .checked_mul(u64::from(config.cells[1]))
         .and_then(|value| value.checked_mul(u64::from(config.cells[2])))
         .ok_or_else(|| FluidError::input("cell count overflow"))?;
-    let subdivision = u64::from(config.surface_subdivisions) + 1;
-    let surface_nodes = config.cells.iter().try_fold(1u64, |total, n| {
-        total.checked_mul((u64::from(*n) * subdivision).checked_add(1)?)
+    let nodes = config.cells.iter().try_fold(1u64, |total, n| {
+        total.checked_mul(u64::from(*n).checked_add(1)?)
     });
-    if total > i32::MAX as u64 || surface_nodes.is_none_or(|n| n > i32::MAX as u64) {
+    if total > i32::MAX as u64 || nodes.is_none_or(|n| n > i32::MAX as u64) {
         return Err(FluidError::input(
             "expanded grid exceeds native signed 32-bit indexing",
         ));
@@ -1044,156 +912,6 @@ fn last_native_error(operation: &str) -> FluidError {
     })
 }
 
-fn decode_surface(
-    bytes: &[u8],
-    output: &mut Vec<SurfaceVertex>,
-    vertices: &mut Vec<[f32; 3]>,
-    triangles: &mut Vec<[u32; 3]>,
-    normals: &mut Vec<[f32; 3]>,
-) -> Result<(), FluidError> {
-    output.clear();
-    vertices.clear();
-    triangles.clear();
-    normals.clear();
-    if bytes.is_empty() {
-        return Ok(());
-    }
-    let mut cursor = 0usize;
-    let vertex_count = read_i32(bytes, &mut cursor, "vertex count")?;
-    if vertex_count < 0 {
-        return Err(FluidError::native("surface vertex count is negative"));
-    }
-    let vertex_count = usize::try_from(vertex_count)
-        .map_err(|_| FluidError::native("surface vertex count does not fit usize"))?;
-    let vertex_bytes = vertex_count
-        .checked_mul(3)
-        .and_then(|count| count.checked_mul(std::mem::size_of::<f32>()))
-        .ok_or_else(|| FluidError::native("surface vertex data length overflow"))?;
-    if bytes.len().saturating_sub(cursor) < vertex_bytes {
-        return Err(FluidError::native("surface vertex data is truncated"));
-    }
-    vertices.try_reserve(vertex_count).map_err(|error| {
-        FluidError::native(format!("surface vertex allocation failed: {error}"))
-    })?;
-    for _ in 0..vertex_count {
-        let position = [
-            read_f32(bytes, &mut cursor, "surface vertex")?,
-            read_f32(bytes, &mut cursor, "surface vertex")?,
-            read_f32(bytes, &mut cursor, "surface vertex")?,
-        ];
-        if position.iter().any(|value| !value.is_finite()) {
-            return Err(FluidError::native(
-                "surface vertex contains a non-finite value",
-            ));
-        }
-        vertices.push(position);
-    }
-    let triangle_count = read_i32(bytes, &mut cursor, "triangle count")?;
-    if triangle_count < 0 {
-        return Err(FluidError::native("surface triangle count is negative"));
-    }
-    let triangle_count = usize::try_from(triangle_count)
-        .map_err(|_| FluidError::native("surface triangle count does not fit usize"))?;
-    let triangle_bytes = triangle_count
-        .checked_mul(3)
-        .and_then(|count| count.checked_mul(std::mem::size_of::<i32>()))
-        .ok_or_else(|| FluidError::native("surface triangle data length overflow"))?;
-    if bytes.len().saturating_sub(cursor) < triangle_bytes {
-        return Err(FluidError::native("surface triangle data is truncated"));
-    }
-    triangles.try_reserve(triangle_count).map_err(|error| {
-        FluidError::native(format!("surface triangle allocation failed: {error}"))
-    })?;
-    normals.try_reserve(vertex_count).map_err(|error| {
-        FluidError::native(format!("surface normal allocation failed: {error}"))
-    })?;
-    normals.resize(vertex_count, [0.0; 3]);
-    for _ in 0..triangle_count {
-        let indices = [
-            read_i32(bytes, &mut cursor, "surface index")?,
-            read_i32(bytes, &mut cursor, "surface index")?,
-            read_i32(bytes, &mut cursor, "surface index")?,
-        ];
-        if indices.iter().any(|&index| index < 0) {
-            return Err(FluidError::native("surface index is negative"));
-        }
-        let indices = [indices[0] as u32, indices[1] as u32, indices[2] as u32];
-        if indices.iter().any(|&index| index as usize >= vertex_count) {
-            return Err(FluidError::native("surface index is out of range"));
-        }
-        let a = vertices[indices[0] as usize];
-        let b = vertices[indices[1] as usize];
-        let c = vertices[indices[2] as usize];
-        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-        let normal = [
-            ab[1] * ac[2] - ab[2] * ac[1],
-            ab[2] * ac[0] - ab[0] * ac[2],
-            ab[0] * ac[1] - ab[1] * ac[0],
-        ];
-        for &index in &indices {
-            let accumulated = &mut normals[index as usize];
-            accumulated[0] += normal[0];
-            accumulated[1] += normal[1];
-            accumulated[2] += normal[2];
-        }
-        triangles.push(indices);
-    }
-    if cursor != bytes.len() {
-        return Err(FluidError::native("surface data has trailing bytes"));
-    }
-    output
-        .try_reserve(triangle_count.saturating_mul(3))
-        .map_err(|error| {
-            FluidError::native(format!("surface output allocation failed: {error}"))
-        })?;
-    for indices in triangles.iter().copied() {
-        for index in indices {
-            let normal = normalize_normal(normals[index as usize]);
-            output.push(SurfaceVertex {
-                position: vertices[index as usize],
-                normal,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn read_i32(bytes: &[u8], cursor: &mut usize, name: &str) -> Result<i32, FluidError> {
-    let end = cursor
-        .checked_add(4)
-        .ok_or_else(|| FluidError::native(format!("{name} offset overflow")))?;
-    let chunk = bytes
-        .get(*cursor..end)
-        .ok_or_else(|| FluidError::native(format!("{name} is truncated")))?;
-    *cursor = end;
-    Ok(i32::from_ne_bytes(
-        chunk.try_into().expect("four-byte slice"),
-    ))
-}
-
-fn read_f32(bytes: &[u8], cursor: &mut usize, name: &str) -> Result<f32, FluidError> {
-    let end = cursor
-        .checked_add(4)
-        .ok_or_else(|| FluidError::native(format!("{name} offset overflow")))?;
-    let chunk = bytes
-        .get(*cursor..end)
-        .ok_or_else(|| FluidError::native(format!("{name} is truncated")))?;
-    *cursor = end;
-    Ok(f32::from_ne_bytes(
-        chunk.try_into().expect("four-byte slice"),
-    ))
-}
-
-fn normalize_normal(normal: [f32; 3]) -> [f32; 3] {
-    let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
-    if length > f32::EPSILON && length.is_finite() {
-        [normal[0] / length, normal[1] / length, normal[2] / length]
-    } else {
-        [0.0, 0.0, 0.0]
-    }
-}
-
 #[cfg(test)]
 mod seeded_tests;
 
@@ -1205,15 +923,14 @@ mod tests {
     use manifold_physics::{FieldInput, UniformField, VectorField};
 
     use super::{
-        Bounds, Config, LiquidOptions, Seconds, SurfaceOptions, SurfaceVertex, TimeStepOptions,
-        WhitewaterKind, WhitewaterOptions, decode_surface,
+        Bounds, Config, FrameStats, LiquidOptions, Seconds, TimeStepOptions, WhitewaterKind,
+        WhitewaterOptions,
     };
 
     fn field_world(substeps: u32) -> super::FluidWorld {
         let mut world = super::FluidWorld::new(Config {
             cells: [12, 12, 12],
             cell_size: 0.25,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native field world");
@@ -1493,7 +1210,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [8, 8, 8],
             cell_size: 0.5,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native obstacle world");
@@ -1518,85 +1234,12 @@ mod tests {
             .expect("reused obstacle step");
     }
 
-    fn bobj(vertices: &[[f32; 3]], triangles: &[[i32; 3]]) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&(vertices.len() as i32).to_ne_bytes());
-        for vertex in vertices {
-            for value in vertex {
-                bytes.extend_from_slice(&value.to_ne_bytes());
-            }
-        }
-        bytes.extend_from_slice(&(triangles.len() as i32).to_ne_bytes());
-        for triangle in triangles {
-            for value in triangle {
-                bytes.extend_from_slice(&value.to_ne_bytes());
-            }
-        }
-        bytes
-    }
-
-    #[test]
-    fn decodes_deindexed_surface_with_smooth_normals() {
-        let bytes = bobj(
-            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            &[[0, 1, 2]],
-        );
-        let mut output = Vec::<SurfaceVertex>::new();
-        let mut vertices = Vec::new();
-        let mut triangles = Vec::new();
-        let mut normals = Vec::new();
-        decode_surface(
-            &bytes,
-            &mut output,
-            &mut vertices,
-            &mut triangles,
-            &mut normals,
-        )
-        .expect("valid BOBJ");
-        assert_eq!(output.len(), 3);
-        assert_eq!(output[0].normal, [0.0, 0.0, 1.0]);
-        assert_eq!(output[1].position, [1.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn rejects_truncated_and_out_of_range_surface_data() {
-        let mut output = Vec::new();
-        let mut vertices = Vec::new();
-        let mut triangles = Vec::new();
-        let mut normals = Vec::new();
-        assert!(
-            decode_surface(
-                &[1, 0, 0, 0],
-                &mut output,
-                &mut vertices,
-                &mut triangles,
-                &mut normals
-            )
-            .is_err()
-        );
-        let bytes = bobj(
-            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            &[[0, 1, 4]],
-        );
-        assert!(
-            decode_surface(
-                &bytes,
-                &mut output,
-                &mut vertices,
-                &mut triangles,
-                &mut normals
-            )
-            .is_err()
-        );
-    }
-
     #[test]
     fn validates_config_and_bounds_before_native_calls() {
         assert!(
             super::validate_config(Config {
                 cells: [7, 16, 16],
                 cell_size: 0.1,
-                surface_subdivisions: 0,
                 apic: false,
             })
             .is_err()
@@ -1615,7 +1258,6 @@ mod tests {
         let config = Config {
             cells: [320, 8, 320],
             cell_size: 0.0625,
-            surface_subdivisions: 0,
             apic: false,
         };
         super::validate_config(config).unwrap();
@@ -1660,42 +1302,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_surface_and_whitewater_options() {
-        assert_eq!(SurfaceOptions::default().particle_scale, 3.0);
-        assert_eq!(SurfaceOptions::default().smoothing, 0.5);
-        assert_eq!(SurfaceOptions::default().smoothing_iterations, 2);
-        assert!(
-            SurfaceOptions {
-                particle_scale: f64::NAN,
-                ..SurfaceOptions::default()
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            SurfaceOptions {
-                particle_scale: 0.0,
-                ..SurfaceOptions::default()
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            SurfaceOptions {
-                particle_scale: 10.1,
-                ..SurfaceOptions::default()
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            SurfaceOptions {
-                smoothing: 1.1,
-                ..SurfaceOptions::default()
-            }
-            .validate()
-            .is_err()
-        );
+    fn validates_whitewater_options() {
         assert_eq!(WhitewaterOptions::default().max_particles, 10_000_000);
         assert_eq!(WhitewaterOptions::default().wavecrest_rate, 175.0);
         assert_eq!(WhitewaterOptions::default().turbulence_rate, 175.0);
@@ -1847,7 +1454,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [12; 3],
             cell_size: 0.25,
-            surface_subdivisions: 0,
             apic: false,
         })
         .unwrap();
@@ -1872,7 +1478,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [8, 8, 8],
             cell_size: 0.5,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native world");
@@ -1896,19 +1501,6 @@ mod tests {
             stats.particles > 0,
             "native liquid scene emitted no particles"
         );
-        let mut surface = Vec::new();
-        world.surface(&mut surface).expect("viscous surface");
-        assert!(
-            !surface.is_empty(),
-            "native liquid scene produced no surface"
-        );
-        assert!(surface.iter().all(|vertex| {
-            vertex
-                .position
-                .iter()
-                .chain(vertex.normal.iter())
-                .all(|value| value.is_finite())
-        }));
         world
             .set_liquid_options(LiquidOptions::default())
             .expect("clear liquid options");
@@ -1920,7 +1512,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [8, 8, 8],
             cell_size: 0.5,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native world");
@@ -1939,7 +1530,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [8, 8, 8],
             cell_size: 0.5,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native world");
@@ -1963,20 +1553,7 @@ mod tests {
         let stats = world.step(Seconds(1.0 / 60.0)).expect("fixed substeps");
         assert_eq!(stats.substeps, 2);
         assert!(stats.simulation_ms.is_finite());
-        assert!(stats.meshing_ms.is_finite());
-        let mut surface = Vec::new();
-        world.surface(&mut surface).expect("surface");
-        assert!(
-            !surface.is_empty(),
-            "fixed-substep scene produced no surface"
-        );
-        assert!(surface.iter().all(|vertex| {
-            vertex
-                .position
-                .iter()
-                .chain(vertex.normal.iter())
-                .all(|value| value.is_finite())
-        }));
+        assert!(stats.particles > 0, "fixed-substep scene has no particles");
     }
 
     #[test]
@@ -1984,7 +1561,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [64, 64, 64],
             cell_size: 4.0 / 64.0,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native world");
@@ -1994,13 +1570,6 @@ mod tests {
                 surface_tension: 0.025,
             })
             .expect("liquid options");
-        world
-            .set_surface_options(SurfaceOptions {
-                particle_scale: 2.2,
-                smoothing: 0.35,
-                smoothing_iterations: 2,
-            })
-            .expect("surface options");
         world
             .add_fluid_box(
                 Bounds {
@@ -2027,21 +1596,14 @@ mod tests {
         world
             .set_obstacle(obstacle, obstacle, obstacle)
             .expect("obstacle");
+        let mut stats = FrameStats::default();
         for _ in 0..20 {
-            world
+            stats = world
                 .step(Seconds(1.0 / 60.0))
                 .expect("surface-tension step");
         }
-        let mut surface = Vec::new();
-        world.surface(&mut surface).expect("final surface");
-        assert!(!surface.is_empty(), "dam-break produced no final surface");
-        assert!(surface.iter().all(|vertex| {
-            vertex
-                .position
-                .iter()
-                .chain(vertex.normal.iter())
-                .all(|value| value.is_finite())
-        }));
+        assert!(stats.particles > 0, "dam-break lost its particles");
+        assert!(!stats.numerical_recovery, "dam-break needed recovery");
     }
 
     #[test]
@@ -2049,7 +1611,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [8, 8, 8],
             cell_size: 0.5,
-            surface_subdivisions: 0,
             apic: true,
         })
         .expect("native world");
@@ -2071,7 +1632,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [24, 24, 24],
             cell_size: 0.25,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native world");
@@ -2136,7 +1696,6 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [16, 16, 16],
             cell_size: 0.25,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native world");
@@ -2178,16 +1737,6 @@ mod tests {
             .expect("obstacle");
         let stats = world.step(Seconds(1.0 / 60.0)).expect("native step");
         assert!(stats.particles > 0, "tiny scene emitted no particles");
-        let mut surface = Vec::new();
-        world.surface(&mut surface).expect("native surface");
-        assert!(!surface.is_empty(), "tiny scene produced no surface");
-        assert!(surface.iter().all(|vertex| {
-            vertex
-                .position
-                .iter()
-                .chain(vertex.normal.iter())
-                .all(|value| value.is_finite())
-        }));
     }
 
     #[test]
@@ -2195,14 +1744,10 @@ mod tests {
         let mut world = super::FluidWorld::new(Config {
             cells: [8, 8, 8],
             cell_size: 0.5,
-            surface_subdivisions: 0,
             apic: true,
         })
         .expect("native world");
         let stats = world.step(Seconds(1.0 / 60.0)).expect("empty step");
         assert_eq!(stats.particles, 0);
-        let mut surface = vec![SurfaceVertex::default()];
-        world.surface(&mut surface).expect("empty surface");
-        assert!(surface.is_empty());
     }
 }

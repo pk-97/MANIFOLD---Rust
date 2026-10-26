@@ -108,19 +108,6 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             port: "out",
             record_bytes: std::mem::size_of::<MatterPoint>(),
         }),
-        overflow: Some(OverflowCase {
-            what: "Mesh Capacity 3 on Dam Break Matter's liquid surface",
-            fixture: Fixture::DamBreak,
-            edit: |def| {
-                set_type_param(
-                    def,
-                    "node.volume_surface_mesh",
-                    "max_capacity",
-                    SerializedParamValue::Int { value: 3 },
-                )
-            },
-            names: &["Mesh Capacity"],
-        }),
         faces: Some(FaceSource {
             type_id: "node.matter_state",
             port: "grid",
@@ -177,19 +164,6 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             type_id: "node.liquid_state",
             port: "out",
             record_bytes: std::mem::size_of::<FluidParticle>(),
-        }),
-        overflow: Some(OverflowCase {
-            what: "Mesh Capacity 3 on Dam Break GPU FLIP's liquid surface",
-            fixture: Fixture::DamBreak,
-            edit: |def| {
-                set_type_param(
-                    def,
-                    "node.volume_surface_mesh",
-                    "max_capacity",
-                    SerializedParamValue::Int { value: 3 },
-                )
-            },
-            names: &["Mesh Capacity"],
         }),
         faces: Some(FaceSource {
             type_id: "node.liquid_state",
@@ -417,14 +391,6 @@ pub fn gpu_flip_box_grid(count: u32) -> EffectGraphDef {
             float(0.5 * FIXTURE_DENSITY * edge.powi(3)),
         );
     }
-    // The water's surface wraps every cube; sized up front, the first frame
-    // draws it rather than growing the buffer.
-    set_type_param(
-        &mut def,
-        "node.volume_surface_mesh",
-        "max_capacity",
-        SerializedParamValue::Int { value: 262_144 },
-    );
     def
 }
 
@@ -743,11 +709,6 @@ mod tests {
                     row.type_id
                 );
                 assert!(
-                    check != Check::OverflowReported || row.overflow.is_some(),
-                    "{}: {check:?} needs an overflow case",
-                    row.type_id
-                );
-                assert!(
                     check != Check::FaceGridPublished || row.faces.is_some(),
                     "{}: {check:?} needs the row's face source",
                     row.type_id
@@ -757,20 +718,6 @@ mod tests {
                         scenes.push(fixture);
                     }
                 }
-            }
-            // An overflow is a run-time count, never a setup refusal.
-            if let Some(case) = &row.overflow {
-                let mut def = (row.fixture)(case.fixture)
-                    .unwrap_or_else(|| panic!("{}: no {:?} scene", row.type_id, case.fixture));
-                (case.edit)(&mut def);
-                build(row, case.fixture, &def)
-                    .check_authored()
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "{}: {} is refused at setup: {error}",
-                            row.type_id, case.what
-                        )
-                    });
             }
             for fixture in scenes {
                 let def = (row.fixture)(fixture).unwrap_or_else(|| {

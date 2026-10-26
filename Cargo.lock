@@ -2814,7 +2814,6 @@ name = "manifold-water-surface"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "glam",
  "inventory",
  "log",
  "manifold-core",

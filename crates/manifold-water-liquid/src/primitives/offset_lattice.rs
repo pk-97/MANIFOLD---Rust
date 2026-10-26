@@ -1,4 +1,4 @@
-//! Single-dispatch scalar lattice operation; see GPU_FLUID_SURFACE_DESIGN.md, Fill Pits.
+//! Single-dispatch scalar lattice operation: adds one distance to every sample.
 use crate::float_param;
 use manifold_gpu::GpuBinding;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -29,13 +29,13 @@ manifold_node_engine::primitive! {
         float_param!("offset", "Offset", 0.0, -1.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "For morphological closing, offset by minus the grow distance, redistance with a band wider than the grow distance, then offset back by the grow distance before clipping to solids. Never substitute a blur for redistancing. The input band must cover the grown surface.",
+    composition_notes: "Wire levelset from any scalar lattice; offset is the distance added to every sample.",
     examples: [],
     picker: { label: "Offset Lattice", category: Atom },
     summary: "Add a distance to every scalar lattice sample. Zero returns the input bits unchanged. Negative offsets grow a negative-inside surface; positive offsets shrink it.",
     category: Particles3D,
     role: Filter,
-    aliases: ["distance field", "morphological closing"],
+    aliases: ["distance field", "lattice offset"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/offset_lattice_body.wgsl"),
     input_access: [Coincident],

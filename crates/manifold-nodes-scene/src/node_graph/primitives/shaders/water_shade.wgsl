@@ -1,0 +1,97 @@
+// Full-screen shading of the water the march found. Reads the march's
+// per-pixel `FieldHit`, lights it with the scene's own shading (the same
+// functions meshes use) and lets the scene behind it through the way glass
+// does. Writes the colour over the frame and the hit depth into the depth
+// buffer later glass layers test against.
+
+@group(0) @binding(60) var<storage, read> hits: array<FieldHit>;
+@group(0) @binding(61) var<uniform> shade: ShadeUniforms;
+
+struct ShadeUniforms {
+    inv_view_proj: mat4x4<f32>,  // clip -> world, the same matrix the march uses
+    target_size: vec4<f32>,      // x width, y height (x is the hits buffer's row length), zw 0
+    slot: vec4<u32>,             // x = slot + 1 this draw shades, yzw 0
+};
+
+@vertex
+fn vs_water(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    var corners = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
+    return vec4<f32>(corners[vi], 0.0, 1.0);
+}
+
+struct WaterOut {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
+@fragment
+fn fs_water(@builtin(position) pos: vec4<f32>) -> WaterOut {
+    let pix = vec2<u32>(pos.xy);
+    let hit = hits[pix.y * u32(shade.target_size.x) + pix.x];
+    if hit.depth <= 0.0 {
+        discard;
+    }
+    let thickness_slot = unpack2x16float(hit.thickness_slot);
+    if u32(round(thickness_slot.y)) != shade.slot.x {
+        discard;
+    }
+
+    // World position from the depth, the march's convention.
+    let uv = pos.xy / shade.target_size.xy;
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let w = shade.inv_view_proj * vec4<f32>(ndc, hit.depth, 1.0);
+    let world = w.xyz / w.w;
+    let thickness = thickness_slot.x;
+    var n = oct_decode(unpack2x16snorm(hit.normal_oct));
+    let view = normalize(u.camera_pos.xyz - world);
+    // The camera under the water sees the surface from behind.
+    if dot(n, view) < 0.0 {
+        n = -n;
+    }
+    n = look_ripple_detail(world, n);
+
+    // Water has no texture maps, so its reflectance comes from the uniforms
+    // alone, as `fs_pbr` computes it for a material with none.
+    let ior = u.pbr_metallic_roughness.z;
+    let specular_factor = u.pbr_metallic_roughness.w;
+    let base_f0 = min(pow((ior - 1.0) / (ior + 1.0), 2.0) * u.pbr_specular_tint.rgb, vec3<f32>(1.0))
+        * specular_factor;
+    let base_f90 = vec3<f32>(specular_factor);
+    let surface = PbrSurface(
+        world, pos.xy, view, n, n, u.base_color.rgb, 0.0, u.pbr_metallic_roughness.y,
+        base_f0, base_f90,
+        vec3<f32>(0.0),
+        0.0, vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0),
+        0.0, 0.01,
+        vec3<f32>(0.0), 0.0,
+        vec4<f32>(0.0),
+    );
+    let direct = pbr_direct_lighting(surface);
+    let ibl = pbr_ibl(surface);
+    // No diffuse body: what is under the water comes through below.
+    let reflection = direct.total - direct.diffuse + ibl.specular;
+
+    // Light through the water as glass does it, with the march's thickness
+    // as the path.
+    let background = sample_transmission(
+        n, view, world, thickness, vec3<f32>(1.0), ior,
+        transmission_mip_level(surface.roughness, ior),
+    );
+    let tint = exp(-volume_attenuation_coefficient() * thickness);
+    let transmitted = (vec3<f32>(1.0) - transmission_specular_fraction(ibl.ibl_f0, base_f90, ibl.env_brdf))
+        * background * tint * u.base_color.rgb;
+
+    var lit = look_thin_water_light(thickness, reflection + transmitted);
+    lit = look_foam(world, lit);
+    lit = look_mist(u.camera_pos.xyz, world, lit);
+    let rgb = apply_fog(lit, world) * exp2(u.scene_params.z);
+
+    var out: WaterOut;
+    out.color = vec4<f32>(rgb, 1.0);
+    out.depth = hit.depth;
+    return out;
+}

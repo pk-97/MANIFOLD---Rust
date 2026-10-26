@@ -109,19 +109,25 @@ pub const WATER_FAMILY_REASON: &str = "the water template's tuned value";
 /// The template node the domain is.
 pub const DOMAIN_ROLE: &str = "domain";
 
-/// The template's Physics View switches: the surface's two inputs, the dots'
-/// visibility and the dots' two inputs. Each follows the World's Render
-/// Mode, on only in Physics View, so the side that is off is never computed.
-pub const PHYSICS_VIEW_SWITCHES: [&str; 5] = [
-    "water_vertices_switch",
-    "water_indices_switch",
+/// The template's Physics View switches: the field's inputs (its level set,
+/// its velocity lattice and its node counts, which come from the surface's
+/// volume), the water's visibility, the dots' visibility and the dots' two
+/// inputs. Each follows the World's Render Mode, on only in Physics View, so
+/// the side that is off is never computed.
+pub const PHYSICS_VIEW_SWITCHES: [&str; 9] = [
+    "water_field_switch",
+    "water_velocity_switch",
+    "water_nodes_x_switch",
+    "water_nodes_y_switch",
+    "water_nodes_z_switch",
+    "water_visible",
     "dots_visible",
     "dots_instances_switch",
     "dots_mesh_switch",
 ];
 
 /// The template nodes Surface Detail sets together.
-pub const SURFACE_DETAIL_NODES: [&str; 3] = ["liquid_volume", "liquid_mesh", "liquid_bricks"];
+pub const SURFACE_DETAIL_NODES: [&str; 2] = ["liquid_volume", "liquid_bricks"];
 
 /// Surface Detail 0 is one surface lattice node per cell, FLIP Fluids' default.
 pub const SURFACE_DETAIL_OFFSET: f32 = 1.0;
@@ -150,6 +156,8 @@ const RESOLUTION: Reach = Reach::Own("resolution");
 const CAPACITY: Reach = Reach::Own("whitewater_capacity");
 const DETAIL: Reach = Reach::Own("surface_detail");
 const BLOBS: Reach = Reach::Own("liquid_blobs");
+const SMOOTHNESS: Reach = Reach::Own("liquid_smoothness");
+const RIPPLES: Reach = Reach::Own("water_ripple_detail");
 use ControlGroup::{Domain, Simulation, Surface, Whitewater};
 
 /// The domain box is axis-aligned: the solvers take no rotation.
@@ -180,7 +188,7 @@ fn surface(fields: &ItemFields) -> bool {
     water(fields).is_some_and(|water| water.draw == WaterDraw::Surface)
 }
 
-pub static WATER_ROWS: [PropertyRow; 37] = [
+pub static WATER_ROWS: [PropertyRow; 35] = [
     row("pos_x", T, Domain, setup())
         .unit(Unit::Metres)
         .limit(HardLimit::Unlimited),
@@ -305,32 +313,20 @@ pub static WATER_ROWS: [PropertyRow; 37] = [
         .param("particle_scale")
         .name("Particle Scale")
         .when(surface),
-    row("surface_stretch", BLOBS, Surface, setup())
-        .param("stretch")
-        .name("Stretch")
+    // Times the smoothing's leash (FIELD_LEASH_CELLS in manifold-water-liquid): 1 is the tuned surface, 0 the raw particle field.
+    row("surface_smoothness", SMOOTHNESS, Surface, setup())
+        .param("value")
+        .name("Smoothness")
+        .default(1.0)
+        .range(0.0, 2.0)
         .when(surface),
-    row("surface_centre_smoothing", BLOBS, Surface, setup())
-        .param("smoothing")
-        .name("Centre Smoothing")
+    // Times the automatic ripples on the surface: 1 is their natural strength, 0 none.
+    row("surface_ripple_detail", RIPPLES, Surface, setup())
+        .param("value")
+        .name("Ripple Detail")
+        .default(1.0)
+        .range(0.0, 2.0)
         .when(surface),
-    row(
-        "surface_fill_pits",
-        Reach::Own("liquid_fill_pits"),
-        Surface,
-        setup(),
-    )
-    .param("value")
-    .name("Fill Pits")
-    .when(surface),
-    row(
-        "surface_smoothing",
-        Reach::Own("liquid_smooth_mesh"),
-        Surface,
-        setup(),
-    )
-    .param("iterations")
-    .name("Smoothing")
-    .when(surface),
     row(
         "whitewater_amount",
         Reach::Own("whitewater"),

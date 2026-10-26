@@ -461,30 +461,6 @@ fn generated_fields(registry: &PrimitiveRegistry, type_id: &str, raw: &[Field]) 
     fields
 }
 
-/// `SurfaceMeshPass` uploads one `RelaxUniforms` for every kernel it runs:
-/// relax_surface_mesh's (also smooth_surface_mesh's) and surface_mesh_normals'.
-#[test]
-fn surface_mesh_pass_uniforms_match_every_kernel_it_dispatches() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../manifold-water-surface/src/primitives/relax_surface_mesh.rs");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    let (_, structs) = parse_source(&text);
-    let hand = structs
-        .iter()
-        .find(|s| s.name == "RelaxUniforms")
-        .expect("RelaxUniforms is a dispatch-family hand struct");
-    let registry = PrimitiveRegistry::with_builtin();
-    for type_id in ["node.relax_surface_mesh", "node.surface_mesh_normals"] {
-        let got = generated_fields(&registry, type_id, &hand.fields);
-        assert!(
-            layout_eq(&hand.fields, &got),
-            "{type_id}: generated {got:?}\n  RelaxUniforms {:?}",
-            hand.fields
-        );
-    }
-}
-
 /// `whitewater_emitter_dispatch` uploads every float param in PARAMS order,
 /// then the count, zero-padded to whole 16-byte rows of its 32-word buffer.
 #[test]
@@ -635,9 +611,11 @@ const NON_STANDALONE: &[&str] = &[
     // uniform_layout_extended.
     "node.lattice_bricks",
     "node.blob_bounds",
-    // SurfaceMeshPass's shared RelaxUniforms, proven above for both kernels.
-    "node.smooth_surface_mesh",
-    "node.surface_mesh_normals",
+    // The field build's surface weights (counts, then weights and velocity)
+    // and its carry into drawn solids: WeightUniforms and CarryUniforms are
+    // reflected in uniform_layout_extended.
+    "node.surface_weights",
+    "node.carry_liquid_into_solids",
     // The whitewater emitter packer, proven above.
     "node.whitewater_influence",
     "node.turbulence_emission_count",
@@ -684,4 +662,3 @@ fn reflection_detects_shader_alignment_size_and_type_drift() {
     let retyped = reflect_shader(&shader("value: u32, dispatch_count: u32,")).unwrap();
     assert!(!layout_eq(&normal.fields, &retyped.fields));
 }
-

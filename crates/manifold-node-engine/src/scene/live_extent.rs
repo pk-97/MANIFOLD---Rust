@@ -1,5 +1,5 @@
 //! The live length of an array whose element count only the GPU knows
-//! (GPU_FLUID_SURFACE_DESIGN.md P6b). The producer publishes it with its array
+//! (a Platonic mesh, a fragment cut's map). The producer publishes it with its array
 //! output; consumers that draw or trace the array use it instead of the
 //! array's capacity. Elements past the live count are zero, so a consumer that
 //! reads the whole array stays correct, only slower.

@@ -471,7 +471,6 @@ mod tests {
         let mut world = FluidWorld::new(Config {
             cells,
             cell_size: 0.25,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native world");
@@ -496,7 +495,6 @@ mod tests {
         let mut world = FluidWorld::new(Config {
             cells: [12, 12, 12],
             cell_size: 0.25,
-            surface_subdivisions: 0,
             apic: false,
         })
         .expect("native world");
@@ -540,7 +538,6 @@ mod tests {
         let config = Config {
             cells: [8, 8, 8],
             cell_size: 0.25,
-            surface_subdivisions: 0,
             apic: false,
         };
         let mesh = cube_mesh(0.25, 0.75);

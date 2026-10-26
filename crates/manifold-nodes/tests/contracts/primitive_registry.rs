@@ -8,10 +8,8 @@
 
 // Standalone staged encoder; the step keeps its existing pressure path.
 #[cfg(test)]
-mod surface_mesh_freeze_tests;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
-
 #[cfg(test)]
 mod tests {
     use manifold_node_engine::primitives::mix::Mix;

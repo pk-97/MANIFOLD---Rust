@@ -5,7 +5,7 @@ use manifold_nodes_water::testkit::preset_extents::{LiquidPreset, check_preset_e
 use manifold_water_liquid::lattice::LiquidLattice;
 
 #[test]
-fn liquid_mesh_grid_native_dispatch_extents_are_covered() {
+fn liquid_lattice_native_dispatch_extents_are_covered() {
     for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
         let layout = domain_layout(None, size, resolution).unwrap();
         let mesh = LiquidLattice::from_layout(&layout).surface();
@@ -18,8 +18,8 @@ fn liquid_mesh_grid_native_dispatch_extents_are_covered() {
             let cells = nodes.map(|n| n - 1);
             let cell_count = cells.into_iter().product::<u64>();
             // Node dispatches (splat, smoothing, offsets, redistance,
-            // clamp) use count; MC dispatches use cell_count. The last
-            // MC cell's +1 corner is exactly the last allocated node.
+            // carry) use count; cell dispatches use cell_count. The last
+            // cell's +1 corner is exactly the last allocated node.
             let last_corner = cells[0] + nodes[0] * (cells[1] + nodes[1] * cells[2]);
             assert_eq!(last_corner, count - 1);
             assert!(count * 4 <= u64::from(u32::MAX));
@@ -193,17 +193,17 @@ fn liquid_blob_bounds_reject_wrong_extent_before_gpu_work() {
 }
 
 #[test]
-fn liquid_mesh_contact_rejects_short_solid_before_gpu_work() {
+fn liquid_carry_rejects_short_solid_before_gpu_work() {
     let (_, def) = liquid_presets()
         .into_iter()
         .find(|(id, _)| id == "WaterDamBreakGpuFlip")
         .expect("preset");
     let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
-    let mesh = flat
+    let carry = flat
         .nodes
         .iter()
-        .find(|n| n.type_id == "node.volume_surface_mesh")
-        .expect("mesh")
+        .find(|n| n.type_id == "node.carry_liquid_into_solids")
+        .expect("carry")
         .id;
     let bounds = flat
         .nodes
@@ -214,15 +214,16 @@ fn liquid_mesh_contact_rejects_short_solid_before_gpu_work() {
     let solid = flat
         .wires
         .iter_mut()
-        .find(|w| w.to_node == mesh && w.to_port == "solid")
+        .find(|w| w.to_node == carry && w.to_port == "solid")
         .expect("solid wire");
     solid.from_node = bounds;
     solid.from_port = "bounds".into();
     match check_preset_extents(&flat, 8) {
         Err(ExtentError::Uncovered { node, detail }) => {
-            // The early solid refusal leaves owned outputs unsized, so
-            // the walk may report that before its final coverage pass.
-            assert!(node.contains("volume_surface_mesh"), "{node}: {detail}");
+            assert!(
+                node.contains("carry_liquid_into_solids"),
+                "{node}: {detail}"
+            );
         }
         other => panic!("expected a short solid lattice refusal, got {other:?}"),
     }
@@ -300,8 +301,8 @@ fn an_atom_without_a_rule_fails_by_name() {
     }
 }
 
-/// A mesher told its lattice is larger than the level set it reads is
-/// caught before the GPU: Dam Break Matter with count_surface_triangles
+/// A smoothing pass told its lattice is larger than the level set it reads
+/// is caught before the GPU: Dam Break Matter with the first smooth_lattice
 /// unwired from the volume's lattice and set to 4096 nodes per axis.
 #[test]
 fn a_lattice_past_its_storage_is_caught() {
@@ -314,9 +315,9 @@ fn a_lattice_past_its_storage_is_caught() {
     let counter = flat
         .nodes
         .iter()
-        .find(|node| node.type_id == "node.count_surface_triangles")
+        .find(|node| node.type_id == "node.smooth_lattice")
         .map(|node| node.id)
-        .expect("a counter");
+        .expect("a smoothing pass");
     let lattice = ["nodes_x", "nodes_y", "nodes_z"];
     // Exercise the dense level-set bound specifically. With a sparse
     // schedule wired, its smaller brick bound correctly refuses first.
@@ -336,7 +337,7 @@ fn a_lattice_past_its_storage_is_caught() {
     match check_preset_extents(&flat, 64) {
         Err(ExtentError::Uncovered { node, detail }) => {
             assert!(
-                node.contains("count_surface_triangles") && detail.starts_with("levelset holds"),
+                node.contains("smooth_lattice") && detail.starts_with("levelset holds"),
                 "{node}: {detail}"
             );
         }

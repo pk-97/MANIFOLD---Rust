@@ -22,7 +22,7 @@ unsafe extern "C" {
 /// coupling uploads fresh body state before each substep offer and exposes its
 /// accepted reaction afterward. Dropping an unfinished frame invalidates
 /// the native world: rebuild it before reuse.
-/// A partly advanced world cannot supply a surface or whitewater snapshot.
+/// A partly advanced world cannot supply a particle or whitewater snapshot.
 #[must_use = "finish the frame after all substeps, or dropping it invalidates the world"]
 pub struct FluidFrame<'a> {
     pub(super) world: &'a mut FluidWorld,

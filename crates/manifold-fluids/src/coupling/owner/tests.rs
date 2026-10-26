@@ -58,7 +58,6 @@ fn fixture(filled: bool) -> Fixture {
     let mut fluid = FluidWorld::new(Config {
         cells: [16; 3],
         cell_size: 0.15,
-        surface_subdivisions: 0,
         apic: false,
     })
     .unwrap();
@@ -329,7 +328,7 @@ fn owner_reuses_scratch_and_invalidates_stats_and_snapshots_at_frame_boundaries(
         .begin_frame(&mut fixture.fluid, DT, &[])
         .unwrap();
     drop(frame);
-    assert!(fixture.fluid.surface(&mut Vec::new()).is_err());
+    assert!(fixture.fluid.whitewater(&mut Vec::new()).is_err());
     assert!(fixture.coupling.last_stats().is_none());
     assert!(fixture.coupling.completed_bodies().is_none());
 }
@@ -354,7 +353,7 @@ fn owner_finish_rejects_foreign_rigid_state_without_publishing_fluid() {
     assert!(frame.finish(&foreign).is_err());
     assert!(fixture.coupling.last_stats().is_none());
     assert!(fixture.coupling.completed_bodies().is_none());
-    assert!(fixture.fluid.surface(&mut Vec::new()).is_err());
+    assert!(fixture.fluid.whitewater(&mut Vec::new()).is_err());
 }
 
 #[test]
@@ -422,7 +421,6 @@ fn owner_compound_interleaved_bindings_apply_once_per_body_and_reuse_storage() {
     let mut fluid = FluidWorld::new(Config {
         cells: [16; 3],
         cell_size: 0.15,
-        surface_subdivisions: 0,
         apic: false,
     })
     .unwrap();

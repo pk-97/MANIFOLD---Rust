@@ -14,12 +14,9 @@
 //!
 //! Run with one output directory and optional `--preset`, `--width`, `--height`,
 //! `--frames`, `--fps`, `--offline-only`, `--max-seconds`, `--stills-every`,
-//! `--linear`, `--cinematic`, `--supersample`, `--hold-time` and `--gpu-surface` flags.
+//! `--linear`, `--cinematic`, `--supersample`, `--hold-time` flags.
 //! `--hold-time` renders every offline frame at the last frame's time, as a stopped
-//! transport does, so nodes that move per frame rather than per second show. `--gpu-surface`
-//! is for presets meshed by the Liquid Surface group (e.g. WaterDamBreakGpu): each
-//! offline frame reads back the GPU mesh, fails on a non-finite vertex or an empty
-//! surface, and reports its live vertices as `vertex_count`. A preset with its own
+//! transport does, so nodes that move per frame rather than per second show. A preset with its own
 //! `node.tone_map` is always read back as `--linear` (sRGB of the graph output, what
 //! the app shows); otherwise the default preset is the shipped GPU FLIP Dam Break.
 //!
@@ -53,7 +50,6 @@ use manifold_node_engine::gpu::headless_readback::{
     encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8,
 };
 use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
@@ -82,7 +78,7 @@ const MAX_HEIGHT: u32 = 2160;
 const MAX_FRAMES: u32 = 900;
 const MAX_FPS: u32 = 60;
 const MAX_SECONDS: f64 = 3600.0;
-const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,meshing_ms,particle_count,vertex_count,capture_ms,presentation_interval_ms,foam_count,bubble_count,spray_count,upload_ms";
+const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,particle_count,capture_ms,presentation_interval_ms,foam_count,bubble_count,spray_count,upload_ms";
 type CaptureResult<T> = Result<T, Box<dyn Error>>;
 
 #[derive(Clone, Debug)]
@@ -99,13 +95,6 @@ struct CaptureOptions {
     linear: bool,
     cinematic: bool,
     supersample: u32,
-    /// The preset meshes on the GPU (the Liquid Surface group): the fluid node
-    /// publishes particle frames and its CPU mesh is off by design.
-    gpu_surface: bool,
-    /// On still frames, write each surface mesh's live vertices (position then
-    /// normal, six little-endian f32 each) to `mesh/` for offline roughness
-    /// measurement.
-    dump_mesh: bool,
     /// Record the particle look metrics
     /// (look gates A1, A2, A5, A6) from each offline frame's particles.
     look_metrics: bool,
@@ -166,9 +155,7 @@ struct FluidMetrics {
     simulation_time: f64,
     lag_seconds: f64,
     simulation_ms: f64,
-    meshing_ms: f64,
     particle_count: f64,
-    vertex_count: f64,
     foam_count: f64,
     bubble_count: f64,
     spray_count: f64,
@@ -638,9 +625,7 @@ fn read_fluid_metrics(runtime: &PresetRuntime, solver: Solver) -> CaptureResult<
             simulation_time: 0.0,
             lag_seconds: 0.0,
             simulation_ms: 0.0,
-            meshing_ms: 0.0,
             particle_count: 0.0,
-            vertex_count: 0.0,
             foam_count: 0.0,
             bubble_count: 0.0,
             spray_count: 0.0,
@@ -649,7 +634,7 @@ fn read_fluid_metrics(runtime: &PresetRuntime, solver: Solver) -> CaptureResult<
     }
     let (inputs, outputs) = runtime.preview_scalar_io();
     // The GPU solver's time is in the frame's gpu_ms; the engine's
-    // solve/mesh/upload columns stay 0. Whitewater counts are read from the
+    // solve/upload columns stay 0. Whitewater counts are read from the
     // GPU after the frame, offline only.
     let read = |list: &[(String, f32)], port: &str| -> CaptureResult<f64> {
         let value = list
@@ -667,11 +652,9 @@ fn read_fluid_metrics(runtime: &PresetRuntime, solver: Solver) -> CaptureResult<
         simulation_time: read(&inputs, "simulation_time")?,
         lag_seconds: 0.0,
         simulation_ms: 0.0,
-        meshing_ms: 0.0,
         // The count of the frame the preset presents: B, or A for a
         // coupled preset (frame A carries the display-time bodies).
         particle_count: read(&outputs, "count_b").or_else(|_| read(&outputs, "count_a"))?,
-        vertex_count: 0.0,
         foam_count: 0.0,
         bubble_count: 0.0,
         spray_count: 0.0,
@@ -876,112 +859,6 @@ fn write_look_metrics(dir: &Path, look: &LookRecorder) -> CaptureResult<()> {
     Ok(())
 }
 
-/// Live vertices of the Liquid Surface mesh on the last dumped frame. Slots past
-/// the live triangles are zero, so a live vertex is one with a nonzero normal.
-fn gpu_surface_vertices(
-    runtime: &PresetRuntime,
-    device: &GpuDevice,
-    frame: u32,
-) -> CaptureResult<u64> {
-    let arrays = runtime.dump_arrays_all();
-    let mesh = arrays
-        .iter()
-        .find(|array| array.type_id == "node.volume_surface_mesh" && array.port == "vertices")
-        .ok_or_else(|| {
-            io::Error::other("--gpu-surface: the preset has no node.volume_surface_mesh")
-        })?;
-    let size = mesh.buffer.size();
-    let staging = device.create_buffer_shared(size);
-    let mut encoder = device.create_encoder("gpu-surface-readback");
-    encoder.copy_buffer_to_buffer(mesh.buffer, &staging, size);
-    encoder.commit_and_wait_completed();
-    let ptr = staging.mapped_ptr().expect("shared staging buffer");
-    // SAFETY: the copy has completed and nothing else writes the staging buffer.
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
-    let mut live = 0u64;
-    for (index, chunk) in bytes
-        .chunks_exact(std::mem::size_of::<MeshVertex>())
-        .enumerate()
-    {
-        let vertex: MeshVertex = bytemuck::pod_read_unaligned(chunk);
-        let values = vertex
-            .position
-            .iter()
-            .chain(&vertex.normal)
-            .chain(&vertex.uv);
-        if values.clone().any(|value| !value.is_finite()) {
-            return Err(io::Error::other(format!(
-                "offline frame {frame}: Liquid Surface vertex {index} is non-finite: {:?} {:?} {:?}",
-                vertex.position, vertex.normal, vertex.uv
-            ))
-            .into());
-        }
-        if vertex.normal != [0.0; 3] {
-            live += 1;
-        }
-    }
-    Ok(live)
-}
-
-/// Writes the live vertices of every surface mesh in the graph: each GPU
-/// Liquid Surface (`gpu`, live = nonzero normal). A GPU mesh node other than
-/// the preset's `liquid_mesh` is tagged `gpu-<node id>`, so one run can mesh
-/// the same particles through several surface variants.
-fn dump_surface_meshes(
-    runtime: &PresetRuntime,
-    device: &GpuDevice,
-    frame: u32,
-    fluid: &FluidMetrics,
-    frame_node: &str,
-    dir: &Path,
-) -> CaptureResult<()> {
-    for array in runtime.dump_arrays_all() {
-        let tag = match (array.type_id.as_str(), array.port.as_str()) {
-            ("node.volume_surface_mesh", "vertices") if array.name == "liquid_mesh" => {
-                "gpu".to_string()
-            }
-            ("node.volume_surface_mesh", "vertices") => {
-                let name: String = array
-                    .name
-                    .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                    .collect();
-                format!("gpu-{name}")
-            }
-            (_, "particles_b") if array.name == frame_node => "particles".to_string(),
-            _ => continue,
-        };
-        let size = array.buffer.size();
-        let staging = device.create_buffer_shared(size);
-        let mut encoder = device.create_encoder("surface-mesh-dump");
-        encoder.copy_buffer_to_buffer(array.buffer, &staging, size);
-        encoder.commit_and_wait_completed();
-        let ptr = staging.mapped_ptr().expect("shared staging buffer");
-        // SAFETY: the copy has completed and nothing else writes the staging buffer.
-        let bytes = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
-        if tag == "particles" {
-            // Raw FluidParticle slots; the name carries the live count.
-            let live = fluid.particle_count as usize;
-            fs::write(
-                dir.join(format!("frame_{frame:06}_particles_{live}.bin")),
-                bytes,
-            )?;
-            continue;
-        }
-        let mut out = Vec::new();
-        for chunk in bytes.chunks_exact(std::mem::size_of::<MeshVertex>()) {
-            let vertex: MeshVertex = bytemuck::pod_read_unaligned(chunk);
-            if vertex.normal != [0.0; 3] {
-                for value in vertex.position.iter().chain(&vertex.normal) {
-                    out.extend_from_slice(&value.to_le_bytes());
-                }
-            }
-        }
-        fs::write(dir.join(format!("frame_{frame:06}_{tag}.f32")), out)?;
-    }
-    Ok(())
-}
-
 fn render_output_frame(
     runtime: &mut PresetRuntime,
     target: &RenderTarget,
@@ -1000,7 +877,6 @@ fn render_output_frame(
     };
     let mut final_fluid = None;
     let mut simulation_ms = 0.0;
-    let mut meshing_ms = 0.0;
     let mut upload_ms = 0.0;
     let temporal_samples = temporal_samples(authored_time);
     for (sample, &temporal_sample) in temporal_samples.iter().enumerate().take(sample_count) {
@@ -1026,13 +902,11 @@ fn render_output_frame(
         )?;
         total_timings.add_assign(timings);
         simulation_ms += fluid.simulation_ms;
-        meshing_ms += fluid.meshing_ms;
         upload_ms += fluid.upload_ms;
         final_fluid = Some(fluid);
     }
     let mut fluid = final_fluid.expect("output frame renders at least one sample");
     fluid.simulation_ms = simulation_ms;
-    fluid.meshing_ms = meshing_ms;
     fluid.upload_ms = upload_ms;
     Ok((total_timings, fluid))
 }
@@ -1085,7 +959,7 @@ impl CsvWriter {
     fn write_row(&mut self, row: &MetricRow) -> CaptureResult<()> {
         writeln!(
             self.writer,
-            "{},{:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.6},{:.6},{:.0},{:.0},{:.0},{:.6}",
+            "{},{:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.6},{:.6},{:.0},{:.0},{:.0},{:.6}",
             row.frame,
             row.authored_time,
             row.fluid.simulation_time,
@@ -1095,9 +969,7 @@ impl CsvWriter {
             row.timings.gpu_ms,
             row.timings.frame_ms,
             row.fluid.simulation_ms,
-            row.fluid.meshing_ms,
             row.fluid.particle_count,
-            row.fluid.vertex_count,
             row.capture_ms,
             row.presentation_interval_ms,
             row.fluid.foam_count,
@@ -1156,8 +1028,6 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         linear: false,
         cinematic: false,
         supersample: 1,
-        gpu_surface: false,
-        dump_mesh: false,
         look_metrics: false,
         hold_time: false,
         water: None,
@@ -1188,8 +1058,6 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             "--offline-only" => options.offline_only = true,
             "--linear" => options.linear = true,
             "--cinematic" => options.cinematic = true,
-            "--gpu-surface" => options.gpu_surface = true,
-            "--dump-mesh" => options.dump_mesh = true,
             "--look-metrics" => options.look_metrics = true,
             "--hold-time" => options.hold_time = true,
             "--water" => options.water = Some(value("--water")?),
@@ -1209,7 +1077,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     options.output_dir = output_dir.ok_or_else(|| {
         io::Error::other(
-            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface] [--look-metrics] [--hold-time] [--dump-mesh] [--water ID]",
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--look-metrics] [--hold-time] [--water ID]",
         )
     })?;
     if options.width == 0
@@ -1306,13 +1174,8 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         linear: options.linear || tone_mapped,
         ..options.clone()
     };
-    if options.solver == Solver::None
-        && (options.gpu_surface || options.look_metrics || options.dump_mesh)
-    {
-        return Err(io::Error::other(
-            "--gpu-surface, --look-metrics and --dump-mesh need a liquid in the preset",
-        )
-        .into());
+    if options.solver == Solver::None && options.look_metrics {
+        return Err(io::Error::other("--look-metrics needs a liquid in the preset").into());
     }
     let instrumented_json = instrument_preset(&json, options.cinematic, options.supersample)?;
     if options.cinematic {
@@ -1341,8 +1204,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         render_height,
         &options.frame_node,
     )?;
-    let dump_arrays =
-        options.gpu_surface || options.look_metrics || options.dump_mesh || preset.whitewater;
+    let dump_arrays = options.look_metrics || preset.whitewater;
     offline_runtime.set_dump_all(options.cinematic || dump_arrays);
     let (initial_timings, initial_fluid) = render_frame(
         &mut offline_runtime,
@@ -1384,9 +1246,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     if options.stills_every.is_some() {
         fs::create_dir_all(options.output_dir.join("stills"))?;
     }
-    if options.dump_mesh {
-        fs::create_dir_all(options.output_dir.join("mesh"))?;
-    }
     let mut capture_ms = 0.0;
     let mut look = options.look_metrics.then(|| {
         let layout = domain_layout(None, preset.domain_size as f32, preset.resolution)
@@ -1410,34 +1269,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             frame_dt,
             options,
         )?;
-        if options.gpu_surface {
-            if fluid.particle_count < 1.0 {
-                return Err(io::Error::other(format!(
-                    "offline frame {frame} published no liquid particles"
-                ))
-                .into());
-            }
-            fluid.vertex_count = gpu_surface_vertices(&offline_runtime, &device, frame)? as f64;
-            if fluid.vertex_count < 3.0 {
-                let arrays: Vec<String> = offline_runtime
-                    .dump_arrays_all()
-                    .iter()
-                    .map(|array| {
-                        format!(
-                            "{}.{} ({} bytes)",
-                            array.type_id,
-                            array.port,
-                            array.buffer.size()
-                        )
-                    })
-                    .collect();
-                return Err(io::Error::other(format!(
-                    "offline frame {frame}: the Liquid Surface mesh is empty; arrays this frame: {}",
-                    arrays.join(", ")
-                ))
-                .into());
-            }
-        } else if options.solver == Solver::Gpu && fluid.particle_count < 1.0 {
+        if options.solver == Solver::Gpu && fluid.particle_count < 1.0 {
             return Err(io::Error::other(format!(
                 "offline frame {frame} published no liquid particles"
             ))
@@ -1468,16 +1300,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         let should_capture = options
             .stills_every
             .is_none_or(|every| frame % every == 0 || frame == options.frames || frame == 1);
-        if should_capture && options.dump_mesh {
-            dump_surface_meshes(
-                &offline_runtime,
-                &device,
-                frame,
-                &fluid,
-                &options.frame_node,
-                &options.output_dir.join("mesh"),
-            )?;
-        }
         if should_capture {
             let capture_started = Instant::now();
             let rgba = readback_rgba(

@@ -127,7 +127,6 @@ fn main() {
         "pressuresolver.cpp",
         "scalarfield.cpp",
         "spatialpointgrid.cpp",
-        "surfaceframe.cpp",
         "stopwatch.cpp",
         "threadutils.cpp",
         "trianglemesh.cpp",

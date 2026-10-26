@@ -432,7 +432,7 @@ pub const CASES: &[CustomAbiCase] = &[
     CustomAbiCase {
         source: "render_scene.rs",
         rust_struct: "RenderSceneUniforms",
-        shader: "shaders/render_scene.wgsl",
+        shader: "shaders/scene_shading.wgsl",
         shader_struct: "Uniforms",
         aliases: &[],
     },
@@ -513,6 +513,20 @@ pub const CASES: &[CustomAbiCase] = &[
         rust_struct: "BoundsParams",
         shader: "shaders/blob_bounds.wgsl",
         shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "surface_weights.rs",
+        rust_struct: "WeightUniforms",
+        shader: "shaders/surface_weights.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "carry_liquid_into_solids.rs",
+        rust_struct: "CarryUniforms",
+        shader: "shaders/carry_liquid_into_solids.wgsl",
+        shader_struct: "CarryParams",
         aliases: &[],
     },
     CustomAbiCase {

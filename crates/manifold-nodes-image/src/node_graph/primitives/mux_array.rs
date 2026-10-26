@@ -25,7 +25,7 @@ const PORT_NAMES: [&str; 8] = [
 manifold_node_engine::primitive! {
     name: MuxArray,
     type_id: "node.switch_array",
-    purpose: "N-way Array<f32> selector. Routes one of in_0..in_7 (Array f32) to the output buffer based on the selector input (rounded, clamped). Output capacity = max of all wired input capacities at chain-build time. Completes the mux family alongside node.switch_value / node.switch_texture; primary use is mode-switching at the value-array level (e.g., NestedCubes Envelope vs Pose target_angles).",
+    purpose: "N-way Array<f32> selector. Routes one of in_0..in_7 (Array f32) to the output buffer based on the selector input (rounded, clamped). With the selector set as a param, `out` is the chosen input's own buffer for the frame (no copy, no GPU work) and everything feeding only the other inputs is skipped. Output capacity = max of all wired input capacities at chain-build time. Completes the mux family alongside node.switch_value / node.switch_texture; primary use is mode-switching at the value-array level (e.g., NestedCubes Envelope vs Pose target_angles).",
     inputs: {
         selector: ScalarF32 required,
         in_0: Array(f32) optional,
@@ -51,7 +51,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Selector rounds to nearest int, clamps to [0, 8). Port-shadows-param: inline param drives the choice when the input wire is absent. The unwired-selected-slot case yields a zero-filled output. Same-frame caveat: if a selected input is GPU-written by an upstream compute primitive, the mux's CPU memcpy may miss the write without an explicit fence — for the first user (NestedCubes) both upstream sources are CPU-write so this isn't an issue, but a GPU-side copy variant is the right shape if a future consumer needs it.",
+    composition_notes: "Selector rounds to nearest int, clamps to [0, 8). Port-shadows-param: inline param drives the choice when the input wire is absent. With the selector set as a param, `out` is the chosen input's own buffer for the frame (no copy, no GPU work) and everything feeding only the other inputs is skipped. A wired selector copies the chosen input on the GPU. An unwired chosen input gives zeros.",
     examples: [],
     picker: { label: "Switch (array)", category: Atom },
     summary: "Picks one of several incoming lists and passes it through, chosen by a selector number.",
@@ -78,6 +78,22 @@ impl Primitive for MuxArray {
             .unwrap_or(0.0);
         let idx = selector.round().clamp(0.0, 7.0) as usize;
         Some(PORT_NAMES[idx])
+    }
+
+    /// With a param selector, a wired choice passes through by alias: the executor
+    /// points `out` at the chosen input's buffer and live extent for the frame
+    /// and `run` does not execute. An unwired choice runs, to publish zeros.
+    fn skip_passthrough(
+        &self,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
+        let port = self.selected_input_branch(params, wired_inputs)?;
+        wired_inputs.contains(&port).then_some((port, "out"))
+    }
+
+    fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
+        Some("out")
     }
 
     fn array_output_capacity(
@@ -127,46 +143,53 @@ impl Primitive for MuxArray {
         }
 
         let src_port = PORT_NAMES[idx];
-        let Some(src) = ctx.inputs.array(src_port) else {
-            // Selected input unwired — output zero-filled. The selector
+        let src = ctx.inputs.array(src_port);
+        let gpu = ctx.gpu_encoder();
+        let Some(src) = src else {
+            // Selected input unwired: output zero-filled. The selector
             // chose a slot the graph didn't provide; emitting zeros is
             // the least-surprising behaviour (matches mux_scalar's
             // unwired-slot returning 0.0).
-            let zeros = vec![0u8; dst_cap_bytes];
-            unsafe { dst.write(0, &zeros) };
+            gpu.native_enc.clear_buffer(dst);
             return;
         };
-        let src_size = src.size as usize;
-        let copy_len = src_size.min(dst_cap_bytes);
+        let copy_len = src.size.min(dst.size);
 
-        // CPU memcpy from src to dst. Both buffers are shared-memory
-        // by the Array<T> pre-allocation policy. Same-frame correctness
-        // depends on upstream being CPU-write (true for the cycler and
-        // the accumulator); see composition_notes.
-        let Some(src_ptr) = src.mapped_ptr() else {
-            log::warn!("node.switch_array: source buffer has no mapped_ptr");
-            return;
-        };
-        // Safety: src_ptr is valid for src_size bytes (allocation policy),
-        // copy_len is clamped to both src and dst sizes, and the
-        // executor runs primitives sequentially on the content thread
-        // so no concurrent reader races this write.
-        let src_slice = unsafe { std::slice::from_raw_parts(src_ptr, copy_len) };
-        unsafe { dst.write(0, src_slice) };
-
-        // Zero-fill any tail beyond the source's size — keeps stale
-        // data from a previously-selected larger input from leaking
-        // into downstream reads that look at the full capacity.
-        if copy_len < dst_cap_bytes {
-            let tail = vec![0u8; dst_cap_bytes - copy_len];
-            unsafe { dst.write(copy_len as u64, &tail) };
+        // A source smaller than `dst` leaves a tail, so clear `dst` first
+        // to keep stale data from a previously-selected larger input out of
+        // downstream reads that look at the full capacity.
+        if copy_len < dst.size {
+            gpu.native_enc.clear_buffer(dst);
         }
+        gpu.native_enc.copy_buffer_range(src, 0, dst, 0, copy_len);
     }
 }
+
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+mod extent;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_param_selector_passes_the_wired_choice_through() {
+        use manifold_node_engine::exec::effect_node::ParamValues;
+        let prim = MuxArray::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("selector"), ParamValue::Float(1.0));
+        assert_eq!(
+            Primitive::skip_passthrough(&prim, &params, &["in_0", "in_1"]),
+            Some(("in_1", "out"))
+        );
+        // Unwired choice runs, so it can publish zeros.
+        assert_eq!(Primitive::skip_passthrough(&prim, &params, &["in_0"]), None);
+        // A wired selector keeps every branch live.
+        assert_eq!(
+            Primitive::skip_passthrough(&prim, &params, &["selector", "in_0", "in_1"]),
+            None
+        );
+    }
 
     #[test]
     fn array_output_capacity_is_max_of_wired_inputs() {

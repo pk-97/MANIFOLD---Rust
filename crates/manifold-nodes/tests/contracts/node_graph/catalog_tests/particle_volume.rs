@@ -36,14 +36,9 @@ fn expected(
                     return band;
                 }
                 let d: [f32; 3] = std::array::from_fn(|axis| p[axis] - blob.center_radius[axis]);
-                let v = [
-                    blob.shape_diag[0] * d[0] + blob.shape_off[0] * d[1] + blob.shape_off[1] * d[2],
-                    blob.shape_off[0] * d[0] + blob.shape_diag[1] * d[1] + blob.shape_off[2] * d[2],
-                    blob.shape_off[1] * d[0] + blob.shape_off[2] * d[1] + blob.shape_diag[2] * d[2],
-                ];
                 let reach = blob.center_radius[3];
-                let distance = v.iter().map(|value| value * value).sum::<f32>().sqrt();
-                band.min(reach * (distance - 1.0))
+                let distance = d.iter().map(|value| value * value).sum::<f32>().sqrt();
+                band.min(distance - reach)
             });
             manifold_water_liquid::testkit::particle_volume::union(
                 particle_phi,
@@ -81,12 +76,7 @@ fn run_volume(
     let (solid_slot, _) = harness.array(&solid, solid.len());
     let interior_slot = interior.map(|values| harness.array(values, values.len().max(1)).0);
     // What node.blob_bounds reduces these blobs to.
-    let bounds = blob.map_or([0.0; 2], |b| {
-        [
-            b.center_radius[3],
-            1.5 * b.center_radius[3] + b.shape_off[3],
-        ]
-    });
+    let bounds = blob.map_or([0.0; 2], |b| [b.center_radius[3], 1.5 * b.center_radius[3]]);
     let (bounds_slot, _) = harness.array(&bounds, bounds.len());
     let levels = solid_nodes.map(|n| n as u32);
     let total = levels.iter().product::<u32>() as usize;
@@ -144,13 +134,10 @@ fn search_boundary_blobs(
         let shift = std::array::from_fn::<_, 3, _>(|a| center[a] - marker[a]);
         let shift_length = shift.iter().map(|v| v * v).sum::<f32>().sqrt();
         assert!(shift_length <= 1.301 * lattice.cell);
-        let inverse = if radius > 0.0 { radius.recip() } else { 1.0 };
         marked.push((
             marker,
             FluidBlob {
                 center_radius: [center[0], center[1], center[2], radius],
-                shape_diag: [inverse, inverse, inverse, 0.0],
-                shape_off: [0.0, 0.0, 0.0, shift_length],
             },
         ));
     };
@@ -261,7 +248,9 @@ fn gpu_flip_volume_tight_bounds_matches_original_search_exactly() {
         let (ranges_slot, _) = harness.array(&ranges, ranges.len());
         let bounds_slot = blob_bounds(&mut harness, blobs_slot);
         let bounds = read::<f32>(&harness.buffer(bounds_slot), 2);
-        assert!(bounds[0] > 0.0 && bounds[1] > 1.5 * bounds[0]);
+        // Spheres: the reach is 1.5 radii of the largest blob.
+        assert!(bounds[0] > 0.0);
+        assert_eq!(bounds[1], 1.5 * bounds[0]);
         let solid = vec![1.0_f32; nodes.iter().product::<u32>() as usize];
         let (solid_slot, _) = harness.array(&solid, solid.len());
         let inputs = [
@@ -329,8 +318,6 @@ fn gpu_flip_narrow_band_mesher_values() {
 
     let surface_blob = FluidBlob {
         center_radius: [0.0, 0.0, 0.0, 0.5],
-        shape_diag: [2.0, 2.0, 2.0, 0.0],
-        shape_off: [0.0; 4],
     };
     let shallow = vec![-0.1; 2 * 2 * 2];
     let surface = run_volume(&deep, [9, 9, 9], Some(&shallow), Some(surface_blob));

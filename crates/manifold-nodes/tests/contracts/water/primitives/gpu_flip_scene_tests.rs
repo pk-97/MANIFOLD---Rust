@@ -1,4 +1,4 @@
-//! The GPU FLIP water step run on whole scenes: the momentum, still-pool and meshed-volume proofs, and the scene
+//! The GPU FLIP water step run on whole scenes: the momentum, still-pool and level-set-volume proofs, and the scene
 //! runner the other water scene proofs share.
 //! `gpu_flip_scenes_cover_every_dispatch` proves every array these graphs
 //! allocate before any of them runs here.
@@ -23,8 +23,6 @@ use manifold_node_engine::{
     persistence::PrimitiveRegistry, state_store::StateStore,
 };
 use manifold_nodes_water::presets::gpu_flip::{FACE_NODES, STEP_NODE, WaterScene, water_def};
-#[cfg(test)]
-use manifold_water_gpu_flip::primitives::gpu_flip_volume::volume_and_area;
 #[cfg(test)]
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::face_len;
@@ -145,10 +143,7 @@ impl Run {
             (node_named(&graph, "stats"), "stats_out"),
         ]);
         if scene.surface {
-            read.push((node_ending(&graph, "liquid_offsets"), "extent"));
-            read.push((node_ending(&graph, "liquid_mesh"), "vertices"));
-            read.push((node_ending(&graph, "liquid_mesh"), "indices"));
-            read.push((node_ending(&graph, "liquid_normals"), "out"));
+            read.push((node_ending(&graph, "liquid_carry_into_solids"), "out"));
         }
         if scene.faces {
             read.extend(FACE_NODES.map(|name| (node_named(&graph, name), "out")));
@@ -183,45 +178,38 @@ impl Run {
         run
     }
 
-    /// The rendered surface's live triangles, after smoothing. The shipped
-    /// surface shares vertices across triangles; the index buffer supplies
-    /// topology, not consecutive triples of unique vertices.
-    #[cfg(test)]
-    pub(super) fn surface(&self) -> Vec<[[f32; 3]; 3]> {
-        // The running total's `extent` starts with the grand total: triangles.
-        let extent: Vec<u32> =
-            self.read_at(node_ending(&self.graph, "liquid_offsets"), "extent", 1);
-        let mesh = node_ending(&self.graph, "liquid_mesh");
-        let count = 3 * extent[0] as usize;
-        let indexed = self
-            .graph
-            .wires_into(mesh)
-            .any(|wire| wire.to.1 == "edge_scan");
-        let indices: Vec<u32> = if indexed {
-            self.read_at(mesh, "indices", count)
-        } else {
-            (0..count as u32).collect()
-        };
-        let vertex_count = indices.iter().max().map_or(0, |&index| index as usize + 1);
-        let vertices: Vec<manifold_node_engine::mesh::MeshVertex> = self.read_at(
-            node_ending(&self.graph, "liquid_normals"),
-            "out",
-            vertex_count,
-        );
-        indices
-            .chunks_exact(3)
-            .map(|triangle| [0, 1, 2].map(|i| vertices[triangle[i] as usize].position))
-            .collect()
-    }
-
-    /// The volume the surface mesh holds in the tank and its free surface's area.
+    /// The water's volume and free-surface area, read from the surface's level
+    /// set (negative inside the water, a distance near the surface). Each node
+    /// holds the share of its cell the water fills: a linear ramp over one node
+    /// spacing across the zero level, so a rising surface moves the volume
+    /// smoothly instead of a whole node layer at a time. The area is the same
+    /// ramp's width times the node count near the surface.
     #[cfg(test)]
     pub(super) fn surface_measure(&self) -> (f64, f64) {
-        volume_and_area(
-            self.surface().into_iter(),
-            self.scene.min(),
-            self.scene.size,
-        )
+        assert_eq!(
+            self.scene.surface_scale, 1,
+            "the lattice read assumes the default surface scale"
+        );
+        let geometry = self.scene.geometry();
+        let outputs = geometry.outputs();
+        let nodes: usize = ["mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z"]
+            .iter()
+            .map(|name| outputs.iter().find(|(port, _)| port == name).unwrap().1 as usize)
+            .product();
+        let level_set: Vec<f32> = self.read_at(
+            node_ending(&self.graph, "liquid_carry_into_solids"),
+            "out",
+            nodes,
+        );
+        let dx = self.scene.cell_size();
+        let (mut filled, mut skin) = (0.0, 0.0);
+        for &phi in &level_set {
+            let phi = f64::from(phi) / dx;
+            assert!(phi.is_finite(), "the level set holds a non-finite node");
+            filled += (0.5 - phi).clamp(0.0, 1.0);
+            skin += (1.0 - phi.abs()).max(0.0);
+        }
+        (filled * dx.powi(3), skin * dx * dx)
     }
 
     /// The particles' own volume: `REST_PER_CELL` fill a cell.
@@ -992,15 +980,11 @@ mod native_reference {
             Config {
                 cells: layout.cells.map(|n| n + 3),
                 cell_size: layout.cell_size,
-                surface_subdivisions: 0,
                 apic: false,
             },
             0,
         )
         .expect("native world");
-        world
-            .set_surface_reconstruction_enabled(false)
-            .expect("disable meshing");
         world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
         if scene.fill_height > 0.0 {
             let min = local(layout.min);
@@ -1252,58 +1236,12 @@ mod native_reference {
     }
 }
 
-/// The measurement must follow the rendered topology and smoothing, in both
-/// supported mesh layouts. One fill frame suffices; no simulation or render.
-#[test]
-fn gpu_flip_surface_readback_matches_triangle_list() {
-    let scene = WaterScene::still_pool(8).with_surface();
-    let indexed = Run::new(scene);
-    let mut registry = PrimitiveRegistry::with_builtin();
-    register_substep_test_nodes(&mut registry);
-    let mut graph = water_def(scene)
-        .into_graph(&registry, &Default::default())
-        .expect("water graph");
-    for name in ["liquid_mesh", "liquid_smooth_mesh", "liquid_normals"] {
-        let node = node_ending(&graph, name);
-        assert!(graph.disconnect((node, "edge_scan")).is_some());
-    }
-    let plain = Run::with_graph(scene, graph);
-    let (a, b) = (indexed.surface(), plain.surface());
-    assert!(!a.is_empty(), "seeded pool must have a surface");
-    assert_eq!(a.len(), b.len());
-    for (triangle, (a, b)) in a.iter().zip(&b).enumerate() {
-        for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
-            assert!(a.is_finite() && b.is_finite());
-            assert!(
-                (a - b).abs() < 1e-5,
-                "triangle {triangle}: indexed {a}, triangle-list {b}"
-            );
-        }
-    }
-    let (volume, area) = indexed.surface_measure();
-    let (plain_volume, plain_area) = plain.surface_measure();
-    assert!(volume > 0.0 && area > 0.0);
-    assert!((volume - plain_volume).abs() < 1e-5);
-    assert!((area - plain_area).abs() < 1e-5);
-    let raw: Vec<manifold_node_engine::mesh::MeshVertex> = plain.read_at(
-        node_ending(&plain.graph, "liquid_mesh"),
-        "vertices",
-        3 * b.len(),
-    );
-    assert!(
-        raw.iter()
-            .zip(b.iter().flatten())
-            .any(|(raw, smoothed)| raw.position != *smoothed),
-        "fixture must distinguish raw and smoothed positions"
-    );
-}
-
-/// The volume oracle on water that must not change: a resting pool's meshed
+/// The volume oracle on water that must not change: a resting pool's level-set
 /// volume holds within 0.5% for 2 s. A drift here is the measure, not the
-/// solver. It also prints the surface's skin, the depth the mesh sits
+/// solver. It also prints the surface's skin, the depth the zero level sits
 /// outside the water, for the Dam Break's frame-0 skin to agree with.
 #[test]
-fn gpu_flip_still_pool_keeps_its_meshed_volume() {
+fn gpu_flip_still_pool_keeps_its_level_set_volume() {
     let scene = WaterScene::still_pool(64).with_surface();
     let mut run = Run::new(scene);
     let mut measures = Vec::new();
@@ -1318,18 +1256,18 @@ fn gpu_flip_still_pool_keeps_its_meshed_volume() {
         .fold(0.0, f64::max);
     let skin = VolumeDrift::new(measures[0], run.particle_volume()).skin();
     println!(
-        "GPU FLIP still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%",
+        "GPU FLIP still pool level set: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%",
         measures[119].0,
         100.0 * drift
     );
     println!(
-        "GPU FLIP still pool meshed: particles hold {:.4} m³, skin {:.2} mm",
+        "GPU FLIP still pool level set: particles hold {:.4} m³, skin {:.2} mm",
         run.particle_volume(),
         1000.0 * skin
     );
     assert!(
         drift < 5e-3,
-        "a resting pool's meshed volume moved {:.3}%",
+        "a resting pool's level-set volume moved {:.3}%",
         100.0 * drift
     );
 }

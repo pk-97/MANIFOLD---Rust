@@ -1,6 +1,6 @@
 //! `node.smooth_lattice` — binomial smoothing of a scalar lattice held in an
-//! `Array(f32)` (GPU_FLUID_SURFACE_DESIGN.md P6c): the liquid level set before
-//! marching cubes, as the CPU mesher's smoothing iterations did. One axis per
+//! `Array(f32)`: the liquid level set inside each step of the field
+//! smoothing, between `node.redistance_lattice` and `node.field_smooth_blend`. One axis per
 //! atom; chained over x, y and z it is the full 3D binomial blur at 3·(2p + 1)
 //! taps per node instead of (2p + 1)³. A per-element gather on the codegen path.
 
@@ -57,7 +57,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Chain three, axes 0, 1 and 2, between node.particle_volume and node.count_surface_triangles / node.volume_surface_mesh, with nodes_x/y/z from the volume's volume_nodes_x/y/z and one passes value wired into all three. More passes round the liquid surface and thin sheets further. Live: changing passes reshapes the next frame without touching the simulation.",
+    composition_notes: "Chain three, axes 0, 1 and 2, inside each step of the field smoothing, between node.redistance_lattice and node.field_smooth_blend, with nodes_x/y/z from the volume's volume_nodes_x/y/z and one passes value wired into all three. More passes round the liquid surface and thin sheets further. Live: changing passes reshapes the next frame without touching the simulation.",
     examples: [],
     picker: { label: "Smooth Lattice", category: Atom },
     summary: "Softens a liquid's density field so its surface comes out smooth instead of lumpy.",

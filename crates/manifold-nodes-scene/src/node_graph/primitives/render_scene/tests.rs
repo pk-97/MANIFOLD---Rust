@@ -194,10 +194,7 @@ fn rt_svt_slot_finds_a_sun_after_many_casters() {
 fn wgsl_caster_struct_matches_the_rust_record() {
     let generated = manifold_gpu::ShadowCaster::WGSL;
     for (name, src) in [
-        (
-            "render_scene.wgsl",
-            RENDER_SCENE_WGSL,
-        ),
+        ("render_scene.wgsl", RENDER_SCENE_WGSL),
         (
             "shaft_march.wgsl",
             include_str!("../shaders/shaft_march.wgsl"),
@@ -472,6 +469,48 @@ fn render_scene_wgsl_parses_and_carries_tangent() {
         src.contains("tangent: vec4<f32>") && src.contains("fn tbn_for"),
         "the authored-tangent path (BUG-wfxe) must be present in the kernel"
     );
+}
+
+/// The shared scene shading stands alone: a full-screen pass prepends it
+/// with no mesh vertex stage, so it must validate with nothing from
+/// `render_scene.wgsl`, and carry the light loop and IBL it exists for.
+#[test]
+fn scene_shading_validates_without_the_mesh_shader() {
+    let shading = concat!(
+        include_str!("../shaders/scene_shading.wgsl"),
+        include_str!("../shaders/look_ripple_detail.wgsl"),
+        include_str!("../shaders/look_foam.wgsl"),
+        include_str!("../shaders/look_mist.wgsl"),
+        include_str!("../shaders/look_thin_water_light.wgsl"),
+        include_str!("../shaders/look_wet_surface.wgsl"),
+    );
+    let module =
+        naga::front::wgsl::parse_str(shading).expect("scene shading must naga-parse alone");
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    if let Err(e) = validator.validate(&module) {
+        panic!(
+            "scene shading validation failed alone:\n{}",
+            e.emit_to_string(shading)
+        );
+    }
+    for function in [
+        "pbr_direct_lighting",
+        "pbr_ibl",
+        "light_visibility",
+        "apply_fog",
+        "look_wet_surface",
+    ] {
+        assert!(
+            module
+                .functions
+                .iter()
+                .any(|(_, f)| f.name.as_deref() == Some(function)),
+            "scene shading must define `{function}`"
+        );
+    }
 }
 
 /// The per-copy cull places a copy with the scene shader's own transform

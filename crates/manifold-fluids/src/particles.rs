@@ -1,8 +1,6 @@
-//! Particle frames written straight into caller memory: the producer side of
-//! the GPU surface seam (GPU_FLUID_SURFACE_DESIGN.md section 3 (The
-//! particle-frame contract)). The caller owns the destination, typically a
-//! mapped GPU buffer; capture never advances the solver and does not allocate
-//! once this world's scratch is warm.
+//! Particle frames written straight into caller memory. The caller owns the
+//! destination, typically a mapped GPU buffer; capture never advances the
+//! solver and does not allocate once this world's scratch is warm.
 
 use std::ffi::c_void;
 
@@ -164,16 +162,7 @@ impl FluidWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Bounds, Config, Seconds, SurfaceOptions};
-
-    unsafe extern "C" {
-        fn manifold_fluids_surface_frame_solid(
-            frame: *mut c_void,
-            solid: *mut f32,
-            capacity: usize,
-            nodes_out: *mut u32,
-        ) -> i32;
-    }
+    use crate::{Bounds, Config, Seconds};
 
     const CELLS: u32 = 12;
     const CELL_SIZE: f64 = 0.2;
@@ -184,7 +173,6 @@ mod tests {
             Config {
                 cells: [CELLS; 3],
                 cell_size: CELL_SIZE,
-                surface_subdivisions: 0,
                 apic: false,
             },
             seed,
@@ -278,11 +266,6 @@ mod tests {
                 .capture_particle_frame([0.0; 3], &mut particles, &mut solid)
                 .unwrap();
         }
-        let mut expected = Vec::new();
-        untouched.surface(&mut expected).unwrap();
-        let mut actual = Vec::new();
-        captured.surface(&mut actual).unwrap();
-        assert_eq!(expected, actual);
         let (a, a_solid, _) = capture(&mut captured, [0.0; 3]);
         let (b, b_solid, _) = capture(&mut untouched, [0.0; 3]);
         assert_eq!(a, b);
@@ -328,11 +311,8 @@ mod tests {
     }
 
     #[test]
-    fn particle_frame_solid_matches_surface_frame() {
+    fn particle_frame_solid_holds_the_obstacle_and_repeats() {
         let mut world = dam_break(9);
-        world
-            .set_surface_options(SurfaceOptions::default())
-            .unwrap();
         world
             .set_obstacle(
                 Bounds {
@@ -353,23 +333,7 @@ mod tests {
             world.step(Seconds(1.0 / 60.0)).unwrap();
         }
         let (_, solid, info) = capture(&mut world, [0.0; 3]);
-        let frame = world.capture_surface_frame().unwrap();
-        let mut reference = vec![0.0f32; SOLID_NODES];
-        let mut nodes = [0u32; 3];
-        let ok = unsafe {
-            manifold_fluids_surface_frame_solid(
-                frame.native_ptr(),
-                reference.as_mut_ptr(),
-                reference.len(),
-                nodes.as_mut_ptr(),
-            )
-        };
-        native_result(ok, "reading the surface frame solid").unwrap();
-        assert_eq!(nodes, info.solid_nodes);
-        assert_eq!(
-            solid.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-            reference.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
-        );
+        assert_eq!(info.solid_nodes, [CELLS + 1; 3]);
         assert!(
             solid.iter().any(|v| *v < 0.0),
             "the obstacle must be inside the lattice"

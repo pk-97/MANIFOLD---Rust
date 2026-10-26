@@ -302,6 +302,7 @@ pub struct GpuVertexLayout {
 // ─── Resource Bindings ───────────────────────────────────────────────
 
 /// Resource binding for dispatch/draw calls.
+#[derive(Clone, Copy)]
 pub enum GpuBinding<'a> {
     /// Buffer at WGSL @binding(N). Backend maps to Metal buffer index.
     Buffer {

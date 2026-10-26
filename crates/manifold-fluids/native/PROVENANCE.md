@@ -12,7 +12,7 @@ Except for the local changes documented below, these files are copied byte-for-b
 - `mixbox/mixbox_stub.cpp`
 - `versionutils.cpp.in` (instantiated by `build.rs` into `OUT_DIR`)
 
-`bridge.cpp`, `bridge.h`, `flip_engine/surfaceframe.*`, `coupling_probe.*`, `coupling_operator_probe.*`,
+`bridge.cpp`, `bridge.h`, `coupling_probe.*`, `coupling_operator_probe.*`,
 `coupling_boundary_probe.*`, `coupling_viscosity_probe.*` and
 `coupling_viscosity_operator_probe.*` are
 MANIFOLD-owned code. The bridge compiles with
@@ -37,23 +37,15 @@ Local changes:
   one interval removes, as export does (BUG-i6niq (live water loses particles
   under load)). CFL substep selection and the final-substep stretch still use
   the whole frame.
-- `surfaceframe.{h,cpp}` and the capture method in `fluidsimulation.{h,cpp}` add
-  explicit, independently owned reconstruction inputs for one completed frame.
-  Capture reuses the production obstacle-offset/meshing-volume preparation;
-  reconstruction reuses `ParticleMesher` and `TriangleMesh` smoothing without
-  retaining a solver. Capture is opt-in and adds no copies to normal playback.
-  Boundary triangle removal and contact-normal inversion (not exposed by the
-  MANIFOLD bridge) are explicitly rejected. This is an in-memory boundary, not
-  a persistent particle-cache format or a solver restart checkpoint.
 - `captureParticleFrameSolid` and `getMarkerParticleRadius` in
   `fluidsimulation.{h,cpp}` back the particle-frame capture
   (`manifold_fluids_world_capture_particle_frame`). The solid lattice reuses the
-  same obstacle-offset and domain-boundary preparation as `captureSurfaceFrame`
+  same obstacle-offset and domain-boundary preparation as the production surface preparation
   into a caller-owned scratch `MeshLevelSet`, copied in place once its lattice
   matches, so repeated captures do not allocate. A meshing volume is rejected.
   Records come from the upstream `DataRange` getters through a fixed bridge
   scratch. The solver is never advanced and no simulation state changes.
-- The captured-frame mesher can optionally shrink single isolated particles.
+- The particle mesher can optionally shrink single isolated particles.
   `particlemesher.{h,cpp}` carries optional radii through chunk/block sorting;
   its default path retains the global radius. `SpatialPointGrid::hasPointWithinSphere`
   is an allocation-free neighbour predicate that exits on the first hit. Classification preserves overlapping

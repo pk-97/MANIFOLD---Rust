@@ -161,8 +161,6 @@ pub mod well_known {
         // generated kernels keep them ─
         POSITION_RADIUS = "position_radius";
         CENTER_RADIUS = "center_radius";
-        SHAPE_DIAG = "shape_diag";
-        SHAPE_OFF = "shape_off";
         START = "start";
         COUNT = "count";
         VOLUME_RATIO    = "volume_ratio";

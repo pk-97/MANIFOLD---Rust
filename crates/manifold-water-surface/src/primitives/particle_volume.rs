@@ -1,6 +1,6 @@
 //! Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
 //! `node.particle_volume` — the liquid level set: one value per lattice node,
-//! the distance to the nearest anisotropic kernel in the node's bins
+//! the distance to the nearest spherical kernel in the node's bins
 //! (GPU_FLUID_SURFACE_DESIGN.md D8, D15, D18, P6e). A per-element gather on
 //! the codegen path. The optional interior field follows Ferstl et al.,
 //! "Narrow Band FLIP for Liquid Simulations", CGF 35(2), 2016, Eq. 4.
@@ -9,14 +9,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::primitives::liquid_bricks;
-use manifold_water_liquid::float_param;
-use manifold_water_liquid::primitives::sort_particles_into_cells::{bin_param, read_searched_bins};
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
+use manifold_water_liquid::primitives::liquid_bricks;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{bin_param, read_searched_bins};
 
 /// Codegen uniform layout: params in PARAMS order, then derived `brick_pass`
 /// and `interior_len`, then `dispatch_count` and 16-byte alignment padding.
@@ -63,7 +63,7 @@ pub(crate) fn volume_scale(params: &ParamValues) -> u32 {
 manifold_node_engine::primitive! {
     name: ParticleVolume,
     type_id: "node.particle_volume",
-    purpose: "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and initialized to three times the largest kernel radius; each kernel visits the inclusive FLIP grid support box from floor((centre - 1.5r)/spacing) through floor((centre + 1.5r)/spacing)+1; positive band_extra expands support and the exterior distance by that distance plus one lattice-cell diagonal so an offset crossing retains its interpolation support. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid; borders follow the same solid-SDF rule as the production FLIP mesher (the preview-only +0.001 closure is not applied). The largest kernel radius and support come from node.blob_bounds on the same blobs.",
+    purpose: "The liquid's level set on a lattice: at each node, the distance to the nearest kernel sphere, |x − c| − r, negative inside and initialized to three times the largest kernel radius; each kernel visits the inclusive FLIP grid support box from floor((centre - 1.5r)/spacing) through floor((centre + 1.5r)/spacing)+1; positive band_extra expands support and the exterior distance by that distance plus one lattice-cell diagonal so an offset crossing retains its interpolation support. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid; borders follow the same solid-SDF rule as the production FLIP mesher (the preview-only +0.001 closure is not applied). The largest kernel radius and support come from node.blob_bounds on the same blobs.",
     inputs: {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
@@ -107,7 +107,7 @@ manifold_node_engine::primitive! {
         float_param!("band_extra", "Extra Distance Band", 0.0, 0.0, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blobs from node.shape_particle_blobs and bounds from a node.blob_bounds fed the same blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). Optionally wire the narrow-band solver's cell-centred interior distance, with exactly one value per authored physical cell: the solid lattice has three padding nodes on every side, so the extent is (solid_nodes - 7)^3; an unwired input preserves the dense particle path. resolution_scale sets mesh detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. The blobs' particle_scale sets how far the surface sits from the particles. volume_nodes_x/y/z carry the refined lattice to node.count_surface_triangles and node.volume_surface_mesh.",
+    composition_notes: "Wire blobs from node.shape_particle_blobs and bounds from a node.blob_bounds fed the same blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). Optionally wire the narrow-band solver's cell-centred interior distance, with exactly one value per authored physical cell: the solid lattice has three padding nodes on every side, so the extent is (solid_nodes - 7)^3; an unwired input preserves the dense particle path. resolution_scale sets the field detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. The blobs' particle_scale sets how far the surface sits from the particles. volume_nodes_x/y/z carry the refined lattice to node.redistance_lattice and the field smoothing.",
     examples: [],
     picker: { label: "Particle Volume", category: Atom },
     summary: "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
@@ -230,7 +230,10 @@ impl Primitive for ParticleVolume {
         let interior_wired = interior_input;
         let (interior, interior_len) = if let Some(buffer) = interior_wired {
             let actual = buffer.size / 4;
-            if !buffer.size.is_multiple_of(4) || manifold_water_liquid::lattice::interior_cells(nodes.map(|n| n as u32), actual).is_none() {
+            if !buffer.size.is_multiple_of(4)
+                || manifold_water_liquid::lattice::interior_cells(nodes.map(|n| n as u32), actual)
+                    .is_none()
+            {
                 ctx.error(format!(
                     "Particle Volume: interior has {actual} f32 values; expected the exact physical cell count for native (nodes minus 4) or solver (nodes minus 7) padding at {}×{}×{} nodes.",
                     nodes[0], nodes[1], nodes[2]
@@ -332,11 +335,6 @@ impl Primitive for ParticleVolume {
 mod cpu_tests {
     use manifold_water_liquid::testkit::particle_volume::*;
 
-
-
-
-
-
     #[test]
     fn deep_pool_interior_reaches_below_particle_band() {
         let interior = vec![-3.0; 2 * 2 * 2];
@@ -351,7 +349,13 @@ mod cpu_tests {
         let field: Vec<f32> = (0..8u32.pow(3)).map(|i| (i % 8) as f32 + 0.5).collect();
         for i in 0..8 {
             let p = [layout.min[0] + (i as f32 + 0.5) * 0.25, 1.0, 0.0];
-            let value = trilinear_interior(&field, p, mesh.min(), mesh.bounds().scale, mesh.nodes().map(|n| n as usize));
+            let value = trilinear_interior(
+                &field,
+                p,
+                mesh.min(),
+                mesh.bounds().scale,
+                mesh.nodes().map(|n| n as usize),
+            );
             assert_eq!(value, i as f32 + 0.5);
         }
     }
@@ -426,15 +430,11 @@ mod cpu_tests {
             wgsl.contains("@group(0) @binding(7) var<storage, read_write> buf_levelset"),
             "{wgsl}"
         );
-        let clear_guard = wgsl
-            .find("if brick_pass != 2u")
-            .expect("brick clear guard");
+        let clear_guard = wgsl.find("if brick_pass != 2u").expect("brick clear guard");
         let interior_union = wgsl
             .find("phi = min(phi, pv_interior")
             .expect("interior union");
-        let solid_constraint = wgsl
-            .find("if pv_solid(")
-            .expect("solid constraint");
+        let solid_constraint = wgsl.find("if pv_solid(").expect("solid constraint");
         assert!(clear_guard < interior_union && clear_guard < solid_constraint);
         assert!(!wgsl.contains("brick_pass == 2u { return band; }"));
         assert_eq!(std::mem::size_of::<super::VolumeUniforms>(), 80);

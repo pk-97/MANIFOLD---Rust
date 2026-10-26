@@ -14,6 +14,8 @@ pub(super) struct SelectionMask {
     /// The target, at the scene's native render size; kept while slots are set.
     texture: Option<manifold_gpu::GpuTexture>,
     pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// The cover draw that puts selected field water into the mask.
+    field_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// This frame drew the mask; cleared at the start of every evaluate.
     pub(super) drawn: bool,
     /// Dirty-cache key for the last drawn mask.
@@ -44,13 +46,15 @@ impl SelectionMask {
 
 impl RenderScene {
     /// Draw every draw whose render slot is selected into the mask, sized
-    /// to the native render. Runs after the main draw; one pass per selected draw,
-    /// the first clearing, so a group's parts union.
+    /// to the native render, and every selected water field as a cover draw.
+    /// Runs after the main draw; one pass per selected draw, the first
+    /// clearing, so a group's parts union.
     pub(super) fn selection_mask_pass<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         pre: &FramePrelude<'ctx>,
         draws: &[ObjectDraw<'ctx>],
+        fields: &[FieldObject<'ctx>],
     ) {
         if self.selection.slots.is_empty() {
             return;
@@ -92,6 +96,25 @@ impl RenderScene {
                 )
             })
             .clone();
+        let selected_fields: Vec<&FieldObject<'ctx>> = fields
+            .iter()
+            .filter(|f| self.selection.slots.contains(&f.slot))
+            .collect();
+        let field_pipeline = (!selected_fields.is_empty()).then(|| {
+            self.selection
+                .field_pipeline
+                .get_or_insert_with(|| {
+                    gpu.device.create_render_pipeline(
+                        water_cover::COVER_WGSL,
+                        "vs_cover",
+                        "fs_cover_mask",
+                        manifold_gpu::GpuTextureFormat::R8Unorm,
+                        None,
+                        "node.render_scene selection mask water",
+                    )
+                })
+                .clone()
+        });
         let mask = self.selection.texture.as_ref().expect("ensured above");
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         let dummy = self.dummy_texture.as_ref().expect("ensured");
@@ -123,19 +146,31 @@ impl RenderScene {
             hasher.write_u8(u8::from(d.live_args.is_some()));
         }
         let selection_key = hasher.finish();
-        let cacheable = selected_draws.iter().all(|d| {
-            d.geometry_content_known
-                && d.appearance_content_known
-                && d.live_args.is_none()
-                && (d.base_color_map.is_none() || d.rt_texture_content[0].is_some())
-        });
+        // The sim rewrites a field every frame, so a mask with water is never cached.
+        let cacheable = selected_fields.is_empty()
+            && selected_draws.iter().all(|d| {
+                d.geometry_content_known
+                    && d.appearance_content_known
+                    && d.live_args.is_none()
+                    && (d.base_color_map.is_none() || d.rt_texture_content[0].is_some())
+            });
         if cacheable && self.selection.cache_key == Some(selection_key) {
             self.selection.drawn = true;
             return;
         }
         self.selection.cache_key = cacheable.then_some(selection_key);
 
-        if selected_draws.is_empty() {
+        // A field whose uniforms fail is skipped: Pass B already failed the
+        // frame on the same matrices.
+        let covers: Vec<(&FieldObject<'ctx>, water_march::MarchUniforms)> = selected_fields
+            .iter()
+            .filter_map(|field| {
+                water_cover::cover_uniforms(view_proj, width, height, field)
+                    .ok()
+                    .map(|uniforms| (*field, uniforms))
+            })
+            .collect();
+        if selected_draws.is_empty() && covers.is_empty() {
             // Nothing selected drew this frame: an empty mask, not last frame's.
             gpu.native_enc.clear_texture(mask, 0.0, 0.0, 0.0, 0.0);
         } else {
@@ -168,7 +203,8 @@ impl RenderScene {
                     },
                     GpuBinding::Sampler {
                         binding: 5,
-                        sampler: &self.material_samplers[&Self::sampler_cache_key(d.sampler_descs[0])],
+                        sampler: &self.material_samplers
+                            [&Self::sampler_cache_key(d.sampler_descs[0])],
                     },
                 ];
                 gpu.native_enc.draw_instanced(
@@ -180,6 +216,22 @@ impl RenderScene {
                     "node.render_scene selection mask",
                 );
                 load = manifold_gpu::GpuLoadAction::Load;
+            }
+            if let Some(field_pipeline) = &field_pipeline {
+                for (field, uniforms) in &covers {
+                    gpu.native_enc.draw_instanced(
+                        field_pipeline,
+                        mask,
+                        &water_cover::cover_bindings(uniforms, field),
+                        manifold_gpu::DrawCount::Direct {
+                            vertices: 3,
+                            instances: 1,
+                        },
+                        load,
+                        "node.render_scene selection mask water",
+                    );
+                    load = manifold_gpu::GpuLoadAction::Load;
+                }
             }
         }
         self.selection.drawn = true;

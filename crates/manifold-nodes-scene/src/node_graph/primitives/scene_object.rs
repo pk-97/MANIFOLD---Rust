@@ -27,11 +27,12 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::mesh::{InstanceTransform, MeshVertex, Vec4Vertex};
+use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex, Vec4Vertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::scene_object::{InstanceSpace, SceneObject};
+use manifold_node_engine::scene::scene_object::{FieldSurface, InstanceSpace, SceneObject};
 
 manifold_node_engine::primitive! {
     name: SceneObjectNode,
@@ -42,6 +43,19 @@ manifold_node_engine::primitive! {
         indices: Array(u32) optional,
         weights: Array(f32) optional,
         topology: Array(Vec4Vertex) optional,
+        field: Array(f32) optional,
+        field_velocity: Array(f32) optional,
+        field_bricks: Array(u32) optional,
+        field_center_x: ScalarF32 optional,
+        field_center_y: ScalarF32 optional,
+        field_center_z: ScalarF32 optional,
+        field_size_x: ScalarF32 optional,
+        field_size_y: ScalarF32 optional,
+        field_size_z: ScalarF32 optional,
+        field_nodes_x: ScalarF32 optional,
+        field_nodes_y: ScalarF32 optional,
+        field_nodes_z: ScalarF32 optional,
+        field_ripple_detail: ScalarF32 optional,
         transform: Transform optional,
         parent_transform: Transform optional,
         parent_visible: ScalarF32 optional,
@@ -142,7 +156,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel.",
+    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per lattice node, negative inside) with its lattice in `field_center_*`, `field_size_*` and `field_nodes_*`, plus optional `field_velocity` (three f32 per node) and `field_bricks` (node.lattice_bricks' list): the object then draws the field instead of a mesh. With `field` wired every lattice scalar is required; a missing one, a size at or below zero or fewer than two nodes on an axis is a node error and the object carries no field.",
     examples: [],
     picker: { label: "Scene Object", category: Driver },
     summary: "Binds one object's mesh, transform, material, maps, instances, and optional live count into a single wire. Wire it into a render_scene object slot.",
@@ -165,8 +179,14 @@ impl Primitive for SceneObjectNode {
         // under the object's own chain (Group space).
         if let Some(copy) = ctx.inputs.transform("copy_scale") {
             let [x, y, z] = copy.scale;
-            let scale = [[x, 0.0, 0.0, 0.0], [0.0, y, 0.0, 0.0], [0.0, 0.0, z, 0.0], [0.0, 0.0, 0.0, 1.0]];
-            transform.parent = manifold_node_engine::mesh::pipeline::mat4_mul(scale, transform.parent);
+            let scale = [
+                [x, 0.0, 0.0, 0.0],
+                [0.0, y, 0.0, 0.0],
+                [0.0, 0.0, z, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ];
+            transform.parent =
+                manifold_node_engine::mesh::pipeline::mat4_mul(scale, transform.parent);
         }
         let parent_transform = ctx.inputs.transform("parent_transform");
         let parent_visible = ctx.scalar_or_param("parent_visible", 1.0) > 0.5;
@@ -174,6 +194,12 @@ impl Primitive for SceneObjectNode {
         let mesh = ctx.inputs.slot_of("vertices");
         let weights = ctx.inputs.slot_of("weights");
         let topology = ctx.inputs.slot_of("topology");
+        // A hidden object reads no field, so Physics View can switch the
+        // hidden water's lattice off without a node error.
+        let field = (visible && parent_visible)
+            .then(|| ctx.inputs.slot_of("field"))
+            .flatten()
+            .and_then(|levelset| field_surface(ctx, levelset));
         let base_color_map = ctx.inputs.slot_of("base_color_map");
         let normal_map = ctx.inputs.slot_of("normal_map");
         let mr_map = ctx.inputs.slot_of("mr_map");
@@ -214,6 +240,7 @@ impl Primitive for SceneObjectNode {
             indices: ctx.inputs.slot_of("indices"),
             weights,
             topology,
+            field,
             base_color_map,
             normal_map,
             mr_map,
@@ -254,19 +281,75 @@ impl Primitive for SceneObjectNode {
     }
 }
 
+const FIELD_CENTER: [&str; 3] = ["field_center_x", "field_center_y", "field_center_z"];
+const FIELD_SIZE: [&str; 3] = ["field_size_x", "field_size_y", "field_size_z"];
+const FIELD_NODES: [&str; 3] = ["field_nodes_x", "field_nodes_y", "field_nodes_z"];
+
+/// The wired field and its lattice. Every lattice scalar is required with a
+/// field: a missing one, a size at or below zero or fewer than two nodes on
+/// an axis is a node error, and the object draws no field.
+fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<FieldSurface> {
+    let read = |names: [&str; 3]| -> Option<[f32; 3]> {
+        let [x, y, z] =
+            names.map(|name| ctx.inputs.scalar(name).and_then(|value| value.as_scalar()));
+        Some([x?, y?, z?])
+    };
+    let (Some(center), Some(size), Some(nodes)) =
+        (read(FIELD_CENTER), read(FIELD_SIZE), read(FIELD_NODES))
+    else {
+        ctx.error(
+            "scene_object: `field` is wired but its lattice centre, size or node count is not",
+        );
+        return None;
+    };
+    if size.iter().any(|s| s.is_nan() || *s <= 0.0) || nodes.iter().any(|n| n.is_nan() || *n < 2.0)
+    {
+        ctx.error(format!(
+            "scene_object: a field lattice needs a size above zero and at least 2 nodes per axis (size {size:?}, nodes {nodes:?})"
+        ));
+        return None;
+    }
+    // Unwired reads 1.0, the automatic strength.
+    let ripple_detail = ctx
+        .inputs
+        .scalar("field_ripple_detail")
+        .and_then(|value| value.as_scalar())
+        .unwrap_or(1.0);
+    if ripple_detail.is_nan() || ripple_detail < 0.0 {
+        ctx.error(format!(
+            "scene_object: a field's ripple detail must be zero or above (got {ripple_detail})"
+        ));
+        return None;
+    }
+    Some(FieldSurface {
+        levelset,
+        velocity: ctx.inputs.slot_of("field_velocity"),
+        bricks: ctx.inputs.slot_of("field_bricks"),
+        center,
+        size,
+        nodes: nodes.map(|n| n.round() as u32),
+        ripple_detail,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_node_engine::exec::backend::Backend;
+    use manifold_core::{Beats, Seconds};
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::ports::{ArrayType, PortType};
-    use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     #[test]
@@ -277,7 +360,10 @@ mod tests {
         let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
 
         let mut params = ParamValues::default();
-        params.insert(std::borrow::Cow::Borrowed("visible"), ParamValue::Float(1.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("visible"),
+            ParamValue::Float(1.0),
+        );
 
         let mut prim = SceneObjectNode::new();
         let inputs_bindings: &[(&'static str, Slot)] = &[];
@@ -313,11 +399,15 @@ mod tests {
 
         let object = backend.object(out_slot).expect("object should be set");
         assert!(object.visible);
-        assert_eq!(object.transform, manifold_node_engine::scene::transform::Transform::default());
+        assert_eq!(
+            object.transform,
+            manifold_node_engine::scene::transform::Transform::default()
+        );
         assert!(object.material.is_none());
         assert!(object.mesh.is_none());
         assert!(object.instances.is_none());
         assert!(object.instance_count.is_none());
+        assert!(object.field.is_none());
     }
 
     #[test]
@@ -354,7 +444,10 @@ mod tests {
         generations[topology_slot.0 as usize] = 7;
 
         let mut params = ParamValues::default();
-        params.insert(std::borrow::Cow::Borrowed("visible"), ParamValue::Float(0.0));
+        params.insert(
+            std::borrow::Cow::Borrowed("visible"),
+            ParamValue::Float(0.0),
+        );
 
         let mut prim = SceneObjectNode::new();
         let inputs_bindings: &[(&'static str, Slot)] = &[
@@ -403,6 +496,275 @@ mod tests {
         assert_eq!(object.topology, Some(topology_slot));
         assert_eq!(object.normal_map, None);
     }
+
+    /// Runs the node once with `inputs_bindings` wired and returns the object
+    /// it emitted. Node errors land in `errors`.
+    fn run_object(
+        backend: &mut MockBackend,
+        out_slot: Slot,
+        inputs_bindings: &[(&'static str, Slot)],
+        errors: &mut Vec<String>,
+    ) -> SceneObject {
+        let mut params = ParamValues::default();
+        params.insert(
+            std::borrow::Cow::Borrowed("visible"),
+            ParamValue::Float(1.0),
+        );
+        let mut prim = SceneObjectNode::new();
+        let generations = vec![0; 32];
+        let outputs_bindings: &[(&'static str, Slot)] = &[("object", out_slot)];
+        let mut scalar_scratch = Vec::new();
+        let mut camera_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
+        {
+            let inputs = NodeInputs::new(inputs_bindings, &*backend, &generations);
+            let outputs = NodeOutputs::new(
+                outputs_bindings,
+                &*backend,
+                &mut scalar_scratch,
+                &mut camera_scratch,
+                &mut light_scratch,
+                &mut material_scratch,
+                &mut transform_scratch,
+                &mut atmosphere_scratch,
+                &mut render_mode_scratch,
+                &mut object_scratch,
+            );
+            let mut ctx = EffectNodeContext::new(frame_time(), &params, inputs, outputs, None)
+                .with_errors(errors);
+            Primitive::run(&mut prim, &mut ctx);
+        }
+        for (slot, value) in object_scratch.drain(..) {
+            backend.set_object(slot, value);
+        }
+        backend.object(out_slot).expect("object should be set")
+    }
+
+    /// Acquires one `f32` scalar slot per `(port, value)` and returns the
+    /// port bindings for them.
+    fn wire_scalars(
+        backend: &mut MockBackend,
+        first_resource: u32,
+        scalars: &[(&'static str, f32)],
+    ) -> Vec<(&'static str, Slot)> {
+        scalars
+            .iter()
+            .enumerate()
+            .map(|(i, &(name, value))| {
+                let slot = backend.acquire(
+                    ResourceId(first_resource + i as u32),
+                    PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
+                    None,
+                    (0, 0),
+                );
+                backend.set_scalar(slot, ParamValue::Float(value));
+                (name, slot)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wired_field_forwards_its_slots_and_lattice() {
+        let mut backend = MockBackend::new();
+        let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
+        let levelset = backend.acquire(
+            ResourceId(1),
+            PortType::Array(ArrayType::of_known::<f32>()),
+            None,
+            (0, 0),
+        );
+        let velocity = backend.acquire(
+            ResourceId(2),
+            PortType::Array(ArrayType::of_known::<f32>()),
+            None,
+            (0, 0),
+        );
+        let bricks = backend.acquire(
+            ResourceId(3),
+            PortType::Array(ArrayType::of_known::<u32>()),
+            None,
+            (0, 0),
+        );
+        let mut bindings = vec![
+            ("field", levelset),
+            ("field_velocity", velocity),
+            ("field_bricks", bricks),
+        ];
+        bindings.extend(wire_scalars(
+            &mut backend,
+            4,
+            &[
+                ("field_center_x", 1.5),
+                ("field_center_y", -2.0),
+                ("field_center_z", 0.25),
+                ("field_size_x", 3.0),
+                ("field_size_y", 1.5),
+                ("field_size_z", 2.25),
+                ("field_nodes_x", 49.0),
+                ("field_nodes_y", 25.0),
+                ("field_nodes_z", 37.0),
+                ("field_ripple_detail", 0.4),
+            ],
+        ));
+
+        let mut errors = Vec::new();
+        let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            object.field,
+            Some(FieldSurface {
+                levelset,
+                velocity: Some(velocity),
+                bricks: Some(bricks),
+                center: [1.5, -2.0, 0.25],
+                size: [3.0, 1.5, 2.25],
+                nodes: [49, 25, 37],
+                ripple_detail: 0.4,
+            })
+        );
+        assert!(object.mesh.is_none());
+    }
+
+    #[test]
+    fn unwired_ripple_detail_reads_automatic_and_a_bad_one_is_a_node_error() {
+        let lattice = [
+            ("field_center_x", 0.0),
+            ("field_center_y", 0.0),
+            ("field_center_z", 0.0),
+            ("field_size_x", 3.0),
+            ("field_size_y", 1.5),
+            ("field_size_z", 2.25),
+            ("field_nodes_x", 49.0),
+            ("field_nodes_y", 25.0),
+            ("field_nodes_z", 37.0),
+        ];
+        for (ripple, want) in [
+            (None, Some(1.0)),
+            (Some(0.0), Some(0.0)),
+            (Some(-0.5), None),
+            (Some(f32::NAN), None),
+        ] {
+            let mut backend = MockBackend::new();
+            let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
+            let levelset = backend.acquire(
+                ResourceId(1),
+                PortType::Array(ArrayType::of_known::<f32>()),
+                None,
+                (0, 0),
+            );
+            let mut scalars = lattice.to_vec();
+            scalars.extend(ripple.map(|value| ("field_ripple_detail", value)));
+            let mut bindings = vec![("field", levelset)];
+            bindings.extend(wire_scalars(&mut backend, 2, &scalars));
+
+            let mut errors = Vec::new();
+            let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
+
+            match want {
+                Some(strength) => {
+                    assert!(errors.is_empty(), "{errors:?}");
+                    assert_eq!(object.field.map(|f| f.ripple_detail), Some(strength));
+                }
+                None => {
+                    assert!(object.field.is_none(), "ripple {ripple:?}");
+                    assert_eq!(errors.len(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn field_without_its_lattice_is_a_node_error() {
+        let mut backend = MockBackend::new();
+        let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
+        let levelset = backend.acquire(
+            ResourceId(1),
+            PortType::Array(ArrayType::of_known::<f32>()),
+            None,
+            (0, 0),
+        );
+        let mut bindings = vec![("field", levelset)];
+        bindings.extend(wire_scalars(
+            &mut backend,
+            2,
+            &[
+                ("field_center_x", 1.5),
+                ("field_center_y", -2.0),
+                ("field_center_z", 0.25),
+                ("field_size_x", 3.0),
+                ("field_size_y", 1.5),
+                ("field_size_z", 2.25),
+            ],
+        ));
+
+        let mut errors = Vec::new();
+        let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
+
+        assert!(object.field.is_none());
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn a_hidden_object_reads_no_field() {
+        let mut backend = MockBackend::new();
+        let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
+        let levelset = backend.acquire(
+            ResourceId(1),
+            PortType::Array(ArrayType::of_known::<f32>()),
+            None,
+            (0, 0),
+        );
+        let mut bindings = vec![("field", levelset)];
+        // No lattice at all: a visible object would report it.
+        bindings.extend(wire_scalars(&mut backend, 2, &[("visible", 0.0)]));
+
+        let mut errors = Vec::new();
+        let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(object.field.is_none());
+        assert!(!object.visible);
+    }
+
+    #[test]
+    fn field_lattice_with_one_node_is_a_node_error() {
+        let mut backend = MockBackend::new();
+        let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
+        let levelset = backend.acquire(
+            ResourceId(1),
+            PortType::Array(ArrayType::of_known::<f32>()),
+            None,
+            (0, 0),
+        );
+        let mut bindings = vec![("field", levelset)];
+        bindings.extend(wire_scalars(
+            &mut backend,
+            2,
+            &[
+                ("field_center_x", 1.5),
+                ("field_center_y", -2.0),
+                ("field_center_z", 0.25),
+                ("field_size_x", 3.0),
+                ("field_size_y", 1.5),
+                ("field_size_z", 2.25),
+                ("field_nodes_x", 49.0),
+                ("field_nodes_y", 1.0),
+                ("field_nodes_z", 37.0),
+            ],
+        ));
+
+        let mut errors = Vec::new();
+        let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
+
+        assert!(object.field.is_none());
+        assert_eq!(errors.len(), 1);
+    }
 }
 
 /// Real-GPU end-to-end wiring proof: `mesh_src → node.scene_object →
@@ -418,26 +780,42 @@ mod tests {
 mod gpu_tests {
     use std::sync::{Arc, Mutex};
 
-    use manifold_node_engine::exec::effect_node::EffectNode;
-    use manifold_node_engine::exec::metal_backend::MetalBackend;
-    use manifold_node_engine::exec::execution_plan::compile;
-    use manifold_node_engine::exec::effect_node::{EffectNodeContext, EffectNodeType, FrameTime};
-    use manifold_node_engine::exec::execution::Executor;
-    use manifold_node_engine::graph::Graph;
-    use manifold_node_engine::parameters::ParamDef;
-    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
+    use manifold_node_engine::exec::effect_node::EffectNode;
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, EffectNodeType, FrameTime};
+    use manifold_node_engine::exec::execution::Executor;
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::exec::metal_backend::MetalBackend;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::ParamDef;
+    use manifold_node_engine::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
+    };
 
     use super::*;
 
     fn frame_time() -> FrameTime {
-        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
     }
 
     fn mk_vertex(pos: [f32; 3]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0, 1.0, 0.0], _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0], tangent: [0.0; 4], color: [1.0; 4] }
-}
+        MeshVertex {
+            position: pos,
+            _pad0: 0.0,
+            normal: [0.0, 1.0, 0.0],
+            _pad1: 0.0,
+            uv: [0.0, 0.0],
+            _pad2: [0.0, 0.0],
+            tangent: [0.0; 4],
+            color: [1.0; 4],
+        }
+    }
 
     /// Test-only mesh producer: its `out` resource is pre-bound directly to
     /// a real GPU buffer before the frame runs (mirroring
@@ -451,7 +829,9 @@ mod gpu_tests {
     }
 
     impl EffectNode for MeshSourceNode {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -490,7 +870,9 @@ mod gpu_tests {
     }
 
     impl EffectNode for ObjectConsumerNode {
-        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+        } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -510,7 +892,9 @@ mod gpu_tests {
             &[]
         }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-            let Some(object) = ctx.inputs.object("in") else { return };
+            let Some(object) = ctx.inputs.object("in") else {
+                return;
+            };
             *self.seen.lock().unwrap() = Some(object);
             *self.live.lock().unwrap() = object
                 .mesh
@@ -534,7 +918,10 @@ mod gpu_tests {
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();
-        let mesh_src = g.add_node(Box::new(MeshSourceNode { type_id: EffectNodeType::new("mesh_src"), live: None }));
+        let mesh_src = g.add_node(Box::new(MeshSourceNode {
+            type_id: EffectNodeType::new("mesh_src"),
+            live: None,
+        }));
         let scene_object = g.add_node(Box::new(SceneObjectNode::new()));
         let seen = Arc::new(Mutex::new(None));
         let resolved_mesh = Arc::new(Mutex::new(None));
@@ -544,8 +931,10 @@ mod gpu_tests {
             resolved_mesh: resolved_mesh.clone(),
             live: Arc::new(Mutex::new(None)),
         }));
-        g.connect((mesh_src, "out"), (scene_object, "vertices")).unwrap();
-        g.connect((scene_object, "object"), (consumer, "in")).unwrap();
+        g.connect((mesh_src, "out"), (scene_object, "vertices"))
+            .unwrap();
+        g.connect((scene_object, "object"), (consumer, "in"))
+            .unwrap();
 
         let plan = compile(&g).unwrap();
         let r_mesh_out = plan
@@ -572,16 +961,29 @@ mod gpu_tests {
         let mut exec = Executor::new(Box::new(backend));
         exec.execute_frame(&mut g, &plan, frame_time());
 
-        let object = seen.lock().unwrap().expect("consumer should have seen a SceneObject");
-        assert!(object.mesh.is_some(), "SceneObject must carry the forwarded mesh Slot");
+        let object = seen
+            .lock()
+            .unwrap()
+            .expect("consumer should have seen a SceneObject");
+        assert!(
+            object.mesh.is_some(),
+            "SceneObject must carry the forwarded mesh Slot"
+        );
         assert!(object.visible, "visible defaults to on (param default 1.0)");
 
-        let resolved = resolved_mesh.lock().unwrap().clone().expect("mesh must resolve through the forwarded slot");
+        let resolved = resolved_mesh
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("mesh must resolve through the forwarded slot");
         let expected_positions: Vec<[f32; 3]> = expected.iter().map(|v| v.position).collect();
-        assert_eq!(resolved, expected_positions, "mesh vertices must round-trip through the Object wire's forwarded Slot");
+        assert_eq!(
+            resolved, expected_positions,
+            "mesh vertices must round-trip through the Object wire's forwarded Slot"
+        );
     }
 
-    /// GPU_FLUID_SURFACE_DESIGN.md P6b: a producer's published live extent
+    /// A producer's published live extent
     /// reaches the object's consumer through the forwarded mesh slot, and a
     /// producer that publishes none leaves the whole array live.
     #[test]
@@ -595,7 +997,10 @@ mod gpu_tests {
                 per_item: 3,
                 bound: 6,
             });
-            let mesh_src = g.add_node(Box::new(MeshSourceNode { type_id: EffectNodeType::new("mesh_src"), live }));
+            let mesh_src = g.add_node(Box::new(MeshSourceNode {
+                type_id: EffectNodeType::new("mesh_src"),
+                live,
+            }));
             let scene_object = g.add_node(Box::new(SceneObjectNode::new()));
             let seen_live = Arc::new(Mutex::new(None));
             let consumer = g.add_node(Box::new(ObjectConsumerNode {
@@ -604,8 +1009,10 @@ mod gpu_tests {
                 resolved_mesh: Arc::new(Mutex::new(None)),
                 live: seen_live.clone(),
             }));
-            g.connect((mesh_src, "out"), (scene_object, "vertices")).unwrap();
-            g.connect((scene_object, "object"), (consumer, "in")).unwrap();
+            g.connect((mesh_src, "out"), (scene_object, "vertices"))
+                .unwrap();
+            g.connect((scene_object, "object"), (consumer, "in"))
+                .unwrap();
             let plan = compile(&g).unwrap();
             let r_mesh_out = plan
                 .steps()
@@ -614,8 +1021,12 @@ mod gpu_tests {
                 .and_then(|s| s.outputs.iter().find(|(n, _)| *n == "out"))
                 .map(|&(_, r)| r)
                 .expect("mesh_src's out resource is bound");
-            let mut backend = MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
-            backend.pre_bind_array(r_mesh_out, device.create_buffer_shared(9 * std::mem::size_of::<MeshVertex>() as u64));
+            let mut backend =
+                MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
+            backend.pre_bind_array(
+                r_mesh_out,
+                device.create_buffer_shared(9 * std::mem::size_of::<MeshVertex>() as u64),
+            );
             let mut exec = Executor::new(Box::new(backend));
             exec.execute_frame(&mut g, &plan, frame_time());
             let expected = publish.then_some((8, 3, 6));

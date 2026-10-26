@@ -5,7 +5,6 @@ fn impact_world(seed: u64) -> FluidWorld {
         Config {
             cells: [16; 3],
             cell_size: 0.25,
-            surface_subdivisions: 1,
             apic: false,
         },
         seed,
@@ -53,7 +52,7 @@ fn impact_world(seed: u64) -> FluidWorld {
 }
 
 #[test]
-fn seeded_native_mesh_and_whitewater_replay_survives_interleaved_worlds() {
+fn seeded_native_whitewater_replay_survives_interleaved_worlds() {
     const SEED: u64 = 0x3141_5926_5358_9793;
     const TICKS: usize = 36;
     let mut baseline = impact_world(SEED);
@@ -64,9 +63,6 @@ fn seeded_native_mesh_and_whitewater_replay_survives_interleaved_worlds() {
     baseline.whitewater(&mut expected).unwrap();
     assert!(!expected.is_empty(), "impact fixture must emit whitewater");
     assert!(expected.len() <= 256);
-    let mut expected_surface = Vec::new();
-    baseline.surface(&mut expected_surface).unwrap();
-    assert!(!expected_surface.is_empty());
 
     let mut unrelated = impact_world(SEED ^ (1 << 40));
     let mut replay = impact_world(SEED);
@@ -79,13 +75,4 @@ fn seeded_native_mesh_and_whitewater_replay_survives_interleaved_worlds() {
     assert_eq!(actual, expected, "another world must not advance this RNG");
     unrelated.whitewater(&mut actual).unwrap();
     assert_ne!(actual, expected, "upper seed bits must affect emission");
-
-    let mut actual_surface = Vec::new();
-    replay.surface(&mut actual_surface).unwrap();
-    assert_eq!(actual_surface.len(), expected_surface.len());
-    for (actual, expected) in actual_surface.iter().zip(&expected_surface) {
-        for (a, b) in actual.position.into_iter().zip(expected.position) {
-            assert!((a - b).abs() < 1e-5, "surface replay: {a} != {b}");
-        }
-    }
 }

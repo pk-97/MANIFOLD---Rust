@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Bounds, Config, SurfaceVertex, TimeStepOptions};
+use crate::{Bounds, Config, TimeStepOptions};
 use manifold_physics::UniformField;
 
 const DT: Seconds = Seconds(1.0 / 60.0);
@@ -17,7 +17,6 @@ fn scene_in(
     let mut world = FluidWorld::new(Config {
         cells,
         cell_size: 0.15,
-        surface_subdivisions: 0,
         apic: false,
     })
     .unwrap();
@@ -64,18 +63,6 @@ fn assert_same_motion(a: &mut FluidWorld, b: &mut FluidWorld) {
     }
 }
 
-fn bounds(surface: &[SurfaceVertex]) -> ([f32; 3], [f32; 3]) {
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in surface {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(vertex.position[axis]);
-            max[axis] = max[axis].max(vertex.position[axis]);
-        }
-    }
-    (min, max)
-}
-
 #[test]
 fn owner_frame_matches_native_step_and_shared_field_preparation() {
     let mut regular = scene(3, 12, [0.2, -0.1, 0.05]);
@@ -86,7 +73,7 @@ fn owner_frame_matches_native_step_and_shared_field_preparation() {
         acceleration: 0.8,
         delta_velocity: 0.2,
     }];
-    for frame_index in 0..3 {
+    for _ in 0..3 {
         let expected = regular.step_with_fields(DT, &inputs).unwrap();
         let mut frame = staged.begin_frame_with_fields(DT, &inputs).unwrap();
         let mut elapsed = 0.0;
@@ -102,24 +89,7 @@ fn owner_frame_matches_native_step_and_shared_field_preparation() {
         assert_eq!(actual.substeps, substeps);
         assert_eq!(actual.substeps, expected.substeps);
         assert_eq!(actual.particles, expected.particles);
-        assert_eq!(actual.triangles, expected.triangles);
         assert_same_motion(&mut regular, &mut staged);
-        let (mut a, mut b) = (Vec::new(), Vec::new());
-        regular.surface(&mut a).unwrap();
-        staged.surface(&mut b).unwrap();
-        assert!(!a.is_empty() && !b.is_empty());
-        let (amin, amax) = bounds(&a);
-        let (bmin, bmax) = bounds(&b);
-        for (actual, expected) in amin
-            .into_iter()
-            .chain(amax)
-            .zip(bmin.into_iter().chain(bmax))
-        {
-            assert!(
-                (actual - expected).abs() < 2e-6,
-                "frame={frame_index} bounds {actual} vs {expected}; regular={amin:?}/{amax:?}, staged={bmin:?}/{bmax:?}"
-            );
-        }
     }
 }
 
@@ -155,9 +125,6 @@ fn owner_frame_rejects_invalid_steps_and_hides_unfinished_snapshots() {
     assert!(frame.advance(Seconds(0.0)).is_err());
     assert!(frame.advance(Seconds(f64::INFINITY)).is_err());
     assert_eq!(frame.next_substep().unwrap(), Some(offered));
-    let (mut surface, mut len) = (std::ptr::null(), 0);
-    let status = unsafe { crate::manifold_fluids_world_surface(native, &mut surface, &mut len) };
-    assert!(native_result(status, "reading unfinished surface").is_err());
     let mut stats = NativeFrameStats::default();
     let status = unsafe { manifold_fluids_world_finish_frame(native, &mut stats) };
     assert!(native_result(status, "finishing prematurely").is_err());
@@ -178,7 +145,6 @@ fn owner_frame_abandonment_requires_rebuild() {
     }
     assert!(world.step(DT).is_err());
     assert!(world.begin_frame(DT).is_err());
-    assert!(world.surface(&mut Vec::new()).is_err());
     assert!(world.whitewater(&mut Vec::new()).is_err());
     let mut rebuilt = scene(1, 8, [0.0; 3]);
     rebuilt.step(DT).unwrap();
@@ -199,7 +165,7 @@ fn owner_frame_exhaustion_does_not_force_a_step_beyond_the_stability_bound() {
         "exhaustion must not consume the remainder"
     );
     drop(frame);
-    assert!(world.surface(&mut Vec::new()).is_err());
+    assert!(world.whitewater(&mut Vec::new()).is_err());
 }
 
 #[test]
@@ -338,7 +304,7 @@ fn owner_frame_does_not_drop_a_small_shared_remainder() {
 }
 
 #[test]
-fn owner_frame_surface_matches_completed_particle_motion() {
+fn owner_frame_moves_particles_along_the_launch() {
     let mut world = scene(4, 16, [6.0, 0.0, 0.0]);
     let mut frame = world.begin_frame(Seconds(1.0 / 30.0)).unwrap();
     while let Some(dt) = frame.next_substep().unwrap() {
@@ -347,15 +313,6 @@ fn owner_frame_surface_matches_completed_particle_motion() {
     let stats = frame.finish().unwrap();
     assert!(stats.substeps >= 4);
     let (particle_center, _) = motion(&mut world);
-    let mut surface = Vec::new();
-    world.surface(&mut surface).unwrap();
-    assert!(!surface.is_empty());
-    let (min, max) = bounds(&surface);
-    let surface_center = (min[0] + max[0]) * 0.5;
-    println!(
-        "particle_x={} surface_x={surface_center}",
-        particle_center[0]
-    );
     // The native emitter samples this cube on a lattice, so its initial mean
     // is not exactly the authored centre. Translation along X must nevertheless
     // separate the X and Y means of the initially symmetric liquid.
@@ -363,7 +320,4 @@ fn owner_frame_surface_matches_completed_particle_motion() {
         particle_center[0] - particle_center[1] > 0.08,
         "liquid must have moved after emission: {particle_center:?}"
     );
-    // Mesh smoothing/particle sampling can move its bounds slightly. A 0.3-cell
-    // tolerance rejects the observed first-substep mismatch of 0.0901 m.
-    assert!((surface_center - particle_center[0]).abs() < 0.045);
 }

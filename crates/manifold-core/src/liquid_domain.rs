@@ -116,10 +116,11 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
 
 /// The liquid domain an object's surface is built from. Water is recognised
 /// by its particle producer, not by the port that feeds the object: the walk
-/// starts at the object's `vertices` producer, follows every wired input
-/// upstream and stops at each liquid domain it meets. A CPU surface
-/// (`fluid_surface.vertices`) and a GPU surface (particles → sort → blobs →
-/// volume → marching cubes) both reach their domain.
+/// starts at the object's `field` producer (a level set the renderer marches),
+/// or its `vertices` producer when no field is wired, follows every wired
+/// input upstream and stops at each liquid domain it meets. A field surface
+/// (particles → sort → blobs → volume → smoothing) and a mesh drawn from the
+/// particles both reach their domain.
 pub fn liquid_domain_of(
     index: &FlatSceneIndex,
     object: &NodeId,
@@ -128,7 +129,12 @@ pub fn liquid_domain_of(
         path,
         detail: detail.into(),
     };
-    let Some(wire) = index.input(object, "vertices")? else {
+    let port = if index.input(object, "field")?.is_some() {
+        "field"
+    } else {
+        "vertices"
+    };
+    let Some(wire) = index.input(object, port)? else {
         return Ok(None);
     };
     let mut pending = vec![wire.from_node];
@@ -137,14 +143,14 @@ pub fn liquid_domain_of(
     while let Some(id) = pending.pop() {
         let Some(node) = index.flat.nodes.iter().find(|node| node.id == id) else {
             return Err(unsupported(
-                format!("{object:?}.vertices"),
+                format!("{object:?}.{port}"),
                 "surface chain names a missing producer",
             ));
         };
         if is_liquid_domain(&node.type_id) {
             let reference = index.by_id.get(&id).ok_or_else(|| {
                 unsupported(
-                    format!("{object:?}.vertices"),
+                    format!("{object:?}.{port}"),
                     "liquid domain has no stable scene reference",
                 )
             })?;

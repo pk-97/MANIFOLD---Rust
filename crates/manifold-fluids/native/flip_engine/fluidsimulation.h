@@ -60,7 +60,6 @@ class MACVelocityField;
 class FluidMaterialGrid;
 class RigidFluidCoupling;
 struct DiffuseParticle;
-struct FluidSurfaceFrame;
 enum class LimitBehaviour : char;
 
 struct FluidSimulationMeshStats {
@@ -299,10 +298,7 @@ public:
         at zero.
     */
     int getCurrentFrame();
-    // Geometry-only copy of an accepted frame; never advances the solver.
-    void captureSurfaceFrame(FluidSurfaceFrame &frame);
-    // MANIFOLD: the prepared solid distances captureSurfaceFrame meshes
-    // against, written into caller scratch. Allocation-free once `solid`
+    // MANIFOLD: the prepared solid distances, written into caller scratch. Allocation-free once `solid`
     // has this world's lattice. Never advances the solver.
     void captureParticleFrameSolid(MeshLevelSet &solid);
     // MANIFOLD: physical marker radius in simulation units, before the

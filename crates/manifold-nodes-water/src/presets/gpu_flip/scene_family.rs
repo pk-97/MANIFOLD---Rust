@@ -6,7 +6,7 @@
 //!
 //! GPU FLIP is the Dam Break family. MPM is main's Matter solver (the "Live
 //! Matter" group of its Matter scenes, kept as `assets/matter_solver.json`)
-//! with the same display: the surface from the push-out particles, the water
+//! with the same display: the surface's field from the push-out particles, the water
 //! object and Physics View's dots. MPM has no whitewater yet: that waits on a
 //! whitewater stage that reads any solver.
 //! Particles draws the push-out particles as small spheres in place of the
@@ -16,12 +16,12 @@ use std::sync::{Arc, OnceLock};
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_doc::{WaterDraw, WaterSolver};
-use manifold_core::scene_schema::{WaterFamily, WaterTemplate};
+use manifold_core::scene_schema::{PHYSICS_VIEW_SWITCHES, WaterFamily, WaterTemplate};
 use serde_json::json;
 
 use super::{
-    Builder, DOTS_OUTPUT, FAMILY_OUTPUTS, LIQUID_BODY_OUTPUT, PHYSICS_VIEW_SWITCHES, WaterScene,
-    display_dots, display_head, feed_intervals, float, surface,
+    Builder, DOTS_OUTPUT, FAMILY_OUTPUTS, LIQUID_BODY_OUTPUT, WaterScene, display_dots,
+    display_head, feed_intervals, float, surface,
 };
 
 /// The Platonic shape a drawn particle is, scaled by the particle's radius.
@@ -37,8 +37,12 @@ pub(super) fn particles_draw(b: &mut Builder) {
         "dots_blend",
         "dots_copies",
         "dots_object",
+        "water_ripple_detail",
     ]);
     b.remove(&PHYSICS_VIEW_SWITCHES);
+    let water = b.id("water_object") as u32;
+    b.wires
+        .retain(|wire| wire.to_node != water || !wire.to_port.starts_with("field_"));
     let copies = b.node(
         "liquid_particle_copies",
         "node.particles_to_copies",

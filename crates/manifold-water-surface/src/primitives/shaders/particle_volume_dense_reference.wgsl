@@ -37,7 +37,7 @@ fn body(
     band_extra: f32,
 ) -> f32 {
     var radius = 0.0;
-    for (var k = 0u; k < arrayLength(&buf_blobs); k += 1u) { radius = max(radius, buf_blobs[k].center_radius.w); }
+    for (var k = 0u; k < arrayLength(&buf_blobs); k += 1u) { radius = max(radius, buf_blobs[k].w); }
     let band = 3.0 * radius;
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
     let scale = u32(clamp(resolution_scale, 1, 8));
@@ -55,18 +55,13 @@ fn body(
     let h = size / vec3<f32>(nodes - vec3<u32>(1u));
     for (var k = 0u; k < arrayLength(&buf_blobs); k += 1u) {
         let blob = buf_blobs[k];
-        let r = blob.center_radius.w;
+        let r = blob.w;
         if !(r > 0.0) { continue; }
-        let first = vec3<i32>(floor((blob.center_radius.xyz - vec3<f32>(1.5 * r) - lattice_min) / h));
-        let last = vec3<i32>(floor((blob.center_radius.xyz + vec3<f32>(1.5 * r) - lattice_min) / h)) + vec3<i32>(1);
+        let first = vec3<i32>(floor((blob.xyz - vec3<f32>(1.5 * r) - lattice_min) / h));
+        let last = vec3<i32>(floor((blob.xyz + vec3<f32>(1.5 * r) - lattice_min) / h)) + vec3<i32>(1);
         if any(vec3<i32>(ijk) < first) || any(vec3<i32>(ijk) > last) { continue; }
-        let d = p - blob.center_radius.xyz;
-        let diag = blob.shape_diag;
-        let off = blob.shape_off;
-        let v = vec3<f32>(diag.x*d.x + off.x*d.y + off.y*d.z,
-            off.x*d.x + diag.y*d.y + off.z*d.z,
-            off.y*d.x + off.z*d.y + diag.z*d.z);
-        phi = min(phi, r * (length(v) - 1.0));
+        let d = p - blob.xyz;
+        phi = min(phi, length(d) - r);
     }
     let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
     if pv_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {

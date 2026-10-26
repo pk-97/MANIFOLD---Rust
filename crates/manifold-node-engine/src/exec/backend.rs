@@ -272,7 +272,7 @@ pub trait Backend: Send {
     fn set_mesh_source(&mut self, _slot: Slot, _value: MeshSource) {}
 
     /// [`LiveExtent`](crate::node_graph::live_extent::LiveExtent) published
-    /// for an array slot: its GPU-known live length (GPU_FLUID_SURFACE_DESIGN.md P6b).
+    /// for an array slot: its GPU-known live length.
     fn live_extent(&self, _slot: Slot) -> Option<crate::scene::live_extent::LiveExtent> {
         None
     }

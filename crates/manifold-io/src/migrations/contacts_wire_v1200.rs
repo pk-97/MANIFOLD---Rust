@@ -106,7 +106,6 @@ mod tests {
         include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakGpuFlip.json");
     const PARTICLES: &str =
         include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakParticles.json");
-    const PETER_LAYER: &str = include_str!("../../tests/fixtures/water_layer_graph_v1160.json");
 
     fn migrate_project(before: &Value) -> Value {
         serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap())
@@ -145,9 +144,16 @@ mod tests {
     }
 
     #[test]
-    fn peters_layer_gains_the_wire() {
+    fn a_saved_graph_gains_the_wire() {
         super::super::take_migration_notes();
-        let graph: Value = serde_json::from_str(PETER_LAYER).unwrap();
+        let graph = json!({
+            "name": "Saved",
+            "nodes": [
+                {"id": 0, "nodeId": "domain", "typeId": DOMAIN},
+                {"id": 6, "nodeId": "step", "typeId": STEP}
+            ],
+            "wires": []
+        });
         assert!(contacts_wires(&graph).is_empty());
         let before = json!({"projectVersion": "1.19.0", "timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
         let after = migrate_project(&before);

@@ -946,31 +946,6 @@ mod tests {
                 .count(),
             1
         );
-        // A saved project layer from before the cursor gets it from its domain.
-        let mut saved: EffectGraphDef = serde_json::from_str(include_str!(
-            "../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
-        ))
-        .expect("saved layer");
-        saved.scene_modifiers.clear();
-        let mut saved = manifold_core::flatten::flatten_groups(&saved).expect("flattens");
-        assert!(wire_liquid_frame_cursor(&mut saved));
-        let frame = saved
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.liquid_frame")
-            .expect("a frame")
-            .id;
-        let feed = saved
-            .wires
-            .iter()
-            .find(|w| w.to_node == frame && w.to_port == "display_cursor")
-            .expect("wired");
-        assert!(
-            saved
-                .nodes
-                .iter()
-                .any(|n| n.id == feed.from_node && n.type_id == GPU_FLIP_DOMAIN_TYPE_ID)
-        );
     }
 
     #[test]

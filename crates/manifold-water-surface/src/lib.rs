@@ -1,5 +1,5 @@
-//! The liquid surface mesher: particle frames to a lattice, bricks, a welded
-//! triangle mesh, its smoothing and normals, and the blob bounds.
+//! The liquid surface field: particle frames to a lattice, bricks, the blob
+//! bounds and the solid carry.
 //! Sits on manifold-water-liquid; never depends on a solver, the whitewater
 //! step, the rigid crate, manifold-physics or manifold-nodes-water.
 

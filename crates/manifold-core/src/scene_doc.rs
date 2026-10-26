@@ -527,7 +527,7 @@ pub enum WaterSolver {
     Mpm,
 }
 
-/// How a Water is drawn: its surface mesh, or its particles as small spheres.
+/// How a Water is drawn: its surface, or its particles as small spheres.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WaterDraw {

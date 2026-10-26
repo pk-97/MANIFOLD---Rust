@@ -22,7 +22,6 @@ fn tank(cells: u32, density_ratio: f32, center_y: f32) -> (FluidWorld, PhysicsWo
     let mut fluid = FluidWorld::new(Config {
         cells: [cells; 3],
         cell_size: 2.4 / f64::from(cells),
-        surface_subdivisions: 0,
         apic: false,
     })
     .unwrap();

@@ -11,9 +11,9 @@ use objc2_metal::{
     MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor,
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLBuffer, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineState,
-    MTLCullMode, MTLIndexType, MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
-    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
-    MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport, MTLWinding,
+    MTLCullMode, MTLIndexType, MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin,
+    MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage,
+    MTLScissorRect, MTLSize, MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport, MTLWinding,
 };
 
 use super::profiling::{self, ProfileState};
@@ -316,7 +316,11 @@ impl<'a> DepthMsaaDraw<'a> {
 fn set_cull(enc: &ProtocolObject<dyn MTLRenderCommandEncoder>, cull: bool) {
     unsafe {
         enc.setFrontFacingWinding(MTLWinding::CounterClockwise);
-        enc.setCullMode(if cull { MTLCullMode::Back } else { MTLCullMode::None });
+        enc.setCullMode(if cull {
+            MTLCullMode::Back
+        } else {
+            MTLCullMode::None
+        });
     }
 }
 
@@ -795,8 +799,8 @@ impl GpuEncoder {
                 return;
             }
         }
-        let isolate_rt_stage = label.starts_with(RT_STAGE_PREFIX)
-            && super::gpu_fault::diagnostics_enabled();
+        let isolate_rt_stage =
+            label.starts_with(RT_STAGE_PREFIX) && super::gpu_fault::diagnostics_enabled();
         if isolate_rt_stage {
             let groups = match grid {
                 DispatchGrid::Groups(groups) => format!("{groups:?}"),
@@ -3631,7 +3635,7 @@ mod tests {
         );
     }
 
-    /// GPU_FLUID_SURFACE_DESIGN.md P6b: an indirect dispatch or draw whose
+    /// An indirect dispatch or draw whose
     /// arguments a kernel wrote earlier in the SAME command buffer does exactly
     /// what the direct call with those counts does.
     #[test]
@@ -4063,7 +4067,10 @@ fn apply_bindings_draw_both_stages_cached(
                 if idx >= 64 || cache.textures[idx] != id {
                     unsafe {
                         enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
-                        enc.setFragmentTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                        enc.setFragmentTexture_atIndex(
+                            Some(&texture.raw),
+                            slot.metal_index as usize,
+                        );
                         let () = msg_send![
                             enc,
                             useResource: &*texture.raw,
@@ -4142,7 +4149,6 @@ fn apply_bindings_draw_both_stages_cached(
         }
     }
 }
-
 
 fn declare_render_resource_usage(
     enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,

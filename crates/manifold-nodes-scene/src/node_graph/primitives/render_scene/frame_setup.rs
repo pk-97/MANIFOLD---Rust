@@ -36,7 +36,7 @@ impl RenderScene {
         pre: &FramePrelude<'ctx>,
         port_index: &ahash::AHashMap<&'static str, manifold_node_engine::bindings::Slot>,
         single_object: Option<SceneObject>,
-    ) -> Option<(Vec<ObjectDraw<'ctx>>, bool)> {
+    ) -> Option<(Vec<ObjectDraw<'ctx>>, Vec<FieldObject<'ctx>>, bool)> {
         let FramePrelude {
             objects,
             cam,
@@ -68,6 +68,7 @@ impl RenderScene {
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
 
         let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(*objects);
+        let mut fields: Vec<FieldObject<'ctx>> = Vec::new();
         // The sole CPU gate for the
         // Pass A/B split below. Only `Blend` objects ever reach Pass B
         // (`is_glass` in `gltf_import.rs` always routes a nonzero
@@ -106,6 +107,14 @@ impl RenderScene {
                 // pushed into `draws`) removes it from both the main pass
                 // and the shadow-caster pass below, which filters from
                 // `draws`.
+                continue;
+            }
+            if let Some(field) = object.field {
+                match self.collect_field(ctx, pre, n, &object, field) {
+                    Some(Some(f)) => fields.push(f),
+                    Some(None) => self.report_incomplete_frame(ctx),
+                    None => return None,
+                }
                 continue;
             }
             let mesh_slot = object.mesh;
@@ -217,64 +226,21 @@ impl RenderScene {
             // gain are SUPPORTED under RT — the old rejection here is
             // removed now that `rt_dynamic_coverage_and_attributes` proves
             // the coverage/brightness behavior against the raster formula.
-            let Some(material) = object.material else {
-                ctx.gpu_encoder()
-                    .merge_frame_status(FrameRenderStatus::Failed(
-                        FrameRenderFailure::InvalidGeometry,
-                    ));
-                Self::fail_frame(
-                    ctx,
-                    Some(n as u32),
-                    format!(
-                        "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
-                    ),
-                );
-                return None;
+            let material = match Self::object_material(
+                ctx,
+                n,
+                object.material,
+                &render_mode,
+                envmap_wired.is_some(),
+                *envmap_pending,
+            ) {
+                ObjectMaterial::Ready(material) => material,
+                ObjectMaterial::Late => {
+                    self.report_incomplete_frame(ctx);
+                    continue;
+                }
+                ObjectMaterial::Failed => return None,
             };
-            // SCENE_RENDER_MODE_DESIGN.md D6/D7/D8: ONE match on the mode
-            // substitutes the object's material at the gather site —
-            // wireframe and points get the unlit line surface (D2: the
-            // wire's line_color/line_brightness serve Points too), solid
-            // the clay PBR material, Rendered passes the object's own material
-            // through untouched. Upstream of `pipeline_for`, so the
-            // ordinary per-kind pipeline cache picks the substitute's
-            // shader and no shader changes.
-            let material = match render_mode.mode {
-                manifold_node_engine::scene::render_mode::RENDER_MODE_WIREFRAME => {
-                    wireframe_material(&render_mode)
-                }
-                manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID
-                    if envmap_wired.is_some() || *envmap_pending =>
-                {
-                    clay_material(&render_mode)
-                }
-                manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID => {
-                    clay_material_without_envmap(&render_mode)
-                }
-                manifold_node_engine::scene::render_mode::RENDER_MODE_POINTS => {
-                    wireframe_material(&render_mode)
-                }
-                _ => material,
-            };
-            if material.requires_envmap() && *envmap_pending {
-                self.report_incomplete_frame(ctx);
-                continue;
-            }
-            if material.requires_envmap() && envmap_wired.is_none() {
-                ctx.gpu_encoder()
-                    .merge_frame_status(FrameRenderStatus::Failed(
-                        FrameRenderFailure::InvalidGeometry,
-                    ));
-                Self::fail_frame(
-                    ctx,
-                    Some(n as u32),
-                    format!(
-                        "{:?} material on `object_{n}` requires `envmap` input but it is unwired; renderer fell back to magenta",
-                        material.kind
-                    ),
-                );
-                return None;
-            }
             // `NodeInputs` is `Copy` (bindings.rs) — capture it by value so
             // these lookups don't hold `ctx` borrowed (`ctx.error`/
             // `ctx.outputs`/`ctx.gpu_encoder()` below still need mutably).
@@ -332,57 +298,8 @@ impl RenderScene {
                 .diffuse_transmission_color_map
                 .and_then(|s| inputs.texture_2d_slot(s));
 
-            // `object.transform` already defaults to `Transform::default()`
-            // (identity) when scene_object's own `transform` input is
-            // unwired (D2) — matches the old scattered params' defaults
-            // exactly (pos 0, rot 0, scale 1).
-            let t = object.transform;
-            let rot_euler = if t.billboard {
-                t.billboard_rot_euler(cam.pos)
-            } else {
-                t.rot_euler
-            };
-            // In Group space the part's place inside one copy is its whole
-            // chain: the groups between it and the copied group.
-            let in_copy = matches!(
-                object.instances_space,
-                manifold_node_engine::scene::scene_object::InstanceSpace::Group
-                    | manifold_node_engine::scene::scene_object::InstanceSpace::World
-            ) && object.instances.is_some();
-            let local_model = if in_copy {
-                t.world_with_rotation(rot_euler)
-            } else {
-                model_matrix(t.pos, rot_euler, t.scale)
-            };
-            let parent_model = object.parent_transform.map(|parent| {
-                let parent_rot = if parent.billboard {
-                    parent.billboard_rot_euler(cam.pos)
-                } else {
-                    parent.rot_euler
-                };
-                parent.world_with_rotation(parent_rot)
-            });
-            let (model, instance_inner) = instance_space_pair(
-                parent_model,
-                local_model,
-                object.instances_space,
-                object.instances.is_some(),
-            );
-            // `None` at this slot (no history
-            // yet — a brand-new node, or the slot right after a rebuild)
-            // seeds prev = current, giving THIS object exactly-zero
-            // first-frame velocity. Stored immediately after reading (not
-            // gated on `velocity_wired`) — see the `prev_view_proj` comment
-            // above for why continuous tracking is the correct default.
-            let [prev_model_n, prev_inner_n] = self
-                .prev_model
-                .get(n)
-                .copied()
-                .flatten()
-                .unwrap_or([model, instance_inner]);
-            if let Some(slot) = self.prev_model.get_mut(n) {
-                *slot = Some([model, instance_inner]);
-            }
+            let (model, instance_inner) = Self::object_model(&object, cam.pos);
+            let [prev_model_n, prev_inner_n] = self.advance_prev_model(n, model, instance_inner);
             let mut uniforms = build_uniforms(
                 *view_proj,
                 model,
@@ -416,8 +333,7 @@ impl RenderScene {
                 prev_jitter_ndc.1,
             ];
             if *temporal_upscale {
-                uniforms.render_mode[1] =
-                    (*width as f32 / (*native_width).max(1) as f32).log2();
+                uniforms.render_mode[1] = (*width as f32 / (*native_width).max(1) as f32).log2();
             }
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
@@ -771,7 +687,11 @@ impl RenderScene {
                 view_block += 1;
             }
         }
-        Some((draws, has_transmission))
+        // A field draws in Pass B, so it needs every resource the glass gate
+        // ensures: the opaque depth snapshot, the scene-colour snapshot and
+        // the Pass B depth states.
+        has_transmission |= !fields.is_empty();
+        Some((draws, fields, has_transmission))
     }
 
     /// Cull each camera-culled draw's copies against the camera's clip volume
@@ -855,6 +775,7 @@ impl RenderScene {
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
     ) {
         self.invalidate_temporal_history();
+        self.water_march.reset();
 
         // Keep these values aligned with the normal MSAA pass: transparent
         // color, reversed-Z depth, zero motion/denoiser feeds, and full AO

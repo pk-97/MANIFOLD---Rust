@@ -267,7 +267,6 @@ mod tests {
 
     const BUNDLED: &str =
         include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakGpuFlip.json");
-    const PETER_LAYER: &str = include_str!("../../tests/fixtures/water_layer_graph_v1160.json");
 
     fn migrate_project(before: &Value) -> Value {
         serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap())
@@ -290,9 +289,17 @@ mod tests {
             .collect()
     }
 
-    /// Peter's layer at 1.18.0: the Solve Level rung already ran on it.
+    /// A saved flip graph at 1.18.0: the Solve Level rung already ran on it.
     fn layer_at_1180() -> Value {
-        let graph: Value = serde_json::from_str(PETER_LAYER).unwrap();
+        let graph = json!({
+            "name": "Saved",
+            "nodes": [
+                {"id": 0, "nodeId": "domain", "typeId": DOMAIN},
+                {"id": 6, "nodeId": "step", "typeId": STEP}
+            ],
+            "wires": [],
+            "presetMetadata": {"bindings": [], "params": []}
+        });
         let mut root =
             json!({"timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
         super::super::solve_level_card_v1180::migrate(&mut root);
@@ -344,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn peters_layer_gains_the_card_the_binding_and_the_wire() {
+    fn a_saved_graph_gains_the_card_the_binding_and_the_wire() {
         super::super::take_migration_notes();
         let graph = layer_at_1180();
         let wires_before = graph["wires"].as_array().unwrap().len();

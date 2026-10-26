@@ -555,7 +555,6 @@ mod tests {
                         let world = crate::FluidWorld::new(crate::Config {
                             cells: [8; 3],
                             cell_size: 0.5,
-                            surface_subdivisions: 0,
                             apic: false,
                         });
                         drop(world.expect("world"));

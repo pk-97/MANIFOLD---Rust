@@ -1,6 +1,6 @@
 //! Indirect draw arguments for scene objects, one aligned eight-word block
 //! per object, written on the GPU each frame: from the mesh's live extent
-//! (GPU_FLUID_SURFACE_DESIGN.md P6b), so every raster pass draws only the
+//! (`scene::live_extent`), so every raster pass draws only the
 //! live triangles, and from the instance array, so an instanced draw stops at
 //! its last instance that is not an all-zero hole (`live_instances.wgsl`).
 //! A camera pass reads a second block per culled draw: the live block with
@@ -251,8 +251,18 @@ impl LiveDrawArgs {
             clip: *draw.clip,
             model: *draw.model,
             inner: *draw.inner,
-            box_min: [draw.bounds.min[0], draw.bounds.min[1], draw.bounds.min[2], 0.0],
-            box_max: [draw.bounds.max[0], draw.bounds.max[1], draw.bounds.max[2], 0.0],
+            box_min: [
+                draw.bounds.min[0],
+                draw.bounds.min[1],
+                draw.bounds.min[2],
+                0.0,
+            ],
+            box_max: [
+                draw.bounds.max[0],
+                draw.bounds.max[1],
+                draw.bounds.max[2],
+                0.0,
+            ],
             count: draw.count,
             live_block: draw.live_block,
             view_block: draw.view_block,
@@ -431,7 +441,18 @@ mod tests {
             copy(-5.0, -5.0),
         ];
         let prev: Vec<[f32; 8]> = (0..5)
-            .map(|i| [i as f32 + 0.25, 7.0, 8.0, 1.0, 0.0, 0.0, 0.0, 100.0 + i as f32])
+            .map(|i| {
+                [
+                    i as f32 + 0.25,
+                    7.0,
+                    8.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    100.0 + i as f32,
+                ]
+            })
             .collect();
         let bounds = MeshBounds {
             min: [-0.5; 3],
@@ -476,7 +497,11 @@ mod tests {
                 std::slice::from_raw_parts(args.mapped_ptr().expect("shared") as *const u32, 16)
             };
             assert_eq!(&words[0..5], &[36, 5, 0, 0, 0], "live block untouched");
-            assert_eq!(&words[8..13], &[36, 2, 0, 0, 0], "view block counts survivors");
+            assert_eq!(
+                &words[8..13],
+                &[36, 2, 0, 0, 0],
+                "view block counts survivors"
+            );
             let kept = unsafe {
                 std::slice::from_raw_parts(out.mapped_ptr().expect("shared") as *const [f32; 8], 2)
             };

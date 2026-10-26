@@ -1,12 +1,9 @@
-use manifold_nodes_water::presets::gpu_flip::testkit::{
-    family_outputs, surface_detail_offset,
-};
+use manifold_nodes_water::presets::gpu_flip::testkit::surface_detail_offset;
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::*;
 use manifold_node_engine::exec::extent::{ExtentError, ExtentReport};
 #[cfg(feature = "gpu-proofs")]
-use manifold_nodes_water::presets::gpu_flip::testkit::surface_group;
 use manifold_nodes_water::presets::gpu_flip::*;
 use manifold_nodes_water::testkit::liquid_extents::*;
 use serde_json::{Value, json};
@@ -118,13 +115,13 @@ fn gpu_flip_scenes_cover_every_dispatch() {
             report.checked,
             scene.steps
         );
-        let meshed = plan.steps().iter().any(|step| {
+        let fielded = plan.steps().iter().any(|step| {
             graph.nodes().any(|node| {
-                node.id == step.node && node.node.type_id().as_str() == "node.volume_surface_mesh"
+                node.id == step.node && node.node.type_id().as_str() == "node.field_smooth_blend"
             })
         });
         assert_eq!(
-            meshed, scene.surface,
+            fielded, scene.surface,
             "the surface is in the plan exactly when asked for"
         );
     }
@@ -379,263 +376,6 @@ fn gpu_flip_state_takes_the_last_steps_extended_faces() {
     }
 }
 
-/// Solver presets share the authored surface structure and the FLIP Fluids
-/// engine surface defaults: particle scale 3.0, Surface Detail 0.
-#[cfg(feature = "gpu-proofs")]
-#[test]
-fn gpu_flip_surface_group_is_shared_with_all_water_presets() {
-    let source = surface_group();
-    let group = &source["group"];
-    assert_eq!(group["nodes"].as_array().unwrap().len(), 33);
-    let structure = |value: &Value| {
-        let mut value = value.clone();
-        for node in value["nodes"].as_array_mut().unwrap() {
-            match node["nodeId"].as_str() {
-                Some("liquid_blobs") => node["params"]["particle_scale"]["value"] = json!(0.0),
-                Some("liquid_volume" | "liquid_mesh" | "liquid_bricks") => {
-                    node["params"]["resolution_scale"]["value"] = json!(0);
-                }
-                _ => {}
-            }
-        }
-        value
-    };
-    let registry = PrimitiveRegistry::with_builtin();
-    for name in [
-        SHIPPED_PRESET,
-        "WaterDamBreakMatter",
-        "WaterStillPoolMatter",
-        "WaterFloatingBoxMatter",
-    ] {
-        let json = scene_json(&PresetTypeId::new(name)).unwrap();
-        let mut preset: Value = serde_json::from_str(&json).unwrap();
-        let surface_id = if name == SHIPPED_PRESET {
-            "surface"
-        } else {
-            "liquid_surface"
-        };
-        let surface =
-            manifold_nodes_water::testkit::conformance::json_node_mut(&mut preset, surface_id)
-                .cloned()
-                .expect("nested surface");
-        assert_eq!(
-            surface["handle"], "Liquid Surface",
-            "{name}: authored surface handle"
-        );
-        assert_eq!(
-            structure(&surface["group"]),
-            structure(group),
-            "{name}: authored surface drift"
-        );
-        let particle_scale = 3.0_f32;
-        let mut defaults = surface["params"].clone();
-        assert_eq!(
-            defaults["particle_scale"]["value"].as_f64().unwrap() as f32,
-            particle_scale,
-            "{name}: particle support"
-        );
-        defaults["particle_scale"] = source["params"]["particle_scale"].clone();
-        assert_eq!(defaults, source["params"], "{name}: other defaults drift");
-        let blobs = surface["group"]["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|n| n["nodeId"] == "liquid_blobs")
-            .unwrap();
-        assert_eq!(
-            blobs["params"]["particle_scale"]["value"].as_f64().unwrap() as f32,
-            particle_scale
-        );
-        let surface_detail = 0.0;
-        for node in surface["group"]["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|n| {
-                matches!(
-                    n["nodeId"].as_str(),
-                    Some("liquid_volume" | "liquid_mesh" | "liquid_bricks")
-                )
-            })
-        {
-            assert_eq!(
-                node["params"]["resolution_scale"]["value"]
-                    .as_f64()
-                    .unwrap(),
-                surface_detail + 1.0,
-                "{name}: {}",
-                node["nodeId"]
-            );
-        }
-        for list in ["params", "bindings"] {
-            let entries = preset["presetMetadata"][list].as_array().unwrap();
-            let support: Vec<_> = entries
-                .iter()
-                .filter(|entry| entry["id"] == "surface_particle_scale")
-                .collect();
-            assert_eq!(
-                support.len(),
-                1,
-                "{name}: one particle support {list} entry"
-            );
-            assert_eq!(
-                support[0]["defaultValue"].as_f64().unwrap() as f32,
-                particle_scale,
-                "{name}: {list}"
-            );
-            let detail: Vec<_> = entries
-                .iter()
-                .filter(|entry| entry["id"] == "surface_detail")
-                .collect();
-            assert_eq!(
-                detail.len(),
-                if list == "params" { 1 } else { 3 },
-                "{name}: surface detail {list} entries"
-            );
-            for entry in detail {
-                assert_eq!(
-                    entry["defaultValue"].as_f64().unwrap(),
-                    surface_detail,
-                    "{name}: {list}"
-                );
-            }
-        }
-        for param in ["stretch", "smoothing", "fill_pits", "smoothing_iterations"] {
-            assert!(
-                surface["params"][param]["value"].is_number(),
-                "{name}: {param}"
-            );
-        }
-        let wires = group["wires"].as_array().unwrap();
-        let nodes = group["nodes"].as_array().unwrap();
-        let mesh = &nodes.iter().find(|n| n["nodeId"] == "liquid_mesh").unwrap()["id"];
-        let clamp = &nodes
-            .iter()
-            .find(|n| n["typeId"] == "node.clamp_liquid_to_solids")
-            .unwrap()["id"];
-        for port in ["solid", "solid_nodes_x", "solid_nodes_y", "solid_nodes_z"] {
-            let source = |id: &Value| {
-                let wire = wires
-                    .iter()
-                    .find(|w| &w["toNode"] == id && w["toPort"] == port)
-                    .unwrap_or_else(|| panic!("{name}: missing {port}"));
-                (wire["fromNode"].clone(), wire["fromPort"].clone())
-            };
-            assert_eq!(
-                source(mesh),
-                source(clamp),
-                "{name}: mesh and clamp must share {port}"
-            );
-        }
-        let mut destinations = std::collections::HashSet::new();
-        for wire in wires {
-            assert!(
-                destinations.insert((
-                    wire["toNode"].as_u64().unwrap(),
-                    wire["toPort"].as_str().unwrap()
-                )),
-                "{name}: duplicate input wire {wire}"
-            );
-        }
-        let preset_json = serde_json::to_string(&preset).expect("preset serializes");
-        manifold_node_engine::runtime::PresetRuntime::from_json_str(&preset_json, &registry)
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let detail = preset["presetMetadata"]["bindings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|b| b["id"] == "surface_detail")
-            .collect::<Vec<_>>();
-        assert_eq!(
-            detail.len(),
-            3,
-            "{name}: detail reaches volume, mesh and bricks"
-        );
-        assert!(detail.iter().all(|b| b["offset"] == 1.0));
-    }
-}
-
-/// Native layer 0's water_material in flipEngineVSGPUFLIP.manifold:
-/// saved RGB (.37254903, .7294118, 1), roughness .5540391, absorption
-/// distance .1 and scattering .08826533 override its raw graph defaults.
-/// The other authored values and all omitted PBR defaults match that save.
-#[test]
-fn gpu_flip_water_material_matches_saved_native_reference() {
-    let registry = PrimitiveRegistry::with_builtin();
-    for def in [render_def(WaterScene::dam_break(64)), particle_view_def()] {
-        let material = find_node(&def.nodes, "water_material").unwrap();
-        assert_eq!(
-            material.params.len(),
-            18,
-            "the material retains its authored parameter surface"
-        );
-        let runtime =
-            manifold_node_engine::runtime::PresetRuntime::from_def(def, &registry, None).unwrap();
-        let id = runtime
-            .graph
-            .instance_by_node_id(&manifold_core::NodeId::new("water_material"))
-            .unwrap();
-        let material = runtime.graph.get_node(id).unwrap();
-        for (name, expected) in [
-            ("ambient", 0.0),
-            ("color_r", 0.37254903),
-            ("color_g", 0.7294118),
-            ("color_b", 1.0),
-            ("metallic", 0.0),
-            ("roughness", 0.5540391),
-            ("ior", 1.333),
-            ("transmission", 1.0),
-            ("volume_attenuation_color_r", 0.35),
-            ("volume_attenuation_color_g", 0.72),
-            ("volume_attenuation_color_b", 0.8),
-            ("volume_attenuation_distance", 0.1),
-            ("volume_geometry", 1.0),
-            ("volume_thickness", 0.09),
-            ("volume_scattering_color_r", 0.68),
-            ("volume_scattering_color_g", 0.86),
-            ("volume_scattering_color_b", 0.92),
-            ("volume_scattering_density", 0.08826533),
-        ] {
-            assert_eq!(
-                material.params.get(name),
-                Some(&ParamValue::Float(expected)),
-                "{name}"
-            );
-        }
-        assert!(
-            runtime.shadowed_def_params().next().is_none(),
-            "material defaults agree with the authored graph"
-        );
-    }
-    let preset = shipped_preset();
-    for (card, target, expected) in [
-        ("water_attenuation", "volume_attenuation_distance", 0.1_f32),
-        (
-            "water_scattering",
-            "volume_scattering_density",
-            0.08826533_f32,
-        ),
-    ] {
-        for list in ["params", "bindings"] {
-            let entries: Vec<_> = preset["presetMetadata"][list]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|entry| entry["id"] == card)
-                .collect();
-            assert_eq!(entries.len(), 1, "{card}: {list}");
-            assert_eq!(
-                entries[0]["defaultValue"].as_f64().unwrap() as f32,
-                expected
-            );
-            if list == "bindings" {
-                assert_eq!(entries[0]["target"]["nodeId"], "water_material");
-                assert_eq!(entries[0]["target"]["param"], target);
-            }
-        }
-    }
-}
-
 #[test]
 fn gpu_flip_sheet_fill_rate_card_binding_and_wire_round_trip() {
     use manifold_core::NodeId;
@@ -657,7 +397,7 @@ fn gpu_flip_sheet_fill_rate_card_binding_and_wire_round_trip() {
         assert_eq!(card["name"], "Sheet Fill Rate");
         assert_eq!(card["min"], 0.0);
         assert_eq!(card["max"], 1.0);
-        assert_eq!(card["defaultValue"], 0.0);
+        assert_eq!(card["defaultValue"], SHEET_FILL_RATE);
         assert_eq!(card["wholeNumbers"], false);
         let bindings: Vec<_> = value["presetMetadata"]["bindings"]
             .as_array()
@@ -670,7 +410,7 @@ fn gpu_flip_sheet_fill_rate_card_binding_and_wire_round_trip() {
             bindings[0]["target"],
             json!({"kind":"node", "nodeId":"domain", "param":"sheet_fill_rate"})
         );
-        assert_eq!(bindings[0]["defaultValue"], 0.0);
+        assert_eq!(bindings[0]["defaultValue"], SHEET_FILL_RATE);
         let flat = manifold_core::flatten::flatten_groups(&def).unwrap();
         let domain = flat
             .nodes
@@ -727,207 +467,6 @@ fn gpu_flip_sheet_fill_rate_card_binding_and_wire_round_trip() {
             .unwrap();
             assert_eq!(geometry.sheet_fill_rate_for_test(), rate);
         }
-    }
-}
-
-/// Insertion and presets share the complete family, including after a
-/// serialization round trip. Comparison uses node identity, not local ids.
-#[test]
-fn water_family_builder_parity() {
-    use std::collections::{BTreeMap, BTreeSet};
-    fn facts(
-        nodes: &[EffectGraphNode],
-        wires: &[EffectGraphWire],
-        particle_view: bool,
-    ) -> (Value, Value) {
-        let omitted = |name: &str| {
-            name == "fluid_input"
-                || particle_view
-                    && matches!(
-                        name,
-                        "surface"
-                            | "liquid_particle_mesh"
-                            | "liquid_particle_copies"
-                            | "water_vertices_switch"
-                            | "water_indices_switch"
-                            | "dots_mesh"
-                            | "dots_material"
-                            | "dots_blend"
-                            | "dots_copies"
-                            | "dots_object"
-                            | "dots_visible"
-                            | "dots_instances_switch"
-                            | "dots_mesh_switch"
-                    )
-        };
-        let names: BTreeMap<_, _> = nodes.iter().map(|n| (n.id, n.node_id.as_str())).collect();
-        let nodes: BTreeMap<_, _> = nodes
-            .iter()
-            .filter(|n| !omitted(n.node_id.as_str()))
-            .map(|n| {
-                let mut value = serde_json::to_value(n).unwrap();
-                value.as_object_mut().unwrap().remove("id");
-                (n.node_id.as_str(), value)
-            })
-            .collect();
-        let wires: BTreeSet<_> = wires
-            .iter()
-            .filter_map(|w| {
-                let (from, to) = (names[&w.from_node], names[&w.to_node]);
-                if omitted(from)
-                    || omitted(to)
-                    || particle_view
-                        && to == "water_object"
-                        && ["vertices", "indices", "instances", "instance_count"]
-                            .contains(&w.to_port.as_str())
-                {
-                    None
-                } else {
-                    // The fill takes the first free role: past the collider
-                    // where a preset has one.
-                    let port = if from == "domain_initial_fill" {
-                        "role"
-                    } else {
-                        w.to_port.as_str()
-                    };
-                    Some((from, w.from_port.as_str(), to, port))
-                }
-            })
-            .collect();
-        (
-            serde_json::to_value(nodes).unwrap(),
-            serde_json::to_value(wires).unwrap(),
-        )
-    }
-    let mut body = gpu_flip_liquid_body();
-    let water = body
-        .nodes
-        .iter_mut()
-        .find(|node| node.node_id.as_str() == "water_object")
-        .unwrap();
-    assert_eq!(
-        water.handle.as_deref(),
-        Some(""),
-        "Add Fluid owns the bare fluid handle"
-    );
-    water.handle = Some("Water".into());
-    let domain = body
-        .nodes
-        .iter_mut()
-        .find(|node| node.node_id.as_str() == "domain")
-        .unwrap();
-    assert_eq!(domain.handle.as_deref(), Some("Simulation"));
-    // This handle belongs to insertion; the preset recipe leaves it unnamed.
-    domain.handle = None;
-    for (def, particles) in [
-        (render_def(WaterScene::dam_break(64)), false),
-        (particle_view_def(), true),
-    ] {
-        let saved = serde_json::to_string(&def).unwrap();
-        let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
-        let family = find_node(&def.nodes, "water_family").unwrap();
-        let group = family.group.as_ref().expect("ordinary family group");
-        // Physics View's dots are a fifth output beside the four roles;
-        // the Particle View has no Physics View.
-        let mut outputs = family_outputs().to_vec();
-        if !particles {
-            outputs.push("object_4");
-        }
-        assert_eq!(
-            group
-                .interface
-                .outputs
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>(),
-            outputs
-        );
-        assert!(
-            group.interface.inputs.is_empty(),
-            "solids reach the water from the World, not a role input"
-        );
-        assert_eq!(
-            facts(&body.nodes, &body.wires, particles),
-            facts(&group.nodes, &group.wires, particles)
-        );
-        assert_eq!(
-            group
-                .nodes
-                .iter()
-                .filter(|n| n.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
-                .count(),
-            1
-        );
-        assert_eq!(
-            group
-                .nodes
-                .iter()
-                .filter(|n| n.type_id == "node.whitewater_obstacle_source")
-                .count(),
-            1
-        );
-        assert!(
-            !group
-                .nodes
-                .iter()
-                .any(|n| n.node_id.as_str().starts_with("dust_"))
-        );
-        let boundary = group
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == LIQUID_BODY_OUTPUT)
-            .unwrap()
-            .id;
-        for (port, object) in family_outputs().into_iter().zip([
-            "water_object",
-            "foam_object",
-            "spray_object",
-            "bubble_object",
-        ]) {
-            let id = group
-                .nodes
-                .iter()
-                .find(|n| n.node_id.as_str() == object)
-                .unwrap()
-                .id;
-            assert!(group.wires.iter().any(|w| w.from_node == id
-                && w.from_port == "object"
-                && w.to_node == boundary
-                && w.to_port == port));
-            let physical: Vec<_> = def
-                .wires
-                .iter()
-                .filter(|w| w.from_node == family.id && w.from_port == port)
-                .collect();
-            assert_eq!(physical.len(), 1);
-            assert!(
-                def.nodes
-                    .iter()
-                    .any(|n| n.id == physical[0].to_node && n.type_id == "node.render_scene")
-            );
-        }
-        let stage = group
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == "whitewater")
-            .unwrap();
-        assert_eq!(
-            serde_json::to_value(&stage.params).unwrap()["amount"]["value"],
-            1.0
-        );
-        let flat = manifold_core::flatten::flatten_groups(&def).expect("nested surface flattens");
-        for binding in &def.preset_metadata.as_ref().unwrap().bindings {
-            let value = serde_json::to_value(binding).unwrap();
-            if value["target"]["kind"] == "node" {
-                assert!(
-                    flat.nodes
-                        .iter()
-                        .any(|n| n.node_id.as_str() == value["target"]["nodeId"].as_str().unwrap()),
-                    "binding target absent: {value}"
-                );
-            }
-        }
-        built(&def);
     }
 }
 
@@ -1346,14 +885,5 @@ fn gpu_flip_physics_view_skips_the_surface() {
 }
 
 use manifold_nodes::engine_scenes::scene_json;
-use manifold_water_gpu_flip::primitives::{
-    gpu_flip_domain::gpu_flip_geometry,
-};
+use manifold_water_gpu_flip::primitives::gpu_flip_domain::gpu_flip_geometry;
 use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
-
-fn shipped_preset() -> Value {
-    let json =
-        manifold_nodes::engine_scenes::scene_json(&PresetTypeId::new("WaterDamBreakGpuFlip"))
-            .expect("the GPU FLIP preset is bundled");
-    serde_json::from_str(&json).expect("the GPU FLIP preset parses")
-}

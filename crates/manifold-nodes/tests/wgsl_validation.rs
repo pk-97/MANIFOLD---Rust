@@ -53,20 +53,19 @@ const PARTIAL_SHADERS: &[&str] = &[
     // `liquid_bricks_tests::fluid_bricks_generated_consumers_validate_on_cpu`.
     "liquid_bricks_common.wgsl",
     "smooth_lattice_element.wgsl",
-    "clamp_liquid_to_solids_element.wgsl",
     "smooth_lattice_dense_reference.wgsl",
-    "clamp_liquid_to_solids_dense_reference.wgsl",
     "particle_volume_dense_reference.wgsl",
-    "count_surface_triangles_dense_reference.wgsl",
-    "volume_surface_mesh_dense_reference.wgsl",
-    "relax_surface_mesh_dense_reference.wgsl",
-    // Welded-mesh `wgsl_includes`: they read the marching-cubes tables and the
-    // kernel's `buf_levelset` / `buf_edge_scan`. Each user's generated kernel
-    // validates on the CPU in its own module (count_surface_edges,
-    // volume_surface_mesh, relax_surface_mesh, surface_mesh_normals).
-    "surface_edge_index.wgsl",
-    "surface_edge_ownership.wgsl",
-    "surface_mesh_adjacency.wgsl",
+    // Preludes of `render_scene`'s composed shader and the water passes; each
+    // user validates composed below.
+    "instance_transform.wgsl",
+    "scene_shading.wgsl",
+    "look_ripple_detail.wgsl",
+    "look_foam.wgsl",
+    "look_mist.wgsl",
+    "look_thin_water_light.wgsl",
+    "look_wet_surface.wgsl",
+    "water_field_common.wgsl",
+    "water_march_core.wgsl",
 ];
 
 const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
@@ -78,6 +77,30 @@ const DEPTH_COMMON: &str =
     include_str!("../../manifold-nodes-image/src/generators/shaders/depth_common.wgsl");
 const VIEW_NORMAL_COMMON: &str = include_str!(
     "../../manifold-nodes-image/src/node_graph/primitives/shaders/view_normal_common.wgsl"
+);
+const INSTANCE_TRANSFORM: &str = include_str!(
+    "../../manifold-nodes-scene/src/node_graph/primitives/shaders/instance_transform.wgsl"
+);
+const SCENE_SHADING: &str =
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/scene_shading.wgsl");
+const LOOK_RIPPLE_DETAIL: &str = include_str!(
+    "../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_ripple_detail.wgsl"
+);
+const LOOK_FOAM: &str =
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_foam.wgsl");
+const LOOK_MIST: &str =
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_mist.wgsl");
+const LOOK_THIN_WATER_LIGHT: &str = include_str!(
+    "../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_thin_water_light.wgsl"
+);
+const LOOK_WET_SURFACE: &str = include_str!(
+    "../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_wet_surface.wgsl"
+);
+const WATER_FIELD_COMMON: &str = include_str!(
+    "../../manifold-nodes-scene/src/node_graph/primitives/shaders/water_field_common.wgsl"
+);
+const WATER_MARCH_CORE: &str = include_str!(
+    "../../manifold-nodes-scene/src/node_graph/primitives/shaders/water_march_core.wgsl"
 );
 const SAMPLE_FACE_COMMON: &str = include_str!(
     "../../manifold-nodes-scene/src/node_graph/primitives/shaders/sample_face_common.wgsl"
@@ -103,6 +126,43 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
     composed.push((
         "temporal_accumulate.wgsl",
         [DEPTH_COMMON, VIEW_NORMAL_COMMON].join("\n"),
+    ));
+    // `render_scene`'s composed shader (`RENDER_SCENE_WGSL`): the instance
+    // transforms, the scene shading and the five look hooks, then the mesh
+    // shader. The per-copy cull and the water march have their own preludes.
+    composed.push((
+        "render_scene.wgsl",
+        [
+            INSTANCE_TRANSFORM,
+            SCENE_SHADING,
+            LOOK_RIPPLE_DETAIL,
+            LOOK_FOAM,
+            LOOK_MIST,
+            LOOK_THIN_WATER_LIGHT,
+            LOOK_WET_SURFACE,
+        ]
+        .join("\n"),
+    ));
+    composed.push(("cull_instances.wgsl", INSTANCE_TRANSFORM.to_owned()));
+    composed.push((
+        "water_march.wgsl",
+        [WATER_FIELD_COMMON, WATER_MARCH_CORE].join("\n"),
+    ));
+    composed.push(("water_cover.wgsl", WATER_MARCH_CORE.to_owned()));
+    // The water shade (`WATER_SHADE_WGSL`): the scene shading and the five
+    // look hooks, then the field helpers.
+    composed.push((
+        "water_shade.wgsl",
+        [
+            SCENE_SHADING,
+            LOOK_RIPPLE_DETAIL,
+            LOOK_FOAM,
+            LOOK_MIST,
+            LOOK_THIN_WATER_LIGHT,
+            LOOK_WET_SURFACE,
+            WATER_FIELD_COMMON,
+        ]
+        .join("\n"),
     ));
     composed.push((
         "whitewater_fused.wgsl",

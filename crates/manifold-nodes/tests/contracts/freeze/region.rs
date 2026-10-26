@@ -335,7 +335,9 @@ mod tests {
     /// `output_capacity` is that external's slot, the kernel stops at the
     /// slot's live extent, and the slot's producer chain ends at `root`.
     fn assert_counts_follow(def: &EffectGraphDef, region: &Region, root: (u32, &str)) {
-        let anchor = region.live_anchor.expect("the region stops at a live extent");
+        let anchor = region
+            .live_anchor
+            .expect("the region stops at a live extent");
         assert_eq!(
             region.output_capacity,
             Some(CapacityExpr::Slot(anchor)),
@@ -360,15 +362,31 @@ mod tests {
         let root = |node: u32, port: &str| capacity_root(&def, &registry, node, port);
         let map_a = (1, "map".to_string());
         let map_b = (7, "map".to_string());
-        assert_eq!(root(0, "vertices"), (0, "vertices".to_string()), "a source is a root");
+        assert_eq!(
+            root(0, "vertices"),
+            (0, "vertices".to_string()),
+            "a source is a root"
+        );
         assert_eq!(root(1, "map"), map_a, "a cut map is a root");
         assert_eq!(root(2, "out"), map_a, "remap follows its map input");
         assert_eq!(root(5, "out"), map_a, "weights remap follows its map input");
-        assert_eq!(root(3, "out"), map_a, "patch: in and reference share a root");
+        assert_eq!(
+            root(3, "out"),
+            map_a,
+            "patch: in and reference share a root"
+        );
         assert_eq!(root(6, "out"), map_a, "morph: in and b share a root");
-        assert_eq!(root(8, "out"), map_b, "the second remap follows the second map");
+        assert_eq!(
+            root(8, "out"),
+            map_b,
+            "the second remap follows the second map"
+        );
         assert_eq!(root(9, "out"), map_b);
-        assert_eq!(root(10, "out"), map_b, "recon: in and reference share a root");
+        assert_eq!(
+            root(10, "out"),
+            map_b,
+            "recon: in and reference share a root"
+        );
         assert_eq!(root(14, "out"), map_b);
     }
 
@@ -388,9 +406,15 @@ mod tests {
         // Morph 2 blends a layer-B mesh (`in`, root: cut B) with a layer-A
         // mesh (`b`, root: cut A).
         set_b(&mut def, 2);
-        assert_eq!(capacity_root(&def, &registry(), 14, "out"), (14, "out".to_string()));
+        assert_eq!(
+            capacity_root(&def, &registry(), 14, "out"),
+            (14, "out".to_string())
+        );
         set_b(&mut def, 8);
-        assert_eq!(capacity_root(&def, &registry(), 14, "out"), (7, "map".to_string()));
+        assert_eq!(
+            capacity_root(&def, &registry(), 14, "out"),
+            (7, "map".to_string())
+        );
     }
 
     /// Vortex: patch, morph and the weights remap fuse. Remap A and cut A's
@@ -862,40 +886,6 @@ mod tests {
             fused.iter().all(|members| !members.contains(&2)),
             "follow_first's output follows a alone, so it must not fuse as MinInputs: {fused:?}"
         );
-        // Declared honestly (FromInput), the same shape fuses: the refusal
-        // above is the probe's, not a gate the chain trips anyway.
-        assert_eq!(
-            partition_regions(&honest_chain(), &registry).len(),
-            1,
-            "a solid clamp into the divide fuses"
-        );
-    }
-
-    /// The same chain with an honest producer: node.clamp_liquid_to_solids (its
-    /// output follows its coincident level set, declared FromInput) into the
-    /// divide.
-    fn honest_chain() -> EffectGraphDef {
-        serde_json::from_value(serde_json::json!({
-            "version": 3,
-            "nodes": [
-                {"id": 0, "nodeId": "solid", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 64}}},
-                {"id": 1, "nodeId": "levelset", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
-                {"id": 2, "nodeId": "clamp", "typeId": "node.clamp_liquid_to_solids"},
-                {"id": 3, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
-                {"id": 4, "nodeId": "divide", "typeId": "node.divide_by_value"},
-                {"id": 5, "nodeId": "sink", "typeId": "test.value_sink"},
-                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
-            ],
-            "wires": [
-                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "levelset"},
-                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "solid"},
-                {"fromNode": 2, "fromPort": "clamped", "toNode": 4, "toPort": "values"},
-                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "divisor"},
-                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "values"},
-                {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"}
-            ]
-        }))
-        .expect("honest fixture")
     }
 
     /// `node.tone_map` and `node.gradient_map` ship no bundled preset today

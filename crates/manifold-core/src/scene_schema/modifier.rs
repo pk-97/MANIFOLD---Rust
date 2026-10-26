@@ -615,10 +615,24 @@ const PIECES: &[Choice] = &[
 
 /// Why no card can aim at `target`: an Ocean is an endless sea cast from
 /// the camera each frame, so it has no bounds for a modifier's frame. A
-/// card aimed at the whole scene or at a Group passes over it.
+/// Water moves by its own simulation, which no card's frame reaches. A
+/// card aimed at the whole scene or at a Group passes over both.
 pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
-    matches!(&target.fields, ItemFields::Object(object) if object.shape == Shape::Ocean)
-        .then_some("An Ocean is endless: it has no bounds for a modifier to bend in")
+    match &target.fields {
+        ItemFields::Object(object) if object.shape == Shape::Ocean => {
+            Some("An Ocean is endless: it has no bounds for a modifier to bend in")
+        }
+        ItemFields::Water(_) => {
+            Some("Water moves by its own simulation: a modifier cannot bend it")
+        }
+        _ => None,
+    }
+}
+
+/// What the Targets menu lists: Objects and Groups, and Water, so it shows
+/// with the reason no card aims at it.
+fn is_target_kind(item: &Item) -> bool {
+    is_object_or_group(item) || item.kind() == ItemKind::Water
 }
 
 /// What a new card aims at: the Objects and Groups in `selection` a card can
@@ -641,7 +655,7 @@ pub fn new_card_targets(doc: &SceneDoc, selection: &[ItemId]) -> ModifierTargets
     }
 }
 
-/// A Modifier's target picks: Objects and Groups; never an Ocean; Shatter
+/// A Modifier's target picks: Objects and Groups; never an Ocean or a Water; Shatter
 /// refuses a target it cannot break, a copy type one without Copies.
 fn target_refused(doc: &SceneDoc, modifier: &Item, target: &Item) -> Option<&'static str> {
     let moves_copies = matches!(&modifier.fields, ItemFields::Modifier(card) if super::copies::acts_on_copies(card.modifier));
@@ -713,7 +727,7 @@ pub static MODIFIER_FIELDS: [FieldRow; 6] = [
         label: "Targets",
         section: M,
         control: FieldControl::ItemSet {
-            items: is_object_or_group,
+            items: is_target_kind,
             all: "Whole scene",
             refused: target_refused,
         },
@@ -813,3 +827,54 @@ pub static MODIFIER_FIELDS: [FieldRow; 6] = [
         },
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_doc::ObjectFields;
+
+    /// The Targets menu lists Objects, Groups and Water; a Camera is never a
+    /// target. Only an Ocean and a Water carry a reason no card can aim at them.
+    #[test]
+    fn targets_list_water_and_ocean_with_their_reason() {
+        let object = Item::new(
+            ItemId::new("object"),
+            "Object",
+            ItemFields::default_for(ItemKind::Object),
+        );
+        let ocean = Item::new(
+            ItemId::new("ocean"),
+            "Ocean",
+            ItemFields::Object(ObjectFields {
+                shape: Shape::Ocean,
+                ..ObjectFields::default()
+            }),
+        );
+        let water = Item::new(
+            ItemId::new("water"),
+            "Water",
+            ItemFields::default_for(ItemKind::Water),
+        );
+        let group = Item::new(
+            ItemId::new("group"),
+            "Group",
+            ItemFields::default_for(ItemKind::Group),
+        );
+        let camera = Item::new(
+            ItemId::new("camera"),
+            "Camera",
+            ItemFields::default_for(ItemKind::Camera),
+        );
+
+        assert!(is_target_kind(&object));
+        assert!(is_target_kind(&ocean));
+        assert!(is_target_kind(&water));
+        assert!(is_target_kind(&group));
+        assert!(!is_target_kind(&camera));
+
+        assert_eq!(modifier_refuses(&object), None);
+        assert_eq!(modifier_refuses(&group), None);
+        assert!(modifier_refuses(&ocean).is_some());
+        assert!(modifier_refuses(&water).is_some());
+    }
+}

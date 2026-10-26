@@ -30,7 +30,6 @@ fn fluid(viscosity: f64) -> FluidWorld {
     let mut fluid = FluidWorld::new(Config {
         cells: [24; 3],
         cell_size: 0.1,
-        surface_subdivisions: 0,
         apic: false,
     })
     .unwrap();

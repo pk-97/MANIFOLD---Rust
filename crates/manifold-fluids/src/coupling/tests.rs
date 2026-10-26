@@ -77,7 +77,6 @@ impl Pair {
         let mut fluid = FluidWorld::new(Config {
             cells: [16; 3],
             cell_size: 0.15,
-            surface_subdivisions: 0,
             apic: false,
         })
         .unwrap();
@@ -204,9 +203,6 @@ fn production_coupling_exchanges_pressure_and_viscosity_with_box3d() {
                     .chain(pose.rotation.iter())
                     .all(|value| value.is_finite())
             );
-            let mut surface = Vec::new();
-            pair.fluid.surface(&mut surface).unwrap();
-            assert!(!surface.is_empty());
         }
     }
 }
@@ -345,5 +341,5 @@ fn production_coupling_guards_bound_topology_and_abandonment() {
     frame.advance(dt).unwrap();
     drop(frame);
     assert!(pair.fluid.begin_frame(DT).is_err());
-    assert!(pair.fluid.surface(&mut Vec::new()).is_err());
+    assert!(pair.fluid.whitewater(&mut Vec::new()).is_err());
 }

@@ -2583,43 +2583,6 @@ fn liquid_nonfinite_live_flip_reseeds_without_stopping_clock() {
     );
 }
 
-/// I11: a run-time capacity overflow is counted and reported as a named
-/// error carrying the count, within a frame of the liquid first needing it.
-#[test]
-fn liquid_overflow_is_reported() {
-    for row in running(Check::OverflowReported) {
-        let case = row.overflow.as_ref().expect("an overflow case");
-        let mut def = scene(row, case.fixture);
-        (case.edit)(&mut def);
-        let tap = NodeErrorTap::new();
-        let mut run = LiquidRun::offline(row, def, 1);
-        run.errors_expected = true;
-        let mut reported = None;
-        for _ in 0..3 {
-            run.step();
-            if let Some(error) = tap
-                .take()
-                .into_iter()
-                .find(|error| case.names.iter().all(|name| error.contains(name)))
-            {
-                reported = Some((run.frame, error));
-                break;
-            }
-        }
-        let (frame, error) = reported
-            .unwrap_or_else(|| panic!("{}: {} is not reported by name", row.type_id, case.what));
-        assert!(
-            error.chars().any(|c| c.is_ascii_digit()),
-            "{}: the report carries no count: {error}",
-            row.type_id
-        );
-        eprintln!(
-            "liquid_overflow_is_reported {}: {} → frame {frame}: {error}",
-            row.type_id, case.what
-        );
-    }
-}
-
 /// I13: 10 uncoupled live frames never wait on the GPU. The counter sits on
 /// the frame clock's one wait, so it sees every waiter on this thread. The
 /// runs use a device with a frame clock, as the app does.

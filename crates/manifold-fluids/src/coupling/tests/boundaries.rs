@@ -6,7 +6,6 @@ fn small_fluid() -> FluidWorld {
     let mut fluid = FluidWorld::new(Config {
         cells: [8; 3],
         cell_size: 0.25,
-        surface_subdivisions: 0,
         apic: false,
     })
     .unwrap();
@@ -210,7 +209,6 @@ fn coupled_pair_fixture() -> (FluidWorld, PhysicsWorld, [BodyHandle; 2], [MeshHa
     let mut fluid = FluidWorld::new(Config {
         cells: [16; 3],
         cell_size: 0.15,
-        surface_subdivisions: 0,
         apic: false,
     })
     .unwrap();

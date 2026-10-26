@@ -94,7 +94,7 @@ fn body(
     if brick_pass != 2u {
         let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
         let reach_bins = i32(ceil((bound.y + extra + margin) / cell_size));
-        // The existing bound includes kernel support, centre displacement and
+        // The existing bound includes sphere support and
         // the outer interpolation node. Locate its endpoints within the bins
         // instead of rounding its radius up around an entire home bin. Expand
         // outwards by more than eight f32 epsilons at the coordinate scale
@@ -113,25 +113,18 @@ fn body(
                     let range = buf_cell_ranges[u32(b.x + bins.x * (b.y + bins.y * b.z))];
                     for (var k = range.start; k < range.start + range.count; k = k + 1u) {
                         let blob = buf_blobs[k];
-                        let reach = blob.center_radius.w;
-                        let d = p - blob.center_radius.xyz;
+                        let reach = blob.w;
+                        let d = p - blob.xyz;
                         // Native support is a grid-aligned box including its outer
                         // interpolation node. Spherical rejection loses the corners.
                         let h = size / vec3<f32>(nodes - vec3<u32>(1u));
                         let support = 1.5 * reach + extra;
-                        let first = vec3<i32>(floor((blob.center_radius.xyz - vec3<f32>(support) - lattice_min) / h));
-                        let last = vec3<i32>(floor((blob.center_radius.xyz + vec3<f32>(support) - lattice_min) / h)) + vec3<i32>(1);
+                        let first = vec3<i32>(floor((blob.xyz - vec3<f32>(support) - lattice_min) / h));
+                        let last = vec3<i32>(floor((blob.xyz + vec3<f32>(support) - lattice_min) / h)) + vec3<i32>(1);
                         if !(reach > 0.0) || any(vec3<i32>(ijk) < first) || any(vec3<i32>(ijk) > last) {
                             continue;
                         }
-                        let diag = blob.shape_diag;
-                        let off = blob.shape_off;
-                        let v = vec3<f32>(
-                            diag.x * d.x + off.x * d.y + off.y * d.z,
-                            off.x * d.x + diag.y * d.y + off.z * d.z,
-                            off.y * d.x + off.z * d.y + diag.z * d.z,
-                        );
-                        phi = min(phi, reach * (length(v) - 1.0));
+                        phi = min(phi, length(d) - reach);
                     }
                 }
             }

@@ -620,6 +620,14 @@ impl RenderScene {
             "node.render_scene points",
         );
 
+        // The water march and its shading pass, which draws in Pass B with
+        // Pass B's colour format; the first water frame is a cache hit.
+        super::water_march::WaterMarch::prewarm(device);
+        super::water_shade::WaterShade::prewarm(
+            device,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+        );
+
         // IBL pipelines are fixed-source,
         // asset-independent (shader source depends only on render_scene's
         // own WGSL files, not on any envmap content). Warm them here so

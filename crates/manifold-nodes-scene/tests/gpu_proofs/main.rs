@@ -13,6 +13,7 @@ mod render_scene_punctual_fidelity;
 mod render_scene_selection_mask;
 mod render_scene_shadows;
 mod render_scene_uv1_preservation;
+mod render_scene_water;
 mod rt_6caster_shadow;
 mod rt_alpha_walk_bound;
 mod rt_bug17r3_lightless_gi;

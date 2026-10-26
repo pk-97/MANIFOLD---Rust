@@ -4,7 +4,6 @@ mod bokeh_gather;
 mod generator_renderer_tests;
 #[cfg(feature = "gpu-proofs")]
 mod generator_renderer_warmup_tests;
-mod initial_fill_migration;
 mod layer_compositor;
 #[cfg(feature = "gpu-proofs")]
 mod physics_impulses;

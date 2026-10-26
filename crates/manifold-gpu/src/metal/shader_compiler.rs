@@ -548,10 +548,9 @@ mod tests {
 
     // A helper's local `array<Element, 12>`, zero-initialised by naga and
     // inlined into the entry: the constant struct array store
-    // `spirv_msl_fixup` rewrites. Self-contained on purpose — a hand copy of
-    // the generated mesher drifted from it (BUG-jro0j); the real mesher's
-    // Metal compile is proven in manifold-nodes's volume_surface_mesh
-    // gpu_tests on its generated source.
+    // `spirv_msl_fixup` rewrites. Self-contained on purpose: a hand copy of a generated
+    // shader drifted from it. The shape is compiled by
+    // `struct_array_local_has_valid_msl_address_spaces` below.
     const STRUCT_ARRAY_LOCAL_WGSL: &str = r#"
 struct Element {
     position: vec3<f32>,

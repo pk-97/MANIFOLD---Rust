@@ -85,16 +85,21 @@ mod state;
 mod tiles;
 
 pub(crate) use emit::*;
-use extend::*;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub use extend::set_force_dense_extend;
-pub(crate) use lattice::*;
+use extend::*;
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+pub(crate) use lattice::scratch_bytes;
+use lattice::*;
 use narrow_band::*;
 use pipelines::*;
-pub(crate) use pockets::*;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub use pockets::set_force_indirect_pockets;
+pub(crate) use pockets::*;
+#[cfg(any(test, feature = "testkit"))]
 pub use tiles::*;
+#[cfg(not(any(test, feature = "testkit")))]
+pub(crate) use tiles::*;
 
 manifold_core::testkit_visible! { pub(crate) const STEP_SHADER: &str = concat!(
     include_str!("shaders/gpu_flip_step/common.wgsl"),
@@ -440,9 +445,7 @@ struct Step<'a> {
     sheet_rate: f32,
 }
 
-impl StepState {
-
-}
+impl StepState {}
 
 manifold_node_engine::primitive! {
     name: GpuFlipStep,

@@ -553,7 +553,6 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
     let mut fluid = FluidWorld::new(Config {
         cells: [16; 3],
         cell_size: 0.15,
-        surface_subdivisions: 0,
         apic: false,
     })
     .unwrap();

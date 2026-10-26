@@ -1,7 +1,8 @@
 // Exact Euclidean distance to the piecewise-linear marching-cubes zero
-// surface, capped at band. This is a geometric distance rebuild, not a blur.
-// The search box contains every cell intersecting the band-radius ball;
-// there is no fixed stencil/slider cap. Distances are in scene metres.
+// surface, capped at the band (band_cells smallest node spacings). This is a
+// geometric distance rebuild, not a blur. The search box contains every cell
+// intersecting the band-radius ball; there is no fixed stencil/slider cap.
+// Distances are in the lattice's size units.
 fn rd_segment(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>) -> f32 {
     let v = b - a;
     let vv = dot(v, v);
@@ -26,18 +27,18 @@ fn rd_triangle(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> f32 {
     return best;
 }
 fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32,
-    size_x: f32, size_y: f32, size_z: f32, band: f32, enabled: f32) -> f32 {
+    size_x: f32, size_y: f32, size_z: f32, band_cells: f32) -> f32 {
     let original = buf_levelset[idx];
-    if enabled == 0.0 { return original; }
     let nodes = vec3<u32>(vec3<f32>(nodes_x,nodes_y,nodes_z));
     if any(nodes < vec3<u32>(2u)) || idx >= nodes.x*nodes.y*nodes.z { return original; }
     let at = vec3<u32>(idx % nodes.x, (idx/nodes.x)%nodes.y, idx/(nodes.x*nodes.y));
     let spacing = vec3<f32>(size_x,size_y,size_z)/vec3<f32>(nodes-vec3<u32>(1u));
+    let band_m = band_cells * min(spacing.x, min(spacing.y, spacing.z));
     let p = vec3<f32>(at)*spacing;
-    let reach = vec3<i32>(ceil(vec3<f32>(band)/spacing));
+    let reach = vec3<i32>(ceil(vec3<f32>(band_m)/spacing));
     let low = max(vec3<i32>(at)-reach-vec3<i32>(1),vec3<i32>(0));
     let high = min(vec3<i32>(at)+reach,vec3<i32>(nodes)-vec3<i32>(2));
-    var best = band*band;
+    var best = band_m*band_m;
     for (var z=low.z; z<=high.z; z=z+1) {
         for (var y=low.y; y<=high.y; y=y+1) {
             for (var x=low.x; x<=high.x; x=x+1) {

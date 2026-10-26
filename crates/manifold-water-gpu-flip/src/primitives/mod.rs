@@ -1,6 +1,5 @@
 //! The GPU FLIP solver: its step, pressure solve, clock, bodies and the
 //! particle atoms only FLIP dispatches.
-manifold_core::testkit_visible! { pub(crate) mod clamp_liquid_to_solids; }
 #[cfg(feature = "gpu-proofs")]
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
@@ -47,6 +46,3 @@ mod euler_step_particles;
 mod euler_step_particles_3d;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 mod gpu_flip_tile_tests;
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-#[doc(hidden)]
-pub mod testkit;

@@ -2,10 +2,6 @@
 use super::WaterRuntimeExt;
 use manifold_node_engine::runtime::PresetRuntime;
 
-pub fn surface_inputs() -> &'static [&'static str] {
-    crate::migration::gpu_flip_surface::SHARED_INPUTS
-}
-
 pub fn sampling_mask(runtime: &PresetRuntime) -> Option<&[bool]> {
     runtime
         .extension::<super::WaterRuntimeState>()

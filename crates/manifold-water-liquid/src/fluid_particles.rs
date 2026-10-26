@@ -20,36 +20,22 @@ const _: () = {
     assert!(offset_of!(FluidParticle, id) == offset_of!(ParticleRecord, id));
 };
 
-/// One anisotropic surface kernel (Yu & Turk 2010), from
-/// `node.shape_particle_blobs`. The kernel is `(1 − |G·(x − c)|²)³` inside the
-/// ellipsoid `|G·(x − c)| < 1`.
+/// One spherical surface kernel, from `node.shape_particle_blobs`: the
+/// particle's centre and its drawn radius (Particle Scale × the particle's
+/// radius). The level set is the distance to the nearest sphere surface.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FluidBlob {
-    /// Smoothed centre xyz; w = bounding radius in metres, 0 = inactive.
+    /// Centre xyz; w = radius in metres, 0 = inactive.
     pub center_radius: [f32; 4],
-    /// Symmetric shape matrix G: xx, yy, zz; w = det(G).
-    pub shape_diag: [f32; 4],
-    /// G: xy, xz, yz; w = centre displacement from the sorted particle.
-    pub shape_off: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<FluidBlob>() == 48);
+const _: () = assert!(std::mem::size_of::<FluidBlob>() == 16);
 
-pub const FLUID_BLOB_SPECS: &[ChannelSpec] = &[
-    ChannelSpec {
-        name: well_known::CENTER_RADIUS,
-        ty: ChannelElementType::Vec4F,
-    },
-    ChannelSpec {
-        name: well_known::SHAPE_DIAG,
-        ty: ChannelElementType::Vec4F,
-    },
-    ChannelSpec {
-        name: well_known::SHAPE_OFF,
-        ty: ChannelElementType::Vec4F,
-    },
-];
+pub const FLUID_BLOB_SPECS: &[ChannelSpec] = &[ChannelSpec {
+    name: well_known::CENTER_RADIUS,
+    ty: ChannelElementType::Vec4F,
+}];
 
 impl KnownItem for FluidBlob {
     const SPECS: &'static [ChannelSpec] = FLUID_BLOB_SPECS;

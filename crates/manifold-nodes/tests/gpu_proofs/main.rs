@@ -23,7 +23,6 @@ mod film_grain_decorrelation;
 mod fragment_storage;
 mod gbuffer_depth;
 mod gbuffer_velocity;
-mod liquid_indexed;
 mod matter_bodies;
 mod matter_coupling;
 mod matter_look;

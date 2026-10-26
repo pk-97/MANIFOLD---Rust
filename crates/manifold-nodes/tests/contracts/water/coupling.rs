@@ -206,10 +206,10 @@ mod tests {
         );
     }
 
-    /// A matter domain pairs through its surface chain even though it takes no
+    /// A matter domain pairs through its level-set chain even though it takes no
     /// scene forces yet.
     #[test]
-    fn matter_domain_pairs_through_its_surface_chain() {
+    fn matter_domain_pairs_through_its_level_set_chain() {
         let mut builder = GraphBuilder::new();
         let scene = builder.node("scene", "node.render_scene");
         let world = builder.node("world", "node.physics_world");
@@ -220,11 +220,11 @@ mod tests {
         builder.wire(box_object, "object", scene, "object_0");
         let domain = builder.node("matter", MATTER_DOMAIN_TYPE_ID);
         let state = builder.node("state", "node.matter_state");
-        let mesh = builder.node("mesh", "node.volume_surface_mesh");
+        let level_set = builder.node("level_set", "node.carry_liquid_into_solids");
         let water = builder.node("water", "node.scene_object");
         builder.wire(domain, "ticks", state, "ticks");
-        builder.wire(state, "out", mesh, "count");
-        builder.wire(mesh, "vertices", water, "vertices");
+        builder.wire(state, "out", level_set, "nodes_x");
+        builder.wire(level_set, "out", water, "field");
         builder.wire(water, "object", scene, "object_1");
         assert_eq!(
             prepare(builder).unwrap(),

@@ -12,11 +12,11 @@
 //! `WaterDamBreakParticles.json`. Every node reads the domain's lattice off
 //! its wires, so a Resolution change reaches the running graph; the params
 //! only seed the planned sizes.
-#[cfg(any(test, feature = "testkit"))]
 use manifold_core::effect_graph_def::find_node_mut;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::initial_fill::{FillBox, add_initial_fill};
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+use manifold_core::scene_schema::PHYSICS_VIEW_SWITCHES;
 use serde_json::{Value, json};
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -534,8 +534,8 @@ manifold_core::testkit_visible! {
 /// runs the clock; the state's region runs one tick per due tick: `steps`
 /// water steps from `state.out`, then the tick's stats, closing into
 /// `state.in` and `state.stats_in`. The frame publishes each tick with the
-/// solid lattice. The harness sink holds the frame, or the surface mesh when
-/// `surface`.
+/// solid lattice. The harness sink holds the frame, or the surface's level set
+/// when `surface`.
 pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut b = Builder::default();
     let geometry = scene.geometry();
@@ -652,9 +652,9 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
 
     let output = b.node("output", "system.final_output", json!({}));
     let sink = if scene.surface {
-        let mesh = surface(&mut b, scene, frame);
-        let sink = b.node("mesh_sink", "test.mesh_sink", json!({}));
-        b.wire(mesh, sink, "vertices");
+        let level_set = surface(&mut b, scene, frame);
+        let sink = b.node("surface_sink", "test.value_sink", json!({}));
+        b.wire(level_set, sink, "values");
         sink
     } else {
         let sink = b.node("sink", "test.liquid_sink", json!({}));
@@ -696,22 +696,25 @@ const DOTS_OUTPUT: &str = "object_4";
 /// The render slot the dots take: the one the tank layout leaves empty.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 const DOTS_RENDER_SLOT: &str = "object_6";
-/// Physics View's switches: the surface's two wires, the dots' visibility and
-/// the dots' two GPU inputs. The card drives them all; the first owns it.
-const VERTICES_SWITCH: &str = "water_vertices_switch";
-const INDICES_SWITCH: &str = "water_indices_switch";
-const DOTS_VISIBLE: &str = "dots_visible";
-const DOTS_INSTANCES_SWITCH: &str = "dots_instances_switch";
-const DOTS_MESH_SWITCH: &str = "dots_mesh_switch";
-const PHYSICS_VIEW_SWITCHES: [&str; 5] = [
-    VERTICES_SWITCH,
-    INDICES_SWITCH,
-    DOTS_VISIBLE,
-    DOTS_INSTANCES_SWITCH,
-    DOTS_MESH_SWITCH,
+/// Physics View's switches, the field's on the first. The card drives them
+/// all and the first owns it.
+const FIELD_SWITCH: &str = PHYSICS_VIEW_SWITCHES[0];
+const VELOCITY_SWITCH: &str = PHYSICS_VIEW_SWITCHES[1];
+const NODES_SWITCHES: [&str; 3] = [
+    PHYSICS_VIEW_SWITCHES[2],
+    PHYSICS_VIEW_SWITCHES[3],
+    PHYSICS_VIEW_SWITCHES[4],
 ];
+const WATER_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[5];
+const DOTS_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[6];
+const DOTS_INSTANCES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[7];
+const DOTS_MESH_SWITCH: &str = PHYSICS_VIEW_SWITCHES[8];
 /// The Platonic shape a physics dot is drawn with, scaled by the particle's radius.
 const TETRAHEDRON: usize = 0;
+
+/// The share of sheet seeds the shipped water keeps, FLIP Fluids' sheet fill
+/// rate. On by default so thin sheets keep their water.
+pub const SHEET_FILL_RATE: f64 = 0.5;
 
 /// The body output retained by the insertion template.
 pub const LIQUID_BODY_OUTPUT: &str = "fluid_output";
@@ -721,7 +724,7 @@ impl WaterScene {
     /// Preset colliders enter through the ordinary domain role interface.
     fn family_def(self) -> EffectGraphDef {
         let mut b = Builder::from_def(water_def(self.with_surface()));
-        b.remove(&["mesh_sink", "output"]);
+        b.remove(&["surface_sink", "output"]);
         let [domain, state, step, frame, solid, source, surface] = [
             "domain",
             "state",
@@ -732,6 +735,13 @@ impl WaterScene {
             "surface",
         ]
         .map(|n| b.id(n));
+        find_node_mut(&mut b.nodes, "domain")
+            .expect("family domain")
+            .params
+            .insert(
+                "sheet_fill_rate".into(),
+                serde_json::from_value(float(SHEET_FILL_RATE)).expect("sheet fill rate"),
+            );
         let whitewater = b.node(
             "whitewater",
             "node.whitewater_step",
@@ -889,6 +899,7 @@ impl WaterScene {
             node.handle = match node.node_id.as_str() {
                 "water_material" => Some("Water Material"),
                 "water_object" => Some("Water"),
+                "water_ripple_detail" => Some("Ripple Detail"),
                 "whitewater" => Some("Whitewater"),
                 "whitewater_budget" => Some("Whitewater Budget"),
                 "foam_object" => Some("Foam"),
@@ -941,7 +952,7 @@ impl WaterScene {
             .find(|node| node.id == domain as u32)
             .expect("family domain");
         bindings.push(
-            json!({"id":"sheet_fill_rate", "label":"Sheet Fill Rate", "defaultValue":0.0,
+            json!({"id":"sheet_fill_rate", "label":"Sheet Fill Rate", "defaultValue":SHEET_FILL_RATE,
             "defaultMirrorsNodeParam":true, "convert":{"type":"Float"},
             "target":{"kind":"node", "nodeId":domain_node.node_id, "param":"sheet_fill_rate"}}),
         );
@@ -950,7 +961,7 @@ impl WaterScene {
             "defaultMirrorsNodeParam":true, "convert":{"type":"IntRound"},
             "target":{"kind":"node", "nodeId":budget_node.node_id, "param":"value"}}),
         );
-        // The vertices switch comes first: a card belongs to its first target.
+        // The field switch comes first: a card belongs to its first target.
         for switch in PHYSICS_VIEW_SWITCHES {
             bindings.push(
                 json!({"id":"physics_view", "label":"Physics View", "defaultValue":0.0,
@@ -962,7 +973,7 @@ impl WaterScene {
             "id":"WaterFamily", "displayName":"Water", "category":"Geometry", "oscPrefix":"water",
             "params":[{"id":"parent_visible", "name":"Visible", "defaultValue":1.0,
                 "min":0.0, "max":1.0, "isToggle":true, "cardVisible":false, "section":"Water"},
-                {"id":"sheet_fill_rate", "name":"Sheet Fill Rate", "defaultValue":0.0,
+                {"id":"sheet_fill_rate", "name":"Sheet Fill Rate", "defaultValue":SHEET_FILL_RATE,
                 "min":0.0, "max":1.0, "formatString":"F2", "wholeNumbers":false,
                 "isToggle":false, "isTrigger":false, "section":"Fluid"},
                 {"id":"whitewater_capacity", "name":"Whitewater Budget", "defaultValue":100000.0,
@@ -1197,34 +1208,31 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
             metadata.params.push(spec);
         }
     }
-    author_mesher_scene(&mut metadata.params);
+    author_surface_scene(&mut metadata.params);
     def.preset_metadata = Some(metadata);
     def
 }
 
-/// The water mesher's controls and the scene group each joins. They shape
+/// The water surface's controls and the scene group each joins. They shape
 /// how the surface is built, set once per scene: the Scene tab shows them,
 /// the card does not (card
-/// projection), the Scene band's setup-role mesher row).
-pub const MESHER_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlGroup); 8] = {
+/// projection), the Scene band's setup-role surface row).
+pub const SURFACE_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlGroup); 5] = {
     use manifold_foundation::scene_surface::ControlGroup::{Look, Whitewater};
     [
         ("surface_detail", Look),
         ("surface_particle_scale", Look),
-        ("mesh_relaxation", Look),
-        ("surface_smoothing_iterations", Look),
-        ("surface_stretch", Look),
-        ("surface_centre_smoothing", Look),
-        ("surface_fill_pits", Look),
+        ("surface_smoothness", Look),
+        ("surface_ripple_detail", Look),
         ("whitewater_capacity", Whitewater),
     ]
 };
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-fn author_mesher_scene(params: &mut [manifold_core::effect_graph_def::ParamSpecDef]) {
+fn author_surface_scene(params: &mut [manifold_core::effect_graph_def::ParamSpecDef]) {
     use manifold_foundation::scene_surface::{CardLabel, SceneParamDesc, SurfaceRole};
     for param in params {
-        if let Some((_, group)) = MESHER_CONTROLS.iter().find(|(id, _)| *id == param.id) {
+        if let Some((_, group)) = SURFACE_CONTROLS.iter().find(|(id, _)| *id == param.id) {
             param.scene = Some(SceneParamDesc {
                 role: SurfaceRole::Setup,
                 group: *group,
@@ -1354,14 +1362,14 @@ fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     metadata
 }
 
-/// Sets `resolution_scale` on the surface schedule, volume and mesh in `value`,
+/// Sets `resolution_scale` on the surface's bricks and volume in `value`,
 /// however deep the group nests them.
 fn set_surface_scale(value: &mut Value, scale: usize) {
     match value {
         Value::Object(map) => {
-            let surface = map.get("nodeId").is_some_and(|id| {
-                id == "liquid_volume" || id == "liquid_mesh" || id == "liquid_bricks"
-            });
+            let surface = map
+                .get("nodeId")
+                .is_some_and(|id| id == "liquid_volume" || id == "liquid_bricks");
             if surface && let Some(params) = map.get_mut("params") {
                 params["resolution_scale"] = int(scale);
             }
@@ -1372,7 +1380,7 @@ fn set_surface_scale(value: &mut Value, scale: usize) {
     }
 }
 
-/// The liquid surface on the frame's seam outputs: frame B's particles and
+/// The liquid's field on the frame's seam outputs: frame B's particles and
 /// count, its solid lattice, and the lattice's bounds and nodes.
 fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     let mut group = surface_group();
@@ -1399,7 +1407,7 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     ] {
         b.wire((frame, from), id, to);
     }
-    (id, "vertices")
+    (id, "level_set")
 }
 
 /// The scene's padded lattice (the domain's `LATTICE_WIRES`) as params,
@@ -1573,8 +1581,13 @@ pub fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
 #[doc(hidden)]
 pub mod testkit;
 
-/// The water drawn from frame B through the push-out: blended particles
-/// and solids, the surface fed from them, and the water object with its
+/// Pure water's absorption per metre at red, green and blue (Pope and Fry
+/// 1997, at 650, 550 and 450 nm). The attenuation colour is what one metre lets
+/// through.
+pub const WATER_ABSORPTION_PER_METRE: [f64; 3] = [0.34, 0.057, 0.009];
+
+/// The water drawn from frame B through the push-out: the surface's field
+/// fed from the blended particles and solids, and the water object with its
 /// material. Returns the water object.
 fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
     let particles = b.node(
@@ -1632,33 +1645,75 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
     b.wire((push_out, "out"), surface, "particles");
     b.wire((blend, "out"), surface, "solid");
 
-    let material = b.node("water_material", "node.pbr_material", json!({
-        "ambient": float(0.0), "color_r": float(0.37254903), "color_g": float(0.7294118), "color_b": float(1.0),
-        "metallic": float(0.0), "roughness": float(0.5540391), "ior": float(1.333), "transmission": float(1.0),
-        "volume_attenuation_color_r": float(0.35), "volume_attenuation_color_g": float(0.72), "volume_attenuation_color_b": float(0.8),
-        "volume_attenuation_distance": float(0.1), "volume_geometry": float(1.0), "volume_thickness": float(0.09),
-        "volume_scattering_color_r": float(0.68), "volume_scattering_color_g": float(0.86), "volume_scattering_color_b": float(0.92),
-        "volume_scattering_density": float(0.08826533),
-    }));
+    let [red, green, blue] =
+        WATER_ABSORPTION_PER_METRE.map(|absorption| float((-absorption).exp()));
+    let material = b.node(
+        "water_material",
+        "node.pbr_material",
+        json!({
+            "ambient": float(0.0),
+            "color_r": float(1.0), "color_g": float(1.0), "color_b": float(1.0),
+            "metallic": float(0.0), "roughness": float(0.0),
+            "ior": float(1.333), "transmission": float(1.0),
+            "volume_attenuation_color_r": red,
+            "volume_attenuation_color_g": green,
+            "volume_attenuation_color_b": blue,
+            "volume_attenuation_distance": float(1.0),
+        }),
+    );
     let water = b.node("water_object", "node.scene_object", json!({}));
     b.wire((material, "out"), water, "material");
+    for axis in ["x", "y", "z"] {
+        b.wire(
+            (lattice_box, &format!("pos_{axis}")),
+            water,
+            &format!("field_center_{axis}"),
+        );
+        b.wire(
+            (lattice_box, &format!("scale_{axis}")),
+            water,
+            &format!("field_size_{axis}"),
+        );
+    }
+    let ripple_detail = b.node(
+        "water_ripple_detail",
+        "node.value",
+        json!({"value": float(1.0)}),
+    );
+    b.wire((ripple_detail, "out"), water, "field_ripple_detail");
     water
 }
 
 /// Physics View: the switches between the surface and the particle dots,
 /// and the dots object. Returns the dots object.
 fn display_dots(b: &mut Builder, frame: usize, surface: usize, water: usize) -> usize {
-    // Physics View: the surface sits on in_0 of its switches and the
-    // dots on in_1 of theirs, so the card prunes whichever side is off.
-    // An unwired choice draws nothing; dots_visible hides the object.
-    for (switch, type_id, port) in [
-        (VERTICES_SWITCH, "node.switch_mesh", "vertices"),
-        (INDICES_SWITCH, "node.switch_indices", "indices"),
+    // Physics View: the surface's field sits on in_0 of its switches and the
+    // dots on in_1 of theirs, so the card prunes whichever side is off. In
+    // Physics View the water is hidden and reads no field. An unwired choice
+    // draws nothing; dots_visible hides the object.
+    for (name, port, to) in [
+        (FIELD_SWITCH, "level_set", "field"),
+        (VELOCITY_SWITCH, "velocity", "field_velocity"),
     ] {
-        let switch = b.node(switch, type_id, json!({"selector": float(0.0)}));
+        let switch = b.node(name, "node.switch_array", json!({"selector": float(0.0)}));
         b.wire((surface, port), switch, "in_0");
-        b.wire((switch, "out"), water, port);
+        b.wire((switch, "out"), water, to);
     }
+    for (axis, name) in ["x", "y", "z"].into_iter().zip(NODES_SWITCHES) {
+        let switch = b.node(name, "node.switch_value", json!({"selector": float(0.0)}));
+        b.wire(
+            (surface, &format!("level_set_nodes_{axis}")),
+            switch,
+            "in_0",
+        );
+        b.wire((switch, "out"), water, &format!("field_nodes_{axis}"));
+    }
+    let water_visible = b.node(
+        WATER_VISIBLE,
+        "node.switch_value",
+        json!({"selector": float(0.0), "in_0": float(1.0), "in_1": float(0.0)}),
+    );
+    b.wire((water_visible, "out"), water, "visible");
     let dots_mesh = b.node(
         "dots_mesh",
         "node.platonic_solid_mesh",

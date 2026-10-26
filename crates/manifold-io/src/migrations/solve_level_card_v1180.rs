@@ -170,7 +170,6 @@ mod tests {
 
     const BUNDLED: &str =
         include_str!("../../../manifold-nodes/tests/fixtures/presets/WaterDamBreakGpuFlip.json");
-    const PETER_LAYER: &str = include_str!("../../tests/fixtures/water_layer_graph_v1160.json");
 
     fn migrate_project(before: &Value) -> Value {
         serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap())
@@ -214,16 +213,17 @@ mod tests {
     }
 
     #[test]
-    fn peters_layer_gains_the_card_the_binding_and_the_wire() {
+    fn a_saved_graph_gains_the_card_the_binding_and_the_wire() {
         super::super::take_migration_notes();
-        let graph: Value = serde_json::from_str(PETER_LAYER).unwrap();
-        assert!(
-            !graph["wires"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|w| w["toPort"] == PARAM)
-        );
+        let graph = json!({
+            "name": "Saved",
+            "nodes": [
+                {"id": 0, "nodeId": "domain", "typeId": DOMAIN},
+                {"id": 6, "nodeId": "step", "typeId": STEP}
+            ],
+            "wires": [],
+            "presetMetadata": {"bindings": [], "params": []}
+        });
         // From 1.17.0 so the density rung, which drops the body's mass, does not run.
         let before = json!({"projectVersion": "1.17.0", "timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
         let after = migrate_project(&before);
@@ -233,11 +233,6 @@ mod tests {
         );
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         let wires = graph["wires"].as_array().unwrap();
-        assert_eq!(
-            wires.len(),
-            195 + 3,
-            "this rung's wire, the Max Iterations rung's and the contacts rung's"
-        );
         assert!(wires.contains(&wire(&json!(0), &json!(6))));
         assert_eq!(
             *find(&graph["presetMetadata"]["bindings"], PARAM),

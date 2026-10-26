@@ -33,8 +33,6 @@ mod tests {
                 (AfterFlatten, 310, "wire_gpu_flip_grid"),
                 (AfterFlatten, 320, "wire_liquid_frame_cursor"),
                 (AfterFlatten, 330, "wire_retained_whitewater"),
-                (AfterFlatten, 400, "wire_blob_bounds"),
-                (BeforeSceneModifiers, 300, "prepare_gpu_flip_surface"),
                 (BeforeBindingCapture, 310, "wire_gpu_flip_grid"),
             ]
         );

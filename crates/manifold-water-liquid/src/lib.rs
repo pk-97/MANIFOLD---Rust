@@ -15,6 +15,7 @@ pub mod display_cursor;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod extent;
+pub mod field_build;
 pub mod fields;
 pub mod frame_history;
 pub mod frame_ring;

@@ -60,12 +60,6 @@ pub fn set_modifier_events(runtime: &mut PresetRuntime, events: Option<PreparedM
 pub fn heal_bool_convert_bindings(def: &mut EffectGraphDef, registry: &PrimitiveRegistry) -> usize {
     super::convert_heal::heal_bool_convert_bindings(def, registry)
 }
-pub fn prepare_surface(def: &mut EffectGraphDef) {
-    crate::load::migration::prepare_stage(
-        def,
-        crate::load::migration::MigrationStage::BeforeSceneModifiers,
-    );
-}
 #[cfg(feature = "gpu-proofs")]
 pub fn build_segment_cards(
     indices: &[usize],

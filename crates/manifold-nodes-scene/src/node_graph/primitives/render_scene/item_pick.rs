@@ -2,9 +2,10 @@
 //! every draw writes its render slot plus one into a small depth-tested
 //! target that covers the picked point and a few pixels around it, through
 //! the camera this frame rendered with, so a click gets exactly what is
-//! drawn there, a part inside a group or a water surface included. It draws
-//! only on a frame with a pick waiting, reads back on the next render, and
-//! never touches the output (REALTIME_3D_DESIGN.md D9).
+//! drawn there, a part inside a group or a water surface included (field
+//! water draws its cover there). It draws only on a frame with a pick
+//! waiting, reads back on the next render, and never touches the output
+//! (REALTIME_3D_DESIGN.md D9).
 
 use manifold_node_engine::scene::pick::{
     PICK_REGION, PickHit, PickRequest, nearest_slot, pick_view_proj,
@@ -29,6 +30,8 @@ pub(super) struct ItemPick {
     depth: Option<manifold_gpu::GpuTexture>,
     readback: Option<manifold_gpu::GpuBuffer>,
     pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// The cover draw that puts field water into the pick region.
+    field_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
 }
 
 impl ItemPick {
@@ -77,6 +80,7 @@ impl RenderScene {
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         pre: &FramePrelude<'ctx>,
         draws: &[ObjectDraw<'ctx>],
+        fields: &[FieldObject<'ctx>],
     ) {
         let Some(pick) = self.pick.waiting.take() else {
             return;
@@ -139,6 +143,23 @@ impl RenderScene {
                 )
             })
             .clone();
+        let field_pipeline = (!fields.is_empty()).then(|| {
+            self.pick
+                .field_pipeline
+                .get_or_insert_with(|| {
+                    gpu.device.create_render_pipeline_depth(
+                        water_cover::COVER_WGSL,
+                        "vs_cover",
+                        "fs_cover_id",
+                        manifold_gpu::GpuTextureFormat::R32Float,
+                        manifold_gpu::GpuTextureFormat::Depth32Float,
+                        None,
+                        1,
+                        "node.render_scene pick water",
+                    )
+                })
+                .clone()
+        });
         let depth_stencil = self
             .depth_stencil
             .as_ref()
@@ -196,7 +217,21 @@ impl RenderScene {
                 ]
             })
             .collect();
-        let batch: Vec<manifold_gpu::DepthMsaaDraw> = drawn
+        // A field whose uniforms fail is skipped: Pass B already failed the
+        // frame on the same matrices.
+        let cover_uniforms: Vec<(&FieldObject<'ctx>, water_march::MarchUniforms)> = fields
+            .iter()
+            .filter_map(|field| {
+                water_cover::cover_uniforms(view_proj, PICK_REGION, PICK_REGION, field)
+                    .ok()
+                    .map(|uniforms| (field, uniforms))
+            })
+            .collect();
+        let cover_bindings: Vec<[GpuBinding; 2]> = cover_uniforms
+            .iter()
+            .map(|(field, uniforms)| water_cover::cover_bindings(uniforms, field))
+            .collect();
+        let mut batch: Vec<manifold_gpu::DepthMsaaDraw> = drawn
             .iter()
             .zip(&bindings)
             .map(|(d, bindings)| {
@@ -208,6 +243,13 @@ impl RenderScene {
                 ))
             })
             .collect();
+        // After the meshes, so the one depth-tested pass decides between
+        // meshes and water.
+        if let Some(field_pipeline) = &field_pipeline {
+            batch.extend(cover_bindings.iter().map(|bindings| {
+                manifold_gpu::GpuEncoder::depth_msaa_draw(field_pipeline, bindings, 3, 1)
+            }));
+        }
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.draw_instanced_depth_batch(
             &ids,

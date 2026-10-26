@@ -59,7 +59,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "The building block for variable-length GPU output: per-item counts (triangles per cell, particles per bin) in, each item's inclusive end out, so a later atom finds its slot by binary search. Values past `count` are not written. `total` lags one frame; GPU consumers read the last scanned value directly instead. Wire `extent` to an emitter (node.volume_surface_mesh) so it dispatches over its live elements and clears last frame's; set per_item to its elements per count (3 vertices per triangle).",
+    composition_notes: "The building block for variable-length GPU output: per-item counts (particles per bin) in, each item's inclusive end out, so a later atom finds its slot by binary search. Values past `count` are not written. `total` lags one frame; GPU consumers read the last scanned value directly instead. Wire `extent` to the source whose elements are counted, so it dispatches over its live elements and clears last frame's; set per_item to the elements each count stands for (1 for one particle per bin).",
     examples: [],
     picker: { label: "Running Total", category: Atom },
     summary: "Adds up a list of counts as it goes, so each item knows where its results start.",

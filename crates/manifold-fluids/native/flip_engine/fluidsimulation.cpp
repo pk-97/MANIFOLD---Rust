@@ -23,7 +23,6 @@ SOFTWARE.
 */
 
 #include "fluidsimulation.h"
-#include "surfaceframe.h"
 #include "rigidfluidcoupling.h"
 
 #include <cstring>
@@ -9616,31 +9615,6 @@ void FluidSimulation::_generateOutputSurface(TriangleMesh &surface, TriangleMesh
     surface.removeMinimumTriangleCountPolyhedra(_minimumSurfacePolyhedronTriangleCount);
     _removeMeshNearDomain(surface);
     _removeMeshNearDomain(preview);
-}
-
-void FluidSimulation::captureSurfaceFrame(FluidSurfaceFrame &frame) {
-    if (isUpdateInProgress() || isUpdateFailed() || getCurrentFrame() == 0) {
-        throw std::runtime_error("surface frame requires a completed simulation frame");
-    }
-    // These upstream options are not exposed by MANIFOLD's bridge. Reject them
-    // explicitly until their postprocessing context is part of the snapshot.
-    if (_isRemoveSurfaceNearDomainEnabled || _isInvertedContactNormalsEnabled) {
-        throw std::runtime_error("surface frame does not support boundary removal or contact-normal inversion");
-    }
-    frame.isize = _isize;
-    frame.jsize = _jsize;
-    frame.ksize = _ksize;
-    frame.dx = _dx;
-    frame.chunks = _numSurfaceReconstructionPolygonizerSlices;
-    frame.minimumTriangles = _minimumSurfacePolyhedronTriangleCount;
-    frame.particleRadius = _markerParticleRadius;
-    frame.domainScale = _domainScale;
-    frame.domainOffset = _domainOffset;
-    frame.particles = getMarkerParticlePositions();
-    if (!frame.particles.empty()) {
-        frame.solid.constructMinimalSignedDistanceField(_solidSDF);
-        _prepareSurfaceMeshingInputs(&frame.particles, &frame.solid);
-    }
 }
 
 void FluidSimulation::captureParticleFrameSolid(MeshLevelSet &solid) {

@@ -66,6 +66,9 @@ pub struct SceneObject {
     /// Cut-map slot. The renderer resolves its typed content metadata from
     /// the slot, just as it does for mesh, weights, and map resources.
     pub topology: Option<Slot>,
+    /// Water drawn straight from a level set instead of a mesh. `None` for
+    /// mesh objects; an object with a field draws the field.
+    pub field: Option<FieldSurface>,
     /// `Texture2D` slot — base colour map.
     pub base_color_map: Option<Slot>,
     /// `Texture2D` slot — normal map.
@@ -119,6 +122,29 @@ pub struct SceneObject {
     pub emission_strength: f32,
     /// Per-object appearance gain. Default 1.0.
     pub gain: f32,
+}
+
+/// A level-set surface the renderer marches to its zero crossing instead
+/// of rasterising triangles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FieldSurface {
+    /// `Array<f32>`: signed distance in metres at each lattice node,
+    /// negative inside, x fastest, then y, then z.
+    pub levelset: Slot,
+    /// Optional `Array<f32>`: three velocity components (m/s) per node, for
+    /// motion vectors. `None` draws the field as still.
+    pub velocity: Option<Slot>,
+    /// Optional `Array<u32>`: `node.lattice_bricks`' brick list, for
+    /// skipping empty space. `None` marches the whole lattice.
+    pub bricks: Option<Slot>,
+    /// Lattice centre in object space.
+    pub center: [f32; 3],
+    /// Lattice extent per axis, metres.
+    pub size: [f32; 3],
+    /// Lattice nodes per axis, at least 2.
+    pub nodes: [u32; 3],
+    /// Ripple detail strength over the automatic one: 1 is the automatic strength, 0 turns it off.
+    pub ripple_detail: f32,
 }
 
 /// The space an object's instances live in. Nested group transforms are
@@ -246,5 +272,4 @@ mod tests {
         assert!(!history.update(1, [object].into_iter()));
         assert!(history.update(1, [(object.0, Some(2_u64), object.2)].into_iter()));
     }
-
 }

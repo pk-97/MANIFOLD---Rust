@@ -1,6 +1,8 @@
 //! Pass 2, the main draw: per-draw binding sets, the opaque MSAA batch with its aux attachments, and the glass Pass B over the opaque scene copy.
 
+use super::water_shade::{RippleBindings, ripple_uniforms};
 use super::*;
+use manifold_node_engine::scene::camera::CameraMode;
 
 impl RenderScene {
     /// BUG-trh7 stage 2, pass 8: the draw — target/resolve-target selection,
@@ -19,6 +21,7 @@ impl RenderScene {
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         pre: &FramePrelude<'ctx>,
         draws: &[ObjectDraw<'ctx>],
+        fields: &[FieldObject<'ctx>],
         has_transmission: bool,
         denoise_active: bool,
         rt_rendered_this_frame: bool,
@@ -39,6 +42,11 @@ impl RenderScene {
             reactive_resolve_target,
             ..
         } = *pre;
+        // A frame with no water holds no G-buffer and no ripple tiles.
+        if fields.is_empty() {
+            self.water_march.reset();
+            self.ripple_detail.reset();
+        }
         // ---- Pass 2 (immutable phase): draw. Every object composites into
         // ONE 4x-MSAA color+depth pass (cleared once); the shared depth
         // buffer resolves inter-object occlusion, and the pass resolves out
@@ -143,7 +151,7 @@ impl RenderScene {
             .unwrap_or_else(|| self.dummy_depth_array.as_ref().expect("stubs ensured"));
         let dummy_mask_array = self.dummy_mask_array.as_ref().expect("stubs ensured");
 
-        if !draws.iter().any(|d| d.vertex_count > 0) {
+        if !draws.iter().any(|d| d.vertex_count > 0) && fields.is_empty() {
             // Every object had zero drawable vertices — clear so stale
             // pool contents don't leak through (matches render_mesh's
             // vertex_count == 0 fallback).
@@ -224,6 +232,81 @@ impl RenderScene {
         // needs since the stage-2 carve — the ensure block guarantees it).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         let prev_positions_dummy = self.prev_positions_dummy.as_ref().expect("ensured");
+        // The scene-wide bindings every mesh draw and every water draw shares;
+        // only the scene-colour snapshot at binding 27 differs per use.
+        let caster_offset = self.caster_offset;
+        let refraction_sampler = self.refraction_sampler.as_ref().expect("ensured");
+        let prefiltered_sheen = self.prefiltered_sheen.as_ref().unwrap_or(dummy);
+        let scene_bindings = |opaque_scene_color| {
+            [
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: envmap_texture,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
+                    sampler,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
+                    buffer: light_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 9,
+                    buffer: light_buffer,
+                    offset: caster_offset,
+                },
+                GpuBinding::Texture {
+                    binding: 10,
+                    texture: shadow_maps,
+                },
+                GpuBinding::Sampler {
+                    binding: 14,
+                    sampler: shadow_sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 16,
+                    texture: prefiltered_specular,
+                },
+                GpuBinding::Texture {
+                    binding: 17,
+                    texture: irradiance_map,
+                },
+                GpuBinding::Texture {
+                    binding: 18,
+                    texture: brdf_lut,
+                },
+                GpuBinding::Texture {
+                    binding: 27,
+                    texture: opaque_scene_color,
+                },
+                GpuBinding::Sampler {
+                    binding: 28,
+                    sampler: refraction_sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 41,
+                    texture: rt_mask_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 42,
+                    texture: rt_irr_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 43,
+                    texture: rt_refl_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 45,
+                    texture: rt_svt_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 49,
+                    texture: prefiltered_sheen,
+                },
+            ]
+        };
         // Indexed by draw, so a draw wholly outside the camera's clip volume
         // keeps its place with no binding set built for it.
         let binding_sets: Vec<Option<[GpuBinding; 54]>> = draws
@@ -233,6 +316,29 @@ impl RenderScene {
                 if !draw.in_view {
                     return None;
                 }
+                let [
+                    s2,
+                    s3,
+                    s8,
+                    s9,
+                    s10,
+                    s14,
+                    s16,
+                    s17,
+                    s18,
+                    s27,
+                    s28,
+                    s41,
+                    s42,
+                    s43,
+                    s45,
+                    s49,
+                ] = scene_bindings(if draw.is_transmissive && has_transmission {
+                    opaque_scene_color_snapshot
+                        .expect("ensured above whenever has_transmission is true")
+                } else {
+                    dummy
+                });
                 Some([
                     GpuBinding::Bytes {
                         binding: 0,
@@ -243,14 +349,8 @@ impl RenderScene {
                         buffer: draw.vertices,
                         offset: 0,
                     },
-                    GpuBinding::Texture {
-                        binding: 2,
-                        texture: envmap_texture,
-                    },
-                    GpuBinding::Sampler {
-                        binding: 3,
-                        sampler,
-                    },
+                    s2,
+                    s3,
                     // normal_map_n (cotangent-frame tangent-space reconstruction).
                     GpuBinding::Texture {
                         binding: 4,
@@ -275,26 +375,12 @@ impl RenderScene {
                     // Lights: ring-buffered storage buffer (was a 4KB-capped
                     // Bytes bind). Holds one zeroed entry when no light is
                     // wired; the shader gates reads on `light_count` (D4).
-                    GpuBinding::Buffer {
-                        binding: 8,
-                        buffer: light_buffer,
-                        offset: 0,
-                    },
+                    s8,
                     // The caster table, after the lights in the same ring
                     // slot — always bound, same D4 discipline.
-                    GpuBinding::Buffer {
-                        binding: 9,
-                        buffer: light_buffer,
-                        offset: self.caster_offset,
-                    },
-                    GpuBinding::Texture {
-                        binding: 10,
-                        texture: shadow_maps,
-                    },
-                    GpuBinding::Sampler {
-                        binding: 14,
-                        sampler: shadow_sampler,
-                    },
+                    s9,
+                    s10,
+                    s14,
                     // D11: per-object instances_n, or the identity stub when
                     // that object leaves it unwired.
                     GpuBinding::Buffer {
@@ -309,18 +395,9 @@ impl RenderScene {
                     // `envmap` is wired this frame; `fs_pbr` only actually
                     // samples them for PBR materials, which already require
                     // `envmap` wired (the `requires_envmap` gate above).
-                    GpuBinding::Texture {
-                        binding: 16,
-                        texture: prefiltered_specular,
-                    },
-                    GpuBinding::Texture {
-                        binding: 17,
-                        texture: irradiance_map,
-                    },
-                    GpuBinding::Texture {
-                        binding: 18,
-                        texture: brdf_lut,
-                    },
+                    s16,
+                    s17,
+                    s18,
                     // The three NEW
                     // per-object maps (normal_map_n reuses binding(4) above).
                     // Same always-bind ABI-stub discipline.
@@ -366,19 +443,8 @@ impl RenderScene {
                     // everything else. Declared in the WGSL (pipeline-layout
                     // correctness) but not yet read by `fs_pbr` this phase —
                     // no shading change.
-                    GpuBinding::Texture {
-                        binding: 27,
-                        texture: if draw.is_transmissive && has_transmission {
-                            opaque_scene_color_snapshot
-                                .expect("ensured above whenever has_transmission is true")
-                        } else {
-                            dummy
-                        },
-                    },
-                    GpuBinding::Sampler {
-                        binding: 28,
-                        sampler: self.refraction_sampler.as_ref().expect("ensured"),
-                    },
+                    s27,
+                    s28,
                     // Sheen/iridescence/anisotropy extension
                     // textures. Same always-bind ABI-stub discipline as
                     // 19-21; sampled with the existing base_color_sampler
@@ -452,26 +518,11 @@ impl RenderScene {
                         binding: 50,
                         data: bytemuck::cast_slice(&draw.map_uniforms),
                     },
-                    GpuBinding::Texture {
-                        binding: 49,
-                        texture: self.prefiltered_sheen.as_ref().unwrap_or(dummy),
-                    },
-                    GpuBinding::Texture {
-                        binding: 41,
-                        texture: rt_mask_tex,
-                    },
-                    GpuBinding::Texture {
-                        binding: 42,
-                        texture: rt_irr_tex,
-                    },
-                    GpuBinding::Texture {
-                        binding: 43,
-                        texture: rt_refl_tex,
-                    },
-                    GpuBinding::Texture {
-                        binding: 45,
-                        texture: rt_svt_tex,
-                    },
+                    s49,
+                    s41,
+                    s42,
+                    s43,
+                    s45,
                     // Optional per-vertex appearance weights. Unwired draws
                     // bind the existing vertex buffer as an unused ABI dummy;
                     // the shader reads it only when the uniform flag is set.
@@ -534,7 +585,8 @@ impl RenderScene {
         // right after (occlusion by opaque geometry falls out of the shared,
         // still-live MSAA depth buffer; no separate resolve/reclear).
         let mut draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = Vec::with_capacity(draws.len());
-        let mut blend_entries: Vec<(f32, usize, manifold_gpu::DepthMsaaDraw)> = Vec::with_capacity(draws.len());
+        let mut blend_entries: Vec<(f32, usize, manifold_gpu::DepthMsaaDraw)> =
+            Vec::with_capacity(draws.len());
         for (draw_index, (draw, bindings)) in draws.iter().zip(&binding_sets).enumerate() {
             let Some(bindings) = bindings else {
                 continue;
@@ -827,6 +879,136 @@ impl RenderScene {
                 .expect("transmission depth state ensured above");
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let solid_depth_pipeline = self.solid_depth_pipeline.as_ref().expect("ensured").clone();
+            if !fields.is_empty() {
+                let view = FieldView {
+                    view_proj: pre.view_proj,
+                    prev_view_proj: pre.prev_view_proj,
+                    jitter_ndc: [pre.jitter_ndc.0, pre.jitter_ndc.1],
+                    prev_jitter_ndc: [pre.prev_jitter_ndc.0, pre.prev_jitter_ndc.1],
+                    frame_seconds: ctx.time.delta.0 as f32,
+                    width,
+                    height,
+                };
+                // Water is drawn where the march found it nearest: the march
+                // writes the depth and velocity outputs there, after Pass A's
+                // depth copy above.
+                let mut failure: Option<(u32, &'static str)> = None;
+                let seconds = ctx.time.seconds.0 as f32;
+                {
+                    let gpu = ctx.gpu_encoder();
+                    #[cfg(feature = "fluid-perf-proofs")]
+                    gpu.native_enc
+                        .profile_next_encoder("node.render_scene water march");
+                    self.ripple_detail
+                        .encode(gpu.device, gpu.native_enc, fields, seconds);
+                    self.water_march
+                        .begin(gpu.device, gpu.native_enc, width, height);
+                    for field in fields {
+                        if let Err(error) = self.water_march.encode(
+                            gpu.native_enc,
+                            &view,
+                            &FieldDraw {
+                                levelset: field.levelset,
+                                velocity: field.velocity,
+                                center: field.center,
+                                size: field.size,
+                                nodes: field.nodes,
+                                model: field.model,
+                                prev_model: field.prev_model,
+                                slot: field.slot,
+                            },
+                            opaque_depth_snapshot,
+                            depth_resolve_target,
+                            velocity_resolve_target,
+                        ) {
+                            failure = Some((field.slot, error));
+                            break;
+                        }
+                    }
+                    // The water refracts the opaque scene, so snapshot it as
+                    // a transmissive layer does.
+                    if failure.is_none() {
+                        gpu.native_enc.copy_texture_to_texture(
+                            resolve_target,
+                            opaque_scene_color,
+                            width,
+                            height,
+                            1,
+                        );
+                        if opaque_scene_color.mip_level_count() > 1 {
+                            gpu.native_enc.generate_mipmaps(opaque_scene_color);
+                        }
+                    }
+                }
+                if failure.is_none() {
+                    let hits = self.water_march.hits().expect("begin ran this frame");
+                    let gpu = ctx.gpu_encoder();
+                    // The size of a pixel on the water: metres per pixel per
+                    // metre of distance (perspective), or flat (orthographic).
+                    let footprint = match pre.cam.mode {
+                        CameraMode::Perspective { fov_y } => {
+                            [2.0 * (fov_y * 0.5).tan() / height as f32, 0.0]
+                        }
+                        CameraMode::Orthographic { half_height } => {
+                            [0.0, 2.0 * half_height / height as f32]
+                        }
+                    };
+                    for field in fields {
+                        let shade = match shade_uniforms(pre.view_proj, width, height, field.slot) {
+                            Ok(shade) => shade,
+                            Err(error) => {
+                                failure = Some((field.slot, error));
+                                break;
+                            }
+                        };
+                        let tile = self.ripple_detail.tile(field.slot);
+                        let ripple_data = match ripple_uniforms(
+                            field,
+                            tile.map(|tile| tile.tile_metres),
+                            seconds,
+                            footprint,
+                        ) {
+                            Ok(uniforms) => uniforms,
+                            Err(error) => {
+                                failure = Some((field.slot, error));
+                                break;
+                            }
+                        };
+                        // A field without a tile reads no ripples, so the stand-ins are never sampled.
+                        let ripple = RippleBindings {
+                            uniforms: &ripple_data,
+                            slopes: match tile {
+                                Some(tile) => &tile.texture,
+                                None => self.ripple_detail.dummy_slopes(),
+                            },
+                            sampler: self.ripple_detail.sampler(),
+                            velocity: match field.velocity {
+                                Some(velocity) => velocity,
+                                None => self.ripple_detail.dummy_velocity(),
+                            },
+                        };
+                        #[cfg(feature = "fluid-perf-proofs")]
+                        gpu.native_enc
+                            .profile_next_encoder("node.render_scene water shade");
+                        self.water_shade.encode(
+                            gpu.device,
+                            gpu.native_enc,
+                            resolve_target,
+                            opaque_depth_snapshot,
+                            opaque_depth_stencil,
+                            &scene_bindings(opaque_scene_color),
+                            bytemuck::bytes_of(&field.uniforms),
+                            hits,
+                            &shade,
+                            &ripple,
+                        );
+                    }
+                }
+                if let Some((slot, error)) = failure {
+                    Self::fail_frame(ctx, Some(slot), error);
+                    return None;
+                }
+            }
             // Capture the already-composited layers before each farther-to-nearer
             // draw. Every glass layer then transmits the layers behind it, instead
             // of all panes replacing one another with the original opaque image.
