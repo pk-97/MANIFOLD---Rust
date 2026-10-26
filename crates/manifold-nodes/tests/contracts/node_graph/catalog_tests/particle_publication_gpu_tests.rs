@@ -108,7 +108,7 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
     // Single dispatch reserve reads one CellRange, two scan words and 12 plan
     // words; rare rollover touches exactly the two live records of four slots.
     let particles = shared(&device, &original);
-    let identity = shared(&device, &[0u32; 4]);
+    let identity = shared(&device, &[0u32; 8]);
     let ranges = shared(&device, &[CellRange { start: 0, count: 2 }]);
     let scan = shared(&device, &[1u32, 2]);
     let plan = shared(&device, &[0u32; 12]);
@@ -139,6 +139,7 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
                 ranges: &ranges,
                 scan: &scan,
                 plan: &plan,
+                step_record: None,
                 params: [4, 1, 2, 1],
             },
         );
@@ -175,6 +176,7 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
             ranges: &ranges,
             scan: &scan,
             plan: &plan,
+            step_record: None,
             params: [4, 1, 2, 1],
         },
     );
@@ -196,7 +198,7 @@ fn particle_identity_multiple_substeps_keep_birth_ids() {
             FluidParticle::default(),
         ],
     );
-    let identity = shared(&device, &[4u32, 7, 0, 0]);
+    let identity = shared(&device, &[4u32, 7, 0, 0, 0, 0, 0, 0]);
     let ranges = shared(&device, &[CellRange { start: 0, count: 3 }]);
     let scan = shared(&device, &[0u32]);
     let plan = shared(&device, &[0u32; 12]);
@@ -231,6 +233,7 @@ fn particle_identity_multiple_substeps_keep_birth_ids() {
                 ranges: &ranges,
                 scan: &scan,
                 plan: &plan,
+                step_record: None,
                 params: [4, 1, 1, 1],
             },
         );

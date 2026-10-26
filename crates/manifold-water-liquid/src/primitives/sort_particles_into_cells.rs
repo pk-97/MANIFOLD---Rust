@@ -87,10 +87,17 @@ struct SortParams {
     live_word: u32,
     live_rule: u32,
     pool_tiles: u32,
-    _pad0: u32,
+    /// The word of the count record (binding 10) holding the slots in use, or
+    /// [`NO_COUNT_WORD`] when `count` is the slot count.
+    count_word: u32,
     _pad1: u32,
     _pad2: u32,
 }
+
+/// `SortParams::count_word` for a sort over a CPU slot count.
+const NO_COUNT_WORD: u32 = 0xffff_ffff;
+/// Bytes of a count record `[groups, 1, 1, n]`.
+const RECORD_BYTES: u64 = 16;
 
 /// Where the sort reads a record's position and liveness, in 4-byte words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,14 +140,28 @@ const NODE_LABELS: SortLabels = SortLabels {
     stabilise: "node.sort_particles_into_cells.stabilise",
 };
 
+/// How many slots a sort covers.
+#[derive(Clone, Copy)]
+pub enum SortCount<'a> {
+    /// The first `n` slots, a number the CPU has. At most every slot of every
+    /// output is sorted.
+    Slots(u32),
+    /// The slots in use, on the GPU: `[groups, 1, 1, n]` at byte `offset` of
+    /// `buffer` (a particle identity's record at `COUNT_OFFSET`, or a step's
+    /// own). The count, scatter and stabilise passes dispatch from the
+    /// triple, and `n` bounds the slots they read. Nothing reads a slot past
+    /// `n`, so the tail pass that clears the outputs past the live total does
+    /// not run: `sorted` and `order` keep their words there.
+    Record { buffer: &'a GpuBuffer, offset: u64 },
+}
+
 /// One sort: the records, the bin grid, and the per-slot outputs to write.
 pub struct SortJob<'a> {
     pub particles: &'a GpuBuffer,
     pub read: RecordRead,
     /// Records the particles buffer holds.
     pub capacity: u32,
-    /// Live records to sort, at most every slot of every output.
-    pub count: u32,
+    pub count: SortCount<'a>,
     pub bin_min: [f32; 3],
     pub inv_cell: f32,
     pub bins: [u32; 3],
@@ -297,7 +318,6 @@ impl ParticleSorter {
         .into_iter()
         .flatten()
         .fold(u64::from(job.capacity), u64::min) as u32;
-        let count = job.count.min(sorted_capacity);
         let rank_bytes = u64::from(job.capacity.max(1)) * 4;
         if self.rank.as_ref().is_none_or(|rank| rank.size < rank_bytes) {
             self.rank = Some(device.create_buffer(rank_bytes));
@@ -320,6 +340,17 @@ impl ParticleSorter {
             .gate
             .or(self.open.as_ref())
             .expect("sort pipelines prepared");
+        // The slots the passes cover: a CPU number, or an upper bound with the
+        // GPU's record bound to the shader (the gate stands in when unused).
+        let (count, count_word, counts) = match job.count {
+            SortCount::Slots(n) => (n.min(sorted_capacity), NO_COUNT_WORD, gate),
+            SortCount::Record { buffer, offset } => {
+                if !offset.is_multiple_of(4) || buffer.size < offset + RECORD_BYTES {
+                    return Err("the count record is smaller than its four words".into());
+                }
+                (sorted_capacity, (offset / 4 + 3) as u32, buffer)
+            }
+        };
         let rank = self.rank.as_ref().expect("rank scratch allocated");
         let slot_input = self.slot_input.as_ref().expect("slot scratch allocated");
         let read = job.read;
@@ -337,7 +368,7 @@ impl ParticleSorter {
             live_word: read.live_word,
             live_rule: read.live_rule,
             pool_tiles: pool.map_or(0, |(_, pool_tiles)| pool_tiles),
-            _pad0: 0,
+            count_word,
             _pad1: 0,
             _pad2: 0,
         };
@@ -387,6 +418,11 @@ impl ParticleSorter {
                 buffer: gate,
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 10,
+                buffer: counts,
+                offset: 0,
+            },
         ];
         if let Some((table, _)) = pool {
             bindings.push(GpuBinding::Buffer {
@@ -396,6 +432,18 @@ impl ParticleSorter {
             });
         }
         let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
+        // One thread per slot in use: direct over the CPU's count, indirect
+        // from the GPU's record.
+        let over_slots = |encoder: &mut GpuEncoder, pipeline: &GpuComputePipeline, label| {
+            match job.count {
+                SortCount::Slots(_) => {
+                    encoder.dispatch_compute(pipeline, &bindings, groups(count), label);
+                }
+                SortCount::Record { buffer, offset } => {
+                    encoder.dispatch_compute_indirect(pipeline, &bindings, buffer, offset, label);
+                }
+            }
+        };
         let [
             clear,
             count_pass,
@@ -409,7 +457,7 @@ impl ParticleSorter {
         };
         encoder.dispatch_compute(clear, &bindings, groups(bin_total), labels.clear);
         encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(count_pass, &bindings, groups(count), labels.count);
+        over_slots(encoder, count_pass, labels.count);
         encoder.compute_memory_barrier_buffers();
         match job.gate {
             Some(gate) => {
@@ -421,12 +469,14 @@ impl ParticleSorter {
                 .encode_labelled(encoder, bin_total as usize, labels.scan),
         }
         encoder.dispatch_compute(write_ranges, &bindings, groups(bin_total), labels.ranges);
-        encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), labels.tail);
+        if matches!(job.count, SortCount::Slots(_)) {
+            encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), labels.tail);
+        }
         encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(scatter, &bindings, groups(count), labels.scatter);
+        over_slots(encoder, scatter, labels.scatter);
         encoder.compute_memory_barrier_buffers();
         // One thread per scattered slot; there are at most `count`.
-        encoder.dispatch_compute(stabilise, &bindings, groups(count), labels.stabilise);
+        over_slots(encoder, stabilise, labels.stabilise);
         Ok(())
     }
 }
@@ -724,7 +774,7 @@ impl Primitive for SortParticlesIntoCells {
             particles,
             read,
             capacity,
-            count,
+            count: SortCount::Slots(count),
             bin_min: std::array::from_fn(|axis| center[axis] - 0.5 * size[axis]),
             inv_cell: 1.0 / cell_size,
             bins,

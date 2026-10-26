@@ -23,7 +23,7 @@ use manifold_water_liquid::primitives::liquid_stats::{
 use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
-    LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels,
+    LIQUID_PARTICLE_READ, ParticleSorter, SortCount, SortJob, SortLabels,
 };
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
 use manifold_water_liquid::tile_storage::pool_len;
@@ -101,7 +101,7 @@ impl Splash {
         let mut node = GpuFlipStep::new();
         node.prepare_pipelines(&h.device);
         let particles = h.array(&records, capacity);
-        let identity = h.array::<u32>(&[next_id, 1, 0, 0], 4);
+        let identity = h.array::<u32>(&[next_id, 1, 0, 0, 0, 1, 1, 0], 8);
         let faces = h
             .array::<FaceSample>(&[], SOLVER.map(|n| n + 1).iter().product())
             .0;
@@ -454,7 +454,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
                 particles: &source,
                 read: LIQUID_PARTICLE_READ,
                 capacity: capacity as u32,
-                count: capacity as u32,
+                count: SortCount::Slots(capacity as u32),
                 bin_min: [0.0; 3],
                 inv_cell: 1.0 / h,
                 bins: cells,
@@ -480,7 +480,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     let faces = vec![face; cells.into_iter().map(|n| (n + 1) as usize).product()];
     let pooled_faces = records_to_pool(&faces, cells, &[face; 8]);
     let old = shared(bytemuck::cast_slice(&pooled_faces), 32 * pooled_faces.len());
-    let identity = shared(bytemuck::cast_slice(&[5000u32, 1, 0, 0]), 16);
+    let identity = shared(bytemuck::cast_slice(&[5000u32, 1, 0, 0, 0, 1, 1, 0]), 32);
     let capped = shared(&[], 4 * SOLVER_WORDS as usize);
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
@@ -521,6 +521,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
                 ranges,
                 scan: stage.winners(),
                 plan,
+                step_record: None,
                 params: [capacity as u32, pool_len(pool_tiles) as u32, stage.ranks(), 1],
             },
         );
@@ -632,7 +633,7 @@ fn a_resting_pool_seeds_nothing() {
     assert_eq!(placed, 2 * BOX as usize * 2 * BOX as usize * 24);
 
     let solver = BOX as usize + 3;
-    let identity = h.array::<u32>(&[placed as u32 + 1, 1, 0, 0], 4);
+    let identity = h.array::<u32>(&[placed as u32 + 1, 1, 0, 0, 0, 1, 1, 0], 8);
     let faces = h.array::<FaceSample>(&[], (solver + 1).pow(3)).0;
     let tiles = h.array::<u32>(&[], 1).0;
     let capped = h.array::<u32>(&[], 2 * placed + SOLVER_WORDS as usize).0;

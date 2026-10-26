@@ -2,14 +2,16 @@
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::extent::PARTICLE;
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
 use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
 use std::mem::size_of;
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    x.provide("identity", 16);
-    x.hold(4 * 16); // persistent identity and the three fenced metadata copies
-    x.covers_if_bound("identity_in", 16)?;
+    x.provide("identity", IDENTITY_BYTES);
+    // The persistent identity and the three fenced metadata copies.
+    x.hold(4 * IDENTITY_BYTES);
+    x.covers_if_bound("identity_in", IDENTITY_BYTES)?;
     let mut whitewater_check = Ok(());
     let capacity = x.count("whitewater_capacity", STEP_CAPACITY as f32)?;
     if !(1..=STEP_MAX_CAPACITY).contains(&capacity) {

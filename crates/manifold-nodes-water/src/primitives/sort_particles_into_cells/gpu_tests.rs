@@ -8,6 +8,7 @@ use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::ports::ArrayType;
 use manifold_water_gpu_mpm::matter::MatterPoint;
 use manifold_water_liquid::fluid_particles::{CellRange, bin_total};
+use manifold_water_liquid::primitives::particle_identity::COUNT_OFFSET;
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::*;
 use manifold_water_liquid::tile_storage::{pool_len, tile_counts, tile_total};
@@ -432,7 +433,7 @@ fn sort_and_check(
                 particles,
                 read: input.read,
                 capacity: input.records() as u32,
-                count: case.count as u32,
+                count: SortCount::Slots(case.count as u32),
                 bin_min: input.grid.min,
                 inv_cell: 1.0 / input.grid.cell,
                 bins: input.grid.bins,
@@ -665,6 +666,119 @@ fn sort_particles_into_cells_matches_the_cpu_sort_for_matter_and_whitewater() {
     }
 }
 
+/// A count record bounds the sort. 300 records sit in a 1024-slot buffer; the
+/// slots past them look live (a positive radius) with NaN positions, so a pass
+/// that read one would bin it and move the ranges. The ranges and the sorted
+/// slots up to the live end equal the 300-slot sort of those records alone, and
+/// the outputs keep their words past it: the record skips the tail clear.
+#[test]
+fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() {
+    let device = manifold_gpu::testkit::test_device();
+    let grid = Grid {
+        min: [-1.0, 0.0, -1.0],
+        cell: 0.125,
+        bins: [16, 16, 16],
+    };
+    let (records, slots) = (300, 1024);
+    let clean = Input::build(
+        LIQUID_PARTICLE_READ,
+        grid,
+        records,
+        11,
+        &[1, 33, 100],
+        0x5eed_0007,
+    );
+    clean.check_fixture();
+    let stride = clean.read.stride_words as usize;
+    let (cells, members) = clean.cpu_sort(records);
+    let live = members.len();
+    assert!(
+        (201..records).contains(&live),
+        "the fixture holds dead records: {live} of {records} live"
+    );
+    // The 300-slot sort of the clean records is the CPU sort, word for word.
+    let clean_particles = clean.upload(&device);
+    sort_and_check(
+        &device,
+        &mut prepared_sorter(&device),
+        &clean,
+        &clean_particles,
+        &Case {
+            count: records,
+            sorted: Some(records),
+            order: Some(records),
+            gate: Gate::Unwired,
+        },
+    );
+
+    let mut words = clean.words.clone();
+    let nan = f32::NAN.to_bits();
+    for _ in records..slots {
+        words.extend_from_slice(&[nan, nan, nan, 0.05_f32.to_bits(), 1, 2, 3, 7]);
+    }
+    let particles = device.create_buffer_shared(words.len() as u64 * 4);
+    // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
+    unsafe { particles.write(0, bytemuck::cast_slice(&words)) };
+    // The identity's record: the allocator words, then `[groups, 1, 1, n]`.
+    let identity = device.create_buffer_shared(32);
+    let groups = (records as u32).div_ceil(256);
+    // SAFETY: a shared buffer of eight words; no GPU work in flight.
+    unsafe {
+        identity.write(
+            0,
+            bytemuck::cast_slice(&[9_u32, 1, 0, 0, groups, 1, 1, records as u32]),
+        )
+    };
+    let sorted = untouched_buffer(&device, slots * stride);
+    let order = untouched_buffer(&device, slots);
+    let mut sorter = prepared_sorter(&device);
+    sorter
+        .reserve_ranges(&device, grid.bins)
+        .expect("the cell ranges");
+    let ranges = sorter.ranges().expect("the cell ranges").clone();
+    fill_untouched(&ranges);
+    let mut encoder = device.create_encoder("sort count record proof");
+    sorter
+        .encode(
+            &device,
+            &mut encoder,
+            &SortJob {
+                particles: &particles,
+                read: clean.read,
+                capacity: slots as u32,
+                count: SortCount::Record {
+                    buffer: &identity,
+                    offset: COUNT_OFFSET,
+                },
+                bin_min: grid.min,
+                inv_cell: 1.0 / grid.cell,
+                bins: grid.bins,
+                sorted: Some(&sorted),
+                order: Some(&order),
+                gate: None,
+            },
+            &LABELS,
+        )
+        .expect("the sort encodes");
+    encoder.commit_and_wait_completed();
+
+    assert_words(
+        "cell ranges",
+        &read_words(&ranges),
+        bytemuck::cast_slice(&cells),
+        2,
+    );
+    let mut want_sorted: Vec<u32> = (0..slots * stride).map(untouched).collect();
+    let mut want_order: Vec<u32> = (0..slots).map(untouched).collect();
+    for (slot, &input) in members.iter().enumerate() {
+        want_sorted[slot * stride..(slot + 1) * stride]
+            .copy_from_slice(clean.record(input as usize));
+        want_order[slot] = input;
+    }
+    assert_words("sorted", &read_words(&sorted), &want_sorted, stride);
+    assert_words("order", &read_words(&order), &want_order, 1);
+}
+
 const NO_SLOT: u32 = u32::MAX;
 
 /// The slot table words for `bins` cells: `slot_of` per box tile, then
@@ -734,7 +848,7 @@ fn sort_particles_into_cells_pooled_matches_the_dense_sort_per_cell() {
                     particles: &particles,
                     read: input.read,
                     capacity: n as u32,
-                    count: n as u32,
+                    count: SortCount::Slots(n as u32),
                     bin_min: grid.min,
                     inv_cell: 1.0 / grid.cell,
                     bins,

@@ -1,6 +1,9 @@
 //! Step order proofs: extension, the cell cap and inflow timing.
 
+use super::super::gpu_flip_step::GpuFlipStep;
 use super::*;
+use manifold_node_engine::bindings::Slot;
+use manifold_node_engine::exec::effect_node::ParamValues;
 
 #[test]
 pub(super) fn gpu_flip_step_order_extend_constraint_value_proof() {
@@ -63,7 +66,7 @@ pub(super) fn gpu_flip_step_order_extend_constraint_value_proof() {
 pub(super) fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
     use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
     use manifold_water_liquid::primitives::sort_particles_into_cells::{
-        LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels,
+        LIQUID_PARTICLE_READ, ParticleSorter, SortCount, SortJob, SortLabels,
     };
     let particles: Vec<_> = (0..300)
         .map(|i| FluidParticle {
@@ -123,7 +126,7 @@ pub(super) fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
                 particles: input,
                 read: LIQUID_PARTICLE_READ,
                 capacity: 300,
-                count: 300,
+                count: SortCount::Slots(300),
                 bin_min: MIN,
                 inv_cell: 1.0 / H,
                 bins: N.map(|n| n as u32),
@@ -140,11 +143,103 @@ pub(super) fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
     assert!(compacted[249..].iter().all(|p| p.position_radius[3] == 0.0));
 }
 
+/// Pool slots of the inflow fixture.
+const INFLOW_POOL: usize = 512;
+
+/// The step node over the small box with one inflow region, and the birth
+/// identity as a reset seeds it: next id, epoch, reserved base, full-reset
+/// request, then the dispatch triple and slot count the step publishes.
+struct InflowStep {
+    h: Harness,
+    node: GpuFlipStep,
+    inputs: [(&'static str, Slot); 6],
+    outputs: [(&'static str, Slot); 4],
+    params: ParamValues,
+    particles: GpuBuffer,
+    identity: GpuBuffer,
+    faces: Slot,
+    tiles: Slot,
+}
+
+impl InflowStep {
+    /// An inflow box of `cells` whole cells from `lo`, moving at 0.25 m/s in x.
+    fn new(lo: [usize; 3], cells: [u32; 3]) -> Self {
+        use manifold_node_engine::primitive::Primitive;
+        let mut h = Harness::new();
+        let mut node = GpuFlipStep::new();
+        node.prepare_pipelines(&h.device);
+        let particles = h.array::<FluidParticle>(&[], INFLOW_POOL);
+        let capped = h.array::<u32>(
+            &[],
+            2 * INFLOW_POOL + manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize,
+        );
+        let faces = h.array::<FaceSample>(&[], 1);
+        let tiles = h.array::<u32>(&[], 1);
+        let (row, shape, atlas) = region_box(2.0, lo, cells, [0.25, 0.0, 0.0]);
+        let regions = h.array(&[row], 1);
+        let shapes = h.array(&[shape], 1);
+        let atlas = h.array(&atlas, atlas.len());
+        let bodies = h.array::<LiquidBody>(&[], 1);
+        let pad = PADDING_NODES as f32;
+        let params = params(&[
+            ("nodes_x", N[0] as f32 + 1.0 + 2.0 * pad),
+            ("nodes_y", N[1] as f32 + 1.0 + 2.0 * pad),
+            ("nodes_z", N[2] as f32 + 1.0 + 2.0 * pad),
+            ("lattice_min_x", MIN[0] - pad * H),
+            ("lattice_min_y", MIN[1] - pad * H),
+            ("lattice_min_z", MIN[2] - pad * H),
+            ("cell_size", H),
+            ("gravity_y", 0.0),
+            ("interval_duration", 0.125),
+            ("volume_projection", 0.0),
+            ("region_count", 1.0),
+            ("iterations", 0.0),
+            ("flip", 1.0),
+        ]);
+        let identity = h.array::<u32>(&[1, 1, 0, 0, 0, 1, 1, 0], 8);
+        let inputs = [
+            ("particles", particles.0),
+            ("regions", regions.0),
+            ("shapes", shapes.0),
+            ("atlas", atlas.0),
+            ("bodies", bodies.0),
+            ("identity", identity.0),
+        ];
+        let outputs = [
+            ("out", particles.0),
+            ("faces", faces.0),
+            ("tiles", tiles.0),
+            ("capped", capped.0),
+        ];
+        Self {
+            h,
+            node,
+            inputs,
+            outputs,
+            params,
+            particles: particles.1,
+            identity: identity.1,
+            faces: faces.0,
+            tiles: tiles.0,
+        }
+    }
+
+    /// One tick of the step. The fixture's one region row is this tick's.
+    fn tick(&mut self, tick: i32) {
+        for name in ["tick_index", "first_tick"] {
+            self.params
+                .insert(name.into(), ParamValue::Float(tick as f32));
+        }
+        let (_, errors) = self
+            .h
+            .run(&mut self.node, &self.inputs, &self.outputs, &self.params);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+}
+
 #[test]
 pub(super) fn gpu_flip_step_order_inflow_waits_until_next_step() {
-    use super::super::gpu_flip_step::GpuFlipStep;
-    use manifold_node_engine::primitive::Primitive;
-    let capacity = 512;
+    let capacity = INFLOW_POOL;
     // Extent arithmetic before device creation: 120 cell ranges, 210 face
     // records, 960 emit sites, 512 particle records, two counters per slot.
     assert_eq!((cell_len(), face_len()), (120, 210));
@@ -152,61 +247,13 @@ pub(super) fn gpu_flip_step_order_inflow_waits_until_next_step() {
         super::super::gpu_flip_step::emit_sites(N.map(|n| n as u32)),
         960
     );
-    let mut h = Harness::new();
-    let mut node = GpuFlipStep::new();
-    node.prepare_pipelines(&h.device);
-    let particles = h.array::<FluidParticle>(&[], capacity);
-    let capped = h.array::<u32>(
-        &[],
-        2 * capacity + manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize,
-    );
+    let mut rig = InflowStep::new([2, 2, 1], [1, 1, 1]);
     // The step solves on the native grid: three more cells, its origin 1.5
     // cells outside the box.
     let solver = N.map(|n| n + 3);
     let solver_min: [f32; 3] = std::array::from_fn(|a| MIN[a] - 1.5 * H);
-    let faces = h.array::<FaceSample>(&[], 1);
-    let tiles = h.array::<u32>(&[], 1);
-    let (row, shape, atlas) = region_box(2.0, [2, 2, 1], [1, 1, 1], [0.25, 0.0, 0.0]);
-    let regions = h.array(&[row], 1);
-    let shapes = h.array(&[shape], 1);
-    let atlas = h.array(&atlas, atlas.len());
-    let bodies = h.array::<LiquidBody>(&[], 1);
-    let pad = PADDING_NODES as f32;
-    let mut p = params(&[
-        ("nodes_x", N[0] as f32 + 1.0 + 2.0 * pad),
-        ("nodes_y", N[1] as f32 + 1.0 + 2.0 * pad),
-        ("nodes_z", N[2] as f32 + 1.0 + 2.0 * pad),
-        ("lattice_min_x", MIN[0] - pad * H),
-        ("lattice_min_y", MIN[1] - pad * H),
-        ("lattice_min_z", MIN[2] - pad * H),
-        ("cell_size", H),
-        ("gravity_y", 0.0),
-        ("interval_duration", 0.125),
-        ("volume_projection", 0.0),
-        ("region_count", 1.0),
-        ("iterations", 0.0),
-        ("flip", 1.0),
-    ]);
-    // liquid_state's birth identity as its reset seeds it: next id, epoch,
-    // reserved base, full-reset request.
-    let identity = h.array::<u32>(&[1, 1, 0, 0], 4);
-    let inputs = [
-        ("particles", particles.0),
-        ("regions", regions.0),
-        ("shapes", shapes.0),
-        ("atlas", atlas.0),
-        ("bodies", bodies.0),
-        ("identity", identity.0),
-    ];
-    let outputs = [
-        ("out", particles.0),
-        ("faces", faces.0),
-        ("tiles", tiles.0),
-        ("capped", capped.0),
-    ];
-    let (_, errors) = h.run(&mut node, &inputs, &outputs, &p);
-    assert!(errors.is_empty(), "{errors:?}");
-    let first: Vec<FluidParticle> = read(&particles.1, capacity);
+    rig.tick(0);
+    let first: Vec<FluidParticle> = read(&rig.particles, capacity);
     let alive: Vec<_> = first
         .iter()
         .filter(|p| p.position_radius[3] > 0.0)
@@ -218,12 +265,9 @@ pub(super) fn gpu_flip_step_order_inflow_waits_until_next_step() {
         let q = (marker.position_radius[0] - MIN[0]) / H;
         assert!(q == 2.25 || q == 2.75, "fresh inflow moved: {q}");
     }
-    p.insert("tick_index".into(), ParamValue::Float(1.0));
-    p.insert("first_tick".into(), ParamValue::Float(1.0));
-    let (_, errors) = h.run(&mut node, &inputs, &outputs, &p);
-    assert!(errors.is_empty(), "{errors:?}");
-    let second: Vec<FluidParticle> = read(&particles.1, capacity);
-    let field = step_faces(&h, faces.0, tiles.0, solver.map(|n| n as u32));
+    rig.tick(1);
+    let second: Vec<FluidParticle> = read(&rig.particles, capacity);
+    let field = step_faces(&rig.h, rig.faces, rig.tiles, solver.map(|n| n as u32));
     assert!(
         alive
             .iter()
@@ -259,5 +303,38 @@ pub(super) fn gpu_flip_step_order_inflow_waits_until_next_step() {
                 "second-step inflow RK3",
             );
         }
+    }
+}
+
+/// The slots in use follow the step: after every tick the identity holds
+/// `[groups, 1, 1, n]` with `n` the live particles (the count the stats'
+/// live word reports), the particles packed in slots `[0, n)` and nothing past
+/// them. The inflow fills a box of cells on the first tick and the sorts
+/// compact the pool on every one.
+#[test]
+pub(super) fn gpu_flip_step_publishes_the_slots_in_use_every_tick() {
+    let mut rig = InflowStep::new([1, 1, 1], [3, 2, 2]);
+    for tick in 0..3 {
+        rig.tick(tick);
+        let particles: Vec<FluidParticle> = read(&rig.particles, INFLOW_POOL);
+        let live = particles
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .count();
+        assert!(live > 8, "tick {tick}: the inflow fills its box: {live}");
+        let record: Vec<u32> = read(&rig.identity, 8);
+        assert_eq!(
+            record[4..],
+            [live.div_ceil(256).max(1) as u32, 1, 1, live as u32],
+            "tick {tick}: the record"
+        );
+        assert!(
+            particles[..live].iter().all(|p| p.position_radius[3] > 0.0),
+            "tick {tick}: slots [0, n) are live"
+        );
+        assert!(
+            particles[live..].iter().all(|p| p.position_radius[3] <= 0.0),
+            "tick {tick}: nothing lives past n"
+        );
     }
 }

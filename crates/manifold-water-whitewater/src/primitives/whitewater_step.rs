@@ -37,7 +37,7 @@ use manifold_water_liquid::primitives::face_sample_component::{
 use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
-    ParticleSorter, SortJob, SortLabels, range_storage_bytes, whitewater_record_read,
+    ParticleSorter, SortCount, SortJob, SortLabels, range_storage_bytes, whitewater_record_read,
 };
 use manifold_water_liquid::tile_storage::{TILE_STORAGE, pool_len};
 use manifold_water_liquid::whitewater::{
@@ -2079,7 +2079,7 @@ impl Step {
             particles: b,
             read: whitewater_record_read(),
             capacity: cap,
-            count: cap,
+            count: SortCount::Slots(cap),
             bin_min,
             inv_cell: 1.0 / s.cell_size,
             bins: s.bins,

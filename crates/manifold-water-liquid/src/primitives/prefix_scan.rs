@@ -168,7 +168,7 @@ impl PrefixScan {
         labels: ScanLabels,
     ) {
         let buffer = self.buffer.as_ref().expect("scan storage prepared");
-        self.encode_levels(encoder, n, buffer, buffer, 0, labels, None);
+        self.encode_levels(encoder, n, buffer, buffer, 0, labels, None, None);
     }
 
     /// [`Self::encode_labelled`] under a GPU FLIP clock plan: an inactive
@@ -181,7 +181,40 @@ impl PrefixScan {
         gate: &GpuBuffer,
     ) {
         let buffer = self.buffer.as_ref().expect("scan storage prepared");
-        self.encode_levels(encoder, n, buffer, buffer, 0, labels, Some(gate));
+        self.encode_levels(encoder, n, buffer, buffer, 0, labels, Some(gate), None);
+    }
+
+    /// [`Self::encode_labelled`] over the first `n` of `capacity` values, `n`
+    /// kept on the GPU: `record` holds `[groups, 1, 1]` at byte `offset`,
+    /// `groups` = `ceil(n / 256)` (at least one), the triple a particle count
+    /// record writes. Level 0's block and add passes dispatch from it; the
+    /// later levels stay sized for `capacity`. A value past `n` reaches only
+    /// outputs past `n`, and a block past the record's groups is untouched, so
+    /// the first `n` outputs are the inclusive sum of the first `n` values.
+    /// `prepare` and `buffer(capacity)` first.
+    pub fn encode_labelled_counted(
+        &self,
+        encoder: &mut manifold_gpu::GpuEncoder,
+        capacity: usize,
+        labels: ScanLabels,
+        record: &GpuBuffer,
+        offset: u64,
+    ) {
+        assert!(
+            offset.is_multiple_of(4) && record.size >= offset + 12,
+            "the scan's count record holds three words at its offset"
+        );
+        let buffer = self.buffer.as_ref().expect("scan storage prepared");
+        self.encode_levels(
+            encoder,
+            capacity,
+            buffer,
+            buffer,
+            0,
+            labels,
+            None,
+            Some((record, offset)),
+        );
     }
 
     /// Scan `src[0, n)` into `dst[0, n)`, the later levels in the storage.
@@ -194,11 +227,22 @@ impl PrefixScan {
         src: &GpuBuffer,
         dst: &GpuBuffer,
     ) {
-        self.encode_levels(encoder, n, src, dst, n.max(1), ScanLabels::DEFAULT, None);
+        self.encode_levels(
+            encoder,
+            n,
+            src,
+            dst,
+            n.max(1),
+            ScanLabels::DEFAULT,
+            None,
+            None,
+        );
     }
 
     /// `level0_offset` is where level 0 would sit in the storage's layout:
-    /// the later levels' storage offsets are the layout's minus it.
+    /// the later levels' storage offsets are the layout's minus it. With
+    /// `counted` (a buffer and the byte offset of a dispatch triple), level 0
+    /// of a multi-block scan dispatches indirectly from it.
     fn encode_levels(
         &self,
         encoder: &mut manifold_gpu::GpuEncoder,
@@ -208,6 +252,7 @@ impl PrefixScan {
         level0_offset: usize,
         labels: ScanLabels,
         gate: Option<&GpuBuffer>,
+        counted: Option<(&GpuBuffer, u64)>,
     ) {
         let gate = gate
             .or(self.open.as_ref())
@@ -242,37 +287,45 @@ impl PrefixScan {
                 } else {
                     (parents, parents)
                 };
-                encoder.dispatch_compute(
-                    pipeline,
-                    &[
-                        GpuBinding::Bytes {
-                            binding: 0,
-                            data: bytemuck::bytes_of(&uniforms),
-                        },
-                        GpuBinding::Buffer {
-                            binding: 1,
-                            buffer: src,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 2,
-                            buffer: dst,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 3,
-                            buffer: parents,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 4,
-                            buffer: gate,
-                            offset: 0,
-                        },
-                    ],
-                    [groups, 1, 1],
-                    label,
-                );
+                let bindings = [
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: src,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: dst,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: parents,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 4,
+                        buffer: gate,
+                        offset: 0,
+                    },
+                ];
+                match counted {
+                    // A single-block scan is one group whatever `n` is.
+                    Some((record, offset)) if level == 0 && count > 1 => {
+                        encoder.dispatch_compute_indirect(
+                            pipeline,
+                            &bindings,
+                            record,
+                            offset,
+                            label,
+                        );
+                    }
+                    _ => encoder.dispatch_compute(pipeline, &bindings, [groups, 1, 1], label),
+                }
                 encoder.compute_memory_barrier_buffers();
             };
         let groups = |level: usize| levels[level].1.div_ceil(BLOCK) as u32;
@@ -407,6 +460,67 @@ mod gpu_tests {
                 read(&src, n),
                 values,
                 "encode_into: n = {n}: src was written"
+            );
+        }
+    }
+
+    /// The counted scan over the first n of a capacity: the first n outputs
+    /// equal the CPU inclusive sum whatever the values past n hold, and the
+    /// blocks past the record's groups keep their input words. The record is
+    /// the particle identity's: the triple at byte 16 of a 32-byte buffer.
+    #[test]
+    fn counted_prefix_scan_sums_the_first_n_values() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut scan = PrefixScan::default();
+        scan.prepare(&device);
+        let mut seed = 0x2545_f491_u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            1 + seed % 7
+        };
+        for (n, capacity) in [
+            (1usize, 256usize),
+            (255, 256),
+            (256, 256),
+            (1, 100_000),
+            (255, 100_000),
+            (256, 100_000),
+            (257, 100_000),
+            (70_000, 100_000),
+        ] {
+            // Every value is non-zero, so stale values past n would show in
+            // the last block's totals and in the blocks the scan must not touch.
+            let values: Vec<u32> = (0..capacity).map(|_| next()).collect();
+            let buffer = scan.buffer(&device, capacity).expect("scan storage");
+            // SAFETY: a shared buffer of at least capacity words; no GPU work in flight.
+            unsafe { buffer.write(0, bytemuck::cast_slice(&values)) };
+            let groups = n.div_ceil(BLOCK).max(1);
+            let record = device.create_buffer_shared(32);
+            let words = [0u32, 0, 0, 0, groups as u32, 1, 1, n as u32];
+            // SAFETY: a shared buffer of eight words; no GPU work in flight.
+            unsafe { record.write(0, bytemuck::cast_slice(&words)) };
+            let mut encoder = device.create_encoder("counted prefix scan proof");
+            scan.encode_labelled_counted(&mut encoder, capacity, ScanLabels::DEFAULT, &record, 16);
+            encoder.commit_and_wait_completed();
+
+            let ptr = scan.buffer_ref().mapped_ptr().expect("shared buffer");
+            // SAFETY: a shared buffer of at least capacity words; GPU work done.
+            let got: Vec<u32> = bytemuck::cast_slice(unsafe {
+                std::slice::from_raw_parts(ptr, capacity * 4)
+            })
+            .to_vec();
+            let mut total = 0u32;
+            for (i, &value) in values[..n].iter().enumerate() {
+                total += value;
+                assert_eq!(got[i], total, "n = {n} of {capacity}: output {i}");
+            }
+            let touched = (groups * BLOCK).min(capacity);
+            assert_eq!(
+                got[touched..],
+                values[touched..],
+                "n = {n} of {capacity}: a block past the record's groups was written"
             );
         }
     }

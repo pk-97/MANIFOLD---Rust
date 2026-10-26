@@ -8,7 +8,7 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
-    LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels,
+    LIQUID_PARTICLE_READ, ParticleSorter, SortCount, SortJob, SortLabels,
 };
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
 use manifold_water_liquid::tile_storage::pool_len;
@@ -114,7 +114,7 @@ fn sort(device: &GpuDevice, markers: &[[f32; 3]], cells: [u32; 3], h: f32) -> So
                 particles: &source,
                 read: LIQUID_PARTICLE_READ,
                 capacity: records.len() as u32,
-                count: records.len() as u32,
+                count: SortCount::Slots(records.len() as u32),
                 bin_min: [0.0; 3],
                 inv_cell: 1.0 / h,
                 bins: cells,
@@ -827,7 +827,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             (
                 stage,
                 shared(&device, bytemuck::cast_slice(&initial)),
-                shared(&device, bytemuck::cast_slice(&[5000u32, 1, 0, 0])),
+                shared(&device, bytemuck::cast_slice(&[5000u32, 1, 0, 0, 0, 1, 1, 0])),
                 (lane >= 2).then(GpuReplayCache::default),
             )
         })
@@ -860,7 +860,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             // SAFETY: sized shared buffers, no GPU work in flight.
             unsafe {
                 particles.write(0, bytemuck::cast_slice(&initial));
-                identity.write(0, bytemuck::cast_slice(&[5000u32, 1, 0, 0]));
+                identity.write(0, bytemuck::cast_slice(&[5000u32, 1, 0, 0, 0, 1, 1, 0]));
             }
             let inputs = SheetInputs {
                 particles,
@@ -893,6 +893,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
                     ranges,
                     scan: stage.winners(),
                     plan: &plan,
+                    step_record: None,
                     params: [capacity, pool_len(pool.tiles) as u32, stage.ranks(), 1],
                 },
             );

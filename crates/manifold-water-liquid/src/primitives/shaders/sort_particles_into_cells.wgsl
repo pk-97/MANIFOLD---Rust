@@ -17,6 +17,11 @@
 // `sorted` is only bound for liquid particle records, so it copies whole
 // records word for word.
 //
+// The slots covered are the first `params.count`, or (`count_word` not
+// 0xffffffff) the first `counts[count_word]` of them, the slots in use a GPU
+// record holds, capped at `params.count`. The dispatch is sized from the same
+// record, so no thread reads a slot past it.
+//
 // A bin's key is `sort_key(coord)`, defined by the source composed before this
 // body: the dense grid index of the bin, or (the step's tile pool) the pool
 // index `ts_cell_at(coord)` of its cell, with `bin_total` keys either way. A
@@ -43,7 +48,8 @@ struct SortParams {
     live_rule: u32,
     // Tiles of the pool a pooled key indexes (`ts_pool_tiles`); 0 when dense.
     pool_tiles: u32,
-    _pad0: u32,
+    // The word of `counts` holding the slots in use, or NO_COUNT_WORD.
+    count_word: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -61,12 +67,22 @@ struct SortParams {
 // A GPU FLIP clock plan (gpu_flip_clock.wgsl Plan; word 0 step_dt, word 11
 // live_mode): live with no time to step, every pass returns. Zeros run.
 @group(0) @binding(8) var<storage, read> gate: array<u32>;
+// A GPU record of the slots in use; unread unless `count_word` names a word.
+@group(0) @binding(10) var<storage, read> counts: array<u32>;
 
 fn gated_off() -> bool {
     return gate[11] != 0u && !(bitcast<f32>(gate[0]) > 0.0);
 }
 
 const NO_RANK: u32 = 0xffffffffu;
+const NO_COUNT_WORD: u32 = 0xffffffffu;
+
+fn live_slots() -> u32 {
+    if params.count_word == NO_COUNT_WORD {
+        return params.count;
+    }
+    return min(counts[params.count_word], params.count);
+}
 
 fn finite3(v: vec3<f32>) -> bool {
     let e = vec3<u32>(bitcast<u32>(v.x), bitcast<u32>(v.y), bitcast<u32>(v.z)) & vec3<u32>(0x7f800000u);
@@ -112,7 +128,7 @@ fn clear_counts(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn count_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if gated_off() || i >= params.count {
+    if gated_off() || i >= live_slots() {
         return;
     }
     if !is_live(i) {
@@ -155,7 +171,7 @@ fn clear_tail(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if gated_off() || i >= params.count || rank[i] == NO_RANK {
+    if gated_off() || i >= live_slots() || rank[i] == NO_RANK {
         return;
     }
     let slot = bin_start(bin_of(position_of(i))) + rank[i];

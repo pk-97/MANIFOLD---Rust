@@ -1,6 +1,7 @@
 //! One step's passes, in order (module doc of `gpu_flip_step`).
 
 use super::*;
+use manifold_water_liquid::primitives::sort_particles_into_cells::SortCount;
 use manifold_water_liquid::tile_storage::pool_len;
 
 impl StepState {
@@ -58,7 +59,7 @@ impl StepState {
             particles,
             read: LIQUID_PARTICLE_READ,
             capacity,
-            count: step.count,
+            count: SortCount::Slots(step.count),
             bin_min: p.box_min,
             inv_cell: 1.0 / p.cell_size,
             bins: cells,
@@ -178,6 +179,11 @@ impl StepState {
             .sorter
             .ranges()
             .ok_or("the cell ranges were not reserved")?;
+        // The slots in use are the sort's live end, for whatever reads the
+        // identity's record.
+        let keys = pool_len(pool) as u32;
+        self.identity_ops
+            .settle(enc, ranges, keys, step.identity, gate_plan, None);
         encode_tile_lists(
             enc,
             pipes,
@@ -701,6 +707,7 @@ impl StepState {
                     ranges,
                     scan: self.sheeting.winners(),
                     plan: step.clock_plan,
+                    step_record: None,
                     params: [
                         base.particles,
                         pool_len(pool) as u32,
@@ -741,22 +748,24 @@ impl StepState {
             device,
             enc,
             &SortJob {
-                count: base.particles,
+                count: SortCount::Slots(base.particles),
                 ..sort_job(step.out, sorted)
             },
             table,
             pool,
             &SORT_LABELS,
         )?;
+        let ranges = self
+            .sorter
+            .ranges()
+            .ok_or("the cell ranges were not reserved")?;
+        self.identity_ops
+            .settle(enc, ranges, keys, step.identity, gate_plan, None);
         enc.compute_memory_barrier_buffers();
         self.clock
             .as_ref()
             .expect("live clock prepared")
             .remove_extreme(enc, sorted, base.particles, clock_params);
-        let ranges = self
-            .sorter
-            .ranges()
-            .ok_or("the cell ranges were not reserved")?;
         enc.compute_memory_barrier_buffers();
         enc.dispatch_compute(
             &pipes.remove_crowded,
@@ -775,20 +784,22 @@ impl StepState {
             device,
             enc,
             &SortJob {
-                count: base.particles,
+                count: SortCount::Slots(base.particles),
                 ..sort_job(sorted, step.out)
             },
             table,
             pool,
             &SORT_LABELS,
         )?;
+        let ranges = self
+            .sorter
+            .ranges()
+            .ok_or("the cell ranges were not reserved")?;
+        self.identity_ops
+            .settle(enc, ranges, keys, step.identity, gate_plan, None);
         // New inflow is first transferred and advected by the following step.
         if p.region_count > 0 {
             let sites = emit_sites(cells);
-            let ranges = self
-                .sorter
-                .ranges()
-                .ok_or("the cell ranges were not reserved")?;
             let scan = self.emit_scan.buffer(device, sites as usize)?.clone();
             let emission = StepParams {
                 capacity: base.particles,
@@ -830,6 +841,7 @@ impl StepState {
                     ranges,
                     scan: &scan,
                     plan: step.clock_plan,
+                    step_record: None,
                     params: [emission.capacity, pool_len(pool) as u32, sites as u32, 1],
                 },
             );
