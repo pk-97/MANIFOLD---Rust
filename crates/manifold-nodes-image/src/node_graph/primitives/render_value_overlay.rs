@@ -15,6 +15,11 @@
 //!
 //! First consumer: Blob Track HUD (hex IDs, coord labels, distance
 //! labels). Reusable for any data-viz numeric annotation layer.
+//!
+//! One render pass per run: a fullscreen triangle copies `in` into `out`
+//! (no blend, every texel exact), then the glyph quads blend onto it in the
+//! same pass. The frame is read once and written once; a separate blit plus a
+//! `Load` pass would move it twice.
 
 use std::borrow::Cow;
 
@@ -29,6 +34,10 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
 const MAX_QUADS: usize = 512;
+/// Indexed draws feed `vertex_index` straight from the index buffer, so a
+/// sequential buffer lets the vertex shader decode `quad = vid / 6`,
+/// `corner = vid % 6`. The copy triangle uses ids 0..3 of the same buffer.
+const MAX_GLYPH_INDICES: usize = MAX_QUADS * 6;
 const FORMATS: &[&str] = &["Index", "Hex", "Coord", "Float3"];
 const ANCHORS: &[&str] = &["TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center"];
 
@@ -200,6 +209,8 @@ manifold_node_engine::primitive! {
     boundary_reason: DrawCall,
     extra_fields: {
         render_pipeline: Option<GpuRenderPipeline> = None,
+        copy_pipeline: Option<GpuRenderPipeline> = None,
+        index_buf: Option<manifold_gpu::GpuBuffer> = None,
         font_atlas: Option<GpuTexture> = None,
         font_sampler: Option<GpuSampler> = None,
         quad_buf: Option<manifold_gpu::GpuBuffer> = None,
@@ -341,11 +352,11 @@ struct VsOut {
 };
 
 @vertex
-fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VsOut {
-    let q = quads[iid];
+fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
+    let q = quads[vid / 6u];
     var cx: f32; var cy: f32;
     var tu: f32; var tv: f32;
-    switch vid {
+    switch vid % 6u {
         case 0u: { cx = q.rect.x; cy = q.rect.y; tu = q.atlas_rect.x; tv = q.atlas_rect.w; }
         case 1u: { cx = q.rect.z; cy = q.rect.y; tu = q.atlas_rect.z; tv = q.atlas_rect.w; }
         case 2u: { cx = q.rect.x; cy = q.rect.w; tu = q.atlas_rect.x; tv = q.atlas_rect.y; }
@@ -367,6 +378,29 @@ fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(u.color * a, 0.0);
 }
 "#;
+
+/// Exact texel copy of `in` into the pass target, drawn without blending
+/// before the glyphs. The target has `in`'s size, so the fragment position
+/// is the source texel.
+const COPY_SHADER: &str = r#"
+@group(0) @binding(0) var src: texture_2d<f32>;
+
+@vertex
+fn vs_copy(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
+    let x = f32((vid << 1u) & 2u);
+    let y = f32(vid & 2u);
+    return vec4<f32>(x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_copy(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(src, vec2<i32>(pos.xy), 0);
+}
+"#;
+
+fn sequential_indices() -> Vec<u32> {
+    (0..MAX_GLYPH_INDICES as u32).collect()
+}
 
 impl Primitive for RenderValueOverlay {
     // Data-driven skip: zero detections means zero labels — the executor
@@ -546,8 +580,8 @@ impl Primitive for RenderValueOverlay {
 
         let gpu = ctx.gpu_encoder();
 
-        // Create pipeline BEFORE early return
-        // so warmup creates it even with zero detections.
+        // Pipelines are created before any early return so warmup builds
+        // them even with zero detections.
         let pipeline = self.render_pipeline.get_or_insert_with(|| {
             let blend = GpuBlendState {
                 src_factor: GpuBlendFactor::One,
@@ -566,62 +600,104 @@ impl Primitive for RenderValueOverlay {
                 "node.value_overlay",
             )
         });
+        let copy_pipeline = self.copy_pipeline.get_or_insert_with(|| {
+            gpu.device.create_render_pipeline(
+                COPY_SHADER,
+                "vs_copy",
+                "fs_copy",
+                GpuTextureFormat::Rgba16Float,
+                None,
+                "node.value_overlay copy",
+            )
+        });
+        let index_buf = self.index_buf.get_or_insert_with(|| {
+            let indices = sequential_indices();
+            let buf = gpu
+                .device
+                .create_buffer_shared((indices.len() * std::mem::size_of::<u32>()) as u64);
+            unsafe { buf.write(0, bytemuck::cast_slice(&indices)) };
+            buf
+        });
 
-        gpu.copy_texture_to_texture(in_tex, out_tex, w, h);
+        // The copy replaces the old blit, which asserted these.
+        assert_eq!(
+            (in_tex.width, in_tex.height, in_tex.format),
+            (w, h, out_tex.format),
+            "render_value_overlay: `in` must match `out` in size and format"
+        );
+
+        // Every texel of `out` is written by the copy triangle, so the pass
+        // loads nothing. The pipelines have no vertex layout; `index_buf`
+        // fills the vertex-buffer slot only because the pass API requires one.
+        gpu.native_enc
+            .begin_render_pass(out_tex, GpuLoadAction::DontCare, "node.value_overlay");
+        gpu.native_enc.draw_in_render_pass(
+            copy_pipeline,
+            &[GpuBinding::Texture {
+                binding: 0,
+                texture: in_tex,
+            }],
+            index_buf,
+            0,
+            index_buf,
+            3,
+            0,
+            None,
+            "node.value_overlay copy",
+        );
 
         let quad_count = self.quads.len();
-        if quad_count == 0 {
-            return;
+        if quad_count > 0 {
+            let font_atlas = self
+                .font_atlas
+                .get_or_insert_with(|| create_font_atlas(gpu.device));
+            let point_sampler = self.font_sampler.get_or_insert_with(|| {
+                gpu.device.create_sampler(&GpuSamplerDesc {
+                    min_filter: GpuFilterMode::Nearest,
+                    mag_filter: GpuFilterMode::Nearest,
+                    ..GpuSamplerDesc::default()
+                })
+            });
+            let quad_buf = self.quad_buf.get_or_insert_with(|| {
+                gpu.device
+                    .create_buffer_shared((MAX_QUADS * std::mem::size_of::<GlyphQuad>()) as u64)
+            });
+
+            let quad_bytes = bytemuck::cast_slice(&self.quads[..quad_count]);
+            unsafe { quad_buf.write(0, quad_bytes) };
+
+            let uniforms = OverlayUniforms { color, alpha };
+            gpu.native_enc.draw_in_render_pass(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: quad_buf,
+                        offset: 0,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: font_atlas,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 3,
+                        sampler: point_sampler,
+                    },
+                ],
+                index_buf,
+                0,
+                index_buf,
+                (quad_count * 6) as u32,
+                0,
+                None,
+                "node.value_overlay",
+            );
         }
-
-        let font_atlas = self
-            .font_atlas
-            .get_or_insert_with(|| create_font_atlas(gpu.device));
-        let point_sampler = self.font_sampler.get_or_insert_with(|| {
-            gpu.device.create_sampler(&GpuSamplerDesc {
-                min_filter: GpuFilterMode::Nearest,
-                mag_filter: GpuFilterMode::Nearest,
-                ..GpuSamplerDesc::default()
-            })
-        });
-        let quad_buf = self.quad_buf.get_or_insert_with(|| {
-            gpu.device
-                .create_buffer_shared((MAX_QUADS * std::mem::size_of::<GlyphQuad>()) as u64)
-        });
-
-        let quad_bytes = bytemuck::cast_slice(&self.quads[..quad_count]);
-        unsafe { quad_buf.write(0, quad_bytes) };
-
-        let uniforms = OverlayUniforms { color, alpha };
-        gpu.native_enc.draw_instanced(
-            pipeline,
-            out_tex,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: quad_buf,
-                    offset: 0,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: font_atlas,
-                },
-                GpuBinding::Sampler {
-                    binding: 3,
-                    sampler: point_sampler,
-                },
-            ],
-            manifold_gpu::DrawCount::Direct {
-                vertices: 6,
-                instances: quad_count as u32,
-            },
-            GpuLoadAction::Load,
-            "node.value_overlay",
-        );
+        gpu.native_enc.end_render_pass();
     }
 }
 
@@ -636,5 +712,40 @@ mod tests {
         assert!((r[2] - 5.0 / 80.0).abs() < 1e-5);
         let r_a = glyph_atlas_rect(10.0); // 'A'
         assert!((r_a[0] - 50.0 / 80.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn index_buffer_ids_decode_to_quad_and_corner() {
+        let idx = sequential_indices();
+        assert_eq!(idx.len(), MAX_QUADS * 6);
+        assert!(idx.iter().enumerate().all(|(i, &v)| v as usize == i));
+        // The copy triangle draws ids 0..3 of the same buffer.
+        assert_eq!(&idx[..3], &[0, 1, 2]);
+        // The last glyph quad's corners decode to quad MAX_QUADS - 1.
+        let last = *idx.last().unwrap();
+        assert_eq!((last / 6) as usize, MAX_QUADS - 1);
+        assert_eq!(last % 6, 5);
+    }
+
+    #[test]
+    fn shaders_validate_and_expose_their_entry_points() {
+        for (src, entries) in [
+            (OVERLAY_SHADER, ["vs_main", "fs_main"]),
+            (COPY_SHADER, ["vs_copy", "fs_copy"]),
+        ] {
+            let module = naga::front::wgsl::parse_str(src).expect("WGSL parses");
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("WGSL validates");
+            for entry in entries {
+                assert!(
+                    module.entry_points.iter().any(|e| e.name == entry),
+                    "missing entry point {entry}"
+                );
+            }
+        }
     }
 }
