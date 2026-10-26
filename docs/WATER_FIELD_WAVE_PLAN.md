@@ -39,7 +39,7 @@ The wave was started on 2026-10-24 under the old worktree workflow, then stopped
   - RD regenerates the six preset fixture JSONs, once.
 - **I9 Foam.** The foam field draws surface foam. Foam particles keep simulating as its source; their icosahedron draw is deleted. Spray and bubble draws are unchanged.
 - **I10 Thickness.** `volume_optics` stays for other closed transmissive meshes (`render_scene.rs:2306`). Water stops feeding it; the march supplies water's thickness.
-- **I11 Surface stays spheres.** The prototype measured stretched blobs bumpier and losing sheets (D2). R1a deletes Stretch and Centre Smoothing from `shape_particle_blobs`, with the anisotropy code they drive. This is a call made for Peter; it goes first in the report.
+- **I11 Surface stays spheres.** The prototype measured stretched blobs bumpier and losing sheets (D2). R1b deletes Stretch and Centre Smoothing from `shape_particle_blobs`, with the anisotropy code they drive. This is a call made for Peter; it goes first in the report.
 - **I12 Modifiers.** Water is not a modifier target today (`scene_schema/fields.rs:95`; never in `b.drawn`, `scene_compile/object.rs:170`), so nothing regresses. R1b adds a one-line refusal reason for water in the Targets menu, following the Ocean precedent (`modifier.rs:445-457`). Loop, Mirror, Copies and deformers on water are a later bead.
 - **I13 Not in this wave, logged:** the 4K half-resolution search, the tracer hit, traced refraction, field versions of Shatter, Surface Peel and Ordered Recon (BUG-l2h3.30.13), and APIC.
 
@@ -49,9 +49,9 @@ Track: **R** is the render track (`manifold-nodes-scene` only), **W** the water 
 
 | Job | Worker | What | Track | Needs |
 |---|---|---|---|---|
-| S0 | haiku | Split the step file, tests and WGSL, copying 554a4ae50's layout | W | — |
+| S0 | sonnet; the lead stages the cut by script | Split the step file, tests and WGSL, copying 554a4ae50's layout | W | — |
 | R0 | haiku | Shader helpers into an include, copying 3d426ca8d's layout; look hook stubs | R | — |
-| R1a | sonnet | Field build: re-distance, weights, smooth, carry-in; spheres only | W | — |
+| R1a.1–R1a.4 | sonnet | Field build, additive: re-distance in cells, surface weights and velocity, weighted smoothing with the leash, carry into solids | W | — |
 | R2.0 | haiku | Optional `field` input on `scene_object` | A (`node-engine`) | — |
 | R2 | sonnet, lead gives the march math | The march pass, with light through thin water | R | R0, R2.0 |
 | R3 | sonnet | Ripple detail | R | R2 |
@@ -78,7 +78,7 @@ Track: **R** is the render track (`manifold-nodes-scene` only), **W** the water 
 **Order.** Each step lists what runs at once. A jobs run when both tracks are between commits.
 0. Before any job starts, the lead builds the base `fluid_capture` (`scripts/dev.py capture` builds it) and copies the binary to the scratchpad, for the final speed check.
 1. R0 with S0. Meanwhile the lead diagnoses SA (read only).
-2. R2.0 alone. Then R2 with R1a.
+2. R2.0 alone. Then R2 with R1a.1 to R1a.4, one after another.
 3. R3 with SA.
 4. R1b.1, then R1b.2, both alone.
 5. RD.1, RD.2 and RD.4 one after another on W, while R runs R4r, R5r and R7r. RD.3 alone. RD.5 last.
@@ -125,7 +125,7 @@ Reference: the prototype, `/Users/peterkiemann/MANIFOLD - Prototypes/levelset_pr
 3. Weighted smoothing as an extension of `smooth_lattice`: weight and leash inputs, with a strength in cells. The prototype's 3 passes are a named constant citing it. The leash is half a cell, derived as the finest change the grid can represent.
 4. Carry-in as an extension of `clamp_liquid_to_solids`: the field is extrapolated into drawn solids by the smoothing's reach (carry radius 2 cells), and clamped elsewhere with no margin. `clamp_liquid_to_solids` runs twice (carry into all solids early, keep drawn solids late), and its drawn-solids input is wired by R1b.
 5. A display-time velocity lattice for exact motion vectors.
-6. Stretch, Centre Smoothing and their anisotropy code are deleted (I11); `FluidBlob` shrinks to centre plus radius.
+6. Jobs: R1a.1 re-distance depth in cells; R1a.2 `node.surface_weights` (counts, weights and the velocity lattice of item 5); R1a.3 the weighted step with the leash in `smooth_lattice`; R1a.4 carry-in in `clamp_liquid_to_solids`. Each is additive: new optional inputs, today's output when unwired, so presets and fixtures stay valid until R1b cuts the group over. The constants live in one new `manifold-water-liquid/src/field_build.rs`.
 7. Tests on small in-test particle sets: weights, smoothing and carry-in match a CPU reference written in the test to f32 rounding. The comparison with the prototype's 64 capture goes in the report, not a test.
 
 ### R2 The march pass, with light through thin water
@@ -159,7 +159,8 @@ Files: per I8, in two jobs, both alone. R1b.1 is the `manifold-core` part: the r
 2. Card (D17):
    - Smoothness is automatic, with one override slider. Its default is the prototype's settings; name the mapping.
    - Ripple detail, foam, mist, thin water and wetness are automatic, with one override slider each. R1b.2 adds the rows for what exists when it runs (ripple detail, thin water); R4w, R5w and R7w each add their own row to these files, so no row ships before its look.
-   - Delete the Stretch, Centre Smoothing, Fill Pits and mesh Smoothing rows, and the `offset_lattice` Fill Pits node if nothing else uses it.
+   - Delete the Stretch, Centre Smoothing, Fill Pits and mesh Smoothing rows, and the `offset_lattice` Fill Pits node if nothing else uses it. Stretch, Centre Smoothing and their anisotropy code go from `shape_particle_blobs` (I11), and `FluidBlob` shrinks to centre plus radius.
+   - In the same commit, delete the old inputs R1a left in place: the metres `band` and `enabled` on `redistance_lattice`, and any path the new chain no longer wires.
    - Surface Detail stays: the field's resolution over the sim's.
 3. The default water material is physical (D2), and the presets use it (D17).
 4. Water's one-line refusal reason in the Modifier Targets menu (I12).
@@ -226,9 +227,8 @@ Layout to copy: commit 554a4ae50 (`git show 554a4ae50 --stat`). It splits the st
 
 Bead: BUG-a8eh6 (Sheet Fill Rate 0.5 grows the Dam Break water by 61% in 4 seconds). Files: `gpu_flip_sheeting.rs`, `.wgsl` and their tests; the sheeting submodule from S0; `liquid_stats.rs`.
 Sheeting goes beyond FLIP Fluids on depth: native FLIP Fluids grows the Dam Break by 62% in 4 s with sheeting at 0.5 too, because its level set is a union of spheres re-distanced short of its own 3 dx target, so deep calm water passes the thin-water test; ours re-distances to a depth derived from the sheet test's threshold, so only thin water seeds.
-Suspects, ranked:
-- The border clear counts from the grid edge, not the wall, so a thin floor pool re-seeds every substep (`gpu_flip_sheeting.wgsl:298-306` `feather_border`, its 3-cell band at `:305`; the cell count in `manifold-water-liquid/src/lattice.rs:71-77`, all (f8084ab59)).- Volume Projection is off in the preset (`gpu_flip.rs:161` (f8084ab59)).
-- Seeding runs per GPU substep; the engine seeds per step (`fluidsimulation.cpp:11053-11057`).
+Leading cause, from reading (2026-10-26): the depth test (`particlesheeter.cpp:119-176`) walks 3·dx inward from particles within 2·dx of the surface, so it is only right where the sheeter's distance is true at least 5·dx deep. The sheeter reads `StepState.surface` (`whitewater_distance::SurfaceDistance`, six fixed upwind iterations, `whitewater_distance.rs:182`); where that distance flattens short of 5·dx, deep calm water reads as a thin sheet and seeds every substep. The fix builds the sheeter's distance to `max_depth + test_distance`, derived from the sheeter's own constants.
+Ruled out by reading: the 3-cell border band sits where native's does, because `FlipSolverGrid` (`lattice.rs:60-91`) reproduces the engine's grid (authored cells + 3, origin offset 1.5h); and native seeds once per `_stepFluid`, which runs once per substep (`fluidsimulation.cpp:11057`, `:11662`), as ours does. Volume Projection (`gpu_flip.rs:161`) stays off unless the fix alone misses the volume proof.
 The lead names the root cause with evidence (read only, during step 1; the 2026-10-24 probes are in `water-wave-2026-10-24/sa/`), then hands sonnet the fix to port.
 1. Root cause named with evidence, and the fix ported from the reference.
 2. A volume proof: a resting pool seeds nothing; Dam Break drift is reported, not gated.
