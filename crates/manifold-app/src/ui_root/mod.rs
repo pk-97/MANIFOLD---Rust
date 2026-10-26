@@ -284,6 +284,9 @@ pub struct UIRoot {
     /// during process_events() and drained by app.rs to route through the overlay.
     viewport_events: Vec<manifold_ui::input::UIEvent>,
 
+    /// Per-event flags: an overlay consumed the event (`process_events`). Reused across frames.
+    overlay_consumed: Vec<bool>,
+
     /// Last right-click screen position, persisted across process_events() so
     /// overlay-generated actions (TrackRightClicked, ClipRightClicked) can anchor
     /// their dropdown menus after the main event loop returns.
@@ -645,6 +648,7 @@ impl UIRoot {
             cursor_hover_actions: Vec::new(),
             pending_keyboard_actions: Vec::new(),
             viewport_events: Vec::new(),
+            overlay_consumed: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
             pending_automation_reveal: None,
             automation_chooser_candidates: Vec::new(),

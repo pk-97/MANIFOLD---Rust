@@ -418,6 +418,15 @@ impl UIInputSystem {
         std::mem::take(&mut self.pending_events)
     }
 
+    /// Hand a drained event list back once it is handled, so the next frame's
+    /// events reuse its storage instead of allocating.
+    pub fn recycle_events(&mut self, mut events: Vec<UIEvent>) {
+        if self.pending_events.capacity() == 0 {
+            events.clear();
+            self.pending_events = events;
+        }
+    }
+
     /// Peek at pending events without draining.
     pub fn pending_events(&self) -> &[UIEvent] {
         &self.pending_events

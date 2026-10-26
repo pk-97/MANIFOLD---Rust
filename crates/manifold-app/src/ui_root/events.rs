@@ -112,7 +112,9 @@ impl UIRoot {
         // InteractionOverlay — without this, a click a floating popup already
         // swallowed (its cell sits over the timeline) is ALSO replayed to the
         // tracks, selecting the clip/layer behind the popup.
-        let mut overlay_consumed = vec![false; events.len()];
+        let mut overlay_consumed = std::mem::take(&mut self.overlay_consumed);
+        overlay_consumed.clear();
+        overlay_consumed.resize(events.len(), false);
         for (event_idx, event) in events.iter().enumerate() {
             // Track which node was clicked (for dropdown anchoring).
             if let UIEvent::Click { node_id, .. } = event {
@@ -400,6 +402,8 @@ impl UIRoot {
             self.mark_overlay_dirty();
         }
 
+        self.overlay_consumed = overlay_consumed;
+        self.input.recycle_events(events);
         filtered
     }
 
@@ -407,5 +411,14 @@ impl UIRoot {
     /// App.rs routes these through the InteractionOverlay with a host trait.
     pub fn drain_viewport_events(&mut self) -> Vec<manifold_ui::input::UIEvent> {
         std::mem::take(&mut self.viewport_events)
+    }
+
+    /// Hand drained viewport events back once routed, so the next frame's stash
+    /// reuses their storage.
+    pub fn recycle_viewport_events(&mut self, mut events: Vec<manifold_ui::input::UIEvent>) {
+        if self.viewport_events.capacity() == 0 {
+            events.clear();
+            self.viewport_events = events;
+        }
     }
 }

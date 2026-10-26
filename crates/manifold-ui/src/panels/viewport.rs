@@ -192,6 +192,8 @@ pub struct TimelineViewportPanel {
     /// Cached clip-only layer — only repainted when clip data changes.
     /// On scroll/playhead changes, this is copied and the overlay is composited on top.
     overview_clip_pixels: Vec<Color32>,
+    /// Each track's row in the overview strip, `None` for groups; reused across repaints.
+    overview_rows: Vec<Option<usize>>,
     overview_tex_w: usize,
     overview_tex_h: usize,
     /// An input of the bitmap moved: repaint it.
@@ -397,6 +399,7 @@ impl TimelineViewportPanel {
             scrub_free: false,
             overview_pixels: Vec::new(),
             overview_clip_pixels: Vec::new(),
+            overview_rows: Vec::new(),
             overview_tex_w: 0,
             overview_tex_h: 0,
             overview_repaint: true,

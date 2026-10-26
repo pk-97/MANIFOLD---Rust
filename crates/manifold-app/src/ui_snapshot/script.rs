@@ -2952,6 +2952,7 @@ impl Runner {
 
         let viewport_events = ui.drain_viewport_events();
         if viewport_events.is_empty() {
+            ui.recycle_viewport_events(viewport_events);
             return n_actions;
         }
         self.overlay.set_modifiers(self.modifiers);
@@ -3070,6 +3071,7 @@ impl Runner {
         // every other `PanelAction` here goes through.
         let mut pending = std::mem::take(&mut host.pending_actions);
         drop(host);
+        ui.recycle_viewport_events(viewport_events);
         // Match the live application pass for overlay-generated context menus.
         ui.intercept_overlay_actions(&mut pending);
         self.apply_panel_actions(ui, data, &pending);

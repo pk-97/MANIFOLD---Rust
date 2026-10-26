@@ -127,13 +127,13 @@ impl TimelineViewportPanel {
             self.overview_clip_pixels.fill(Color32::TRANSPARENT);
 
             // Remap: skip group layers
-            let mut non_group_row: Vec<Option<usize>> = Vec::with_capacity(self.tracks.len());
+            self.overview_rows.clear();
             let mut non_group_count: usize = 0;
             for track in &self.tracks {
                 if track.is_group {
-                    non_group_row.push(None);
+                    self.overview_rows.push(None);
                 } else {
-                    non_group_row.push(Some(non_group_count));
+                    self.overview_rows.push(Some(non_group_count));
                     non_group_count += 1;
                 }
             }
@@ -142,7 +142,7 @@ impl TimelineViewportPanel {
                 let row_h = tex_h as f32 / non_group_count as f32;
 
                 for clip in self.clips_by_layer.iter().flatten() {
-                    let row = match non_group_row.get(clip.layer_index).copied().flatten() {
+                    let row = match self.overview_rows.get(clip.layer_index).copied().flatten() {
                         Some(r) => r,
                         None => continue,
                     };

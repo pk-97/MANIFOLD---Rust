@@ -118,8 +118,13 @@ impl TimelineViewportPanel {
     /// Grid snap uses a threshold of at least half the grid interval, ensuring clips
     /// always jump between grid positions (standard DAW behavior). Clip edge snap
     /// uses the pixel-based threshold for fine-grained magnetic pull.
-    /// `ignore_ids` are clip IDs being dragged (don't snap to self).
-    pub fn magnetic_snap(&self, beat: Beats, layer_index: usize, ignore_ids: &[ClipId]) -> Beats {
+    /// `ignore` picks out the clip IDs being dragged, which never snap to themselves.
+    pub fn magnetic_snap(
+        &self,
+        beat: Beats,
+        layer_index: usize,
+        ignore: impl Fn(&ClipId) -> bool,
+    ) -> Beats {
         use crate::snap::SNAP_THRESHOLD_PX;
 
         let ppb = self.mapper.pixels_per_beat() as f64;
@@ -157,7 +162,7 @@ impl TimelineViewportPanel {
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         for clip in layer_clips {
-            if ignore_ids.contains(&clip.clip_id) {
+            if ignore(&clip.clip_id) {
                 continue;
             }
 

@@ -22,6 +22,23 @@ impl UIRoot {
         }
     }
 
+    /// The overlay for an id and the tree it builds into, borrowed side by side
+    /// so routing an event needs no stand-in tree.
+    fn overlay_and_tree(&mut self, id: OverlayId) -> (&mut dyn Overlay, &mut UITree) {
+        let tree = &mut self.tree;
+        let overlay: &mut dyn Overlay = match id {
+            OverlayId::PerfHud => &mut self.perf_hud,
+            OverlayId::Dropdown => &mut self.dropdown,
+            OverlayId::Settings => &mut self.settings_popup,
+            OverlayId::RtQuality => &mut self.rt_quality_panel,
+            OverlayId::BrowserPopup => &mut self.browser_popup,
+            OverlayId::AbletonPicker => &mut self.ableton_picker,
+            OverlayId::ExportProgress => &mut self.export_progress,
+            OverlayId::Toast => &mut self.toast,
+        };
+        (overlay, tree)
+    }
+
     /// Immutable view of the overlay for an id. Used by hit-tests that only
     /// need to read geometry / modality.
     pub(crate) fn overlay_ref(&self, id: OverlayId) -> &dyn Overlay {
@@ -244,14 +261,13 @@ impl UIRoot {
         event: &UIEvent,
         actions: &mut Vec<PanelAction>,
     ) -> bool {
-        let mut tree = std::mem::replace(&mut self.tree, UITree::new());
         let mut consumed = false;
         for id in OverlayId::Z_ORDER.iter().rev() {
-            let ov = self.overlay_mut(*id);
-            if !ov.is_open() {
+            if !self.overlay_is_open(*id) {
                 continue;
             }
-            let response = ov.on_event(event, &mut tree);
+            let (ov, tree) = self.overlay_and_tree(*id);
+            let response = ov.on_event(event, tree);
             let still_open = ov.is_open();
             let is_modal = matches!(ov.modality(), Modality::Modal { .. });
             if !still_open {
@@ -285,7 +301,6 @@ impl UIRoot {
                 }
             }
         }
-        self.tree = tree;
         if consumed {
             self.mark_overlay_dirty();
         }

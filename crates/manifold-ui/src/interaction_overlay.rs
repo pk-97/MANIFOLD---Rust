@@ -2728,14 +2728,13 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
     ) {
-        let Some(TimelineDrag::AutomationPoint(d)) = self.drag.payload() else {
+        let Some(TimelineDrag::AutomationPoint(drag)) = self.drag.payload_mut() else {
             return;
         };
-        let (target, param_id) = (d.target.clone(), d.param_id.clone());
         let lanes = viewport.automation_lane_screens();
         let Some(lane) = lanes
             .iter()
-            .find(|l| l.target == target && l.param_id == param_id)
+            .find(|l| l.target == drag.target && l.param_id == drag.param_id)
         else {
             return;
         };
@@ -2747,9 +2746,6 @@ impl InteractionOverlay {
             command: self.modifiers.command,
             shift: self.modifiers.shift,
             curve_height: lane.curve_rect().height,
-        };
-        let Some(TimelineDrag::AutomationPoint(drag)) = self.drag.payload_mut() else {
-            return;
         };
         let resolved = drag.resolver.resolve(&input);
         let to_beat = clamp_single_beat(
@@ -2775,7 +2771,7 @@ impl InteractionOverlay {
                 drag.original.2,
             );
         }
-        host.set_automation_lane_preview(&target, &param_id, &drag.working);
+        host.set_automation_lane_preview(&drag.target, &drag.param_id, &drag.working);
         drag.last_beat = to_beat;
         drag.last_value = to_value;
         if let Some(selected) = ui_state.selected_automation_point.as_mut() {
@@ -4003,11 +3999,9 @@ impl InteractionOverlay {
         let snapped = if self.modifiers.command {
             candidate_anchor_beat
         } else {
-            viewport.magnetic_snap(
-                candidate_anchor_beat,
-                m.start_layer_index,
-                &m.snapshot_clip_ids.iter().cloned().collect::<Vec<_>>(),
-            )
+            viewport.magnetic_snap(candidate_anchor_beat, m.start_layer_index, |id| {
+                m.snapshot_clip_ids.contains(id)
+            })
         };
         let mut beat_delta = snapped - m.start_beat;
         // Clamp: don't let the leftmost clip go below beat 0. The ONE shared
@@ -4047,7 +4041,7 @@ impl InteractionOverlay {
         let snapped = if self.modifiers.command {
             mouse_beat
         } else {
-            viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id))
+            viewport.magnetic_snap(mouse_beat, clip_layer, |id| *id == trim_id)
         };
         let raw_delta = snapped - grabbed_original_start_beat;
 
@@ -4104,7 +4098,7 @@ impl InteractionOverlay {
         let snapped = if self.modifiers.command {
             mouse_beat
         } else {
-            viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id))
+            viewport.magnetic_snap(mouse_beat, clip_layer, |id| *id == trim_id)
         };
         let raw_delta = snapped - grabbed_original_end;
 

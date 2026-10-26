@@ -654,6 +654,7 @@ impl Application {
                 // (right-click context menus: ClipRightClicked, TrackRightClicked).
                 actions.append(&mut host.pending_actions);
             }
+            self.ws.ui_root.recycle_viewport_events(viewport_events);
             // A selected point in another lane folds into
             // `automation_point_lane` when the planner reads it (D8).
         }

@@ -418,12 +418,18 @@ impl UIState {
     /// lane as the chosen param, so reselecting a point in another lane is a
     /// view change; moving one inside its lane is not. Read once a frame.
     pub fn automation_point_lane(&mut self) -> u64 {
-        let lane = self
-            .selected_automation_point
-            .as_ref()
-            .map(|point| (point.target.clone(), point.param_id.clone()));
-        if lane != self.seen_point_lane {
-            self.seen_point_lane = lane;
+        let same = match (&self.selected_automation_point, &self.seen_point_lane) {
+            (None, None) => true,
+            (Some(point), Some((target, param_id))) => {
+                point.target == *target && point.param_id == *param_id
+            }
+            _ => false,
+        };
+        if !same {
+            self.seen_point_lane = self
+                .selected_automation_point
+                .as_ref()
+                .map(|point| (point.target.clone(), point.param_id.clone()));
             if self.automation_mode_visible {
                 self.point_lane_view += 1;
             }

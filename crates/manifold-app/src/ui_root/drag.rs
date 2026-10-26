@@ -397,6 +397,71 @@ mod drag_capture_tests {
         );
     }
 
+    /// Once a timeline drag is under way, each move reuses the event lists the
+    /// frame already owns, so it allocates nothing. Runs where the `work-trace`
+    /// allocator counts allocations (the `ui-snapshot` feature).
+    #[cfg(feature = "work-trace")]
+    #[test]
+    fn a_steady_timeline_drag_allocates_nothing() {
+        use manifold_core::work_count::{WorkKind, thread_work_snapshot};
+
+        let mut ui = new_root();
+        let origin = center(ui.viewport.tracks_rect());
+
+        ui.pointer_event(origin, PointerAction::Down, 0.0);
+        let _ = ui.process_events();
+        let stashed = ui.drain_viewport_events();
+        ui.recycle_viewport_events(stashed);
+
+        // First move past DRAG_THRESHOLD_PX (4px) starts the drag.
+        let mut pos = Vec2::new(origin.x + 40.0, origin.y + 6.0);
+        let mut time = 0.02_f32;
+        ui.pointer_event(pos, PointerAction::Move, time);
+        let _ = ui.process_events();
+        assert_eq!(ui.drag_owner, Some(DragOwner::TimelineTracks));
+        let stashed = ui.drain_viewport_events();
+        ui.recycle_viewport_events(stashed);
+
+        let mut step = |ui: &mut UIRoot| {
+            pos.x += 3.5;
+            pos.y += 0.25;
+            time += 0.016;
+            ui.pointer_event(pos, PointerAction::Move, time);
+            let _ = ui.process_events();
+            let stashed = ui.drain_viewport_events();
+            ui.recycle_viewport_events(stashed);
+        };
+        for _ in 0..5 {
+            step(&mut ui);
+        }
+
+        let probe = thread_work_snapshot();
+        drop(std::hint::black_box(Vec::<u8>::with_capacity(16)));
+        assert!(
+            thread_work_snapshot()
+                .since(&probe)
+                .get(WorkKind::FrameAlloc)
+                > 0,
+            "the allocation counter counts"
+        );
+
+        let before = thread_work_snapshot();
+        for _ in 0..20 {
+            step(&mut ui);
+        }
+        let steady = thread_work_snapshot().since(&before);
+        assert_eq!(
+            steady.get(WorkKind::FrameAlloc),
+            0,
+            "a steady timeline drag allocates nothing"
+        );
+
+        ui.pointer_event(pos, PointerAction::Up, time + 0.016);
+        let _ = ui.process_events();
+        let stashed = ui.drain_viewport_events();
+        ui.recycle_viewport_events(stashed);
+    }
+
     /// D1/section 3.5: full-stack proof that a PointerDown landing on the docked Audio
     /// Setup panel's Low/Mid crossover divider requests immediate drag for that
     /// press, so a 1px Move begins the drag immediately (not after the usual
