@@ -1,8 +1,9 @@
 // The sheeter's signed distance (gpu_flip_sheet_distance.rs): seeded from the
 // liquid level set's zero crossings along grid edges, then swept with the
 // Godunov update of |grad u| = 1 in Jacobi passes (A -> B, B -> A), clamped to
-// `depth` metres. Cell centred, x fastest.
-struct Params { nx: u32, ny: u32, nz: u32, count: u32, h: f32, depth: f32, pad0: u32, pad1: u32 };
+// `depth` metres. Cell centred; `source`, `field_in` and `field_out` are
+// pooled cell fields (tile_storage.wgsl).
+struct Params { nx: u32, ny: u32, nz: u32, count: u32, h: f32, depth: f32, pool_tiles: u32, pad1: u32 };
 // The FLIP clock plan (gpu_flip_step/common.wgsl ClockPlan). An inactive substep slot
 // (live clock, zero step) does no work.
 struct ClockPlan {
@@ -15,12 +16,15 @@ struct ClockPlan {
 @group(0) @binding(2) var<storage, read> field_in: array<f32>;
 @group(0) @binding(3) var<storage, read_write> field_out: array<f32>;
 @group(0) @binding(4) var<storage, read> clock_plan: array<ClockPlan>;
+// The tile pool's slot and tile table.
+@group(0) @binding(5) var<storage, read> ts_table: array<u32>;
 
 fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
 }
 
 fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
+fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
 fn sign_of(v: f32) -> f32 { return select(-1.0, 1.0, v >= 0.0); }
 // The face neighbour of `c` along `axis` by `d` (-1 or 1) as a flat index, or
 // -1 off the grid.
@@ -51,19 +55,22 @@ fn crossing(c: vec3<i32>, p: f32) -> f32 {
 @compute @workgroup_size(256)
 fn seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let i = gid.x;
-    if i >= u.count { return; }
+    if gid.x >= u.count { return; }
+    let c = ts_box_cell(gid.x);
+    if !ts_cell_stored(c) { return; }
+    let i = ts_cell_at(c);
     let p = source[i];
-    let t = crossing(ts_cell_coord(i), p);
+    let t = crossing(c, p);
     field_out[i] = sign_of(p) * select(u.depth, t, t >= 0.0);
 }
 
 @compute @workgroup_size(256)
 fn sweep(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let i = gid.x;
-    if i >= u.count { return; }
-    let c = ts_cell_coord(i);
+    if gid.x >= u.count { return; }
+    let c = ts_box_cell(gid.x);
+    if !ts_cell_stored(c) { return; }
+    let i = ts_cell_at(c);
     let p = source[i];
     if crossing(c, p) >= 0.0 {
         field_out[i] = field_in[i];

@@ -26,8 +26,10 @@ pub(super) struct Pipelines {
     pub(super) pocket_condition: GpuComputePipeline,
     pub(super) pocket_tally: GpuComputePipeline,
     pub(super) pocket_clear: GpuComputePipeline,
-    pub(super) pocket_accumulate: GpuComputePipeline,
-    pub(super) pocket_remove: GpuComputePipeline,
+    /// The pocket sums' accumulate and remove over the fine lattice (pooled
+    /// fields), then over a coarse level (dense boxes).
+    pub(super) pocket_accumulate: [GpuComputePipeline; 2],
+    pub(super) pocket_remove: [GpuComputePipeline; 2],
     pub(super) pocket_pin: GpuComputePipeline,
     /// The removed flux into the pressure, then the density, solver word.
     pub(super) pocket_flux: [GpuComputePipeline; 2],
@@ -42,9 +44,16 @@ pub(super) struct Pipelines {
     pub(super) birth_tally_reset: GpuComputePipeline,
     pub(super) tiles_classify: GpuComputePipeline,
     pub(super) tiles_rings: GpuComputePipeline,
+    pub(super) tiles_free: GpuComputePipeline,
+    pub(super) tiles_alloc: GpuComputePipeline,
+    pub(super) tiles_settle: GpuComputePipeline,
+    pub(super) tiles_fresh: GpuComputePipeline,
     pub(super) tiles_lists: GpuComputePipeline,
-    pub(super) tiles_fill: GpuComputePipeline,
     pub(super) tiles_retire: GpuComputePipeline,
+    /// The canonical block of every pooled field, once per pool build.
+    pub(super) pool_canon: GpuComputePipeline,
+    /// The pooled faces and φ into the step's dense outputs.
+    pub(super) publish: GpuComputePipeline,
     /// The proofs' poison entry, dispatched under [`POISON`].
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub(super) poison: GpuComputePipeline,
@@ -89,8 +98,8 @@ impl Pipelines {
             pocket_condition: pipe("pocket_condition"),
             pocket_tally: pipe("pocket_tally"),
             pocket_clear: pipe("pocket_clear"),
-            pocket_accumulate: pipe("pocket_accumulate"),
-            pocket_remove: pipe("pocket_remove"),
+            pocket_accumulate: [pipe("pocket_accumulate"), pipe("pocket_accumulate_coarse")],
+            pocket_remove: [pipe("pocket_remove"), pipe("pocket_remove_coarse")],
             pocket_pin: pipe("pocket_pin"),
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
             pocket_coarse: [
@@ -105,9 +114,14 @@ impl Pipelines {
             birth_tally_reset: pipe("birth_tally_reset"),
             tiles_classify: pipe("tiles_classify"),
             tiles_rings: pipe("tiles_rings"),
+            tiles_free: pipe("tiles_free"),
+            tiles_alloc: pipe("tiles_alloc"),
+            tiles_settle: pipe("tiles_settle"),
+            tiles_fresh: pipe("tiles_fresh"),
             tiles_lists: pipe("tiles_lists"),
-            tiles_fill: pipe("tiles_fill"),
             tiles_retire: pipe("tiles_retire"),
+            pool_canon: pipe("pool_canon"),
+            publish: pipe("publish"),
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             poison: pipe(super::super::gpu_flip_tile_tests::POISON_ENTRY),
         }

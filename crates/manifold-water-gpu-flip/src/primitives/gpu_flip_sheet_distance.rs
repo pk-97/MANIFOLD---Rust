@@ -50,7 +50,8 @@ struct Params {
     count: u32,
     h: f32,
     depth: f32,
-    pad0: u32,
+    /// The tile pool's capacity P (gpu_flip_sheet_distance.wgsl ts_pool_tiles).
+    pool_tiles: u32,
     pad1: u32,
 }
 
@@ -62,9 +63,10 @@ pub(crate) fn depth_metres(h: f32) -> f32 {
 #[derive(Default)]
 pub(crate) struct SheetDistance {
     pipelines: Vec<GpuComputePipeline>,
-    /// The two ping-pong fields.
+    /// The two ping-pong fields, pooled cell fields of `pool_len` elements.
     buffers: Option<[GpuBuffer; 2]>,
     cells: [u32; 3],
+    pool_tiles: u32,
 }
 
 impl SheetDistance {
@@ -83,11 +85,16 @@ impl SheetDistance {
         }
     }
 
-    pub(crate) fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3]) -> Result<(), String> {
-        if self.buffers.is_some() && self.cells == cells {
+    pub(crate) fn reserve(
+        &mut self,
+        device: &GpuDevice,
+        cells: [u32; 3],
+        pool_tiles: u32,
+    ) -> Result<(), String> {
+        if self.buffers.is_some() && self.cells == cells && self.pool_tiles == pool_tiles {
             return Ok(());
         }
-        let bytes = cells.into_iter().map(u64::from).product::<u64>() * 4;
+        let bytes = manifold_water_liquid::tile_storage::pool_len(pool_tiles) * 4;
         manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(),
             2 * bytes,
@@ -98,6 +105,7 @@ impl SheetDistance {
             device.try_create_buffer(bytes)?,
         ]);
         self.cells = cells;
+        self.pool_tiles = pool_tiles;
         Ok(())
     }
 
@@ -107,15 +115,18 @@ impl SheetDistance {
         self.buffers.as_ref().expect("sheet distance reserved")
     }
 
-    /// Builds the distance of `source` (the liquid level set, cell centred, x
-    /// fastest) and returns the buffer holding it. Gated by the FLIP clock
-    /// plan: an inactive substep slot (live clock, zero step) changes nothing.
+    /// Builds the distance of `source` (the liquid level set, a pooled cell
+    /// field) and returns the pooled buffer holding it. Gated by the FLIP
+    /// clock plan: an inactive substep slot (live clock, zero step) changes
+    /// nothing.
     pub(crate) fn encode_gated(
         &self,
         enc: &mut GpuEncoder,
         source: &GpuBuffer,
         h: f32,
         plan: &GpuBuffer,
+        table: &GpuBuffer,
+        pool_tiles: u32,
     ) -> &GpuBuffer {
         let [a, b] = self.buffers.as_ref().expect("sheet distance reserved");
         let [nx, ny, nz] = self.cells;
@@ -127,7 +138,7 @@ impl SheetDistance {
             count,
             h,
             depth: depth_metres(h),
-            pad0: 0,
+            pool_tiles,
             pad1: 0,
         };
         let mut pass = |entry: usize, from: &GpuBuffer, to: &GpuBuffer, label: &'static str| {
@@ -158,6 +169,11 @@ impl SheetDistance {
                         buffer: plan,
                         offset: 0,
                     },
+                    GpuBinding::Buffer {
+                        binding: 5,
+                        buffer: table,
+                        offset: 0,
+                    },
                 ],
                 [count.div_ceil(256).max(1), 1, 1],
                 label,
@@ -179,6 +195,7 @@ impl SheetDistance {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
+    use crate::primitives::pool_testkit::{from_pool, identity_table, to_pool};
     use manifold_node_engine::testkit::array_harness::read;
 
     const CELLS: [u32; 3] = [24, 40, 20];
@@ -243,22 +260,32 @@ mod gpu_tests {
         shared(device, &words)
     }
 
+    /// Every box tile allocated: the identity pool table and its capacity.
+    fn pool(device: &GpuDevice) -> (GpuBuffer, u32) {
+        let (words, pool_tiles) = identity_table(CELLS);
+        (shared(device, &words), pool_tiles)
+    }
+
     fn stage(device: &GpuDevice) -> SheetDistance {
         let mut stage = SheetDistance::default();
         stage.prepare(device);
-        stage.reserve(device, CELLS).unwrap();
+        stage.reserve(device, CELLS, pool(device).1).unwrap();
         stage
     }
 
+    /// The distance of the dense `phi`, read back as a dense array.
     fn run(device: &GpuDevice, stage: &SheetDistance, phi: &[f32], plan: &GpuBuffer) -> Vec<f32> {
-        let source = shared(device, bytemuck::cast_slice(phi));
+        let (table, pool_tiles) = pool(device);
+        let pooled = to_pool(phi, CELLS, &[3.0 * H]);
+        let source = shared(device, bytemuck::cast_slice(&pooled));
         let mut enc = device.create_encoder("sheet distance");
-        let out = stage.encode_gated(&mut enc, &source, H, plan);
+        let out = stage.encode_gated(&mut enc, &source, H, plan, &table, pool_tiles);
         enc.commit_and_wait_completed();
-        copy_out(device, out)
+        let out: Vec<f32> = copy_out(device, out)
             .into_iter()
             .map(f32::from_bits)
-            .collect()
+            .collect();
+        from_pool(&out, CELLS)
     }
 
     /// The same seed and sweeps on the CPU, in f32 and the kernel's order.

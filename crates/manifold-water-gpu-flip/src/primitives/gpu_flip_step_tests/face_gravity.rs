@@ -14,9 +14,10 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
         ..lattice()
     };
     let got: Vec<FaceSample> = Pass::new()
-        .bind(3, &faces)
-        .bind(12, &[0.0f32; 4])
-        .bind(13, &[0.0f32; 4])
+        .bind(3, &faces, Layout::Records)
+        .bind(4, &faces, Layout::Records)
+        .bind(12, &[0.0f32; 4], Layout::Dense)
+        .bind(13, &[0.0f32; 4], Layout::Dense)
         .run("face_gravity", &step, 4, face_len(), face_len());
     for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
         let p = pad_coords(i);
@@ -90,9 +91,10 @@ fn face_gravity_case(air: bool) {
             ..lattice()
         };
         let got: Vec<FaceSample> = Pass::new()
-            .bind(3, &faces)
-            .bind(12, &flat(&forces))
-            .bind(13, &flat(&impulses))
+            .bind(3, &faces, Layout::Records)
+            .bind(4, &faces, Layout::Records)
+            .bind(12, &flat(&forces), Layout::Dense)
+            .bind(13, &flat(&impulses), Layout::Dense)
             .run("face_gravity", &params, 4, face_len(), face_len());
         for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
             let p = pad_coords(i);

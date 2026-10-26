@@ -15,11 +15,13 @@
 // 14-16: the next round setup's indirect dispatch size.
 @group(0) @binding(24) var<storage, read_write> pocket_gate: array<u32>;
 
-// Each water cell's pocket: the lowest cell index of the sealed water it
-// links to. A pocket's label is its leader cell.
+// Each water cell's pocket: the lowest box cell index (`ts_dense_cell`) of
+// the sealed water it links to. A pocket's label is its leader cell.
 @group(0) @binding(25) var<storage, read_write> pocket_label: array<u32>;
 
 // Per label, three words: a right-hand side sum as a 64-bit fixed-point
 // integer (low, high) and the cell count. Then two words: the magnitude of
-// everything removed this solve, in the same fixed point.
+// everything removed this solve, in the same fixed point. A dense array
+// indexed by the label (a box cell index, or a level cell's at a coarse
+// level), not a pooled field.
 @group(0) @binding(26) var<storage, read_write> pocket_sum: array<atomic<u32>>;

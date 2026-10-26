@@ -136,8 +136,12 @@ const OLD_SELECTION: &str = r#"// Phase 2: the first four markers of each sheet 
 fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
-    if c >= ts_cell_count() || atomicLoad(&sheet_a[c]) == 0u { return; }
-    let range = ranges[c];
+    if c >= ts_cell_count() { return; }
+    let q = ts_box_cell(c);
+    if !ts_cell_stored(q) { return; }
+    let at = ts_cell_at(q);
+    if atomicLoad(&sheet_a[at]) == 0u { return; }
+    let range = ranges[ts_dense_cell(q)];
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
         let p = local(particles[s]);
@@ -146,7 +150,7 @@ fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
         selected[4u * c + n] = vec4<f32>(p, bitcast<f32>(order[s]));
         n = n + 1u;
     }
-    selected_count[c] = n;
+    selected_count[at] = n;
 }
 
 // One coarse 2-cell bucket's phase-2 markers in input order: the eight
@@ -156,12 +160,14 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
     var heads: array<u32, 8>;
     var counts: array<u32, 8>;
     var cells: array<u32, 8>;
+    var dense: array<u32, 8>;
     for (var l = 0; l < 8; l = l + 1) {
         let c = 2 * b + vec3<i32>(l & 1, (l >> 1) & 1, (l >> 2) & 1);
         heads[l] = 0u;
         counts[l] = 0u;
         if in_range(c) {
             cells[l] = ts_cell_at(c);
+            dense[l] = ts_dense_cell(c);
             counts[l] = selected_count[cells[l]];
         }
     }
@@ -171,12 +177,12 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
         var best_index = 0xffffffffu;
         for (var l = 0; l < 8; l = l + 1) {
             if heads[l] < counts[l] {
-                let index = bitcast<u32>(selected[4u * cells[l] + heads[l]].w);
+                let index = bitcast<u32>(selected[4u * dense[l] + heads[l]].w);
                 if index < best_index { best_index = index; best = l; }
             }
         }
         if best < 0 { break; }
-        bucket[n] = selected[4u * cells[best] + heads[best]];
+        bucket[n] = selected[4u * dense[best] + heads[best]];
         heads[best] = heads[best] + 1u;
         n = n + 1u;
     }

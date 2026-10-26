@@ -183,9 +183,16 @@ fn step_shader_validates_with_every_entry() {
         "faces_to_particles",
         "tiles_classify",
         "tiles_rings",
+        "tiles_free",
+        "tiles_alloc",
+        "tiles_settle",
+        "tiles_fresh",
         "tiles_lists",
-        "tiles_fill",
         "tiles_retire",
+        "pool_canon",
+        "publish",
+        "pocket_accumulate_coarse",
+        "pocket_remove_coarse",
         "pocket_leader_clear",
         "pocket_coarsen",
         "pocket_relabel",
@@ -201,12 +208,17 @@ fn step_params_match_the_shader_uniform() {
     assert_eq!(std::mem::offset_of!(StepParams, particles), 108);
     assert_eq!(std::mem::offset_of!(StepParams, live_impulse_stride), 152);
     assert_eq!(std::mem::offset_of!(StepParams, wall_inset), 156);
+    assert_eq!(std::mem::offset_of!(StepParams, coupled_h), 160);
+    assert_eq!(std::mem::offset_of!(StepParams, pool_tiles), 164);
+    assert_eq!(std::mem::offset_of!(StepParams, alloc_ring), 168);
 }
 
 /// The tile table's bytes, by an independent count: five words a tile
-/// (nearness, two ring halves, the list, the retired list), the counts
-/// and the triples; partial edge tiles counted whole; the extent's hold
-/// grows by exactly that.
+/// (nearness, two ring halves, the list, the retired list), the slot table
+/// (a word per tile and per pool slot, the pool as large as the box), the
+/// free stack (a word per slot), the fresh list (a word per tile), the
+/// counts and the triples; partial edge tiles counted whole; the extent's
+/// hold grows by exactly that.
 #[test]
 fn gpu_flip_tile_table_bytes_follow_the_lattice() {
     assert_eq!(tile_counts([64, 64, 64]), [8, 8, 8]);
@@ -222,12 +234,16 @@ fn gpu_flip_tile_table_bytes_follow_the_lattice() {
         ([1, 9, 17], 6),
     ] {
         for r in 1..5u32 {
-            let counts = u64::from(r) + 2 + 1 + 1;
+            // Counts: |C|, the rings 1..=r + 1, the retired count, the parity,
+            // then the free top, the pop count, the exhausted flag and the
+            // fresh count.
+            let counts = u64::from(r) + 2 + 1 + 1 + 4;
             let triples = 3 * (u64::from(r) + 1 + 1 + 1);
-            let arguments = triples + triples % 2 + 2;
+            // The triples, the aligned replay range, the fresh triple.
+            let arguments = triples + triples % 2 + 2 + 3;
             assert_eq!(
                 tile_scratch_bytes(cells, r),
-                (5 * tiles + counts + arguments) * 4,
+                (5 * tiles + 2 * tiles + tiles + tiles + counts + arguments) * 4,
                 "{cells:?} ring_max {r}"
             );
             assert_eq!(

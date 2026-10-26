@@ -2,6 +2,7 @@
 //! against FLIP's own sheeter) on the same level set and ordered markers.
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs};
 use super::gpu_flip_sheeting_cpu_tests::bucket_fixture;
+use super::pool_testkit::{from_pool, identity_table, records_to_pool, to_pool};
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
@@ -39,6 +40,30 @@ fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
     enc.commit_and_wait_completed();
     read(&staged, (buffer.size / 4) as usize)
+}
+
+/// A lattice's identity pool: every box tile allocated, P = T.
+struct Pool {
+    table: GpuBuffer,
+    tiles: u32,
+    cells: [u32; 3],
+}
+
+fn pool(device: &GpuDevice, cells: [u32; 3]) -> Pool {
+    let (words, tiles) = identity_table(cells);
+    Pool {
+        table: shared(device, bytemuck::cast_slice(&words)),
+        tiles,
+        cells,
+    }
+}
+
+/// A dense cell field uploaded in pool layout.
+fn pooled<T: bytemuck::Pod>(device: &GpuDevice, pool: &Pool, dense: &[T], canon: T) -> GpuBuffer {
+    shared(
+        device,
+        bytemuck::cast_slice(&to_pool(dense, pool.cells, &[canon])),
+    )
 }
 
 /// A clock plan (gpu_flip_step/common.wgsl ClockPlan): live, with `step_dt`.
@@ -121,6 +146,7 @@ fn run(
     phi: &GpuBuffer,
     h: f32,
     plan: Option<&GpuBuffer>,
+    pool: &Pool,
 ) -> Run {
     let inputs = SheetInputs {
         particles: &sorted.particles,
@@ -134,8 +160,8 @@ fn run(
     };
     let mut enc = device.create_encoder("sheeting proof");
     match plan {
-        Some(plan) => stage.encode_gated(&mut enc, &inputs, plan),
-        None => stage.encode(&mut enc, &inputs),
+        Some(plan) => stage.encode_gated(&mut enc, &inputs, plan, &pool.table, pool.tiles),
+        None => stage.encode(&mut enc, &inputs, &pool.table, pool.tiles),
     }
     enc.commit_and_wait_completed();
     let (births, count) = stage.births();
@@ -148,8 +174,14 @@ fn run(
             .collect(),
         count: words[0],
         unresolved: words[1],
-        flags: copy_out(device, &stage.scratch()[6]),
-        claims: copy_out(device, &stage.scratch()[5]),
+        flags: from_pool(&copy_out(device, &stage.scratch()[6]), pool.cells),
+        claims: from_pool(
+            bytemuck::cast_slice::<u32, [u32; 8]>(&copy_out(device, &stage.scratch()[5])),
+            pool.cells,
+        )
+        .into_iter()
+        .flatten()
+        .collect(),
     }
 }
 
@@ -185,11 +217,14 @@ fn matches_port(
     let trace = sheeter::trace_sheet_particles(markers, phi, cells, f64::from(h), FILL_THRESHOLD)
         .expect("port");
     let sorted = sort(device, markers, cells, h);
-    let phi_buffer = shared(device, bytemuck::cast_slice(phi));
+    let pool = pool(device, cells);
+    let phi_buffer = pooled(device, &pool, phi, 3.0 * h);
     let mut stage = GpuSheeting::default();
     stage.prepare(device);
-    stage.reserve(device, cells, 1 << 16).expect("reserve");
-    let gpu = run(device, &stage, &sorted, &phi_buffer, h, None);
+    stage
+        .reserve(device, cells, 1 << 16, pool.tiles)
+        .expect("reserve");
+    let gpu = run(device, &stage, &sorted, &phi_buffer, h, None, &pool);
 
     // Candidates by identity. The port lists them as generated; the engine
     // visits them bucket by bucket (k, j, i) in that order within a bucket,
@@ -310,7 +345,7 @@ fn matches_port(
     for _ in 0..5 {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut enc = device.create_encoder("sheeting timing");
-        stage.encode(&mut enc, &inputs);
+        stage.encode(&mut enc, &inputs, &pool.table, pool.tiles);
         enc.add_gpu_time_handler(move |seconds| {
             let _ = tx.send(seconds);
         });
@@ -356,10 +391,11 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
     let (markers, phi, cells, dx) = sheeter::fixtures::splash();
     let h = dx as f32;
     let sorted = sort(&device, &markers, cells, h);
-    let phi_buffer = shared(&device, bytemuck::cast_slice(&phi));
+    let pool = pool(&device, cells);
+    let phi_buffer = pooled(&device, &pool, &phi, 3.0 * h);
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
-    stage.reserve(&device, cells, 1 << 16).unwrap();
+    stage.reserve(&device, cells, 1 << 16, pool.tiles).unwrap();
     let full = run(
         &device,
         &stage,
@@ -367,6 +403,7 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
         &phi_buffer,
         h,
         Some(&live_plan(&device, 0.01)),
+        &pool,
     );
     assert!(full.count > 3);
     let snapshot = |stage: &GpuSheeting| -> Vec<Vec<u32>> {
@@ -378,7 +415,7 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
     };
     let before = snapshot(&stage);
     let other: Vec<f32> = phi.iter().map(|v| -v).collect();
-    let other = shared(&device, bytemuck::cast_slice(&other));
+    let other = pooled(&device, &pool, &other, 3.0 * h);
     run(
         &device,
         &stage,
@@ -386,12 +423,13 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
         &other,
         h,
         Some(&live_plan(&device, 0.0)),
+        &pool,
     );
     assert!(
         before == snapshot(&stage),
         "an inactive slot wrote to the stage"
     );
-    let again = run(&device, &stage, &sorted, &phi_buffer, h, None);
+    let again = run(&device, &stage, &sorted, &phi_buffer, h, None, &pool);
     assert!(
         again.births == full.births && again.count == full.count,
         "a rerun changed the births"
@@ -399,8 +437,8 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
 
     let mut short = GpuSheeting::default();
     short.prepare(&device);
-    short.reserve(&device, cells, 3).unwrap();
-    let three = run(&device, &short, &sorted, &phi_buffer, h, None);
+    short.reserve(&device, cells, 3, pool.tiles).unwrap();
+    let three = run(&device, &short, &sorted, &phi_buffer, h, None, &pool);
     assert_eq!(
         three.count, full.count,
         "a short list still counts every birth"
@@ -478,10 +516,11 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
             .collect();
         let particles = shared(&device, bytemuck::cast_slice(&records));
         let zeros = shared(&device, &vec![0u8; 4 * 64000]);
+        let pool = pool(&device, cells);
         let mut stage = GpuSheeting::default();
         stage.prepare(&device);
         stage
-            .reserve(&device, cells, 2 * records.len() as u32)
+            .reserve(&device, cells, 2 * records.len() as u32, pool.tiles)
             .unwrap();
         let mut enc = device.create_encoder("sheeting index probe");
         let inputs = SheetInputs {
@@ -494,7 +533,7 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
             h,
             threshold: FILL_THRESHOLD,
         };
-        stage.encode_index_probe(&device, &mut enc, &inputs);
+        stage.encode_index_probe(&device, &mut enc, &inputs, &pool.table, pool.tiles);
         enc.commit_and_wait_completed();
         let words = copy_out(&device, stage.births().0);
         // In contract: finite with both floors inside +-2^30, the engine's floor.
@@ -619,10 +658,11 @@ fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
             "h {h}: the sweep crosses the walk's decision ({thin} thin)"
         );
         let sorted = sort(&device, &markers, cells, h);
-        let phi_buffer = shared(&device, bytemuck::cast_slice(&phi));
+        let pool = pool(&device, cells);
+        let phi_buffer = pooled(&device, &pool, &phi, 3.0 * h);
         let mut stage = GpuSheeting::default();
         stage.prepare(&device);
-        stage.reserve(&device, cells, 16).unwrap();
+        stage.reserve(&device, cells, 16, pool.tiles).unwrap();
         let mut enc = device.create_encoder("sheeting detect");
         stage.encode_detect(
             &mut enc,
@@ -636,9 +676,11 @@ fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
                 h,
                 threshold: FILL_THRESHOLD,
             },
+            &pool.table,
+            pool.tiles,
         );
         enc.commit_and_wait_completed();
-        let flags = copy_out(&device, &stage.scratch()[0]);
+        let flags = from_pool(&copy_out(&device, &stage.scratch()[0]), cells);
         let got: Vec<usize> = (0..flags.len()).filter(|&c| flags[c] != 0).collect();
         assert_eq!(got, want, "h {h}: thin cells differ");
         eprintln!(
@@ -654,10 +696,11 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
     for cells in [[5u32, 3, 7], [4, 4, 4], [1, 1, 1]] {
-        stage.reserve(&device, cells, 1).unwrap();
+        let pool = pool(&device, cells);
+        stage.reserve(&device, cells, 1, pool.tiles).unwrap();
         for saturated in [true, false] {
             let fixture = bucket_fixture(cells.map(|n| n as usize), saturated);
-            let counts = shared(&device, bytemuck::cast_slice(&fixture.counts));
+            let counts = pooled(&device, &pool, &fixture.counts, 0u32);
             let segments = shared(&device, bytemuck::cast_slice(&fixture.segments));
             let dummy = shared(&device, &[0; 32]);
             let inputs = SheetInputs {
@@ -671,13 +714,9 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
                 threshold: FILL_THRESHOLD,
             };
             let mut enc = device.create_encoder("sheeting bucket proof");
-            enc.copy_buffer_to_buffer(
-                &counts,
-                &stage.scratch()[3],
-                4 * fixture.counts.len() as u64,
-            );
+            enc.copy_buffer_to_buffer(&counts, &stage.scratch()[3], counts.size);
             enc.copy_buffer_to_buffer(&segments, &stage.scratch()[4], segments.size);
-            stage.encode_buckets(&mut enc, &inputs);
+            stage.encode_buckets(&mut enc, &inputs, &pool.table, pool.tiles);
             enc.commit_and_wait_completed();
             let lengths = copy_out(&device, &stage.scratch()[1]);
             let rows = copy_out(&device, &stage.scratch()[4]);
@@ -748,15 +787,17 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
     let mut initial = vec![0u32; 8 * capacity as usize];
     initial[..original.len()].copy_from_slice(&original);
     let ranges = sorted.sorter.ranges().unwrap();
-    let phi = shared(&device, bytemuck::cast_slice(&analytic));
-    let faces = vec![
-        FaceSample {
-            velocity: [0.3, -0.2, 0.1, 0.0],
-            weight: [1.0; 4]
-        };
-        cells.into_iter().map(|n| (n + 1) as usize).product()
-    ];
-    let old = shared(&device, bytemuck::cast_slice(&faces));
+    let pool = pool(&device, cells);
+    let phi = pooled(&device, &pool, &analytic, 3.0 * h);
+    let face = FaceSample {
+        velocity: [0.3, -0.2, 0.1, 0.0],
+        weight: [1.0; 4],
+    };
+    let faces = vec![face; cells.into_iter().map(|n| (n + 1) as usize).product()];
+    let old = shared(
+        &device,
+        bytemuck::cast_slice(&records_to_pool(&faces, cells, &[face; 8])),
+    );
     let capped = shared(
         &device,
         &[0u8; 4 * manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize],
@@ -773,7 +814,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             } else {
                 stage.prepare(&device);
             }
-            stage.reserve(&device, cells, capacity).unwrap();
+            stage.reserve(&device, cells, capacity, pool.tiles).unwrap();
             (
                 stage,
                 shared(&device, bytemuck::cast_slice(&initial)),
@@ -834,7 +875,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             };
             let mut enc = device.create_encoder("sheeting old GPU parity");
             let replay = cache.take().map(|c| enc.begin_replay(&device, c)).is_some();
-            stage.encode_draw(&mut enc, &inputs, &plan, &births);
+            stage.encode_draw(&mut enc, &inputs, &plan, &births, &pool.table, pool.tiles);
             ids.reserve(
                 &mut enc,
                 BirthReservation {
@@ -847,7 +888,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
                 },
             );
             enc.compute_memory_barrier_buffers();
-            stage.encode_write(&mut enc, &inputs, &plan, &births);
+            stage.encode_write(&mut enc, &inputs, &plan, &births, &pool.table, pool.tiles);
             if replay {
                 *cache = Some(enc.end_replay());
             }

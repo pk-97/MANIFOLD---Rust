@@ -18,7 +18,7 @@ impl Primitive for GpuFlipStep {
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "faces" => self.state.faces.as_ref(),
-            "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
+            "distance" => self.state.distance.as_ref(),
             "substep_schedule" => self.state.history.schedule.as_ref(),
             "substep_u" | "substep_v" | "substep_w" => self.state.history.faces.as_ref().map(|f| {
                 &f[match port {
@@ -343,7 +343,9 @@ impl Primitive for GpuFlipStep {
                 coupled_h: manifold_physics::coupled_motion::coupled_substep(
                     manifold_physics::Seconds(interval_duration),
                 ),
-                _pad: [0; 3],
+                pool_tiles: pool_tiles(cells),
+                alloc_ring: ALLOC_RING,
+                _pad: 0,
             },
             clock_plan: &zeros,
             particles,

@@ -21,9 +21,13 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = ts_cells();
-    let p = ts_face_coord(idx);
-    let here = faces_rw[idx];
-    let open = solid_faces[idx];
+    let p = ts_box_record(idx);
+    if !ts_record_stored(p) {
+        return;
+    }
+    let at = ts_face(p);
+    let here = faces_rw[at];
+    let open = solid_faces[at];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let surface = -0.005 * u.cell_size;
     for (var a = 0; a < 3; a = a + 1) {
@@ -52,7 +56,7 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
             out.face_weight[a] = 1.0;
         }
     }
-    faces_rw[idx] = out;
+    faces_rw[at] = out;
 }
 
 // One thread per face record, in place on `faces_rw`
@@ -69,10 +73,14 @@ fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = ts_cells();
-    let p = ts_face_coord(idx);
-    var out = faces_rw[idx];
-    let open = solid_faces[idx];
-    let solid_here = solid_velocity[idx];
+    let p = ts_box_record(idx);
+    if !ts_record_stored(p) {
+        return;
+    }
+    let at = ts_face(p);
+    var out = faces_rw[at];
+    let open = solid_faces[at];
+    let solid_here = solid_velocity[at];
     for (var a = 0; a < 3; a = a + 1) {
         if !face_exists(p, n, a) {
             continue;
@@ -90,5 +98,5 @@ fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
             out.face_velocity[a] = f * v_s + (1.0 - f) * out.face_velocity[a];
         }
     }
-    faces_rw[idx] = out;
+    faces_rw[at] = out;
 }

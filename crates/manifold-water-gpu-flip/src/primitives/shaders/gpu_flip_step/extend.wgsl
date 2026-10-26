@@ -16,9 +16,13 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = ts_cells();
-    let p = ts_face_coord(idx);
+    let p = ts_box_record(idx);
+    if !ts_record_stored(p) {
+        return;
+    }
+    let at = ts_face(p);
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    let here = faces_in[idx];
+    let here = faces_in[at];
     for (var a = 0; a < 3; a = a + 1) {
         // Faces of component a span 0..=n on axis a and 0..n on the others.
         var top = n - vec3<i32>(1);
@@ -55,5 +59,5 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
             out.face_weight[a] = 1.0;
         }
     }
-    faces_out[idx] = out;
+    faces_out[at] = out;
 }

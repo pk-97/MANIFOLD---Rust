@@ -8,6 +8,7 @@ use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs, StepBir
 use super::gpu_flip_step::GpuFlipStep;
 use super::gpu_flip_step_tests::cpu_sample_on;
 use super::liquid_fill::LiquidFill;
+use super::pool_testkit::{identity_table, records_to_pool, to_pool};
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
@@ -460,23 +461,27 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
         )
         .unwrap();
     enc.commit_and_wait_completed();
-    let phi = shared(
-        bytemuck::cast_slice(&marker_phi(&markers, cells, h)),
-        4 * 64000,
-    );
-    let faces = vec![
-        FaceSample {
-            velocity: [0.3, -0.2, 0.1, 0.0],
-            weight: [1.0; 4]
-        };
-        41 * 41 * 41
-    ];
-    let old = shared(bytemuck::cast_slice(&faces), 32 * faces.len());
+    let (table_words, pool_tiles) = identity_table(cells);
+    let table = shared(bytemuck::cast_slice(&table_words), 4 * table_words.len());
+    let pooled_phi = |phi: &[f32]| {
+        let pooled = to_pool(phi, cells, &[3.0 * h]);
+        shared(bytemuck::cast_slice(&pooled), 4 * pooled.len())
+    };
+    let phi = pooled_phi(&marker_phi(&markers, cells, h));
+    let face = FaceSample {
+        velocity: [0.3, -0.2, 0.1, 0.0],
+        weight: [1.0; 4],
+    };
+    let faces = vec![face; cells.into_iter().map(|n| (n + 1) as usize).product()];
+    let pooled_faces = records_to_pool(&faces, cells, &[face; 8]);
+    let old = shared(bytemuck::cast_slice(&pooled_faces), 32 * pooled_faces.len());
     let identity = shared(bytemuck::cast_slice(&[5000u32, 1, 0, 0]), 16);
     let capped = shared(&[], 4 * SOLVER_WORDS as usize);
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
-    stage.reserve(&device, cells, capacity as u32).unwrap();
+    stage
+        .reserve(&device, cells, capacity as u32, pool_tiles)
+        .unwrap();
     let mut ids = ParticleIdentity::default();
     ids.prepare(&device);
     let ranges = sorter.ranges().unwrap();
@@ -502,7 +507,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
             substep: 0,
         };
         let mut enc = device.create_encoder("sheeting step passes");
-        stage.encode_draw(&mut enc, &inputs, plan, &births);
+        stage.encode_draw(&mut enc, &inputs, plan, &births, &table, pool_tiles);
         ids.reserve(
             &mut enc,
             BirthReservation {
@@ -515,7 +520,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
             },
         );
         enc.compute_memory_barrier_buffers();
-        stage.encode_write(&mut enc, &inputs, plan, &births);
+        stage.encode_write(&mut enc, &inputs, plan, &births, &table, pool_tiles);
         enc.commit_and_wait_completed();
     };
     let plan = |step_dt: f32| {
@@ -540,11 +545,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     };
     let before = snapshot(&stage);
     let other: Vec<f32> = marker_phi(&markers, cells, h).iter().map(|v| -v).collect();
-    run(
-        &stage,
-        &plan(0.0),
-        &shared(bytemuck::cast_slice(&other), 4 * 64000),
-    );
+    run(&stage, &plan(0.0), &pooled_phi(&other));
     assert!(before == snapshot(&stage), "an inactive slot wrote");
 }
 

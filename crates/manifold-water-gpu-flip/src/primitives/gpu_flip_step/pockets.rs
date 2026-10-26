@@ -3,17 +3,17 @@
 use super::*;
 
 /// The coarse pockets' bytes: a state and a label per level-1 cell (every
-/// deeper level has fewer) and a leader slot per fine cell. A lattice with
-/// no level 1 has no solve level above 0 and never reads them.
+/// deeper level has fewer). A lattice with no level 1 has no solve level
+/// above 0 and never reads them.
 pub(super) fn pocket_coarse_bytes(cells: [u32; 3]) -> u64 {
     level_lattices(cells)
         .get(1)
         .map_or(0, |&coarse| 2 * cell_bytes(coarse))
-        + cell_bytes(cells)
 }
 
 /// Three words a cell (a pocket's 64-bit sum and its count, indexed by its
-/// leader cell), then the removed total's two.
+/// leader cell's box index), then the removed total's two. A dense array,
+/// not a pooled field.
 pub(super) fn pocket_sum_bytes(cells: [u32; 3]) -> u64 {
     3 * cell_bytes(cells) + 8
 }
@@ -57,6 +57,7 @@ pub(super) fn encode_pockets(
     pipes: &Pipelines,
     params: &StepParams,
     l: &LatticeBuffers,
+    table: &GpuBuffer,
     ranges: &GpuBuffer,
     cells: [u32; 3],
     capped: &GpuBuffer,
@@ -73,6 +74,7 @@ pub(super) fn encode_pockets(
             buffer(23, &l.pocket),
             buffer(25, &l.pocket_label),
             buffer(46, plan),
+            buffer(51, table),
         ],
         groups(cell_count),
         "gpu_flip.step.pocket_seed",
@@ -124,6 +126,7 @@ pub(super) fn encode_pockets(
                 buffer(23, &l.pocket),
                 buffer(24, &l.pocket_gate),
                 buffer(25, &l.pocket_label),
+                buffer(51, table),
             ];
             if segmented {
                 enc.dispatch_compute_gated(
@@ -165,6 +168,7 @@ pub(super) fn encode_pockets(
             buffer(24, &l.pocket_gate),
             buffer(25, &l.pocket_label),
             buffer(46, plan),
+            buffer(51, table),
         ],
         groups(cell_count),
         "gpu_flip.step.pocket_check",
@@ -187,6 +191,7 @@ pub(super) fn encode_pockets(
                 offset: tally,
             },
             buffer(46, plan),
+            buffer(51, table),
         ],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",
@@ -197,6 +202,9 @@ pub(super) fn encode_pockets(
 /// cell's sealed state and its pocket's label (a cell of that lattice), and
 /// the sums, three words a cell plus the removed total's two.
 pub(super) struct Pockets<'a> {
+    /// The fine lattice's pockets are pooled fields; a coarse level's are
+    /// dense boxes.
+    pub(super) fine: bool,
     pub(super) state: &'a GpuBuffer,
     pub(super) label: &'a GpuBuffer,
     pub(super) sums: &'a GpuBuffer,
@@ -205,6 +213,7 @@ pub(super) struct Pockets<'a> {
 impl LatticeBuffers {
     pub(super) fn fine_pockets(&self) -> Pockets<'_> {
         Pockets {
+            fine: true,
             state: &self.pocket,
             label: &self.pocket_label,
             sums: &self.pocket_sum,
@@ -213,6 +222,7 @@ impl LatticeBuffers {
 
     pub(super) fn coarse_pockets(&self) -> Pockets<'_> {
         Pockets {
+            fine: false,
             state: &self.pocket_coarse,
             label: &self.pocket_coarse_label,
             sums: &self.pocket_sum,
@@ -231,12 +241,14 @@ pub(super) fn encode_pocket_mean(
     pipes: &Pipelines,
     params: &StepParams,
     pockets: Pockets<'_>,
+    table: &GpuBuffer,
     rhs: &GpuBuffer,
     solve: usize,
     capped: &GpuBuffer,
     tally: u64,
     plan: &GpuBuffer,
 ) {
+    let which = usize::from(!pockets.fine);
     let cell_count: u64 = params.n.iter().map(|&n| u64::from(n)).product();
     let sums = [uniform(params), buffer(26, pockets.sums), buffer(46, plan)];
     enc.dispatch_compute(
@@ -252,15 +264,16 @@ pub(super) fn encode_pocket_mean(
         buffer(25, pockets.label),
         buffer(26, pockets.sums),
         buffer(46, plan),
+        buffer(51, table),
     ];
     enc.dispatch_compute(
-        &pipes.pocket_accumulate,
+        &pipes.pocket_accumulate[which],
         &cells,
         groups(cell_count),
         "gpu_flip.step.pocket_accumulate",
     );
     enc.dispatch_compute(
-        &pipes.pocket_remove,
+        &pipes.pocket_remove[which],
         &cells,
         groups(cell_count),
         "gpu_flip.step.pocket_remove",
@@ -291,6 +304,7 @@ pub(super) fn encode_pocket_coarsen(
     pipes: &Pipelines,
     params: &StepParams,
     l: &LatticeBuffers,
+    table: &GpuBuffer,
     plan: &GpuBuffer,
 ) {
     let level = params.solve_level as usize;
@@ -305,6 +319,7 @@ pub(super) fn encode_pocket_coarsen(
             uniform(params),
             buffer(41, &l.pocket_leader),
             buffer(46, plan),
+            buffer(51, table),
         ],
         groups(cell_count),
         "gpu_flip.step.pocket_leader_clear",
@@ -319,6 +334,7 @@ pub(super) fn encode_pocket_coarsen(
         buffer(40, &l.pocket_coarse_label),
         buffer(41, &l.pocket_leader),
         buffer(46, plan),
+        buffer(51, table),
     ];
     enc.dispatch_compute(
         &pipes.pocket_coarse[1],

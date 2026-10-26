@@ -7,7 +7,11 @@ use super::*;
 /// through a linked dry neighbour or an open tank face (`mask`); a cell of an
 /// unreached region of more than one cell is isolated. Returns the isolated
 /// cells, then every sealed (wet, unreached) cell.
-pub(super) fn cpu_isolated(water: &[f32], open: &[FaceSample], mask: u32) -> (Vec<bool>, Vec<bool>) {
+pub(super) fn cpu_isolated(
+    water: &[f32],
+    open: &[FaceSample],
+    mask: u32,
+) -> (Vec<bool>, Vec<bool>) {
     let wet = |c: [usize; 3]| water[cell_index(c)] > 0.5;
     let neighbours = |c: [usize; 3]| {
         let mut out = Vec::new();
@@ -110,15 +114,15 @@ pub(super) fn gpu_pockets(
     };
     let lines = (N[1] * N[2]).max(N[0] * N[2]).max(N[0] * N[1]);
     let mut pass = Pass::new();
-    pass.bind(6, water)
-        .bind(10, open)
-        .bind(23, &vec![0u32; cell_len()])
-        .bind(24, &[0u32; POCKET_GATE_WORDS as usize])
-        .bind(4, moving)
-        .bind(25, &vec![0u32; cell_len()])
-        .bind(5, rhs)
-        .bind(26, &vec![7u32; 3 * cell_len() + 2])
-        .bind(22, &[9u32; 6]);
+    pass.bind(6, water, Layout::Cells)
+        .bind(10, open, Layout::Records)
+        .bind(23, &vec![0u32; cell_len()], Layout::Cells)
+        .bind(24, &[0u32; POCKET_GATE_WORDS as usize], Layout::Dense)
+        .bind(4, moving, Layout::Records)
+        .bind(25, &vec![0u32; cell_len()], Layout::Cells)
+        .bind(5, rhs, Layout::Cells)
+        .bind(26, &vec![7u32; 3 * cell_len() + 2], Layout::Dense)
+        .bind(22, &[9u32; 6], Layout::Dense);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
     pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
     let mut rounds = 0;
@@ -204,7 +208,12 @@ pub(super) fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
                 let mut face = FaceSample::default();
                 for a in 0..3 {
                     if face_exists(p, a) {
-                        face.velocity[a] = 0.5 + rng.unit();
+                        // A box wall is closed: the pool holds none past the
+                        // lattice but the zero velocity there.
+                        let draw = 0.5 + rng.unit();
+                        if p[a] < N[a] {
+                            face.velocity[a] = draw;
+                        }
                     }
                 }
                 face.velocity[3] = 7.0;
@@ -323,7 +332,8 @@ pub(super) fn gpu_flip_pocket_round_initializes_replay_gate() {
     clock[0] = (1.0f32 / 60.0).to_bits();
     clock[11] = 1;
     let mut pass = Pass::new();
-    pass.bind(24, &vec![73u32; words]).bind(46, &clock);
+    pass.bind(24, &vec![73u32; words], Layout::Dense)
+        .bind(46, &clock, Layout::Dense);
     let mut expected = vec![73u32; words];
     expected[9] = 1;
     expected[10] = 0;
@@ -396,11 +406,11 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     let water = vec![1.0f32; cell_len()];
     let open = solid_faces(0x5e9, false);
     let mut pass = Pass::new();
-    pass.bind(6, &water)
-        .bind(10, &open)
-        .bind(23, &vec![0u32; cell_len()])
-        .bind(24, &[0u32; POCKET_GATE_WORDS as usize])
-        .bind(25, &vec![0u32; cell_len()]);
+    pass.bind(6, &water, Layout::Cells)
+        .bind(10, &open, Layout::Records)
+        .bind(23, &vec![0u32; cell_len()], Layout::Cells)
+        .bind(24, &[0u32; POCKET_GATE_WORDS as usize], Layout::Dense)
+        .bind(25, &vec![0u32; cell_len()], Layout::Cells);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
     pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
     pass.run::<u32>(
@@ -425,13 +435,14 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
         [0, (cell_len() - N[1] * N[2]) as u32, (N[1] * N[2]) as u32],
         "every cell water, the -X layer touching air"
     );
-    pass.bind(1, &vec![0u32; 2 * cell_len()])
-        .bind(7, &vec![0.0f32; cell_len()]);
+    pass.bind(1, &vec![0u32; 2 * cell_len()], Layout::Dense)
+        .bind(7, &vec![0.0f32; cell_len()], Layout::Cells);
     pass.bind(
         22,
         &[
             5u32, 6, 7, 9, 0, 0, 0, 77, 77, 77, 77, 77, 77, 77, 77, 77, 77,
         ],
+        Layout::Dense,
     );
     let first: Vec<u32> = pass.run(
         "pocket_tally",
@@ -483,11 +494,11 @@ pub(super) fn fine_pockets(water: &[f32], open: &[FaceSample]) -> (Vec<u32>, Vec
     let params = lattice();
     let lines = (N[1] * N[2]).max(N[0] * N[2]).max(N[0] * N[1]);
     let mut pass = Pass::new();
-    pass.bind(6, water)
-        .bind(10, open)
-        .bind(23, &vec![0u32; cell_len()])
-        .bind(24, &[0u32; POCKET_GATE_WORDS as usize])
-        .bind(25, &vec![0u32; cell_len()]);
+    pass.bind(6, water, Layout::Cells)
+        .bind(10, open, Layout::Records)
+        .bind(23, &vec![0u32; cell_len()], Layout::Cells)
+        .bind(24, &[0u32; POCKET_GATE_WORDS as usize], Layout::Dense)
+        .bind(25, &vec![0u32; cell_len()], Layout::Cells);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
     pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
     for _ in 0..=cell_len() {
@@ -629,13 +640,13 @@ pub(super) fn gpu_flip_pocket_mean_at_solve_level_one_sums_to_zero() {
             ..lattice()
         };
         let mut pass = Pass::new();
-        pass.bind(6, &water)
-            .bind(10, &open)
-            .bind(23, &state)
-            .bind(25, &label)
-            .bind(39, &vec![7u32; coarse_len])
-            .bind(40, &vec![7u32; coarse_len])
-            .bind(41, &vec![0u32; cell_len()]);
+        pass.bind(6, &water, Layout::Cells)
+            .bind(10, &open, Layout::Records)
+            .bind(23, &state, Layout::Cells)
+            .bind(25, &label, Layout::Cells)
+            .bind(39, &vec![7u32; coarse_len], Layout::Dense)
+            .bind(40, &vec![7u32; coarse_len], Layout::Dense)
+            .bind(41, &vec![0u32; cell_len()], Layout::Cells);
         pass.run::<u32>("pocket_leader_clear", &params, 41, cell_len(), cell_len());
         pass.run::<u32>("pocket_coarsen", &params, 39, coarse_len, coarse_len);
         let got_label = pass.run::<u32>("pocket_relabel", &params, 40, coarse_len, coarse_len);
@@ -675,11 +686,12 @@ pub(super) fn gpu_flip_pocket_mean_at_solve_level_one_sums_to_zero() {
             ..params
         };
         let mut mean = Pass::new();
-        mean.bind(23, &got_state)
-            .bind(25, &got_label)
-            .bind(5, &rhs)
-            .bind(26, &vec![7u32; 3 * coarse_len + 2])
-            .bind(22, &[9u32; 6]);
+        // The coarse level's arrays are dense boxes.
+        mean.bind(23, &got_state, Layout::Dense)
+            .bind(25, &got_label, Layout::Dense)
+            .bind(5, &rhs, Layout::Dense)
+            .bind(26, &vec![7u32; 3 * coarse_len + 2], Layout::Dense)
+            .bind(22, &[9u32; 6], Layout::Dense);
         mean.run::<u32>(
             "pocket_clear",
             &coarse_params,
@@ -688,13 +700,19 @@ pub(super) fn gpu_flip_pocket_mean_at_solve_level_one_sums_to_zero() {
             3 * coarse_len + 2,
         );
         mean.run::<u32>(
-            "pocket_accumulate",
+            "pocket_accumulate_coarse",
             &coarse_params,
             26,
             3 * coarse_len + 2,
             coarse_len,
         );
-        let removed = mean.run::<f32>("pocket_remove", &coarse_params, 5, coarse_len, coarse_len);
+        let removed = mean.run::<f32>(
+            "pocket_remove_coarse",
+            &coarse_params,
+            5,
+            coarse_len,
+            coarse_len,
+        );
         let words = mean.run::<u32>("pocket_flux_pressure", &coarse_params, 22, 6, 1);
         let mut total = 0.0;
         for &l in &pockets {

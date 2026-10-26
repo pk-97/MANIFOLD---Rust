@@ -39,6 +39,7 @@ pub(super) fn extend(
             uniform(params),
             buffer(3, from),
             buffer(4, to),
+            buffer(51, &table.table),
         ];
         if let Some(table) = gate {
             // The first slot is normally active and keeps ordinary replay.

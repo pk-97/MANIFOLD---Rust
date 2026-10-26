@@ -23,20 +23,20 @@ struct Progress {
 @group(0) @binding(12) var<storage, read_write> transfer: array<vec4<f32>>;
 const NONE: u32 = 0xffffffffu;
 const EPSILON: f32 = 1.1920928955078125e-7;
-// The lattice this dispatch runs on (the fine one or a coarse level); it
-// indexes through `ts_grid_*`, not as the FLIP cells.
-fn ts_cells() -> vec3<i32> { return vec3<i32>(params.n); }
+// The component lattice: the caller's own dense arrays, indexed through
+// `ts_grid_*`; no step field of the tile pool is read here.
+fn lattice() -> vec3<i32> { return vec3<i32>(params.n); }
 fn xyz(i: u32, n: vec3<u32>) -> vec3<u32> { return vec3<u32>(ts_grid_coord(i, vec3<i32>(n))); }
 fn child(p: vec3<u32>, k: u32) -> u32 {
     let q = p + vec3(k & 1u, (k >> 1u) & 1u, k >> 2u);
     if any(q >= params.n) { return NONE; }
-    return ts_grid_index(vec3<i32>(q), ts_cells());
+    return ts_grid_index(vec3<i32>(q), lattice());
 }
 fn neighbor(i: u32, a: u32, high: bool) -> u32 {
     var p = xyz(i, params.n);
     if high { if p[a] + 1u >= params.n[a] { return NONE; } p[a] += 1u; }
     else { if p[a] == 0u { return NONE; } p[a] -= 1u; }
-    return ts_grid_index(vec3<i32>(p), ts_cells());
+    return ts_grid_index(vec3<i32>(p), lattice());
 }
 fn wet(i: u32) -> bool { if i == NONE { return false; } return water[i] > 0.5; }
 fn is_root(i: u32) -> bool { return labels[i] == i; }

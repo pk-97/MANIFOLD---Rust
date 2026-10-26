@@ -89,8 +89,12 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = ts_cells();
-    let p = ts_face_coord(idx);
-    let here = faces_in[idx];
+    let p = ts_box_record(idx);
+    if !ts_record_stored(p) {
+        return;
+    }
+    let at = ts_face(p);
+    let here = faces_in[at];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let origin = u.box_min;
     var force_base = 0u;
@@ -133,5 +137,5 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         out.face_velocity[a] = select(v, 0.0, p[a] == 0 || p[a] == n[a]);
     }
-    faces_out[idx] = out;
+    faces_out[at] = out;
 }

@@ -12,7 +12,7 @@ pub(super) fn gpu_flip_step_order_extend_constraint_value_proof() {
         let mut got = initial.clone();
         for _ in 0..super::super::gpu_flip_step::band_layers(cfl) {
             want = cpu_extend(&want, N);
-            got = Pass::new().bind(3, &got).run(
+            got = Pass::new().bind(3, &got, Layout::Records).run(
                 "extend_faces",
                 &lattice(),
                 4,
@@ -41,9 +41,9 @@ pub(super) fn gpu_flip_step_order_extend_constraint_value_proof() {
             .collect();
         let expected = cpu_constrain(bytemuck::cast_slice(&want), &open64, &moving64, N);
         let constrained: Vec<FaceSample> = Pass::new()
-            .bind(20, &got)
-            .bind(10, &open)
-            .bind(11, &moving)
+            .bind(20, &got, Layout::Records)
+            .bind(10, &open, Layout::Records)
+            .bind(11, &moving, Layout::Records)
             .run(
                 "constrain_solid_faces",
                 &lattice(),
@@ -87,13 +87,10 @@ pub(super) fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
     assert_eq!(ranges.len(), cell_len());
     assert_eq!(ranges.iter().map(|r| r.count).sum::<u32>(), 300);
     let mut pass = Pass::new();
-    let removed: Vec<FluidParticle> = pass.bind(1, &ranges).bind(38, &sorted).run(
-        "remove_crowded_markers",
-        &lattice(),
-        38,
-        300,
-        cell_len(),
-    );
+    let removed: Vec<FluidParticle> = pass
+        .bind(1, &ranges, Layout::Dense)
+        .bind(38, &sorted, Layout::Dense)
+        .run("remove_crowded_markers", &lattice(), 38, 300, cell_len());
     let mut speeds = [1.0; 300];
     speeds[0] = 1000.0;
     let want = super::super::gpu_flip_extension_tests::native_cell_survivors(&speeds, 6.0);
@@ -154,7 +151,10 @@ pub(super) fn gpu_flip_step_order_inflow_waits_until_next_step() {
     // Extent arithmetic before device creation: 120 cell ranges, 210 face
     // records, 960 emit sites, 512 particle records, two counters per slot.
     assert_eq!((cell_len(), face_len()), (120, 210));
-    assert_eq!(super::super::gpu_flip_step::emit_sites(N.map(|n| n as u32)), 960);
+    assert_eq!(
+        super::super::gpu_flip_step::emit_sites(N.map(|n| n as u32)),
+        960
+    );
     let mut h = Harness::new();
     let mut node = GpuFlipStep::new();
     node.prepare_pipelines(&h.device);

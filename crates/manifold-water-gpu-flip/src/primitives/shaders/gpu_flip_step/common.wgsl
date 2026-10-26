@@ -4,12 +4,16 @@
 // FLIP Fluids attribution below covers the explicitly named baseline
 // transfers, boundaries and source operations.
 //
-// Cells are n per axis from the box minimum, x fastest. A face grid is
-// (n + 1)³ FaceSample records indexed like the cells with m = n + 1: record
-// p holds the low x, y and z faces of cell p, face a existing when every
-// other coordinate is under n. Face a of p sits at p on axis a and p + ½ on
-// the other two, in cells from the box minimum. The solid corner lattice is
-// (n + 1)³ values from the box minimum.
+// Cells are n per axis from the box minimum. A face grid has one FaceSample
+// record per cell and a record past the lattice on some axis: record p holds
+// the low x, y and z faces of cell p, face a existing when every other
+// coordinate is under n. Face a of p sits at p on axis a and p + ½ on the
+// other two, in cells from the box minimum. The step's cell and face fields
+// are stored in the tile pool (tile_storage.wgsl): reached through
+// `ts_cell_at` / `ts_face`, never written where `ts_cell_stored` /
+// `ts_record_stored` is false. The solid corner lattice is a dense
+// (n + 1)³ array from the box minimum, reached through `ts_corner`, and the
+// sort's ranges a dense box, through `ts_dense_cell`.
 //
 // The CPU sizes every buffer for the lattice and the particle slots before
 // it dispatches; each pass only checks its thread is inside its range.
@@ -91,8 +95,11 @@ struct Params {
     // Box3D's substep over this tick, dt / box3d_substep_count(dt): the h in
     // the coupled motion law (liquid_body_state).
     coupled_h: f32,
-    pad1: u32,
-    pad2: u32,
+    // Tiles the pool holds (P), the words after the lattice's tiles in
+    // `ts_table`.
+    pool_tiles: u32,
+    // Tiles with ring at most this are allocated (`ALLOC_RING` in tiles.rs).
+    alloc_ring: u32,
     pad3: u32,
 };
 
@@ -245,6 +252,14 @@ fn clock_active() -> bool {
 fn ts_cells() -> vec3<i32> {
     return vec3<i32>(u.n);
 }
+
+fn ts_pool_tiles() -> u32 {
+    return u.pool_tiles;
+}
+
+// The tile table: `slot_of` per box tile, then `tile_of` per pool slot
+// (tile_storage.wgsl).
+@group(0) @binding(51) var<storage, read> ts_table: array<u32>;
 
 // Face a of record p exists when every other coordinate is inside the cells.
 fn face_exists(p: vec3<i32>, n: vec3<i32>, a: i32) -> bool {

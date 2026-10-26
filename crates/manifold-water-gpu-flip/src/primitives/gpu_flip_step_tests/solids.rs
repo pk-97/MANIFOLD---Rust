@@ -276,7 +276,7 @@ pub(super) fn gpu_flip_open_fractions_match_the_engine() {
         box_offset: offset,
         ..solid_lattice()
     };
-    let got: Vec<f32> = Pass::new().bind(9, &phi).run(
+    let got: Vec<f32> = Pass::on(SOLID_N).bind(9, &phi, Layout::Dense).run(
         "open_fractions",
         &step,
         4,
@@ -626,7 +626,9 @@ pub(super) fn cpu_solid_face_velocity(
 /// for both ticks' rows (the second tick's dynamic body on a floor's four
 /// corners and against a slanted wall; the first tick's under a ceiling):
 /// rows, reaction, supports, and the step's params.
-pub(super) fn two_tick_bodies(solids: &Solids) -> (Vec<LiquidBody>, Vec<f32>, Vec<BodySupports>, StepParams) {
+pub(super) fn two_tick_bodies(
+    solids: &Solids,
+) -> (Vec<LiquidBody>, Vec<f32>, Vec<BodySupports>, StepParams) {
     let count = solids.bodies.len();
     let reaction: Vec<f32> = random_values(8 * count, 0x5fb)
         .iter()
@@ -683,11 +685,11 @@ pub(super) fn gpu_flip_pose_bodies_matches_coupled_motion() {
     let solids = solids();
     let (rows, reaction, contacts, step) = two_tick_bodies(&solids);
     let count = solids.bodies.len();
-    let mut pass = Pass::new();
-    pass.bind(14, &rows)
-        .bind(21, &reaction)
-        .bind(49, &contacts)
-        .bind(50, &vec![[0.0f32; 4]; 6 * count]);
+    let mut pass = Pass::on(SOLID_N);
+    pass.bind(14, &rows, Layout::Dense)
+        .bind(21, &reaction, Layout::Dense)
+        .bind(49, &contacts, Layout::Dense)
+        .bind(50, &vec![[0.0f32; 4]; 6 * count], Layout::Dense);
     let got: Vec<LiquidBody> = pass.run("pose_bodies", &step, 48, count, count);
     let mobility: Vec<[f32; 4]> = pass.bound(50, 6 * count);
     let want = posed(&solids, &reaction, &contacts[count..]);
@@ -759,14 +761,14 @@ pub(super) fn gpu_flip_solid_face_velocity_matches_cpu() {
     let open = random_open_faces(SOLID_N, 0x5fa, 0);
     let count = solids.bodies.len();
     let (rows, reaction, contacts, step) = two_tick_bodies(&solids);
-    let mut pass = Pass::new();
-    pass.bind(10, &open)
-        .bind(14, &rows)
-        .bind(15, &solids.shapes)
-        .bind(16, &solids.atlas)
-        .bind(21, &reaction)
-        .bind(49, &contacts);
-    pass.bind(50, &vec![[0.0f32; 4]; 6 * count]);
+    let mut pass = Pass::on(SOLID_N);
+    pass.bind(10, &open, Layout::Records)
+        .bind(14, &rows, Layout::Dense)
+        .bind(15, &solids.shapes, Layout::Dense)
+        .bind(16, &solids.atlas, Layout::Dense)
+        .bind(21, &reaction, Layout::Dense)
+        .bind(49, &contacts, Layout::Dense);
+    pass.bind(50, &vec![[0.0f32; 4]; 6 * count], Layout::Dense);
     let _: Vec<LiquidBody> = pass.run("pose_bodies", &step, 48, count, count);
     let got: Vec<f32> = pass.run(
         "solid_face_velocity",
@@ -890,7 +892,9 @@ pub(super) fn gpu_flip_solid_extrapolate_matches_cpu() {
             [r[0], r[1], r[2], code as f32, 0.0, 0.0, 0.0, known as f32]
         })
         .collect();
-    let got: Vec<f32> = Pass::new().bind(3, &records).run(
+    // The pool holds no record past the lattice but the canonical one: zero.
+    let records = zero_past_lattice(records, n);
+    let got: Vec<f32> = Pass::on(SOLID_N).bind(3, &records, Layout::Records).run(
         "solid_extrapolate",
         &solid_lattice(),
         4,
@@ -916,7 +920,12 @@ pub(super) fn gpu_flip_solid_extrapolate_matches_cpu() {
 }
 
 /// The step's solid constraint in f64.
-pub(super) fn cpu_constrain(faces: &[f32], open: &[f64], moving: &[f64], n: [usize; 3]) -> Vec<f64> {
+pub(super) fn cpu_constrain(
+    faces: &[f32],
+    open: &[f64],
+    moving: &[f64],
+    n: [usize; 3],
+) -> Vec<f64> {
     let m = n.map(|v| v + 1);
     let mut out: Vec<f64> = faces.iter().map(|&v| f64::from(v)).collect();
     for i in 0..m.iter().product::<usize>() {
@@ -945,7 +954,7 @@ pub(super) fn cpu_constrain(faces: &[f32], open: &[f64], moving: &[f64], n: [usi
 #[test]
 pub(super) fn gpu_flip_constrain_solid_faces_matches_cpu() {
     let n = SOLID_N;
-    let faces = random_values(face_grid_len(n), 0xc51);
+    let faces = zero_past_lattice(random_values(face_grid_len(n), 0xc51), n);
     let open = random_open_faces(n, 0xc52, 0);
     let moving: Vec<f32> = random_values(face_grid_len(n), 0xc53)
         .chunks(FACE_FLOATS)
@@ -962,10 +971,11 @@ pub(super) fn gpu_flip_constrain_solid_faces_matches_cpu() {
             ]
         })
         .collect();
-    let got: Vec<f32> = Pass::new()
-        .bind(20, &faces)
-        .bind(10, &open)
-        .bind(11, &moving)
+    let moving = zero_past_lattice(moving, n);
+    let got: Vec<f32> = Pass::on(SOLID_N)
+        .bind(20, &faces, Layout::Records)
+        .bind(10, &open, Layout::Records)
+        .bind(11, &moving, Layout::Records)
         .run(
             "constrain_solid_faces",
             &solid_lattice(),

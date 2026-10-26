@@ -50,7 +50,8 @@ impl StepState {
         {
             self.saved_particles = Some(allocate(device, saved_particle_bytes)?);
         }
-        let saved_distance_bytes = cell_bytes(cells);
+        let pool = pool_tiles(cells);
+        let saved_distance_bytes = pool_cell_bytes(pool);
         if self
             .saved_distance
             .as_ref()
@@ -70,13 +71,29 @@ impl StepState {
         if self.lattice.as_ref().is_none_or(|l| l.cells != cells) {
             self.lattice = None;
             self.tiles = None;
-            self.filled = false;
+            self.pool_canon_pending = true;
             self.solid_velocity_is_zero = false;
-            self.lattice = Some(LatticeBuffers::new(device, cells)?);
+            self.lattice = Some(LatticeBuffers::new(device, cells, pool)?);
         }
         if self.tiles.as_ref().is_none_or(|t| t.ring_max != ring_max) {
             self.tiles = None;
             self.tiles = Some(TileTable::new(device, cells, ring_max)?);
+        }
+        let distance = cell_bytes(cells);
+        if self
+            .distance
+            .as_ref()
+            .is_none_or(|distance_out| distance_out.size != distance)
+        {
+            self.distance = None;
+            let out = manifold_node_engine::load::expand::admit_candidate_bytes(
+                device.modifier_memory_snapshot(),
+                distance,
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|()| device.try_create_buffer_shared(distance))?;
+            out.zero_fill();
+            self.distance = Some(out);
         }
         let face = face_bytes(cells);
         if self.faces.as_ref().is_none_or(|faces| faces.size != face) {
@@ -106,8 +123,8 @@ impl StepState {
         if sheeting {
             let slot_count = u32::try_from(slots)
                 .map_err(|_| "sheeting particle capacity exceeds u32".to_string())?;
-            self.sheet_distance.reserve(device, cells)?;
-            self.sheeting.reserve(device, cells, slot_count)?;
+            self.sheet_distance.reserve(device, cells, pool)?;
+            self.sheeting.reserve(device, cells, slot_count, pool)?;
             if self
                 .sheet_order
                 .as_ref()

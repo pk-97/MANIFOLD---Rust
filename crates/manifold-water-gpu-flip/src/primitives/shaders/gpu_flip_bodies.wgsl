@@ -47,7 +47,8 @@ struct Params {
     // impulse_finalize inside a round: the gate's solve-live triple
     // (`armed` is the gate there); 0 outside rounds, where it always runs.
     live: u32,
-    _pad1: u32,
+    // The tile pool's capacity P (tile_storage.wgsl ts_pool_tiles).
+    pool_tiles: u32,
     _pad2: u32,
 };
 
@@ -102,6 +103,9 @@ struct ClockPlan {
 // Six vec4 per row of `bodies`: the body's packed 6 × 6 response to an
 // impulse while it stays on its supports.
 @group(0) @binding(16) var<storage, read> mobility: array<vec4<f32>>;
+// The tile pool's slot and tile table (tile_storage.wgsl): `water`, `open`,
+// `solid`, `x`, `product` and `solid_rw` are pooled fields.
+@group(0) @binding(17) var<storage, read> ts_table: array<u32>;
 
 // Entry (i, j) of body b's packed mobility.
 fn mobility_at(b: u32, i: u32, j: u32) -> f32 {
@@ -117,6 +121,10 @@ var<workgroup> scratch: array<array<f32, 256>, 6>;
 
 fn ts_cells() -> vec3<i32> {
     return vec3<i32>(u.n);
+}
+
+fn ts_pool_tiles() -> u32 {
+    return u.pool_tiles;
 }
 
 // Whether thread gid's workgroup is inside the fine level's active list; a
@@ -385,12 +393,17 @@ fn velocity_change(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() {
         return;
     }
-    let idx = gid.x;
     let n = ts_cells();
-    if idx >= ts_record_count() {
+    if gid.x >= ts_record_count() {
         return;
     }
-    let p = ts_face_coord(idx);
+    let p = ts_box_record(gid.x);
+    // A record past the lattice is never changed (the loop below skips every
+    // face of it), so the canonical block is left alone.
+    if !ts_record_stored(p) {
+        return;
+    }
+    let idx = ts_face(p);
     var out = solid_rw[idx];
     for (var a = 0; a < 3; a = a + 1) {
         var other = p;

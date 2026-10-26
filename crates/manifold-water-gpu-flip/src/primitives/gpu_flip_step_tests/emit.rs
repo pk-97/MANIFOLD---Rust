@@ -226,12 +226,12 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     let corners = vec![1.0f32; face_len()];
     let params = region_params();
     let got: Vec<u32> = Pass::new()
-        .bind(1, &ranges)
-        .bind(2, &sorted)
-        .bind(9, &corners)
-        .bind(15, &[shape])
-        .bind(16, &atlas)
-        .bind(36, &[row])
+        .bind(1, &ranges, Layout::Dense)
+        .bind(2, &sorted, Layout::Dense)
+        .bind(9, &corners, Layout::Dense)
+        .bind(15, &[shape], Layout::Dense)
+        .bind(16, &atlas, Layout::Dense)
+        .bind(36, &[row], Layout::Dense)
         .run("emit_flags", &params, 37, site_count, site_count);
     assert_eq!(got, want, "the flags are the empty inflow sites");
 
@@ -251,13 +251,13 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         ..params
     };
     let written: Vec<FluidParticle> = Pass::new()
-        .bind(1, &ranges)
-        .bind(15, &[shape])
-        .bind(16, &atlas)
-        .bind(36, &[row])
-        .bind(37, &scan)
-        .bind(38, &pool)
-        .bind(47, &[0u32, 0, 1000, 0])
+        .bind(1, &ranges, Layout::Dense)
+        .bind(15, &[shape], Layout::Dense)
+        .bind(16, &atlas, Layout::Dense)
+        .bind(36, &[row], Layout::Dense)
+        .bind(37, &scan, Layout::Dense)
+        .bind(38, &pool, Layout::Dense)
+        .bind(47, &[0u32, 0, 1000, 0], Layout::Dense)
         .run("emit_write", &params, 38, pool.len(), site_count);
     assert_eq!(
         written[..sorted.len()],
@@ -316,16 +316,19 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         words[tail..tail + 2].copy_from_slice(&before);
         words[sheet] = 3;
         if first_substep {
-            words =
-                Pass::new()
-                    .bind(22, &words)
-                    .run("birth_tally_reset", &params, 22, sheet + 1, 1);
+            words = Pass::new().bind(22, &words, Layout::Dense).run(
+                "birth_tally_reset",
+                &params,
+                22,
+                sheet + 1,
+                1,
+            );
         }
         let got: Vec<u32> = Pass::new()
-            .bind(1, &ranges)
-            .bind(37, &scan)
-            .bind(47, &[0u32, 0, 1000, 0])
-            .bind(22, &words)
+            .bind(1, &ranges, Layout::Dense)
+            .bind(37, &scan, Layout::Dense)
+            .bind(47, &[0u32, 0, 1000, 0], Layout::Dense)
+            .bind(22, &words, Layout::Dense)
             .run(
                 "emit_tally",
                 &StepParams {
@@ -362,13 +365,13 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         ..params
     };
     let jittered: Vec<FluidParticle> = Pass::new()
-        .bind(1, &ranges)
-        .bind(15, &[shape])
-        .bind(16, &atlas)
-        .bind(36, &[row])
-        .bind(37, &scan)
-        .bind(38, &pool)
-        .bind(47, &[0u32, 0, 1000, 0])
+        .bind(1, &ranges, Layout::Dense)
+        .bind(15, &[shape], Layout::Dense)
+        .bind(16, &atlas, Layout::Dense)
+        .bind(36, &[row], Layout::Dense)
+        .bind(37, &scan, Layout::Dense)
+        .bind(38, &pool, Layout::Dense)
+        .bind(47, &[0u32, 0, 1000, 0], Layout::Dense)
         .run("emit_write", &params, 38, pool.len(), site_count);
     let substep = 3u32 * 64 + 1;
     let mut spread = 0.0f64;
@@ -426,15 +429,15 @@ pub(super) fn gpu_flip_outflow_kills_the_particles_it_holds() {
         ..region_params()
     };
     let got: Vec<FluidParticle> = Pass::new()
-        .bind(2, &particles)
-        .bind(3, &faces)
-        .bind(9, &wall_solid(N, H))
-        .bind(17, &faces)
-        .bind(18, &faces)
-        .bind(22, &vec![0u32; 2 * particles.len()])
-        .bind(15, &[shape])
-        .bind(16, &atlas)
-        .bind(36, &[row])
+        .bind(2, &particles, Layout::Dense)
+        .bind(3, &faces, Layout::Records)
+        .bind(9, &wall_solid(N, H), Layout::Dense)
+        .bind(17, &faces, Layout::Records)
+        .bind(18, &faces, Layout::Records)
+        .bind(22, &vec![0u32; 2 * particles.len()], Layout::Dense)
+        .bind(15, &[shape], Layout::Dense)
+        .bind(16, &atlas, Layout::Dense)
+        .bind(36, &[row], Layout::Dense)
         .run(
             "faces_to_particles",
             &step,

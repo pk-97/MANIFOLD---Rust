@@ -22,10 +22,13 @@ use manifold_water_gpu_flip::primitives::gpu_flip_pressure::{
     MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water,
 };
 use manifold_water_gpu_flip::primitives::gpu_flip_step::{set_all_tiles, set_gate_off, set_poison};
+use manifold_water_gpu_flip::primitives::pool_testkit::{
+    from_pool, identity_table, records_from_pool, records_to_pool, to_pool,
+};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
-use manifold_water_liquid::tile_storage::TILE;
+use manifold_water_liquid::tile_storage::{TILE, pool_len};
 
 /// Tail index of stats word 16 (active-tile share): the tail starts at stats word 10 (liquid_stats.rs `SOLVER_WORDS`).
 const TILE_SHARE: usize = 16 - 10;
@@ -342,6 +345,9 @@ struct Scene {
     /// [`Self::hold`] held the dynamic body.
     mobility: Vec<Mobility>,
     buffers: [GpuBuffer; 5],
+    /// The identity slot table (every box tile allocated) and its pool size.
+    table: GpuBuffer,
+    pool_tiles: u32,
     passes: BodyPasses,
     /// Prepared on the scene's water for its fine tile set; `all` means
     /// every tile was classified active.
@@ -363,10 +369,30 @@ impl Scene {
             .iter()
             .map(|row| constrained_mobility(&coupled_start(row), &[], Held::default()))
             .collect();
+        let cells = N.map(|v| v as u32);
+        let (table_words, pool_tiles) = identity_table(cells);
+        let table = shared(&device, &table_words);
+        // Records past the lattice are answered by the canonical block, so the
+        // CPU references read the round trip the GPU sees.
+        let pool_records = |dense: &[f32]| -> Vec<[f32; 8]> {
+            records_to_pool(
+                bytemuck::cast_slice::<f32, [f32; 8]>(dense),
+                cells,
+                &[[0.0f32; 8]; 8],
+            )
+        };
+        let (open_pool, solid_pool) = (pool_records(&open), pool_records(&solid));
+        let dense_records = |pool: &[[f32; 8]]| -> Vec<f32> {
+            records_from_pool(pool, cells)
+                .into_iter()
+                .flatten()
+                .collect()
+        };
+        let (open, solid) = (dense_records(&open_pool), dense_records(&solid_pool));
         let buffers = [
-            shared(&device, &water),
-            shared(&device, &open),
-            shared(&device, &solid),
+            shared(&device, &to_pool(&water, cells, &[0.0f32])),
+            shared(&device, &open_pool),
+            shared(&device, &solid_pool),
             shared(&device, &rows),
             shared(&device, &gpu_mobility(&mobility)),
         ];
@@ -387,7 +413,7 @@ impl Scene {
             phi: None,
         };
         solver
-            .prepare(&device, &mut enc, &lattice)
+            .prepare(&device, &mut enc, &lattice, &table, pool_tiles)
             .expect("the solver prepares its tile lists");
         set_all_tiles(false);
         enc.commit_and_wait_completed();
@@ -399,9 +425,39 @@ impl Scene {
             rows,
             mobility,
             buffers,
+            table,
+            pool_tiles,
             passes,
             solver,
         }
+    }
+
+    fn cells(&self) -> [u32; 3] {
+        N.map(|v| v as u32)
+    }
+
+    /// Floats in a pooled cell field.
+    fn pool_floats(&self) -> usize {
+        pool_len(self.pool_tiles) as usize
+    }
+
+    /// A dense cell field uploaded pooled (the canonical block holds 0).
+    fn cells_to_gpu(&self, dense: &[f32]) -> GpuBuffer {
+        shared(&self.device, &to_pool(dense, self.cells(), &[0.0f32]))
+    }
+
+    /// A pooled cell field read back dense.
+    fn cells_from_gpu(&self, buffer: &GpuBuffer) -> Vec<f32> {
+        from_pool(&read::<f32>(buffer, self.pool_floats()), self.cells())
+    }
+
+    /// A pooled record array read back dense, flattened to floats.
+    fn records_from_gpu(&self, buffer: &GpuBuffer) -> Vec<f32> {
+        let pool: Vec<[f32; 8]> = read(buffer, self.pool_floats());
+        records_from_pool(&pool, self.cells())
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// The dynamic body held on a floor under it: its bottom corners closed
@@ -467,14 +523,19 @@ fn gpu_flip_body_operator_matches_cpu() {
     let cells: usize = N.iter().product();
     let direction = random_values(cells, 0xb0d2);
     let base = random_values(cells, 0xb0d3);
-    let (direction_gpu, s) = (
-        shared(&scene.device, &direction),
-        shared(&scene.device, &base),
-    );
+    let (direction_gpu, s) = (scene.cells_to_gpu(&direction), scene.cells_to_gpu(&base));
     let mut enc = scene.device.create_encoder("body operator");
     scene
         .passes
-        .apply(&mut enc, &scene.bodies(), scene.tiles(), &direction_gpu, &s)
+        .apply(
+            &mut enc,
+            &scene.bodies(),
+            scene.tiles(),
+            &direction_gpu,
+            &s,
+            &scene.table,
+            scene.pool_tiles,
+        )
         .expect("apply");
     enc.commit_and_wait_completed();
 
@@ -508,7 +569,7 @@ fn gpu_flip_body_operator_matches_cpu() {
         moved > 50,
         "water cells beside the dynamic body's faces change: {moved}"
     );
-    assert_close(&read(&s, cells), &product, "body operator");
+    assert_close(&scene.cells_from_gpu(&s), &product, "body operator");
 }
 
 /// After the projection: the pressure's impulse into the reaction and its
@@ -519,9 +580,9 @@ fn gpu_flip_body_reaction_matches_cpu() {
     let cells: usize = N.iter().product();
     let pressure = random_values(cells, 0x7ea2);
     let base = random_values(BODIES * 8, 0x7ea4);
-    let pressure_gpu = shared(&scene.device, &pressure);
+    let pressure_gpu = scene.cells_to_gpu(&pressure);
     let reaction = shared(&scene.device, &base);
-    let scratch = shared(&scene.device, &vec![0.0_f32; cells]);
+    let scratch = scene.cells_to_gpu(&vec![0.0_f32; cells]);
 
     // The same impulse react starts with, on its own, to read its sums.
     let mut enc = scene.device.create_encoder("pressure sums");
@@ -533,6 +594,8 @@ fn gpu_flip_body_reaction_matches_cpu() {
             scene.tiles(),
             &pressure_gpu,
             &scratch,
+            &scene.table,
+            scene.pool_tiles,
         )
         .expect("apply");
     enc.commit_and_wait_completed();
@@ -554,11 +617,13 @@ fn gpu_flip_body_reaction_matches_cpu() {
             scene.tiles(),
             &pressure_gpu,
             &reaction,
+            &scene.table,
+            scene.pool_tiles,
         )
         .expect("react");
     enc.commit_and_wait_completed();
 
-    let changed: Vec<f32> = read(&scene.buffers[2], face_grid_len(N));
+    let changed = scene.records_from_gpu(&scene.buffers[2]);
     let want_changed = cpu_velocity_change(&scene.solid, &pushed, &scene.rows);
     let touched = want_changed
         .iter()
@@ -595,14 +660,22 @@ fn gpu_flip_body_operator_holds_a_supported_body_symmetric() {
     let cells: usize = N.iter().product();
     let zeros = vec![0.0_f32; cells];
     let product = |x: &[f32]| -> Vec<f32> {
-        let (x_gpu, s) = (shared(&scene.device, x), shared(&scene.device, &zeros));
+        let (x_gpu, s) = (scene.cells_to_gpu(x), scene.cells_to_gpu(&zeros));
         let mut enc = scene.device.create_encoder("held body operator");
         scene
             .passes
-            .apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s)
+            .apply(
+                &mut enc,
+                &scene.bodies(),
+                scene.tiles(),
+                &x_gpu,
+                &s,
+                &scene.table,
+                scene.pool_tiles,
+            )
             .expect("apply");
         enc.commit_and_wait_completed();
-        read(&s, cells)
+        scene.cells_from_gpu(&s)
     };
     let (x, y) = (random_values(cells, 0x5e1e), random_values(cells, 0x5e1f));
     let bx = product(&x);
@@ -680,8 +753,8 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
             let mut scene =
                 Scene::with_water(0xc09e, random_water(N.iter().product(), 0xc09f), false);
             let cells = N.iter().product::<usize>();
-            let rhs = shared(&scene.device, &vec![0.0_f32; cells]);
-            let pressure = shared(&scene.device, &vec![0.0_f32; cells]);
+            let rhs = scene.cells_to_gpu(&vec![0.0_f32; cells]);
+            let pressure = scene.cells_to_gpu(&vec![0.0_f32; cells]);
             let progress = shared(&scene.device, &vec![0_u32; PROGRESS_FLOATS as usize]);
             let plan = shared(&scene.device, &[0_u32; 12]);
             scene.passes.set_clock_plan(&plan);
@@ -705,12 +778,13 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
             stop: Stop,
             active: bool,
         ) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+            let pooled_rhs = to_pool(rhs, self.scene.cells(), &[0.0f32]);
             let mut plan = [0_u32; 12];
             plan[0] = if active { TICK.to_bits() } else { 0 };
             plan[11] = 1;
             // SAFETY: shared buffers sized for these values; the previous solve completed.
             unsafe {
-                self.rhs.write(0, bytemuck::cast_slice(rhs));
+                self.rhs.write(0, bytemuck::cast_slice(&pooled_rhs));
                 self.plan.write(0, bytemuck::cast_slice(&plan));
             }
             let mut enc = self.scene.device.create_encoder("coupled pressure replay");
@@ -727,7 +801,13 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
                 phi: None,
             };
             self.solver
-                .prepare(&self.scene.device, &mut enc, &water)
+                .prepare(
+                    &self.scene.device,
+                    &mut enc,
+                    &water,
+                    &self.scene.table,
+                    self.scene.pool_tiles,
+                )
                 .expect("prepare coupled solve");
             self.solver
                 .solve(
@@ -741,6 +821,8 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
                         level: 0,
                         coarse_rhs: None,
                     },
+                    &self.scene.table,
+                    self.scene.pool_tiles,
                 )
                 .expect("coupled solve");
             if replay {
@@ -753,7 +835,7 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
             );
             enc.commit_and_wait_completed();
             (
-                read(&self.pressure, N.iter().product()),
+                bits(&self.scene.cells_from_gpu(&self.pressure)),
                 bits(&self.scene.sums()),
                 read(&self.progress, PROGRESS_FLOATS as usize),
             )
@@ -942,8 +1024,8 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
                 })
                 .collect()
         };
-        let x_gpu = shared(&scene.device, &outside(&x));
-        let s = shared(&scene.device, &outside(&base));
+        let x_gpu = scene.cells_to_gpu(&outside(&x));
+        let s = scene.cells_to_gpu(&outside(&base));
         let reaction = shared(&scene.device, &reaction_base);
         let mut enc = scene.device.create_encoder("sparse apply");
         if poison {
@@ -951,7 +1033,15 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
         }
         scene
             .passes
-            .apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s)
+            .apply(
+                &mut enc,
+                &scene.bodies(),
+                scene.tiles(),
+                &x_gpu,
+                &s,
+                &scene.table,
+                scene.pool_tiles,
+            )
             .expect("apply");
         enc.commit_and_wait_completed();
         let pushed = bits(&scene.sums());
@@ -961,10 +1051,18 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
         }
         scene
             .passes
-            .react(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &reaction)
+            .react(
+                &mut enc,
+                &scene.bodies(),
+                scene.tiles(),
+                &x_gpu,
+                &reaction,
+                &scene.table,
+                scene.pool_tiles,
+            )
             .expect("react");
         enc.commit_and_wait_completed();
-        let s: Vec<f32> = read(&s, cells);
+        let s = scene.cells_from_gpu(&s);
         // Only the active tiles' s is compared under poison: the rest holds
         // the NaN written in, which nothing touched.
         let s = s
@@ -981,7 +1079,7 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
         Left {
             pushed,
             s,
-            solid: bits(&read(&scene.buffers[2], face_grid_len(N))),
+            solid: bits(&scene.records_from_gpu(&scene.buffers[2])),
             reacted: bits(&scene.sums()),
             reaction: bits(&read(&reaction, BODIES * 8)),
         }
@@ -1598,8 +1696,8 @@ fn body_golden_lines() -> Vec<String> {
         ] {
             for replay in [false, true] {
                 let mut scene = Scene::with_water(0xc09e, random_water(cells, 0xc09f), false);
-                let rhs = shared(&scene.device, &rhs_values);
-                let pressure = shared(&scene.device, &vec![0.0_f32; cells]);
+                let rhs = scene.cells_to_gpu(&rhs_values);
+                let pressure = scene.cells_to_gpu(&vec![0.0_f32; cells]);
                 let mut plan = [0_u32; 12];
                 plan[0] = TICK.to_bits();
                 plan[11] = 1;
@@ -1644,9 +1742,17 @@ fn body_golden_lines() -> Vec<String> {
                         phi: None,
                     };
                     // SAFETY: a shared buffer sized for the lattice; the last solve completed.
-                    unsafe { pressure.write(0, bytemuck::cast_slice(&vec![0u32; cells])) };
+                    unsafe {
+                        pressure.write(0, bytemuck::cast_slice(&vec![0u32; scene.pool_floats()]))
+                    };
                     solver
-                        .prepare(&scene.device, &mut enc, &water)
+                        .prepare(
+                            &scene.device,
+                            &mut enc,
+                            &water,
+                            &scene.table,
+                            scene.pool_tiles,
+                        )
                         .expect("prepares");
                     solver.seed_records(&mut enc, &sentinel);
                     let spanned = cache
@@ -1662,7 +1768,7 @@ fn body_golden_lines() -> Vec<String> {
                         coarse_rhs: None,
                     };
                     solver
-                        .solve(&mut enc, &water, solve)
+                        .solve(&mut enc, &water, solve, &scene.table, scene.pool_tiles)
                         .expect("coupled solve");
                     if spanned {
                         cache = Some(enc.end_replay());
@@ -1684,7 +1790,7 @@ fn body_golden_lines() -> Vec<String> {
                     }
                     set_gate_off(false);
                     fingerprints = [
-                        fnv(&read::<u32>(&pressure, cells)),
+                        fnv(&bits(&scene.cells_from_gpu(&pressure))),
                         fnv(&bits(&scene.sums())),
                         fnv(&read::<u32>(&scalars, 2 * 64)),
                         fnv(&read::<u32>(&record, PROGRESS_FLOATS.min(68) as usize)),

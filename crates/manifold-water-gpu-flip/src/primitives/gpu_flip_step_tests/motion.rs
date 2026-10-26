@@ -197,19 +197,21 @@ pub(super) fn gpu_flip_faces_to_particles_reads_native_stored_face_values() {
             face.velocity[a] = (10 * (a + 1) + c[0] + 2 * c[1] + 3 * c[2]) as f32;
         }
     }
+    // The pool stores one record per wall mask past the lattice: zero.
+    let affine = zero_past_lattice(affine, N);
     let zero = vec![FaceSample::default(); face_len()];
     let solid = wall_solid(N, H);
     let run = |flip: f32, faces: &[FaceSample], old: &[FaceSample]| {
         Pass::new()
-            .bind(2, &particles)
-            .bind(3, faces)
-            .bind(9, &solid)
-            .bind(15, &[LiquidShape::default()])
-            .bind(16, &[0_u32; 4])
-            .bind(17, old)
-            .bind(18, faces)
-            .bind(22, &vec![0_u32; 2 * particles.len()])
-            .bind(36, &[LiquidBody::default()])
+            .bind(2, &particles, Layout::Dense)
+            .bind(3, faces, Layout::Records)
+            .bind(9, &solid, Layout::Dense)
+            .bind(15, &[LiquidShape::default()], Layout::Dense)
+            .bind(16, &[0_u32; 4], Layout::Dense)
+            .bind(17, old, Layout::Records)
+            .bind(18, faces, Layout::Records)
+            .bind(22, &vec![0_u32; 2 * particles.len()], Layout::Dense)
+            .bind(36, &[LiquidBody::default()], Layout::Dense)
             .run::<FluidParticle>(
                 "faces_to_particles",
                 &StepParams {
@@ -289,17 +291,17 @@ pub(super) fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     let solid = wall_solid(N, H);
     let mut pass = Pass::new();
     let got: Vec<FluidParticle> = pass
-        .bind(2, &particles)
-        .bind(3, &faces)
+        .bind(2, &particles, Layout::Dense)
+        .bind(3, &faces, Layout::Records)
         // Metal requires the conditional solid/region resources even with zero counts.
-        .bind(9, &solid)
-        .bind(15, &[LiquidShape::default()])
-        .bind(16, &[0_u32; 4])
-        .bind(36, &[LiquidBody::default()])
-        .bind(17, &old)
+        .bind(9, &solid, Layout::Dense)
+        .bind(15, &[LiquidShape::default()], Layout::Dense)
+        .bind(16, &[0_u32; 4], Layout::Dense)
+        .bind(36, &[LiquidBody::default()], Layout::Dense)
+        .bind(17, &old, Layout::Records)
         // Spread equal to the new faces: no density move.
-        .bind(18, &faces)
-        .bind(22, &vec![7u32; 2 * particles.len()])
+        .bind(18, &faces, Layout::Records)
+        .bind(22, &vec![7u32; 2 * particles.len()], Layout::Dense)
         .run(
             "faces_to_particles",
             &step,
@@ -406,6 +408,7 @@ pub(super) fn gpu_flip_rk3_stage_velocity_is_not_truncated() {
                 weight: [1.0; 4],
             })
             .collect();
+        let faces = zero_past_lattice(faces, n);
         let particle = FluidParticle {
             position_radius: [
                 MIN[0] + q0[0] as f32 * H,
@@ -447,18 +450,18 @@ pub(super) fn gpu_flip_rk3_stage_velocity_is_not_truncated() {
             clock[0] = dt.to_bits();
             clock[3] = 0.0f32.to_bits(); // Pre-step marker speed before the high grid field.
             clock[11] = u32::from(live);
-            let mut pass = Pass::new();
+            let mut pass = Pass::on(n);
             let got: Vec<FluidParticle> = pass
-                .bind(2, &[particle])
-                .bind(3, &faces)
-                .bind(9, &wall_solid(n, H))
-                .bind(15, &[LiquidShape::default()])
-                .bind(16, &[0_u32; 4])
-                .bind(17, &faces)
-                .bind(18, &faces)
-                .bind(22, &[91u32; 2])
-                .bind(36, &[LiquidBody::default()])
-                .bind(46, &clock)
+                .bind(2, &[particle], Layout::Dense)
+                .bind(3, &faces, Layout::Records)
+                .bind(9, &wall_solid(n, H), Layout::Dense)
+                .bind(15, &[LiquidShape::default()], Layout::Dense)
+                .bind(16, &[0_u32; 4], Layout::Dense)
+                .bind(17, &faces, Layout::Records)
+                .bind(18, &faces, Layout::Records)
+                .bind(22, &[91u32; 2], Layout::Dense)
+                .bind(36, &[LiquidBody::default()], Layout::Dense)
+                .bind(46, &clock, Layout::Dense)
                 .run(
                     "faces_to_particles",
                     &StepParams {
@@ -562,15 +565,15 @@ pub(super) fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies
             ..lattice()
         };
         let got: Vec<FluidParticle> = Pass::new()
-            .bind(2, &particles)
-            .bind(3, &faces)
-            .bind(9, &solid)
-            .bind(15, &[LiquidShape::default()])
-            .bind(16, &[0_u32; 4])
-            .bind(17, &faces)
-            .bind(18, &faces)
-            .bind(22, &[0_u32; 2])
-            .bind(36, &[LiquidBody::default()])
+            .bind(2, &particles, Layout::Dense)
+            .bind(3, &faces, Layout::Records)
+            .bind(9, &solid, Layout::Dense)
+            .bind(15, &[LiquidShape::default()], Layout::Dense)
+            .bind(16, &[0_u32; 4], Layout::Dense)
+            .bind(17, &faces, Layout::Records)
+            .bind(18, &faces, Layout::Records)
+            .bind(22, &[0_u32; 2], Layout::Dense)
+            .bind(36, &[LiquidBody::default()], Layout::Dense)
             .run(entry, &step, 19, 1, 1);
         if name == "nonfinite" {
             assert!(
@@ -663,15 +666,15 @@ pub(super) fn gpu_flip_collision_keeps_negative_body_phi_and_removes_open_band_p
         };
         let mut pass = Pass::new();
         let got: Vec<FluidParticle> = pass
-            .bind(2, &particles)
-            .bind(3, &faces)
-            .bind(9, &solid)
-            .bind(15, &[LiquidShape::default()])
-            .bind(16, &[0_u32; 4])
-            .bind(17, &faces)
-            .bind(18, &faces)
-            .bind(22, &[0_u32; 4])
-            .bind(36, &[LiquidBody::default()])
+            .bind(2, &particles, Layout::Dense)
+            .bind(3, &faces, Layout::Records)
+            .bind(9, &solid, Layout::Dense)
+            .bind(15, &[LiquidShape::default()], Layout::Dense)
+            .bind(16, &[0_u32; 4], Layout::Dense)
+            .bind(17, &faces, Layout::Records)
+            .bind(18, &faces, Layout::Records)
+            .bind(22, &[0_u32; 4], Layout::Dense)
+            .bind(36, &[LiquidBody::default()], Layout::Dense)
             .run(entry, &step, 19, particles.len(), particles.len());
         assert_eq!(
             got[0].position_radius, particles[0].position_radius,
@@ -721,15 +724,15 @@ pub(super) fn gpu_flip_collision_refuses_excessive_push_and_keeps_the_particle()
     let entry = "faces_to_particles";
     let mut pass = Pass::new();
     let got: Vec<FluidParticle> = pass
-        .bind(2, &[particle])
-        .bind(3, &faces)
-        .bind(9, &solid)
-        .bind(15, &[LiquidShape::default()])
-        .bind(16, &[0_u32; 4])
-        .bind(17, &faces)
-        .bind(18, &faces)
-        .bind(22, &[0_u32; 2])
-        .bind(36, &[LiquidBody::default()])
+        .bind(2, &[particle], Layout::Dense)
+        .bind(3, &faces, Layout::Records)
+        .bind(9, &solid, Layout::Dense)
+        .bind(15, &[LiquidShape::default()], Layout::Dense)
+        .bind(16, &[0_u32; 4], Layout::Dense)
+        .bind(17, &faces, Layout::Records)
+        .bind(18, &faces, Layout::Records)
+        .bind(22, &[0_u32; 2], Layout::Dense)
+        .bind(36, &[LiquidBody::default()], Layout::Dense)
         .run(entry, &step, 19, 1, 1);
     assert_eq!(
         got[0].position_radius[..3],

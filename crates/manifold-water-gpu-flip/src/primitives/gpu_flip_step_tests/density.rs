@@ -107,19 +107,21 @@ pub(super) fn gpu_flip_density_support_matches_original() {
         let (sorted, ranges) = cpu_sort(&input);
         for (body_count, distance) in [(0, 4.0 * H), (1, 4.0 * H), (1, -4.0 * H)] {
             pass.bound.clear();
+            pass.layouts.clear();
             let threads = pass.every_tile();
-            pass.bind(1, &ranges)
-                .bind(2, &sorted)
-                .bind(6, &water)
-                .bind(9, &vec![distance; face_len()])
-                .bind(46, &[0_u32; 12])
-                .bind(5, &vec![f32::NAN; cell_len()]);
-            let step = StepParams {
+            pass.bind(1, &ranges, Layout::Dense)
+                .bind(2, &sorted, Layout::Dense)
+                .bind(6, &water, Layout::Cells)
+                .bind(9, &vec![distance; face_len()], Layout::Dense)
+                .bind(46, &[0_u32; 12], Layout::Dense)
+                .bind(5, &vec![f32::NAN; cell_len()], Layout::Cells);
+            pass.table();
+            let step = pass.pooled(&StepParams {
                 capacity: sorted.len() as u32,
                 body_count,
                 rate: 4.0,
                 ..lattice()
-            };
+            });
             let outputs =
                 pipelines.each_ref().map(|pipeline| {
                     let mut bindings = vec![GpuBinding::Bytes {

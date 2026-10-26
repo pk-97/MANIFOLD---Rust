@@ -94,7 +94,7 @@ const SOLID_PUSH: f32 = 5.0;
 const SOLID_SLOPE: f32 = 1.7320508;
 
 fn solid_corner(c: vec3<i32>, n: vec3<i32>) -> f32 {
-    return solid[ts_face(clamp(c, vec3<i32>(0), n))];
+    return solid[ts_corner(clamp(c, vec3<i32>(0), n))];
 }
 
 // The solid distance in cells at q (cells from the box minimum), trilinear

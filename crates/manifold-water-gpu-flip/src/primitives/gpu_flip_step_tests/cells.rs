@@ -16,7 +16,7 @@ pub(super) fn gpu_flip_water_is_negative_phi() {
     let mut pass = Pass::new();
     let threads = pass.every_tile();
     let got: Vec<f32> =
-        pass.bind(7, &phi)
+        pass.bind(7, &phi, Layout::Cells)
             .run("water_from_phi", &lattice(), 5, cell_len(), threads);
     for (c, (g, f)) in got.iter().zip(&phi).enumerate() {
         assert_eq!(*g, f32::from(u8::from(*f < 0.0)), "cell {c}");
@@ -35,18 +35,15 @@ pub(super) fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
             ..lattice()
         };
         // The pass owns the cells' records; the records past the lattice
-        // are the fill's constants.
+        // are the pool's canonical ones: only the box walls closed.
         let mut pass = Pass::new();
         let threads = pass.every_tile();
-        let filled: Vec<FaceSample> =
-            Pass::new().run("tiles_fill", &step, 4, face_len(), face_len());
-        let got: Vec<FaceSample> = pass.bind(1, &ranges).bind(2, &sorted).bind(4, &filled).run(
-            "particles_to_faces",
-            &step,
-            4,
-            face_len(),
-            threads,
-        );
+        let filled = canonical_faces();
+        let got: Vec<FaceSample> = pass
+            .bind(1, &ranges, Layout::Dense)
+            .bind(2, &sorted, Layout::Dense)
+            .bind(4, &filled, Layout::Records)
+            .run("particles_to_faces", &step, 4, face_len(), threads);
         let (checked, invalid, walls) = check_wyvill_faces(&particles, &got);
         if name == "dense" {
             assert!(
@@ -164,10 +161,10 @@ pub(super) fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
         let mut pass = Pass::new();
         let threads = pass.every_tile();
         let got: Vec<f32> = pass
-            .bind(3, &faces)
-            .bind(6, &water)
-            .bind(10, &open)
-            .bind(11, &moving)
+            .bind(3, &faces, Layout::Records)
+            .bind(6, &water, Layout::Cells)
+            .bind(10, &open, Layout::Records)
+            .bind(11, &moving, Layout::Records)
             .run("divergence", &lattice(), 5, cell_len(), threads);
         let mut pushed = 0;
         for (c, g) in got.iter().enumerate() {
@@ -253,11 +250,11 @@ pub(super) fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
     for (solid, phi) in draws {
         let open = solid_faces(0x5c7, solid);
         let got: Vec<FaceSample> = Pass::new()
-            .bind(20, &faces)
-            .bind(10, &open)
-            .bind(6, &water)
-            .bind(8, &pressure)
-            .bind(7, &phi)
+            .bind(20, &faces, Layout::Records)
+            .bind(10, &open, Layout::Records)
+            .bind(6, &water, Layout::Cells)
+            .bind(8, &pressure, Layout::Cells)
+            .bind(7, &phi, Layout::Cells)
             .run(
                 "subtract_pressure",
                 &StepParams {
@@ -562,13 +559,10 @@ pub(super) fn gpu_flip_particle_distance_is_the_engines_level_set() {
         };
         let mut pass = Pass::new();
         let threads = pass.every_tile();
-        let got: Vec<f32> = pass.bind(1, &ranges).bind(2, &sorted).run(
-            "particle_distance",
-            &step,
-            5,
-            cell_len(),
-            threads,
-        );
+        let got: Vec<f32> = pass
+            .bind(1, &ranges, Layout::Dense)
+            .bind(2, &sorted, Layout::Dense)
+            .run("particle_distance", &step, 5, cell_len(), threads);
         let empty = ranges.iter().filter(|r| r.count == 0).count();
         assert!(
             empty > 10 && empty < cell_len(),
@@ -620,10 +614,10 @@ pub(super) fn gpu_flip_particle_distance_is_the_engines_level_set() {
 #[test]
 pub(super) fn gpu_flip_extend_faces_fills_one_layer() {
     let faces = random_faces(0xe7e, true);
-    let got: Vec<FaceSample> =
-        Pass::new()
-            .bind(3, &faces)
-            .run("extend_faces", &lattice(), 4, face_len(), face_len());
+    let got: Vec<FaceSample> = Pass::new()
+        .bind(3, &faces, Layout::Records)
+        .bind(4, &faces, Layout::Records)
+        .run("extend_faces", &lattice(), 4, face_len(), face_len());
     let want = super::super::gpu_flip_extension_tests::cpu_extend(&faces, N);
     let mut filled = 0;
     for (i, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -650,13 +644,10 @@ pub(super) fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
             let (mut faces, target) = wall_gap(N, axis, high);
             for layer in 0..2 {
                 let want = cpu_extend(&faces, N);
-                let got: Vec<FaceSample> = Pass::new().bind(3, &faces).run(
-                    "extend_faces",
-                    &lattice(),
-                    4,
-                    face_len(),
-                    face_len(),
-                );
+                let got: Vec<FaceSample> = Pass::new()
+                    .bind(3, &faces, Layout::Records)
+                    .bind(4, &faces, Layout::Records)
+                    .run("extend_faces", &lattice(), 4, face_len(), face_len());
                 for (i, (g, w)) in got.iter().zip(&want).enumerate() {
                     for a in 0..3 {
                         close(
@@ -689,13 +680,10 @@ pub(super) fn gpu_flip_extend_faces_holds_border_rows_as_native() {
         let mut averaged = 0;
         for layer in 0..2 {
             let want = cpu_extend(&faces, N);
-            let got: Vec<FaceSample> = Pass::new().bind(3, &faces).run(
-                "extend_faces",
-                &lattice(),
-                4,
-                face_len(),
-                face_len(),
-            );
+            let got: Vec<FaceSample> = Pass::new()
+                .bind(3, &faces, Layout::Records)
+                .bind(4, &faces, Layout::Records)
+                .run("extend_faces", &lattice(), 4, face_len(), face_len());
             for (i, (g, w)) in got.iter().zip(&want).enumerate() {
                 for a in 0..3 {
                     close(
@@ -746,11 +734,11 @@ pub(super) fn gpu_flip_pressure_clear_precedes_face_extension() {
     let pressure = vec![0.0; cell_len()];
     let phi = vec![0.0; cell_len()];
     let projected: Vec<FaceSample> = Pass::new()
-        .bind(20, &faces)
-        .bind(10, &open)
-        .bind(6, &water)
-        .bind(8, &pressure)
-        .bind(7, &phi)
+        .bind(20, &faces, Layout::Records)
+        .bind(10, &open, Layout::Records)
+        .bind(6, &water, Layout::Cells)
+        .bind(8, &pressure, Layout::Cells)
+        .bind(7, &phi, Layout::Cells)
         .run("subtract_pressure", &lattice(), 20, face_len(), face_len());
     assert_eq!(
         projected[target_index].velocity[0], 0.0,
@@ -765,10 +753,13 @@ pub(super) fn gpu_flip_pressure_clear_precedes_face_extension() {
         0.0,
         "open air-only velocity is cleared before extension"
     );
-    let extended: Vec<FaceSample> =
-        Pass::new()
-            .bind(3, &projected)
-            .run("extend_faces", &lattice(), 4, face_len(), face_len());
+    let extended: Vec<FaceSample> = Pass::new().bind(3, &projected, Layout::Records).run(
+        "extend_faces",
+        &lattice(),
+        4,
+        face_len(),
+        face_len(),
+    );
     for x in [target[0] - 1, target[0], target[0] + 1] {
         let index = pad_index([x, target[1], target[2]]);
         assert_eq!(

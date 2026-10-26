@@ -170,7 +170,10 @@ fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = ts_cells();
-    let p = ts_face_coord(idx);
+    let p = ts_box_record(idx);
+    if !ts_record_stored(p) {
+        return;
+    }
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let tolerance = 8.0 * 1.1920929e-7 * (u.cell_size * f32(max(n.x, max(n.y, n.z))) + u.box_offset);
     for (var a = 0; a < 3; a = a + 1) {
@@ -182,10 +185,10 @@ fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
         var e2 = vec3<i32>(0);
         e1[axes.x] = 1;
         e2[axes.y] = 1;
-        let c0 = solid[ts_face(p)];
-        let c1 = solid[ts_face(p + e1)];
-        let c2 = solid[ts_face(p + e2)];
-        let c3 = solid[ts_face(p + e1 + e2)];
+        let c0 = solid[ts_corner(p)];
+        let c1 = solid[ts_corner(p + e1)];
+        let c2 = solid[ts_corner(p + e2)];
+        let c3 = solid[ts_corner(p + e1 + e2)];
         var inside = solid_square_inside(c0, c1, c2, c3);
         if abs(c0) <= tolerance && abs(c1) <= tolerance && abs(c2) <= tolerance && abs(c3) <= tolerance {
             inside = 0.5;
@@ -195,11 +198,11 @@ fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
     if all(p < n) {
         var corners: array<f32, 8>;
         for (var k = 0; k < 8; k = k + 1) {
-            corners[k] = solid[ts_face(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
+            corners[k] = solid[ts_corner(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
         }
         out.face_weight.w = clamp(1.0 - solid_cube_inside(corners), 0.0, 1.0);
     }
-    faces_out[idx] = out;
+    faces_out[ts_face(p)] = out;
 }
 
 fn liquid_atlas_half(index: u32) -> f32 {
@@ -324,8 +327,12 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = ts_cells();
-    let p = ts_face_coord(idx);
-    let open = solid_faces[idx];
+    let p = ts_box_record(idx);
+    if !ts_record_stored(p) {
+        return;
+    }
+    let at_record = ts_face(p);
+    let open = solid_faces[at_record];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let lattice_min = u.box_min;
     let h = u.cell_size;
@@ -365,7 +372,7 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     out.face_velocity.w = code;
     out.face_weight.w = known;
-    faces_out[idx] = out;
+    faces_out[at_record] = out;
 }
 
 // Layers of the solid velocity's extrapolation
@@ -402,8 +409,12 @@ fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = ts_cells();
-    let p = ts_face_coord(idx);
-    var out = faces_in[idx];
+    let p = ts_box_record(idx);
+    if !ts_record_stored(p) {
+        return;
+    }
+    let at_record = ts_face(p);
+    var out = faces_in[at_record];
     var known = u32(out.face_weight.w);
     var code = u32(out.face_velocity.w);
     for (var a = 0; a < 3; a = a + 1) {
@@ -446,7 +457,7 @@ fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     out.face_velocity.w = f32(code);
     out.face_weight.w = f32(known);
-    faces_out[idx] = out;
+    faces_out[at_record] = out;
 }
 
 // The solid distance at cell p's centre, the mean of its eight corners
@@ -454,7 +465,7 @@ fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn solid_centre(p: vec3<i32>, m: vec3<i32>) -> f32 {
     var sum = 0.0;
     for (var k = 0; k < 8; k = k + 1) {
-        sum = sum + solid[ts_face(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
+        sum = sum + solid[ts_corner(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
     }
     return 0.125 * sum;
 }

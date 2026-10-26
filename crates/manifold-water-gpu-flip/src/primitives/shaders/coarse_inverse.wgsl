@@ -12,6 +12,11 @@
 // rows and columns are zero. Works in `out` itself; storageBarrier orders
 // the passes. The CPU refuses a lattice past MAX_CELLS or past the arrays
 // before dispatch; a lattice that gets here anyway writes nothing.
+//
+// `water` and `solid_faces` are the coarsest level's dense boxes, except when
+// the lattice is small enough to have no coarse level: then they are the
+// fine level's pooled fields (`pool_tiles` non-zero, tile_storage.wgsl).
+// `out` is always a dense cells × cells matrix.
 
 const MAX_CELLS: u32 = 64u;
 const THREADS: u32 = 256u;
@@ -21,7 +26,9 @@ struct Params {
     nodes_x: u32,
     nodes_y: u32,
     nodes_z: u32,
-    _pad0: u32,
+    // The tile pool's capacity P when the lattice is the pooled fine level,
+    // else 0 (dense).
+    pool_tiles: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Params;
@@ -36,11 +43,29 @@ struct FaceSample {
 // The GPU FLIP clock's plan (gpu_flip_pressure.wgsl slot_plan): a live slot
 // with no time to step builds nothing.
 @group(0) @binding(4) var<storage, read> slot_plan: array<u32>;
+// The tile pool's slot and tile table (read only when `pool_tiles` is non-zero).
+@group(0) @binding(5) var<storage, read> ts_table: array<u32>;
 
-// The coarsest level's dense lattice; it indexes through `ts_grid_*`, not as
-// the FLIP cells.
 fn ts_cells() -> vec3<i32> {
     return vec3<i32>(i32(u.nodes_x), i32(u.nodes_y), i32(u.nodes_z));
+}
+
+fn ts_pool_tiles() -> u32 {
+    return u.pool_tiles;
+}
+
+// Whether the lattice is the pooled fine level rather than a dense coarse box.
+fn pooled() -> bool {
+    return u.pool_tiles != 0u;
+}
+
+// Cell c (flat in the dense box) in `water`.
+fn water_at(c: u32) -> f32 {
+    let p = ts_grid_coord(c, ts_cells());
+    if pooled() {
+        return water[ts_cell_at(p)];
+    }
+    return water[c];
 }
 
 // The open fraction of the face between c and its neighbour d steps along
@@ -56,6 +81,9 @@ fn face_weight(c: u32, a: i32, d: i32) -> f32 {
     }
     var face = p;
     face[a] = max(p[a], q[a]);
+    if pooled() {
+        return solid_faces[ts_face(face)].weight[a];
+    }
     return solid_faces[ts_grid_index(face, m)].weight[a];
 }
 
@@ -69,7 +97,7 @@ fn diagonal(c: u32) -> f32 {
 }
 
 fn entry(i: u32, j: u32) -> f32 {
-    if water[i] <= 0.5 || water[j] <= 0.5 {
+    if water_at(i) <= 0.5 || water_at(j) <= 0.5 {
         return 0.0;
     }
     if i == j {

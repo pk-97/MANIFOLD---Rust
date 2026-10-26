@@ -31,15 +31,20 @@ impl StepState {
             .pipelines
             .as_ref()
             .expect("step pipelines built by prepare_pipelines at install");
-        let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) = (
+        let (Some(l), Some(tiles), Some(sorted), Some(published), Some(distance_out)) = (
             self.lattice.as_ref(),
             self.tiles.as_ref(),
             self.sorted.as_ref(),
             self.faces.as_ref(),
+            self.distance.as_ref(),
         ) else {
             return Err("the step's storage was not reserved".into());
         };
         let cells = l.cells;
+        // The step's own faces, pooled; `publish` copies them to `published`.
+        let out_faces = &l.faces;
+        let table = &tiles.table;
+        let pool = tiles.pool_tiles;
         let p = step.params;
         let capacity = p.capacity;
         // What reads this slot's activity beyond the passes that always did:
@@ -153,30 +158,27 @@ impl StepState {
         // Which tiles hold water this step, from the sort's bin counts. The
         // cell passes run over the cell set C through its indirect triple;
         // every other tile holds the canonical values (design section 4 (The
-        // defined-value rule)): filled once per lattice, restored by the
-        // retire when a tile leaves C.
+        // defined-value rule)): set when the tile is allocated, restored by
+        // the retire when a tile leaves C. A new pool's canonical block is
+        // written first.
+        if self.pool_canon_pending {
+            encode_pool_canon(enc, pipes, &base, l);
+            self.pool_canon_pending = false;
+        }
         encode_tiles(
             enc,
             pipes,
             &base,
+            l,
             tiles,
             ranges,
             step.capped,
             step.tally,
             gate_plan,
         );
-        if !self.filled {
-            enc.dispatch_compute(
-                &pipes.tiles_fill,
-                &canonical(l, vec![uniform(&base)]),
-                face_groups,
-                "gpu_flip.step.tiles.fill",
-            );
-            self.filled = true;
-        }
         enc.dispatch_compute_indirect(
             &pipes.tiles_retire,
-            &canonical(l, vec![uniform(&base), buffer(32, &tiles.retired)]),
+            &canonical(l, tiles, vec![uniform(&base), buffer(32, &tiles.retired)]),
             &tiles.args,
             retired_args_offset(tiles.ring_max),
             "gpu_flip.step.tiles.retire",
@@ -187,6 +189,7 @@ impl StepState {
                 &pipes.poison,
                 &canonical(
                     l,
+                    tiles,
                     vec![
                         uniform(&base),
                         buffer(28, &tiles.rank),
@@ -205,6 +208,7 @@ impl StepState {
                 uniform(&base),
                 buffer(29, &tiles.by_ring),
                 buffer(46, step.clock_plan),
+                buffer(51, table),
             ];
             bound.extend(bindings);
             enc.dispatch_compute_indirect(pipeline, &bound, &tiles.args, 0, label);
@@ -248,6 +252,7 @@ impl StepState {
                 buffer(16, step.atlas),
                 buffer(36, step.regions),
                 buffer(46, step.clock_plan),
+                buffer(51, table),
             ],
             face_groups,
             "gpu_flip.step.forces",
@@ -259,6 +264,7 @@ impl StepState {
                 uniform(&base),
                 buffer(9, &l.corners),
                 buffer(4, &l.s),
+                buffer(51, table),
             ],
             face_groups,
             "gpu_flip.step.open_fractions",
@@ -275,6 +281,7 @@ impl StepState {
                     buffer(16, step.atlas),
                     buffer(46, step.clock_plan),
                     buffer(48, posed),
+                    buffer(51, table),
                 ],
                 face_groups,
                 "gpu_flip.step.solid_velocity",
@@ -296,6 +303,7 @@ impl StepState {
                         buffer(3, from),
                         buffer(4, to),
                         buffer(46, gate_plan),
+                        buffer(51, table),
                     ],
                     face_groups,
                     "gpu_flip.step.solid_extrapolate",
@@ -332,6 +340,7 @@ impl StepState {
             pipes,
             &base,
             l,
+            table,
             ranges,
             cells,
             step.capped,
@@ -347,12 +356,13 @@ impl StepState {
                 buffer(25, &l.pocket_label),
                 buffer(5, &l.solve_water),
                 buffer(46, gate_plan),
+                buffer(51, table),
             ],
             cells_groups,
             "gpu_flip.step.pocket_pin",
         );
         if step.level > 0 {
-            encode_pocket_coarsen(enc, pipes, &base, l, gate_plan);
+            encode_pocket_coarsen(enc, pipes, &base, l, table, gate_plan);
         }
         if bodies && !step.dynamic {
             enc.dispatch_compute(
@@ -363,6 +373,7 @@ impl StepState {
                     buffer(10, &l.s),
                     buffer(23, &l.pocket),
                     buffer(46, gate_plan),
+                    buffer(51, table),
                 ],
                 face_groups,
                 "gpu_flip.step.pocket_condition",
@@ -385,6 +396,7 @@ impl StepState {
             pipes,
             &base,
             l.fine_pockets(),
+            table,
             &l.rhs,
             0,
             step.capped,
@@ -407,6 +419,7 @@ impl StepState {
                     pipes,
                     &params,
                     l.coarse_pockets(),
+                    table,
                     rhs,
                     solve,
                     step.capped,
@@ -424,7 +437,7 @@ impl StepState {
             phi: step.ghost.then_some(&l.phi),
         };
         self.solver.set_clock_plan(gate_plan);
-        self.solver.prepare(device, enc, &water)?;
+        self.solver.prepare(device, enc, &water, table, pool)?;
         // Dynamic bodies join the solve as the engine's mass-aware PCG
         // (RigidFluidCoupling) has them, at the pose the solid takes.
         let coupled = Bodies {
@@ -462,6 +475,8 @@ impl StepState {
                 level: step.level,
                 coarse_rhs: Some(&pressure_mean),
             },
+            table,
+            pool,
         )?;
         let tally = step.tally;
         self.solver.tally(
@@ -490,6 +505,7 @@ impl StepState {
                     buffer(6, &l.water),
                     buffer(8, &l.pressure),
                     buffer(7, phi),
+                    buffer(51, table),
                 ],
                 face_groups,
                 label,
@@ -506,6 +522,8 @@ impl StepState {
                 self.solver.tiles()?,
                 &l.pressure,
                 step.reaction,
+                table,
+                pool,
             )?;
         }
         extend(
@@ -535,6 +553,7 @@ impl StepState {
                     buffer(20, faces),
                     buffer(10, &l.s),
                     buffer(11, &l.v),
+                    buffer(51, table),
                 ],
                 face_groups,
                 label,
@@ -563,6 +582,7 @@ impl StepState {
                 pipes,
                 &base,
                 l.fine_pockets(),
+                table,
                 &l.rhs,
                 1,
                 step.capped,
@@ -584,6 +604,8 @@ impl StepState {
                     level: step.level,
                     coarse_rhs: Some(&density_mean),
                 },
+                table,
+                pool,
             )?;
             self.solver
                 .tally(enc, step.pressure, step.capped, tally, 1, false)?;
@@ -632,9 +654,14 @@ impl StepState {
             let order = sheet_order.ok_or("sheet seeding storage was not reserved")?;
             // The sheeter's own distance, true to SHEET_DISTANCE_CELLS deep,
             // from the liquid level set the pressure solve read.
-            let phi = self
-                .sheet_distance
-                .encode_gated(enc, &l.phi, p.cell_size, step.clock_plan);
+            let phi = self.sheet_distance.encode_gated(
+                enc,
+                &l.phi,
+                p.cell_size,
+                step.clock_plan,
+                table,
+                pool,
+            );
             enc.compute_memory_barrier_buffers();
             let inputs = super::super::gpu_flip_sheeting::SheetInputs {
                 particles: sorted,
@@ -657,7 +684,7 @@ impl StepState {
                 substep: p.step_in_tick.max(0) as u32,
             };
             self.sheeting
-                .encode_draw(enc, &inputs, step.clock_plan, &births);
+                .encode_draw(enc, &inputs, step.clock_plan, &births, table, pool);
             self.identity_ops.reserve(
                 enc,
                 manifold_water_liquid::primitives::particle_identity::BirthReservation {
@@ -676,7 +703,7 @@ impl StepState {
             );
             enc.compute_memory_barrier_buffers();
             self.sheeting
-                .encode_write(enc, &inputs, step.clock_plan, &births);
+                .encode_write(enc, &inputs, step.clock_plan, &births, table, pool);
         }
         enc.set_profile_tag("gpu_flip.stage.move");
         enc.dispatch_compute(
@@ -694,6 +721,7 @@ impl StepState {
                 buffer(16, step.atlas),
                 buffer(36, step.regions),
                 buffer(46, step.clock_plan),
+                buffer(51, table),
             ],
             groups(u64::from(base.particles)),
             "gpu_flip.step.move",
@@ -825,6 +853,16 @@ impl StepState {
                 "gpu_flip.step.emit_tally",
             );
         }
+        // The pooled faces and φ are final: copy them to the dense outputs.
+        encode_publish(
+            enc,
+            pipes,
+            &base,
+            l,
+            tiles,
+            [published, distance_out],
+            step.clock_plan,
+        );
         enc.compute_memory_barrier_buffers();
         Ok(())
     }

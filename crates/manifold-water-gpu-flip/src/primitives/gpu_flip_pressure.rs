@@ -30,7 +30,7 @@ use manifold_gpu::{
 use super::gpu_flip_bodies::{Bodies, BodyGate, BodyPasses};
 use manifold_water_liquid::fluid_particles::FaceSample;
 
-use manifold_water_liquid::tile_storage::TILE_STORAGE;
+use manifold_water_liquid::tile_storage::{TILE_STORAGE, pool_len};
 
 const SHADER_BODY: &str = include_str!("shaders/gpu_flip_pressure.wgsl");
 const INVERSE_SHADER_BODY: &str = include_str!("shaders/coarse_inverse.wgsl");
@@ -129,12 +129,13 @@ fn tile_bases(lattices: &[[u32; 3]]) -> Vec<u32> {
     bases
 }
 
-/// Device bytes the solver holds for itself at `lattice`: five lattice
-/// vectors and the fine rows, each coarse level's water, touched mask,
-/// faces, rows, right-hand side and correction, the coarse inverse, every
-/// level's tile flags and lists, the partial sums and the scalars.
+/// Device bytes the solver holds for itself at `lattice`: five fine vectors
+/// and the fine rows (pooled fields of a pool of `pool_tiles` tiles), each
+/// coarse level's water, touched mask, faces, rows, right-hand side and
+/// correction (dense boxes), the coarse inverse, every level's tile flags and
+/// lists, the partial sums and the scalars.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-pub(crate) fn scratch_bytes(lattice: [u32; 3]) -> u64 {
+pub(crate) fn scratch_bytes(lattice: [u32; 3], pool_tiles: u32) -> u64 {
     let levels = level_lattices(lattice);
     let coarse: u64 = levels[1..]
         .iter()
@@ -142,8 +143,8 @@ pub(crate) fn scratch_bytes(lattice: [u32; 3]) -> u64 {
         .sum();
     let last = cells(*levels.last().expect("at least the fine level"));
     let tiles = u64::from(*tile_bases(&levels).last().expect("the total"));
-    5 * cells(lattice) * 4
-        + cells(lattice) * ROW_BYTES
+    5 * pool_len(pool_tiles) * 4
+        + pool_len(pool_tiles) * ROW_BYTES
         + coarse
         + last * last * 4
         + 2 * tiles * 4
@@ -233,7 +234,9 @@ manifold_core::testkit_visible! {
 /// padded face grid of open fractions (the step's open_fractions pass, box
 /// walls 0), the cell size in metres, and the particles' signed distance per cell
 /// for the free surface's ghost rows. With no φ the rows are the plain ones, as the
-/// density solve runs; the coarse levels always are.
+/// density solve runs; the coarse levels always are. The water, faces and φ
+/// are pooled fields: every call that takes a `Water` also takes the pool's
+/// table and capacity P.
 pub(crate) struct Water<'a> {
     pub lattice: [u32; 3],
     pub cell_size: f32,
@@ -276,6 +279,10 @@ struct Params {
     /// dense zero check before writing (gpu_flip_pressure.wgsl stopped); 0
     /// outside rounds, where they always run.
     live: u32,
+    /// The tile pool's capacity P when the dispatched lattice is the pooled
+    /// fine level; 0 on a dense coarse level (gpu_flip_pressure.wgsl pooled).
+    pool_tiles: u32,
+    _pad: [u32; 3],
 }
 
 impl Params {
@@ -294,10 +301,19 @@ impl Params {
         self
     }
 
-    /// The level whose tile list the dispatch runs over.
+    /// The level whose tile list the dispatch runs over; its lattice is the
+    /// dispatched one, pooled when it is the fine level.
     fn over(mut self, v: &View<'_>) -> Self {
         self.list_base = v.list_base;
         self.level = v.level;
+        self.pool_tiles = v.pool_tiles;
+        self
+    }
+
+    /// The pool capacity of the dispatched lattice: P on the fine level, 0
+    /// on a coarse one.
+    fn pooled(mut self, pool_tiles: u32) -> Self {
+        self.pool_tiles = pool_tiles;
         self
     }
 }
@@ -308,7 +324,8 @@ struct InverseParams {
     nodes_x: u32,
     nodes_y: u32,
     nodes_z: u32,
-    _pad0: u32,
+    /// P when the lattice is the pooled fine level (no coarse level), else 0.
+    pool_tiles: u32,
 }
 
 struct Pipelines {
@@ -389,8 +406,13 @@ struct Level {
 /// Everything sized by the lattice, rebuilt when it changes.
 struct Buffers {
     lattice: [u32; 3],
+    /// The tile pool's capacity the fine vectors and rows are sized for.
+    pool_tiles: u32,
     coarse: Vec<Level>,
-    /// The fine level's operator rows, built at prepare.
+    /// The fine level's operator rows, built at prepare. The fine vectors
+    /// below and the rows are pooled fields (`pool_len` elements); a solve on
+    /// a coarse level uses r, z, p and the scratch as dense boxes of that
+    /// level.
     rows: GpuBuffer,
     r: GpuBuffer,
     z: GpuBuffer,
@@ -425,10 +447,11 @@ struct Buffers {
 }
 
 impl Buffers {
-    fn new(device: &GpuDevice, lattice: [u32; 3]) -> Self {
+    fn new(device: &GpuDevice, lattice: [u32; 3], pool_tiles: u32) -> Self {
         let lattices = level_lattices(lattice);
         let vector = |n: [u32; 3]| device.create_buffer(cells(n) * 4);
         let rows = |n: [u32; 3]| device.create_buffer(cells(n) * ROW_BYTES);
+        let pooled_vector = || device.create_buffer(pool_len(pool_tiles) * 4);
         let coarse = lattices[1..]
             .iter()
             .map(|&n| Level {
@@ -447,13 +470,14 @@ impl Buffers {
         let tiles = u64::from(*bases.last().expect("the total"));
         Self {
             lattice,
+            pool_tiles,
             coarse,
-            rows: rows(lattice),
-            r: vector(lattice),
-            z: vector(lattice),
-            p: vector(lattice),
-            scratch: vector(lattice),
-            body: vector(lattice),
+            rows: device.create_buffer(pool_len(pool_tiles) * ROW_BYTES),
+            r: pooled_vector(),
+            z: pooled_vector(),
+            p: pooled_vector(),
+            scratch: pooled_vector(),
+            body: pooled_vector(),
             inverse: device.create_buffer(last * last * 4),
             partials: device.create_buffer(u64::from(partial_count(lattice)) * 4),
             scalars: device.create_buffer(u64::from(2 * MAX_ITERATIONS) * 4),
@@ -627,11 +651,15 @@ struct View<'a> {
     /// triple.
     list_base: u32,
     level: u32,
+    /// The pool capacity P for the fine level (its buffers are pooled
+    /// fields), 0 for a coarse level (dense boxes).
+    pool_tiles: u32,
 }
 
 /// Level `level`'s view: the fine level is the caller's water with the
-/// solver's r and z; a coarse level is its own arrays.
-fn view<'a>(b: &'a Buffers, water: &Water<'a>, level: usize) -> View<'a> {
+/// solver's r and z; a coarse level is its own arrays. `pool_tiles` is the
+/// fine level's pool capacity.
+fn view<'a>(b: &'a Buffers, water: &Water<'a>, level: usize, pool_tiles: u32) -> View<'a> {
     match level {
         0 => View {
             lattice: water.lattice,
@@ -645,6 +673,7 @@ fn view<'a>(b: &'a Buffers, water: &Water<'a>, level: usize) -> View<'a> {
             partials: &b.partials,
             list_base: 0,
             level: 0,
+            pool_tiles,
         },
         l => {
             let c = &b.coarse[l - 1];
@@ -660,6 +689,7 @@ fn view<'a>(b: &'a Buffers, water: &Water<'a>, level: usize) -> View<'a> {
                 partials: &b.partials,
                 list_base: b.bases[l],
                 level: l as u32,
+                pool_tiles: 0,
             }
         }
     }
@@ -752,22 +782,22 @@ impl PressureSolver {
         /// inverse for `water`. Every solve until the next prepare runs on this
         /// water; a solve with φ needs a prepare that saw it. Allocates only when
         /// the lattice changes.
-        pub(crate) fn prepare(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, water: &Water<'_>) -> Result<(), String> {
+        pub(crate) fn prepare(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, water: &Water<'_>, table: &GpuBuffer, pool_tiles: u32) -> Result<(), String> {
             if let Some(reason) = lattice_refusal(water.lattice) {
                 return Err(reason);
             }
             let n = water.lattice;
             let phi = water.phi.map_or(u64::MAX, |phi| phi.size);
-            if cells(n) * 4 > water.water.size.min(phi) || face_records(n) * FACE_BYTES > water.faces.size {
-                return Err(format!("a {n:?} lattice is larger than its water, distance or face arrays"));
+            if pool_len(pool_tiles) * 4 > water.water.size.min(phi) || pool_len(pool_tiles) * FACE_BYTES > water.faces.size {
+                return Err(format!("a {n:?} lattice's pool of {pool_tiles} tiles is larger than its water, distance or face arrays"));
             }
             if !(water.cell_size.is_finite() && water.cell_size > 0.0) {
                 return Err("the cell size must be positive".into());
             }
             let pipes = self.pipelines.as_ref().expect("pressure pipelines built by prepare_pipelines at install");
             let plan = self.plan.as_ref().expect("the clock plan is set at install");
-            if self.buffers.as_ref().is_none_or(|b| b.lattice != n) {
-                self.buffers = Some(Buffers::new(device, n));
+            if self.buffers.as_ref().is_none_or(|b| b.lattice != n || b.pool_tiles != pool_tiles) {
+                self.buffers = Some(Buffers::new(device, n, pool_tiles));
             }
             let b = self.buffers.as_mut().expect("buffers sized");
             let mut h = water.cell_size;
@@ -776,16 +806,19 @@ impl PressureSolver {
                 level.cell_size = h;
             }
             let (ghost, phi) = water.ghost();
-            let assemble = |enc: &mut GpuEncoder, lattice: [u32; 3], water: &GpuBuffer, faces: &GpuBuffer, ghost: (u32, &GpuBuffer), rows: &GpuBuffer| {
+            // Level 0's lattice is the pooled fine level; a coarse level's is a dense box.
+            let pool_of = |level: usize| if level == 0 { pool_tiles } else { 0 };
+            let assemble = |enc: &mut GpuEncoder, lattice: [u32; 3], water: &GpuBuffer, faces: &GpuBuffer, ghost: (u32, &GpuBuffer), rows: &GpuBuffer, pool: u32| {
                 enc.dispatch_compute(
                     &pipes.rows,
                     &[
-                        bytes(&Params { ghost: ghost.0, ..Params::at(lattice, 0.0) }),
+                        bytes(&Params { ghost: ghost.0, ..Params::at(lattice, 0.0).pooled(pool) }),
                         buffer(1, water),
                         buffer(2, faces),
                         buffer(10, ghost.1),
                         buffer(18, rows),
                         buffer(21, plan),
+                        buffer(22, table),
                     ],
                     groups(cells(lattice)),
                     "gpu_flip.pressure.rows",
@@ -795,10 +828,10 @@ impl PressureSolver {
             // fine level's water, a coarse level's any-touched-child mask.
             let all_tiles = u32::from(super::gpu_flip_step::all_tiles());
             let tiles = |enc: &mut GpuEncoder, lattice: [u32; 3], touched: &GpuBuffer, level: usize| {
-                let params = Params { list_base: b.bases[level], level: level as u32, all_tiles, ..Params::at(lattice, 0.0) };
+                let params = Params { list_base: b.bases[level], level: level as u32, all_tiles, ..Params::at(lattice, 0.0).pooled(pool_of(level)) };
                 enc.dispatch_compute(
                     &pipes.classify,
-                    &[bytes(&params), buffer(1, touched), buffer(19, &b.flags), buffer(21, plan)],
+                    &[bytes(&params), buffer(1, touched), buffer(19, &b.flags), buffer(21, plan), buffer(22, table)],
                     groups(u64::from(tile_total(lattice)) * 32),
                     "gpu_flip.pressure.classify",
                 );
@@ -809,31 +842,32 @@ impl PressureSolver {
                     "gpu_flip.pressure.lists",
                 );
             };
-            assemble(enc, n, water.water, water.faces, (ghost, phi), &b.rows);
+            assemble(enc, n, water.water, water.faces, (ghost, phi), &b.rows, pool_tiles);
             tiles(enc, n, water.water, 0);
             let mut fine = (n, water.water, water.water, water.faces);
             for (index, level) in b.coarse.iter().enumerate() {
                 // `level` is the fine side of this coarsening: at 0 the mask has
                 // no solid kind and the kernel reads the faces for it.
-                let params = Params { level: index as u32, ..Params::at(fine.0, 0.0).coarse(level.lattice) };
+                let params = Params { level: index as u32, ..Params::at(fine.0, 0.0).coarse(level.lattice).pooled(pool_of(index)) };
                 enc.dispatch_compute(
                     &pipes.coarsen_water,
-                    &[bytes(&params), buffer(1, fine.1), buffer(2, fine.3), buffer(4, fine.2), buffer(5, &level.water), buffer(6, &level.touched), buffer(21, plan)],
+                    &[bytes(&params), buffer(1, fine.1), buffer(2, fine.3), buffer(4, fine.2), buffer(5, &level.water), buffer(6, &level.touched), buffer(21, plan), buffer(22, table)],
                     groups(cells(level.lattice)),
                     "gpu_flip.pressure.coarsen_water",
                 );
                 enc.dispatch_compute(
                     &pipes.coarsen_faces,
-                    &[bytes(&params), buffer(2, fine.3), buffer(9, &level.faces), buffer(21, plan)],
+                    &[bytes(&params), buffer(2, fine.3), buffer(9, &level.faces), buffer(21, plan), buffer(22, table)],
                     groups(face_records(level.lattice)),
                     "gpu_flip.pressure.coarsen_faces",
                 );
-                assemble(enc, level.lattice, &level.water, &level.faces, (0, &level.water), &level.rows);
+                assemble(enc, level.lattice, &level.water, &level.faces, (0, &level.water), &level.rows, 0);
                 tiles(enc, level.lattice, &level.touched, index + 1);
                 fine = (level.lattice, &level.water, &level.touched, &level.faces);
             }
             let (last, last_water, _, last_faces) = fine;
-            let params = InverseParams { nodes_x: last[0], nodes_y: last[1], nodes_z: last[2], _pad0: 0 };
+            // With no coarse level the coarsest one is the pooled fine level.
+            let params = InverseParams { nodes_x: last[0], nodes_y: last[1], nodes_z: last[2], pool_tiles: pool_of(b.coarse.len()) };
             enc.dispatch_compute(
                 &pipes.inverse,
                 &[
@@ -842,6 +876,7 @@ impl PressureSolver {
                     buffer(2, last_faces),
                     buffer(3, &b.inverse),
                     buffer(4, plan),
+                    buffer(5, table),
                 ],
                 [1, 1, 1],
                 "gpu_flip.pressure.coarse_inverse",
@@ -868,7 +903,7 @@ impl PressureSolver {
         /// zeroed fine pressure. The bodies stay fine: each direction is
         /// prolonged, their product taken there and restricted into s, so the
         /// coarse operator is L_k + Rᵀ B P.
-        pub(crate) fn solve(&mut self, enc: &mut GpuEncoder, water: &Water<'_>, run: Solve<'_>) -> Result<(), String> {
+        pub(crate) fn solve(&mut self, enc: &mut GpuEncoder, water: &Water<'_>, run: Solve<'_>, table: &GpuBuffer, pool_tiles: u32) -> Result<(), String> {
             let n = water.lattice;
             let Solve { rhs, pressure, stop, bodies, level: k, coarse_rhs } = run;
             let Some((lattice, cell_size, with_phi)) = self.prepared else {
@@ -884,8 +919,11 @@ impl PressureSolver {
             if !(1..=MAX_ITERATIONS).contains(&iterations) {
                 return Err(format!("iterations must be 1 to {MAX_ITERATIONS}, not {iterations}"));
             }
-            if cells(n) * 4 > rhs.size.min(pressure.size) {
-                return Err(format!("a {n:?} lattice is larger than the right-hand side or the pressure"));
+            if pool_len(pool_tiles) * 4 > rhs.size.min(pressure.size) {
+                return Err(format!("a {n:?} lattice's pool of {pool_tiles} tiles is larger than the right-hand side or the pressure"));
+            }
+            if self.buffers.as_ref().is_some_and(|b| b.pool_tiles != pool_tiles) {
+                return Err(format!("the solver was prepared for another pool than {pool_tiles} tiles"));
             }
             if let Some(reason) = level_refusal(n, k) {
                 return Err(reason);
@@ -906,13 +944,15 @@ impl PressureSolver {
                 tiles: [&b.gate, &b.flags, &b.lists],
                 plan,
                 live: slots.single() as u32,
+                table,
+                pool_tiles,
             };
             // The gate is armed just below, so the prelude always runs full:
             // plain dispatches, which record with the rest of the step.
             let plain = Gate { gated: false, tiles: [&b.armed, &b.flags, &b.lists], live: 0, ..g };
             // The gradient's level: its r and z are the solver's, its x and
             // right-hand side the caller's at level 0, level k's own above.
-            let top = View { rhs: &b.r, e: &b.z, ..view(b, water, k) };
+            let top = View { rhs: &b.r, e: &b.z, ..view(b, water, k, pool_tiles) };
             let (rhs_k, x): (&GpuBuffer, &GpuBuffer) = if k == 0 { (rhs, pressure) } else { (spare(b, k, Spare::Rhs), spare(b, k, Spare::E)) };
             let chain = Chain { pipes, b, water, g: plain, k, plan };
             // Each round is one replayed segment, or two for a plain body product: the arm
@@ -963,13 +1003,13 @@ impl PressureSolver {
                         r.head(&mut sink);
                         match (round, bodies) {
                             (BodyRound::Gated, Some((passes, bodies))) => {
-                                passes.apply_gated(&mut sink, bodies, g.tiles, &b.p, &b.scratch, &body_gate)?;
+                                passes.apply_gated(&mut sink, bodies, g.tiles, &b.p, &b.scratch, &body_gate, table, pool_tiles)?;
                             }
                             (BodyRound::GatedCoarse(_), Some((passes, bodies))) => {
                                 let inside = Chain { g, ..chain };
                                 inside.prolong_down(&mut sink, &b.p, pressure, Spare::E);
                                 zero_in(&mut sink, pipes, g, 0, n, &b.body, plan);
-                                passes.apply_gated(&mut sink, bodies, g.tiles, pressure, &b.body, &body_gate)?;
+                                passes.apply_gated(&mut sink, bodies, g.tiles, pressure, &b.body, &body_gate, table, pool_tiles)?;
                                 inside.restrict_down(&mut sink, &b.body, &b.scratch, 0, RESTRICT_ADD);
                             }
                             _ => {}
@@ -1022,11 +1062,11 @@ impl PressureSolver {
                         r.head(enc);
                         enc.end_gated_segments();
                         if k == 0 {
-                            passes.apply(enc, bodies, plain.tiles, &b.p, &b.scratch)?;
+                            passes.apply(enc, bodies, plain.tiles, &b.p, &b.scratch, table, pool_tiles)?;
                         } else {
                             chain.prolong_down(enc, &b.p, pressure, Spare::E);
-                            zero(enc, pipes, n, &b.body, &b.armed, plan);
-                            passes.apply(enc, bodies, plain.tiles, pressure, &b.body)?;
+                            zero(enc, pipes, n, &b.body, &b.armed, plan, table, pool_tiles);
+                            passes.apply(enc, bodies, plain.tiles, pressure, &b.body, table, pool_tiles)?;
                             chain.restrict_down(enc, &b.body, &b.scratch, 0, RESTRICT_ADD);
                         }
                         g.begin_round(enc, 2 * i + 1, after);
@@ -1097,7 +1137,13 @@ impl PressureSolver {
     /// inactive partials, after a prepare. A solve that reads past its
     /// lists shows in its pressure.
     #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(crate) fn poison(&self, enc: &mut GpuEncoder, level: usize) {
+    pub(crate) fn poison(
+        &self,
+        enc: &mut GpuEncoder,
+        level: usize,
+        table: &GpuBuffer,
+        pool_tiles: u32,
+    ) {
         let (Some(pipes), Some(b)) = (self.pipelines.as_ref(), self.buffers.as_ref()) else {
             panic!("the solver was not prepared");
         };
@@ -1122,7 +1168,7 @@ impl PressureSolver {
                 list_base: b.bases[level as usize],
                 level,
                 color: u32::from(level == partials),
-                ..Params::at(lattice, 0.0)
+                ..Params::at(lattice, 0.0).pooled(if level == 0 { pool_tiles } else { 0 })
             };
             enc.dispatch_compute(
                 &pipes.poison,
@@ -1131,6 +1177,7 @@ impl PressureSolver {
                     buffer(5, out),
                     buffer(16, &b.partials),
                     buffer(19, &b.flags),
+                    buffer(22, table),
                 ],
                 [partial_count(lattice), 1, 1],
                 "gpu_flip.pressure.poison",
@@ -1301,11 +1348,15 @@ struct Gate<'a> {
     /// The solve-live triple the singleton passes check (Params live); 0
     /// outside rounds.
     live: u32,
+    /// The tile pool's table (bound at 22) and capacity P: the fine level's
+    /// buffers are pooled fields.
+    table: &'a GpuBuffer,
+    pool_tiles: u32,
 }
 
-/// The most bindings one solve dispatch names, the tile buffers and the
-/// clock plan included.
-const MAX_BINDINGS: usize = 12;
+/// The most bindings one solve dispatch names, the tile buffers, the clock
+/// plan and the pool table included.
+const MAX_BINDINGS: usize = 13;
 
 manifold_core::testkit_visible! {
 /// Where a solve's dispatches go: the encoder, or a round template's
@@ -1417,6 +1468,7 @@ impl Gate<'_> {
         all.push(buffer(19, self.tiles[1]));
         all.push(buffer(20, self.tiles[2]));
         all.push(buffer(21, self.plan));
+        all.push(buffer(22, self.table));
         if self.gated {
             enc.gated(
                 pipeline,
@@ -1549,7 +1601,7 @@ fn v_cycle<'a, S: Sink>(
         if level == start {
             *top
         } else {
-            view(b, water, level)
+            view(b, water, level, g.pool_tiles)
         }
     };
     let last = b.coarse.len();
@@ -1595,7 +1647,7 @@ fn v_cycle<'a, S: Sink>(
         &[
             bytes(&Params {
                 live: g.live,
-                ..params
+                ..params.pooled(v.pool_tiles)
             }),
             buffer(3, &b.inverse),
             buffer(4, v.rhs),
@@ -1630,11 +1682,13 @@ fn restrict<S: Sink>(
     out: &GpuBuffer,
     mode: u32,
 ) {
+    // The list is the coarse level's; the fine side decides the pooling.
     let params = Params {
         mode,
         ..Params::at(fine.lattice, fine.cell_size)
             .coarse(coarse.lattice)
             .over(coarse)
+            .pooled(fine.pool_tiles)
     };
     g.dispatch(
         enc,
@@ -1681,7 +1735,8 @@ fn prolong<S: Sink>(
 }
 
 /// Every cell of `out` on `lattice` to 0: a dispatch, so it records and
-/// labels with the solver's passes.
+/// labels with the solver's passes. `pool_tiles` is P when `lattice` is the
+/// pooled fine level, 0 for a dense coarse one.
 fn zero<S: Sink>(
     enc: &mut S,
     pipes: &Pipelines,
@@ -1689,14 +1744,17 @@ fn zero<S: Sink>(
     out: &GpuBuffer,
     armed: &GpuBuffer,
     plan: &GpuBuffer,
+    table: &GpuBuffer,
+    pool_tiles: u32,
 ) {
     // `armed` with `live` 0: the shader's stop check reads it and never stops.
-    let params = Params::at(lattice, 0.0);
+    let params = Params::at(lattice, 0.0).pooled(pool_tiles);
     let bindings = [
         bytes(&params),
         buffer(5, out),
         buffer(14, armed),
         buffer(21, plan),
+        buffer(22, table),
     ];
     debug_assert_bound(&pipes.zero, &bindings, "gpu_flip.pressure.zero");
     enc.plain(
@@ -1718,13 +1776,16 @@ fn zero_in<S: Sink>(
     out: &GpuBuffer,
     plan: &GpuBuffer,
 ) {
+    let pool_tiles = if level == 0 { g.pool_tiles } else { 0 };
     if !g.gated {
-        zero(enc, pipes, lattice, out, g.tiles[0], plan);
+        zero(
+            enc, pipes, lattice, out, g.tiles[0], plan, g.table, pool_tiles,
+        );
         return;
     }
     let params = Params {
         live: g.live,
-        ..Params::at(lattice, 0.0)
+        ..Params::at(lattice, 0.0).pooled(pool_tiles)
     };
     g.dispatch(
         enc,
@@ -1772,8 +1833,8 @@ impl<'a> Chain<'a> {
                 enc,
                 self.pipes,
                 self.g,
-                &view(self.b, self.water, j - 1),
-                &view(self.b, self.water, j),
+                &view(self.b, self.water, j - 1, self.g.pool_tiles),
+                &view(self.b, self.water, j, self.g.pool_tiles),
                 from,
                 to,
                 mode,
@@ -1788,7 +1849,7 @@ impl<'a> Chain<'a> {
     fn prolong_down<S: Sink>(self, enc: &mut S, src: &GpuBuffer, out: &GpuBuffer, which: Spare) {
         let mut from = src;
         for j in (0..self.k).rev() {
-            let fine = view(self.b, self.water, j);
+            let fine = view(self.b, self.water, j, self.g.pool_tiles);
             let to = if j == 0 { out } else { spare(self.b, j, which) };
             zero_in(enc, self.pipes, self.g, j, fine.lattice, to, self.plan);
             prolong(
@@ -1796,7 +1857,7 @@ impl<'a> Chain<'a> {
                 self.pipes,
                 self.g,
                 &fine,
-                &view(self.b, self.water, j + 1),
+                &view(self.b, self.water, j + 1, self.g.pool_tiles),
                 from,
                 to,
             );
@@ -2023,7 +2084,9 @@ mod tests {
             slots.armed() as usize,
             armed_groups(&level_lattices([64; 3])).len()
         );
-        assert!(scratch_bytes([128; 3]) > 4 * 128 * 128 * 128 * 4);
+        // The pooled fine vectors scale with the pool: 128³ is 4096 tiles.
+        assert!(scratch_bytes([128; 3], 4096) > 4 * 128 * 128 * 128 * 4);
+        assert!(scratch_bytes([128; 3], 4096) > scratch_bytes([128; 3], 2048));
     }
 
     /// The gradient never starts on the coarsest level: it is solved by its
@@ -2091,11 +2154,7 @@ mod tests {
         ] {
             assert!(entries.contains(&entry), "missing entry {entry}");
         }
-        assert_eq!(
-            size_of::<Params>(),
-            64,
-            "sixteen words, the shader's Params"
-        );
+        assert_eq!(size_of::<Params>(), 80, "twenty words, the shader's Params");
     }
 }
 

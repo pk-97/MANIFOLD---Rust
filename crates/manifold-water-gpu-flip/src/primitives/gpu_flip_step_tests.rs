@@ -13,6 +13,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass};
 use super::liquid_fill::LiquidFill;
+use super::pool_testkit::{from_pool, identity_table, records_from_pool, records_to_pool, to_pool};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_node_engine::testkit::atom::{
@@ -28,7 +29,7 @@ use manifold_water_liquid::bodies::{
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
 use manifold_water_liquid::primitives::liquid_stats::{INFLOW_BIRTHS_TAIL, with_stats_layout};
-use manifold_water_liquid::tile_storage::tile_total;
+use manifold_water_liquid::tile_storage::{pool_len, tile_total};
 mod cells;
 mod density;
 mod emit;
@@ -259,31 +260,200 @@ fn native_collision_move(
     q1
 }
 
-/// One entry of the step's shader with its buffers bound by number.
+/// How a bound array is stored: a dense array as the CPU references hold it,
+/// or a pooled field of the identity-allocated tile pool, which the harness
+/// converts from and to the dense array. Cells are `n³`, records `(n + 1)³`
+/// with the records past the lattice answered by the canonical block.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Layout {
+    Dense,
+    Cells,
+    Records,
+}
+
+/// The layout of an output the harness creates itself, by the step shader's
+/// binding numbers.
+fn output_layout(binding: u32) -> Layout {
+    match binding {
+        3 | 4 | 10 | 11 | 17 | 18 | 20 => Layout::Records,
+        5..=8 | 23 | 25 | 33..=35 | 41 => Layout::Cells,
+        _ => Layout::Dense,
+    }
+}
+
+/// Bit a of the canonical mask of record `p` past the lattice `n`: face a
+/// exists and sits on a box wall.
+fn wall_mask(p: [usize; 3], n: [usize; 3]) -> usize {
+    (0..3)
+        .filter(|&a| {
+            let mut other = p;
+            other[a] = 0;
+            (0..3).all(|b| other[b] < n[b]) && (p[a] == 0 || p[a] == n[a])
+        })
+        .fold(0, |mask, a| mask | (1 << a))
+}
+
+/// The 8 canonical records of a record field, read off the dense array's
+/// records past the lattice. The pool stores none of them, so every one must
+/// hold the record of its wall mask (only masks 0, 1, 2 and 4 occur there).
+fn canonical_records(dense: &[FaceSample], cells: [u32; 3], binding: u32) -> [FaceSample; 8] {
+    let n = cells.map(|v| v as usize);
+    let at = |p: [usize; 3]| dense[p[0] + (n[0] + 1) * (p[1] + (n[1] + 1) * p[2])];
+    let mut canon = [at(n); 8];
+    canon[1] = at([n[0], 0, 0]);
+    canon[2] = at([0, n[1], 0]);
+    canon[4] = at([0, 0, n[2]]);
+    for (i, record) in dense.iter().enumerate() {
+        let p = [
+            i % (n[0] + 1),
+            (i / (n[0] + 1)) % (n[1] + 1),
+            i / ((n[0] + 1) * (n[1] + 1)),
+        ];
+        if (0..3).all(|a| p[a] < n[a]) {
+            continue;
+        }
+        let mask = wall_mask(p, n);
+        assert_eq!(
+            bytemuck::bytes_of(record),
+            bytemuck::bytes_of(&canon[mask]),
+            "binding {binding}: record {p:?} past the lattice differs from its canonical record \
+             (mask {mask}); a pooled field stores no record there"
+        );
+    }
+    canon
+}
+
+/// The records of a gathered face grid with nothing gathered: every face
+/// absent but the box walls, closed (velocity 0, weight 1).
+fn canonical_faces_on(n: [usize; 3]) -> Vec<FaceSample> {
+    let m = n.map(|v| v + 1);
+    (0..m.iter().product())
+        .map(|i| {
+            let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+            let mut face = FaceSample::default();
+            for a in 0..3 {
+                let mut other = p;
+                other[a] = 0;
+                if (0..3).all(|b| other[b] < n[b]) && (p[a] == 0 || p[a] == n[a]) {
+                    face.weight[a] = 1.0;
+                }
+            }
+            face
+        })
+        .collect()
+}
+
+fn canonical_faces() -> Vec<FaceSample> {
+    canonical_faces_on(N)
+}
+
+/// `records` (32-byte records, one per padded cell of the lattice `n`) with
+/// every record past the lattice zeroed: the pool stores one record per wall
+/// mask there, so a fixture that wants the CPU reference and the pool to read
+/// the same value gives them zero.
+fn zero_past_lattice<T: bytemuck::Pod>(mut records: Vec<T>, n: [usize; 3]) -> Vec<T> {
+    let m = n.map(|v| v + 1);
+    let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut records);
+    assert_eq!(
+        bytes.len(),
+        32 * m.iter().product::<usize>(),
+        "one 32-byte record per padded cell"
+    );
+    for i in 0..m.iter().product::<usize>() {
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        if (0..3).any(|a| p[a] >= n[a]) {
+            bytes[32 * i..32 * (i + 1)].fill(0);
+        }
+    }
+    records
+}
+
+/// One entry of the step's shader with its buffers bound by number. Pooled
+/// arrays live in the identity-allocated tile pool (`P = T`, slot = tile) of
+/// the lattice `cells`; the binding at 51 is the slot table.
 struct Pass {
     device: manifold_gpu::testkit::TestDevice,
+    cells: [u32; 3],
     bound: Vec<(u32, GpuBuffer)>,
+    layouts: Vec<(u32, Layout)>,
 }
 
 impl Pass {
     fn new() -> Self {
+        Self::on(N)
+    }
+
+    /// A pass over a lattice other than [`N`].
+    fn on(cells: [usize; 3]) -> Self {
         Self {
             device: manifold_gpu::testkit::test_device(),
+            cells: cells.map(|n| n as u32),
             bound: Vec::new(),
+            layouts: Vec::new(),
         }
     }
 
-    /// Binds a buffer holding `values` at `binding`.
-    fn bind<T: bytemuck::Pod>(&mut self, binding: u32, values: &[T]) -> &mut Self {
+    /// Tiles the pool holds.
+    fn pool_tiles(&self) -> u32 {
+        identity_table(self.cells).1
+    }
+
+    /// `params` over this pass's pool.
+    fn pooled(&self, params: &StepParams) -> StepParams {
+        StepParams {
+            pool_tiles: self.pool_tiles(),
+            ..*params
+        }
+    }
+
+    /// Binds the identity slot table at 51 once.
+    fn table(&mut self) {
+        if !self.bound.iter().any(|(binding, _)| *binding == 51) {
+            let (words, _) = identity_table(self.cells);
+            self.bind(51, &words, Layout::Dense);
+        }
+    }
+
+    fn layout(&self, binding: u32) -> Layout {
+        self.layouts
+            .iter()
+            .find(|(b, _)| *b == binding)
+            .expect("bound")
+            .1
+    }
+
+    /// Binds a buffer holding `values` at `binding`, in `layout`: a pooled
+    /// layout converts the dense array to the pool (records past the lattice
+    /// must already hold their canonical records).
+    fn bind<T: bytemuck::Pod>(&mut self, binding: u32, values: &[T], layout: Layout) -> &mut Self {
+        let pooled: Vec<u8> = match layout {
+            Layout::Dense => Vec::new(),
+            Layout::Cells => {
+                let pool = to_pool(values, self.cells, &[T::zeroed()]);
+                bytemuck::cast_slice::<T, u8>(&pool).to_vec()
+            }
+            Layout::Records => {
+                let records: Vec<FaceSample> = bytemuck::pod_collect_to_vec(values);
+                let canon = canonical_records(&records, self.cells, binding);
+                let pool = records_to_pool(&records, self.cells, &canon);
+                bytemuck::cast_slice::<FaceSample, u8>(&pool).to_vec()
+            }
+        };
+        let bytes: &[u8] = if layout == Layout::Dense {
+            bytemuck::cast_slice::<T, u8>(values)
+        } else {
+            &pooled
+        };
         let buffer = self
             .device
-            .create_buffer_shared((size_of_val(values) as u64).max(16));
+            .create_buffer_shared((bytes.len() as u64).max(16));
         buffer.zero_fill();
-        if !values.is_empty() {
-            // SAFETY: shared buffer sized for `values`; no GPU work in flight.
-            unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
+        if !bytes.is_empty() {
+            // SAFETY: shared buffer sized for `bytes`; no GPU work in flight.
+            unsafe { buffer.write(0, bytes) };
         }
         self.bound.push((binding, buffer));
+        self.layouts.push((binding, layout));
         self
     }
 
@@ -291,13 +461,14 @@ impl Pass {
     /// cell set C covers the whole lattice; returns its thread count (512 a
     /// tile).
     fn every_tile(&mut self) -> usize {
-        let tiles: Vec<u32> = (0..tile_total(N.map(|n| n as u32)) as u32).collect();
-        self.bind(29, &tiles);
+        let tiles: Vec<u32> = (0..tile_total(self.cells) as u32).collect();
+        self.bind(29, &tiles, Layout::Dense);
         tiles.len() * 512
     }
 
     /// Runs `entry` over `threads` threads and reads `len` records of
-    /// `out`: the bound buffer for a pass in place, else a zeroed one.
+    /// `out`: the bound buffer for a pass in place, else a zeroed one (zero
+    /// records past the lattice).
     fn run<T: bytemuck::Pod>(
         &mut self,
         entry: &str,
@@ -307,34 +478,43 @@ impl Pass {
         threads: usize,
     ) -> Vec<T> {
         if !self.bound.iter().any(|(binding, _)| *binding == out) {
-            self.bind(out, &vec![T::zeroed(); len]);
+            self.bind(out, &vec![T::zeroed(); len], output_layout(out));
         }
+        self.table();
+        let params = self.pooled(params);
         let buffers: Vec<(u32, &GpuBuffer)> = self
             .bound
             .iter()
             .map(|(binding, buffer)| (*binding, buffer))
             .collect();
-        dispatch_pass(&self.device, entry, params, &buffers, threads as u64);
+        dispatch_pass(&self.device, entry, &params, &buffers, threads as u64);
+        self.bound(out, len)
+    }
+
+    /// `len` records of the buffer bound at `binding`, converted to the dense
+    /// array its layout stands for.
+    fn bound<T: bytemuck::Pod>(&self, binding: u32, len: usize) -> Vec<T> {
         let buffer = &self
             .bound
             .iter()
-            .find(|(binding, _)| *binding == out)
+            .find(|(b, _)| *b == binding)
             .expect("bound")
             .1;
-        read(buffer, len)
-    }
-
-    /// `len` records of the buffer bound at `binding`.
-    fn bound<T: bytemuck::Pod>(&self, binding: u32, len: usize) -> Vec<T> {
-        read(
-            &self
-                .bound
-                .iter()
-                .find(|(b, _)| *b == binding)
-                .expect("bound")
-                .1,
-            len,
-        )
+        let pool = pool_len(self.pool_tiles()) as usize;
+        match self.layout(binding) {
+            Layout::Dense => read(buffer, len),
+            Layout::Cells => {
+                let dense = from_pool(&read::<T>(buffer, pool), self.cells);
+                assert_eq!(dense.len(), len, "binding {binding}: cells read");
+                dense
+            }
+            Layout::Records => {
+                let dense = records_from_pool(&read::<FaceSample>(buffer, pool), self.cells);
+                let dense: Vec<T> = bytemuck::pod_collect_to_vec(&dense);
+                assert_eq!(dense.len(), len, "binding {binding}: records read");
+                dense
+            }
+        }
     }
 }
 
@@ -347,7 +527,8 @@ fn close(got: f32, want: f64, scale: f64, what: &str) {
 
 /// Random faces over the padded grid; faces that do not exist are zero.
 /// `valid` draws weights of 0 or 1 (a projected grid) instead of positive
-/// particle weights.
+/// particle weights. The faces on the far box walls are closed (velocity 0,
+/// weight 1), the canonical record there, as the pool holds no other.
 fn random_faces(seed: u64, valid: bool) -> Vec<FaceSample> {
     let mut rng = Stream::new(seed);
     (0..face_len())
@@ -362,6 +543,10 @@ fn random_faces(seed: u64, valid: bool) -> Vec<FaceSample> {
                     } else {
                         rng.unit()
                     };
+                    if p[a] == N[a] {
+                        face.velocity[a] = 0.0;
+                        face.weight[a] = 1.0;
+                    }
                 }
             }
             face

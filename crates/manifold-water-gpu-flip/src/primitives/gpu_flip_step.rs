@@ -7,9 +7,13 @@
 //! `shaders/gpu_flip_step/*.wgsl`, the solver in [`super::gpu_flip_pressure`].
 //!
 //! Every scratch array is sized from the lattice and the particle slots
-//! before any pass is encoded, so no kernel reads `arrayLength`. The face
-//! grid output is this node's own storage, exactly one record per padded
-//! cell, reallocated when the lattice changes.
+//! before any pass is encoded, so no kernel reads `arrayLength`. The
+//! lattice's cell and face fields live in the tile pool (`tiles.rs`): their
+//! passes index them through the storage helpers, and a tile is stored while
+//! the allocator holds it. The `faces` and `distance` outputs are this
+//! node's own dense storage, exactly one record per padded cell and one value
+//! per cell, written from the pool at the end of each step and reallocated
+//! when the lattice changes.
 //!
 //! Extrapolation order/count, marker removal, inflow emission/placement,
 //! inflow constrained velocity and outflow removal port
@@ -264,7 +268,11 @@ pub(crate) struct StepParams {
     /// Box3D's substep over this tick: the coupled motion law's h
     /// (`manifold_physics::coupled_motion::coupled_substep`).
     pub(crate) coupled_h: f32,
-    pub(crate) _pad: [u32; 3],
+    /// Tiles the pool holds ([`pool_tiles`]).
+    pub(crate) pool_tiles: u32,
+    /// Tiles with ring at most this are allocated ([`ALLOC_RING`]).
+    pub(crate) alloc_ring: u32,
+    pub(crate) _pad: u32,
 }
 }
 
@@ -304,16 +312,20 @@ pub(crate) struct StepState {
     lattice: Option<LatticeBuffers>,
     /// Keyed on the lattice (with `lattice`) and its own `ring_max`.
     tiles: Option<TileTable>,
-    /// The lattice's cell arrays and gathered faces hold canonical values
-    /// everywhere (`tiles_fill` ran); false until the first step on a lattice.
-    filled: bool,
+    /// A lattice was just built: its pooled fields' canonical blocks are
+    /// written by the next step (`pool_canon`).
+    pool_canon_pending: bool,
     /// No-body solid scratch stays zero until a body pass writes it.
     solid_velocity_is_zero: bool,
     sorted: Option<GpuBuffer>,
     /// The emission flags' scan, one word a half-cell site.
     emit_scan: PrefixScan,
-    /// The face grid output: exactly [`face_bytes`] of the current lattice.
+    /// The face grid output: exactly [`face_bytes`] of the current lattice,
+    /// dense; `publish` copies the lattice's pooled faces into it.
     faces: Option<GpuBuffer>,
+    /// The distance output, one f32 a cell of the current lattice, dense;
+    /// `publish` copies the lattice's pooled φ into it.
+    distance: Option<GpuBuffer>,
     /// [`ZERO_BYTES`] zero bytes bound where an optional input is unwired.
     saved_particles: Option<GpuBuffer>,
     saved_distance: Option<GpuBuffer>,

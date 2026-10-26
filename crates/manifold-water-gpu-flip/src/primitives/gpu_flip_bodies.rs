@@ -22,6 +22,10 @@
 //! level-0 tile buffers come in with every call. The partials are two a
 //! tile per body, so they grow with the lattice and the body count.
 //!
+//! Every fine-lattice buffer a call takes (the water, open fractions, solid
+//! velocity, direction, `s`) is a pooled field: the call also takes the
+//! pool's table and capacity P and the kernels index through them.
+//!
 //! The reaction holds 8 floats per body (linear then angular impulse, N·s and
 //! N·m·s about the posed centre of mass), added up over a tick's steps.
 
@@ -105,7 +109,8 @@ struct Params {
     accumulate: u32,
     /// impulse_finalize inside a round: the gate's solve-live triple; 0 runs always.
     live: u32,
-    _pad1: u32,
+    /// The tile pool's capacity P (gpu_flip_bodies.wgsl ts_pool_tiles).
+    pool_tiles: u32,
     _pad2: u32,
 }
 
@@ -290,6 +295,8 @@ impl BodyPasses {
         pressure: &GpuBuffer,
         reaction: Option<&GpuBuffer>,
         gate: Option<&BodyGate<'_>>,
+        table: &GpuBuffer,
+        pool_tiles: u32,
     ) -> Result<(), String> {
         let (pipes, partials, sums) = self.parts()?;
         if partials.size < partial_bytes(bodies.lattice, bodies.count) {
@@ -300,6 +307,7 @@ impl BodyPasses {
         }
         let params = Params {
             live: gate.map_or(0, |g| g.live),
+            pool_tiles,
             ..Self::params(bodies, reaction.is_some())
         };
         let data = bytemuck::bytes_of(&params);
@@ -314,6 +322,7 @@ impl BodyPasses {
             buffer(12, tiles[0]),
             buffer(14, tiles[2]),
             self.clock_binding(),
+            buffer(17, table),
         ];
         let groups = [tile_groups(bodies.lattice), bodies.count.max(1), 1];
         match gate {
@@ -373,8 +382,10 @@ impl BodyPasses {
             tiles: Tiles<'_>,
             direction: &GpuBuffer,
             s: &GpuBuffer,
+            table: &GpuBuffer,
+            pool_tiles: u32,
         ) -> Result<(), String> {
-            self.apply_on(enc, bodies, tiles, direction, s, None)
+            self.apply_on(enc, bodies, tiles, direction, s, None, table, pool_tiles)
         }
     }
 
@@ -388,8 +399,19 @@ impl BodyPasses {
         direction: &GpuBuffer,
         s: &GpuBuffer,
         gate: &BodyGate<'_>,
+        table: &GpuBuffer,
+        pool_tiles: u32,
     ) -> Result<(), String> {
-        self.apply_on(enc, bodies, tiles, direction, s, Some(gate))
+        self.apply_on(
+            enc,
+            bodies,
+            tiles,
+            direction,
+            s,
+            Some(gate),
+            table,
+            pool_tiles,
+        )
     }
 
     fn apply_on<S: Sink>(
@@ -400,10 +422,15 @@ impl BodyPasses {
         direction: &GpuBuffer,
         s: &GpuBuffer,
         gate: Option<&BodyGate<'_>>,
+        table: &GpuBuffer,
+        pool_tiles: u32,
     ) -> Result<(), String> {
-        self.impulse(enc, bodies, tiles, direction, None, gate)?;
+        self.impulse(enc, bodies, tiles, direction, None, gate, table, pool_tiles)?;
         let (pipes, _, sums) = self.parts()?;
-        let params = Self::params(bodies, false);
+        let params = Params {
+            pool_tiles,
+            ..Self::params(bodies, false)
+        };
         let product = [
             GpuBinding::Bytes {
                 binding: 0,
@@ -418,6 +445,7 @@ impl BodyPasses {
             buffer(12, tiles[0]),
             buffer(14, tiles[2]),
             self.clock_binding(),
+            buffer(17, table),
         ];
         let groups = [tile_groups(bodies.lattice), 1, 1];
         match gate {
@@ -445,10 +473,15 @@ impl BodyPasses {
             tiles: Tiles<'_>,
             pressure: &GpuBuffer,
             reaction: &GpuBuffer,
+            table: &GpuBuffer,
+            pool_tiles: u32,
         ) -> Result<(), String> {
-            self.impulse(enc, bodies, tiles, pressure, Some(reaction), None)?;
+            self.impulse(enc, bodies, tiles, pressure, Some(reaction), None, table, pool_tiles)?;
             let (pipes, _, sums) = self.parts()?;
-            let params = Self::params(bodies, false);
+            let params = Params {
+                pool_tiles,
+                ..Self::params(bodies, false)
+            };
             enc.dispatch_compute(
                 &pipes.velocity,
                 &[
@@ -457,6 +490,7 @@ impl BodyPasses {
                     buffer(8, sums),
                     buffer(11, bodies.solid),
                     self.clock_binding(),
+                    buffer(17, table),
                 ],
                 groups(records(bodies.lattice)),
                 "gpu_flip.bodies.velocity_change",

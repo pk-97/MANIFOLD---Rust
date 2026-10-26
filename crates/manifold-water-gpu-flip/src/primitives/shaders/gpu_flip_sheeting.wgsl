@@ -14,7 +14,7 @@ struct Params {
     max_depth: f32, step_distance: f32, steps: u32, max_seed_depth: f32,
     max_radius: f32, threshold: f32, inv_h_bits_lo: u32, inv_h_bits_hi: u32,
     inv_sub_bits_lo: u32, inv_sub_bits_hi: u32, rate: f32, tick: u32,
-    substep: u32, slots: u32, pad0: u32, pad1: u32,
+    substep: u32, slots: u32, pool_tiles: u32, pad1: u32,
 };
 struct FluidParticle { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32 };
 struct CellRange { start: u32, count: u32 };
@@ -31,7 +31,7 @@ struct ClockPlan {
 @group(0) @binding(2) var<storage, read> ranges: array<CellRange>;
 // Per sorted slot: its input index, the engine's marker order.
 @group(0) @binding(3) var<storage, read> order: array<u32>;
-// The surface level set at cell centres, x fastest.
+// The surface level set at cell centres, a pooled cell field.
 @group(0) @binding(4) var<storage, read> phi: array<f32>;
 @group(0) @binding(5) var<storage, read_write> sheet_a: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> sheet_b: array<u32>;
@@ -62,6 +62,10 @@ struct ClockPlan {
 // tick's refused births are summed at SHEET_REFUSED_TAIL (zeroed per tick by
 // the step's birth_tally_reset).
 @group(0) @binding(19) var<storage, read_write> capped: array<u32>;
+// The tile pool's slot and tile table. `phi`, `sheet_a`, `sheet_b` (as the
+// feather's cells), `mask`, `cell_counts`, `claims` (eight a cell), `flags`
+// and `old` are pooled fields; `ranges` and the bucket rows are dense.
+@group(0) @binding(20) var<storage, read> ts_table: array<u32>;
 
 const NO_CLAIM: u32 = 0xffffffffu;
 const MAX_PARTICLES_PER_CELL: u32 = 6u;
@@ -73,6 +77,7 @@ fn clock_active() -> bool {
 }
 
 fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
+fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
 fn in_range(c: vec3<i32>) -> bool { return all(c >= vec3<i32>(0)) && all(c < ts_cells()); }
 // Grid3d::positionToGridIndex floors the f64 product of the widened position
 // and the f64 reciprocal. Emulated exactly in integers: the 24-bit mantissa
@@ -230,13 +235,16 @@ fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = gid.x;
     if c == 0u { atomicStore(&birth_count[1], 0u); }
     if c >= ts_cell_count() { return; }
-    atomicStore(&sheet_a[c], 0u);
-    sheet_b[c] = 0u;
-    atomicStore(&mask[c], 0u);
-    cell_counts[c] = 0u;
-    atomicStore(&flags[c], 0u);
+    let p = ts_box_cell(c);
+    if !ts_cell_stored(p) { return; }
+    let at = ts_cell_at(p);
+    atomicStore(&sheet_a[at], 0u);
+    sheet_b[at] = 0u;
+    atomicStore(&mask[at], 0u);
+    cell_counts[at] = 0u;
+    atomicStore(&flags[at], 0u);
     for (var o = 0u; o < 8u; o = o + 1u) {
-        atomicStore(&claims[8u * c + o], NO_CLAIM);
+        atomicStore(&claims[8u * at + o], NO_CLAIM);
     }
 }
 
@@ -252,7 +260,7 @@ fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     let g = cell_of(p);
     if !in_range(g) { return; }
     atomicOr(&mask[ts_cell_at(g)], 1u << sub_case(sub_of(p)));
-    if ranges[ts_cell_at(g)].count >= MAX_PARTICLES_PER_CELL { return; }
+    if ranges[ts_dense_cell(g)].count >= MAX_PARTICLES_PER_CELL { return; }
     let value = sample(p);
     if value >= u.max_depth || value < -u.max_depth { return; }
     var dir = -gradient(p - vec3<f32>(u.half_h));
@@ -289,20 +297,21 @@ fn grown(source: u32, c: vec3<i32>) -> u32 {
 @compute @workgroup_size(256)
 fn feather(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let c = gid.x;
-    if c >= ts_cell_count() { return; }
-    sheet_b[c] = grown(0u, ts_cell_coord(c));
+    if gid.x >= ts_cell_count() { return; }
+    let q = ts_box_cell(gid.x);
+    if !ts_cell_stored(q) { return; }
+    sheet_b[ts_cell_at(q)] = grown(0u, q);
 }
 
 // The second feather pass, b into a, then the 3-cell border band cleared.
 @compute @workgroup_size(256)
 fn feather_border(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let c = gid.x;
-    if c >= ts_cell_count() { return; }
-    let q = ts_cell_coord(c);
+    if gid.x >= ts_cell_count() { return; }
+    let q = ts_box_cell(gid.x);
+    if !ts_cell_stored(q) { return; }
     let border = any(q < vec3<i32>(3)) || any(q >= ts_cells() - vec3<i32>(3));
-    atomicStore(&sheet_a[c], select(grown(1u, q), 0u, border));
+    atomicStore(&sheet_a[ts_cell_at(q)], select(grown(1u, q), 0u, border));
 }
 
 // Phase 2: the first four markers of each sheet cell, in input order, with
@@ -311,17 +320,21 @@ fn feather_border(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
-    if c >= ts_cell_count() || atomicLoad(&sheet_a[c]) == 0u { return; }
-    let range = ranges[c];
+    if c >= ts_cell_count() { return; }
+    let q = ts_box_cell(c);
+    if !ts_cell_stored(q) { return; }
+    let at = ts_cell_at(q);
+    if atomicLoad(&sheet_a[at]) == 0u { return; }
+    let range = ranges[ts_dense_cell(q)];
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
         let p = local(particles[s]);
         let value = sample(p);
         if value >= u.max_depth || value < -u.max_depth { continue; }
-        selected[segment_base(ts_cell_coord(c)) + n] = vec4<f32>(p, bitcast<f32>(order[s]));
+        selected[segment_base(q) + n] = vec4<f32>(p, bitcast<f32>(order[s]));
         n = n + 1u;
     }
-    cell_counts[c] = n;
+    cell_counts[at] = n;
 }
 
 fn bucket_flat(b: vec3<i32>) -> u32 {
@@ -392,9 +405,9 @@ struct Evaluation {
     rank: u32,
 };
 
-// One half-cell site: candidate test, plane projection, mask and
-// opposite-neighbour test. Deterministic, so resolve recomputes a claimant's
-// projection instead of storing it.
+// One half-cell site (8 · the cell's pool index + offset): candidate test,
+// plane projection, mask and opposite-neighbour test. Deterministic, so
+// resolve recomputes a claimant's projection instead of storing it.
 fn evaluate(site: u32) -> Evaluation {
     var e = Evaluation(0u, vec3<f32>(0.0), 0u);
     let c = site / 8u;
@@ -491,8 +504,10 @@ fn evaluate(site: u32) -> Evaluation {
 @compute @workgroup_size(256)
 fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let site = gid.x;
-    if site >= 8u * ts_cell_count() { return; }
+    if gid.x >= 8u * ts_cell_count() { return; }
+    let box_cell = ts_box_cell(gid.x / 8u);
+    if !ts_cell_stored(box_cell) { return; }
+    let site = 8u * ts_cell_at(box_cell) + gid.x % 8u;
     let e = evaluate(site);
     if e.state == 0u { return; }
     let c = site / 8u;
@@ -507,8 +522,8 @@ fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 fn rank_total() -> u32 { return 64u * u.bx * u.by * u.bz; }
 
-// The half-cell site a rank names, or NO_CLAIM where its cell is past the
-// grid (an odd side's last bucket).
+// The half-cell site a rank names (8 · pool index + offset), or NO_CLAIM
+// where its cell is past the grid (an odd side's last bucket).
 fn site_of_rank(r: u32) -> u32 {
     let o = r % 8u;
     let in_bucket = (r / 8u) % 8u;
@@ -615,7 +630,6 @@ fn saved_velocity(q: vec3<f32>) -> vec3<f32> {
     if !finite3(q) || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(n)) {
         return vec3<f32>(0.0);
     }
-    let m = n + vec3<i32>(1);
     var v = vec3<f32>(0.0);
     for (var a = 0; a < 3; a = a + 1) {
         var offset = vec3<f32>(0.5);
@@ -630,7 +644,7 @@ fn saved_velocity(q: vec3<f32>) -> vec3<f32> {
             let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
             let c = base + bit;
             if all(c >= vec3<i32>(0)) && all(c <= top) {
-                let face = old[u32(c.x) + u32(m.x) * (u32(c.y) + u32(m.y) * u32(c.z))];
+                let face = old[ts_face(c)];
                 let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
                 sum = sum + w3.x * w3.y * w3.z * face.face_velocity[a];
             }

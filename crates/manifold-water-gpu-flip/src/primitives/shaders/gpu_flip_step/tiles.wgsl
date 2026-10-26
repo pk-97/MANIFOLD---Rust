@@ -1,5 +1,6 @@
 // ---- The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
-// table)). Built every step from the sort's ranges, on the GPU, never read
+// table)) and the tile pool's allocator (WATER_TILE_POOL_DESIGN.md section
+// 4). Built every step from the sort's ranges, on the GPU, never read
 // back; the parity and the lists live here so a replayed encode stays
 // right. ----
 
@@ -10,29 +11,52 @@ fn tile_parity_word() -> u32 {
     return u.ring_max + 3u;
 }
 
+// The allocator's words follow the parity word.
+fn tile_free_top_word() -> u32 {
+    return u.ring_max + 4u;
+}
+
+fn tile_pop_word() -> u32 {
+    return u.ring_max + 5u;
+}
+
+fn tile_exhausted_word() -> u32 {
+    return u.ring_max + 6u;
+}
+
+fn tile_fresh_word() -> u32 {
+    return u.ring_max + 7u;
+}
+
+fn counts_load(i: u32) -> u32 {
+    return atomicLoad(&tile_counts[i]);
+}
+
+fn counts_store(i: u32, value: u32) {
+    atomicStore(&tile_counts[i], value);
+}
+
+// The word of `tile_args` holding the fresh list's triple, after the
+// aligned replay range.
+fn fresh_args_word() -> u32 {
+    let end_triples = 3u * (u.ring_max + 3u);
+    return ((end_triples + 1u) & ~1u) + 2u;
+}
+
 // The cell passes run over the cell set C, the first `tile_counts[0]` tiles
-// of `tiles_by_ring`, through the triple at `tile_args[0]`.
+// of `tiles_by_ring`, through the triple at `tile_args[0]`. The pool index
+// of the thread's cell; a cell's records live at the same index.
 fn c_cell_index(gid: u32) -> u32 {
     return ts_list_cell(tiles_by_ring[gid >> 9u], gid);
 }
 
-// The gather runs over C's cells too: cell p owns face record p. A record
-// past the lattice (p[a] == n[a]) belongs to no cell and is a constant: wall
-// faces closed, the others absent (canonical_face), written by tiles_fill.
-fn c_face_index(gid: u32) -> u32 {
-    let cell = c_cell_index(gid);
-    if cell == TS_NONE {
-        return TS_NONE;
-    }
-    return ts_face(ts_cell_coord(cell));
-}
-
-// The gather's output at record p with no particle within reach: every face
+// The gather's output at a record with no particle within reach: every face
 // absent (velocity 0, weight 0) except a box wall face, closed (0, weight 1).
-fn canonical_face(p: vec3<i32>, n: vec3<i32>) -> FaceSample {
+// `mask` is `ts_wall_mask` of the record.
+fn canonical_face(mask: u32) -> FaceSample {
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    for (var a = 0; a < 3; a = a + 1) {
-        if face_exists(p, n, a) && (p[a] == 0 || p[a] == n[a]) {
+    for (var a = 0u; a < 3u; a = a + 1u) {
+        if ((mask >> a) & 1u) != 0u {
             out.face_weight[a] = 1.0;
         }
     }
@@ -47,42 +71,151 @@ fn canonical_cell(idx: u32) {
     tile_rhs[idx] = 0.0;
 }
 
-// One thread per face record, once per lattice: every record and cell
-// canonical, so the cells the C passes never visit read as the dense passes
-// would leave them.
-@compute @workgroup_size(256)
-fn tiles_fill(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= ts_record_count() {
+// The tile's face grids that are not gathered or solid, and the cell fields
+// the retire leaves alone: the values a pass would read before writing.
+fn fresh_fields(idx: u32, face: FaceSample) {
+    let none = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
+    faces_out[idx] = face;
+    fresh_a[idx] = face;
+    fresh_b[idx] = face;
+    fresh_f[idx] = face;
+    fresh_faces[idx] = face;
+    fresh_s[idx] = none;
+    fresh_v[idx] = none;
+    fresh_pressure[idx] = 0.0;
+    fresh_solve_water[idx] = 0.0;
+    pocket[idx] = 0u;
+    pocket_label[idx] = 0u;
+    atomicStore(&pocket_leader[idx], 0u);
+}
+
+// One thread per canonical element (8), once per pool build: the canonical
+// block of every pooled field. Cell fields hold their defined value in all
+// eight (only the first is ever read); a record field holds `canonical_face`
+// of its wall mask, except the open fractions `s` and the solid velocity
+// `v`, which are zero for every mask: the record past the lattice is what
+// `open_fractions` and `solid_face_velocity` write there (no face of it is
+// an inner face, and it owns no cell).
+@compute @workgroup_size(8)
+fn pool_canon(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let mask = gid.x;
+    if mask >= 8u {
         return;
     }
-    let n = ts_cells();
-    let p = ts_face_coord(idx);
-    faces_out[idx] = canonical_face(p, n);
-    if all(p < n) {
-        canonical_cell(ts_cell_at(p));
+    let at = ts_canon(mask);
+    let face = canonical_face(mask);
+    canonical_cell(at);
+    fresh_fields(at, face);
+}
+
+// One thread per box tile, after the rings: a stored tile whose ring is
+// past `alloc_ring` returns its slot to the free stack and leaves the table.
+// Thread 0 clears the step's exhausted flag and fresh count first; the
+// allocation runs in the next dispatch.
+@compute @workgroup_size(256)
+fn tiles_free(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    if gid.x == 0u {
+        counts_store(tile_exhausted_word(), 0u);
+        counts_store(tile_fresh_word(), 0u);
     }
+    let t = gid.x;
+    let total = ts_tile_count();
+    if t >= total {
+        return;
+    }
+    let slot = tile_table[t];
+    if slot == TS_NONE || tile_ring(t) <= u.alloc_ring {
+        return;
+    }
+    let at = atomicAdd(&tile_counts[tile_free_top_word()], 1u);
+    tile_free[at] = slot;
+    tile_table[t] = TS_NONE;
+    tile_table[total + slot] = TS_NONE;
+}
+
+// One thread per box tile, after `tiles_free`: an absent tile with ring at
+// most `alloc_ring` takes the free stack's k-th slot from the top (k the
+// order its thread asks in). Slot numbers follow that order; no value
+// depends on them. A tile finding the stack empty stays absent and sets the
+// exhausted flag. A taken tile joins the fresh list.
+@compute @workgroup_size(256)
+fn tiles_alloc(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let t = gid.x;
+    let total = ts_tile_count();
+    if t >= total || tile_table[t] != TS_NONE || tile_ring(t) > u.alloc_ring {
+        return;
+    }
+    let top = counts_load(tile_free_top_word());
+    let k = atomicAdd(&tile_counts[tile_pop_word()], 1u);
+    if k >= top {
+        counts_store(tile_exhausted_word(), 1u);
+        return;
+    }
+    let slot = tile_free[top - 1u - k];
+    tile_table[t] = slot;
+    tile_table[total + slot] = t;
+    let at = atomicAdd(&tile_counts[tile_fresh_word()], 1u);
+    tiles_fresh_list[at] = t;
+}
+
+// One thread, after `tiles_alloc`: the stack loses the slots taken, the
+// pop count restarts, and the fresh list's triple is written (512 threads
+// a tile, 256 a group). An inactive clock slot allocates nothing: its
+// fresh triple is switched off.
+@compute @workgroup_size(1)
+fn tiles_settle() {
+    let word = fresh_args_word();
+    tile_args[word + 1u] = 1u;
+    tile_args[word + 2u] = 1u;
+    if !clock_active() {
+        tile_args[word] = 0u;
+        return;
+    }
+    let top = counts_load(tile_free_top_word());
+    let taken = min(counts_load(tile_pop_word()), top);
+    counts_store(tile_free_top_word(), top - taken);
+    counts_store(tile_pop_word(), 0u);
+    tile_args[word] = 2u * counts_load(tile_fresh_word());
+}
+
+// 512 threads a fresh tile: every pooled field's cells and records of the
+// tile to their canonical values, as the tile was never written.
+@compute @workgroup_size(256)
+fn tiles_fresh(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = ts_list_cell(tiles_fresh_list[gid.x >> 9u], gid.x);
+    if idx == TS_NONE {
+        return;
+    }
+    canonical_cell(idx);
+    fresh_fields(idx, canonical_face(ts_wall_mask(ts_cell_coord(idx))));
 }
 
 // 512 threads a retired tile (the triple at `tile_args[3 · (ring_max + 1)]`):
 // its cells and their records back to canonical, so a tile leaving C reads
 // as the dense passes would leave it. Wall records past the lattice are
-// never written by the C passes and keep their fill.
+// never written by the C passes and stay canonical.
 @compute @workgroup_size(256)
 fn tiles_retire(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = ts_list_cell(tiles_retired[gid.x >> 9u], gid.x);
     if idx == TS_NONE {
         return;
     }
-    let n = ts_cells();
-    let p = ts_cell_coord(idx);
     canonical_cell(idx);
-    faces_out[ts_face(p)] = canonical_face(p, n);
+    faces_out[idx] = canonical_face(ts_wall_mask(ts_cell_coord(idx)));
+}
+
+// The ring of a tile in the current half of the rank: rings 0 and 1 share
+// rank 0 and 1, so both read as 1.
+fn tile_ring(tile: u32) -> u32 {
+    let rank = tile_rank[counts_load(tile_parity_word()) * ts_tile_count() + tile];
+    return select(rank, 1u, rank <= 1u);
 }
 
 // Test-only (gpu_flip_tile_tests.rs): one thread per cell, after
-// tiles_retire; NaN into the water, φ and rhs of every cell of a tile with
-// ring > 1 (rank >= 2), so a dense read that escapes the defined-value rule
+// tiles_retire; NaN into the water, φ and rhs of every stored cell of a tile
+// with ring > 1 (rank >= 2), so a read that escapes the defined-value rule
 // shows in the particles or the faces.
 @compute @workgroup_size(256)
 fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -90,15 +223,16 @@ fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx >= ts_cell_count() {
         return;
     }
-    let tile = ts_grid_index(ts_cell_coord(idx) / i32(TS_TILE), ts_tile_dims());
-    let half = tile_counts[tile_parity_word()] * ts_tile_count();
-    if tile_rank[half + tile] < 2u {
+    let p = ts_box_cell(idx);
+    let half = counts_load(tile_parity_word()) * ts_tile_count();
+    if tile_rank[half + ts_tile_of_cell(p)] < 2u || !ts_cell_stored(p) {
         return;
     }
+    let at = ts_cell_at(p);
     let nan = bitcast<f32>(0x7fc00000u);
-    tile_water[idx] = nan;
-    tile_phi[idx] = nan;
-    tile_rhs[idx] = nan;
+    tile_water[at] = nan;
+    tile_phi[at] = nan;
+    tile_rhs[at] = nan;
 }
 
 var<workgroup> tile_near_min: array<u32, 256>;
@@ -117,7 +251,7 @@ fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_
     let lane = gid.x & 31u;
     let valid = t < ts_tile_count();
     if gid.x == 0u {
-        tile_counts[tile_parity_word()] = 1u - tile_counts[tile_parity_word()];
+        counts_store(tile_parity_word(), 1u - counts_load(tile_parity_word()));
     }
     var near = CELL_REACH + 1u;
     if valid && u.all_tiles != 0u {
@@ -131,7 +265,7 @@ fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_
         for (var k = lane; k < side * side * side && near != 0u; k = k + 32u) {
             let c = origin - vec3<i32>(reach) + ts_grid_coord(k, vec3<i32>(i32(side)));
             if all(c >= vec3<i32>(0)) && all(c < n) {
-                if ranges[ts_cell_at(c)].count != 0u {
+                if ranges[ts_dense_cell(c)].count != 0u {
                     // Distance to the original clipped tile box, unchanged.
                     let d = max(max(origin - c, c - box_last), vec3<i32>(0));
                     near = min(near, u32(max(max(d.x, d.y), d.z)));
@@ -164,7 +298,7 @@ fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
     if t >= total {
         return;
     }
-    let at = tile_counts[tile_parity_word()] * total + t;
+    let at = counts_load(tile_parity_word()) * total + t;
     if u.all_tiles != 0u {
         tile_rank[at] = 0u;
         return;
@@ -229,40 +363,57 @@ fn tiles_lists() {
         }
         return;
     }
-    let parity = tile_counts[tile_parity_word()];
+    let parity = counts_load(tile_parity_word());
     let cur = parity * total;
     let prev = (1u - parity) * total;
     for (var k = 0u; k <= r + 1u; k = k + 1u) {
-        tile_counts[k] = 0u;
+        counts_store(k, 0u);
     }
     for (var t = 0u; t < total; t = t + 1u) {
         let rank = tile_rank[cur + t];
-        tile_counts[rank] = tile_counts[rank] + 1u;
+        counts_store(rank, counts_load(rank) + 1u);
     }
     var start = 0u;
     for (var k = 0u; k <= r + 1u; k = k + 1u) {
-        let count = tile_counts[k];
-        tile_counts[k] = start;
+        let count = counts_load(k);
+        counts_store(k, start);
         start = start + count;
     }
     var retired = 0u;
     for (var t = 0u; t < total; t = t + 1u) {
         let rank = tile_rank[cur + t];
-        tiles_by_ring[tile_counts[rank]] = t;
-        tile_counts[rank] = tile_counts[rank] + 1u;
+        tiles_by_ring[counts_load(rank)] = t;
+        counts_store(rank, counts_load(rank) + 1u);
         if tile_rank[prev + t] == 0u && rank != 0u {
             tiles_retired[retired] = t;
             retired = retired + 1u;
         }
     }
-    tile_counts[r + 2u] = retired;
+    counts_store(r + 2u, retired);
     for (var k = 0u; k <= r; k = k + 1u) {
-        tile_args[3u * k] = 2u * tile_counts[k];
+        tile_args[3u * k] = 2u * counts_load(k);
         tile_args[3u * k + 1u] = 1u;
         tile_args[3u * k + 2u] = 1u;
     }
     tile_args[3u * (r + 1u)] = 2u * retired;
     tile_args[3u * (r + 1u) + 1u] = 1u;
     tile_args[3u * (r + 1u) + 2u] = 1u;
-    capped[6u] = bitcast<u32>(f32(tile_counts[0]) / f32(total));
+    capped[6u] = bitcast<u32>(f32(counts_load(0u)) / f32(total));
+}
+
+// One thread per record of the box, at the end of an active slot: the
+// pooled faces and φ copied to the step's dense outputs. A record past the
+// lattice reads its canonical record, so the output keeps its walls.
+@compute @workgroup_size(256)
+fn publish(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let idx = gid.x;
+    if idx >= ts_record_count() {
+        return;
+    }
+    let p = ts_box_record(idx);
+    faces_published[ts_corner(p)] = faces_in[ts_face(p)];
+    if all(p < ts_cells()) {
+        distance_published[ts_dense_cell(p)] = phi[ts_cell_at(p)];
+    }
 }

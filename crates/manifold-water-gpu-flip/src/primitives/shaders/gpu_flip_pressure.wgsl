@@ -1,8 +1,9 @@
 // GPU FLIP's pressure solver (gpu_flip_pressure.rs): the multigrid-
 // preconditioned conjugate gradient for L p = f on the water, every pass a
-// separate entry point. Lattices are x-fastest, cell (i, j, k) at
-// i + nx·(j + ny·k). A face grid is padded to (n + 1)³ records; weight[a] is
-// the open fraction of a cell's low face along axis a, box walls 0.
+// separate entry point. A coarse level is a dense box, x-fastest, cell
+// (i, j, k) at i + nx·(j + ny·k); the fine level is pooled (see below). A face
+// grid is padded to (n + 1)³ records; weight[a] is the open fraction of a
+// cell's low face along axis a, box walls 0.
 //
 // A level halves each side rounding up. An odd side's extra coarse half is a
 // virtual solid cell: it never makes a coarse cell air, its faces count 0,
@@ -21,6 +22,13 @@
 //
 // The CPU sizes every buffer for the lattice before it dispatches; each pass
 // only checks its thread is inside the lattice.
+//
+// The fine level (level 0) is stored in the tile pool (tile_storage.wgsl):
+// its water, φ, faces, rows, right-hand side and every vector of it are
+// pooled fields, indexed by the pool index of the cell or record. A dispatch
+// whose lattice `n` (u.nx, u.ny, u.nz) is the fine level has `pool_tiles` P
+// non-zero; a dispatch on a coarse level has 0 and indexes its dense box. The
+// coarse side of a transfer or coarsening is always a dense box.
 //
 // Every level's lattice passes run over its active tiles
 // (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 7 (the pressure solve over
@@ -69,6 +77,12 @@ struct Params {
     all_tiles: u32,
     // Inside a round: the solve-live triple (stopped); 0 outside rounds.
     live: u32,
+    // The tile pool's capacity P when the dispatched lattice is the pooled
+    // fine level, else 0 (a dense coarse level).
+    pool_tiles: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 };
 
 struct FaceSample {
@@ -115,6 +129,9 @@ struct FaceSample {
 // run no groups, and every plain pass returns. Zeros (live_mode 0) are
 // always active: a solve outside a live clock.
 @group(0) @binding(21) var<storage, read> slot_plan: array<u32>;
+// The tile pool's slot and tile table (tile_storage.wgsl), read when the
+// dispatched lattice is the pooled fine level.
+@group(0) @binding(22) var<storage, read> ts_table: array<u32>;
 
 fn slot_inactive() -> bool {
     return slot_plan[11] != 0u && !(bitcast<f32>(slot_plan[0]) > 0.0);
@@ -156,13 +173,25 @@ fn tile_total(n: vec3<i32>) -> u32 {
     return u32(t.x * t.y * t.z);
 }
 
-// Cell `local` (0..512) of `tile`, flattened in the lattice, or TS_NONE.
-fn tile_cell(tile: u32, local: u32, n: vec3<i32>) -> u32 {
+// Cell `local` (0..512) of `tile` on lattice n: its storage index (the pool
+// index on the pooled fine level, flat in the box on a dense one), or TS_NONE
+// past the lattice or in a tile with no slot.
+fn tile_cell_in(tile: u32, local: u32, n: vec3<i32>, pool: bool) -> u32 {
     let p = ts_grid_coord(tile, tile_dims(n)) * TILE + ts_grid_coord(local, vec3<i32>(TILE));
     if any(p >= n) {
         return TS_NONE;
     }
+    if pool {
+        if !ts_cell_stored(p) {
+            return TS_NONE;
+        }
+        return ts_cell_at(p);
+    }
     return ts_grid_index(p, n);
+}
+
+fn tile_cell(tile: u32, local: u32, n: vec3<i32>) -> u32 {
+    return tile_cell_in(tile, local, n, pooled());
 }
 
 // Whether thread gid's workgroup is inside the dispatched level's active
@@ -175,6 +204,11 @@ fn listed(gid: u32) -> bool {
 // Thread gid's cell on lattice n through the dispatched level's list.
 fn listed_cell(gid: u32, n: vec3<i32>) -> u32 {
     return tile_cell(lists[u.list_base + (gid >> 9u)], gid & 511u, n);
+}
+
+// The same on a lattice that is always a dense box (a transfer's coarse side).
+fn listed_cell_dense(gid: u32, n: vec3<i32>) -> u32 {
+    return tile_cell_in(lists[u.list_base + (gid >> 9u)], gid & 511u, n, false);
 }
 
 // Thread gid's partial slot: its tile's two, by workgroup.
@@ -264,6 +298,46 @@ fn ts_cells() -> vec3<i32> {
     return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz));
 }
 
+fn ts_pool_tiles() -> u32 {
+    return u.pool_tiles;
+}
+
+// Whether the dispatched lattice (ts_cells) is the pooled fine level.
+fn pooled() -> bool {
+    return u.pool_tiles != 0u;
+}
+
+// Whether a write to cell p of the dispatched lattice lands: always in a
+// dense box, in the pool only where p's tile has a slot.
+fn writable(p: vec3<i32>) -> bool {
+    return !pooled() || ts_cell_stored(p);
+}
+
+// Cell p of lattice n in storage: its pool index on the fine level, flat in
+// the box on a dense level. n is ts_cells() when the lattice is pooled.
+fn cell_idx(p: vec3<i32>, n: vec3<i32>) -> u32 {
+    if pooled() {
+        return ts_cell_at(p);
+    }
+    return ts_grid_index(p, n);
+}
+
+// The coordinate of the cell a storage index names (never a canonical one).
+fn cell_pos(idx: u32, n: vec3<i32>) -> vec3<i32> {
+    if pooled() {
+        return ts_cell_coord(idx);
+    }
+    return ts_grid_coord(idx, n);
+}
+
+// Face record p of lattice n in storage.
+fn face_idx(p: vec3<i32>, n: vec3<i32>) -> u32 {
+    if pooled() {
+        return ts_face(p);
+    }
+    return ts_grid_index(p, n + vec3<i32>(1));
+}
+
 fn coarse_lattice() -> vec3<i32> {
     return vec3<i32>(i32(u.cx), i32(u.cy), i32(u.cz));
 }
@@ -282,7 +356,7 @@ fn face_weight(p: vec3<i32>, a: i32, d: i32, n: vec3<i32>) -> f32 {
     }
     var face = p;
     face[a] = max(p[a], q[a]);
-    return faces[ts_grid_index(face, n + vec3<i32>(1))].weight[a];
+    return faces[face_idx(face, n)].weight[a];
 }
 
 // The ghost ratio θ an air neighbour `air` of water cell `own` puts on the
@@ -306,13 +380,16 @@ fn rows_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = ts_cells();
-    let idx = gid.x;
-    if idx >= ts_cell_count() {
+    if gid.x >= ts_cell_count() {
         return;
     }
+    let p = ts_box_cell(gid.x);
+    if !writable(p) {
+        return;
+    }
+    let idx = cell_idx(p, n);
     var row = Row(vec4<f32>(0.0), vec4<f32>(0.0));
     if is_water(idx) {
-        let p = ts_grid_coord(idx, n);
         var ghost = 0.0;
         var plain = 0.0;
         for (var k = 0u; k < 6u; k = k + 1u) {
@@ -324,7 +401,7 @@ fn rows_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 plain = plain + w;
                 var q = p;
                 q[a] = p[a] + d;
-                let at = ts_grid_index(q, n);
+                let at = cell_idx(q, n);
                 if is_water(at) {
                     if k < 4u {
                         row.lo[k] = w;
@@ -353,10 +430,13 @@ struct Stencil {
 // A zero weight must not read its neighbour (which may be outside the box).
 // Keep the six additions in the original face order without a dynamic loop
 // or dynamic vector-component indexing in each smoothing/operator pass.
-fn stencil_add(sum: f32, source: u32, weight: f32, at: u32) -> f32 {
+fn stencil_add(sum: f32, source: u32, weight: f32, p: vec3<i32>, a: i32, d: i32) -> f32 {
     if !(weight > 0.0) {
         return sum;
     }
+    var q = p;
+    q[a] = p[a] + d;
+    let at = cell_idx(q, ts_cells());
     if source == 0u {
         return sum + weight * out[at];
     }
@@ -369,12 +449,13 @@ fn stencil(idx: u32, source: u32) -> Stencil {
     if source == 2u {
         return s;
     }
-    s.sum = stencil_add(s.sum, source, row.lo.x, idx - 1u);
-    s.sum = stencil_add(s.sum, source, row.lo.y, idx + 1u);
-    s.sum = stencil_add(s.sum, source, row.lo.z, idx - u.nx);
-    s.sum = stencil_add(s.sum, source, row.lo.w, idx + u.nx);
-    s.sum = stencil_add(s.sum, source, row.hi.x, idx - u.nx * u.ny);
-    s.sum = stencil_add(s.sum, source, row.hi.y, idx + u.nx * u.ny);
+    let p = cell_pos(idx, ts_cells());
+    s.sum = stencil_add(s.sum, source, row.lo.x, p, 0, -1);
+    s.sum = stencil_add(s.sum, source, row.lo.y, p, 0, 1);
+    s.sum = stencil_add(s.sum, source, row.lo.z, p, 1, -1);
+    s.sum = stencil_add(s.sum, source, row.lo.w, p, 1, 1);
+    s.sum = stencil_add(s.sum, source, row.hi.x, p, 2, -1);
+    s.sum = stencil_add(s.sum, source, row.hi.y, p, 2, 1);
     return s;
 }
 
@@ -506,7 +587,7 @@ fn open_water(at: u32, n: vec3<i32>) -> bool {
     if !is_water(at) {
         return false;
     }
-    let p = ts_grid_coord(at, n);
+    let p = cell_pos(at, n);
     var diagonal = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
         diagonal = diagonal + face_weight(p, a, -1, n) + face_weight(p, a, 1, n);
@@ -537,7 +618,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let q = base + ts_grid_coord(k, RESTRICT_FOOT);
         var v = 0.0;
         if all(q >= vec3<i32>(0)) && all(q < n) {
-            let at = ts_grid_index(q, n);
+            let at = cell_idx(q, n);
             if !masked || open_water(at, n) {
                 v = src[at];
             }
@@ -545,7 +626,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         fine_patch[k] = v;
     }
     workgroupBarrier();
-    let idx = listed_cell(gid.x, c);
+    let idx = listed_cell_dense(gid.x, c);
     if idx == TS_NONE {
         return;
     }
@@ -591,8 +672,12 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // prolongation chain, so a prolonged vector is 0 off the water.
 @compute @workgroup_size(256, 1, 1)
 fn zero_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !slot_inactive() && !stopped() && gid.x < ts_cell_count() {
-        out[gid.x] = 0.0;
+    if slot_inactive() || stopped() || gid.x >= ts_cell_count() {
+        return;
+    }
+    let p = ts_box_cell(gid.x);
+    if writable(p) {
+        out[cell_idx(p, ts_cells())] = 0.0;
     }
 }
 
@@ -623,7 +708,7 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx == TS_NONE || !is_water(idx) {
         return;
     }
-    let f = ts_grid_coord(idx, n);
+    let f = cell_pos(idx, n);
     let parent = f / 2;
     let odd = (f % vec3<i32>(2)) == vec3<i32>(1);
     let other = clamp(select(parent - vec3<i32>(1), parent + vec3<i32>(1), odd), vec3<i32>(0), c - vec3<i32>(1));
@@ -645,7 +730,7 @@ const KIND_WATER: u32 = 1u;
 const KIND_SOLID: u32 = 2u;
 
 fn kind(p: vec3<i32>, n: vec3<i32>) -> u32 {
-    let at = ts_grid_index(p, n);
+    let at = cell_idx(p, n);
     if water[at] > 0.5 {
         return KIND_WATER;
     }
@@ -690,7 +775,7 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let k = kind(q, n);
             any_air = any_air || k == KIND_AIR;
             all_solid = all_solid && k == KIND_SOLID;
-            if aux[ts_grid_index(q, n)] > 0.5 {
+            if aux[cell_idx(q, n)] > 0.5 {
                 touched = true;
             }
         }
@@ -719,7 +804,7 @@ fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         for (var k = lane; k < 1000u && !lit; k = k + 32u) {
             let p = origin - vec3<i32>(1) + ts_grid_coord(k, vec3<i32>(10));
             if all(p >= vec3<i32>(0)) && all(p < n) {
-                lit = is_water(ts_grid_index(p, n));
+                lit = is_water(cell_idx(p, n));
             }
         }
     }
@@ -840,7 +925,7 @@ fn coarsen_faces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var inside = q;
             inside[a] = 0;
             if all(inside < n) {
-                sum = sum + faces[ts_grid_index(q, n + vec3<i32>(1))].weight[a];
+                sum = sum + faces[face_idx(q, n)].weight[a];
             }
         }
         record.weight[a] = 0.25 * sum;
@@ -865,7 +950,6 @@ fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let p = ts_grid_coord(idx, m);
-    let fm = n + vec3<i32>(1);
     var record = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     for (var a = 0; a < 3; a = a + 1) {
         var across = p;
@@ -887,7 +971,7 @@ fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var inside = q;
             inside[a] = 0;
             if all(inside < n) {
-                let face = ts_grid_index(q, fm);
+                let face = face_idx(q, n);
                 let w = faces[face].weight[a];
                 area = area + w;
                 flux = flux + w * src[8u * face + u32(a)];
@@ -901,10 +985,10 @@ fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var volume = 0.0;
         for (var k = 0u; k < 8u; k = k + 1u) {
             let q = 2 * p + ts_grid_coord(k, vec3<i32>(2));
-            if any(q >= n) || !(water[ts_grid_index(q, n)] > 0.5) {
+            if any(q >= n) || !(water[cell_idx(q, n)] > 0.5) {
                 continue;
             }
-            let open_volume = faces[ts_grid_index(q, fm)].weight.w;
+            let open_volume = faces[face_idx(q, n)].weight.w;
             volume = volume + open_volume;
             for (var a = 0; a < 3; a = a + 1) {
                 for (var side = 0; side < 2; side = side + 1) {
@@ -913,7 +997,7 @@ fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if f[a] == 0 || f[a] == n[a] {
                         continue;
                     }
-                    let face = ts_grid_index(f, fm);
+                    let face = face_idx(f, n);
                     let sign = f32(2 * side - 1);
                     solid_source = solid_source + sign *
                         (open_volume - faces[face].weight[a]) * aux[8u * face + u32(a)];
@@ -937,11 +1021,12 @@ fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
     if i >= cells {
         return;
     }
+    let n = ts_cells();
     var sum = 0.0;
     for (var j = 0u; j < cells; j = j + 1u) {
-        sum = sum + src[i * cells + j] * aux[j];
+        sum = sum + src[i * cells + j] * aux[cell_idx(ts_grid_coord(j, n), n)];
     }
-    out[i] = -u.cell_size * u.cell_size * sum;
+    out[cell_idx(ts_grid_coord(i, n), n)] = -u.cell_size * u.cell_size * sum;
 }
 
 // The conjugate gradient's start, over every tile (512 threads a tile in
@@ -967,7 +1052,7 @@ fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invoc
     if idx != TS_NONE {
         var diagonal = 0.0;
         if is_water(idx) {
-            let p = ts_grid_coord(idx, n);
+            let p = cell_pos(idx, n);
             for (var a = 0; a < 3; a = a + 1) {
                 diagonal = diagonal + face_weight(p, a, -1, n) + face_weight(p, a, 1, n);
             }

@@ -6,13 +6,14 @@
 //! sign to the step pressure. Projection outputs leave caller inputs unchanged.
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-use manifold_water_liquid::tile_storage::TILE_STORAGE;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 
 const SHADER_BODY: &str = include_str!("shaders/gpu_flip_lentine.wgsl");
 
-/// The kernels with the storage helpers they index the lattice through.
+/// The kernels with the dense grid helpers they index the caller's arrays
+/// through (no tile pool: every array here is the caller's own dense box).
 fn shader() -> String {
-    format!("{TILE_STORAGE}\n{SHADER_BODY}")
+    format!("{TILE_GRID}\n{SHADER_BODY}")
 }
 const ENTRIES: [&str; 10] = [
     "labels_main",

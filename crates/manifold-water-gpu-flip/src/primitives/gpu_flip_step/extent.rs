@@ -5,6 +5,7 @@ use crate::primitives::gpu_flip_pressure::scratch_bytes as pressure_scratch_byte
 use crate::primitives::gpu_flip_step::ENGINE_CFL;
 use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use crate::primitives::gpu_flip_step::band_layers;
+use crate::primitives::gpu_flip_step::pool_tiles;
 use crate::primitives::gpu_flip_step::ring_max;
 use crate::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
@@ -79,7 +80,14 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.hold(ranges + bin_total(cells) * 4 + 2 * slots.max(1) * 4);
     // Same configured CFL as the step, never particle travel.
     let ring = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
-    x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots, ring));
+    // The dense published faces and distance, then the pooled fields: the
+    // step's cell and face arrays and the solver's fine vectors.
+    x.hold(
+        faces
+            + cell_total(cells) * 4
+            + pressure_scratch_bytes(cells, pool_tiles(cells))
+            + step_scratch_bytes(cells, slots, ring),
+    );
     field_reads(x)?;
     x.covers_if_bound("clock_status", 32)?;
     for (buffer, count) in [
