@@ -9,6 +9,7 @@ Checks:
   feature-matrix          build every non-default feature so none rots  [scripts/feature_matrix.py]
   rt-noise                RT temporal-stability check on a paused scene (--record to re-baseline)  [scripts/rt_noise_gate.py]
   bridge-probe            presentation tear regression check  [scripts/bridge_probe_gate.py]
+  wgsl-check              naga-validate the hand-composed water shader stacks in seconds, no cargo or GPU; names pick stacks  [scripts/wgsl_check.py]
   glb-status              regenerate the glTF conformance status doc  [scripts/gen_glb_conformance_status.py]
 
 Machine:

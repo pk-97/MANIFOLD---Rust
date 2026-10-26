@@ -32,6 +32,9 @@ VERBS = [
     ("Checks",
      "bridge-probe", "bridge_probe_gate.py", "presentation tear regression check"),
     ("Checks",
+     "wgsl-check", "wgsl_check.py",
+     "naga-validate the hand-composed water shader stacks in seconds, no cargo or GPU; names pick stacks"),
+    ("Checks",
      "glb-status", "gen_glb_conformance_status.py", "regenerate the glTF conformance status doc"),
 
     ("Machine",
