@@ -128,14 +128,8 @@ impl ScenePanel {
             return;
         }
         let card = &mut self.properties_card;
-        for (row, param) in card.rows.iter_mut().enumerate() {
-            if param.affordance.is_some() {
-                continue;
-            }
-            let shapes = shapes_of(param.id.as_ref());
-            card.row_host
-                .sync_row_shapes(tree, &mut card.mod_state, param, row, &shapes);
-        }
+        card.row_host
+            .sync_live_shapes(tree, &mut card.mod_state, &mut card.rows, shapes_of);
     }
 
     pub fn sync_driver_frame_rates(
@@ -144,21 +138,52 @@ impl ScenePanel {
         rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
     ) {
         let card = &mut self.properties_card;
-        for (row, param) in card.rows.iter_mut().enumerate() {
-            if !card
-                .mod_state
-                .driver_frame_aligned
-                .get(row)
-                .copied()
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let rate = rate_of(param.id.as_ref());
-            // The row model too, so the next build from these rows agrees.
-            param.modulation.driver_frame_rate = rate;
-            card.row_host
-                .sync_driver_frame_rate(tree, &mut card.mod_state, row, rate);
+        card.row_host
+            .sync_driver_frame_rates(tree, &mut card.mod_state, &mut card.rows, rate_of);
+    }
+
+    /// Fire meter for the properties card's rows, keyed on the generator
+    /// instance that owns `full_params`. Does nothing while closed or with no
+    /// generator surface.
+    pub fn update_fire_meters(
+        &self,
+        tree: &mut UITree,
+        fire_level: &dyn Fn(u64) -> Option<f32>,
+        dt: f32,
+    ) {
+        if !self.open {
+            return;
         }
+        let Some(full_params) = self.full_params.as_ref() else {
+            return;
+        };
+        let card = &self.properties_card;
+        card.row_host.update_fire_meters(
+            tree,
+            &card.rows,
+            full_params.effect_id.as_str(),
+            fire_level,
+            dt,
+        );
+    }
+
+    /// The send the open fire-mode drawer in the properties card reads, if any.
+    pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_foundation::AudioSendId> {
+        if !self.open {
+            return None;
+        }
+        let card = &self.properties_card;
+        card.row_host
+            .open_fire_mode_drawer_send(&card.rows, &card.mod_state)
+    }
+
+    /// The band the open fire-mode drawer in the properties card reads, if any.
+    pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
+        if !self.open {
+            return None;
+        }
+        let card = &self.properties_card;
+        card.row_host
+            .open_fire_mode_drawer_band(&card.rows, &card.mod_state)
     }
 }

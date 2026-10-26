@@ -1,5 +1,7 @@
 use super::*;
+use crate::RowValue;
 use crate::input::Modifiers;
+use crate::panels::param_slider_shared::AudioSendChoice;
 use manifold_foundation::scene_surface::FieldPick;
 
 fn item(id: &str, kind: ItemKind, name: &str, depth: usize, parent: Option<&str>) -> SceneItemVm {
@@ -769,4 +771,117 @@ fn named(tree: &UITree, name: &str) -> Option<NodeId> {
             .take_while(|id| *id != NodeId::PLACEHOLDER)
             .find(|id| tree.name_of(*id) == Some(name))
     })
+}
+
+/// A momentary Fire row, armed on send "send-kick" with the Audio/Transient
+/// mode, so its audio drawer and Amount meter build.
+fn fire_row() -> ParamRow {
+    ParamRow {
+        id: std::borrow::Cow::Borrowed("fire"),
+        spec: RowSpec {
+            tooltip: None,
+            name: "Fire".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            whole_numbers: false,
+            is_angle: false,
+            is_toggle: false,
+            is_trigger: true,
+            is_trigger_gate: false,
+            value_labels: None,
+            unit: None,
+            section: None,
+            disabled: None,
+            material_role: None,
+            inactive_reason: None,
+            setup_warning: None,
+            scene: None,
+            limit: Default::default(),
+        },
+        value: RowValue {
+            base: 0.0,
+            effective: 0.0,
+            exposed: true,
+            driven: false,
+        },
+        audio: AudioRowState {
+            active: true,
+            send_id: Some(manifold_foundation::AudioSendId::new("send-kick")),
+            band_idx: 1,
+            sensitivity: 0.65,
+            trigger_mode_idx: 1,
+            ..AudioRowState::default()
+        },
+        clip_trigger: None,
+        modulation: RowMod::default(),
+        mapping: RowMapping {
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        },
+        rgb_members: None,
+        modulator_stored: false,
+        affordance: None,
+    }
+}
+
+#[test]
+fn scene_fire_drawer_meter_shows_its_level() {
+    let mut cube = item("cube", ItemKind::Object, "Cube", 0, None);
+    cube.parameter_ids = vec!["fire".into()];
+    let (mut panel, _) = live_panel_with(cube);
+    panel.configure_params(Some(ParamSurface {
+        kind: crate::ParamCardKind::Generator,
+        title: "Scene".into(),
+        collapsed: false,
+        enabled: true,
+        effect_index: 0,
+        effect_id: manifold_foundation::EffectId::new("gen"),
+        supports_envelopes: false,
+        has_graph_mod: false,
+        layer_id: Some(LayerId::new("layer-1")),
+        rows: vec![fire_row()],
+        string_params: Vec::new(),
+        audio_sends: vec![AudioSendChoice {
+            label: "Kick".into(),
+            id: manifold_foundation::AudioSendId::new("send-kick"),
+        }],
+    }));
+    let mut tree = UITree::new();
+    panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 900.0));
+
+    let ids: Vec<NodeId> = (0..tree.count()).map(|i| tree.id_at(i)).collect();
+    let before: Vec<Rect> = ids.iter().map(|&id| tree.get_bounds(id)).collect();
+    let fire_key = manifold_foundation::fire_meter_key_for_param("gen", "fire");
+    panel.update_fire_meters(
+        &mut tree,
+        &|key| (key == fire_key).then_some(0.8),
+        1.0 / 60.0,
+    );
+
+    // The meter fill is the one node whose bounds move. Its track is the
+    // unmoved node at the same origin and height.
+    let moved: Vec<usize> = (0..ids.len())
+        .filter(|&i| tree.get_bounds(ids[i]) != before[i])
+        .collect();
+    assert_eq!(moved.len(), 1, "only the meter fill should move: {moved:?}");
+    let fill = tree.get_bounds(ids[moved[0]]);
+    let track = (0..ids.len())
+        .filter(|&i| i != moved[0])
+        .map(|i| before[i])
+        .find(|b| b.x == fill.x && b.y == fill.y && b.height == fill.height && b.width > 0.0)
+        .expect("the meter track");
+    assert!(
+        (fill.width - track.width * 0.8).abs() < 0.001,
+        "fill should show 0.8 of the track: fill {} track {}",
+        fill.width,
+        track.width,
+    );
+
+    assert_eq!(
+        panel.open_fire_mode_drawer_send(),
+        Some(manifold_foundation::AudioSendId::new("send-kick"))
+    );
 }

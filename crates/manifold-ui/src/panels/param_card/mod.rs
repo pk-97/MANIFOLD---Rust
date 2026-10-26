@@ -609,88 +609,29 @@ impl ParamCardPanel {
         &self.effect_id
     }
 
-    /// Fire meter: push this tick's live
-    /// shaped-signal level onto every OPEN row's Amount meter — in place, no
-    /// rebuild. Every enabled audio-mod row now captures a level on the
-    /// content-thread side (`evaluate_instance_audio_mods`), not just
-    /// `is_trigger_gate` ones, so this no longer filters by
-    /// `info.is_trigger_gate` — a continuous/Step/Random drawer's meter now
-    /// updates exactly like a trigger-gate drawer's. Keyed on
-    /// `(owner instance, param_id)` via `manifold_foundation::
-    /// fire_meter_key_for_param` — the SAME constructor the content-thread
-    /// capture uses — so `fire_level` (built at the app boundary from
-    /// `ContentState::fire_meters`, a `manifold-core` type `manifold-ui`
-    /// cannot depend on) resolves it.
-    /// Amount is always the first `Slider` row `build_audio_mod_drawer`
-    /// builds (`DrawerIds::meters[0]`), regardless of which trailing rows
-    /// follow. `dt` (BUG-109 P5) is the UI frame delta seconds, threaded down
-    /// to [`crate::panels::drawer::MeterIds::update`] for its peak-hold
-    /// timing.
+    /// Fire meter: push this tick's live shaped-signal level onto every open
+    /// row's Amount meter. `fire_level` is keyed on the owner instance and
+    /// param id, built at the app boundary from `ContentState::fire_meters`.
     pub fn update_fire_meters(
         &self,
         tree: &mut UITree,
         fire_level: &dyn Fn(u64) -> Option<f32>,
         dt: f32,
     ) {
-        let owner = &self.effect_id;
-        for (pi, cfg) in self.row_host.audio_configs.iter().enumerate() {
-            let Some((dids, _)) = cfg else { continue };
-            let Some(info) = self.rows.get(pi) else {
-                continue;
-            };
-            let Some(Some(meter)) = dids.meters.first() else {
-                continue;
-            };
-            let key =
-                manifold_foundation::fire_meter_key_for_param(owner.as_str(), info.id.as_ref());
-            let level = fire_level(key).unwrap_or(0.0);
-            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
-        }
-    }
-
-    /// param index of the currently-OPEN fire-mode (`is_trigger` or
-    /// `is_trigger_gate`, armed)
-    /// drawer, if any — deliberately narrower than the Amount meter itself
-    /// (every open drawer shows a meter, 2026-07-11): only a fire-mode config
-    /// re-taps the scope send/band here. A plain continuous mod's open drawer
-    /// never matches. First match wins; a card with two armed fire rows is not
-    /// a case this app produces today.
-    fn open_fire_mode_drawer_row(&self) -> Option<usize> {
         self.row_host
-            .audio_configs
-            .iter()
-            .enumerate()
-            .find_map(|(pi, cfg)| {
-                cfg.as_ref()?;
-                let info = self.rows.get(pi)?;
-                (info.spec.is_trigger || info.spec.is_trigger_gate).then_some(pi)
-            })
+            .update_fire_meters(tree, &self.rows, self.effect_id.as_str(), fire_level, dt);
     }
 
     /// The send the currently-open fire-mode drawer is reading, if any.
     pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_foundation::AudioSendId> {
-        let pi = self.open_fire_mode_drawer_row()?;
-        let idx = self.state.mod_state.audio_send_index(pi);
-        if idx < 0 {
-            return None;
-        }
-        self.state
-            .mod_state
-            .audio_sends
-            .get(idx as usize)
-            .map(|send| send.id.clone())
+        self.row_host
+            .open_fire_mode_drawer_send(&self.rows, &self.state.mod_state)
     }
 
     /// The band the currently-open fire-mode drawer is reading, if any.
     pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
-        let pi = self.open_fire_mode_drawer_row()?;
-        let idx = self
-            .state
-            .mod_state
-            .audio_rows
-            .get(pi)
-            .map_or(0, |row| row.band_idx);
-        crate::types::AudioBand::ALL.get(idx as usize).copied()
+        self.row_host
+            .open_fire_mode_drawer_band(&self.rows, &self.state.mod_state)
     }
 
     pub fn effect_name(&self) -> &str {
@@ -862,23 +803,12 @@ impl ParamCardPanel {
         tree: &mut UITree,
         rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
     ) {
-        for (row, param) in self.rows.iter_mut().enumerate() {
-            if !self
-                .state
-                .mod_state
-                .driver_frame_aligned
-                .get(row)
-                .copied()
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let rate = rate_of(param.id.as_ref());
-            // The row model too, so a later build from these rows agrees.
-            param.modulation.driver_frame_rate = rate;
-            self.row_host
-                .sync_driver_frame_rate(tree, &mut self.state.mod_state, row, rate);
-        }
+        self.row_host.sync_driver_frame_rates(
+            tree,
+            &mut self.state.mod_state,
+            &mut self.rows,
+            rate_of,
+        );
     }
 
     /// Rewrite every row's live-scalar handles and drawer readouts in place
@@ -888,11 +818,8 @@ impl ParamCardPanel {
         tree: &mut UITree,
         shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes,
     ) {
-        for (row, param) in self.rows.iter_mut().enumerate() {
-            let shapes = shapes_of(param.id.as_ref());
-            self.row_host
-                .sync_row_shapes(tree, &mut self.state.mod_state, param, row, &shapes);
-        }
+        self.row_host
+            .sync_live_shapes(tree, &mut self.state.mod_state, &mut self.rows, shapes_of);
     }
 
     /// Per-frame content sync (push_state — after build). Black↔Frame

@@ -1800,6 +1800,8 @@ impl UIRoot {
     ) {
         self.inspector
             .update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
+        self.scene_setup_panel
+            .update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
     /// The send whichever fire-mode drawer is currently open in the inspector
@@ -1808,14 +1810,18 @@ impl UIRoot {
     /// so this crosses the boundary for
     /// free.
     pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_core::AudioSendId> {
-        self.inspector.open_fire_mode_drawer_send()
+        self.inspector
+            .open_fire_mode_drawer_send()
+            .or_else(|| self.scene_setup_panel.open_fire_mode_drawer_send())
     }
 
     /// The band whichever fire-mode drawer is currently open in the
     /// inspector is reading, if any — pairs with
     /// [`Self::open_fire_mode_drawer_send`] (both read off the same open row).
     pub fn open_fire_mode_drawer_band(&self) -> Option<manifold_ui::types::AudioBand> {
-        self.inspector.open_fire_mode_drawer_band()
+        self.inspector
+            .open_fire_mode_drawer_band()
+            .or_else(|| self.scene_setup_panel.open_fire_mode_drawer_band())
     }
 
     /// Update the audio scope's hover readout (freq + dB under the cursor), or

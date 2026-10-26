@@ -310,6 +310,120 @@ impl RowHost {
         self.row_index.clear();
     }
 
+    /// Fire meter: push this tick's live shaped-signal level onto every open
+    /// row's Amount meter, in place. Every audio-mod row captures a level on
+    /// the content thread, so a continuous or Step/Random drawer updates the
+    /// same way a trigger-gate drawer does. Keyed on `(owner instance, param
+    /// id)` via `manifold_foundation::fire_meter_key_for_param`, the same
+    /// constructor the capture uses. The Amount meter is the first `Slider`
+    /// row the audio drawer builds (`DrawerIds::meters[0]`). `dt` is the UI
+    /// frame delta in seconds, for the meter's peak-hold timing.
+    pub(crate) fn update_fire_meters(
+        &self,
+        tree: &mut UITree,
+        rows: &[ParamRow],
+        owner: &str,
+        fire_level: &dyn Fn(u64) -> Option<f32>,
+        dt: f32,
+    ) {
+        for (pi, cfg) in self.audio_configs.iter().enumerate() {
+            let Some((dids, _)) = cfg else { continue };
+            let Some(info) = rows.get(pi) else {
+                continue;
+            };
+            let Some(Some(meter)) = dids.meters.first() else {
+                continue;
+            };
+            let key = manifold_foundation::fire_meter_key_for_param(owner, info.id.as_ref());
+            let level = fire_level(key).unwrap_or(0.0);
+            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
+        }
+    }
+
+    /// The row of the open fire-mode drawer, if any. Only an `is_trigger` or
+    /// `is_trigger_gate` row counts, so a plain continuous mod's open drawer
+    /// never re-taps the scope send or band. First match wins.
+    fn open_fire_mode_drawer_row(&self, rows: &[ParamRow]) -> Option<usize> {
+        self.audio_configs.iter().enumerate().find_map(|(pi, cfg)| {
+            cfg.as_ref()?;
+            let info = rows.get(pi)?;
+            (info.spec.is_trigger || info.spec.is_trigger_gate).then_some(pi)
+        })
+    }
+
+    /// The send the open fire-mode drawer is reading, if any.
+    pub(crate) fn open_fire_mode_drawer_send(
+        &self,
+        rows: &[ParamRow],
+        mod_state: &ParamModState,
+    ) -> Option<manifold_foundation::AudioSendId> {
+        let pi = self.open_fire_mode_drawer_row(rows)?;
+        let idx = mod_state.audio_send_index(pi);
+        if idx < 0 {
+            return None;
+        }
+        mod_state
+            .audio_sends
+            .get(idx as usize)
+            .map(|send| send.id.clone())
+    }
+
+    /// The band the open fire-mode drawer is reading, if any.
+    pub(crate) fn open_fire_mode_drawer_band(
+        &self,
+        rows: &[ParamRow],
+        mod_state: &ParamModState,
+    ) -> Option<crate::types::AudioBand> {
+        let pi = self.open_fire_mode_drawer_row(rows)?;
+        let idx = mod_state.audio_rows.get(pi).map_or(0, |row| row.band_idx);
+        crate::types::AudioBand::ALL.get(idx as usize).copied()
+    }
+
+    /// Rewrite every row's live-scalar handles and drawer readouts in place
+    /// (`sync_row_shapes`). A row with an `affordance` is a scene helper or
+    /// field row with no manifest slider, so it is skipped. `shapes_of`
+    /// answers for a row's param id.
+    pub(crate) fn sync_live_shapes(
+        &mut self,
+        tree: &mut UITree,
+        mod_state: &mut ParamModState,
+        rows: &mut [ParamRow],
+        shapes_of: &mut dyn FnMut(&str) -> RowShapes,
+    ) {
+        for (row, param) in rows.iter_mut().enumerate() {
+            if param.affordance.is_some() {
+                continue;
+            }
+            let shapes = shapes_of(param.id.as_ref());
+            self.sync_row_shapes(tree, mod_state, param, row, &shapes);
+        }
+    }
+
+    /// Rewrite each frame-aligned driver's period readout in place (D20).
+    /// `rate_of` answers for a row's param id.
+    pub(crate) fn sync_driver_frame_rates(
+        &mut self,
+        tree: &mut UITree,
+        mod_state: &mut ParamModState,
+        rows: &mut [ParamRow],
+        rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
+    ) {
+        for (row, param) in rows.iter_mut().enumerate() {
+            if !mod_state
+                .driver_frame_aligned
+                .get(row)
+                .copied()
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let rate = rate_of(param.id.as_ref());
+            // The row model too, so a later build from these rows agrees.
+            param.modulation.driver_frame_rate = rate;
+            self.sync_driver_frame_rate(tree, mod_state, row, rate);
+        }
+    }
+
     /// Rewrite a frame-aligned driver's period readout in place (D20): the
     /// content clock moved the frame-quantized period, nothing structural.
     pub(crate) fn sync_driver_frame_rate(
