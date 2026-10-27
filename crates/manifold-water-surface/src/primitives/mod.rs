@@ -8,3 +8,4 @@ mod surface_wetness;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod testkit;
+mod tile_surface_mesh;
