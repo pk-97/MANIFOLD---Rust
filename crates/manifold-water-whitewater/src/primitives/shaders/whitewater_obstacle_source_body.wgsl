@@ -1,11 +1,23 @@
-// Nearest-object metadata, using liquid_solid_distance's posed SDF sampling.
+// node.whitewater_obstacle_source — BUFFER body, GATHER, two outputs: the
+// nearest-object metadata (`source`) and the posed solid distance (`distance`)
+// at every element of the step's pooled node arrays. Element p holds the value
+// at the low corner (p − ½)·h of world cell p; the last element (past every
+// slot, and every slot the table leaves free) holds the canonical value:
+// zeroed metadata and distance 1e30. A thread finds its cell through the
+// world-tile table (`tiles`, `pool_tiles` tiles).
 // The domain is the Wall faces of the Bounds box (bounds_lo..bounds_hi in
 // metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z) with
 // liquid_solid_distance's wall distance: the least of x − lo and hi − x over
 // the Wall faces, 1e30 with none, minus the length of the per-axis overshoots
-// past a Wall.
+// past a Wall. Bodies are sampled in their pose after tick_seconds, as
+// liquid_solid_distance does; the nearest of the walls and the bodies sets
+// both the distance and the kind (none 0, domain 1, obstacle 2).
 // LiquidBody = Element; LiquidShape = Element2; WhitewaterSource = Element3.
 
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
@@ -14,13 +26,7 @@ fn liquid_atlas_half(index: u32) -> f32 {
 fn body(
     idx: u32,
     count: u32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
     cell_size: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
     closed_faces: i32,
     bounds_lo_x: f32,
     bounds_lo_y: f32,
@@ -32,11 +38,18 @@ fn body(
     rows: i32,
     tick_seconds: f32,
     influence: f32, dust_strength: f32,
-) -> Element3 {
-    let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
-    let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
-    let lattice_min = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
-    let x = lattice_min + vec3<f32>(coord) * cell_size;
+    pool_tiles: f32,
+) -> BufferOutputs {
+    ww_pool_tiles = u32(pool_tiles);
+    let canonical = BufferOutputs(Element3(0.0, 0.0, 0u, 0u), 1.0e30);
+    if idx >= ts_canon() {
+        return canonical;
+    }
+    if ts_slot_entry(idx >> 9u) == WT_NONE {
+        return canonical;
+    }
+    ts_home(idx);
+    let x = (vec3<f32>(ts_cell_coord(idx)) - vec3<f32>(0.5)) * cell_size;
     let lo = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
     let hi = vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z);
     var distance = 1.0e30;
@@ -78,5 +91,5 @@ fn body(
         let candidate = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz);
         if candidate < distance { distance = candidate; kind = 2u; }
     }
-    return Element3(influence, select(dust_strength, 1.0, kind == 1u), kind, 0u);
+    return BufferOutputs(Element3(influence, select(dust_strength, 1.0, kind == 1u), kind, 0u), distance);
 }

@@ -1,40 +1,60 @@
 //! Small value proofs for the reference emitters. Run only through gpu_queue.
 //! The turbulence reference is independently checked against the vendored C++ engine.
+//! The grid arrays sit on world tiles: a box of nine one-metre nodes a side
+//! whose first cell is world cell (-4, 0, 0), so it straddles tiles -1 and 0
+//! on x. Particles lie well inside it, where the pooled atoms read the box's
+//! fields, or in a tile the table does not hold, where they read the
+//! canonical element.
 use super::{
     dust_potential::DustPotential,
     energy_potential::EnergyPotential,
     inside_turbulence_potential::InsideTurbulencePotential,
     turbulence_emission_count::TurbulenceEmissionCount,
+    whitewater_cpu::{CANONICAL_SOLID, canonical_distance},
     whitewater_emitter_velocity::WhitewaterEmitterVelocity,
     whitewater_influence::WhitewaterInfluence,
-    whitewater_obstacle_source::{
-        ObstacleSourceJob, WhitewaterObstacleSource, WhitewaterSource, encode_obstacle_source,
-    },
+    whitewater_obstacle_source::{ObstacleSourceJob, WhitewaterSource, encode_obstacle_source},
+    whitewater_particle_tests::Rig,
 };
+use manifold_gpu::GpuComputePipeline;
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::scene::world_tiles::TILE_CELLS;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use manifold_node_engine::testkit::fused_atoms::run;
+use manifold_node_engine::testkit::fused_atoms::{fused, member, run};
 use manifold_node_engine::{freeze::codegen::InputSource, particles::FluidParticle};
+use manifold_water_liquid::whitewater::{CELL_AIR, WhitewaterPool};
 use {super::whitewater_particle_cpu::Box3, crate::primitives::whitewater_particle_cpu as cpu};
 
-fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
-    let mut v = vec![
-        ("center_x", 4.0),
-        ("center_y", 4.0),
-        ("center_z", 4.0),
-        ("size_x", 8.0),
-        ("size_y", 8.0),
-        ("size_z", 8.0),
-        ("nodes_x", 9.0),
-        ("nodes_y", 9.0),
-        ("nodes_z", 9.0),
-        ("cell_size", 1.0),
-        ("face_cells_x", 8.0),
-        ("face_cells_y", 8.0),
-        ("face_cells_z", 8.0),
-    ];
-    v.extend_from_slice(extra);
-    v
+const ORIGIN: [i32; 3] = [-4, 0, 0];
+const NODES: [u32; 3] = [9; 3];
+const H: f32 = 1.0;
+/// Metres along x that carry a particle into a tile the table does not hold.
+const FAR: f32 = 64.0 * H;
+
+fn rig() -> Rig {
+    Rig::new(ORIGIN, NODES, H)
+}
+
+/// 32 live particles `offset` metres from the box's first node, every fourth
+/// carried `FAR` along x into a tile the table does not hold.
+fn placed(rig: &Rig, offset: [f32; 3], velocity: [f32; 3]) -> Vec<FluidParticle> {
+    let at = rig.point(offset);
+    (0..32)
+        .map(|i| FluidParticle {
+            position_radius: [at[0] + if far(i) { FAR } else { 0.0 }, at[1], at[2], 0.1],
+            velocity,
+            id: i as u32 + 1,
+        })
+        .collect()
+}
+
+fn far(i: usize) -> bool {
+    i % 4 == 3
+}
+
+/// `near` in the box's slots of a 32-slot array, 0 in the far ones.
+fn in_box(near: f32) -> Vec<f32> {
+    (0..32).map(|i| if far(i) { 0.0 } else { near }).collect()
 }
 
 fn close(actual: &[f32], expected: &[f32]) {
@@ -49,36 +69,26 @@ fn close(actual: &[f32], expected: &[f32]) {
 
 #[test]
 fn whitewater_inside_dust_counts_and_fusion() {
+    let rig = rig();
     let mut h = Harness::new();
-    let particles: Vec<FluidParticle> = (0..32)
-        .map(|i| FluidParticle {
-            position_radius: [3.5, 3.5, 2.5, 0.1],
-            velocity: [12.0, 0.0, 0.0],
-            id: i + 1,
-        })
-        .collect();
-    let part = h.array(&particles, 32);
-    let phi = h.array(&vec![-4.0f32; 512], 512);
-    let turb = h.array(&vec![150.0f32; 512], 512);
-    let cells = h.array(&vec![1u32; 512], 512);
+    let part = h.array(&placed(&rig, [3.5, 3.5, 2.5], [12.0, 0.0, 0.0]), 32);
+    let phi = rig.cell_pool(&mut h, &vec![-4.0f32; 512], canonical_distance(H));
+    let turb = rig.cell_pool(&mut h, &vec![150.0f32; 512], 0.0);
+    let cells = rig.cell_pool(&mut h, &vec![1u32; 512], CELL_AIR);
     let energy = h.array(&[1.0f32; 32], 32);
     let wave = h.array(&[0.0f32; 32], 32);
-    let influence = h.array(&vec![2.0f32; 729], 729);
-    let solid = h.array(&vec![1.0f32; 729], 729);
-    let source = h.array(
-        &vec![
-            WhitewaterSource {
-                influence: 2.0,
-                dust_strength: 0.5,
-                kind: 2,
-                pad: 0
-            };
-            729
-        ],
-        729,
-    );
+    let influence = rig.node_pool(&mut h, &vec![2.0f32; 729], 1.0);
+    let solid = rig.node_pool(&mut h, &vec![1.0f32; 729], CANONICAL_SOLID);
+    let obstacle = WhitewaterSource {
+        influence: 2.0,
+        dust_strength: 0.5,
+        kind: 2,
+        pad: 0,
+    };
+    let source = rig.node_pool(&mut h, &vec![obstacle; 729], WhitewaterSource::default());
+    let tiles = rig.tiles(&mut h);
     let dt = 1.0 / 30.0;
-    let v = values(&[
+    let v = rig.values(&[
         ("dt", dt),
         ("dust_enabled", 1.0),
         ("generation_rate", 0.6),
@@ -93,11 +103,12 @@ fn whitewater_inside_dust_counts_and_fusion() {
             ("distance", phi.0),
             ("turbulence", turb.0),
             ("cells", cells.0),
+            ("tiles", tiles.0),
         ],
         32,
         &p,
     );
-    close(&inside, &[0.5; 32]);
+    close(&inside, &in_box(0.5));
     let dust: Vec<f32> = run(
         &mut h,
         &mut DustPotential::new(),
@@ -106,56 +117,51 @@ fn whitewater_inside_dust_counts_and_fusion() {
             ("solid", solid.0),
             ("turbulence", turb.0),
             ("source", source.0),
+            ("tiles", tiles.0),
         ],
         32,
         &p,
     );
-    close(&dust, &[0.3; 32]);
+    close(&dust, &in_box(0.3));
+    let count_ports = |h: &mut Harness, potential: &[f32]| {
+        let t = h.array(potential, 32);
+        let ports = [
+            ("particles", part.0),
+            ("energy", energy.0),
+            ("wavecrest", wave.0),
+            ("turbulence", t.0),
+            ("influence", influence.0),
+            ("tiles", tiles.0),
+        ];
+        run::<_, u32>(h, &mut TurbulenceEmissionCount::new(), &ports, 32, &p)
+    };
+    let expected = |i: u32, potential: f32| -> u32 {
+        if cpu::random(i, 7.0f32.to_bits(), 0, 10) >= 0.6 {
+            0
+        } else {
+            super::whitewater_emitter_cpu::emission_count(
+                1.0,
+                [0.0, potential],
+                [175.0; 2],
+                2.0,
+                8.0,
+                1.0,
+                dt,
+            )
+        }
+    };
     for (is_dust, potential) in [(false, inside), (true, dust)] {
-        let t = h.array(&potential, 32);
-        let got: Vec<u32> = run(
-            &mut h,
-            &mut TurbulenceEmissionCount::new(),
-            &[
-                ("particles", part.0),
-                ("energy", energy.0),
-                ("wavecrest", wave.0),
-                ("turbulence", t.0),
-                ("influence", influence.0),
-            ],
-            32,
-            &p,
-        );
+        let got = count_ports(&mut h, &potential);
         let want: Vec<u32> = (0..32)
-            .map(|i| {
-                if cpu::random(i, 7.0f32.to_bits(), 0, 10) >= 0.6 {
-                    0
-                } else {
-                    super::whitewater_emitter_cpu::emission_count(
-                        1.0,
-                        [0.0, potential[i as usize]],
-                        [175.0; 2],
-                        2.0,
-                        8.0,
-                        1.0,
-                        dt,
-                    )
-                }
-            })
+            .map(|i| expected(i, potential[i as usize]))
             .collect();
         assert_eq!(got, want);
+        assert!(want.iter().any(|&n| n > 0), "some slots emit");
+        let inputs: Vec<InputSource> = (0..5).map(InputSource::External).collect();
         let a = if is_dust {
-            member::<DustPotential>(
-                0,
-                vec![
-                    InputSource::External(0),
-                    InputSource::External(1),
-                    InputSource::External(2),
-                    InputSource::External(3),
-                ],
-            )
+            member::<DustPotential>(0, inputs)
         } else {
-            member::<InsideTurbulencePotential>(0, (0..4).map(InputSource::External).collect())
+            member::<InsideTurbulencePotential>(0, inputs)
         };
         let fused = fused::<u32>(
             &mut h,
@@ -165,10 +171,11 @@ fn whitewater_inside_dust_counts_and_fusion() {
                     1,
                     vec![
                         InputSource::External(0),
-                        InputSource::External(4),
                         InputSource::External(5),
-                        InputSource::Node(NodeInstanceId(0)),
                         InputSource::External(6),
+                        InputSource::Node(NodeInstanceId(0)),
+                        InputSource::External(7),
+                        InputSource::External(4),
                     ],
                 ),
             ],
@@ -177,6 +184,7 @@ fn whitewater_inside_dust_counts_and_fusion() {
                 if is_dust { &solid.1 } else { &phi.1 },
                 &turb.1,
                 if is_dust { &source.1 } else { &cells.1 },
+                &tiles.1,
                 &energy.1,
                 &wave.1,
                 &influence.1,
@@ -186,40 +194,49 @@ fn whitewater_inside_dust_counts_and_fusion() {
         );
         assert_eq!(fused, got);
     }
-    // Boundary dust is disabled by default, and only the bottom three cells emit when enabled.
-    let domain = h.array(
-        &vec![
-            WhitewaterSource {
-                influence: 1.0,
-                dust_strength: 1.0,
-                kind: 1,
-                pad: 0
-            };
-            729
-        ],
-        729,
-    );
-    for (boundary, expected) in [(0.0, 0.0), (1.0, 0.6)] {
-        let p = params(&values(&[
+    // A particle in no stored tile emits nothing whatever its potential.
+    let got = count_ports(&mut h, &[0.5; 32]);
+    let want: Vec<u32> = (0..32)
+        .map(|i| if far(i as usize) { 0 } else { expected(i, 0.5) })
+        .collect();
+    assert_eq!(got, want);
+    assert!(want.iter().any(|&n| n > 0), "some slots emit");
+    // Boundary dust is disabled by default, and when enabled only markers
+    // within 1.5 cells of the Bounds' low z face emit: the box's first node
+    // sits 1.5 cells below it.
+    let domain = WhitewaterSource {
+        influence: 1.0,
+        dust_strength: 1.0,
+        kind: 1,
+        pad: 0,
+    };
+    let domain = rig.node_pool(&mut h, &vec![domain; 729], WhitewaterSource::default());
+    let high = h.array(&placed(&rig, [3.5, 3.5, 6.5], [12.0, 0.0, 0.0]), 32);
+    for (boundary, bottom, top) in [(0.0, 0.0, 0.0), (1.0, 0.6, 0.0)] {
+        let p = rig.params(&[
             ("dust_enabled", 1.0),
             ("boundary_dust", boundary),
-        ]));
-        let got: Vec<f32> = run(
-            &mut h,
-            &mut DustPotential::new(),
-            &[
-                ("particles", part.0),
-                ("solid", solid.0),
-                ("turbulence", turb.0),
-                ("source", domain.0),
-            ],
-            32,
-            &p,
-        );
-        close(&got, &[expected; 32]);
+            ("bounds_lo_z", rig.first_node()[2] + 1.5 * H),
+        ]);
+        for (at, want) in [(&part, bottom), (&high, top)] {
+            let got: Vec<f32> = run(
+                &mut h,
+                &mut DustPotential::new(),
+                &[
+                    ("particles", at.0),
+                    ("solid", solid.0),
+                    ("turbulence", turb.0),
+                    ("source", domain.0),
+                    ("tiles", tiles.0),
+                ],
+                32,
+                &p,
+            );
+            close(&got, &in_box(want));
+        }
     }
-    let air = h.array(&vec![0u32; 512], 512);
-    let surface = h.array(&vec![0.0f32; 512], 512);
+    let air = rig.cell_pool(&mut h, &vec![0u32; 512], CELL_AIR);
+    let surface = rig.cell_pool(&mut h, &vec![0.0f32; 512], canonical_distance(H));
     let got: Vec<f32> = run(
         &mut h,
         &mut InsideTurbulencePotential::new(),
@@ -228,6 +245,7 @@ fn whitewater_inside_dust_counts_and_fusion() {
             ("distance", surface.0),
             ("turbulence", turb.0),
             ("cells", air.0),
+            ("tiles", tiles.0),
         ],
         32,
         &p,
@@ -237,18 +255,14 @@ fn whitewater_inside_dust_counts_and_fusion() {
 
 #[test]
 fn whitewater_emitter_speed_values_and_fusion() {
-    let particles: Vec<FluidParticle> = (0..32)
-        .map(|i| FluidParticle {
-            position_radius: [3.5; 4],
-            velocity: [2.0, 1.0, 0.0],
-            id: i + 1,
-        })
-        .collect();
+    let rig = rig();
+    let particles = placed(&rig, [3.5; 3], [2.0, 1.0, 0.0]);
     let mut h = Harness::new();
     let input = h.array(&particles, 32);
-    let phi = h.array(&vec![0.0f32; 512], 512);
-    let air = h.array(&vec![0u32; 512], 512);
-    let v = values(&[("spray_speed", 2.0), ("seed", 9.0), ("epoch", 3.0)]);
+    let phi = rig.cell_pool(&mut h, &vec![0.0f32; 512], canonical_distance(H));
+    let air = rig.cell_pool(&mut h, &vec![0u32; 512], CELL_AIR);
+    let tiles = rig.tiles(&mut h);
+    let v = rig.values(&[("spray_speed", 2.0), ("seed", 9.0), ("epoch", 3.0)]);
     let p = params(&v);
     let got: Vec<FluidParticle> = run(
         &mut h,
@@ -257,12 +271,19 @@ fn whitewater_emitter_speed_values_and_fusion() {
             ("particles", input.0),
             ("distance", phi.0),
             ("cells", air.0),
+            ("tiles", tiles.0),
         ],
         32,
         &p,
     );
     for (i, particle) in got.iter().enumerate() {
-        let speed = 1.0 + cpu::random(i as u32, 9.0f32.to_bits(), 3, 9);
+        // The surface cells of the box speed up; a cell in no stored tile is
+        // three cells from the surface, and keeps its speed.
+        let speed = if far(i) {
+            1.0
+        } else {
+            1.0 + cpu::random(i as u32, 9.0f32.to_bits(), 3, 9)
+        };
         close(
             &particle.velocity,
             &particles[i].velocity.map(|x| x * speed),
@@ -280,59 +301,126 @@ fn whitewater_emitter_speed_values_and_fusion() {
     let folded = fused::<f32>(
         &mut h,
         vec![
-            member::<WhitewaterEmitterVelocity>(0, (0..3).map(InputSource::External).collect()),
+            member::<WhitewaterEmitterVelocity>(0, (0..4).map(InputSource::External).collect()),
             member::<EnergyPotential>(1, vec![InputSource::Node(NodeInstanceId(0))]),
         ],
-        &[&input.1, &phi.1, &air.1],
+        &[&input.1, &phi.1, &air.1, &tiles.1],
         32,
         &v,
     );
     close(&folded, &unfused);
 }
 
+/// The kernel into the outputs of `job`, then both read back.
+fn encode_source(
+    h: &Harness,
+    pipeline: &mut Option<GpuComputePipeline>,
+    job: &ObstacleSourceJob<'_>,
+) -> (Vec<WhitewaterSource>, Vec<f32>) {
+    let mut enc = h.device.create_encoder("whitewater-source-reference");
+    encode_obstacle_source(
+        pipeline,
+        &h.device,
+        &mut enc,
+        job,
+        "whitewater-source-reference",
+    );
+    enc.commit_and_wait_completed();
+    let elements = job.pool.elements() as usize;
+    (read(job.source, elements), read(job.distance, elements))
+}
+
+fn fields(s: &WhitewaterSource) -> (f32, f32, u32, u32) {
+    (s.influence, s.dust_strength, s.kind, s.pad)
+}
+
 #[test]
 fn whitewater_obstacle_source_closed_and_open_domain() {
     use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
+    use manifold_water_liquid::lattice::bounds_distance;
+    use manifold_water_liquid::testkit::world_box::table_words_of;
+    let rig = rig();
+    // A pool one slot longer than the box's tiles: the table leaves that slot
+    // free, and the pool's last element is the canonical one.
+    let pool = WhitewaterPool {
+        pool_tiles: rig.nodes.pool_tiles + 1,
+        cell_size: H,
+    };
+    let words = table_words_of(pool.pool_tiles, &rig.nodes.held());
+    let elements = pool.elements() as usize;
+    let boxed = rig.nodes.pool_tiles as usize * TILE_CELLS as usize;
+    // Every node of the box: its pool index and scene position.
+    let mut nodes = Vec::new();
+    for k in 0..NODES[2] {
+        for j in 0..NODES[1] {
+            for i in 0..NODES[0] {
+                let c = [i, j, k];
+                let x: [f32; 3] =
+                    std::array::from_fn(|a| ((ORIGIN[a] + c[a] as i32) as f32 - 0.5) * H);
+                nodes.push((rig.nodes.pool_index(c), x));
+            }
+        }
+    }
     let mut h = Harness::new();
+    let tiles = h.array(&words, words.len());
     let bodies = h.array::<LiquidBody>(&[], 1);
     let shapes = h.array::<LiquidShape>(&[], 1);
     let atlas = h.array::<u32>(&[], 1);
-    let output = h.array::<WhitewaterSource>(&[], 729);
+    // Outputs the kernel must overwrite everywhere.
+    let stale = WhitewaterSource {
+        influence: 9.0,
+        dust_strength: 9.0,
+        kind: 9,
+        pad: 9,
+    };
+    let source = h.array(&vec![stale; elements], elements);
+    let distance = h.array(&vec![9.0f32; elements], elements);
+    // A box off the node grid, different on every axis.
+    let (lo, hi) = (rig.point([0.5, 1.25, 2.0]), rig.point([7.5, 6.75, 8.5]));
+    let mut job = ObstacleSourceJob {
+        influence: 2.0,
+        dust_strength: 0.5,
+        pool,
+        closed_faces: 0,
+        bounds_lo: lo,
+        bounds_hi: hi,
+        body_count: 0,
+        rows: 0,
+        tick_seconds: 1.0 / 60.0,
+        bodies: &bodies.1,
+        shapes: &shapes.1,
+        atlas: &atlas.1,
+        tiles: &tiles.1,
+        source: &source.1,
+        distance: &distance.1,
+    };
     let mut pipeline = None;
-    for (closed, kind) in [(63, 1), (0, 0)] {
-        let job = ObstacleSourceJob {
-            influence: 2.0,
-            dust_strength: 0.5,
-            min: [0.0; 3],
-            cell_size: 1.0,
-            nodes: [9; 3],
-            closed_faces: closed,
-            bounds_lo: [0.0; 3],
-            bounds_hi: [8.0; 3],
-            body_count: 0,
-            rows: 0,
-            tick_seconds: 1.0 / 60.0,
-            bodies: &bodies.1,
-            shapes: &shapes.1,
-            atlas: &atlas.1,
-            out: &output.1,
-        };
-        let mut enc = h.device.create_encoder("whitewater-source-reference");
-        encode_obstacle_source(
-            &mut pipeline,
-            &h.device,
-            &mut enc,
-            &job,
-            "whitewater-source-reference",
-        );
-        enc.commit_and_wait_completed();
-        let got: Vec<WhitewaterSource> = read(&output.1, 729);
-        assert!(got.iter().all(|s| s.kind == kind
-            && s.influence == 2.0
-            && s.dust_strength == if kind == 1 { 1.0 } else { 0.5 }));
+    let canonical = |got: &[WhitewaterSource], distances: &[f32]| {
+        assert!(got[boxed..].iter().all(|s| fields(s) == (0.0, 0.0, 0, 0)));
+        assert!(distances[boxed..].iter().all(|&d| d == 1.0e30));
+    };
+    for (closed, kind, dust) in [(0b11_1111, 1, 1.0), (0b10_1101, 1, 1.0), (0, 0, 0.5)] {
+        job.closed_faces = closed;
+        let (got, distances) = encode_source(&h, &mut pipeline, &job);
+        for &(at, _) in &nodes {
+            assert_eq!(fields(&got[at]), (2.0, dust, kind, 0), "walls {closed:b}");
+        }
+        let seen: Vec<f32> = nodes.iter().map(|&(at, _)| distances[at]).collect();
+        let wanted: Vec<f32> = nodes
+            .iter()
+            .map(|&(_, x)| bounds_distance(x, lo, hi, closed as u32))
+            .collect();
+        close(&seen, &wanted);
+        canonical(&got, &distances);
     }
+    // A constant -1 distance over a lattice covering part of the box: past the
+    // lattice it grows by the gap to it. Where it is under the wall distance
+    // the obstacle is the nearest object, elsewhere the domain is.
+    let position = rig.point([1.3, 0.7, 2.2]);
+    let dims = [5u32, 4, 6];
     let body = h.array(
         &[LiquidBody {
+            position_inv_mass: [position[0], position[1], position[2], 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             ..Default::default()
         }],
@@ -340,65 +428,57 @@ fn whitewater_obstacle_source_closed_and_open_domain() {
     );
     let shape = h.array(
         &[LiquidShape {
-            origin_spacing: [0.0, 0.0, 0.0, 1.0],
-            dims_x: 9,
-            dims_y: 9,
-            dims_z: 9,
+            origin_spacing: [0.0, 0.0, 0.0, H],
+            dims_x: dims[0],
+            dims_y: dims[1],
+            dims_z: dims[2],
             atlas_offset: 0,
             scale_min: [1.0; 4],
         }],
         1,
     );
-    // Constant negative obstacle SDF beats the nonnegative closed-wall distance.
-    let negative = h.array(&vec![0xbc00_bc00u32; 365], 365);
-    let job = ObstacleSourceJob {
-        influence: 2.0,
-        dust_strength: 0.5,
-        min: [0.0; 3],
-        cell_size: 1.0,
-        nodes: [9; 3],
-        closed_faces: 63,
-        bounds_lo: [0.0; 3],
-        bounds_hi: [8.0; 3],
-        body_count: 1,
-        rows: 1,
-        tick_seconds: 1.0 / 60.0,
-        bodies: &body.1,
-        shapes: &shape.1,
-        atlas: &negative.1,
-        out: &output.1,
-    };
-    let mut enc = h.device.create_encoder("whitewater-source-obstacle");
-    encode_obstacle_source(
-        &mut pipeline,
-        &h.device,
-        &mut enc,
-        &job,
-        "whitewater-source-obstacle",
-    );
-    enc.commit_and_wait_completed();
-    let got: Vec<WhitewaterSource> = read(&output.1, 729);
+    let negative = h.array(&vec![0xbc00_bc00u32; 60], 60);
+    job.closed_faces = 0b11_1111;
+    job.body_count = 1;
+    job.rows = 1;
+    job.bodies = &body.1;
+    job.shapes = &shape.1;
+    job.atlas = &negative.1;
+    let (got, distances) = encode_source(&h, &mut pipeline, &job);
+    let mut kinds = [0; 3];
+    let mut wanted = Vec::new();
+    for &(at, x) in &nodes {
+        let gap: f32 = (0..3)
+            .map(|a| {
+                let g = (x[a] - position[a]) / H;
+                (g - g.clamp(0.0, (dims[a] - 1) as f32)).powi(2)
+            })
+            .sum::<f32>()
+            .sqrt();
+        let obstacle = -1.0 + gap * H;
+        let wall = bounds_distance(x, lo, hi, 0b11_1111);
+        let (kind, dust, nearest) = if obstacle < wall {
+            (2, 0.5, obstacle)
+        } else {
+            (1, 1.0, wall)
+        };
+        assert_eq!(fields(&got[at]), (2.0, dust, kind, 0), "node at {x:?}");
+        wanted.push(nearest);
+        kinds[kind as usize] += 1;
+    }
+    let seen: Vec<f32> = nodes.iter().map(|&(at, _)| distances[at]).collect();
+    close(&seen, &wanted);
     assert!(
-        got.iter()
-            .all(|s| s.kind == 2 && s.influence == 2.0 && s.dust_strength == 0.5)
+        kinds[1] > 50 && kinds[2] > 50,
+        "the obstacle and the walls each set some nodes: {kinds:?}"
     );
-    let metadata = h.array(&got, 729);
-    let previous = h.array(&vec![1.0f32; 729], 729);
-    let solid = h.array(&vec![-1.0f32; 729], 729);
-    let v = values(&[
-        ("lattice_min_x", 0.0),
-        ("lattice_min_y", 0.0),
-        ("lattice_min_z", 0.0),
-        ("closed_faces", 63.0),
-        ("bounds_hi_x", 8.0),
-        ("bounds_hi_y", 8.0),
-        ("bounds_hi_z", 8.0),
-        ("body_count", 1.0),
-        ("rows", 1.0),
-        ("influence", 2.0),
-        ("dust_strength", 0.5),
-    ]);
-    let unfused: Vec<f32> = run(
+    canonical(&got, &distances);
+    // The influence over the node arrays: an obstacle within three cells sets
+    // its influence, a domain wall the base level, the rest decay toward it.
+    let metadata = h.array(&got, elements);
+    let solid = h.array(&distances, elements);
+    let previous = h.array(&vec![0.5f32; elements], elements);
+    let influence: Vec<f32> = run(
         &mut h,
         &mut WhitewaterInfluence::new(),
         &[
@@ -406,28 +486,84 @@ fn whitewater_obstacle_source_closed_and_open_domain() {
             ("solid", solid.0),
             ("source", metadata.0),
         ],
-        729,
-        &params(&v),
+        elements,
+        &params(&[("cell_size", H)]),
     );
-    let folded = fused::<f32>(
-        &mut h,
-        vec![
-            member::<WhitewaterObstacleSource>(0, (1..4).map(InputSource::External).collect()),
-            member::<WhitewaterInfluence>(
-                1,
-                vec![
-                    InputSource::External(0),
-                    InputSource::External(4),
-                    InputSource::Node(NodeInstanceId(0)),
-                ],
-            ),
-        ],
-        &[&previous.1, &body.1, &shape.1, &negative.1, &solid.1],
-        729,
-        &v,
-    );
-    close(&folded, &unfused);
-    close(&folded, &vec![2.0; 729]);
+    let decayed = 0.5f32 + 2.0 * (1.0 / 60.0);
+    let want: Vec<f32> = got
+        .iter()
+        .zip(&distances)
+        .map(|(s, &d)| match s.kind {
+            _ if d.abs() > 3.0 * H => decayed,
+            1 => 1.0,
+            2 => s.influence,
+            _ => decayed,
+        })
+        .collect();
+    close(&influence, &want);
+    for level in [1.0, 2.0, decayed] {
+        assert!(want.contains(&level), "{level} is set somewhere");
+    }
+}
+
+#[test]
+fn whitewater_fresh_spray_speed_and_dust_typing() {
+    use super::whitewater_type::WhitewaterType;
+    use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
+    let rig = rig();
+    let at = rig.point([4.5; 3]);
+    // Even slots sit in the box's surface cells, odd slots in a tile the table
+    // does not hold.
+    let spawns: Vec<WhitewaterSpawn> = (0..32)
+        .map(|i| WhitewaterSpawn {
+            position_lifetime: [
+                at[0] + if i % 2 == 1 { FAR } else { 0.0 },
+                at[1],
+                at[2],
+                2.0,
+            ],
+            velocity: [2.0, 1.0, 0.0],
+            kind: 0,
+        })
+        .collect();
+    let mut h = Harness::new();
+    let input = h.array(&spawns, 32);
+    let phi = rig.cell_pool(&mut h, &vec![0.0f32; 512], canonical_distance(H));
+    let air = rig.cell_pool(&mut h, &vec![0u32; 512], CELL_AIR);
+    let tiles = rig.tiles(&mut h);
+    for dust in [0.0, 1.0] {
+        let p = rig.params(&[
+            ("spray_speed", 2.0),
+            ("seed", 9.0),
+            ("epoch", 3.0),
+            ("dust", dust),
+        ]);
+        let got: Vec<WhitewaterSpawn> = run(
+            &mut h,
+            &mut WhitewaterType::new(),
+            &[
+                ("spawns", input.0),
+                ("distance", phi.0),
+                ("cells", air.0),
+                ("tiles", tiles.0),
+            ],
+            32,
+            &p,
+        );
+        for (i, s) in got.iter().enumerate() {
+            // Foam at the surface keeps its speed; spray outside every stored
+            // tile is scaled; dust is typed 4 and left alone.
+            let (kind, factor) = if dust > 0.5 {
+                (4, 1.0)
+            } else if i % 2 == 0 {
+                (1, 1.0)
+            } else {
+                (2, 1.0 + cpu::random(i as u32, 9.0f32.to_bits(), 3, 11))
+            };
+            close(&s.velocity, &spawns[i].velocity.map(|v| v * factor));
+            assert_eq!(s.kind, kind, "slot {i}");
+        }
+    }
 }
 
 #[test]
@@ -436,15 +572,19 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
         advect_whitewater::AdvectWhitewater, age_whitewater::AgeWhitewater,
         whitewater_pool_cpu as pool,
     };
+    use manifold_water_liquid::fluid_particles::FaceSample;
     use manifold_water_liquid::whitewater::WhitewaterParticle;
+    let rig = rig();
+    let at = rig.point([4.0; 3]);
+    // The dense grid the CPU statement reads: the box's eight cells.
     let grid = Box3 {
         cells: [8; 3],
-        center: [4.0; 3],
+        center: at,
         size: [8.0; 3],
     };
     let particles: Vec<_> = (0..32)
         .map(|i| WhitewaterParticle {
-            position_lifetime: [4.0, 4.0, 4.0, 2.0],
+            position_lifetime: [at[0], at[1], at[2], 2.0],
             velocity: [0.2, 0.0, 0.0],
             kind: 4,
             id: i * 8,
@@ -460,19 +600,25 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
     };
     let mut h = Harness::new();
     let input = h.array(&particles, 32);
-    let f = faces.each_ref().map(|f| h.array(f, 576));
-    let s = h.array(&solid, 729);
-    let v = values(&[("dt", 1.0 / 60.0)]);
+    // Every face of the box's nodes moves 0.5 m/s along x; the faces' weights
+    // are valid.
+    let record = FaceSample {
+        velocity: [0.5, 0.0, 0.0, 0.0],
+        weight: [1.0, 1.0, 1.0, 0.0],
+    };
+    let f = rig.node_pool(&mut h, &vec![record; 729], FaceSample::default());
+    let s = rig.node_pool(&mut h, &solid, CANONICAL_SOLID);
+    let tiles = rig.tiles(&mut h);
+    let v = rig.values(&[("dt", 1.0 / 60.0)]);
     let p = params(&v);
     let got: Vec<WhitewaterParticle> = run(
         &mut h,
         &mut AdvectWhitewater::new(),
         &[
             ("pool", input.0),
-            ("face_u", f[0].0),
-            ("face_v", f[1].0),
-            ("face_w", f[2].0),
+            ("faces", f.0),
             ("solid", s.0),
+            ("tiles", tiles.0),
         ],
         32,
         &p,
@@ -491,19 +637,16 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
         32,
         &p,
     );
+    // Pool, faces, solid, the four optional arrays unwired (any array
+    // satisfies them: the substep count is 0), tiles.
+    let advect_inputs = [0, 1, 2, 2, 2, 2, 2, 3].map(InputSource::External);
     let folded = fused::<WhitewaterParticle>(
         &mut h,
         vec![
-            member::<AdvectWhitewater>(
-                0,
-                (0..5)
-                    .chain(std::iter::repeat_n(4, 6))
-                    .map(InputSource::External)
-                    .collect(),
-            ),
+            member::<AdvectWhitewater>(0, advect_inputs.to_vec()),
             member::<AgeWhitewater>(1, vec![InputSource::Node(NodeInstanceId(0))]),
         ],
-        &[&input.1, &f[0].1, &f[1].1, &f[2].1, &s.1],
+        &[&input.1, &f.1, &s.1, &tiles.1],
         32,
         &v,
     );
@@ -515,58 +658,18 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
 }
 
 #[test]
-fn whitewater_fresh_spray_speed_and_dust_typing() {
-    use super::whitewater_type::WhitewaterType;
-    use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
-    let mut h = Harness::new();
-    let spawns = vec![
-        WhitewaterSpawn {
-            position_lifetime: [1.0, 3.0, 3.0, 2.0],
-            velocity: [2.0, 1.0, 0.0],
-            kind: 0
-        };
-        32
-    ];
-    let input = h.array(&spawns, 32);
-    let phi = h.array(&vec![0.0f32; 512], 512);
-    let air = h.array(&vec![0u32; 512], 512);
-    for dust in [0.0, 1.0] {
-        let p = params(&values(&[
-            ("spray_speed", 2.0),
-            ("seed", 9.0),
-            ("epoch", 3.0),
-            ("dust", dust),
-        ]));
-        let got: Vec<WhitewaterSpawn> = run(
-            &mut h,
-            &mut WhitewaterType::new(),
-            &[("spawns", input.0), ("distance", phi.0), ("cells", air.0)],
-            32,
-            &p,
-        );
-        for (i, s) in got.iter().enumerate() {
-            let factor = if dust > 0.5 {
-                1.0
-            } else {
-                1.0 + cpu::random(i as u32, 9.0f32.to_bits(), 3, 11)
-            };
-            close(&s.velocity, &spawns[i].velocity.map(|v| v * factor));
-            assert_eq!(s.kind, if dust > 0.5 { 4 } else { 2 });
-        }
-    }
-}
-
-#[test]
 fn whitewater_dust_step_publishes_a_distinct_population() {
     use super::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-    use manifold_node_engine::scene::transform::Transform;
+    use manifold_water_liquid::fluid_particles::FaceSample;
     use manifold_water_liquid::whitewater::WhitewaterParticle;
+    let rig = rig();
+    let at = rig.point([4.0; 3]);
     let mut h = Harness::new();
     let particles = h.array(
         &vec![
             FluidParticle {
-                position_radius: [4.0, 4.0, 4.0, 0.05],
+                position_radius: [at[0], at[1], at[2], 0.05],
                 velocity: [0.0; 3],
                 id: 1
             };
@@ -575,23 +678,18 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         32,
     );
     let shape = StepShape::new(
-        [9; 3],
-        [8; 3],
-        1.0,
-        Some(Transform {
-            pos: [4.0; 3],
-            scale: [8.0; 3],
-            ..Default::default()
-        }),
+        WhitewaterPool {
+            pool_tiles: rig.cells.pool_tiles,
+            cell_size: H,
+        },
         256,
     )
     .unwrap();
-    let (phi, table, pool_tiles) =
-        super::whitewater_step::fused_tests::pooled_distance(&[-5.0f32; 512], &shape);
-    let phi = h.array(&phi, phi.len());
-    let tiles = h.array(&table, table.len());
-    let solid = h.array(&vec![1.0f32; 729], 729);
-    let source = h.array(
+    let phi = rig.cell_pool(&mut h, &vec![-5.0f32; 512], canonical_distance(H));
+    let tiles = rig.tiles(&mut h);
+    let solid = rig.node_pool(&mut h, &vec![1.0f32; 729], CANONICAL_SOLID);
+    let source = rig.node_pool(
+        &mut h,
         &vec![
             WhitewaterSource {
                 influence: 1.0,
@@ -601,18 +699,16 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             };
             729
         ],
-        729,
+        WhitewaterSource::default(),
     );
-    let f = [
-        h.array(&vec![12.0f32; 576], 576),
-        h.array(
-            &(0..576)
-                .map(|i| if i % 8 % 2 == 0 { 24.0f32 } else { -24.0 })
-                .collect::<Vec<_>>(),
-            576,
-        ),
-        h.array(&vec![0.0f32; 576], 576),
-    ];
+    // A shear: x faces carry 12 m/s, y faces alternate +-24 m/s along x.
+    let shear: Vec<FaceSample> = (0..729)
+        .map(|i| FaceSample {
+            velocity: [12.0, if i % 9 % 2 == 0 { 24.0 } else { -24.0 }, 0.0, 0.0],
+            weight: [1.0, 1.0, 1.0, 0.0],
+        })
+        .collect();
+    let faces = rig.node_pool(&mut h, &shear, FaceSample::default());
     let identity = h.array(&[0u32, 0, 0, 0, 1, 1, 1, 32], 8);
     let pool = h.array(&vec![super::whitewater_step::empty_slot(); 256], 256);
     let state = h.array(&[0u32; 8], 8);
@@ -625,6 +721,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             epoch: 0,
             seed: 0.0,
             gravity: [0.0, -9.81, 0.0],
+            bounds_lo: rig.first_node(),
             wavecrest_emission: 175.0,
             turbulence_emission: 175.0,
             min_turbulence: 100.0,
@@ -647,10 +744,9 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             identity: &identity.1,
             solid: &solid.1,
             obstacle_source: Some(&source.1),
-            faces: super::whitewater_step::FaceSource::Axes([&f[0].1, &f[1].1, &f[2].1]),
+            faces: &faces.1,
             distance: &phi.1,
             tiles: &tiles.1,
-            pool_tiles,
         };
         let mut native = h.device.create_encoder("whitewater-dust-population");
         step.advance_tick(
@@ -700,5 +796,3 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         );
     }
 }
-
-use manifold_node_engine::testkit::fused_atoms::{fused, member};

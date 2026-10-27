@@ -1,21 +1,35 @@
 //! GPU value proofs for the whitewater pool atoms against their CPU
 //! statements (`whitewater_pool_cpu`), and each atom folded by the codegen
-//! against its standalone kernel.
+//! against its standalone kernel. The CPU fixture's tank sits `MARGIN` cells
+//! inside a larger box of world tiles, placed so the tank crosses tiles -1
+//! and 0 on x, and the margin is solid: no particle reaches the box rule of
+//! the CPU statements, which the pooled atoms do not have (a wall is a
+//! solid there).
 
 use super::advect_whitewater::AdvectWhitewater;
 use super::age_whitewater::AgeWhitewater;
 use super::preserve_foam::PreserveFoam;
 use super::retype_whitewater::RetypeWhitewater;
-use super::whitewater_cpu::Rng;
-use super::whitewater_pool_cpu::fixture::{FACE_CELLS, NODES, faces, grid, pool, tank};
+use super::whitewater_cpu::{CANONICAL_SOLID, Rng, canonical_distance};
+use super::whitewater_particle_cpu::{Box3, face_index};
+use super::whitewater_pool_cpu::fixture::{FACE_CELLS, H, NODES, ORIGIN, faces, pool, tank};
+use manifold_gpu::GpuBuffer;
 use manifold_node_engine::bindings::Slot;
-use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::freeze::codegen::InputSource;
 use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::ports::KnownItem;
+use manifold_node_engine::scene::world_tiles::{lattice_origin, pool_len};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use manifold_node_engine::testkit::fused_atoms::run;
-use manifold_water_liquid::fluid_particles::{CellRange, bin_counts};
-use manifold_water_liquid::primitives::sort_particles_into_cells::SortParticlesIntoCells;
-use manifold_water_liquid::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
+use manifold_node_engine::testkit::fused_atoms::{fused, member, run};
+use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
+use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{
+    LIQUID_PARTICLE_READ, ParticleSorter, RecordRead, SortCount, SortJob, SortLabels,
+    whitewater_record_read,
+};
+use manifold_water_liquid::testkit::world_box::BoxTable;
+use manifold_water_liquid::whitewater::{CELL_AIR, WHITEWATER_EMPTY, WhitewaterParticle};
 use {
     super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age,
     super::whitewater_pool_cpu::DEAD, super::whitewater_pool_cpu::Fields,
@@ -23,22 +37,180 @@ use {
 };
 
 const SLOTS: usize = 4000;
+/// Cells of solid round the tank in the world box, past the reach of the
+/// CPU statements' boundary box (1.625 cells in from the box's sides).
+const MARGIN: u32 = 4;
+/// The world cell of the world box's first cell: the tank starts `MARGIN`
+/// cells on, so it crosses tiles -1 and 0 on x and has its y and z in
+/// positive and negative cells.
+const WORLD_ORIGIN: [i32; 3] = [-27, 3, -6];
 
-fn advect_values(s: Advect) -> Vec<(&'static str, f32)> {
-    let g = grid();
+const LABELS: SortLabels = SortLabels {
+    clear: "whitewater.sort.clear",
+    count: "whitewater.sort.count",
+    scan: ScanLabels {
+        blocks: "whitewater.sort.scan.blocks",
+        add: "whitewater.sort.scan.add",
+    },
+    ranges: "whitewater.sort.ranges",
+    tail: "whitewater.sort.tail",
+    scatter: "whitewater.sort.scatter",
+    stabilise: "whitewater.sort.stabilise",
+};
+
+/// The scene position of the world box's first node, the low corner of its
+/// first cell.
+fn first_node() -> [f32; 3] {
+    WORLD_ORIGIN.map(|c| (c as f32 - 0.5) * H)
+}
+
+/// The world box: the tank and its margin as pooled arrays under one table,
+/// and the same box as the dense grid the CPU statements read.
+struct World {
+    /// Node arrays (the solid, the face records).
+    nodes: BoxTable,
+    /// Cell arrays, on the same tiles.
+    cells: BoxTable,
+    grid: Box3,
+}
+
+impl World {
+    fn new() -> Self {
+        let cells = NODES.map(|n| n - 1 + 2 * MARGIN);
+        let nodes = BoxTable::new(WORLD_ORIGIN, cells.map(|n| n + 1));
+        let size = cells.map(|n| n as f32 * H);
+        let first = first_node();
+        Self {
+            cells: nodes.with_cells(cells),
+            grid: Box3 {
+                cells,
+                center: std::array::from_fn(|a| first[a] + 0.5 * size[a]),
+                size,
+            },
+            nodes,
+        }
+    }
+
+    /// The tank's low corner: where the fixture's origin lands.
+    fn tank_low(&self) -> [f32; 3] {
+        WORLD_ORIGIN.map(|c| ((c + MARGIN as i32) as f32 - 0.5) * H)
+    }
+
+    /// Moves a fixture pool, built round `ORIGIN`, into the tank.
+    fn shift(&self, pool: &mut [WhitewaterParticle]) {
+        let low = self.tank_low();
+        for p in pool {
+            for (a, x) in p.position_lifetime[..3].iter_mut().enumerate() {
+                *x += low[a] - ORIGIN[a];
+            }
+        }
+    }
+
+    /// The CPU fixture's tank over the world box, nodes counted from its
+    /// first: the walls one cell thick and the ball in place, the margin
+    /// solid all the way out.
+    fn solid(&self) -> Vec<f32> {
+        let tank_cells = NODES.map(|n| n - 1);
+        let ball: [f32; 3] = std::array::from_fn(|a| 0.45 * tank_cells[a] as f32 * H);
+        let [nx, ny, nz] = self.nodes.cells;
+        let mut solid = Vec::with_capacity((nx * ny * nz) as usize);
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let x = [i, j, k].map(|n| (n as i32 - MARGIN as i32) as f32 * H);
+                    let wall = (0..3)
+                        .map(|a| (x[a] - H).min(tank_cells[a] as f32 * H - H - x[a]))
+                        .fold(f32::INFINITY, f32::min);
+                    let d: [f32; 3] = std::array::from_fn(|a| x[a] - ball[a]);
+                    solid
+                        .push(wall.min((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - 3.0 * H));
+                }
+            }
+        }
+        let fixture = tank();
+        for k in 0..NODES[2] {
+            for j in 0..NODES[1] {
+                for i in 0..NODES[0] {
+                    let at = [i + MARGIN, j + MARGIN, k + MARGIN];
+                    assert_eq!(
+                        solid[(at[0] + nx * (at[1] + ny * at[2])) as usize],
+                        fixture[(i + NODES[0] * (j + NODES[1] * k)) as usize],
+                        "the tank's node {:?}",
+                        [i, j, k]
+                    );
+                }
+            }
+        }
+        solid
+    }
+
+    /// One record per node of the world box, the fixture's faces `MARGIN`
+    /// cells in, as the seam places them: a face has weight where the
+    /// fixture holds it.
+    fn face_records(&self, faces: &[Vec<f32>; 3]) -> Vec<FaceSample> {
+        let pad = (self.grid.cells[0] as i32 - FACE_CELLS[0] as i32) / 2;
+        let [nx, ny, nz] = self.nodes.cells;
+        let mut records = Vec::with_capacity((nx * ny * nz) as usize);
+        for z in 0..nz as i32 {
+            for y in 0..ny as i32 {
+                for x in 0..nx as i32 {
+                    let mut record = FaceSample::default();
+                    for (axis, axis_faces) in faces.iter().enumerate() {
+                        if let Some(i) = face_index([x, y, z], axis, pad, FACE_CELLS) {
+                            record.velocity[axis] = axis_faces[i];
+                            record.weight[axis] = 1.0;
+                        }
+                    }
+                    records.push(record);
+                }
+            }
+        }
+        records
+    }
+
+    /// The `cell_size` and `pool_tiles` params of every pooled atom.
+    fn pool_values(&self) -> [(&'static str, f32); 2] {
+        [
+            ("cell_size", H),
+            ("pool_tiles", self.nodes.pool_tiles as f32),
+        ]
+    }
+
+    /// The table words the atoms read the pools through.
+    fn tiles(&self, harness: &mut Harness) -> (Slot, GpuBuffer) {
+        harness.array(&self.nodes.words, self.nodes.words.len())
+    }
+
+    /// A cell array over the world box's cells (x fastest), `canon` elsewhere.
+    fn cell_pool<T: KnownItem + Copy>(
+        &self,
+        harness: &mut Harness,
+        dense: &[T],
+        canon: T,
+    ) -> (Slot, GpuBuffer) {
+        let pool = self.cells.to_pool(dense, canon);
+        harness.array(&pool, pool.len())
+    }
+
+    /// A node array over the world box's nodes (x fastest), `canon` elsewhere.
+    fn node_pool<T: KnownItem + Copy>(
+        &self,
+        harness: &mut Harness,
+        dense: &[T],
+        canon: T,
+    ) -> (Slot, GpuBuffer) {
+        let pool = self.nodes.to_pool(dense, canon);
+        harness.array(&pool, pool.len())
+    }
+}
+
+fn advect_values(s: Advect, world: &World) -> Vec<(&'static str, f32)> {
+    let low = first_node();
+    let [cell_size, pool_tiles] = world.pool_values();
     vec![
-        ("center_x", g.center[0]),
-        ("center_y", g.center[1]),
-        ("center_z", g.center[2]),
-        ("size_x", g.size[0]),
-        ("size_y", g.size[1]),
-        ("size_z", g.size[2]),
-        ("nodes_x", NODES[0] as f32),
-        ("nodes_y", NODES[1] as f32),
-        ("nodes_z", NODES[2] as f32),
-        ("face_cells_x", FACE_CELLS[0] as f32),
-        ("face_cells_y", FACE_CELLS[1] as f32),
-        ("face_cells_z", FACE_CELLS[2] as f32),
+        ("bounds_lo_x", low[0]),
+        ("bounds_lo_y", low[1]),
+        ("bounds_lo_z", low[2]),
         ("gravity_x", s.gravity[0]),
         ("gravity_y", s.gravity[1]),
         ("gravity_z", s.gravity[2]),
@@ -58,6 +230,8 @@ fn advect_values(s: Advect) -> Vec<(&'static str, f32)> {
         ("force_lattices", 0.0),
         ("tick_index", 0.0),
         ("first_tick", 0.0),
+        cell_size,
+        pool_tiles,
     ]
 }
 
@@ -78,24 +252,34 @@ fn close(a: f32, b: f32) -> bool {
 /// A velocity read from the faces is a weighted sum of values up to the
 /// face speed, so its rounding scales with that speed, not with the result.
 fn velocity_close(a: f32, b: f32) -> bool {
-    (a - b).abs() <= 1e-5 * (5.0 * grid().cell_size() * 60.0).max(b.abs())
+    (a - b).abs() <= 1e-5 * (5.0 * H * 60.0).max(b.abs())
 }
 
 struct Fixture {
+    world: World,
+    /// The solid nodes of the world box.
     solid: Vec<f32>,
+    /// The fixture's faces, for the CPU statements.
     faces: [Vec<f32>; 3],
+    /// The same faces as one record per node of the world box.
+    records: Vec<FaceSample>,
     pool: Vec<WhitewaterParticle>,
 }
 
 impl Fixture {
     fn new(seed: u64) -> Self {
+        let world = World::new();
         let mut rng = Rng(seed);
-        let speed = 5.0 * grid().cell_size() * 60.0;
+        let speed = 5.0 * H * 60.0;
         let faces = faces(&mut rng, speed / 3f32.sqrt());
+        let mut pool = pool(&mut rng, SLOTS, speed);
+        world.shift(&mut pool);
         Self {
-            solid: tank(),
+            solid: world.solid(),
+            records: world.face_records(&faces),
+            world,
             faces,
-            pool: pool(&mut rng, SLOTS, speed),
+            pool,
         }
     }
 
@@ -107,22 +291,28 @@ impl Fixture {
         }
     }
 
-    fn advect(&self, harness: &mut Harness, params: &ParamValues) -> Vec<WhitewaterParticle> {
+    fn advect(
+        &self,
+        harness: &mut Harness,
+        values: &[(&'static str, f32)],
+    ) -> Vec<WhitewaterParticle> {
         let pool = harness.array(&self.pool, SLOTS);
-        let faces = self.faces.each_ref().map(|f| harness.array(f, f.len()));
-        let solid = harness.array(&self.solid, self.solid.len());
+        let faces = self
+            .world
+            .node_pool(harness, &self.records, FaceSample::default());
+        let solid = self.world.node_pool(harness, &self.solid, CANONICAL_SOLID);
+        let tiles = self.world.tiles(harness);
         run(
             harness,
             &mut AdvectWhitewater::new(),
             &[
                 ("pool", pool.0),
-                ("face_u", faces[0].0),
-                ("face_v", faces[1].0),
-                ("face_w", faces[2].0),
+                ("faces", faces.0),
                 ("solid", solid.0),
+                ("tiles", tiles.0),
             ],
             SLOTS,
-            params,
+            &params(values),
         )
     }
 }
@@ -133,8 +323,8 @@ fn advect_whitewater_matches_cpu() {
     let fixture = Fixture::new(0xad7e_0001);
     let s = settings();
     let mut harness = Harness::new();
-    let got = fixture.advect(&mut harness, &params(&advect_values(s)));
-    let g = grid();
+    let got = fixture.advect(&mut harness, &advect_values(s, &fixture.world));
+    let g = fixture.world.grid;
     let (mut checked, mut edges, mut killed, mut bounced) = (0, 0, 0, 0);
     let mut kinds = [0; 3];
     for (i, (got, particle)) in got.iter().zip(&fixture.pool).enumerate() {
@@ -183,104 +373,30 @@ fn advect_whitewater_matches_cpu() {
 /// standalone kernel.
 #[test]
 fn advect_whitewater_fused_matches_unfused() {
-    use manifold_gpu::GpuBinding;
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
     let fixture = Fixture::new(0xad7e_0002);
-    let values = advect_values(settings());
+    let values = advect_values(settings(), &fixture.world);
     let mut harness = Harness::new();
-    let unfused = fixture.advect(&mut harness, &params(&values));
+    let unfused = fixture.advect(&mut harness, &values);
 
-    let region = FusionRegion {
-        nodes: vec![RegionNode {
-            node_id: NodeInstanceId(0),
-            fusion_kind: <AdvectWhitewater as PrimitiveSpec>::FUSION_KIND,
-            body: <AdvectWhitewater as PrimitiveSpec>::WGSL_BODY.expect("body"),
-            params: <AdvectWhitewater as PrimitiveSpec>::PARAMS,
-            inputs: (0..5)
-                .chain(std::iter::repeat_n(4, 6))
-                .map(InputSource::External)
-                .collect(),
-            input_access: <AdvectWhitewater as PrimitiveSpec>::INPUT_ACCESS.to_vec(),
-            node_inputs: <AdvectWhitewater as PrimitiveSpec>::INPUTS,
-            node_outputs: <AdvectWhitewater as PrimitiveSpec>::OUTPUTS,
-            node_includes: <AdvectWhitewater as PrimitiveSpec>::WGSL_INCLUDES,
-            derived_uniforms: <AdvectWhitewater as PrimitiveSpec>::DERIVED_UNIFORMS,
-            type_id: <AdvectWhitewater as PrimitiveSpec>::TYPE_ID.to_string(),
-            derived_camera_ext: None,
-            output_storage: "rgba16float",
-            stencil_fetch: false,
-            quantize_f16: false,
-        }],
-        num_external_inputs: 5,
-        outputs: vec![(NodeInstanceId(0), "out".to_string())],
-        in_place_alias: None,
-        sampler_address_mode: "clamp",
-        dispatch_count_field: None,
-        virtual_chains: Vec::new(),
-        sampled_externals: Vec::new(),
-        camera_externals: 0,
-        live_anchor: None,
-        output_capacity: None,
-    };
-    let fused = generate_fused(&region).expect("the advect fuses");
-    assert!(
-        naga::front::wgsl::parse_str(&fused.wgsl).is_ok(),
-        "fused WGSL parses:\n{}",
-        fused.wgsl
-    );
-    let lookup = |name: &str| values.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
-    let mut words: Vec<u32> = fused
-        .param_order
-        .iter()
-        .map(|&(member, name)| {
-            lookup(name)
-                .unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}"))
-                .to_bits()
-        })
-        .collect();
-    words.push(SLOTS as u32);
-    while !words.len().is_multiple_of(4) {
-        words.push(0);
-    }
     let pool = harness.array(&fixture.pool, SLOTS);
-    let faces = fixture.faces.each_ref().map(|f| harness.array(f, f.len()));
-    let solid = harness.array(&fixture.solid, fixture.solid.len());
-    let dst = harness.array::<WhitewaterParticle>(&[], SLOTS);
-    let pipeline =
-        harness
-            .device
-            .create_compute_pipeline(&fused.wgsl, ENTRY, "advect-whitewater-fused");
-    let mut enc = harness.device.create_encoder("advect-whitewater-fused");
-    let externals = [&pool.1, &faces[0].1, &faces[1].1, &faces[2].1, &solid.1];
-    let mut bindings = vec![GpuBinding::Bytes {
-        binding: 0,
-        data: bytemuck::cast_slice(&words),
-    }];
-    for (i, buffer) in externals.iter().enumerate() {
-        bindings.push(GpuBinding::Buffer {
-            binding: i as u32 + 1,
-            buffer,
-            offset: 0,
-        });
-    }
-    bindings.push(GpuBinding::Buffer {
-        binding: externals.len() as u32 + 1,
-        buffer: &dst.1,
-        offset: 0,
-    });
-    enc.dispatch_compute(
-        &pipeline,
-        &bindings,
-        [(SLOTS as u32).div_ceil(256), 1, 1],
-        "advect-whitewater-fused",
+    let faces = fixture
+        .world
+        .node_pool(&mut harness, &fixture.records, FaceSample::default());
+    let solid = fixture
+        .world
+        .node_pool(&mut harness, &fixture.solid, CANONICAL_SOLID);
+    let tiles = fixture.world.tiles(&mut harness);
+    let external = InputSource::External;
+    // Pool, faces, solid, the four optional arrays unwired (any array
+    // satisfies them: the substep count is 0), tiles.
+    let inputs = [0, 1, 2, 2, 2, 2, 2, 3].map(external).to_vec();
+    let fused_out: Vec<WhitewaterParticle> = fused(
+        &mut harness,
+        vec![member::<AdvectWhitewater>(0, inputs)],
+        &[&pool.1, &faces.1, &solid.1, &tiles.1],
+        SLOTS,
+        &values,
     );
-    enc.commit_and_wait_completed();
-    let fused_out: Vec<WhitewaterParticle> = read(&dst.1, SLOTS);
     for j in 0..SLOTS {
         assert_eq!(
             bytemuck::bytes_of(&fused_out[j]),
@@ -301,10 +417,6 @@ fn advect_whitewater_fused_matches_unfused() {
     );
 }
 
-fn grid_values() -> Vec<(&'static str, f32)> {
-    advect_values(settings()).into_iter().take(12).collect()
-}
-
 fn age_values(s: Age) -> Vec<(&'static str, f32)> {
     vec![
         ("dt", s.dt),
@@ -314,25 +426,25 @@ fn age_values(s: Age) -> Vec<(&'static str, f32)> {
     ]
 }
 
-/// The surface height in cells at cell column (x, z).
+/// The surface height in cells at tank cell column (x, z).
 fn level(x: f32, z: f32) -> f32 {
-    0.5 * grid().cells[1] as f32 + 4.0 * (0.3 * x).sin() + 3.0 * (0.2 * z).cos()
+    0.5 * (NODES[1] - 1) as f32 + 4.0 * (0.3 * x).sin() + 3.0 * (0.2 * z).cos()
 }
 
-/// A rolling liquid surface sampled at cell centres (negative in the liquid,
-/// metres), and its cell types: liquid below, air above, with a third of
-/// the air cells walled off as solid so some foam and spray sit with no air
-/// around them.
-fn surface(rng: &mut Rng) -> (Vec<f32>, Vec<u32>) {
-    let g = grid();
-    let h = g.cell_size();
-    let [nx, ny, nz] = g.cells;
+/// A rolling liquid surface sampled at the world box's cell centres
+/// (negative in the liquid, metres), and its cell types: liquid below, air
+/// above, with a third of the air cells walled off as solid so some foam and
+/// spray sit with no air around them. The surface continues over the margin.
+fn surface(world: &World, rng: &mut Rng) -> (Vec<f32>, Vec<u32>) {
+    let [nx, ny, nz] = world.cells.cells;
     let total = (nx * ny * nz) as usize;
     let (mut distance, mut cells) = (Vec::with_capacity(total), Vec::with_capacity(total));
+    // Cell n of the world box, counted in tank cells.
+    let rel = |n: u32| (n as i32 - MARGIN as i32) as f32;
     for k in 0..nz {
         for j in 0..ny {
             for i in 0..nx {
-                let d = (j as f32 + 0.5 - level(i as f32, k as f32)) * h;
+                let d = (rel(j) + 0.5 - level(rel(i), rel(k))) * H;
                 distance.push(d);
                 cells.push(if d < 0.0 {
                     1
@@ -349,17 +461,16 @@ fn surface(rng: &mut Rng) -> (Vec<f32>, Vec<u32>) {
 
 /// Moves every particle to within six cells of the surface, so every branch
 /// of the retype fires.
-fn near_surface(rng: &mut Rng, pool: &mut [WhitewaterParticle]) {
-    let g = grid();
-    let h = g.cell_size();
-    let origin: [f32; 3] = std::array::from_fn(|a| g.center[a] - 0.5 * g.size[a]);
+fn near_surface(world: &World, rng: &mut Rng, pool: &mut [WhitewaterParticle]) {
+    let low = world.tank_low();
+    let cells = NODES.map(|n| n - 1);
     for p in pool.iter_mut() {
-        let x = g.cells[0] as f32 * rng.unit();
-        let z = g.cells[2] as f32 * rng.unit();
+        let x = cells[0] as f32 * rng.unit();
+        let z = cells[2] as f32 * rng.unit();
         let y = level(x - 0.5, z - 0.5) + 6.0 * (2.0 * rng.unit() - 1.0);
-        p.position_lifetime[0] = origin[0] + x * h;
-        p.position_lifetime[1] = origin[1] + y * h;
-        p.position_lifetime[2] = origin[2] + z * h;
+        p.position_lifetime[0] = low[0] + x * H;
+        p.position_lifetime[1] = low[1] + y * H;
+        p.position_lifetime[2] = low[2] + z * H;
     }
 }
 
@@ -373,8 +484,8 @@ impl Typing {
     fn new(seed: u64) -> Self {
         let mut base = Fixture::new(seed);
         let mut rng = Rng(seed ^ 0x5eed);
-        near_surface(&mut rng, &mut base.pool);
-        let (distance, cells) = surface(&mut rng);
+        near_surface(&base.world, &mut rng, &mut base.pool);
+        let (distance, cells) = surface(&base.world, &mut rng);
         Self {
             base,
             distance,
@@ -387,29 +498,24 @@ impl Typing {
         harness: &mut Harness,
         pool: &[WhitewaterParticle],
     ) -> Vec<WhitewaterParticle> {
+        let world = &self.base.world;
         let pool = harness.array(pool, SLOTS);
-        let faces = self
-            .base
-            .faces
-            .each_ref()
-            .map(|f| harness.array(f, f.len()));
-        let (d, c) = (
-            harness.array(&self.distance, self.distance.len()),
-            harness.array(&self.cells, self.cells.len()),
-        );
+        let faces = world.node_pool(harness, &self.base.records, FaceSample::default());
+        let distance = world.cell_pool(harness, &self.distance, canonical_distance(H));
+        let cells = world.cell_pool(harness, &self.cells, CELL_AIR);
+        let tiles = world.tiles(harness);
         run(
             harness,
             &mut RetypeWhitewater::new(),
             &[
                 ("pool", pool.0),
-                ("distance", d.0),
-                ("cells", c.0),
-                ("face_u", faces[0].0),
-                ("face_v", faces[1].0),
-                ("face_w", faces[2].0),
+                ("distance", distance.0),
+                ("cells", cells.0),
+                ("faces", faces.0),
+                ("tiles", tiles.0),
             ],
             SLOTS,
-            &params(&grid_values()),
+            &params(&world.pool_values()),
         )
     }
 }
@@ -421,7 +527,7 @@ fn retype_whitewater_matches_cpu() {
     let fixture = Typing::new(0x2e7f_0001);
     let mut harness = Harness::new();
     let got = fixture.retype(&mut harness, &fixture.base.pool);
-    let g = grid();
+    let g = fixture.base.world.grid;
     let fields = fixture.base.fields();
     let (mut edges, mut buffered, mut picked) = (0, 0, 0);
     let mut moves = [[0; 3]; 3];
@@ -513,20 +619,13 @@ fn age_whitewater_matches_cpu() {
 /// bit the three standalone kernels in a row.
 #[test]
 fn whitewater_tick_fused_matches_unfused() {
-    use manifold_gpu::GpuBinding;
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
     let fixture = Typing::new(0x71c4_0001);
+    let world = &fixture.base.world;
     let s = settings();
     let a = Age::flip();
     let mut harness = Harness::new();
-    let advected = fixture
-        .base
-        .advect(&mut harness, &params(&advect_values(s)));
+    let advect = advect_values(s, world);
+    let advected = fixture.base.advect(&mut harness, &advect);
     let retyped = fixture.retype(&mut harness, &advected);
     let pool_in = harness.array(&retyped, SLOTS);
     let unfused: Vec<WhitewaterParticle> = run(
@@ -537,142 +636,32 @@ fn whitewater_tick_fused_matches_unfused() {
         &params(&age_values(a)),
     );
 
-    macro_rules! member {
-        ($n:expr, $atom:ty, $inputs:expr) => {
-            RegionNode {
-                node_id: NodeInstanceId($n),
-                fusion_kind: <$atom as PrimitiveSpec>::FUSION_KIND,
-                body: <$atom as PrimitiveSpec>::WGSL_BODY.expect("body"),
-                params: <$atom as PrimitiveSpec>::PARAMS,
-                inputs: $inputs,
-                input_access: <$atom as PrimitiveSpec>::INPUT_ACCESS.to_vec(),
-                node_inputs: <$atom as PrimitiveSpec>::INPUTS,
-                node_outputs: <$atom as PrimitiveSpec>::OUTPUTS,
-                node_includes: <$atom as PrimitiveSpec>::WGSL_INCLUDES,
-                derived_uniforms: <$atom as PrimitiveSpec>::DERIVED_UNIFORMS,
-                type_id: <$atom as PrimitiveSpec>::TYPE_ID.to_string(),
-                derived_camera_ext: None,
-                output_storage: "rgba16float",
-                stencil_fetch: false,
-                quantize_f16: false,
-            }
-        };
-    }
+    let pool = harness.array(&fixture.base.pool, SLOTS);
+    let faces = world.node_pool(&mut harness, &fixture.base.records, FaceSample::default());
+    let solid = world.node_pool(&mut harness, &fixture.base.solid, CANONICAL_SOLID);
+    let tiles = world.tiles(&mut harness);
+    let distance = world.cell_pool(&mut harness, &fixture.distance, canonical_distance(H));
+    let cells = world.cell_pool(&mut harness, &fixture.cells, CELL_AIR);
     let external = InputSource::External;
     let node = |n: u32| InputSource::Node(NodeInstanceId(n));
-    let region = FusionRegion {
-        nodes: vec![
-            member!(
-                0,
-                AdvectWhitewater,
-                (0..5)
-                    .chain(std::iter::repeat_n(4, 6))
-                    .map(external)
-                    .collect()
-            ),
-            member!(
+    // The advect and the age both step by `dt`: the fused kernel takes one
+    // value for both.
+    assert_eq!(s.dt, a.dt);
+    let values = [advect, age_values(a)].concat();
+    let fused_out: Vec<WhitewaterParticle> = fused(
+        &mut harness,
+        vec![
+            member::<AdvectWhitewater>(0, [0, 1, 2, 2, 2, 2, 2, 3].map(external).to_vec()),
+            member::<RetypeWhitewater>(
                 1,
-                RetypeWhitewater,
-                vec![
-                    node(0),
-                    external(5),
-                    external(6),
-                    external(1),
-                    external(2),
-                    external(3)
-                ]
+                vec![node(0), external(4), external(5), external(1), external(3)],
             ),
-            member!(2, AgeWhitewater, vec![node(1)]),
+            member::<AgeWhitewater>(2, vec![node(1)]),
         ],
-        num_external_inputs: 7,
-        outputs: vec![(NodeInstanceId(2), "out".to_string())],
-        in_place_alias: None,
-        sampler_address_mode: "clamp",
-        dispatch_count_field: None,
-        virtual_chains: Vec::new(),
-        sampled_externals: Vec::new(),
-        camera_externals: 0,
-        live_anchor: None,
-        output_capacity: None,
-    };
-    let fused = generate_fused(&region).expect("the tick fuses");
-    assert!(
-        naga::front::wgsl::parse_str(&fused.wgsl).is_ok(),
-        "fused WGSL parses:\n{}",
-        fused.wgsl
+        &[&pool.1, &faces.1, &solid.1, &tiles.1, &distance.1, &cells.1],
+        SLOTS,
+        &values,
     );
-    let (advect_side, age_side) = (advect_values(s), age_values(a));
-    let lookup = |member: NodeInstanceId, name: &str| {
-        let side = if member == NodeInstanceId(2) {
-            &age_side
-        } else {
-            &advect_side
-        };
-        side.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
-    };
-    let mut words: Vec<u32> = fused
-        .param_order
-        .iter()
-        .map(|&(member, name)| {
-            lookup(member, name)
-                .unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}"))
-                .to_bits()
-        })
-        .collect();
-    words.push(SLOTS as u32);
-    while !words.len().is_multiple_of(4) {
-        words.push(0);
-    }
-    let pool = harness.array(&fixture.base.pool, SLOTS);
-    let faces = fixture
-        .base
-        .faces
-        .each_ref()
-        .map(|f| harness.array(f, f.len()));
-    let solid = harness.array(&fixture.base.solid, fixture.base.solid.len());
-    let (d, c) = (
-        harness.array(&fixture.distance, fixture.distance.len()),
-        harness.array(&fixture.cells, fixture.cells.len()),
-    );
-    let dst = harness.array::<WhitewaterParticle>(&[], SLOTS);
-    let pipeline =
-        harness
-            .device
-            .create_compute_pipeline(&fused.wgsl, ENTRY, "whitewater-tick-fused");
-    let mut enc = harness.device.create_encoder("whitewater-tick-fused");
-    let externals = [
-        &pool.1,
-        &faces[0].1,
-        &faces[1].1,
-        &faces[2].1,
-        &solid.1,
-        &d.1,
-        &c.1,
-    ];
-    let mut bindings = vec![GpuBinding::Bytes {
-        binding: 0,
-        data: bytemuck::cast_slice(&words),
-    }];
-    for (i, buffer) in externals.iter().enumerate() {
-        bindings.push(GpuBinding::Buffer {
-            binding: i as u32 + 1,
-            buffer,
-            offset: 0,
-        });
-    }
-    bindings.push(GpuBinding::Buffer {
-        binding: externals.len() as u32 + 1,
-        buffer: &dst.1,
-        offset: 0,
-    });
-    enc.dispatch_compute(
-        &pipeline,
-        &bindings,
-        [(SLOTS as u32).div_ceil(256), 1, 1],
-        "whitewater-tick-fused",
-    );
-    enc.commit_and_wait_completed();
-    let fused_out: Vec<WhitewaterParticle> = read(&dst.1, SLOTS);
     for j in 0..SLOTS {
         assert_eq!(
             bytemuck::bytes_of(&fused_out[j]),
@@ -694,10 +683,9 @@ fn whitewater_tick_fused_matches_unfused() {
 /// them dead, which FLIP still counts), plus bubbles, spray, empty slots and
 /// foam with no finite position, shuffled. Every position sits clear of its
 /// cell's faces, so the sort's bin and FLIP's cell agree.
-fn crowded(rng: &mut Rng) -> Vec<WhitewaterParticle> {
-    let g = grid();
-    let h = g.cell_size();
-    let origin: [f32; 3] = std::array::from_fn(|a| g.center[a] - 0.5 * g.size[a]);
+fn crowded(world: &World, rng: &mut Rng) -> Vec<WhitewaterParticle> {
+    let cells = NODES.map(|n| n - 1);
+    let low = world.tank_low();
     let mut pool = Vec::new();
     let add = |pool: &mut Vec<WhitewaterParticle>,
                rng: &mut Rng,
@@ -705,7 +693,7 @@ fn crowded(rng: &mut Rng) -> Vec<WhitewaterParticle> {
                kind: u32,
                lifetime: f32| {
         let p: [f32; 3] =
-            std::array::from_fn(|a| origin[a] + (cell[a] as f32 + 0.02 + 0.96 * rng.unit()) * h);
+            std::array::from_fn(|a| low[a] + (cell[a] as f32 + 0.02 + 0.96 * rng.unit()) * H);
         pool.push(WhitewaterParticle {
             position_lifetime: [p[0], p[1], p[2], lifetime],
             kind,
@@ -715,7 +703,7 @@ fn crowded(rng: &mut Rng) -> Vec<WhitewaterParticle> {
     };
     for k in 0..70u32 {
         let cell: [u32; 3] =
-            std::array::from_fn(|a| (rng.unit() * g.cells[a] as f32) as u32 % g.cells[a]);
+            std::array::from_fn(|a| (rng.unit() * cells[a] as f32) as u32 % cells[a]);
         for n in 0..k {
             let lifetime = if n % 4 == 3 { -0.01 } else { 0.2 + rng.unit() };
             add(&mut pool, rng, cell, 1, lifetime);
@@ -735,42 +723,74 @@ fn crowded(rng: &mut Rng) -> Vec<WhitewaterParticle> {
     pool
 }
 
-fn preserve_values(s: Preserve, enabled: bool) -> Vec<(&'static str, f32)> {
-    let g = grid();
-    let bins = bin_counts(g.size, g.cell_size());
+fn preserve_values(world: &World, s: Preserve, enabled: bool) -> Vec<(&'static str, f32)> {
+    let [cell_size, pool_tiles] = world.pool_values();
     vec![
         ("enabled", if enabled { 1.0 } else { 0.0 }),
         ("dt", s.dt),
         ("rate", s.rate),
         ("min_density", s.min_density),
         ("max_density", s.max_density),
-        ("center_x", g.center[0]),
-        ("center_y", g.center[1]),
-        ("center_z", g.center[2]),
-        ("size_x", g.size[0]),
-        ("size_y", g.size[1]),
-        ("size_z", g.size[2]),
-        ("cell_size", g.cell_size()),
-        ("bins_x", bins[0] as f32),
-        ("bins_y", bins[1] as f32),
-        ("bins_z", bins[2] as f32),
+        cell_size,
+        pool_tiles,
     ]
 }
 
-/// The pool's bins from the sort over the whitewater grid: (pool, ranges, order) slots.
-fn sort_pool(harness: &mut Harness, pool: &[WhitewaterParticle]) -> (Slot, Slot, Slot) {
-    let input = harness.array(pool, pool.len());
-    let (ranges, _) = harness.array::<CellRange>(&[], 1);
-    let (order, _) = harness.array::<u32>(&[], pool.len());
-    let values = preserve_values(Preserve::flip(), true);
-    let (_, errors) = harness.run(
-        &mut SortParticlesIntoCells::new(),
-        &[("particles", input.0)],
-        &[("cell_ranges", ranges), ("order", order)],
-        &params(&values[5..12]),
-    );
-    assert!(errors.is_empty(), "{errors:?}");
-    (input.0, ranges, order)
+/// A pool and its bins from the pooled sort over the world box.
+struct Binned {
+    particles: (Slot, GpuBuffer),
+    ranges: (Slot, GpuBuffer),
+    order: (Slot, GpuBuffer),
+}
+
+/// `particles` sorted into the world box's pool elements: the ranges (one
+/// per element, the canonical element last) and the order of the slots.
+fn sort_into_world<T: KnownItem + bytemuck::Pod>(
+    harness: &mut Harness,
+    world: &World,
+    particles: &[T],
+    record: RecordRead,
+) -> Binned {
+    let input = harness.array(particles, particles.len());
+    let order = harness.array::<u32>(&[], particles.len());
+    let tiles = world.tiles(harness);
+    let pool_tiles = world.nodes.pool_tiles;
+    let mut sorter = ParticleSorter::default();
+    sorter.prepare_pooled(&harness.device);
+    sorter
+        .reserve_keys(&harness.device, pool_len(pool_tiles))
+        .expect("the cell ranges");
+    let mut enc = harness.device.create_encoder("whitewater pooled sort");
+    sorter
+        .encode_pooled(
+            &harness.device,
+            &mut enc,
+            &SortJob {
+                particles: &input.1,
+                read: record,
+                capacity: particles.len() as u32,
+                count: SortCount::Slots(particles.len() as u32),
+                bin_min: lattice_origin(H),
+                inv_cell: 1.0 / H,
+                bins: [0; 3],
+                sorted: None,
+                order: Some(&order.1),
+                gate: None,
+            },
+            &tiles.1,
+            pool_tiles,
+            &LABELS,
+        )
+        .expect("the pooled sort encodes");
+    enc.commit_and_wait_completed();
+    let len = pool_len(pool_tiles) as usize;
+    let ranges: Vec<CellRange> = read(sorter.ranges().expect("the cell ranges"), len);
+    let ranges = harness.array(&ranges, len);
+    Binned {
+        particles: input,
+        ranges,
+        order,
+    }
 }
 
 /// Whitewater particles sort in place: ranges and order are byte-identical to
@@ -779,7 +799,8 @@ fn sort_pool(harness: &mut Harness, pool: &[WhitewaterParticle]) -> (Slot, Slot,
 #[test]
 fn sort_bins_whitewater_particles_dead_and_alive() {
     let mut harness = Harness::new();
-    let pool = crowded(&mut Rng(0x5047_0001));
+    let world = World::new();
+    let pool = crowded(&world, &mut Rng(0x5047_0001));
     let liquid: Vec<FluidParticle> = pool
         .iter()
         .map(|p| {
@@ -792,33 +813,22 @@ fn sort_bins_whitewater_particles_dead_and_alive() {
             }
         })
         .collect();
-    let bins = |harness: &mut Harness, sorted: (Slot, Slot, Slot)| {
-        let (ranges, order) = (harness.buffer(sorted.1), harness.buffer(sorted.2));
+    let len = pool_len(world.nodes.pool_tiles) as usize;
+    let bins = |binned: &Binned| {
         (
-            read::<u8>(&ranges, ranges.size as usize),
-            read::<u8>(&order, order.size as usize),
+            read::<CellRange>(&binned.ranges.1, len),
+            read::<u32>(&binned.order.1, pool.len()),
         )
     };
     let whitewater = {
-        let slots = sort_pool(&mut harness, &pool);
-        bins(&mut harness, slots)
+        let binned = sort_into_world(&mut harness, &world, &pool, whitewater_record_read());
+        bins(&binned)
     };
-    let input = harness.array(&liquid, liquid.len());
-    let (ranges, _) = harness.array::<CellRange>(&[], 1);
-    let (order, _) = harness.array::<u32>(&[], liquid.len());
-    let values = preserve_values(Preserve::flip(), true);
-    let (_, errors) = harness.run(
-        &mut SortParticlesIntoCells::new(),
-        &[("particles", input.0)],
-        &[("cell_ranges", ranges), ("order", order)],
-        &params(&values[5..12]),
-    );
-    assert!(errors.is_empty(), "{errors:?}");
-    let expected = bins(&mut harness, (input.0, ranges, order));
-    let live: u32 = bytemuck::cast_slice::<u8, CellRange>(&expected.0)
-        .iter()
-        .map(|r| r.count)
-        .sum();
+    let expected = {
+        let binned = sort_into_world(&mut harness, &world, &liquid, LIQUID_PARTICLE_READ);
+        bins(&binned)
+    };
+    let live: u32 = expected.0.iter().map(|r| r.count).sum();
     let dead = pool
         .iter()
         .filter(|p| p.kind < 3 && p.position_lifetime[3] <= 0.0)
@@ -827,26 +837,31 @@ fn sort_bins_whitewater_particles_dead_and_alive() {
         dead > 100 && (live as usize) < pool.len() && live > 2000,
         "live {live}, dead {dead}"
     );
-    assert_eq!(
-        whitewater, expected,
+    assert!(
+        whitewater.0 == expected.0 && whitewater.1 == expected.1,
         "whitewater bins and order exactly as the equivalent liquid particles"
     );
+    // The crowd lies in held tiles: nothing is in the canonical bin.
+    assert_eq!(expected.0.last().map(|r| r.count), Some(0));
 }
 
 fn preserve_run(
     harness: &mut Harness,
+    world: &World,
     pool: &[WhitewaterParticle],
     values: &[(&'static str, f32)],
 ) -> Vec<WhitewaterParticle> {
-    let (input, ranges, order) = sort_pool(harness, pool);
+    let binned = sort_into_world(harness, world, pool, whitewater_record_read());
+    let tiles = world.tiles(harness);
     run(
         harness,
         &mut PreserveFoam::new(),
         &[
-            ("pool", input),
-            ("binned", input),
-            ("cell_ranges", ranges),
-            ("order", order),
+            ("pool", binned.particles.0),
+            ("binned", binned.particles.0),
+            ("cell_ranges", binned.ranges.0),
+            ("order", binned.order.0),
+            ("tiles", tiles.0),
         ],
         pool.len(),
         &params(values),
@@ -859,17 +874,21 @@ fn preserve_run(
 #[test]
 fn preserve_foam_matches_flip() {
     let mut harness = Harness::new();
-    let pool = crowded(&mut Rng(0x9e5e_0001));
+    let world = World::new();
+    let pool = crowded(&world, &mut Rng(0x9e5e_0001));
     let s = Preserve {
         dt: 1.0 / 50.0,
         rate: 0.9,
         min_density: 15.0,
         max_density: 50.0,
     };
-    let got = preserve_run(&mut harness, &pool, &preserve_values(s, true));
-    let g = grid();
-    let origin: [f32; 3] = std::array::from_fn(|a| g.center[a] - 0.5 * g.size[a]);
-    let want = cpu::preserve(&pool, origin, g.cell_size(), g.cells, s);
+    let got = preserve_run(
+        &mut harness,
+        &world,
+        &pool,
+        &preserve_values(&world, s, true),
+    );
+    let want = cpu::preserve(&pool, world.tank_low(), H, NODES.map(|n| n - 1), s);
     let (mut partial, mut full, mut none, mut revived) = (0, 0, 0, 0);
     for (i, ((got, want), before)) in got.iter().zip(&want).zip(&pool).enumerate() {
         let (mut a, mut b) = (*got, *want);
@@ -900,7 +919,12 @@ fn preserve_foam_matches_flip() {
         "{partial} {full} {none} {revived}"
     );
 
-    let off = preserve_run(&mut harness, &pool, &preserve_values(s, false));
+    let off = preserve_run(
+        &mut harness,
+        &world,
+        &pool,
+        &preserve_values(&world, s, false),
+    );
     assert_eq!(
         bytemuck::cast_slice::<_, u8>(&off),
         bytemuck::cast_slice::<_, u8>(&pool),
@@ -912,109 +936,30 @@ fn preserve_foam_matches_flip() {
 /// the standalone kernel.
 #[test]
 fn preserve_foam_fused_matches_unfused() {
-    use manifold_gpu::GpuBinding;
-    use manifold_node_engine::exec::effect_node::NodeInstanceId;
-    use manifold_node_engine::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use manifold_node_engine::primitive::PrimitiveSpec;
-
     let mut harness = Harness::new();
-    let pool = crowded(&mut Rng(0x9e5e_0002));
-    let values = preserve_values(Preserve::flip(), true);
-    let unfused = preserve_run(&mut harness, &pool, &values);
-    let region = FusionRegion {
-        nodes: vec![RegionNode {
-            node_id: NodeInstanceId(0),
-            fusion_kind: <PreserveFoam as PrimitiveSpec>::FUSION_KIND,
-            body: <PreserveFoam as PrimitiveSpec>::WGSL_BODY.expect("body"),
-            params: <PreserveFoam as PrimitiveSpec>::PARAMS,
-            inputs: (0..4).map(InputSource::External).collect(),
-            input_access: <PreserveFoam as PrimitiveSpec>::INPUT_ACCESS.to_vec(),
-            node_inputs: <PreserveFoam as PrimitiveSpec>::INPUTS,
-            node_outputs: <PreserveFoam as PrimitiveSpec>::OUTPUTS,
-            node_includes: <PreserveFoam as PrimitiveSpec>::WGSL_INCLUDES,
-            derived_uniforms: <PreserveFoam as PrimitiveSpec>::DERIVED_UNIFORMS,
-            type_id: <PreserveFoam as PrimitiveSpec>::TYPE_ID.to_string(),
-            derived_camera_ext: None,
-            output_storage: "rgba16float",
-            stencil_fetch: false,
-            quantize_f16: false,
-        }],
-        num_external_inputs: 4,
-        outputs: vec![(NodeInstanceId(0), "out".to_string())],
-        in_place_alias: None,
-        sampler_address_mode: "clamp",
-        dispatch_count_field: None,
-        virtual_chains: Vec::new(),
-        sampled_externals: Vec::new(),
-        camera_externals: 0,
-        live_anchor: None,
-        output_capacity: None,
-    };
-    let fused = generate_fused(&region).expect("the preservation fuses");
-    assert!(
-        naga::front::wgsl::parse_str(&fused.wgsl).is_ok(),
-        "fused WGSL parses:\n{}",
-        fused.wgsl
+    let world = World::new();
+    let pool = crowded(&world, &mut Rng(0x9e5e_0002));
+    let values = preserve_values(&world, Preserve::flip(), true);
+    let unfused = preserve_run(&mut harness, &world, &pool, &values);
+
+    let binned = sort_into_world(&mut harness, &world, &pool, whitewater_record_read());
+    let tiles = world.tiles(&mut harness);
+    // The pool read in place and as the bins' records: two externals over
+    // one buffer.
+    let inputs = (0..5).map(InputSource::External).collect();
+    let fused_out: Vec<WhitewaterParticle> = fused(
+        &mut harness,
+        vec![member::<PreserveFoam>(0, inputs)],
+        &[
+            &binned.particles.1,
+            &binned.particles.1,
+            &binned.ranges.1,
+            &binned.order.1,
+            &tiles.1,
+        ],
+        pool.len(),
+        &values,
     );
-    let mut words: Vec<u32> = fused
-        .param_order
-        .iter()
-        .map(|&(member, name)| {
-            let v = values
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, v)| *v)
-                .unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}"));
-            if name.starts_with("bins_") {
-                (v as i32) as u32
-            } else {
-                v.to_bits()
-            }
-        })
-        .collect();
-    words.push(pool.len() as u32);
-    while !words.len().is_multiple_of(4) {
-        words.push(0);
-    }
-    let (input, ranges, order) = sort_pool(&mut harness, &pool);
-    let externals = [
-        harness.buffer(input),
-        harness.buffer(input),
-        harness.buffer(ranges),
-        harness.buffer(order),
-    ];
-    let dst = harness.array::<WhitewaterParticle>(&[], pool.len());
-    let pipeline =
-        harness
-            .device
-            .create_compute_pipeline(&fused.wgsl, ENTRY, "preserve-foam-fused");
-    let mut enc = harness.device.create_encoder("preserve-foam-fused");
-    let mut bindings = vec![GpuBinding::Bytes {
-        binding: 0,
-        data: bytemuck::cast_slice(&words),
-    }];
-    for (i, buffer) in externals.iter().enumerate() {
-        bindings.push(GpuBinding::Buffer {
-            binding: i as u32 + 1,
-            buffer,
-            offset: 0,
-        });
-    }
-    bindings.push(GpuBinding::Buffer {
-        binding: externals.len() as u32 + 1,
-        buffer: &dst.1,
-        offset: 0,
-    });
-    enc.dispatch_compute(
-        &pipeline,
-        &bindings,
-        [(pool.len() as u32).div_ceil(256), 1, 1],
-        "preserve-foam-fused",
-    );
-    enc.commit_and_wait_completed();
-    let fused_out: Vec<WhitewaterParticle> = read(&dst.1, pool.len());
     for j in 0..pool.len() {
         assert_eq!(
             bytemuck::bytes_of(&fused_out[j]),

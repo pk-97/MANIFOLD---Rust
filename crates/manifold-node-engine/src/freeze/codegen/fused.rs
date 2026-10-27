@@ -36,7 +36,9 @@ pub(super) fn is_param_derived(node: &RegionNode<'_>, derived_name: &str) -> boo
 /// fns, so without carrying the prelude it would silently drop those decls and
 /// the kernel would fail to compile (`no definition in scope`). WGSL has no
 /// nested fns, so a column-0 `fn ` reliably starts each definition; a block runs
-/// until the next column-0 `fn `. Leading comments / blank lines are dropped
+/// until the next column-0 `fn `, less the blank and comment lines before it
+/// (they head the next definition), so two bodies sharing a helper dedup it
+/// whatever comments follow it. Leading comments / blank lines are dropped
 /// (only real declarations are carried).
 pub(super) fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
     let mut prelude: Vec<String> = Vec::new();
@@ -47,6 +49,11 @@ pub(super) fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
     // `(`/`[`/`{` carried over, so continuation lines join the prelude instead
     // of being dropped (which would truncate the declaration mid-expression).
     let mut open_brackets = 0i32;
+    // A definition ends on the line its braces close, so a top-level `const`
+    // or comment after it is not part of its text: two bodies sharing a helper
+    // split it to the same text whatever follows it in each.
+    let mut fn_depth = 0i32;
+    let mut fn_opened = false;
     for line in fragment.lines() {
         if let Some(rest) = line.strip_prefix("fn ") {
             if let Some((name, lines)) = current.take() {
@@ -56,9 +63,23 @@ pub(super) fn split_fns(fragment: &str) -> (Vec<String>, Vec<FnBlock>) {
                 });
             }
             let name = rest.split('(').next().unwrap_or("").trim().to_string();
-            current = Some((name, vec![line.to_string()]));
-        } else if let Some((_, lines)) = current.as_mut() {
+            current = Some((name, Vec::new()));
+            fn_depth = 0;
+            fn_opened = false;
+        }
+        if let Some((_, lines)) = current.as_mut() {
             lines.push(line.to_string());
+            let code = line.split("//").next().unwrap_or("");
+            let opens = code.matches('{').count() as i32;
+            fn_opened |= opens > 0;
+            fn_depth += opens - code.matches('}').count() as i32;
+            if fn_opened && fn_depth <= 0 {
+                let (name, lines) = current.take().expect("open definition");
+                blocks.push(FnBlock {
+                    name,
+                    text: lines.join("\n"),
+                });
+            }
         } else if open_brackets > 0 || is_top_level_decl(line) {
             // One prelude ENTRY per declaration (continuation lines append to
             // the open entry) so the fused paths' dedup-by-entry compares whole
@@ -1087,4 +1108,34 @@ fn chain_member_args(
         return Err(CodegenError::BadInput);
     }
     Ok(args)
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::split_fns;
+
+    /// Two bodies sharing a helper, each followed by its own comment or const,
+    /// split the helper to the same text, so the fused kernel keeps one copy.
+    #[test]
+    fn a_shared_helper_splits_the_same_whatever_comment_follows_it() {
+        let helper = "fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }";
+        let a = format!(
+            "var<private> ww_pool_tiles: u32;\n{helper}\n\n// node.a: one body\nfn body() -> f32 {{ return 1.0; }}\n"
+        );
+        let b = format!(
+            "var<private> ww_pool_tiles: u32;\n{helper}\n// node.b: another\nconst B_DEPTH: f32 = 1.0;\nfn body() -> f32 {{\n    return B_DEPTH;\n}}\n"
+        );
+        let (pa, ba) = split_fns(&a);
+        let (pb, bb) = split_fns(&b);
+        assert_eq!(pa[0], pb[0], "the private pool line is one prelude entry");
+        assert_eq!(
+            pb[1], "const B_DEPTH: f32 = 1.0;",
+            "a const after a helper is prelude"
+        );
+        assert_eq!(ba[0].name, "ts_pool_tiles");
+        assert_eq!(ba[0].text, helper);
+        assert_eq!(ba[0].text, bb[0].text);
+        assert_eq!(ba[1].name, "body");
+        assert_eq!(bb[1].text, "fn body() -> f32 {\n    return B_DEPTH;\n}");
+    }
 }

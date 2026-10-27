@@ -1,4 +1,7 @@
-//! Shader checks on the CPU, bitwise stage oracles on the GPU.
+//! Shader checks on the CPU, bitwise stage oracles on the GPU. Every pooled
+//! input sits on a [`BoxTable`]: a box of cells whose first cell is a world
+//! cell chosen so the box straddles tiles on both sides of the origin and
+//! leaves part of each edge tile to the canonical element.
 use super::*;
 use manifold_water_liquid::testkit::world_box::BoxTable;
 
@@ -15,74 +18,103 @@ fn validate_wgsl(source: &str) -> naga::Module {
     module
 }
 
+/// Bytes the shader's uniform `name` spans, a struct.
+#[cfg(test)]
+fn uniform_span(module: &naga::Module, name: &str) -> usize {
+    let (_, var) = module
+        .global_variables
+        .iter()
+        .find(|(_, var)| var.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("the shader declares no {name}"));
+    match module.types[var.ty].inner {
+        naga::TypeInner::Struct { span, .. } => span as usize,
+        ref other => panic!("{name} is {other:?}, not a struct"),
+    }
+}
+
 #[test]
-fn whitewater_fused_and_gather_validate_on_cpu() {
+fn whitewater_fused_and_restart_validate_on_cpu() {
     let module = validate_wgsl(&fused_source());
-    assert_eq!(std::mem::size_of::<EmitParams>(), 128);
-    assert_eq!(std::mem::size_of::<SpawnParams>(), 112);
-    assert_eq!(std::mem::size_of::<LifecycleParams>(), 144);
-    assert_eq!(std::mem::size_of::<TurbulenceParams>(), 32);
-    assert_eq!(std::mem::size_of::<GatherParams>(), 48);
-    assert_eq!(module.entry_points.len(), 5);
+    // The Rust uniforms are the shader's structs byte for byte.
+    for (name, bytes) in [
+        ("p", std::mem::size_of::<EmitParams>()),
+        ("sp", std::mem::size_of::<SpawnParams>()),
+        ("lc", std::mem::size_of::<LifecycleParams>()),
+        ("tf", std::mem::size_of::<TurbulenceParams>()),
+    ] {
+        assert_eq!(uniform_span(&module, name), bytes, "uniform {name}");
+    }
+    // `Fused::index` is the entry's place in the shader.
+    let entries: Vec<_> = module
+        .entry_points
+        .iter()
+        .map(|e| e.name.as_str())
+        .collect();
+    assert_eq!(entries, FUSED_ENTRIES.map(|(entry, _)| entry));
     for entry in &module.entry_points {
         assert_eq!(entry.workgroup_size, [256, 1, 1]);
     }
-    let gather = validate_wgsl(&gather_source());
-    assert_eq!(gather.entry_points.len(), 1);
-    assert_eq!(gather.entry_points[0].name, GATHER_ENTRY.0);
-    assert_eq!(gather.entry_points[0].workgroup_size, [256, 1, 1]);
+    let hand = validate_wgsl(WHITEWATER_STEP_SHADER);
+    assert_eq!(
+        uniform_span(&hand, "params"),
+        std::mem::size_of::<HandParams>()
+    );
+    assert_eq!(
+        uniform_span(&hand, "restart"),
+        std::mem::size_of::<RestartParams>()
+    );
+    let restart = hand
+        .entry_points
+        .iter()
+        .find(|e| e.name == RESTART_ENTRY.0)
+        .expect("the restart pass is a hand entry");
+    assert_eq!(restart.workgroup_size, [256, 1, 1]);
 }
 
-/// A dense face-cells distance lattice as the step's pooled field: the cells
-/// at the shape's world cell origin, in a world-tile table holding the tiles
-/// they touch. Returns the pooled phi, the table words and the pool's tiles.
-/// Cells of those tiles outside the lattice read 0, the canonical value.
-pub fn pooled_distance(dense: &[f32], shape: &StepShape) -> (Vec<f32>, Vec<u32>, u32) {
-    let table = BoxTable::new(shape.cell_origin, shape.face_cells);
-    (table.to_pool(dense, 0.0), table.words, table.pool_tiles)
+/// The cell size of the synthetic tests, metres.
+pub const CELL: f32 = 0.1;
+
+/// The box every synthetic test places: 16 cells a side from world cell
+/// (-5, -6, -7), so it touches 27 tiles, none of them filled, and crosses
+/// the origin on every axis.
+pub fn synthetic_table() -> BoxTable {
+    BoxTable::new([-5, -6, -7], [16; 3])
 }
 
-/// A dense face-record lattice (`(n+1)^3`) as the step's pooled faces: record
-/// p lives with world cell cell_origin + p, in a world-tile table holding the
-/// tiles the records touch. Returns the pooled records, the table words and
-/// the pool's tiles. Cells of those tiles outside the lattice hold no face.
-pub fn pooled_faces(dense: &[FaceSample], shape: &StepShape) -> (Vec<FaceSample>, Vec<u32>, u32) {
-    let table = BoxTable::new(shape.cell_origin, shape.face_cells.map(|n| n + 1));
-    (
-        table.to_pool(dense, FaceSample::default()),
-        table.words,
-        table.pool_tiles,
-    )
+/// The scene position of the low corner of `table`'s first cell, where the
+/// force fields of the tests start.
+pub fn low_corner(table: &BoxTable, cell_size: f32) -> [f32; 3] {
+    table.origin.map(|c| (c as f32 - 0.5) * cell_size)
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
-fn synthetic_faces() -> [Vec<f32>; 3] {
-    std::array::from_fn(|a| vec![[2.0, 1.0, -0.5][a]; face_len([8; 3], a) as usize])
+/// The scene position of the middle of `table`'s box.
+pub fn middle(table: &BoxTable, cell_size: f32) -> [f32; 3] {
+    std::array::from_fn(|a| {
+        (table.origin[a] as f32 + 0.5 * (table.cells[a] as f32 - 1.0)) * cell_size
+    })
 }
 
-pub fn synthetic_shape() -> StepShape {
+/// The step's shape over `table`'s pool.
+pub fn step_shape(table: &BoxTable, cell_size: f32, capacity: u32) -> StepShape {
     StepShape::new(
-        [13; 3],
-        [8; 3],
-        1.0,
-        Some(Transform {
-            pos: [0.6; 3],
-            scale: [1.2; 3],
-            ..Default::default()
-        }),
-        256,
+        WhitewaterPool {
+            pool_tiles: table.pool_tiles,
+            cell_size,
+        },
+        capacity,
     )
     .unwrap()
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
-fn synthetic_records() -> Vec<FluidParticle> {
+#[cfg(feature = "gpu-proofs")]
+fn synthetic_records(table: &BoxTable, cell_size: f32) -> Vec<FluidParticle> {
+    let m = middle(table, cell_size);
     (0..8)
         .map(|i| FluidParticle {
             position_radius: [
-                0.45 + 0.015 * i as f32,
-                0.5,
-                0.5,
+                m[0] - 0.15 + 0.015 * i as f32,
+                m[1] - 0.1,
+                m[2] - 0.1,
                 if i == 6 {
                     0.0
                 } else if i == 7 {
@@ -95,37 +127,6 @@ fn synthetic_records() -> Vec<FluidParticle> {
             id: 255 - i,
         })
         .collect()
-}
-
-#[test]
-fn whitewater_half_integer_fixture_has_saturated_energy() {
-    use super::super::whitewater_particle_cpu::{Box3, energy, jitter, sample_faces};
-    let faces = synthetic_faces();
-    let shape = synthetic_shape();
-    let grid = Box3 {
-        cells: shape.cells,
-        center: shape.center,
-        size: shape.size,
-    };
-    for (axis, face) in faces.iter().enumerate() {
-        assert_eq!(
-            bytemuck::cast_slice::<_, u8>(face).len(),
-            face_len([8; 3], axis) as usize * 4
-        );
-    }
-    for (i, particle) in synthetic_records().into_iter().take(6).enumerate() {
-        let sampled = sample_faces(
-            jitter(particle, i as u32, shape.cell_size, 0.375, 7.0),
-            faces.each_ref().map(Vec::as_slice),
-            [8; 3],
-            &grid,
-        );
-        assert_eq!(
-            energy(sampled, 0.0, 1.0).to_bits(),
-            1.0f32.to_bits(),
-            "emitter {i}"
-        );
-    }
 }
 
 #[cfg(feature = "gpu-proofs")]
@@ -185,16 +186,20 @@ pub mod gpu {
         shared(device, &identity_words(n))
     }
 
+    /// Liquid at rest in `table`'s box (distance -1 inside, air in the rest
+    /// of its tiles), every box face moving at (2, 1, -0.5) with a valid
+    /// weight, a solid 0.1 m away and an obstacle source of influence 1 on
+    /// every element, with `records` as the liquid particles.
     pub struct Fixture {
         pub shape: StepShape,
+        pub table: BoxTable,
         pub records: Vec<FluidParticle>,
         particles: GpuBuffer,
         identity: GpuBuffer,
         solid: GpuBuffer,
         distance: GpuBuffer,
         tiles: GpuBuffer,
-        pool_tiles: u32,
-        faces: [GpuBuffer; 3],
+        faces: GpuBuffer,
         source: GpuBuffer,
         pool: GpuBuffer,
         state: GpuBuffer,
@@ -202,35 +207,57 @@ pub mod gpu {
 
     impl Fixture {
         pub fn new(device: &GpuDevice) -> Self {
-            let shape = synthetic_shape();
-            let records = synthetic_records();
-            let (phi, table, pool_tiles) = pooled_distance(&vec![-1.0f32; 8 * 8 * 8], &shape);
+            let table = synthetic_table();
+            let records = synthetic_records(&table, CELL);
+            Self::with(device, table, CELL, records)
+        }
+
+        pub fn with(
+            device: &GpuDevice,
+            table: BoxTable,
+            cell_size: f32,
+            records: Vec<FluidParticle>,
+        ) -> Self {
+            let shape = step_shape(&table, cell_size, 256);
+            let cells = table.cells.iter().product::<u32>() as usize;
+            let elements = shape.elements() as usize;
+            let face = FaceSample {
+                velocity: [2.0, 1.0, -0.5, 0.0],
+                weight: [1.0, 1.0, 1.0, 0.0],
+            };
+            let source = WhitewaterSource {
+                influence: 1.0,
+                dust_strength: 1.0,
+                kind: 2,
+                pad: 0,
+            };
             Self {
                 shape,
                 particles: shared(device, &records),
                 identity: identity_record(device, records.len() as u32),
-                records,
-                solid: shared(device, &vec![0.1f32; 13 * 13 * 13]),
-                distance: shared(device, &phi),
-                tiles: shared(device, &table),
-                pool_tiles,
-                faces: synthetic_faces().map(|face| shared(device, &face)),
-                source: shared(
+                solid: shared(device, &vec![0.1f32; elements]),
+                distance: shared(
                     device,
-                    &vec![
-                        WhitewaterSource {
-                            influence: 1.0,
-                            dust_strength: 1.0,
-                            kind: 2,
-                            pad: 0
-                        };
-                        13 * 13 * 13
-                    ],
+                    &table.to_pool(&vec![-1.0f32; cells], 3.0 * cell_size),
                 ),
+                tiles: shared(device, &table.words),
+                faces: shared(
+                    device,
+                    &table.to_pool(&vec![face; cells], FaceSample::default()),
+                ),
+                source: shared(device, &vec![source; elements]),
                 pool: shared(device, &vec![empty_slot(); 256]),
                 state: shared(device, &[0u32; 8]),
+                records,
+                table,
             }
         }
+
+        /// The scene position of the middle of the box.
+        pub fn middle(&self) -> [f32; 3] {
+            middle(&self.table, self.shape.pool.cell_size)
+        }
+
         pub fn frame(&self, dust: bool) -> StepFrame {
             StepFrame {
                 shape: self.shape,
@@ -239,6 +266,7 @@ pub mod gpu {
                 epoch: 7,
                 seed: 0.375,
                 gravity: [0.0; 3],
+                bounds_lo: low_corner(&self.table, self.shape.pool.cell_size),
                 wavecrest_emission: 0.0,
                 turbulence_emission: 32.0,
                 min_turbulence: -1.0,
@@ -263,10 +291,9 @@ pub mod gpu {
                 identity: &self.identity,
                 solid: &self.solid,
                 obstacle_source: Some(&self.source),
-                faces: FaceSource::Axes(self.faces.each_ref()),
+                faces: &self.faces,
                 distance: &self.distance,
                 tiles: &self.tiles,
-                pool_tiles: self.pool_tiles,
             }
         }
         /// Count `n` of the fixture's particles in use from now on. Call
@@ -391,7 +418,7 @@ pub mod gpu {
             stage.surface_distance.prepare(device);
             stage.emission_scan.prepare(device);
             stage.slot_scan.prepare(device);
-            stage.sort.prepare(device);
+            stage.sort.prepare_pooled(device);
             stage.reserve(device, shape, u64::from(slots)).unwrap();
         }
         stages
@@ -416,8 +443,10 @@ pub mod gpu {
         );
     }
 
-    pub fn mixed_faces() -> Vec<FaceSample> {
-        (0..9 * 9 * 9)
+    /// `count` face records of every weight sign, with values behind the
+    /// invalid weights and poison in the fourth lanes.
+    pub fn mixed_faces(count: usize) -> Vec<FaceSample> {
+        (0..count)
             .map(|i| FaceSample {
                 velocity: [
                     (i % 17) as f32 / 7.0,
@@ -435,79 +464,28 @@ pub mod gpu {
             .collect()
     }
 
-    // Compile the actual face component, with its own generated uniform
-    // layout/body, over the pooled faces and their slot table. Dispatch its
-    // whole output extent, including the zero tail.
-    pub fn adapter_outputs(
-        device: &GpuDevice,
-        packed: &GpuBuffer,
-        tiles: &GpuBuffer,
-        pool_tiles: u32,
-        cells: [u32; 3],
-        cell_origin: [i32; 3],
-    ) -> [GpuBuffer; 3] {
-        use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
-        let mut pipeline = None;
-        standalone_pipeline::<FaceSampleComponent>(&mut pipeline, device);
-        let count = cell_total(cells.map(|n| n + 1)) as u32;
-        let out = std::array::from_fn(|_| shared(device, &vec![12345.0f32; count as usize]));
-        let [nx, ny, nz] = cells.map(|n| (n + 4) as f32);
-        let [ox, oy, oz] = cell_origin.map(|c| c as f32);
-        let mut enc = device.create_encoder("whitewater face adapter oracle");
-        for (axis, output) in out.iter().enumerate() {
-            atom::<FaceSampleComponent>(
-                &mut enc,
-                pipeline.as_ref().unwrap(),
-                &[
-                    ("axis", axis as f32),
-                    ("nodes_x", nx),
-                    ("nodes_y", ny),
-                    ("nodes_z", nz),
-                    ("pool_tiles", pool_tiles as f32),
-                    ("cell_origin_x", ox),
-                    ("cell_origin_y", oy),
-                    ("cell_origin_z", oz),
-                ],
-                &[packed, tiles, output],
-                count,
-                "whitewater adapter oracle",
-            );
-        }
-        enc.commit_and_wait_completed();
-        out
-    }
-
     pub fn spawn_boundaries() {
         let device = manifold_gpu::testkit::test_device();
-        let fixtures = [Fixture::new(&device), Fixture::new(&device)];
-        let shape = StepShape::new(
-            [17; 3],
-            [16; 3],
-            1.0,
-            Some(Transform {
-                pos: [1.0; 3],
-                scale: [2.0; 3],
-                ..Default::default()
-            }),
-            256,
-        )
-        .unwrap();
-        let mut stages = particle_stages(&device, shape, 3);
-        let identity = identity_record(&device, 3);
-        for stage in &mut stages {
-            stage.reference.emitters = Some(3);
-        }
+        let table = synthetic_table();
+        let h = 0.125;
+        let m = middle(&table, h);
+        // Three unequal emitters and nonmatching IDs make slot-vs-emitter RNG
+        // mistakes visible when sw_mul_div thins 4097 emissions into 256 slots.
         let records: Vec<_> = (0..3)
             .map(|i| FluidParticle {
-                position_radius: [0.9 + 0.1 * i as f32, 1.0, 1.0, 0.025],
+                position_radius: [m[0] - 0.1 + 0.1 * i as f32, m[1], m[2], 0.025],
                 velocity: [2.0, 1.0, -0.5],
                 id: 255 - i,
             })
             .collect();
-        // Three unequal emitters and nonmatching IDs make slot-vs-emitter RNG
-        // mistakes visible when sw_mul_div thins 4097 emissions into 256 slots.
+        let fixtures = [0, 1].map(|_| Fixture::with(&device, table.clone(), h, records.clone()));
+        let shape = fixtures[0].shape;
+        let elements = shape.elements() as usize;
+        let mut stages = particle_stages(&device, shape, 3);
+        for stage in &mut stages {
+            stage.reference.emitters = Some(3);
+        }
         let counts = [[1u32, 3, 7], [1001, 2049, 4097]];
-        let h = shape.cell_size;
         let epsilon = h / 1024.0;
         let mut saw = [false; 5];
         for (case, (distance, expected)) in [
@@ -527,25 +505,16 @@ pub mod gpu {
                     let mut captures = Vec::new();
                     for (stage, fixture) in stages.iter_mut().zip(&fixtures) {
                         let mut frame = fixture.frame(dust);
-                        frame.shape = shape;
                         frame.dt = 0.0;
                         let sampled = shared(&device, &records);
                         let energy = shared(&device, &[1.0f32; 3]);
                         let offsets = shared(&device, offsets);
-                        let surface = shared(&device, &vec![distance; shape.cell_count() as usize]);
-                        let air = shared(&device, &vec![0u32; shape.cell_count() as usize]);
-                        let solid = shared(&device, &vec![1.0f32; 17 * 17 * 17]);
-                        let faces: [GpuBuffer; 3] = std::array::from_fn(|a| {
-                            shared(
-                                &device,
-                                &vec![[2.0f32, 1.0, -0.5][a]; face_len([16; 3], a) as usize],
-                            )
-                        });
+                        let surface = shared(&device, &vec![distance; elements]);
+                        let air = shared(&device, &vec![0u32; elements]);
+                        let solid = shared(&device, &vec![1.0f32; elements]);
                         enc.copy_buffer_to_buffer(&air, &stage.fields().cells, air.size);
                         let mut inputs = fixture.inputs();
                         inputs.solid = &solid;
-                        inputs.identity = &identity;
-                        inputs.faces = FaceSource::Axes(faces.each_ref());
                         stage.spawn(
                             &mut enc, &frame, &inputs, &surface, &offsets, &sampled, &energy, dust,
                         );
@@ -649,16 +618,30 @@ pub mod gpu {
         assert_eq!(stages[1].reference.spawn_dispatches.get(), 4);
     }
 
+    /// The substep history of `rows` rows over `elements` pooled records:
+    /// row s holds (s + 1) times 0.125, 0.0625 and 0.03125 on every record.
+    pub fn stepped_history(device: &GpuDevice, rows: usize, elements: usize) -> GpuBuffer {
+        let data: Vec<[f32; 4]> = (0..rows)
+            .flat_map(|s| {
+                let k = (s + 1) as f32;
+                std::iter::repeat_n([k * 0.125, k * 0.0625, k * 0.03125, 0.0], elements)
+            })
+            .collect();
+        shared(device, &data)
+    }
+
     pub fn lifecycle_history() {
         let device = manifold_gpu::testkit::test_device();
         let fixtures = [Fixture::new(&device), Fixture::new(&device)];
         let shape = fixtures[0].shape;
+        let elements = shape.elements() as usize;
+        let m = fixtures[0].middle();
         let mut stages = particle_stages(&device, shape, 8);
         let mut controls = particle_stages(&device, shape, 8);
         let mut records = vec![empty_slot(); 256];
         for (i, p) in records[..12].iter_mut().enumerate() {
             *p = WhitewaterParticle {
-                position_lifetime: [0.5, 0.5, 0.5, if i < 6 { 7.0 } else { -1.0 }],
+                position_lifetime: [m[0], m[1], m[2], if i < 6 { 7.0 } else { -1.0 }],
                 velocity: [0.0; 3],
                 kind: (i % 6) as u32,
                 id: (255 - i) as u32,
@@ -678,8 +661,8 @@ pub mod gpu {
                     let mut frame = fixture.frame(false);
                     frame.dt = 3.0 / 64.0;
                     frame.preserve_foam = preserve;
-                    let surface = shared(&device, &vec![0.0f32; shape.cell_count() as usize]);
-                    let air = shared(&device, &vec![0u32; shape.cell_count() as usize]);
+                    let surface = shared(&device, &vec![0.0f32; elements]);
+                    let air = shared(&device, &vec![0u32; elements]);
                     let pool = shared(&device, &records);
                     let state = shared(&device, &[12u32, 255, 0, 0, 0, 0, 0, 0]);
                     let schedule = shared(
@@ -699,17 +682,7 @@ pub mod gpu {
                             0.0,
                         ],
                     );
-                    let histories: [GpuBuffer; 3] = std::array::from_fn(|axis| {
-                        let data: Vec<f32> = (0..3)
-                            .flat_map(|step| {
-                                std::iter::repeat_n(
-                                    (step + 1) as f32 * [0.125, 0.0625, 0.03125][axis],
-                                    face_len(shape.face_cells, axis) as usize,
-                                )
-                            })
-                            .collect();
-                        shared(&device, &data)
-                    });
+                    let history = stepped_history(&device, 3, elements);
                     let forces = shared(
                         &device,
                         &[[0.125f32, 0.25, -0.125, 0.0], [0.0; 4]].repeat(16),
@@ -720,12 +693,12 @@ pub mod gpu {
                     let mut inputs = fixture.inputs();
                     inputs.motion = Some(MotionInputs {
                         schedule: &schedule,
-                        faces: histories.each_ref(),
+                        faces: &history,
                         count: 3,
                         fields: ForceLatticeBinding {
                             nodes: [2; 3],
                             spacing: 0.5,
-                            min: [0.0; 3],
+                            min: frame.bounds_lo,
                             force_lattices: 2,
                             impulse_tick: 0,
                             first_tick: 3,
@@ -819,11 +792,12 @@ pub mod gpu {
     fn whitewater_emission_ignores_slots_past_the_count() {
         let device = manifold_gpu::testkit::test_device();
         let fixture = Fixture::new(&device);
+        let m = fixture.middle();
         let emitter = |i: u32| FluidParticle {
             position_radius: [
-                0.35 + 0.5 * (i as f32 * 0.618_034).fract(),
-                0.35 + 0.5 * (i as f32 * 0.414_214).fract(),
-                0.5,
+                m[0] + 0.5 * ((i as f32 * 0.618_034).fract() - 0.5),
+                m[1] + 0.5 * ((i as f32 * 0.414_214).fract() - 0.5),
+                m[2] - 0.1,
                 0.025,
             ],
             velocity: [17.0, -3.25, 0.75],

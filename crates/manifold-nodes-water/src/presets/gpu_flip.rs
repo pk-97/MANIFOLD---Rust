@@ -527,6 +527,16 @@ const FIELD_WIRES: [&str; 9] = [
     "impulse_tick",
 ];
 
+/// The domain's bodies, walls and cell size into a node that rasterises the
+/// solids: the published surface's solid lattice or whitewater's obstacle
+/// source.
+fn solid_wires(b: &mut Builder, domain: usize, node: usize) {
+    b.wires(domain, node, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
+    b.wire((domain, "cell_size"), node, "cell_size");
+    b.wire((domain, "body_rows"), node, "rows");
+    b.wires(domain, node, &BOUNDS_WIRES);
+}
+
 manifold_core::testkit_visible! {
 /// A scene as a running liquid on the seam. The domain seeds the fill and
 /// runs the clock; the state's region runs one tick per due tick: `steps`
@@ -603,21 +613,15 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((stats, "stats_out"), state, "stats_in");
     b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
-    // Solver faces, published surface and whitewater share the native grid.
+    // The published surface's solid sits on the native grid.
     const NATIVE_GRID: [(&str, &str); 6] = [
         ("mesh_min_x", "lattice_min_x"), ("mesh_min_y", "lattice_min_y"), ("mesh_min_z", "lattice_min_z"),
         ("mesh_nodes_x", "nodes_x"), ("mesh_nodes_y", "nodes_y"), ("mesh_nodes_z", "nodes_z"),
     ];
     let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({}));
-    let source = b.node("whitewater_obstacle_source", "node.whitewater_obstacle_source", json!({}));
-    for node in [solid, source] {
-        b.wires(domain, node, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-        b.wire((domain, "cell_size"), node, "cell_size");
-        for (from, to) in NATIVE_GRID {
-            b.wire((domain, from), node, to);
-        }
-        b.wire((domain, "body_rows"), node, "rows");
-        b.wires(domain, node, &BOUNDS_WIRES);
+    solid_wires(&mut b, domain, solid);
+    for (from, to) in NATIVE_GRID {
+        b.wire((domain, from), solid, to);
     }
     let frame = b.node("frame", "node.liquid_frame", json!({}));
     b.wire((state, "out"), frame, "particles");
@@ -708,16 +712,8 @@ impl WaterScene {
     fn family_def(self) -> EffectGraphDef {
         let mut b = Builder::from_def(water_def(self.with_surface()));
         b.remove(&["surface_sink", "output"]);
-        let [domain, state, step, frame, solid, source, surface] = [
-            "domain",
-            "state",
-            STEP_NODE,
-            "frame",
-            "mesh_solid",
-            "whitewater_obstacle_source",
-            "surface",
-        ]
-        .map(|n| b.id(n));
+        let [domain, state, step, frame, surface] =
+            ["domain", "state", STEP_NODE, "frame", "surface"].map(|n| b.id(n));
         find_node_mut(&mut b.nodes, "domain")
             .expect("family domain")
             .params
@@ -740,37 +736,39 @@ impl WaterScene {
         );
         b.wire((budget, "out"), whitewater, "capacity");
         b.wire((budget, "out"), state, "whitewater_capacity");
+        // The bodies' distance and emission source on the step's world tiles.
+        let source = b.node(
+            "whitewater_obstacle_source",
+            "node.whitewater_obstacle_source",
+            json!({}),
+        );
+        solid_wires(&mut b, domain, source);
+        b.wires(step, source, &["tiles", "pool_tiles"]);
         b.wires(
             step,
             whitewater,
             &[
-                "grid_bounds",
-                "grid_nodes_x",
-                "grid_nodes_y",
-                "grid_nodes_z",
-                "face_cells_x",
-                "face_cells_y",
-                "face_cells_z",
-                "face_valid_layers",
                 "distance",
                 "faces",
                 "tiles",
                 "pool_tiles",
                 "substep_schedule",
-                "substep_u",
-                "substep_v",
-                "substep_w",
+                "substep_faces",
                 "substep_count",
             ],
         );
         b.wire((step, "out"), whitewater, "particles");
         b.wire((step, "identity_out"), whitewater, "identity");
-        b.wire((solid, "solid"), whitewater, "solid");
-        b.wire((source, "solid"), whitewater, "obstacle_source");
+        b.wire((source, "distance"), whitewater, "solid");
+        b.wire((source, "source"), whitewater, "obstacle_source");
         b.wires(
             domain,
             whitewater,
             &[
+                "cell_size",
+                "bounds_lo_x",
+                "bounds_lo_y",
+                "bounds_lo_z",
                 "epoch",
                 "gravity_x",
                 "gravity",
@@ -1504,64 +1502,6 @@ pub(super) fn fused_as_rendered(
         );
     }
     view
-}
-
-/// Independent axis oracle over the same solver output and tick region.
-#[cfg(any(test, feature = "testkit"))]
-pub fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
-    // This independent axis oracle edits the compiled topology, including nested
-    // surface nodes. Production presets retain their authored groups.
-    let def = manifold_core::flatten::flatten_groups(&def).expect("axis oracle flattens");
-    let mut def = serde_json::to_value(def).expect("def serialises");
-    let nodes = def["nodes"].as_array().expect("nodes");
-    let id = |name: &str| {
-        nodes.iter().find(|n| n["nodeId"] == name).expect("node")["id"]
-            .as_u64()
-            .expect("id")
-    };
-    let (step, domain, whitewater) = (id("step"), id("domain"), id("whitewater"));
-    let mut next = nodes.iter().filter_map(|n| n["id"].as_u64()).max().unwrap() + 1;
-    let gone: Vec<_> = nodes
-        .iter()
-        .filter(|n| {
-            [
-                "whitewater_face_u",
-                "whitewater_face_v",
-                "whitewater_face_w",
-            ]
-            .iter()
-            .any(|name| n["nodeId"] == *name)
-        })
-        .map(|n| n["id"].clone())
-        .collect();
-    def["nodes"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|n| !gone.contains(&n["id"]));
-    def["wires"].as_array_mut().unwrap().retain(|w| {
-        !(gone.contains(&w["fromNode"])
-            || gone.contains(&w["toNode"])
-            || w["toNode"] == whitewater
-                && ["faces", "face_u", "face_v", "face_w"]
-                    .iter()
-                    .any(|port| w["toPort"] == *port))
-    });
-    for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
-        let adapter = next;
-        next += 1;
-        def["nodes"].as_array_mut().unwrap().push(serde_json::json!({"id": adapter, "nodeId": format!("whitewater_{port}"), "typeId": "node.face_sample_component", "params": {"axis": {"type": "Enum", "value": axis}}}));
-        let wires = def["wires"].as_array_mut().unwrap();
-        for pool in ["faces", "tiles", "pool_tiles"] {
-            wires.push(serde_json::json!({"fromNode": step, "fromPort": pool, "toNode": adapter, "toPort": pool}));
-        }
-        for dim in ["x", "y", "z"] {
-            for port in [format!("nodes_{dim}"), format!("cell_origin_{dim}")] {
-                wires.push(serde_json::json!({"fromNode": domain, "fromPort": port, "toNode": adapter, "toPort": port}));
-            }
-        }
-        wires.push(serde_json::json!({"fromNode": adapter, "fromPort": "out", "toNode": whitewater, "toPort": port}));
-    }
-    serde_json::from_value(def).expect("def with axis adapters")
 }
 
 // CPU size proofs for every GPU FLIP graph, run before any GPU run of it: the

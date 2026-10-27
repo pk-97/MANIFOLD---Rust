@@ -249,23 +249,12 @@ impl Reference {
         turbulence: &GpuBuffer,
     ) {
         let s = &frame.shape;
-        let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
-        let [nx, ny, nz] = s.nodes.map(|n| n as f32);
-        let [u, v, w] = inputs.faces.axes();
         self.atom::<TurbulenceField>(
             enc,
             get(&self.turbulence),
-            &[
-                ("face_cells_x", fx),
-                ("face_cells_y", fy),
-                ("face_cells_z", fz),
-                ("nodes_x", nx),
-                ("nodes_y", ny),
-                ("nodes_z", nz),
-                ("cell_size", s.cell_size),
-            ],
-            &[distance, u, v, w, turbulence],
-            s.cell_count() as u32,
+            &pooled(s),
+            &[distance, inputs.faces, inputs.tiles, turbulence],
+            s.elements() as u32,
             "node.whitewater_step.turbulence",
         );
     }
@@ -333,24 +322,7 @@ impl Reference {
         let s = &frame.shape;
         let p = self;
         let [jittered, sampled, energy, wavecrest, inside] = self.scratch();
-        let [nx, ny, nz] = s.nodes.map(|n| n as f32);
-        let [cx, cy, cz] = s.center;
-        let [sx, sy, sz] = s.size;
-        let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
-        let nodes = [("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz)];
-        let box3 = [
-            ("center_x", cx),
-            ("center_y", cy),
-            ("center_z", cz),
-            ("size_x", sx),
-            ("size_y", sy),
-            ("size_z", sz),
-        ];
-        let faces = [
-            ("face_cells_x", fx),
-            ("face_cells_y", fy),
-            ("face_cells_z", fz),
-        ];
+        let pooled = pooled(s);
         let epoch = frame.epoch as f32;
         // The per-particle passes run over the emitters, not every slot of
         // the particle array: the emission count masks everything from the
@@ -360,7 +332,7 @@ impl Reference {
             enc,
             get(&p.jitter),
             &[
-                ("cell_size", s.cell_size),
+                ("cell_size", s.pool.cell_size),
                 ("seed", frame.seed),
                 ("epoch", epoch),
             ],
@@ -368,37 +340,25 @@ impl Reference {
             emitters,
             "node.whitewater_step.jitter",
         );
-        let mut sample = [("", 0.0); 12];
-        sample[..3].copy_from_slice(&faces);
-        sample[3..9].copy_from_slice(&box3);
-        sample[9..].copy_from_slice(&nodes);
         self.atom::<SampleFacesAtParticles>(
             enc,
             get(&p.sample),
-            &sample,
-            &[
-                jittered,
-                inputs.faces.axes()[0],
-                inputs.faces.axes()[1],
-                inputs.faces.axes()[2],
-                sampled,
-            ],
+            &pooled,
+            &[jittered, inputs.faces, inputs.tiles, sampled],
             emitters,
             "node.whitewater_step.sample_velocity",
         );
-        let mut grid = [("", 0.0); 9];
-        grid[..6].copy_from_slice(&box3);
-        grid[6..].copy_from_slice(&nodes);
-        let mut velocity_params = [("", 0.0); 12];
-        velocity_params[..9].copy_from_slice(&grid);
-        velocity_params[9] = ("spray_speed", frame.spray_speed);
-        velocity_params[10] = ("seed", frame.seed);
-        velocity_params[11] = ("epoch", epoch);
         self.atom::<WhitewaterEmitterVelocity>(
             enc,
             get(&p.emitter_velocity),
-            &velocity_params,
-            &[sampled, surface, &f.cells, jittered],
+            &[
+                ("spray_speed", frame.spray_speed),
+                ("seed", frame.seed),
+                ("epoch", epoch),
+                pooled[0],
+                pooled[1],
+            ],
+            &[sampled, surface, &f.cells, inputs.tiles, jittered],
             emitters,
             "node.whitewater_step.emitter_velocity",
         );
@@ -418,53 +378,50 @@ impl Reference {
         self.atom::<WavecrestPotential>(
             enc,
             get(&p.wavecrest),
-            &grid,
+            &pooled,
             &[
                 sampled,
                 surface,
                 &f.curvature[curvature],
                 &f.cells,
+                inputs.tiles,
                 wavecrest,
             ],
             emitters,
             "node.whitewater_step.wavecrest",
         );
-        let mut turbulence_params = [("", 0.0); 12];
-        turbulence_params[..9].copy_from_slice(&grid);
-        turbulence_params[9] = ("min_turbulence", frame.min_turbulence);
-        turbulence_params[10] = ("max_turbulence", frame.max_turbulence);
-        turbulence_params[11] = ("inside_enabled", f32::from(u8::from(frame.inside_emission)));
         self.atom::<InsideTurbulencePotential>(
             enc,
             get(&p.inside),
-            &turbulence_params,
-            &[sampled, surface, &f.turbulence, &f.cells, inside],
+            &[
+                ("min_turbulence", frame.min_turbulence),
+                ("max_turbulence", frame.max_turbulence),
+                ("inside_enabled", f32::from(u8::from(frame.inside_emission))),
+                pooled[0],
+                pooled[1],
+            ],
+            &[
+                sampled,
+                surface,
+                &f.turbulence,
+                &f.cells,
+                inputs.tiles,
+                inside,
+            ],
             emitters,
             "node.whitewater_step.inside",
         );
-        let mut count_params = [("", 0.0); 18];
-        count_params[..8].copy_from_slice(&[
-            ("rate", frame.wavecrest_emission),
-            ("turbulence_rate", frame.turbulence_emission),
-            ("generation_rate", frame.generation_rate),
-            ("seed", frame.seed),
-            ("epoch", epoch),
-            ("points_per_cell", 8.0),
-            ("ticks", frame.ticks as f32),
-            ("live_count", emitters as f32),
-        ]);
-        count_params[8..17].copy_from_slice(&grid);
-        count_params[17] = ("dt", frame.dt);
         self.atom::<TurbulenceEmissionCount>(
             enc,
             get(&p.emission),
-            &count_params,
+            &count_params(frame, emitters),
             &[
                 sampled,
                 energy,
                 wavecrest,
                 inside,
                 &f.influence[influence_next],
+                inputs.tiles,
                 offsets,
             ],
             emitters,
@@ -485,52 +442,25 @@ impl Reference {
         let p = self;
         let [_, unscaled, _, wavecrest, inside] = self.scratch();
         let energy = self.dust_energy();
-        let [nx, ny, nz] = s.nodes.map(|n| n as f32);
-        let [cx, cy, cz] = s.center;
-        let [sx, sy, sz] = s.size;
-        let nodes = [("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz)];
-        let box3 = [
-            ("center_x", cx),
-            ("center_y", cy),
-            ("center_z", cz),
-            ("size_x", sx),
-            ("size_y", sy),
-            ("size_z", sz),
-        ];
-        let epoch = frame.epoch as f32;
-        let mut grid = [("", 0.0); 9];
-        grid[..6].copy_from_slice(&box3);
-        grid[6..].copy_from_slice(&nodes);
-        let mut count_params = [("", 0.0); 18];
-        count_params[..8].copy_from_slice(&[
-            ("rate", frame.wavecrest_emission),
-            ("turbulence_rate", frame.turbulence_emission),
-            ("generation_rate", frame.generation_rate),
-            ("seed", frame.seed),
-            ("epoch", epoch),
-            ("points_per_cell", 8.0),
-            ("ticks", frame.ticks as f32),
-            ("live_count", emitters as f32),
-        ]);
-        count_params[8..17].copy_from_slice(&grid);
-        count_params[17] = ("dt", frame.dt);
-        let mut dust_params = [("", 0.0); 13];
-        dust_params[..9].copy_from_slice(&grid);
-        dust_params[9..].copy_from_slice(&[
-            ("min_turbulence", frame.min_turbulence),
-            ("max_turbulence", frame.max_turbulence),
-            ("dust_enabled", 1.0),
-            ("boundary_dust", f32::from(u8::from(frame.boundary_dust))),
-        ]);
+        let pooled = pooled(s);
         self.atom::<DustPotential>(
             enc,
             get(&p.dust),
-            &dust_params,
+            &[
+                ("min_turbulence", frame.min_turbulence),
+                ("max_turbulence", frame.max_turbulence),
+                ("dust_enabled", 1.0),
+                ("boundary_dust", f32::from(u8::from(frame.boundary_dust))),
+                ("bounds_lo_z", frame.bounds_lo[2]),
+                pooled[0],
+                pooled[1],
+            ],
             &[
                 unscaled,
                 inputs.solid,
                 &f.turbulence,
                 inputs.obstacle_source.expect("validated dust source"),
+                inputs.tiles,
                 inside,
             ],
             emitters,
@@ -547,19 +477,21 @@ impl Reference {
             emitters,
             "node.whitewater_step.dust_energy",
         );
-        count_params[0] = ("rate", 0.0);
-        count_params[1] = ("turbulence_rate", frame.dust_rate);
-        count_params[3] = ("seed", frame.seed + 104729.0);
+        let mut count = count_params(frame, emitters);
+        count[0] = ("rate", 0.0);
+        count[1] = ("turbulence_rate", frame.dust_rate);
+        count[3] = ("seed", frame.seed + 104729.0);
         self.atom::<TurbulenceEmissionCount>(
             enc,
             get(&p.emission),
-            &count_params,
+            &count,
             &[
                 unscaled,
                 energy,
                 wavecrest,
                 inside,
                 &f.influence[influence_next],
+                inputs.tiles,
                 offsets,
             ],
             emitters,
@@ -581,105 +513,63 @@ impl Reference {
     ) {
         let s = &frame.shape;
         let p = self;
-        let [nx, ny, nz] = s.nodes.map(|n| n as f32);
-        let [cx, cy, cz] = s.center;
-        let [sx, sy, sz] = s.size;
-        let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
-        let nodes = [("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz)];
-        let box3 = [
-            ("center_x", cx),
-            ("center_y", cy),
-            ("center_z", cz),
-            ("size_x", sx),
-            ("size_y", sy),
-            ("size_z", sz),
-        ];
-        let faces = [
-            ("face_cells_x", fx),
-            ("face_cells_y", fy),
-            ("face_cells_z", fz),
-        ];
+        let pooled = pooled(s);
         let epoch = frame.epoch as f32;
-        let mut grid = [("", 0.0); 9];
-        grid[..6].copy_from_slice(&box3);
-        grid[6..].copy_from_slice(&nodes);
-        let mut velocity_params = [("", 0.0); 12];
-        velocity_params[..9].copy_from_slice(&grid);
-        velocity_params[9] = ("spray_speed", frame.spray_speed);
-        velocity_params[10] = ("seed", frame.seed);
-        velocity_params[11] = ("epoch", epoch);
-        let mut spawn = [("", 0.0); 19];
-        spawn[0] = ("capacity", s.capacity as f32);
-        spawn[1] = ("emitters", emitters as f32);
-        spawn[2..5].copy_from_slice(&faces);
-        spawn[5..11].copy_from_slice(&box3);
-        spawn[11..14].copy_from_slice(&nodes);
-        spawn[14] = ("seed", frame.seed);
-        spawn[15] = ("epoch", epoch);
-        spawn[16] = ("dt", frame.dt);
+        let spawns = self.spawns.as_ref().expect("oracle spawns reserved");
+        let seed = if dust {
+            frame.seed + 104729.0
+        } else {
+            frame.seed
+        };
+        self.atom::<SpawnWhitewater>(
+            enc,
+            get(&p.spawn),
+            &[
+                ("capacity", s.capacity as f32),
+                ("emitters", emitters as f32),
+                ("seed", seed),
+                ("epoch", epoch),
+                ("dt", frame.dt),
+                pooled[0],
+                pooled[1],
+            ],
+            &[
+                offsets,
+                sampled,
+                energy,
+                inputs.faces,
+                inputs.solid,
+                inputs.tiles,
+                spawns,
+            ],
+            s.capacity,
+            if dust {
+                "node.whitewater_step.dust_spawn"
+            } else {
+                "node.whitewater_step.spawn"
+            },
+        );
         if dust {
-            spawn[14] = ("seed", frame.seed + 104729.0);
-            self.atom::<SpawnWhitewater>(
-                enc,
-                get(&p.spawn),
-                &spawn[..17],
-                &[
-                    offsets,
-                    sampled,
-                    energy,
-                    inputs.faces.axes()[0],
-                    inputs.faces.axes()[1],
-                    inputs.faces.axes()[2],
-                    inputs.solid,
-                    self.spawns.as_ref().expect("oracle spawns reserved"),
-                ],
-                s.capacity,
-                "node.whitewater_step.dust_spawn",
-            );
-            let mut dust_type = [("", 0.0); 10];
-            dust_type[..9].copy_from_slice(&grid);
-            dust_type[9] = ("dust", 1.0);
             self.atom::<WhitewaterType>(
                 enc,
                 get(&p.kind),
-                &dust_type,
-                &[
-                    self.spawns.as_ref().expect("oracle spawns reserved"),
-                    surface,
-                    &f.cells,
-                    &f.typed,
-                ],
+                &[("dust", 1.0), pooled[0], pooled[1]],
+                &[spawns, surface, &f.cells, inputs.tiles, &f.typed],
                 s.capacity,
                 "node.whitewater_step.dust_type",
             );
         } else {
-            self.atom::<SpawnWhitewater>(
-                enc,
-                get(&p.spawn),
-                &spawn[..17],
-                &[
-                    offsets,
-                    sampled,
-                    energy,
-                    inputs.faces.axes()[0],
-                    inputs.faces.axes()[1],
-                    inputs.faces.axes()[2],
-                    inputs.solid,
-                    self.spawns.as_ref().expect("oracle spawns reserved"),
-                ],
-                s.capacity,
-                "node.whitewater_step.spawn",
-            );
             self.atom::<WhitewaterType>(
                 enc,
                 get(&p.kind),
-                &velocity_params,
                 &[
-                    self.spawns.as_ref().expect("oracle spawns reserved"),
-                    surface,
-                    &f.cells,
-                    &f.typed,
+                    ("spray_speed", frame.spray_speed),
+                    ("seed", frame.seed),
+                    ("epoch", epoch),
+                    pooled[0],
+                    pooled[1],
                 ],
+                &[spawns, surface, &f.cells, inputs.tiles, &f.typed],
                 s.capacity,
                 "node.whitewater_step.kind",
             );
@@ -698,71 +588,50 @@ impl Reference {
         let s = &frame.shape;
         let p = self;
         let cap = s.capacity;
-        let [nx, ny, nz] = s.nodes.map(|n| n as f32);
-        let [cx, cy, cz] = s.center;
-        let [sx, sy, sz] = s.size;
-        let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
+        let pooled = pooled(s);
         let dt = frame.dt;
-        let place = [
-            ("center_x", cx),
-            ("center_y", cy),
-            ("center_z", cz),
-            ("size_x", sx),
-            ("size_y", sy),
-            ("size_z", sz),
-            ("nodes_x", nx),
-            ("nodes_y", ny),
-            ("nodes_z", nz),
-            ("face_cells_x", fx),
-            ("face_cells_y", fy),
-            ("face_cells_z", fz),
-        ];
+        let [lx, ly, lz] = frame.bounds_lo;
         let [gx, gy, gz] = frame.gravity;
-        let mut advect = [("", 0.0); 24];
-        advect[..12].copy_from_slice(&place);
-        advect[12..16].copy_from_slice(&[
-            ("gravity_x", gx),
-            ("gravity_y", gy),
-            ("gravity_z", gz),
-            ("dt", dt),
-        ]);
-        let faces = inputs.faces.axes();
         let motion = inputs.motion.as_ref();
         let empty = &f.state;
-        let history = motion.map_or([empty; 3], |m| m.faces);
         let field_nodes = motion.map_or([2; 3], |m| m.fields.nodes);
-        advect[16..].copy_from_slice(&[
-            ("substep_count", motion.map_or(0.0, |m| m.count as f32)),
-            ("field_nodes_x", field_nodes[0] as f32),
-            ("field_nodes_y", field_nodes[1] as f32),
-            ("field_nodes_z", field_nodes[2] as f32),
-            ("field_spacing", motion.map_or(0.25, |m| m.fields.spacing)),
-            (
-                "force_lattices",
-                motion.map_or(0.0, |m| m.fields.force_lattices as f32),
-            ),
-            ("tick_index", motion.map_or(0.0, |m| m.tick_index)),
-            (
-                "first_tick",
-                motion.map_or(0.0, |m| m.fields.first_tick as f32),
-            ),
-        ]);
         self.atom::<AdvectWhitewater>(
             enc,
             get(&p.advect),
-            &advect,
+            &[
+                ("bounds_lo_x", lx),
+                ("bounds_lo_y", ly),
+                ("bounds_lo_z", lz),
+                ("gravity_x", gx),
+                ("gravity_y", gy),
+                ("gravity_z", gz),
+                ("dt", dt),
+                ("substep_count", motion.map_or(0.0, |m| m.count as f32)),
+                ("field_nodes_x", field_nodes[0] as f32),
+                ("field_nodes_y", field_nodes[1] as f32),
+                ("field_nodes_z", field_nodes[2] as f32),
+                ("field_spacing", motion.map_or(0.25, |m| m.fields.spacing)),
+                (
+                    "force_lattices",
+                    motion.map_or(0.0, |m| m.fields.force_lattices as f32),
+                ),
+                ("tick_index", motion.map_or(0.0, |m| m.tick_index)),
+                (
+                    "first_tick",
+                    motion.map_or(0.0, |m| m.fields.first_tick as f32),
+                ),
+                pooled[0],
+                pooled[1],
+            ],
             &[
                 a,
-                faces[0],
-                faces[1],
-                faces[2],
+                inputs.faces,
                 inputs.solid,
                 motion.map_or(empty, |m| m.schedule),
-                history[0],
-                history[1],
-                history[2],
+                motion.map_or(empty, |m| m.faces),
                 motion.and_then(|m| m.fields.forces).unwrap_or(empty),
                 motion.and_then(|m| m.fields.impulses).unwrap_or(empty),
+                inputs.tiles,
                 b,
             ],
             cap,
@@ -771,8 +640,8 @@ impl Reference {
         self.atom::<RetypeWhitewater>(
             enc,
             get(&p.retype),
-            &place,
-            &[b, surface, &f.cells, faces[0], faces[1], faces[2], a],
+            &pooled,
+            &[b, surface, &f.cells, inputs.faces, inputs.tiles, a],
             cap,
             "node.whitewater_step.retype",
         );
@@ -785,4 +654,30 @@ impl Reference {
             "node.whitewater_step.age",
         );
     }
+}
+
+/// The two params every pooled atom takes: where its arrays live.
+fn pooled(s: &StepShape) -> [(&'static str, f32); 2] {
+    [
+        ("cell_size", s.pool.cell_size),
+        ("pool_tiles", s.pool.pool_tiles as f32),
+    ]
+}
+
+/// The emission count's params for the emit pass, in the atom's order.
+fn count_params(frame: &StepFrame, emitters: u32) -> [(&'static str, f32); 11] {
+    let [cell_size, pool_tiles] = pooled(&frame.shape);
+    [
+        ("rate", frame.wavecrest_emission),
+        ("turbulence_rate", frame.turbulence_emission),
+        ("generation_rate", frame.generation_rate),
+        ("seed", frame.seed),
+        ("epoch", frame.epoch as f32),
+        ("points_per_cell", 8.0),
+        ("ticks", frame.ticks as f32),
+        ("live_count", emitters as f32),
+        ("dt", frame.dt),
+        cell_size,
+        pool_tiles,
+    ]
 }

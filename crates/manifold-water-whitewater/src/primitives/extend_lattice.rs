@@ -1,5 +1,6 @@
-//! `node.extend_lattice` — one layer of FLIP's grid extrapolation into a
-//! whitewater grid's unknown cells. A per-element gather on the codegen path.
+//! `node.extend_lattice` — one layer of FLIP's grid extrapolation into the
+//! unknown cells of a whitewater field on the liquid step's world tiles. A
+//! per-element gather on the codegen path.
 //!
 //! Ported from FLIP Fluids gridutils.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
@@ -11,40 +12,39 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::tile_storage::TILE_GRID;
-use manifold_water_liquid::whitewater::{
-    KnownValue, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes,
-};
+use manifold_water_liquid::whitewater::{KnownValue, WHITEWATER_COMMON, whitewater_pool};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ExtendUniforms {
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
+    cell_size: f32,
+    pool_tiles: f32,
     dispatch_count: u32,
+    _pad0: u32,
 }
 
 manifold_node_engine::primitive! {
     name: ExtendLattice,
     type_id: "node.extend_lattice",
-    purpose: "One layer of FLIP's grid extrapolation on the whitewater grid: a known cell keeps its value; an unknown cell off the grid border with a known face neighbour off the border becomes known with the mean of its face neighbours that are known or on the border (FLIP counts the border as settled and never fills it). Others stay as they are.",
+    purpose: "One layer of FLIP's grid extrapolation on a whitewater field over the liquid step's world tiles: a known cell keeps its value; an unknown cell with a known face neighbour becomes known with the mean of its known face neighbours. Others stay as they are. A neighbour in a tile the table does not hold reads the canonical element, unknown, so the field grows as far as its tiles go.",
     inputs: {
         values: Array(KnownValue) required,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        tiles: Array(u32) required,
+        cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         out: Array(KnownValue),
     },
     params: [
-        float_param!("nodes_x", "Solid Nodes X", 71.0, 3.0, 4096.0),
-        float_param!("nodes_y", "Solid Nodes Y", 71.0, 3.0, 4096.0),
-        float_param!("nodes_z", "Solid Nodes Z", 71.0, 3.0, 4096.0),
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Chain one per layer, each reading the one before: three after node.lattice_curvature, as FLIP extends its curvature grid. nodes_x/y/z are the particle frame's grid_nodes_x/y/z.",
+    composition_notes: "Chain one per layer, each reading the one before: three after node.lattice_curvature, as FLIP extends its curvature grid. tiles and pool_tiles are the liquid step's, cell_size the domain's.",
     examples: [],
     summary: "Fills the empty cells next to known ones with their neighbours' average, one cell further each time.",
     category: Particles3D,
@@ -52,8 +52,8 @@ manifold_node_engine::primitive! {
     aliases: ["extrapolate", "extend field", "fill unknown cells"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/extend_lattice_body.wgsl"),
-    input_access: [BufferGather],
-    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
+    input_access: [BufferGather, BufferGather],
+    wgsl_includes: [READ_SIDE, WHITEWATER_COMMON],
 }
 
 impl Primitive for ExtendLattice {
@@ -74,31 +74,35 @@ impl Primitive for ExtendLattice {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let nodes = grid_nodes(ctx);
-        let Some(cells) = grid_cells(nodes) else {
-            ctx.error(format!(
-                "Extend Lattice: a {nodes:?} solid lattice has too few or too many nodes"
-            ));
-            return;
+        let pool = match whitewater_pool(ctx, "Extend Lattice") {
+            Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(values), Some(out)) = (ctx.inputs.array("values"), ctx.outputs.array("out"))
-        else {
+        let (Some(values), Some(tiles), Some(out)) = (
+            ctx.inputs.array("values"),
+            ctx.inputs.array("tiles"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
-        let count = cell_total(cells);
+        let count = pool.elements();
         if count * 8 > values.size.min(out.size) {
             ctx.error(format!(
-                "Extend Lattice: a {nodes:?}-node grid is larger than its arrays"
+                "Extend Lattice: a pool of {} tiles is larger than its arrays",
+                pool.pool_tiles
             ));
             return;
         }
         let uniforms = ExtendUniforms {
-            nodes_x: nodes[0] as f32,
-            nodes_y: nodes[1] as f32,
-            nodes_z: nodes[2] as f32,
+            cell_size: pool.cell_size,
+            pool_tiles: pool.pool_tiles as f32,
             dispatch_count: count as u32,
+            _pad0: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
@@ -115,6 +119,11 @@ impl Primitive for ExtendLattice {
                 },
                 GpuBinding::Buffer {
                     binding: 2,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
                     buffer: out,
                     offset: 0,
                 },

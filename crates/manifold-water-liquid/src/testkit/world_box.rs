@@ -83,6 +83,22 @@ impl BoxTable {
         table
     }
 
+    /// The same table and placement for a box of `cells` from the same cell
+    /// 0, inside the tiles this box touches: a cell array beside a node array
+    /// one larger.
+    pub fn with_cells(&self, cells: [u32; 3]) -> Self {
+        let last: [i32; 3] = std::array::from_fn(|a| self.origin[a] + cells[a] as i32 - 1);
+        let t = tile_of_cell(last);
+        assert!(
+            (0..3).all(|a| cells[a] > 0 && t[a] < self.tile_min[a] + self.tiles[a] as i32),
+            "a box inside the table's tiles"
+        );
+        Self {
+            cells,
+            ..self.clone()
+        }
+    }
+
     /// Every (tile, slot) the box holds: tile `tile_min` first, x fastest.
     pub fn held(&self) -> Vec<([i32; 3], u32)> {
         (0..self.pool_tiles)

@@ -2,8 +2,6 @@
 
 pub mod conformance;
 
-pub mod face_grid_scenes;
-
 pub mod preset_extents;
 
 #[cfg(any(test, feature = "testkit"))]

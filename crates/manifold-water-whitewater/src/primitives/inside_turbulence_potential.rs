@@ -11,9 +11,9 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::tile_storage::TILE_GRID;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, cell_total, grid_cells, particle_grid};
+use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, whitewater_pool};
 
 /// FLIP turbulence normalization defaults; dust uses 0.75 times the minimum.
 pub(crate) const MIN_TURBULENCE: f32 = 100.0;
@@ -24,59 +24,44 @@ pub(crate) const INSIDE_ENABLED: f32 = 1.0;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct InsideUniforms {
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
     min_turbulence: f32,
     max_turbulence: f32,
     inside_enabled: f32,
+    cell_size: f32,
+    pool_tiles: f32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
     name: InsideTurbulencePotential,
     type_id: "node.inside_turbulence_potential",
-    purpose: "Sample FLIP turbulence at p minus half a cell with out-of-range corners zero, clamp to Min/Max Turbulence and normalize. Exclude surface particles (within 1.5 cells of the surface and bordering air). Inside Enabled zero suppresses this source.",
+    purpose: "Sample FLIP turbulence at p minus half a cell through the liquid step's world-tile table (a cell in an absent tile reads the canonical element), clamp to Min/Max Turbulence and normalize. Exclude surface particles (within 1.5 cells of the surface and bordering air). Inside Enabled zero suppresses this source.",
     inputs: {
         particles: Array(FluidParticle) required,
         distance: Array(f32) required,
         turbulence: Array(f32) required,
         cells: Array(u32) required,
-        center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
-        size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        tiles: Array(u32) required,
         min_turbulence: ScalarF32 optional,
         max_turbulence: ScalarF32 optional,
         inside_enabled: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         out: Array(f32),
     },
     params: [
-        float_param!("center_x", "Grid Center X", 0.0, -1.0e4, 1.0e4),
-        float_param!("center_y", "Grid Center Y", 0.0, -1.0e4, 1.0e4),
-        float_param!("center_z", "Grid Center Z", 0.0, -1.0e4, 1.0e4),
-        float_param!("size_x", "Grid Size X", 4.375, 0.0001, 1.0e4),
-        float_param!("size_y", "Grid Size Y", 4.375, 0.0001, 1.0e4),
-        float_param!("size_z", "Grid Size Z", 4.375, 0.0001, 1.0e4),
-        float_param!("nodes_x", "Solid Nodes X", 71.0, 3.0, 4096.0),
-        float_param!("nodes_y", "Solid Nodes Y", 71.0, 3.0, 4096.0),
-        float_param!("nodes_z", "Solid Nodes Z", 71.0, 3.0, 4096.0),
         float_param!("min_turbulence", "Min Turbulence", MIN_TURBULENCE, 0.0, 1.0e5),
         float_param!("max_turbulence", "Max Turbulence", MAX_TURBULENCE, 0.0, 1.0e5),
         float_param!("inside_enabled", "Inside Enabled", INSIDE_ENABLED, 0.0, 1.0),
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16777216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Sample turbulence_field with the same distance and shrunken material cells as wavecrest_potential; feed turbulence_emission_count alongside the mutually exclusive wavecrest potential.",
+    composition_notes: "Sample turbulence_field with the same distance and shrunken material cells as wavecrest_potential, with the liquid step's tiles and pool_tiles and the domain's cell_size; feed turbulence_emission_count alongside the mutually exclusive wavecrest potential.",
     examples: [],
     summary: "Finds submerged turbulent emitters, including near-surface particles classified inside by FLIP.",
     category: Particles3D,
@@ -84,9 +69,9 @@ manifold_node_engine::primitive! {
     aliases: ["inside emission", "turbulence potential", "bubble source"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/inside_turbulence_potential_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "particles" },
-    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
+    wgsl_includes: [READ_SIDE, WHITEWATER_COMMON],
 }
 
 impl Primitive for InsideTurbulencePotential {
@@ -107,10 +92,10 @@ impl Primitive for InsideTurbulencePotential {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let grid = match particle_grid(ctx) {
-            Ok(grid) => grid,
+        let pool = match whitewater_pool(ctx, "Inside Turbulence Potential") {
+            Ok(pool) => pool,
             Err(refusal) => {
-                ctx.error(format!("Inside Turbulence Potential: {refusal}"));
+                ctx.error(refusal);
                 return;
             }
         };
@@ -131,21 +116,22 @@ impl Primitive for InsideTurbulencePotential {
         let Some(particles) = ctx.inputs.array("particles") else {
             return;
         };
-        let (Some(distance), Some(turbulence), Some(cells)) = (
+        let (Some(distance), Some(turbulence), Some(cells), Some(tiles)) = (
             ctx.inputs.array("distance"),
             ctx.inputs.array("turbulence"),
             ctx.inputs.array("cells"),
+            ctx.inputs.array("tiles"),
         ) else {
             return;
         };
         let Some(out) = ctx.outputs.array("out") else {
             return;
         };
-        let total = cell_total(grid_cells(grid.nodes).expect("particle_grid checked the lattice"));
+        let total = pool.elements();
         if total * 4 > distance.size || total * 4 > turbulence.size || total * 4 > cells.size {
             ctx.error(format!(
-                "Inside Turbulence Potential: a {:?}-node grid is larger than its arrays",
-                grid.nodes
+                "Inside Turbulence Potential: a pool of {} tiles is larger than its arrays",
+                pool.pool_tiles
             ));
             return;
         }
@@ -154,26 +140,15 @@ impl Primitive for InsideTurbulencePotential {
         if count == 0 {
             return;
         }
-        let [center_x, center_y, center_z] = grid.center;
-        let [size_x, size_y, size_z] = grid.size;
-        let [nodes_x, nodes_y, nodes_z] = grid.nodes.map(|n| n as f32);
         let uniforms = InsideUniforms {
-            center_x,
-            center_y,
-            center_z,
-            size_x,
-            size_y,
-            size_z,
-            nodes_x,
-            nodes_y,
-            nodes_z,
             min_turbulence,
             max_turbulence,
             inside_enabled,
+            cell_size: pool.cell_size,
+            pool_tiles: pool.pool_tiles as f32,
             dispatch_count: count,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
@@ -205,6 +180,11 @@ impl Primitive for InsideTurbulencePotential {
                 },
                 GpuBinding::Buffer {
                     binding: 5,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
                     buffer: out,
                     offset: 0,
                 },

@@ -7,15 +7,13 @@ use manifold_core::effect_graph_def::{
 use manifold_core::id::NodeId;
 use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 use manifold_nodes_water::testkit::conformance::testkit::{
-    G, liquid_totals, matter_faces, matter_totals, set_fill_param,
+    G, liquid_totals, matter_totals, set_fill_param,
 };
 
 use crate::engine_scenes::scene_def;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_nodes_water::presets::gpu_flip::{SHIPPED_PRESET, WaterScene, render_def};
-use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
 use manifold_water_gpu_mpm::matter::{MatterPoint, STATS_WORDS};
-use manifold_water_gpu_mpm::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_water_whitewater::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
 
@@ -29,9 +27,6 @@ const GPU_FLIP_WALLS_IN_SOLVE: &str = "GPU FLIP's tank walls are in its pressure
      design, as in the engine: an open face is a sink that removes particles, not a hole in the wall. The \
      floor's push back on a box pressing the pool is real ground reaction, so the walls absorb momentum and \
      body plus liquid momentum cannot balance; the check is valid only for a solver with no walls in the solve";
-
-const GPU_FLIP_FACES_ARE_POOLED: &str = "GPU FLIP's step keeps its faces in a tile pool that its whitewater reads \
-     through the slot table; the frame publishes no face grid, so there is nothing to compare";
 
 // Known bugs, each logged with its numbers; a known red comes off with its fix.
 const GPU_FLIP_CORNER_LIFT: &str = "BUG-o3kj8 (GPU FLIP pushes a light box tilted into a corner down instead of \
@@ -111,17 +106,6 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             port: "out",
             record_bytes: std::mem::size_of::<MatterPoint>(),
         }),
-        faces: Some(FaceSource {
-            type_id: "node.matter_state",
-            port: "grid",
-            resample: matter_faces,
-            valid_layers: MATTER_FACE_VALID_LAYERS,
-            ulps: (
-                1,
-                "the component's f32 mean of up to four nodes is compiled with Metal's fast math, which may round a \
-                 sum or the division differently from the CPU; a few faces land one unit off",
-            ),
-        }),
         exempt: &[(Check::HandoverAgreement, MPM_MOVES_ITS_OWN_BODIES)],
         known_red: &[
             known(Check::FloatingRest, "rms", MPM_FLOATS_LOW),
@@ -168,11 +152,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             port: "out",
             record_bytes: std::mem::size_of::<FluidParticle>(),
         }),
-        faces: None,
-        exempt: &[
-            (Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE),
-            (Check::FaceGridPublished, GPU_FLIP_FACES_ARE_POOLED),
-        ],
+        exempt: &[(Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE)],
         known_red: &[
             known(Check::FloatingRest, "centre", GPU_FLIP_FLOATS_HIGH),
             known(Check::FloatingRest, "rms", GPU_FLIP_FLOATS_HIGH),
@@ -197,9 +177,6 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     match fixture {
         Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
         Fixture::StillPool => Some(render_def(WaterScene::still_pool(64))),
-        Fixture::FaceGrid => Some(render_def(WaterScene::dam_break(
-            FACE_GRID_RESOLUTION as usize,
-        ))),
         Fixture::Collision { .. }
         | Fixture::FloatingBox
         | Fixture::SubmergedBox
@@ -523,15 +500,6 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
             scene.apply(bundled("WaterFloatingBoxMatter"), MATTER_DOMAIN_TYPE_ID),
         ),
         None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
-        None if fixture == Fixture::FaceGrid => {
-            let mut def = matter_dam_break_faces(None);
-            // The Dam Break's 4 m box at the face grid's resolution.
-            let cell_size = SerializedParamValue::Float {
-                value: 4.0 / FACE_GRID_RESOLUTION as f32,
-            };
-            set_type_param(&mut def, MATTER_DOMAIN_TYPE_ID, "cell_metres", cell_size);
-            def
-        }
         None => bundled("WaterDamBreakMatter"),
     })
 }
@@ -706,11 +674,6 @@ mod tests {
                 assert!(
                     check != Check::NonfiniteTickNotPublished || row.state.is_some(),
                     "{}: {check:?} needs the row's state array",
-                    row.type_id
-                );
-                assert!(
-                    check != Check::FaceGridPublished || row.faces.is_some(),
-                    "{}: {check:?} needs the row's face source",
                     row.type_id
                 );
                 for &fixture in check.fixtures(row.coupled) {

@@ -2,7 +2,6 @@
 
 use super::*;
 use manifold_node_engine::scene::world_tiles::lattice_origin;
-use manifold_water_liquid::primitives::face_sample_component::solver_origin_cell;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::substep_history::PooledFaces;
 
@@ -15,13 +14,7 @@ impl Primitive for GpuFlipStep {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(
             port,
-            "faces"
-                | "distance"
-                | "tiles"
-                | "substep_schedule"
-                | "substep_u"
-                | "substep_v"
-                | "substep_w"
+            "faces" | "distance" | "tiles" | "substep_schedule" | "substep_faces"
         )
     }
 
@@ -31,13 +24,7 @@ impl Primitive for GpuFlipStep {
             "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
             "tiles" => self.state.tiles.as_ref().map(|t| t.table()),
             "substep_schedule" => self.state.history.schedule.as_ref(),
-            "substep_u" | "substep_v" | "substep_w" => self.state.history.faces.as_ref().map(|f| {
-                &f[match port {
-                    "substep_u" => 0,
-                    "substep_v" => 1,
-                    _ => 2,
-                }]
-            }),
+            "substep_faces" => self.state.history.faces.as_ref(),
             _ => None,
         }
     }
@@ -54,8 +41,7 @@ impl Primitive for GpuFlipStep {
                 .find(|(name, _)| *name == "particles")
                 .map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the lattice at run time.
-            "faces" | "distance" | "tiles" | "substep_schedule" | "substep_u" | "substep_v"
-            | "substep_w" => Some(1),
+            "faces" | "distance" | "tiles" | "substep_schedule" | "substep_faces" => Some(1),
             "reaction_out" => inputs
                 .iter()
                 .find(|(name, _)| *name == "reaction")
@@ -221,6 +207,7 @@ impl Primitive for GpuFlipStep {
                     return;
                 }
             };
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         let box_min = solver.min();
         let regions_in = ctx.inputs.array("regions");
         let region_sites_in = ctx.inputs.array("region_sites");
@@ -463,12 +450,9 @@ impl Primitive for GpuFlipStep {
             ctx.error(format!("{NAME}: {error}"));
             return;
         }
-        // The history reads the pooled faces from the solver grid's first
-        // world cell.
-        let cell_origin = solver_origin_cell(box_min, h);
         let gpu = ctx.gpu_encoder();
         self.state.history.prepare(gpu.device);
-        if let Err(error) = self.state.history.reserve(gpu.device, cells, history_slots) {
+        if let Err(error) = self.state.history.reserve(gpu.device, pool, history_slots) {
             ctx.error(format!("{NAME}: {error}"));
             return;
         }
@@ -571,12 +555,18 @@ impl Primitive for GpuFlipStep {
                         faces: &self.state.lattice.as_ref().expect("lattice prepared").faces,
                         table: self.state.tiles.as_ref().expect("tiles prepared").table(),
                         pool_tiles: pool,
-                        cell_origin,
                     },
                 );
                 last_clock_plan = plan_buffer;
             }
         }
+        // Tiles change slot, come and go between substeps: every captured
+        // row moves onto the table the step publishes.
+        self.state.history.remap(
+            gpu.native_enc,
+            self.state.tiles.as_ref().expect("tiles prepared").table(),
+            encoded_steps,
+        );
         if let Some(status) = clock_status {
             gpu.native_enc
                 .copy_buffer_to_buffer(&last_clock_plan, &status, 32);

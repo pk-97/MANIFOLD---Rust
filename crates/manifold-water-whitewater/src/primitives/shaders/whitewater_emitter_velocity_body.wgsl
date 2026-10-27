@@ -1,21 +1,25 @@
 // FLIP diffuseparticlesimulation.cpp:1699: scale eligible surface emitter velocity.
+// The distance is read trilinearly at cell centres and the air test over the
+// 26 neighbours of the particle's cell, both through the step's world-tile
+// table (`tiles`, `pool_tiles` tiles): a cell in an absent tile reads the
+// canonical element (distance 3h, air).
 
-fn wc_distance(c: vec3<i32>, cells: vec3<u32>) -> f32 {
-    if !ww_in_grid(c, cells) {
-        return 0.0;
-    }
-    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+fn wc_distance(c: vec3<i32>) -> f32 {
+    return buf_distance[ts_cell_at(c)];
 }
 
-fn wc_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
+fn wc_borders_air(c: vec3<i32>) -> bool {
     for (var dz = -1; dz <= 1; dz = dz + 1) {
         for (var dy = -1; dy <= 1; dy = dy + 1) {
             for (var dx = -1; dx <= 1; dx = dx + 1) {
-                let n = c + vec3<i32>(dx, dy, dz);
-                if (dx == 0 && dy == 0 && dz == 0) || !ww_in_grid(n, cells) {
+                if dx == 0 && dy == 0 && dz == 0 {
                     continue;
                 }
-                if buf_cells[ts_grid_index(vec3<i32>(vec3<u32>(n)), vec3<i32>(cells))] == 0u {
+                if buf_cells[ts_cell_at(c + vec3<i32>(dx, dy, dz))] == 0u {
                     return true;
                 }
             }
@@ -28,48 +32,30 @@ fn body(
     idx: u32,
     count: u32,
     e_particles: Element,
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
     spray_speed: f32,
     seed: f32,
     epoch: f32,
+    cell_size: f32,
+    pool_tiles: f32,
 ) -> Element {
+    ww_pool_tiles = u32(pool_tiles);
     if !(e_particles.position_radius.w > 0.0) {
         return e_particles;
     }
-    let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
-    if any(nodes < vec3<u32>(3u)) {
-        return e_particles;
-    }
-    let cells = nodes - vec3<u32>(1u);
-    let total = cells.x * cells.y * cells.z;
-    if total > arrayLength(&buf_distance) || total > arrayLength(&buf_cells) {
-        return e_particles;
-    }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let h = size.x / f32(cells.x);
-    let q = ww_grid_position(e_particles.position_radius.xyz, vec3<f32>(center_x, center_y, center_z), size, cells);
+    let h = cell_size;
+    let q = ww_cell_position(e_particles.position_radius.xyz, h);
+    let cell = vec3<i32>(floor(q));
+    ts_home(ts_cell_at(cell));
     let s = q - vec3<f32>(0.5);
     let lower = floor(s);
     let f = s - lower;
     let base = vec3<i32>(lower);
-    var phi: array<f32, 8>;
     var d = 0.0;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-        let c = base + vec3<i32>(ww_corner(corner));
-        phi[corner] = wc_distance(c, cells);
-        let w = ww_corner_weight(f, corner);
-        d = d + w * phi[corner];
+        d = d + ww_corner_weight(f, corner) * wc_distance(base + vec3<i32>(ww_corner(corner)));
     }
     var out = e_particles;
-    if abs(d) < 1.5 * h && wc_borders_air(vec3<i32>(floor(q)), cells) && d > -0.75 * h {
+    if abs(d) < 1.5 * h && wc_borders_air(cell) && d > -0.75 * h {
         out.velocity *= 1.0 + (spray_speed - 1.0) * ww_random(idx, bitcast<u32>(seed), u32(max(round(epoch), 0.0)), 9u);
     }
     return out;

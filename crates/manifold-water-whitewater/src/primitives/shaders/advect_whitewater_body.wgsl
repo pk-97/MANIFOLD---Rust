@@ -1,5 +1,11 @@
-// node.advect_whitewater — fusable BUFFER body, COINCIDENT pool, GATHER faces
-// and solid. One FLIP tick of a live whitewater particle by its type
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+
+// node.advect_whitewater — fusable BUFFER body, COINCIDENT pool, GATHER faces,
+// solid, the substep history, the force lattices and the world-tile table.
+// One FLIP tick of a live whitewater particle by its type
 // (diffuseparticlesimulation.cpp:2250-2600), every limit behaviour collide:
 //   spray: gravity and per-id drag, then the collision march; a collision
 //     with a usable normal sets velocity from the old one split along it
@@ -9,113 +15,85 @@
 //   foam: the liquid velocity times the advection strength;
 //   all: a particle that moved faster than 1.1 times its new speed dies
 //     (lifetime -1e6), and so does one whose travel is not finite.
-// Work is in FLIP's local frame: metres from the grid's first node. The
-// liquid velocity is FLIP's MAC trilinear at the old position (0 outside
-// the grid), the solid its node lattice read trilinearly (a node past the
-// lattice reads 0). FLIP's near-solid early-out is dropped
-//Its range check stays. Slots with
-// kind 3 is empty; kind 4 is dust, with FLIP's ID-dependent buoyancy and drag.
+// Work is in world metres, grid positions from `ww_cell_position`. The
+// liquid velocity is FLIP's MAC trilinear at the old position over the
+// step's pooled faces (the face of cell f along an axis is the record of
+// cell f, 0 where it has no weight or its tile is not held) or, under a
+// schedule, over substep k's row of the history, which lies on the same
+// table. The solid is the node array read trilinearly, a node in a tile the
+// table does not hold reading the canonical element. FLIP's near-solid
+// early-out is dropped, and so is the boundary box: a wall is a solid. Slots
+// with kind 3 is empty; kind 4 is dust, with FLIP's ID-dependent buoyancy and drag.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
-// FLIP's boundary box: 3 cells and 1e-6 m in from the domain, then
-// _solidBufferWidth (a quarter cell) more, each side moving by half.
-const AW_BOX_INSET: f32 = 1.625;
-const AW_BOX_EPSILON: f32 = 0.5e-6;
 // _solidBufferWidth, _diffuseParticleStepDistanceFactor and the CFL number,
 // cells; _maxVelocityFactor.
 const AW_SOLID_BUFFER: f32 = 0.25;
 const AW_STEP: f32 = 0.5;
 const AW_MAX_RESOLVE: f32 = 5.0;
 const AW_MAX_VELOCITY: f32 = 1.1;
-// _nearSolidGridCellSizeFactor, cells.
-const AW_NEAR_SOLID: f32 = 3.0;
 const AW_EPS: f32 = 1e-6;
 const AW_DEAD: f32 = -1e6;
 // _diffuseParticleIDLimit - 1.
 const AW_ID_TOP: f32 = 255.0;
+// The solid reads 1e30 in a tile no slot holds; stopping a node read here
+// keeps the gradient's differences finite.
+const AW_FAR: f32 = 1e4;
 
-fn aw_face_len(axis: u32) -> u32 {
-    if axis == 0u {
-        return arrayLength(&buf_face_u);
-    }
-    if axis == 1u {
-        return arrayLength(&buf_face_v);
-    }
-    return arrayLength(&buf_face_w);
-}
-
-fn aw_face(axis: u32, i: u32, step: u32, cells: vec3<u32>) -> f32 {
+// Component `axis` of the face of cell c: the step's own faces, or substep
+// `step` of the history (0xffffffff reads the step's own).
+fn aw_face(axis: u32, c: vec3<i32>, step: u32) -> f32 {
+    let i = ts_face(c);
     if step != 0xffffffffu {
-        var dims = cells; dims[axis] = dims[axis] + 1u;
-        let at = step * dims.x * dims.y * dims.z + i;
-        if axis == 0u { return buf_substep_u[at]; }
-        if axis == 1u { return buf_substep_v[at]; }
-        return buf_substep_w[at];
+        return buf_substep_faces[(step * ts_pool_len() + i) * 4u + axis];
     }
-    if axis == 0u {
-        return buf_face_u[i];
-    }
-    if axis == 1u {
-        return buf_face_v[i];
-    }
-    return buf_face_w[i];
+    let s = buf_faces[i];
+    return lf_face_velocity(s.face_velocity, s.face_weight, axis);
 }
 
 // FLIP's MAC trilinear at grid position q.
-fn aw_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>, step: u32) -> vec3<f32> {
-    if any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(cells)) {
-        return vec3<f32>(0.0);
-    }
-    let pad = lf_pad(cells, face_cells);
+fn aw_velocity(q: vec3<f32>, step: u32) -> vec3<f32> {
     var v = vec3<f32>(0.0);
     for (var axis = 0u; axis < 3u; axis = axis + 1u) {
         let s = lf_stencil(q, axis);
         let lower = floor(s);
         let f = s - lower;
         let base = vec3<i32>(lower);
-        let len = aw_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
-            if i != LF_NONE && i < len {
-                sum = sum + ww_corner_weight(f, corner) * aw_face(axis, i, step, face_cells);
-            }
+            sum = sum + ww_corner_weight(f, corner) * aw_face(axis, base + vec3<i32>(ww_corner(corner)), step);
         }
         v[axis] = sum;
     }
     return v;
 }
 
-fn aw_node(n: vec3<i32>, nodes: vec3<u32>) -> f32 {
-    if any(n < vec3<i32>(0)) || any(n >= vec3<i32>(nodes)) {
-        return 0.0;
-    }
-    let u = vec3<u32>(n);
-    return buf_solid[u.x + nodes.x * (u.y + nodes.y * u.z)];
+fn aw_node(n: vec3<i32>) -> f32 {
+    return min(buf_solid[ts_cell_at(n)], AW_FAR);
 }
 
 // The solid's distance at grid position q, metres.
-fn aw_solid(q: vec3<f32>, nodes: vec3<u32>) -> f32 {
+fn aw_solid(q: vec3<f32>) -> f32 {
     let lower = floor(q);
     let f = q - lower;
     let base = vec3<i32>(lower);
     var d = 0.0;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-        d = d + ww_corner_weight(f, corner) * aw_node(base + vec3<i32>(ww_corner(corner)), nodes);
+        d = d + ww_corner_weight(f, corner) * aw_node(base + vec3<i32>(ww_corner(corner)));
     }
     return d;
 }
 
 // FLIP's trilinear gradient (interpolation.cpp:197), unscaled; corner index
 // x + 2y + 4z.
-fn aw_gradient(q: vec3<f32>, nodes: vec3<u32>) -> vec3<f32> {
+fn aw_gradient(q: vec3<f32>) -> vec3<f32> {
     let lower = floor(q);
     let f = q - lower;
     let base = vec3<i32>(lower);
     var phi: array<f32, 8>;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-        phi[corner] = aw_node(base + vec3<i32>(ww_corner(corner)), nodes);
+        phi[corner] = aw_node(base + vec3<i32>(ww_corner(corner)));
     }
     let gx = mix(mix(phi[1] - phi[0], phi[3] - phi[2], f.y), mix(phi[5] - phi[4], phi[7] - phi[6], f.y), f.z);
     let gy = mix(mix(phi[2] - phi[0], phi[3] - phi[1], f.x), mix(phi[6] - phi[4], phi[7] - phi[5], f.x), f.z);
@@ -123,33 +101,9 @@ fn aw_gradient(q: vec3<f32>, nodes: vec3<u32>) -> vec3<f32> {
     return vec3<f32>(gx, gy, gz);
 }
 
-fn aw_inside(p: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>) -> bool {
-    return all(p >= lo) && all(p < hi);
-}
-
-// Whether a local position's near-solid cell lies in FLIP's near-solid grid.
-fn aw_in_near_solid(p: vec3<f32>, h: f32, cells: vec3<u32>) -> bool {
-    let g = floor(p / (AW_NEAR_SOLID * h));
-    let top = vec3<f32>((cells + vec3<u32>(2u)) / vec3<u32>(3u));
-    return all(g >= vec3<f32>(0.0)) && all(g < top);
-}
-
 fn aw_step(
-    idx: u32,
-    count: u32,
     e_pool: Element,
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
-    face_cells_x: f32,
-    face_cells_y: f32,
-    face_cells_z: f32,
+    cell_size: f32,
     gravity_x: f32,
     gravity_y: f32,
     gravity_z: f32,
@@ -167,24 +121,13 @@ fn aw_step(
     if (e_pool.kind == 3u || e_pool.kind > 4u) || !(dt > 0.0) {
         return out;
     }
-    let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
-    let face_cells = vec3<u32>(max(round(vec3<f32>(face_cells_x, face_cells_y, face_cells_z)), vec3<f32>(0.0)));
-    if any(nodes < vec3<u32>(3u)) || any(face_cells == vec3<u32>(0u)) || nodes.x * nodes.y * nodes.z > arrayLength(&buf_solid) {
-        return out;
-    }
-    let cells = nodes - vec3<u32>(1u);
-    if any(face_cells > cells) {
-        return out;
-    }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let h = size.x / f32(cells.x);
-    let origin = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let p = e_pool.position_lifetime.xyz - origin;
+    let h = cell_size;
+    let p = e_pool.position_lifetime.xyz;
     let v = e_pool.velocity;
     let gravity = vec3<f32>(gravity_x, gravity_y, gravity_z);
-    let lo = vec3<f32>(AW_BOX_INSET * h + AW_BOX_EPSILON);
-    let hi = vec3<f32>(cells) * h - lo;
     let spray = e_pool.kind == 2u;
+    let q = ww_cell_position(p, h);
+    ts_home(ts_cell_at(vec3<i32>(floor(q))));
 
     var nextv: vec3<f32>;
     if spray {
@@ -194,7 +137,7 @@ fn aw_step(
         let drag = mind + (1.0 - factor) * (maxd - mind);
         nextv = v + gravity * dt + (-drag * v * dt);
     } else {
-        let vmac = aw_velocity(p / h, cells, face_cells, face_step);
+        let vmac = aw_velocity(q, face_step);
         if e_pool.kind == 4u {
             let factor = f32(e_pool.id) / AW_ID_TOP;
             let buoyancy = -2.0 + factor * (-6.0 + 2.0);
@@ -217,7 +160,7 @@ fn aw_step(
     var resolved = nextp;
     var bounced = false;
     var bounce = vec3<f32>(0.0);
-    if aw_in_near_solid(p, h, cells) && aw_in_near_solid(nextp, h, cells) && travel >= AW_EPS {
+    if travel >= AW_EPS {
         let step = AW_STEP * h;
         let steps = i32(ceil(travel / step));
         let dir = (nextp - p) / travel;
@@ -231,8 +174,8 @@ fn aw_step(
             } else {
                 current = p + f32(i + 1) * step * dir;
             }
-            let phi = aw_solid(current / h, nodes);
-            if phi < 0.0 || !aw_inside(current, lo, hi) {
+            let phi = aw_solid(ww_cell_position(current, h));
+            if phi < 0.0 {
                 hit_phi = phi;
                 found = true;
                 break;
@@ -241,11 +184,11 @@ fn aw_step(
         }
         if found {
             let reach = AW_MAX_RESOLVE * h;
-            let grad = aw_gradient(current / h, nodes);
+            let grad = aw_gradient(ww_cell_position(current, h));
             if length(grad) > AW_EPS {
                 let n = normalize(grad);
                 resolved = current - (hit_phi - AW_SOLID_BUFFER * h) * n;
-                if aw_solid(resolved / h, nodes) < 0.0 || length(resolved - current) > reach {
+                if aw_solid(ww_cell_position(resolved, h)) < 0.0 || length(resolved - current) > reach {
                     resolved = last;
                 }
                 let u = dot(v, n) * n;
@@ -253,13 +196,6 @@ fn aw_step(
                 bounced = true;
             } else {
                 resolved = last;
-            }
-            if !aw_inside(resolved, lo, hi) {
-                let before = resolved;
-                resolved = min(max(resolved, lo), hi - vec3<f32>(AW_EPS));
-                if aw_solid(resolved / h, nodes) < 0.0 || length(resolved - before) > reach {
-                    resolved = last;
-                }
             }
         }
     }
@@ -269,7 +205,7 @@ fn aw_step(
     if length(resolved - p) * (1.0 / dt) > AW_MAX_VELOCITY * length(nextv) {
         out.position_lifetime.w = AW_DEAD;
     }
-    out.position_lifetime = vec4<f32>(resolved + origin, out.position_lifetime.w);
+    out.position_lifetime = vec4<f32>(resolved, out.position_lifetime.w);
     out.velocity = nextv;
     return out;
 }
@@ -278,18 +214,9 @@ fn body(
     idx: u32,
     count: u32,
     e_pool: Element,
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
-    face_cells_x: f32,
-    face_cells_y: f32,
-    face_cells_z: f32,
+    bounds_lo_x: f32,
+    bounds_lo_y: f32,
+    bounds_lo_z: f32,
     gravity_x: f32,
     gravity_y: f32,
     gravity_z: f32,
@@ -309,12 +236,12 @@ fn body(
     force_lattices: f32,
     tick_index: f32,
     first_tick: f32,
+    cell_size: f32,
+    pool_tiles: f32,
 ) -> Element {
+    ww_pool_tiles = u32(pool_tiles);
     let steps = u32(max(substep_count, 0.0));
-    let origin = vec3<f32>(center_x,center_y,center_z) - 0.5 * vec3<f32>(size_x,size_y,size_z);
-    let h = size_x / (nodes_x - 1.0);
-    let padding = 0.5 * (nodes_x - 1.0 - face_cells_x);
-    let field_origin = origin + vec3<f32>(padding * h);
+    let field_origin = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
     let dims = vec3<u32>(vec3<f32>(field_nodes_x,field_nodes_y,field_nodes_z));
     let stride = dims.x * dims.y * dims.z * 4u;
     let base = force_lattice_base(i32(tick_index), i32(first_tick), i32(force_lattices), dims);
@@ -345,7 +272,7 @@ fn body(
         }
         // Foam gets the impulse through the already-forced liquid velocity.
         if particle.kind != 1u && (event & 0x80000000u) != 0u { particle.velocity = particle.velocity + impulse; }
-        particle = aw_step(idx, count, particle, center_x, center_y, center_z, size_x, size_y, size_z, nodes_x, nodes_y, nodes_z, face_cells_x, face_cells_y, face_cells_z, acceleration.x, acceleration.y, acceleration.z, duration, foam_advection, bubble_buoyancy, bubble_drag, spray_drag, spray_drag_variance, spray_restitution, spray_friction, face_step);
+        particle = aw_step(particle, cell_size, acceleration.x, acceleration.y, acceleration.z, duration, foam_advection, bubble_buoyancy, bubble_drag, spray_drag, spray_drag_variance, spray_restitution, spray_friction, face_step);
     }
     return particle;
 }

@@ -430,6 +430,137 @@ pub(crate) fn retire_dense_liquid_faces(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Move saved GPU FLIP whitewater onto the step's world tiles, after
+/// flattening. The whitewater step's dense grid and face ports (`grid_bounds`,
+/// `grid_nodes_*`, `face_cells_*`, `face_valid_layers`, `face_u/v/w`) and its
+/// per-axis history (`substep_u/v/w`) are gone: their wires drop, and a
+/// whitewater fed the step's substep schedule reads its `substep_faces`. The
+/// obstacle source drops its native-grid wires (`lattice_min_*`, `nodes_*`)
+/// and reads the step's `tiles` and `pool_tiles`; its `distance` feeds the
+/// whitewater's `solid` and its `source` the `obstacle_source`, in place of
+/// the native solid lattice and the old `solid` output. The domain feeds the
+/// whitewater its `cell_size` and `bounds_lo_x/y/z`. Idempotent.
+pub(crate) fn pool_whitewater_on_step_tiles(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    const RETIRED_INPUTS: [&str; 14] = [
+        "grid_bounds",
+        "grid_nodes_x",
+        "grid_nodes_y",
+        "grid_nodes_z",
+        "face_cells_x",
+        "face_cells_y",
+        "face_cells_z",
+        "face_valid_layers",
+        "face_u",
+        "face_v",
+        "face_w",
+        "substep_u",
+        "substep_v",
+        "substep_w",
+    ];
+    const SOURCE_GRID: [&str; 6] = [
+        "lattice_min_x",
+        "lattice_min_y",
+        "lattice_min_z",
+        "nodes_x",
+        "nodes_y",
+        "nodes_z",
+    ];
+    const SOURCE: &str = "node.whitewater_obstacle_source";
+    let kinds: std::collections::HashMap<u32, String> = def
+        .nodes
+        .iter()
+        .map(|n| (n.id, n.type_id.clone()))
+        .collect();
+    let kind = |id: u32| kinds.get(&id).map(String::as_str);
+    let feeder = |to: u32, ports: &[&str], from_kind: &str| {
+        def.wires
+            .iter()
+            .find(|w| {
+                w.to_node == to
+                    && ports.contains(&w.to_port.as_str())
+                    && kind(w.from_node) == Some(from_kind)
+            })
+            .map(|w| w.from_node)
+    };
+    let mut added: Vec<EffectGraphWire> = Vec::new();
+    let mut wire = |from_node: u32, from_port: &str, to_node: u32, to_port: &str| {
+        added.push(EffectGraphWire {
+            from_node,
+            from_port: from_port.into(),
+            to_node,
+            to_port: to_port.into(),
+        });
+    };
+    for ww in def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.whitewater_step")
+        .map(|n| n.id)
+    {
+        let Some(step) = feeder(ww, &["faces", "distance"], "node.gpu_flip_step") else {
+            continue;
+        };
+        if def
+            .wires
+            .iter()
+            .any(|w| w.to_node == ww && w.to_port == "substep_schedule" && w.from_node == step)
+        {
+            wire(step, "substep_faces", ww, "substep_faces");
+        }
+        if let Some(source) = feeder(ww, &["obstacle_source"], SOURCE) {
+            wire(source, "distance", ww, "solid");
+            wire(source, "source", ww, "obstacle_source");
+            wire(step, "tiles", source, "tiles");
+            wire(step, "pool_tiles", source, "pool_tiles");
+        }
+        let domain = def
+            .wires
+            .iter()
+            .find(|w| w.to_node == step && kind(w.from_node) == Some(GPU_FLIP_DOMAIN_TYPE_ID))
+            .map(|w| w.from_node);
+        if let Some(domain) = domain {
+            for port in ["cell_size", "bounds_lo_x", "bounds_lo_y", "bounds_lo_z"] {
+                wire(domain, port, ww, port);
+            }
+        }
+    }
+    let before = def.wires.clone();
+    def.wires.retain(|w| {
+        let into_whitewater = kind(w.to_node) == Some("node.whitewater_step");
+        let retired = into_whitewater && RETIRED_INPUTS.contains(&w.to_port.as_str());
+        // Replaced below by the obstacle source's pooled outputs.
+        let replaced = into_whitewater
+            && matches!(w.to_port.as_str(), "solid" | "obstacle_source")
+            && added
+                .iter()
+                .any(|a| a.to_node == w.to_node && a.to_port == w.to_port && a != w);
+        let source_grid =
+            kind(w.to_node) == Some(SOURCE) && SOURCE_GRID.contains(&w.to_port.as_str());
+        let source_solid = kind(w.from_node) == Some(SOURCE) && w.from_port == "solid";
+        !(retired || replaced || source_grid || source_solid)
+    });
+    for a in added {
+        if !def
+            .wires
+            .iter()
+            .any(|w| w.to_node == a.to_node && w.to_port == a.to_port)
+        {
+            def.wires.push(a);
+        }
+    }
+    def.wires != before
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "pool_whitewater_on_step_tiles",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 350,
+        apply: pool_whitewater_on_step_tiles,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "wire_liquid_intervals",
@@ -1053,6 +1184,78 @@ mod tests {
         }
         let migrated = def.clone();
         assert!(!retire_dense_liquid_faces(&mut def));
+        assert_eq!(def, migrated);
+    }
+
+    #[test]
+    fn whitewater_moves_onto_the_step_tiles() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from,
+            from_port: output.into(),
+            to_node: to,
+            to_port: input.into(),
+        };
+        // Domain 1, step 2, obstacle source 3, whitewater 4, the native solid
+        // lattice 5.
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID),
+                bare_node(2, "node.gpu_flip_step"),
+                bare_node(3, "node.whitewater_obstacle_source"),
+                bare_node(4, "node.whitewater_step"),
+                bare_node(5, "node.liquid_solid_distance"),
+            ],
+            wires: vec![
+                wire(1, "cell_size", 2, "cell_size"),
+                wire(2, "distance", 4, "distance"),
+                wire(2, "faces", 4, "faces"),
+                wire(2, "substep_schedule", 4, "substep_schedule"),
+                wire(2, "substep_u", 4, "substep_u"),
+                wire(2, "grid_bounds", 4, "grid_bounds"),
+                wire(2, "face_valid_layers", 4, "face_valid_layers"),
+                wire(5, "solid", 4, "solid"),
+                wire(3, "solid", 4, "obstacle_source"),
+                wire(1, "mesh_min_x", 3, "lattice_min_x"),
+                wire(1, "mesh_nodes_x", 3, "nodes_x"),
+                wire(1, "bodies", 3, "bodies"),
+            ],
+        };
+        assert!(pool_whitewater_on_step_tiles(&mut def));
+        for gone in [
+            wire(2, "substep_u", 4, "substep_u"),
+            wire(2, "grid_bounds", 4, "grid_bounds"),
+            wire(2, "face_valid_layers", 4, "face_valid_layers"),
+            wire(5, "solid", 4, "solid"),
+            wire(3, "solid", 4, "obstacle_source"),
+            wire(1, "mesh_min_x", 3, "lattice_min_x"),
+            wire(1, "mesh_nodes_x", 3, "nodes_x"),
+        ] {
+            assert!(!def.wires.contains(&gone), "{gone:?}");
+        }
+        for kept in [
+            wire(2, "distance", 4, "distance"),
+            wire(2, "substep_schedule", 4, "substep_schedule"),
+            wire(1, "bodies", 3, "bodies"),
+            wire(2, "substep_faces", 4, "substep_faces"),
+            wire(3, "distance", 4, "solid"),
+            wire(3, "source", 4, "obstacle_source"),
+            wire(2, "tiles", 3, "tiles"),
+            wire(2, "pool_tiles", 3, "pool_tiles"),
+            wire(1, "cell_size", 4, "cell_size"),
+            wire(1, "bounds_lo_x", 4, "bounds_lo_x"),
+            wire(1, "bounds_lo_z", 4, "bounds_lo_z"),
+        ] {
+            assert!(def.wires.contains(&kept), "{kept:?}");
+        }
+        assert_eq!(def.wires.len(), 14);
+        let migrated = def.clone();
+        assert!(!pool_whitewater_on_step_tiles(&mut def));
         assert_eq!(def, migrated);
     }
 }

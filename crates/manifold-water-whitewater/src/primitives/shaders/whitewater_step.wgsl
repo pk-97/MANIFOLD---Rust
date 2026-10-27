@@ -297,3 +297,44 @@ fn publish_counts() {
     counts[7] = state[1];
     counts[8] = population_end(3u) - population_start(3u);
 }
+
+// Influence belongs to world tiles but lives in pool slots, and the table may
+// give a slot to another tile between frames. `restart_table` is this frame's
+// table: its slot rows start at word 2 * entries, a tile (x, y, z) and an
+// entry per slot. `restart_rows` is the same rows as last frame left them.
+// A slot that is free now is never read and keeps its value; a slot that was
+// free or held a different tile last frame starts over at the base level.
+struct RestartParams {
+    pool_tiles: u32,
+    entries: u32,
+    count: u32,
+    base_level: f32,
+}
+
+@group(0) @binding(0) var<uniform> restart: RestartParams;
+@group(0) @binding(13) var<storage, read> restart_table: array<u32>;
+@group(0) @binding(14) var<storage, read> restart_rows: array<u32>;
+@group(0) @binding(15) var<storage, read_write> restart_values: array<f32>;
+
+const RESTART_NONE: u32 = 0xffffffffu;
+
+@compute @workgroup_size(256)
+fn restart_moved_influence(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= restart.count {
+        return;
+    }
+    let slot = i >> 9u;
+    let now = 2u * restart.entries + 4u * slot;
+    if restart_table[now + 3u] == RESTART_NONE {
+        return;
+    }
+    let before = 4u * slot;
+    let same = restart_rows[before + 3u] != RESTART_NONE
+        && restart_rows[before] == restart_table[now]
+        && restart_rows[before + 1u] == restart_table[now + 1u]
+        && restart_rows[before + 2u] == restart_table[now + 2u];
+    if !same {
+        restart_values[i] = restart.base_level;
+    }
+}

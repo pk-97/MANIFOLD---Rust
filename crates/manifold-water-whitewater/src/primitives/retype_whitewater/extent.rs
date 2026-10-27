@@ -1,13 +1,14 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::{whitewater_faces, whitewater_lattice};
-use manifold_water_liquid::whitewater::cell_total;
+use manifold_water_liquid::extent::whitewater_pool;
+use manifold_water_liquid::fluid_particles::FaceSample;
+use std::mem::size_of;
 
 fn retype_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
-    whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
-    x.covers("distance", cell_total(cells) * 4)?;
-    x.covers("cells", cell_total(cells) * 4)?;
+    let elements = whitewater_pool(x)?;
+    x.covers("distance", elements * 4)?;
+    x.covers("cells", elements * 4)?;
+    x.covers("faces", elements * size_of::<FaceSample>() as u64)?;
     x.covers("out", x.bytes("pool").unwrap_or(0))
 }
 inventory::submit! {

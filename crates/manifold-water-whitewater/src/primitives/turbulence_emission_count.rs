@@ -11,7 +11,9 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
+use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
 
 /// FLIP's wavecrest emission rate, particles per second at full potential.
 pub(crate) const WAVECREST_RATE: f32 = 175.0;
@@ -26,9 +28,7 @@ manifold_node_engine::primitive! {
         wavecrest: Array(f32) required,
         turbulence: Array(f32) required,
         influence: Array(f32) required,
-        center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
-        size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        tiles: Array(u32) required,
         turbulence_rate: ScalarF32 optional,
         generation_rate: ScalarF32 optional, seed: ScalarF32 optional, epoch: ScalarF32 optional,
         rate: ScalarF32 optional,
@@ -36,6 +36,8 @@ manifold_node_engine::primitive! {
         ticks: ScalarF32 optional,
         live_count: ScalarF32 optional,
         dt: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         out: Array(u32),
@@ -50,18 +52,11 @@ manifold_node_engine::primitive! {
         float_param!("ticks", "Ticks", 1.0, 0.0, 1.0e3),
         float_param!("live_count", "Live Count", 1.0e9, 0.0, 1.0e9),
         float_param!("dt", "Duration (s)", 1.0 / 60.0, 0.0, 1.0e3),
-        float_param!("center_x", "Grid Center X", 0.0, -1.0e4, 1.0e4),
-        float_param!("center_y", "Grid Center Y", 0.0, -1.0e4, 1.0e4),
-        float_param!("center_z", "Grid Center Z", 0.0, -1.0e4, 1.0e4),
-        float_param!("size_x", "Grid Size X", 4.375, 0.0001, 1.0e4),
-        float_param!("size_y", "Grid Size Y", 4.375, 0.0001, 1.0e4),
-        float_param!("size_z", "Grid Size Z", 4.375, 0.0001, 1.0e4),
-        float_param!("nodes_x", "Grid Nodes X", 71.0, 3.0, 4096.0),
-        float_param!("nodes_y", "Grid Nodes Y", 71.0, 3.0, 4096.0),
-        float_param!("nodes_z", "Grid Nodes Z", 71.0, 3.0, 4096.0),
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16777216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Combine wavecrest_potential and inside_turbulence_potential, then running_total and spawn_whitewater. FLIP classifies markers into mutually exclusive surface and inside sources before counting.",
+    composition_notes: "Combine wavecrest_potential and inside_turbulence_potential, then running_total and spawn_whitewater. influence is the step's node array, read at the particle's cell through its tiles and pool_tiles, with the domain's cell_size. FLIP classifies markers into mutually exclusive surface and inside sources before counting.",
     examples: [],
     summary: "Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame.",
     category: Particles3D,
@@ -69,9 +64,9 @@ manifold_node_engine::primitive! {
     aliases: ["emission count", "whitewater count", "emit"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/turbulence_emission_count_body.wgsl"),
-    input_access: [Coincident, Coincident, Coincident, Coincident, BufferGather],
+    input_access: [Coincident, Coincident, Coincident, Coincident, BufferGather, BufferGather],
     output_capacity: manifold_node_engine::freeze::classify::FusedOutputCapacity::FromInput { input: "particles" },
-    wgsl_includes: [manifold_water_liquid::tile_storage::TILE_GRID, manifold_water_liquid::whitewater::WHITEWATER_COMMON],
+    wgsl_includes: [READ_SIDE, WHITEWATER_COMMON],
 }
 
 impl Primitive for TurbulenceEmissionCount {
@@ -101,6 +96,7 @@ impl Primitive for TurbulenceEmissionCount {
                 "wavecrest",
                 "turbulence",
                 "influence",
+                "tiles",
             ],
             32,
             4,

@@ -307,6 +307,16 @@ impl EffectNode for FollowFirst {
     }
 }
 
+/// Register `type_id` as a test array source of `item`s, `max_capacity`
+/// long: for record types this crate does not know.
+pub fn register_array_source(
+    registry: &mut PrimitiveRegistry,
+    type_id: &'static str,
+    item: ArrayType,
+) {
+    registry.register(type_id, move || Box::new(ArraySource::new(type_id, item)));
+}
+
 pub fn register_substep_test_nodes(registry: &mut PrimitiveRegistry) {
     registry.register("test.follow_first", || {
         let f32s = || PortType::Array(ArrayType::of_known::<f32>());

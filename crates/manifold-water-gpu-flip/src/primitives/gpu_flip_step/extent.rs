@@ -13,7 +13,6 @@ use manifold_water_liquid::coupling::REACTION_FLOATS;
 use manifold_water_liquid::extent::liquid_lattice;
 use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, whole};
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::FlipSolverGrid;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::primitives::sort_particles_into_cells::key_storage_bytes;
@@ -36,15 +35,10 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("pool_tiles", pool as f32);
     let history = history_slots(whole(x, "live_hit_count", 0.0));
     x.provide("substep_schedule", u64::from(history) * 16);
-    for (axis, port) in ["substep_u", "substep_v", "substep_w"]
-        .into_iter()
-        .enumerate()
-    {
-        x.provide(port, u64::from(history) * face_len(cells, axis) * 4);
-    }
+    x.provide("substep_faces", u64::from(history) * pool_len(pool) * 16);
     x.publish("substep_count", history as f32);
     x.hold(manifold_water_liquid::substep_history::history_bytes(
-        cells, history,
+        pool, history,
     ));
     let lattice = FlipSolverGrid::from_lattice(liquid_lattice(x)?);
     x.publish_transform("grid_bounds", lattice.bounds());

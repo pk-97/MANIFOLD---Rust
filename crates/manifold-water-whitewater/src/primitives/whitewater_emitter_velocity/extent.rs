@@ -1,11 +1,11 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::{particle_map, whitewater_grid};
+use manifold_water_liquid::extent::{particle_map, whitewater_pool};
 
 fn whitewater_emitter_velocity(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (_, cells) = whitewater_grid(x)?;
+    let elements = whitewater_pool(x)?;
     for p in ["distance", "cells"] {
-        x.covers(p, cells * 4)?;
+        x.covers(p, elements * 4)?;
     }
     particle_map(x)
 }

@@ -15,7 +15,6 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::tile_storage::TILE_GRID;
 use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
@@ -56,7 +55,7 @@ manifold_node_engine::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/jitter_particles_body.wgsl"),
     output_capacity: FusedOutputCapacity::FromInput { input: "particles" },
-    wgsl_includes: [TILE_GRID, WHITEWATER_COMMON],
+    wgsl_includes: [WHITEWATER_COMMON],
 }
 
 impl Primitive for JitterParticles {

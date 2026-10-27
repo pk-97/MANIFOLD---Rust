@@ -658,9 +658,7 @@ fn whitewater_per_tick_preset_closes_the_liquid_region() {
         "tiles",
         "pool_tiles",
         "substep_schedule",
-        "substep_u",
-        "substep_v",
-        "substep_w",
+        "substep_faces",
         "substep_count",
     ] {
         assert!(

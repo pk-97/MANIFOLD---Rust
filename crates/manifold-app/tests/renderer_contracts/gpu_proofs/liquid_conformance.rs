@@ -33,7 +33,6 @@ use manifold_nodes_water::testkit::conformance::{
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::HANDOVER_BOUND;
-use manifold_water_liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_water_rigid::physics::{SimStep, native_ticks_on_this_thread};
 use serde_json::json;
 use {
@@ -72,14 +71,7 @@ const FRAME_SCALARS: [&str; 6] = [
     "blend",
     "span",
 ];
-/// The face grid's scalars, where the frame publishes them.
-const FACE_SCALARS: [&str; 4] = [
-    "face_cells_x",
-    "face_cells_y",
-    "face_cells_z",
-    "face_valid_layers",
-];
-const SCALARS: usize = DOMAIN_SCALARS.len() + FRAME_SCALARS.len() + FACE_SCALARS.len();
+const SCALARS: usize = DOMAIN_SCALARS.len() + FRAME_SCALARS.len();
 
 /// What one frame published: the drawn Box3D pose and the probed scalars
 /// (NaN where nothing is wired).
@@ -113,19 +105,15 @@ impl Probe {
 }
 
 fn probed_scalars() -> impl Iterator<Item = &'static &'static str> {
-    DOMAIN_SCALARS
-        .iter()
-        .chain(&FRAME_SCALARS)
-        .chain(&FACE_SCALARS)
+    DOMAIN_SCALARS.iter().chain(&FRAME_SCALARS)
 }
 
 thread_local! {
     static PROBE: Cell<Probe> = const { Cell::new(Probe::EMPTY) };
 }
 
-/// Records whichever of its inputs are wired. Its particle and face inputs
-/// keep both frames and the face grid allocated, so the array dump carries
-/// them.
+/// Records whichever of its inputs are wired. Its particle inputs keep both
+/// frames allocated, so the array dump carries them.
 struct LiquidProbe {
     type_id: EffectNodeType,
     inputs: Vec<NodeInput>,
@@ -148,9 +136,6 @@ impl LiquidProbe {
                 name,
                 PortType::Array(ArrayType::of_known::<FluidParticle>()),
             ));
-        }
-        for &name in &FACE_GRID_PORTS[..3] {
-            inputs.push(port(name, PortType::Array(ArrayType::of_known::<f32>())));
         }
         Self {
             type_id: EffectNodeType::new(PROBE_TYPE),
@@ -374,14 +359,6 @@ fn prepare(
             wire(domain, name, name);
         }
         for name in FRAME_SCALARS.iter().chain(&["particles_a", "particles_b"]) {
-            wire(publisher_id, name, name);
-        }
-        let publisher_outputs = outputs(&publisher_type);
-        for name in FACE_SCALARS
-            .iter()
-            .chain(&FACE_GRID_PORTS[..3])
-            .filter(|name| publisher_outputs.iter().any(|port| port == *name))
-        {
             wire(publisher_id, name, name);
         }
     }
@@ -726,23 +703,6 @@ impl LiquidRun {
 
     fn particles(&self, port: &str) -> Vec<FluidParticle> {
         self.read(&self.publisher, port)
-    }
-
-    /// The frame's face grid over `cells`, x, y and z.
-    fn faces(&self, cells: [u32; 3]) -> [Vec<f32>; 3] {
-        std::array::from_fn(|axis| {
-            let port = FACE_GRID_PORTS[axis];
-            let mut faces: Vec<f32> = self.read(&self.publisher, port);
-            let len = face_len(cells, axis) as usize;
-            assert!(
-                faces.len() >= len,
-                "{}: {port} holds {} of {len} faces",
-                self.domain_type,
-                faces.len()
-            );
-            faces.truncate(len);
-            faces
-        })
     }
 
     /// Corrupt one record's position in the solver state with NaN (the GPU
@@ -1127,7 +1087,7 @@ fn liquid_export_matches_live_project_schedule() {
     for rate in [rates[0], rates[rates.len() - 1]] {
         let project_fps = f64::from(rate.hz());
         let make = |fps: f64, live| {
-            let mut def = scene(row, Fixture::FaceGrid);
+            let mut def = scene(row, Fixture::DamBreak);
             set_type_param(
                 &mut def,
                 GPU_FLIP_DOMAIN_TYPE_ID,
@@ -2896,144 +2856,6 @@ fn liquid_reset_starts_a_new_epoch() {
                 cleared.get("simulation_time")
             );
         }
-    }
-}
-
-/// Units in the last place between two finite f32 of one sign; `u64::MAX`
-/// across signs or for a non-finite value.
-fn ulps(a: f32, b: f32) -> u64 {
-    if a.to_bits() == b.to_bits() || (a == 0.0 && b == 0.0) {
-        return 0;
-    }
-    if !a.is_finite() || !b.is_finite() || a.is_sign_negative() != b.is_sign_negative() {
-        return u64::MAX;
-    }
-    (i64::from(a.to_bits()) - i64::from(b.to_bits())).unsigned_abs()
-}
-
-/// Faces of `published` whose bits differ from `expected`, the most units
-/// in the last place any sits off, and the first few.
-fn face_mismatches(
-    published: &[Vec<f32>; 3],
-    expected: &[Vec<f32>; 3],
-) -> (usize, u64, Vec<String>) {
-    let mut count = 0;
-    let mut worst = 0;
-    let mut first = Vec::new();
-    for axis in 0..3 {
-        assert_eq!(
-            published[axis].len(),
-            expected[axis].len(),
-            "axis {axis} lengths"
-        );
-        for (index, (got, want)) in published[axis].iter().zip(&expected[axis]).enumerate() {
-            if got.to_bits() != want.to_bits() {
-                count += 1;
-                worst = worst.max(ulps(*got, *want));
-                if first.len() < 5 {
-                    first.push(format!(
-                        "axis {axis} face {index}: {got:e} against {want:e}"
-                    ));
-                }
-            }
-        }
-    }
-    (count, worst, first)
-}
-
-/// P10 (D5), for every row that publishes a face grid (GPU FLIP's step keeps
-/// its faces pooled and is exempt): the frame publishes the faces the
-/// solver's own grid gives at the frame's last tick, bit for bit where the
-/// resample is a gather (the row's `ulps` otherwise, with its reason), over
-/// the domain's cells with the solver's valid layers. Paused frames hold
-/// them bit for bit; the next tick moves them, again as the grid gives them.
-#[test]
-fn liquid_face_grid_published() {
-    for row in running(Check::FaceGridPublished) {
-        let source = row
-            .faces
-            .as_ref()
-            .unwrap_or_else(|| panic!("{}: no face source", row.type_id));
-        let (allowed, reason) = source.ulps;
-        assert!(
-            allowed == 0 || !reason.is_empty(),
-            "{}: {allowed} ulps without a reason",
-            row.type_id
-        );
-        let mut run = LiquidRun::offline(row, scene(row, Fixture::FaceGrid), 1);
-        let played = run.steps(PLAY);
-        let cells =
-            ["face_cells_x", "face_cells_y", "face_cells_z"].map(|name| played.get(name) as u32);
-        assert!(
-            cells.iter().all(|&n| n > 0),
-            "{}: the frame publishes {cells:?} cells",
-            row.type_id
-        );
-        assert_eq!(
-            played.get("face_valid_layers"),
-            source.valid_layers as f32,
-            "{}: valid layers",
-            row.type_id
-        );
-
-        let published = run.faces(cells);
-        let expected = (source.resample)(&run.read::<u8>(source.type_id, source.port), cells);
-        let (differ, worst, first) = face_mismatches(&published, &expected);
-        let total: usize = published.iter().map(Vec::len).sum();
-        let moving = published.iter().flatten().filter(|v| **v != 0.0).count();
-        let finite = published.iter().flatten().all(|v| v.is_finite());
-        eprintln!(
-            "liquid_face_grid_published {}: {cells:?} cells, {moving} of {total} faces moving; {differ} differ from {}.{} by at most {worst} ulps (allowed {allowed}) {first:?}",
-            row.type_id, source.type_id, source.port
-        );
-        assert!(finite, "{}: a published face is not finite", row.type_id);
-        assert!(
-            moving > total / 100,
-            "{}: only {moving} of {total} faces move after {PLAY} ticks",
-            row.type_id
-        );
-        assert!(
-            worst <= u64::from(allowed),
-            "{}: published faces sit {worst} ulps from the solver's: {first:?}",
-            row.type_id
-        );
-
-        for _ in 0..3 {
-            let held = run.hold();
-            assert_eq!(
-                held.get("ticks"),
-                0.0,
-                "{}: a paused frame ran a tick",
-                row.type_id
-            );
-        }
-        let held = run.faces(cells);
-        let (changed, _, first) = face_mismatches(&held, &published);
-        assert_eq!(
-            changed, 0,
-            "{}: paused frames moved the faces: {first:?}",
-            row.type_id
-        );
-
-        run.step();
-        let next = run.faces(cells);
-        let (moved, _, _) = face_mismatches(&next, &published);
-        let expected = (source.resample)(&run.read::<u8>(source.type_id, source.port), cells);
-        let (differ, worst, first) = face_mismatches(&next, &expected);
-        eprintln!(
-            "liquid_face_grid_published {}: the next tick moved {moved} faces; {differ} differ by at most {worst} ulps",
-            row.type_id
-        );
-        assert!(
-            moved > 0,
-            "{}: the next tick left the faces as they were",
-            row.type_id
-        );
-        assert!(
-            worst <= u64::from(allowed),
-            "{}: the next tick's faces sit {worst} ulps off: {first:?}",
-            row.type_id
-        );
     }
 }
 

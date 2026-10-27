@@ -1,42 +1,40 @@
 // node.wavecrest_potential — fusable BUFFER body, COINCIDENT particles,
-// GATHER distance, curvature and cells. FLIP's wavecrest potential for a
-// surface particle (diffuseparticlesimulation.cpp:1571, :1718), with the
-// distance and curvature read trilinearly at cell centres (a cell outside
-// the grid reads 0):
+// GATHER distance, curvature, cells and tiles. FLIP's wavecrest potential for
+// a surface particle (diffuseparticlesimulation.cpp:1571, :1718), with the
+// distance and curvature read trilinearly at cell centres:
 //   0 unless the particle sits within 1.5 cells of the surface and its cell
-//   borders air (26 neighbours; outside the grid counts as solid);
+//   borders air (26 neighbours);
 //   0 when it is still (every velocity component under 1e-6);
 //   k = curvature × cell size, 0 below min_curvature, held at max_curvature;
 //   0 when the distance's gradient vanishes or the velocity's direction
 //   meets the surface normal below `sharpness` (a dot product);
 //   else (k − min_curvature)/(max_curvature − min_curvature).
-// 0 for a slot with radius 0, or a grid past any gathered array.
+// 0 for a slot with radius 0. Every field is read through the step's
+// world-tile table (`tiles`, `pool_tiles` tiles): a cell in an absent tile
+// reads the canonical element (distance 3h, curvature 0, air).
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp and interpolation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
-fn wc_distance(c: vec3<i32>, cells: vec3<u32>) -> f32 {
-    if !ww_in_grid(c, cells) {
-        return 0.0;
-    }
-    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+fn wc_distance(c: vec3<i32>) -> f32 {
+    return buf_distance[ts_cell_at(c)];
 }
 
-fn wc_curvature(c: vec3<i32>, cells: vec3<u32>) -> f32 {
-    if !ww_in_grid(c, cells) {
-        return 0.0;
-    }
-    return buf_curvature[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))].value;
+fn wc_curvature(c: vec3<i32>) -> f32 {
+    return buf_curvature[ts_cell_at(c)].value;
 }
 
-fn wc_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
+fn wc_borders_air(c: vec3<i32>) -> bool {
     for (var dz = -1; dz <= 1; dz = dz + 1) {
         for (var dy = -1; dy <= 1; dy = dy + 1) {
             for (var dx = -1; dx <= 1; dx = dx + 1) {
-                let n = c + vec3<i32>(dx, dy, dz);
-                if (dx == 0 && dy == 0 && dz == 0) || !ww_in_grid(n, cells) {
+                if dx == 0 && dy == 0 && dz == 0 {
                     continue;
                 }
-                if buf_cells[ts_grid_index(vec3<i32>(vec3<u32>(n)), vec3<i32>(cells))] == 0u {
+                if buf_cells[ts_cell_at(c + vec3<i32>(dx, dy, dz))] == 0u {
                     return true;
                 }
             }
@@ -49,34 +47,20 @@ fn body(
     idx: u32,
     count: u32,
     e_particles: Element,
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
     min_curvature: f32,
     max_curvature: f32,
     sharpness: f32,
+    cell_size: f32,
+    pool_tiles: f32,
 ) -> f32 {
+    ww_pool_tiles = u32(pool_tiles);
     if !(e_particles.position_radius.w > 0.0) || !(max_curvature > min_curvature) {
         return 0.0;
     }
-    let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
-    if any(nodes < vec3<u32>(3u)) {
-        return 0.0;
-    }
-    let cells = nodes - vec3<u32>(1u);
-    let total = cells.x * cells.y * cells.z;
-    if total > arrayLength(&buf_distance) || total > arrayLength(&buf_curvature) || total > arrayLength(&buf_cells) {
-        return 0.0;
-    }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let h = size.x / f32(cells.x);
-    let q = ww_grid_position(e_particles.position_radius.xyz, vec3<f32>(center_x, center_y, center_z), size, cells);
+    let h = cell_size;
+    let q = ww_cell_position(e_particles.position_radius.xyz, h);
+    let cell = vec3<i32>(floor(q));
+    ts_home(ts_cell_at(cell));
     let s = q - vec3<f32>(0.5);
     let lower = floor(s);
     let f = s - lower;
@@ -86,12 +70,12 @@ fn body(
     var k = 0.0;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
         let c = base + vec3<i32>(ww_corner(corner));
-        phi[corner] = wc_distance(c, cells);
+        phi[corner] = wc_distance(c);
         let w = ww_corner_weight(f, corner);
         d = d + w * phi[corner];
-        k = k + w * wc_curvature(c, cells);
+        k = k + w * wc_curvature(c);
     }
-    if !(abs(d) < 1.5 * h) || !wc_borders_air(vec3<i32>(floor(q)), cells) {
+    if !(abs(d) < 1.5 * h) || !wc_borders_air(cell) {
         return 0.0;
     }
     let v = e_particles.velocity;

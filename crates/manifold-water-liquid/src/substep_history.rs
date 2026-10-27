@@ -1,41 +1,156 @@
-//! Accepted liquid substeps on the solver-neutral MAC-face seam.
+//! Accepted liquid substeps on the solver's world tiles.
 //! Four f32 words per schedule row: duration, elapsed endpoint, bitcast
 //! timestamped impulse index/valid bit, reserved zero. Zero duration is inactive.
-//! Face arrays concatenate ordinary seam grids in schedule order. Inactive
-//! rows do not publish faces; consumers must skip them before reading a grid.
-use super::grid::face_len;
-use crate::primitives::face_sample_component::{ComponentUniforms, FaceSampleComponent};
+//! The faces concatenate one pooled grid per row in schedule order: row k's
+//! element e is at (k · pool_len(P) + e) · 4, the x, y and z velocity of the
+//! face record of the pool index e (a face is its cell's low face along the
+//! axis, 0 where the face has no weight) and a zero. Every row lies on the
+//! table the step publishes at the frame's end, so a reader finds a face
+//! with `ts_face` on that table whichever substep it reads. Inactive rows do
+//! not publish faces; consumers must skip them before reading a row.
+//!
+//! The step's table changes from substep to substep (a tile can change slot
+//! or come and go), so each capture keeps its table's words beside the faces,
+//! and after the frame's last capture [`SubstepHistory::remap`] moves every
+//! captured row onto the final table: a tile the final table lacks drops out,
+//! a tile the substep lacked reads the canonical element.
+use crate::fluid_particles::FaceSample;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries, table_words};
 
-const ARGUMENT_BYTES: u64 = 3 * 3 * 4;
-// Adapt the solver plan once, then let the existing component primitive
-// gather only active grids. The GPU owns activity; no readback is needed.
-const CAPTURE_SHADER: &str = r#"
-@group(0) @binding(0) var<uniform> capture: vec4<u32>;
+/// Indirect dispatch words per row: the table copy's groups, then the
+/// faces', each three words.
+const ROW_ARGUMENT_BYTES: u64 = 2 * 3 * 4;
+/// The words a pass reads as its uniform.
+const PARAM_WORDS: usize = 8;
+
+// The passes. The table of the substep a pass reads through (`ts_*`, from the
+// world tiles' read side) is its row of `tables`, the copy the capture made.
+// The GPU owns activity: the schedule pass writes each row's indirect
+// arguments, zero groups for an inactive row, and no readback is needed.
+const HISTORY_SHADER: &str = r#"
+struct FaceSample { face_velocity: vec4<f32>, face_weight: vec4<f32> }
+struct Params {
+    row: u32,
+    table_groups: u32,
+    element_groups: u32,
+    pool_tiles: u32,
+    pool_len: u32,
+    table_words: u32,
+    entries: u32,
+    _pad: u32,
+}
+@group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> plan: array<u32>;
 @group(0) @binding(2) var<storage, read_write> schedule: array<u32>;
 @group(0) @binding(3) var<storage, read_write> arguments: array<u32>;
+@group(0) @binding(4) var<storage, read> faces: array<FaceSample>;
+@group(0) @binding(5) var<storage, read> live_table: array<u32>;
+@group(0) @binding(6) var<storage, read_write> tables: array<u32>;
+@group(0) @binding(7) var<storage, read_write> history: array<f32>;
+@group(0) @binding(8) var<storage, read_write> stash: array<f32>;
+
+fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
+fn ts_table_entries() -> u32 { return params.entries; }
+fn ts_table_word(i: u32) -> u32 { return tables[params.row * params.table_words + i]; }
 
 @compute @workgroup_size(1)
 fn capture_schedule() {
-    let row = capture.x * 4u;
+    let row = params.row * 4u;
     schedule[row] = plan[0];
     schedule[row + 1u] = plan[1];
     schedule[row + 2u] = plan[7];
     schedule[row + 3u] = 0u;
     let enabled = bitcast<f32>(plan[0]) > 0.0;
-    for (var axis = 0u; axis < 3u; axis = axis + 1u) {
-        arguments[axis * 3u] = select(0u, capture[axis + 1u], enabled);
-        arguments[axis * 3u + 1u] = 1u;
-        arguments[axis * 3u + 2u] = 1u;
+    let at = params.row * 6u;
+    arguments[at] = select(0u, params.table_groups, enabled);
+    arguments[at + 1u] = 1u;
+    arguments[at + 2u] = 1u;
+    arguments[at + 3u] = select(0u, params.element_groups, enabled);
+    arguments[at + 4u] = 1u;
+    arguments[at + 5u] = 1u;
+}
+
+// The step's table, kept as row `row` of `tables`.
+@compute @workgroup_size(256)
+fn capture_table(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x >= params.table_words { return; }
+    tables[params.row * params.table_words + gid.x] = live_table[gid.x];
+}
+
+// The step's faces as row `row`: a face without weight reads 0, as the
+// whitewater atoms read it (lf_face_velocity).
+@compute @workgroup_size(256)
+fn capture_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let e = gid.x;
+    if e >= params.pool_len { return; }
+    let s = faces[e];
+    let at = (params.row * params.pool_len + e) * 4u;
+    history[at] = select(0.0, s.face_velocity.x, s.face_weight.x > 0.0);
+    history[at + 1u] = select(0.0, s.face_velocity.y, s.face_weight.y > 0.0);
+    history[at + 2u] = select(0.0, s.face_velocity.z, s.face_weight.z > 0.0);
+    history[at + 3u] = 0.0;
+}
+
+// Row `row` as it lies, one row of scratch for the remap to read.
+@compute @workgroup_size(256)
+fn stash_row(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let e = gid.x;
+    if e >= params.pool_len { return; }
+    let row_at = (params.row * params.pool_len + e) * 4u;
+    for (var a = 0u; a < 4u; a = a + 1u) {
+        stash[e * 4u + a] = history[row_at + a];
+    }
+}
+
+// Row `row` rewritten onto the final table (`live_table`): element e holds the
+// tile of the final table's slot e >> 9, which the row's own table (the copy
+// in `tables`) finds under whatever slot it had then. The canonical element,
+// a free slot and a tile the substep did not hold read the stash's canonical
+// element.
+@compute @workgroup_size(256)
+fn remap_row(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let e = gid.x;
+    if e >= params.pool_len { return; }
+    var src = params.pool_len - 1u;
+    let slot = e >> 9u;
+    if slot < params.pool_tiles {
+        let word = 2u * params.entries + 4u * slot;
+        if live_table[word + 3u] != WT_NONE {
+            let tile = bitcast<vec3<i32>>(vec3<u32>(live_table[word], live_table[word + 1u], live_table[word + 2u]));
+            let held = ts_hash_slot(tile);
+            if held != WT_NONE {
+                src = held * 512u + (e & 511u);
+            }
+        }
+    }
+    let dst = (params.row * params.pool_len + e) * 4u;
+    for (var a = 0u; a < 4u; a = a + 1u) {
+        history[dst + a] = stash[src * 4u + a];
     }
 }
 "#;
 
+const ENTRIES: [&str; 5] = [
+    "capture_schedule",
+    "capture_table",
+    "capture_faces",
+    "stash_row",
+    "remap_row",
+];
+
+/// The passes' kernels: the world tiles' read side, then the history's.
+fn history_source() -> String {
+    format!("{READ_SIDE}\n{HISTORY_SHADER}")
+}
+
 manifold_core::testkit_visible! {
-pub(crate) fn history_bytes(cells: [u32; 3], slots: u32) -> u64 {
-    ARGUMENT_BYTES + u64::from(slots) * (16 + (0..3).map(|a| face_len(cells, a) * 4).sum::<u64>())
+/// Bytes the history holds for `slots` rows over a pool of `pool_tiles`
+/// tiles: per row its schedule words, indirect arguments, table copy and
+/// faces, and one row of scratch for the remap.
+pub(crate) fn history_bytes(pool_tiles: u32, slots: u32) -> u64 {
+    let row = pool_len(pool_tiles) * 16;
+    row + u64::from(slots) * (16 + ROW_ARGUMENT_BYTES + table_words(pool_tiles) * 4 + row)
 }
 }
 
@@ -46,64 +161,93 @@ pub struct PooledFaces<'a> {
     /// The step's world-tile table over `pool_tiles` tiles.
     pub table: &'a GpuBuffer,
     pub pool_tiles: u32,
-    /// The world cell of the solver grid's first cell: the history's dense
-    /// faces are read from there.
-    pub cell_origin: [i32; 3],
 }
 
 #[derive(Default)]
 pub struct SubstepHistory {
     pub schedule: Option<GpuBuffer>,
-    pub faces: Option<[GpuBuffer; 3]>,
-    component: Option<GpuComputePipeline>,
-    capture_schedule: Option<GpuComputePipeline>,
+    /// `slots · pool_len(P) · 4` floats: row k's element e at `(k · pool_len +
+    /// e) · 4`, the x, y and z face velocity and a zero. After
+    /// [`SubstepHistory::remap`] every active row lies on the final table.
+    pub faces: Option<GpuBuffer>,
+    pipelines: Vec<GpuComputePipeline>,
+    /// Each captured row's table words, `table_words(P)` a row.
+    tables: Option<GpuBuffer>,
+    /// One row of faces: the remap's source while it rewrites a row.
+    stash: Option<GpuBuffer>,
     arguments: Option<GpuBuffer>,
     clear_faces: bool,
-    shape: Option<([u32; 3], u32)>,
+    /// The pool's tiles, and the rows reserved.
+    shape: Option<(u32, u32)>,
 }
 impl SubstepHistory {
     pub fn prepare(&mut self, device: &GpuDevice) {
-        standalone_pipeline::<FaceSampleComponent>(&mut self.component, device);
-        self.capture_schedule.get_or_insert_with(|| {
-            device.create_compute_pipeline(
-                CAPTURE_SHADER,
-                "capture_schedule",
-                "liquid.substep_history.schedule",
-            )
-        });
+        if self.pipelines.is_empty() {
+            let source = history_source();
+            for entry in ENTRIES {
+                self.pipelines.push(device.create_compute_pipeline(
+                    &source,
+                    entry,
+                    "liquid.substep_history",
+                ));
+            }
+        }
     }
     pub fn reserve(
         &mut self,
         device: &GpuDevice,
-        cells: [u32; 3],
+        pool_tiles: u32,
         slots: u32,
     ) -> Result<(), String> {
         if self
             .shape
-            .is_some_and(|(old, capacity)| old == cells && slots <= capacity)
+            .is_some_and(|(old, capacity)| old == pool_tiles && slots <= capacity)
         {
             return Ok(());
         }
         manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(),
-            history_bytes(cells, slots),
+            history_bytes(pool_tiles, slots),
         )
         .map_err(|e| e.to_string())?;
-        let schedule = device.try_create_buffer_shared(u64::from(slots) * 16)?;
+        let rows = u64::from(slots);
+        let row_bytes = pool_len(pool_tiles) * 16;
+        let schedule = device.try_create_buffer_shared(rows * 16)?;
         schedule.zero_fill();
-        let alloc = |a| device.try_create_buffer(u64::from(slots) * face_len(cells, a) * 4);
-        let faces = [alloc(0)?, alloc(1)?, alloc(2)?];
-        let arguments = device.try_create_buffer(ARGUMENT_BYTES)?;
+        let faces = device.try_create_buffer(rows * row_bytes)?;
+        let tables = device.try_create_buffer(rows * table_words(pool_tiles) * 4)?;
+        let stash = device.try_create_buffer(row_bytes)?;
+        let arguments = device.try_create_buffer(rows * ROW_ARGUMENT_BYTES)?;
         self.faces = Some(faces);
         self.schedule = Some(schedule);
+        self.tables = Some(tables);
+        self.stash = Some(stash);
         self.arguments = Some(arguments);
         self.clear_faces = true;
-        self.shape = Some((cells, slots));
+        self.shape = Some((pool_tiles, slots));
         Ok(())
     }
+
+    /// The uniform of the passes over row `row`.
+    fn params(row: u32, pool_tiles: u32) -> [u32; PARAM_WORDS] {
+        let words = table_words(pool_tiles) as u32;
+        [
+            row,
+            words.div_ceil(256),
+            (pool_len(pool_tiles) as u32).div_ceil(256),
+            pool_tiles,
+            pool_len(pool_tiles) as u32,
+            words,
+            table_entries(pool_tiles),
+            0,
+        ]
+    }
+
     /// GPU FLIP adapts its scheduler and native face records here: `pooled`
-    /// holds its pooled records and the table that finds them. Consumers
-    /// never see either solver-private layout.
+    /// holds its pooled records and the table that finds them. Row `index`
+    /// keeps the faces and a copy of the table as this substep leaves them;
+    /// an inactive row (no time to step) keeps what it had. Consumers never
+    /// see either solver-private layout.
     pub fn capture(
         &mut self,
         enc: &mut GpuEncoder,
@@ -111,29 +255,32 @@ impl SubstepHistory {
         plan: &GpuBuffer,
         pooled: &PooledFaces<'_>,
     ) {
-        let (cells, slots) = self.shape.expect("history reserved");
+        let (pool_tiles, slots) = self.shape.expect("history reserved");
         assert!(index < slots);
+        assert_eq!(
+            pooled.pool_tiles, pool_tiles,
+            "history reserved for this pool"
+        );
         let schedule = self.schedule.as_ref().expect("schedule reserved");
         let arguments = self.arguments.as_ref().expect("arguments reserved");
+        let tables = self.tables.as_ref().expect("tables reserved");
+        let faces = self.faces.as_ref().expect("faces reserved");
         if self.clear_faces {
-            for out in self.faces.as_ref().expect("faces reserved") {
-                enc.clear_buffer(out);
-            }
+            enc.clear_buffer(faces);
             self.clear_faces = false;
         }
-        let dispatch = [
-            index,
-            (face_len(cells, 0) as u32).div_ceil(256),
-            (face_len(cells, 1) as u32).div_ceil(256),
-            (face_len(cells, 2) as u32).div_ceil(256),
-        ];
+        let [capture_schedule, capture_table, capture_faces, ..] = &self.pipelines[..] else {
+            panic!("history prepared");
+        };
+        let words = Self::params(index, pool_tiles);
+        let uniform = GpuBinding::Bytes {
+            binding: 0,
+            data: bytemuck::cast_slice(&words),
+        };
         enc.dispatch_compute(
-            self.capture_schedule.as_ref().expect("capture prepared"),
+            capture_schedule,
             &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::cast_slice(&dispatch),
-                },
+                uniform,
                 GpuBinding::Buffer {
                     binding: 1,
                     buffer: plan,
@@ -154,128 +301,164 @@ impl SubstepHistory {
             "liquid.substep_history.schedule",
         );
         enc.compute_memory_barrier_buffers();
-        for (axis, out) in self
-            .faces
-            .as_ref()
-            .expect("faces reserved")
-            .iter()
-            .enumerate()
-        {
-            let count = face_len(cells, axis);
-            // The component reads nodes − 4 cells: GPU FLIP's solver grid.
-            let uniforms = ComponentUniforms::new(
-                axis,
-                cells.map(|n| n + 4),
-                pooled.pool_tiles,
-                pooled.cell_origin,
-                count,
-            );
+        let row_arguments = u64::from(index) * ROW_ARGUMENT_BYTES;
+        enc.dispatch_compute_indirect(
+            capture_table,
+            &[
+                uniform,
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: pooled.table,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: tables,
+                    offset: 0,
+                },
+            ],
+            arguments,
+            row_arguments,
+            "liquid.substep_history.table",
+        );
+        enc.dispatch_compute_indirect(
+            capture_faces,
+            &[
+                uniform,
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: pooled.faces,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: faces,
+                    offset: 0,
+                },
+            ],
+            arguments,
+            row_arguments + 12,
+            "liquid.substep_history.faces",
+        );
+        enc.compute_memory_barrier_buffers();
+    }
+
+    /// After the frame's last capture: every active row of the first `rows`
+    /// rewritten onto `table`, the table the step publishes. Row k's element
+    /// for a tile of `table` is the row's own element for that tile, wherever
+    /// the tile sat when the row was captured; a tile `table` lacks drops out
+    /// and a tile the row lacked reads the row's canonical element. An
+    /// inactive row dispatches nothing.
+    pub fn remap(&self, enc: &mut GpuEncoder, table: &GpuBuffer, rows: u32) {
+        let (pool_tiles, slots) = self.shape.expect("history reserved");
+        assert!(rows <= slots);
+        let arguments = self.arguments.as_ref().expect("arguments reserved");
+        let tables = self.tables.as_ref().expect("tables reserved");
+        let faces = self.faces.as_ref().expect("faces reserved");
+        let stash = self.stash.as_ref().expect("stash reserved");
+        let [_, _, _, stash_row, remap_row] = &self.pipelines[..] else {
+            panic!("history prepared");
+        };
+        for row in 0..rows {
+            let words = Self::params(row, pool_tiles);
+            let uniform = GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::cast_slice(&words),
+            };
+            let row_arguments = u64::from(row) * ROW_ARGUMENT_BYTES + 12;
             enc.dispatch_compute_indirect(
-                self.component.as_ref().expect("component prepared"),
+                stash_row,
                 &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&uniforms),
-                    },
+                    uniform,
                     GpuBinding::Buffer {
-                        binding: 1,
-                        buffer: pooled.faces,
+                        binding: 7,
+                        buffer: faces,
                         offset: 0,
                     },
                     GpuBinding::Buffer {
-                        binding: 2,
-                        buffer: pooled.table,
+                        binding: 8,
+                        buffer: stash,
                         offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 3,
-                        buffer: out,
-                        offset: u64::from(index) * count * 4,
                     },
                 ],
                 arguments,
-                axis as u64 * 12,
-                "liquid.substep_history.faces",
+                row_arguments,
+                "liquid.substep_history.stash",
             );
+            enc.compute_memory_barrier_buffers();
+            enc.dispatch_compute_indirect(
+                remap_row,
+                &[
+                    uniform,
+                    GpuBinding::Buffer {
+                        binding: 5,
+                        buffer: table,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 6,
+                        buffer: tables,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 7,
+                        buffer: faces,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 8,
+                        buffer: stash,
+                        offset: 0,
+                    },
+                ],
+                arguments,
+                row_arguments,
+                "liquid.substep_history.remap",
+            );
+            enc.compute_memory_barrier_buffers();
         }
-        enc.compute_memory_barrier_buffers();
     }
 }
+
+const _: () = assert!(size_of::<FaceSample>() == 32);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn liquid_substep_history_capture_shader_validates() {
-        let module =
-            naga::front::wgsl::parse_str(CAPTURE_SHADER).expect("history capture WGSL parses");
+    fn liquid_substep_history_shader_validates() {
+        let source = history_source();
+        let module = naga::front::wgsl::parse_str(&source).expect("history WGSL parses");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
-        .expect("history capture WGSL validates");
+        .expect("history WGSL validates");
+        for entry in ENTRIES {
+            assert!(
+                module.entry_points.iter().any(|e| e.name == entry),
+                "{entry} is an entry point"
+            );
+        }
     }
 
-    /// The history binds the component's own uniform: axis, the padded nodes,
-    /// the pool's tiles (as f32 bits), the world cell origin (as i32), the
-    /// count, three pad words.
+    /// The faces of a row are `pool_len` records of four floats, whatever the
+    /// pool, and each row adds its schedule, arguments, table copy and faces;
+    /// the remap's scratch is one row, not one per slot.
     #[test]
-    fn liquid_substep_history_component_uniform_layout() {
-        let words: [u32; 12] =
-            bytemuck::cast(ComponentUniforms::new(2, [10, 11, 12], 7, [-5, 6, -7], 99));
-        let bits = |v: f32| v.to_bits();
-        assert_eq!(
-            words,
-            [
-                2,
-                bits(10.0),
-                bits(11.0),
-                bits(12.0),
-                bits(7.0),
-                (-5i32) as u32,
-                6,
-                (-7i32) as u32,
-                99,
-                0,
-                0,
-                0
-            ]
-        );
-    }
-
-    #[test]
-    fn liquid_substep_history_extent_covers_all_schedule_and_face_dispatches() {
-        for cells in [[8, 8, 8], [16, 12, 8], [64, 64, 64]] {
-            for slots in [6, 7, 262] {
-                let mut bytes = ARGUMENT_BYTES + u64::from(slots) * 16;
-                for axis in 0..3 {
-                    let count = face_len(cells, axis);
-                    let length = u64::from(slots) * count;
-                    let mut dims = cells;
-                    dims[axis] += 1;
-                    let native = cells.map(|n| u64::from(n + 1));
-                    for i in 0..count {
-                        let c = [
-                            i % u64::from(dims[0]),
-                            i / u64::from(dims[0]) % u64::from(dims[1]),
-                            i / (u64::from(dims[0]) * u64::from(dims[1])),
-                        ];
-                        assert!(
-                            c[0] + native[0] * (c[1] + native[1] * c[2])
-                                < native.into_iter().product::<u64>()
-                        );
-                    }
-                    for step in 0..slots {
-                        // Codegen guards the rounded workgroup tail at count.
-                        assert!(u64::from(step) * count + count <= length);
-                        assert!(u64::from(step) * 16 + 12 <= u64::from(slots) * 16);
-                    }
-                    bytes += length * 4;
-                }
-                assert_eq!(history_bytes(cells, slots), bytes);
+    fn liquid_substep_history_bytes_count_every_buffer() {
+        for pool in [1, 3, 8, 4096] {
+            let row = pool_len(pool) * 16;
+            let per_slot = 16 + ROW_ARGUMENT_BYTES + table_words(pool) * 4 + row;
+            for slots in [1, 6, 7, 262] {
+                assert_eq!(
+                    history_bytes(pool, slots),
+                    row + u64::from(slots) * per_slot,
+                    "{pool} tiles, {slots} slots"
+                );
             }
         }
-        assert_eq!(history_bytes([64; 3], 6), 19_169_412);
     }
 }

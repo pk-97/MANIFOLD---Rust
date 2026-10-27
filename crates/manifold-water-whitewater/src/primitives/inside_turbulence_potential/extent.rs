@@ -1,11 +1,11 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::{particle_values, whitewater_grid};
+use manifold_water_liquid::extent::{particle_values, whitewater_pool};
 
 fn inside_turbulence_potential(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (_, cells) = whitewater_grid(x)?;
+    let elements = whitewater_pool(x)?;
     for p in ["distance", "turbulence", "cells"] {
-        x.covers(p, cells * 4)?;
+        x.covers(p, elements * 4)?;
     }
     particle_values(x)
 }

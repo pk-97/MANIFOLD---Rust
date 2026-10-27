@@ -1,56 +1,59 @@
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+
 // node.lattice_curvature — fusable BUFFER body, GATHER. One thread per
-// whitewater cell, FLIP's curvature grid (particlelevelset.cpp:692, :728):
-// a cell off the grid border whose distance and six face neighbours'
-// distances all lie within 2 cells of 0 is known (1) and holds the mean
-// curvature of the distance by central differences, in 1/m, clamped to ±1
-// cell⁻¹ (0 where the gradient vanishes); any other cell is unknown with 0.
-// `distance` is gathered; a grid past its array gives unknown.
+// pool element of the liquid step's world tiles (`buf_tiles`, `pool_tiles`
+// tiles), FLIP's curvature grid (particlelevelset.cpp:692, :728): a cell
+// whose distance and six face neighbours' distances all lie within 2 cells of
+// 0 is known (1) and holds the mean curvature of the distance by central
+// differences, in 1/m, clamped to ±1 cell⁻¹ (0 where the gradient vanishes);
+// any other cell is unknown with 0. `distance` is gathered through the
+// table: a neighbour in a tile it does not hold reads the canonical
+// distance, which is no cell of the surface band. A free slot and the
+// canonical element are unknown.
 //
 // Ported from FLIP Fluids particlelevelset.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
-fn lk_phi(c: vec3<i32>, cells: vec3<u32>) -> f32 {
-    return buf_distance[ts_grid_index(vec3<i32>(vec3<u32>(c)), vec3<i32>(cells))];
+fn lk_phi(c: vec3<i32>) -> f32 {
+    return buf_distance[ts_cell_at(c)];
 }
 
-fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, cell_size: f32) -> Element {
+fn body(idx: u32, count: u32, cell_size: f32, pool_tiles: f32) -> Element {
+    ww_pool_tiles = u32(pool_tiles);
     let unknown = Element(0.0, 0.0);
+    if idx >= ts_canon() {
+        return unknown;
+    }
+    if ts_slot_entry(idx >> 9u) == WT_NONE {
+        return unknown;
+    }
+    ts_home(idx);
+    let c = ts_cell_coord(idx);
     let h = cell_size;
-    let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
-    if any(nodes < vec3<u32>(3u)) {
-        return unknown;
-    }
-    let cells = nodes - vec3<u32>(1u);
-    let total = cells.x * cells.y * cells.z;
-    if idx >= total || total > arrayLength(&buf_distance) {
-        return unknown;
-    }
-    let u = vec3<u32>(ts_grid_coord(idx, vec3<i32>(cells)));
-    if ww_on_border(u, cells) {
-        return unknown;
-    }
     let band = 2.0 * h;
-    let c = vec3<i32>(u);
-    let p = lk_phi(c, cells);
+    let p = lk_phi(c);
     if !(abs(p) < band) {
         return unknown;
     }
     for (var face = 0u; face < 6u; face = face + 1u) {
-        if !(abs(lk_phi(c + ww_face_step(face), cells)) < band) {
+        if !(abs(lk_phi(c + ww_face_step(face))) < band) {
             return unknown;
         }
     }
     let ex = vec3<i32>(1, 0, 0);
     let ey = vec3<i32>(0, 1, 0);
     let ez = vec3<i32>(0, 0, 1);
-    let x = 0.5 * (lk_phi(c + ex, cells) - lk_phi(c - ex, cells));
-    let y = 0.5 * (lk_phi(c + ey, cells) - lk_phi(c - ey, cells));
-    let z = 0.5 * (lk_phi(c + ez, cells) - lk_phi(c - ez, cells));
-    let xx = lk_phi(c + ex, cells) - 2.0 * p + lk_phi(c - ex, cells);
-    let yy = lk_phi(c + ey, cells) - 2.0 * p + lk_phi(c - ey, cells);
-    let zz = lk_phi(c + ez, cells) - 2.0 * p + lk_phi(c - ez, cells);
-    let xy = 0.25 * (lk_phi(c + ex + ey, cells) - lk_phi(c - ex + ey, cells) - lk_phi(c + ex - ey, cells) + lk_phi(c - ex - ey, cells));
-    let xz = 0.25 * (lk_phi(c + ex + ez, cells) - lk_phi(c - ex + ez, cells) - lk_phi(c + ex - ez, cells) + lk_phi(c - ex - ez, cells));
-    let yz = 0.25 * (lk_phi(c + ey + ez, cells) - lk_phi(c - ey + ez, cells) - lk_phi(c + ey - ez, cells) + lk_phi(c - ey - ez, cells));
+    let x = 0.5 * (lk_phi(c + ex) - lk_phi(c - ex));
+    let y = 0.5 * (lk_phi(c + ey) - lk_phi(c - ey));
+    let z = 0.5 * (lk_phi(c + ez) - lk_phi(c - ez));
+    let xx = lk_phi(c + ex) - 2.0 * p + lk_phi(c - ex);
+    let yy = lk_phi(c + ey) - 2.0 * p + lk_phi(c - ey);
+    let zz = lk_phi(c + ez) - 2.0 * p + lk_phi(c - ez);
+    let xy = 0.25 * (lk_phi(c + ex + ey) - lk_phi(c - ex + ey) - lk_phi(c + ex - ey) + lk_phi(c - ex - ey));
+    let xz = 0.25 * (lk_phi(c + ex + ez) - lk_phi(c - ex + ez) - lk_phi(c + ex - ez) + lk_phi(c - ex - ez));
+    let yz = 0.25 * (lk_phi(c + ey + ez) - lk_phi(c - ey + ez) - lk_phi(c + ey - ez) + lk_phi(c - ey - ez));
     let g = x * x + y * y + z * z;
     let denominator = sqrt(g * g * g);
     if denominator < 1e-9 {

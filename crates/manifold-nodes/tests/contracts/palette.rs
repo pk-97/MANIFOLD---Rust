@@ -20,9 +20,6 @@ mod tests {
         let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         let atoms = palette_atoms();
         for type_id in [
-            "node.surface_crossings",
-            "node.nearest_crossing",
-            "node.crossing_distance",
             "node.liquid_cells",
             "node.lattice_curvature",
             "node.extend_lattice",

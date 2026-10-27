@@ -1,45 +1,48 @@
-// node.liquid_cells — fusable BUFFER body, GATHER. One thread per whitewater
-// cell, FLIP's emitter material grid (diffuseparticlesimulation.cpp:1655):
-// solid (2) when the mean of its eight solid corners is below 0, else liquid
-// (1) when its distance is below 0, else air (0). Then FLIP's shrink
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+
+// node.liquid_cells — fusable BUFFER body, GATHER. One thread per pool
+// element of the liquid step's world tiles (`buf_tiles`, `pool_tiles` tiles),
+// FLIP's emitter material grid (diffuseparticlesimulation.cpp:1655): solid
+// (2) when the mean of its eight solid corners is below 0, else liquid (1)
+// when its distance is below 0, else air (0). Cell c's corners are the solid
+// nodes c..c+1, node n at the low corner of cell n. Then FLIP's shrink
 // (:1667): a liquid cell with an air face neighbour becomes air. `distance`
-// and `solid` are gathered; a grid past either array gives air.
+// and `solid` are gathered through the table: a cell or node in a tile it
+// does not hold reads the canonical element, air and not solid. A free slot
+// and the canonical element are air.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
-fn lc_kind(c: vec3<u32>, cells: vec3<u32>, nodes: vec3<u32>) -> u32 {
+fn lc_kind(c: vec3<i32>) -> u32 {
     var solid = 0.0;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-        let n = c + ww_corner(corner);
-        solid = solid + buf_solid[n.x + nodes.x * (n.y + nodes.y * n.z)];
+        solid = solid + buf_solid[ts_cell_at(c + vec3<i32>(ww_corner(corner)))];
     }
     if 0.125 * solid < 0.0 {
         return 2u;
     }
-    return select(0u, 1u, buf_distance[ts_grid_index(vec3<i32>(c), vec3<i32>(cells))] < 0.0);
+    return select(0u, 1u, buf_distance[ts_cell_at(c)] < 0.0);
 }
 
-fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> u32 {
-    let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
-    if any(nodes < vec3<u32>(3u)) {
+fn body(idx: u32, count: u32, cell_size: f32, pool_tiles: f32) -> u32 {
+    ww_pool_tiles = u32(pool_tiles);
+    if idx >= ts_canon() {
         return 0u;
     }
-    let cells = nodes - vec3<u32>(1u);
-    let total = cells.x * cells.y * cells.z;
-    if idx >= total || total > arrayLength(&buf_distance) || nodes.x * nodes.y * nodes.z > arrayLength(&buf_solid) {
+    if ts_slot_entry(idx >> 9u) == WT_NONE {
         return 0u;
     }
-    let c = vec3<u32>(ts_grid_coord(idx, vec3<i32>(cells)));
-    let own = lc_kind(c, cells, nodes);
+    ts_home(idx);
+    let c = ts_cell_coord(idx);
+    let own = lc_kind(c);
     if own != 1u {
         return own;
     }
     for (var face = 0u; face < 6u; face = face + 1u) {
-        let n = vec3<i32>(c) + ww_face_step(face);
-        if any(n < vec3<i32>(0)) || any(n >= vec3<i32>(cells)) {
-            continue;
-        }
-        if lc_kind(vec3<u32>(n), cells, nodes) == 0u {
+        if lc_kind(c + ww_face_step(face)) == 0u {
             return 0u;
         }
     }

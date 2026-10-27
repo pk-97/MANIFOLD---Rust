@@ -2,10 +2,11 @@
 use super::super::whitewater_obstacle_source::WhitewaterSource;
 use super::super::whitewater_step::empty_slot;
 use super::fused_tests::gpu::identity_record;
-use super::fused_tests::pooled_distance;
+use super::fused_tests::{CELL, low_corner, middle, step_shape};
 use super::*;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, read};
+use manifold_water_liquid::testkit::world_box::{BoxTable, table_words_of};
 
 const CAPACITY: u32 = 1024;
 const EMITTERS: usize = 64;
@@ -28,92 +29,137 @@ fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
 
 struct Fixture {
     shape: StepShape,
+    bounds_lo: [f32; 3],
     particles: GpuBuffer,
     identity: GpuBuffer,
     solid: GpuBuffer,
     distance: GpuBuffer,
     tiles: GpuBuffer,
-    pool_tiles: u32,
-    faces: [GpuBuffer; 3],
+    faces: GpuBuffer,
     source: GpuBuffer,
 }
 
 impl Fixture {
-    fn new(device: &GpuDevice, face_cells: [u32; 3], pad: u32, kind: u32, influence: f32) -> Self {
-        let nodes = face_cells.map(|n| n + 2 * pad + 1);
-        let size = nodes.map(|n| (n - 1) as f32 * 0.1);
-        let shape = StepShape::new(
-            nodes,
-            face_cells,
-            1.0,
-            Some(Transform {
-                pos: size.map(|n| n * 0.5),
-                scale: size,
-                ..Default::default()
-            }),
-            CAPACITY,
-        )
-        .unwrap();
-        let sphere = |q: [f32; 3]| (q.iter().map(|v| v * v).sum::<f32>().sqrt() - 2.5) * 0.1;
-        let phi: Vec<f32> = (0..cell_total(face_cells))
+    /// A sphere of liquid in the middle of `table`'s box with 64 emitters
+    /// inside it, faces that drift and shear, and `influence` of obstacle
+    /// source `kind` on every element.
+    fn new(device: &GpuDevice, table: &BoxTable, h: f32, kind: u32, influence: f32) -> Self {
+        let [nx, ny, _] = table.cells.map(u64::from);
+        let count = (nx * ny * u64::from(table.cells[2])) as usize;
+        let at = |i: usize| {
+            let i = i as u64;
+            [i % nx, i / nx % ny, i / (nx * ny)].map(|c| c as f32)
+        };
+        let centre = table.cells.map(|n| 0.5 * (n as f32 - 1.0));
+        let phi: Vec<f32> = (0..count)
             .map(|i| {
-                let [nx, ny, _] = face_cells.map(u64::from);
-                let q = [i % nx, i / nx % ny, i / (nx * ny)];
-                sphere(std::array::from_fn(|a| {
-                    q[a] as f32 + 0.5 - face_cells[a] as f32 * 0.5
-                }))
+                let q = at(i);
+                let r = (0..3).map(|a| (q[a] - centre[a]).powi(2)).sum::<f32>();
+                (r.sqrt() - 2.5) * h
             })
             .collect();
-        let (phi, table, pool_tiles) = pooled_distance(&phi, &shape);
-        let particles: Vec<_> = (0..EMITTERS)
+        let faces: Vec<FaceSample> = (0..count)
+            .map(|i| {
+                let q = at(i);
+                FaceSample {
+                    velocity: [2.0 + q[1] * 0.5, 5.0 + q[2] * 0.5, -1.0 + q[0] * 0.5, 0.0],
+                    weight: [1.0, 1.0, 1.0, 0.0],
+                }
+            })
+            .collect();
+        let m = middle(table, h);
+        let emitters: Vec<_> = (0..EMITTERS)
             .map(|i| {
                 let q = [i % 4, i / 4 % 4, i / 16];
-                let p: [f32; 3] =
-                    std::array::from_fn(|a| size[a] * 0.5 + (q[a] as f32 - 1.5) * 0.09);
+                let p: [f32; 3] = std::array::from_fn(|a| m[a] + (q[a] as f32 - 1.5) * 0.9 * h);
                 FluidParticle {
-                    position_radius: [p[0], p[1], p[2], 0.025],
+                    position_radius: [p[0], p[1], p[2], 0.25 * h],
                     velocity: [0.0; 3],
                     id: i as u32,
                 }
             })
             .collect();
-        let faces = std::array::from_fn(|a| {
-            let mut dims = face_cells;
-            dims[a] += 1;
-            let values: Vec<f32> = (0..cell_total(dims))
-                .map(|i| {
-                    let q = [
-                        i % u64::from(dims[0]),
-                        i / u64::from(dims[0]) % u64::from(dims[1]),
-                        i / u64::from(dims[0] * dims[1]),
-                    ];
-                    [2.0, 5.0, -1.0][a] + q[(a + 1) % 3] as f32 * 0.5
-                })
-                .collect();
-            shared(device, bytemuck::cast_slice(&values))
-        });
-        let sources = vec![
-            WhitewaterSource {
-                influence,
-                dust_strength: 1.0,
-                kind,
-                pad: 0
-            };
-            cell_total(nodes) as usize
-        ];
+        Self::assemble(
+            device,
+            step_shape(table, h, CAPACITY),
+            low_corner(table, h),
+            &table.words,
+            (
+                table.to_pool(&phi, 3.0 * h),
+                table.to_pool(&faces, FaceSample::default()),
+            ),
+            &emitters,
+            (kind, influence),
+        )
+    }
+
+    /// Liquid at rest in every element of a pool of `pool_tiles` tiles whose
+    /// table is `words`, the same faces everywhere, and four emitters in the
+    /// tile at the origin.
+    fn uniform(
+        device: &GpuDevice,
+        words: &[u32],
+        pool_tiles: u32,
+        h: f32,
+        source: (u32, f32),
+    ) -> Self {
+        let shape = StepShape::new(
+            WhitewaterPool {
+                pool_tiles,
+                cell_size: h,
+            },
+            CAPACITY,
+        )
+        .unwrap();
+        let elements = shape.elements() as usize;
+        let face = FaceSample {
+            velocity: [2.0, 5.0, -1.0, 0.0],
+            weight: [1.0, 1.0, 1.0, 0.0],
+        };
+        let emitters: Vec<_> = (0..4)
+            .map(|i| FluidParticle {
+                position_radius: [3.0 * h + 0.2 * h * i as f32, 3.0 * h, 3.0 * h, 0.25 * h],
+                velocity: [0.0; 3],
+                id: i,
+            })
+            .collect();
+        Self::assemble(
+            device,
+            shape,
+            [0.0; 3],
+            words,
+            (vec![-1.0; elements], vec![face; elements]),
+            &emitters,
+            source,
+        )
+    }
+
+    fn assemble(
+        device: &GpuDevice,
+        shape: StepShape,
+        bounds_lo: [f32; 3],
+        words: &[u32],
+        (phi, faces): (Vec<f32>, Vec<FaceSample>),
+        emitters: &[FluidParticle],
+        (kind, influence): (u32, f32),
+    ) -> Self {
+        let elements = shape.elements() as usize;
+        let source = WhitewaterSource {
+            influence,
+            dust_strength: 1.0,
+            kind,
+            pad: 0,
+        };
         Self {
             shape,
-            particles: shared(device, bytemuck::cast_slice(&particles)),
-            identity: identity_record(device, EMITTERS as u32),
-            solid: shared(
-                device,
-                bytemuck::cast_slice(&vec![0.1f32; cell_total(nodes) as usize]),
-            ),
+            bounds_lo,
+            particles: shared(device, bytemuck::cast_slice(emitters)),
+            identity: identity_record(device, emitters.len() as u32),
+            solid: shared(device, bytemuck::cast_slice(&vec![0.1f32; elements])),
             distance: shared(device, bytemuck::cast_slice(&phi)),
-            tiles: shared(device, bytemuck::cast_slice(&table)),
-            pool_tiles,
-            faces,
-            source: shared(device, bytemuck::cast_slice(&sources)),
+            tiles: shared(device, bytemuck::cast_slice(words)),
+            faces: shared(device, bytemuck::cast_slice(&faces)),
+            source: shared(device, bytemuck::cast_slice(&vec![source; elements])),
         }
     }
 
@@ -124,10 +170,9 @@ impl Fixture {
             identity: &self.identity,
             solid: &self.solid,
             obstacle_source: Some(&self.source),
-            faces: FaceSource::Axes(self.faces.each_ref()),
+            faces: &self.faces,
             distance: &self.distance,
             tiles: &self.tiles,
-            pool_tiles: self.pool_tiles,
         }
     }
 
@@ -139,6 +184,7 @@ impl Fixture {
             epoch,
             seed: 0.375,
             gravity: [0.0; 3],
+            bounds_lo: self.bounds_lo,
             wavecrest_emission: 80.0,
             turbulence_emission: 80.0,
             min_turbulence: 0.0,
@@ -180,6 +226,18 @@ fn capture(device: &GpuDevice, enc: &mut manifold_gpu::GpuEncoder, step: &Step) 
         .collect()
 }
 
+/// A copy of the influence the stage holds after its last tick.
+fn capture_influence(
+    device: &GpuDevice,
+    enc: &mut manifold_gpu::GpuEncoder,
+    step: &Step,
+) -> GpuBuffer {
+    let field = &step.fields().influence[step.influence_current];
+    let copied = device.create_buffer_shared(field.size);
+    enc.copy_buffer_to_buffer(field, &copied, field.size);
+    copied
+}
+
 fn assert_rows(got: &[GpuBuffer], want: &[GpuBuffer], label: &str) {
     for ((got, want), port) in got.iter().zip(want).zip(PORTS) {
         let a = read::<u32>(got, got.size as usize / 4);
@@ -191,19 +249,28 @@ fn assert_rows(got: &[GpuBuffer], want: &[GpuBuffer], label: &str) {
     }
 }
 
+/// A stage that has run other pools answers a frame as a fresh one does:
+/// the pool grows, the cell size changes, and the same pool repeats.
 #[test]
-fn whitewater_alias_follows_live_padding() {
+fn whitewater_live_stage_follows_pool_changes() {
     let h = Harness::new();
     let device = &h.device;
     let mut live = Step::default();
     // All transitions share one encoder.
-    let fixtures: Vec<_> = [([8; 3], 0), ([8, 10, 8], 2), ([10, 8, 10], 0)]
-        .into_iter()
-        .map(|(cells, pad)| Fixture::new(device, cells, pad, 2, 2.0))
-        .collect();
-    let mut enc = device.create_encoder("whitewater live padding");
+    let fixtures: Vec<_> = [
+        (BoxTable::new([-4; 3], [8; 3]), CELL),
+        (BoxTable::new([-5, -6, -7], [20, 10, 12]), CELL),
+        (BoxTable::new([-4; 3], [8; 3]), 1.25 * CELL),
+        (BoxTable::new([-4; 3], [8; 3]), 1.25 * CELL),
+    ]
+    .into_iter()
+    .map(|(table, cell)| Fixture::new(device, &table, cell, 2, 2.0))
+    .collect();
+    assert_ne!(fixtures[0].shape.pool, fixtures[1].shape.pool);
+    assert_ne!(fixtures[0].shape.pool, fixtures[2].shape.pool);
+    let mut enc = device.create_encoder("whitewater live pool");
     let mut rows = Vec::new();
-    for (index, fixture) in fixtures.iter().enumerate() {
+    for fixture in &fixtures {
         let frame = fixture.frame(0);
         let inputs = fixture.inputs();
         let (pool, state) = boundary(device);
@@ -218,9 +285,7 @@ fn whitewater_alias_follows_live_padding() {
                 true,
             )
             .unwrap();
-            let owned = index == 1;
-            assert_eq!(step.fields().distance.is_some(), owned);
-            assert_eq!(step.fields().surface.is_some(), owned);
+            assert_eq!(step.shape, Some(fixture.shape));
         }
         rows.push((
             capture(device, &mut enc, &live),
@@ -241,7 +306,7 @@ fn whitewater_influence_swap_lifecycle() {
     let mut live = Step::default();
     let (pool, state) = boundary(device);
     // Nonzero obstacle influence, decay, epoch reset, disable/re-enable,
-    // another obstacle impulse, then shape replacement without an epoch.
+    // another obstacle impulse, then pool replacement without an epoch.
     let cases = [
         (8, 0, true, 2, 4.0),
         (8, 0, true, 0, 0.0),
@@ -250,13 +315,21 @@ fn whitewater_influence_swap_lifecycle() {
         (8, 1, false, 0, 0.0),
         (8, 1, true, 0, 0.0),
         (8, 1, true, 2, 3.0),
-        (10, 1, true, 0, 0.0),
-        (10, 1, true, 2, 0.5),
-        (10, 1, true, 0, 0.0),
+        (16, 1, true, 0, 0.0),
+        (16, 1, true, 2, 0.5),
+        (16, 1, true, 0, 0.0),
     ];
     let fixtures: Vec<_> = cases
         .iter()
-        .map(|&(n, _, _, kind, influence)| Fixture::new(device, [n; 3], 0, kind, influence))
+        .map(|&(n, _, _, kind, influence)| {
+            Fixture::new(
+                device,
+                &BoxTable::new([-4; 3], [n; 3]),
+                CELL,
+                kind,
+                influence,
+            )
+        })
         .collect();
     let mut expected = 1.0f32;
     let mut previous = None;
@@ -322,10 +395,7 @@ fn whitewater_influence_swap_lifecycle() {
             .unwrap();
         rows.push((got, capture(device, &mut enc, &reference)));
         if enabled {
-            let field = &live.fields().influence[live.influence_current];
-            let copied = device.create_buffer_shared(field.size);
-            enc.copy_buffer_to_buffer(field, &copied, field.size);
-            influences.push((i, copied, expected));
+            influences.push((i, capture_influence(device, &mut enc, &live), expected));
         } else {
             assert_eq!(live.influence_epoch, None);
         }
@@ -338,14 +408,14 @@ fn whitewater_influence_swap_lifecycle() {
         assert_rows(got, want, &format!("tick {i}"));
     }
     for (i, buffer, expected) in influences {
-        for (node, value) in read::<f32>(&buffer, buffer.size as usize / 4)
+        for (element, value) in read::<f32>(&buffer, buffer.size as usize / 4)
             .into_iter()
             .enumerate()
         {
             assert_eq!(
                 value.to_bits(),
                 expected.to_bits(),
-                "tick {i} influence node {node}"
+                "tick {i} influence element {element}"
             );
         }
     }
@@ -360,4 +430,97 @@ fn whitewater_influence_swap_lifecycle() {
         counts[8] > 0,
         "dust must exercise the same new influence buffer: {counts:?}"
     );
+}
+
+/// Influence belongs to a world tile but is stored in a pool slot: a slot
+/// the table gives to another tile, or that was free, starts over at the
+/// base level, while a slot that keeps its tile decays on. Free slots are
+/// never read.
+#[test]
+fn whitewater_influence_restarts_where_a_slot_changes_tile() {
+    let h = Harness::new();
+    let device = &h.device;
+    let pool_tiles = 3;
+    let [a, b, c] = [[0, 0, 0], [1, 0, 0], [0, 1, 0]];
+    let all = vec![(a, 0), (b, 1), (c, 2)];
+    // Each tick's tiles and whether the obstacle source is wired, with the
+    // influence of every slot after it (None where the slot is free). The
+    // first tick sets 3 everywhere; decay is a quarter a tick down to 1.
+    let ticks = [
+        (all.clone(), true, [Some(3.0f32), Some(3.0), Some(3.0)]),
+        (all.clone(), false, [Some(2.75), Some(2.75), Some(2.75)]),
+        // Slots 1 and 2 swap tiles.
+        (
+            vec![(a, 0), (c, 1), (b, 2)],
+            false,
+            [Some(2.5), Some(1.0), Some(1.0)],
+        ),
+        // Slots 1 and 2 go free.
+        (vec![(a, 0)], false, [Some(2.25), None, None]),
+        // Both come back as the tiles they held before they went free.
+        (all.clone(), false, [Some(2.0), Some(1.0), Some(1.0)]),
+    ];
+    let live = Fixture::uniform(
+        device,
+        &table_words_of(pool_tiles, &all),
+        pool_tiles,
+        CELL,
+        (2, 3.0),
+    );
+    let (pool, state) = boundary(device);
+    let mut step = Step::default();
+    let mut enc = device.create_encoder("whitewater influence slot rows");
+    let mut seen = Vec::new();
+    // The table words are read until the encoder retires.
+    let mut tables = Vec::new();
+    // Dust needs the obstacle source, which the later ticks leave unwired.
+    let frame = StepFrame {
+        dust_emission: false,
+        ..live.frame(0)
+    };
+    for (held, source, _) in &ticks {
+        let tiles = shared(
+            device,
+            bytemuck::cast_slice(&table_words_of(pool_tiles, held)),
+        );
+        let mut inputs = live.inputs();
+        inputs.tiles = &tiles;
+        if !source {
+            inputs.obstacle_source = None;
+        }
+        step.advance_tick(
+            &mut GpuEncoder::new(&mut enc, device),
+            &frame,
+            &inputs,
+            &pool,
+            &state,
+            true,
+        )
+        .unwrap();
+        seen.push(capture_influence(device, &mut enc, &step));
+        tables.push(tiles);
+    }
+    enc.commit_and_wait_completed();
+    drop(tables);
+    for (tick, ((_, _, slots), buffer)) in ticks.iter().zip(&seen).enumerate() {
+        let values = read::<f32>(buffer, buffer.size as usize / 4);
+        for (slot, want) in slots.iter().enumerate() {
+            let Some(want) = want else { continue };
+            for (i, value) in values[slot * 512..(slot + 1) * 512].iter().enumerate() {
+                assert_eq!(
+                    value.to_bits(),
+                    want.to_bits(),
+                    "tick {tick} slot {slot} element {i}"
+                );
+            }
+        }
+        // No slot owns the canonical element: it decays as slot 0, which
+        // never changes tile, does.
+        let canon = slots[0].expect("slot 0 is always held");
+        assert_eq!(
+            values[3 * 512].to_bits(),
+            canon.to_bits(),
+            "tick {tick} canonical"
+        );
+    }
 }

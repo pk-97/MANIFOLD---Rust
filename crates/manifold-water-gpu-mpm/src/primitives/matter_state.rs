@@ -18,7 +18,6 @@ use manifold_node_engine::exec::substeps::{
 };
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::world_tiles::table_words;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 
 /// `reaction_in` closes the reaction chain (node.matter_body_reaction, then
@@ -35,13 +34,6 @@ const RESULTS: &[SubstepResultPorts] = &[
         capture: "reaction_in",
         output: "reaction",
         optional: false,
-    },
-    // The world tile table node.matter_to_grid built the region's last grid
-    // under, for readers of `grid` after the region.
-    SubstepResultPorts {
-        capture: "tiles_in",
-        output: "tiles",
-        optional: true,
     },
 ];
 
@@ -87,7 +79,6 @@ manifold_node_engine::primitive! {
         in: Array(MatterPoint) required,
         stats_in: Array(u32) required,
         reaction_in: Array(i32) required,
-        tiles_in: Array(u32) optional,
         count: ScalarF32 optional,
         pool_tiles: ScalarF32 optional,
         ticks: ScalarF32 optional,
@@ -104,7 +95,6 @@ manifold_node_engine::primitive! {
         reaction: Array(i32),
         grid_accum: Array(i32),
         grid: Array(MatterGridNode),
-        tiles: Array(u32),
         step_dt: ScalarF32,
         step_index: ScalarF32,
         substep_in_tick: ScalarF32,
@@ -116,7 +106,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; tiles_in takes node.matter_to_grid's tiles, and tiles carries the table of the last substep's grid out of the region for readers of grid (node.matter_face_component); reaction is the last substep's reaction words, which nothing needs to read. Only live points (id ≠ 0) move.",
+    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. Only live points (id ≠ 0) move.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter State", category: Atom },
     summary: "Keeps the liquid's particles between frames and runs its simulation steps.",
@@ -134,7 +124,6 @@ manifold_node_engine::primitive! {
         captures: u32 = 0,
         captured_ticks: u32 = 0,
         grid_accum: Option<GpuBuffer> = None,
-        tiles: Option<GpuBuffer> = None,
         grid: Option<GpuBuffer> = None,
         zero_stats: Option<GpuBuffer> = None,
         readback: Vec<ReadbackSlot> = Vec::new(),
@@ -215,7 +204,7 @@ impl MatterState {
 
 impl Primitive for MatterState {
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
-        &["in", "stats_in", "reaction_in", "tiles_in"]
+        &["in", "stats_in", "reaction_in"]
     }
 
     fn persistent_output_ports(&self) -> &'static [&'static str] {
@@ -227,14 +216,13 @@ impl Primitive for MatterState {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "grid_accum" | "grid" | "tiles")
+        matches!(port, "grid_accum" | "grid")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "grid_accum" => self.grid_accum.as_ref(),
             "grid" => self.grid.as_ref(),
-            "tiles" => self.tiles.as_ref(),
             _ => None,
         }
     }
@@ -253,7 +241,7 @@ impl Primitive for MatterState {
             "stats" => Some(STATS_WORDS),
             "reaction" => Some(MAX_LIQUID_BODIES as u32 * REACTION_WORDS),
             // Provided storage, sized to the tile pool at run time.
-            "grid_accum" | "grid" | "tiles" => Some(1),
+            "grid_accum" | "grid" => Some(1),
             _ => None,
         }
     }
@@ -276,11 +264,6 @@ impl Primitive for MatterState {
         let seed = ctx.inputs.array("seed");
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
-        // The table copy only when something reads it.
-        let tiles_bytes = ctx
-            .outputs
-            .array("tiles")
-            .map(|_| table_words(pool_tiles) * 4);
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
 
@@ -288,15 +271,11 @@ impl Primitive for MatterState {
         // over; a pool the device cannot hold stops the solver before any tick.
         let device = gpu.device;
         let mut refused = None;
-        if tiles_bytes.is_none() {
-            self.tiles = None;
-        }
         for (buffer, bytes) in [
             (&mut self.grid_accum, grid_accum_bytes(pool_tiles)),
             (&mut self.grid, grid_bytes(pool_tiles)),
         ]
         .into_iter()
-        .chain(tiles_bytes.map(|bytes| (&mut self.tiles, bytes)))
         {
             if buffer.as_ref().is_some_and(|b| b.size >= bytes) {
                 continue;
@@ -446,15 +425,6 @@ impl Primitive for MatterState {
             ctx.inputs.array("reaction_in"),
             ctx.outputs.array("reaction"),
         ) && !candidate.ptr_eq(state)
-        {
-            let size = candidate.size.min(state.size);
-            ctx.gpu_encoder()
-                .native_enc
-                .copy_buffer_to_buffer(candidate, state, size);
-        }
-        // The table copy is this node's own storage, allocated in `run` only
-        // while `tiles` has a reader.
-        if let (Some(candidate), Some(state)) = (ctx.inputs.array("tiles_in"), self.tiles.as_ref())
         {
             let size = candidate.size.min(state.size);
             ctx.gpu_encoder()

@@ -14,10 +14,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::frame_ring::{FrameRing, RING};
-use manifold_water_liquid::grid::{FACE_INPUT_PORTS, PublishedFaces};
 use manifold_water_liquid::lattice::LiquidLattice;
-
-use super::matter_face_component::MATTER_FACE_VALID_LAYERS;
 
 const SHADER: &str = include_str!("shaders/matter_frame.wgsl");
 
@@ -33,12 +30,11 @@ struct FrameParams {
 manifold_node_engine::primitive! {
     name: MatterFrame,
     type_id: "node.matter_frame",
-    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, it also publishes frame B's face grid (face_u, face_v, face_w over face_cells_x/y/z, and face_valid_layers, 0: only the liquid's own faces and those sharing an edge with them are sure to carry velocity), copied each tick and held between ticks. A tick with non-finite values is never published, as particles or as faces.",
+    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. A tick with non-finite values is never published as particles.",
     inputs: {
         points: Array(MatterPoint) required,
         stats: Array(u32) required,
         solid: Array(f32) optional,
-        face_u_in: Array(f32) optional, face_v_in: Array(f32) optional, face_w_in: Array(f32) optional,
         count: ScalarF32 optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -54,14 +50,12 @@ manifold_node_engine::primitive! {
         solid_a: Array(f32), solid_b: Array(f32), grid_bounds: Transform,
         grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
         blend: ScalarF32, span: ScalarF32,
-        face_u: Array(f32), face_v: Array(f32), face_w: Array(f32),
-        face_cells_x: ScalarF32, face_cells_y: ScalarF32, face_cells_z: ScalarF32, face_valid_layers: ScalarF32,
     },
     params: [
         ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Reads node.matter_state's out and stats after the region; count, lattice, closed faces, simulation_time, display_time and epoch come from node.matter_fill and node.matter_domain. Its outputs are the particle-frame seam node.fluid_surface also publishes, so the Liquid Surface atoms and node.particles_to_copies read either solver unchanged. identity_a/b carry the domain epoch. The face grid inputs come from three node.matter_face_component on node.matter_state's grid; leave them unwired unless something reads the face grid, since each costs a copy per tick.",
+    composition_notes: "Reads node.matter_state's out and stats after the region; count, lattice, closed faces, simulation_time, display_time and epoch come from node.matter_fill and node.matter_domain. Its outputs are the particle-frame seam node.fluid_surface also publishes, so the Liquid Surface atoms and node.particles_to_copies read either solver unchanged. identity_a/b carry the domain epoch.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Frame", category: Atom },
     summary: "Hands the simulated liquid particles to the liquid surface, one frame per simulation tick.",
@@ -76,7 +70,6 @@ manifold_node_engine::primitive! {
         solid_key: Option<([u32; 7], u32)> = None,
         solid_slots: Vec<GpuBuffer> = Vec::new(),
         solid_wired: bool = false,
-        faces: PublishedFaces = PublishedFaces::default(),
     },
 }
 
@@ -86,12 +79,10 @@ impl Primitive for MatterFrame {
             self.convert =
                 Some(device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame"));
         }
-        self.faces.prepare(device);
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b")
-            || PublishedFaces::provides(port)
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -101,7 +92,7 @@ impl Primitive for MatterFrame {
             "solid_a" if self.solid_wired => self.solid_slots.get(self.ring.a()),
             "solid_b" if self.solid_wired => self.solid_slots.get(self.ring.b()),
             "solid_a" | "solid_b" => self.solid.as_ref(),
-            _ => self.faces.buffer(port),
+            _ => None,
         }
     }
 
@@ -131,7 +122,6 @@ impl Primitive for MatterFrame {
         let stats = ctx.inputs.array("stats");
         let solid_in = ctx.inputs.array("solid");
         self.solid_wired = solid_in.is_some();
-        let faces_in = FACE_INPUT_PORTS.map(|port| ctx.inputs.array(port));
 
         let solid_key = (
             [
@@ -172,7 +162,6 @@ impl Primitive for MatterFrame {
         } else {
             None
         };
-        let published = ring.is_some();
         if let (Some(slot), Some(points), Some(stats)) = (ring, points, stats) {
             let write = slot.write;
             let pipeline = self
@@ -254,17 +243,8 @@ impl Primitive for MatterFrame {
             }
             self.ring.finish(slot, params.count, epoch, simulation_time);
         }
-        let faces_refused = self.faces.publish(
-            gpu,
-            lattice.cells(),
-            faces_in,
-            stats,
-            published,
-            "Matter Frame",
-        );
 
         let (blend, span) = self.ring.blend(display_time);
-        let faces_published = self.faces.complete();
         for (name, value) in [
             ("count_a", self.ring.count_a() as f32),
             ("count_b", self.ring.count_b() as f32),
@@ -275,22 +255,11 @@ impl Primitive for MatterFrame {
             ("grid_nodes_z", lattice.nodes()[2] as f32),
             ("blend", blend),
             ("span", span),
-            ("face_cells_x", lattice.cells()[0] as f32),
-            ("face_cells_y", lattice.cells()[1] as f32),
-            ("face_cells_z", lattice.cells()[2] as f32),
-            (
-                "face_valid_layers",
-                if faces_published {
-                    MATTER_FACE_VALID_LAYERS as f32
-                } else {
-                    0.0
-                },
-            ),
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         ctx.outputs.set_transform("grid_bounds", lattice.bounds());
-        for error in [refused, faces_refused].into_iter().flatten() {
+        if let Some(error) = refused {
             ctx.error(error);
         }
     }

@@ -13,11 +13,8 @@ use manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE;
 #[cfg(any(test, feature = "testkit"))]
 use serde_json::Value;
 
-use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterTickStats};
+use manifold_water_gpu_mpm::matter::MatterTickStats;
 use manifold_water_liquid::WATER_DENSITY;
-use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::grid::{face_coords, face_len};
-use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_water_liquid::primitives::liquid_stats::LiquidTickStats;
 
 /// A scene the checks run on.
@@ -44,17 +41,10 @@ pub enum Fixture {
     /// [`STACK_HEIGHT`] boxes, each half again as dense as the liquid,
     /// stacked on the floor under a still pool.
     Stack,
-    /// The Dam Break at resolution [`FACE_GRID_RESOLUTION`]; MPM wires its
-    /// face grid into the frame.
-    FaceGrid,
 }
 
 /// Boxes in the [`Fixture::Stack`] scene.
 pub const STACK_HEIGHT: u32 = 3;
-
-/// The face grid scene's resolution: the publish path is the same at any
-/// size, and 32 keeps the check cheap.
-pub const FACE_GRID_RESOLUTION: u32 = 32;
 
 /// One conformance check (section 4 (Invariants & enforcement)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,9 +75,6 @@ pub enum Check {
     HalfSpeed,
     /// Reset, and the runtime's state reset, start a new epoch.
     Reset,
-    /// P10 (D5): the frame publishes the faces the solver's grid gives at
-    /// its last tick, bit for bit, and holds them while paused.
-    FaceGridPublished,
     /// I20: a light floating box comes to rest at any Sim Rate, and no water
     /// is removed.
     FloatingRest,
@@ -122,7 +109,7 @@ const BOX_FALLS: &[Fixture] = &[
 ];
 
 impl Check {
-    pub const ALL: [Check; 19] = [
+    pub const ALL: [Check; 18] = [
         Check::CoupledWorldStepsOnce,
         Check::CollisionMomentum,
         Check::CollisionEnergy,
@@ -136,7 +123,6 @@ impl Check {
         Check::LiveFramesNeverWait,
         Check::HalfSpeed,
         Check::Reset,
-        Check::FaceGridPublished,
         Check::FloatingRest,
         Check::RestingContact,
         Check::LiftOff,
@@ -194,7 +180,6 @@ impl Check {
             Check::HydrostaticLift => &[Fixture::SubmergedBox],
             Check::FreeFlight => &[Fixture::Collision { density_ratio: 1.0 }],
             Check::PauseDiscardsImpulses => &[Fixture::StillPool],
-            Check::FaceGridPublished => &[Fixture::FaceGrid],
             Check::ExportFrameRateIndependent if coupled => &[Fixture::FloatingBox],
             Check::LiveFramesNeverWait => &[Fixture::DamBreak],
             _ => &[Fixture::DamBreak],
@@ -247,21 +232,6 @@ pub struct StateArray {
     pub record_bytes: usize,
 }
 
-/// Where a row's solver keeps the grid its published faces come from, and
-/// how that grid reads as the seam's faces (section 3.2 (Grid outputs)).
-pub struct FaceSource {
-    pub type_id: &'static str,
-    pub port: &'static str,
-    /// The face arrays, x, y and z over `cells`, from the grid's bytes, as
-    /// the solver's resample computes them.
-    pub resample: fn(&[u8], [u32; 3]) -> [Vec<f32>; 3],
-    /// The frame's `face_valid_layers`.
-    pub valid_layers: u32,
-    /// Units in the last place a published face may sit from the CPU
-    /// resample, with the reason when it is not 0.
-    pub ulps: (u32, &'static str),
-}
-
 /// A setup change a row's domain refuses, and the controls the refusal
 /// must name.
 pub struct RefusalCase {
@@ -290,8 +260,6 @@ pub struct LiquidSolverRow {
     pub totals: Option<TotalsReadout>,
     /// Needed by [`Check::NonfiniteTickNotPublished`].
     pub state: Option<StateArray>,
-    /// Needed by [`Check::FaceGridPublished`].
-    pub faces: Option<FaceSource>,
     /// A closed list, each with its reason.
     pub exempt: &'static [(Check, &'static str)],
     /// Named misses a logged bug keeps failing in checks the row still runs.
@@ -332,57 +300,6 @@ fn liquid_totals(words: &[u32]) -> LiquidTotals {
         energy: f64::from(stats.kinetic),
         nonfinite: stats.nonfinite,
     }
-}
-
-/// GPU FLIP's faces: component `axis` of the FaceSample lattice's padded cell,
-/// (cells + 1)³ records x fastest; 0 where no weight reached the face.
-pub fn gpu_flip_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
-    let lattice: Vec<FaceSample> = bytemuck::pod_collect_to_vec(bytes);
-    let m = cells.map(|n| n as usize + 1);
-    std::array::from_fn(|axis| {
-        (0..face_len(cells, axis) as usize)
-            .map(|index| {
-                let f = face_coords(cells, axis, index).map(|n| n as usize);
-                let sample = lattice[f[0] + m[0] * (f[1] + m[1] * f[2])];
-                if sample.weight[axis] > 0.0 {
-                    sample.velocity[axis]
-                } else {
-                    0.0
-                }
-            })
-            .collect()
-    })
-}
-
-/// MPM's faces: the mean velocity of the four lattice nodes around each
-/// face's centre that carry mass, past the lattice's padding, summed in the
-/// component's order.
-fn matter_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
-    let grid: Vec<MatterGridNode> = bytemuck::pod_collect_to_vec(bytes);
-    let pad = PADDING_NODES as usize;
-    let nodes = cells.map(|n| n as usize + 1 + 2 * pad);
-    std::array::from_fn(|axis| {
-        let (b, c) = ((axis + 1) % 3, (axis + 2) % 3);
-        (0..face_len(cells, axis) as usize)
-            .map(|index| {
-                let f = face_coords(cells, axis, index).map(|n| n as usize + pad);
-                let (mut sum, mut hits) = (0.0_f32, 0.0_f32);
-                for db in 0..2 {
-                    for dc in 0..2 {
-                        let mut q = f;
-                        q[b] += db;
-                        q[c] += dc;
-                        let node = grid[q[0] + nodes[0] * (q[1] + nodes[1] * q[2])].velocity_mass;
-                        if node[3] > 0.0 {
-                            sum += node[axis];
-                            hits += 1.0;
-                        }
-                    }
-                }
-                if hits > 0.0 { sum / hits } else { 0.0 }
-            })
-            .collect()
-    })
 }
 
 fn matter_totals(words: &[u32]) -> LiquidTotals {
@@ -495,7 +412,7 @@ impl BoxScene {
                     ..Self::rest_tank()
                 })
             }
-            Fixture::StillPool | Fixture::DamBreak | Fixture::FaceGrid => None,
+            Fixture::StillPool | Fixture::DamBreak => None,
         }
     }
 

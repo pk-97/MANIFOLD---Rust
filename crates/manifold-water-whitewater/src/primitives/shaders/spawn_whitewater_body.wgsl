@@ -1,15 +1,18 @@
 // node.spawn_whitewater — fusable BUFFER body, GATHER only. One thread per
 // spawn slot j, FLIP's _emitDiffuseParticles (diffuseparticlesimulation.cpp
-// :1912) for one new particle:
+// :1912) for one new particle. The step's faces and the solid distance are
+// read through its world-tile table (`tiles`, `pool_tiles` tiles); a node or
+// face in an absent tile reads the canonical element:
 //   the frame emits total = offsets[emitters − 1]; slot j < min(total,
 //   capacity) takes emission m = j, or ⌊j · total / capacity⌋ past capacity
 //   (a uniform subset), and m's emitter e is the first with offsets[e] > m;
 //   the particle lands in a cylinder about e's velocity: radius 8 marker
 //   radii · √Xr, angle 2π·Xt, height Xh · |v| · dt along it (export supplies 1/60 s);
-//   it is dropped outside the grid, or where the solid lattice's distance is
-//   under a quarter cell;
+//   it is dropped in a cell outside every stored tile, or where the solid
+//   distance is under a quarter cell;
 //   lifetime = min + Ie·(max − min) ± variance, dropped at or below 0;
-//   velocity is FLIP's MAC trilinear of the faces at its position.
+//   velocity is FLIP's MAC trilinear of the faces at its position (the same
+//   stencil as node.sample_faces_at_particles).
 // Dropped and unused slots write lifetime 0. Kind is left 0 for
 // node.whitewater_type. Xr, Xt, Xh and the variance draw hash (j, seed,
 // epoch) on their own streams.
@@ -23,8 +26,12 @@ const SW_EMITTER_RADIUS: f32 = 2.481402;
 const SW_SOLID_BUFFER: f32 = 0.25;
 const SW_TWO_PI: f32 = 6.28318;
 
-// floor(a·b / c) for a < c, through the 64-bit product.
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 fn sw_mul_div(a: u32, b: u32, c: u32) -> u32 {
+    // floor(a·b / c) for a < c, through the 64-bit product.
     let a0 = a & 0xffffu;
     let a1 = a >> 16u;
     let b0 = b & 0xffffu;
@@ -63,62 +70,35 @@ fn sw_emitter(m: u32, emitters: u32) -> u32 {
     return lo;
 }
 
-fn sw_face_len(axis: u32) -> u32 {
-    if axis == 0u {
-        return arrayLength(&buf_face_u);
-    }
-    if axis == 1u {
-        return arrayLength(&buf_face_v);
-    }
-    return arrayLength(&buf_face_w);
-}
-
-fn sw_face(axis: u32, i: u32) -> f32 {
-    if axis == 0u {
-        return buf_face_u[i];
-    }
-    if axis == 1u {
-        return buf_face_v[i];
-    }
-    return buf_face_w[i];
-}
-
-// FLIP's MAC trilinear at q (whitewater cells), a face past the face grid
-// reading 0; q lies inside the grid.
-fn sw_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>) -> vec3<f32> {
-    let pad = lf_pad(cells, face_cells);
+// FLIP's MAC trilinear at q (whitewater cells) over the pooled faces, a face
+// in an absent tile reading the canonical record.
+fn sw_velocity(q: vec3<f32>) -> vec3<f32> {
     var v = vec3<f32>(0.0);
     for (var axis = 0u; axis < 3u; axis = axis + 1u) {
         let s = lf_stencil(q, axis);
         let lower = floor(s);
         let f = s - lower;
         let base = vec3<i32>(lower);
-        let len = sw_face_len(axis);
         var sum = 0.0;
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-            let i = lf_face_at(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
-            if i != LF_NONE && i < len {
-                sum = sum + ww_corner_weight(f, corner) * sw_face(axis, i);
-            }
+            let face = buf_faces[ts_face(base + vec3<i32>(ww_corner(corner)))];
+            sum = sum + ww_corner_weight(f, corner) * lf_face_velocity(face.face_velocity, face.face_weight, axis);
         }
         v[axis] = sum;
     }
     return v;
 }
 
-// The solid lattice's distance at q, trilinear over its nodes (a node past
-// the lattice reads 0), metres.
-fn sw_solid(q: vec3<f32>, nodes: vec3<u32>) -> f32 {
+// The solid distance at q, trilinear over its eight nodes (node n is the
+// element of world cell n; a node in an absent tile reads the canonical
+// 1e30), metres.
+fn sw_solid(q: vec3<f32>) -> f32 {
     let lower = floor(q);
     let f = q - lower;
     let base = vec3<i32>(lower);
     var d = 0.0;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-        let n = base + vec3<i32>(ww_corner(corner));
-        if all(n >= vec3<i32>(0)) && all(n < vec3<i32>(nodes)) {
-            let u = vec3<u32>(n);
-            d = d + ww_corner_weight(f, corner) * buf_solid[u.x + nodes.x * (u.y + nodes.y * u.z)];
-        }
+        d = d + ww_corner_weight(f, corner) * buf_solid[ts_cell_at(base + vec3<i32>(ww_corner(corner)))];
     }
     return d;
 }
@@ -128,26 +108,17 @@ fn body(
     count: u32,
     capacity: f32,
     emitters: f32,
-    face_cells_x: f32,
-    face_cells_y: f32,
-    face_cells_z: f32,
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
     seed: f32,
     epoch: f32,
     min_lifetime: f32,
     max_lifetime: f32,
     lifetime_variance: f32,
     dt: f32,
-) -> Element2 {
-    let empty = Element2(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+    cell_size: f32,
+    pool_tiles: f32,
+) -> Element3 {
+    ww_pool_tiles = u32(pool_tiles);
+    let empty = Element3(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
     let n = min(u32(max(round(emitters), 0.0)), arrayLength(&buf_offsets));
     let slots = u32(max(round(capacity), 0.0));
     if n == 0u || slots == 0u {
@@ -165,22 +136,12 @@ fn body(
     if e >= n || e >= arrayLength(&buf_particles) || e >= arrayLength(&buf_energy) {
         return empty;
     }
-    let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
-    let face_cells = vec3<u32>(max(round(vec3<f32>(face_cells_x, face_cells_y, face_cells_z)), vec3<f32>(0.0)));
-    if any(nodes < vec3<u32>(3u)) || any(face_cells == vec3<u32>(0u)) || nodes.x * nodes.y * nodes.z > arrayLength(&buf_solid) {
-        return empty;
-    }
-    let cells = nodes - vec3<u32>(1u);
-    if any(face_cells > cells) {
-        return empty;
-    }
     let emitter = buf_particles[e];
     let v = emitter.velocity;
     if !(emitter.position_radius.w > 0.0) || length(v) < 1e-3 {
         return empty;
     }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let h = size.x / f32(cells.x);
+    let h = cell_size;
     let axis = normalize(v);
     // FLIP's test as written; its first clause always holds.
     var e1: vec3<f32>;
@@ -196,11 +157,13 @@ fn body(
     let theta = ww_random(idx, s, generation, 5u) * SW_TWO_PI;
     let along = ww_random(idx, s, generation, 6u) * length(dt * v);
     let p = emitter.position_radius.xyz + r * cos(theta) * e1 + r * sin(theta) * e2 + along * axis;
-    let q = ww_grid_position(p, vec3<f32>(center_x, center_y, center_z), size, cells);
-    if !ww_in_grid(vec3<i32>(floor(q)), cells) {
+    let q = ww_cell_position(p, h);
+    let cell = vec3<i32>(floor(q));
+    ts_home(ts_cell_at(cell));
+    if !ts_cell_stored(cell) {
         return empty;
     }
-    if sw_solid(q, nodes) < SW_SOLID_BUFFER * h {
+    if sw_solid(q) < SW_SOLID_BUFFER * h {
         return empty;
     }
     var lifetime = min_lifetime + buf_energy[e] * (max_lifetime - min_lifetime);
@@ -208,5 +171,5 @@ fn body(
     if !(lifetime > 0.0) {
         return empty;
     }
-    return Element2(vec4<f32>(p, lifetime), sw_velocity(q, cells, face_cells), 0u);
+    return Element3(vec4<f32>(p, lifetime), sw_velocity(q), 0u);
 }

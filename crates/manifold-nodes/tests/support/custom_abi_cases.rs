@@ -16,13 +16,6 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "grid.rs",
-        rust_struct: "FaceParams",
-        shader: "shaders/liquid_frame_faces.wgsl",
-        shader_struct: "FaceParams",
-        aliases: &[],
-    },
-    CustomAbiCase {
         source: "matter_stats.rs",
         rust_struct: "StatsParams",
         shader: "shaders/matter_stats.wgsl",
@@ -206,9 +199,9 @@ pub const CASES: &[CustomAbiCase] = &[
     },
     CustomAbiCase {
         source: "whitewater_step.rs",
-        rust_struct: "GatherParams",
-        shader: "shaders/gather_distance.wgsl",
-        shader_struct: "GatherParams",
+        rust_struct: "RestartParams",
+        shader: "shaders/whitewater_step.wgsl",
+        shader_struct: "RestartParams",
         aliases: &[],
     },
     CustomAbiCase {
@@ -569,13 +562,6 @@ pub const CASES: &[CustomAbiCase] = &[
         source: "smooth_normals.rs",
         rust_struct: "SmoothUniforms",
         shader: "shaders/smooth_normals.wgsl",
-        shader_struct: "Params",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "pad_distance_lattice.rs",
-        rust_struct: "PadUniforms",
-        shader: "shaders/pad_distance_lattice.wgsl",
         shader_struct: "Params",
         aliases: &[],
     },

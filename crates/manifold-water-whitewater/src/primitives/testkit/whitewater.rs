@@ -2,12 +2,6 @@
 use manifold_node_engine::freeze::codegen::{InputSource, RegionNode};
 use manifold_node_engine::primitive::Primitive;
 
-pub fn energy_potential() -> impl Primitive {
-    crate::primitives::energy_potential::EnergyPotential::new()
-}
-pub fn turbulence_field() -> impl Primitive {
-    crate::primitives::turbulence_field::TurbulenceField::new()
-}
 pub fn whitewater_influence() -> impl Primitive {
     crate::primitives::whitewater_influence::WhitewaterInfluence::new()
 }
@@ -18,9 +12,6 @@ pub fn member(kind: &str, id: u32, inputs: Vec<InputSource>) -> RegionNode<'stat
         >(id, inputs),
         "turbulence_field" => manifold_node_engine::testkit::fused_atoms::member::<
             crate::primitives::turbulence_field::TurbulenceField,
-        >(id, inputs),
-        "whitewater_obstacle_source" => manifold_node_engine::testkit::fused_atoms::member::<
-            crate::primitives::whitewater_obstacle_source::WhitewaterObstacleSource,
         >(id, inputs),
         "whitewater_influence" => manifold_node_engine::testkit::fused_atoms::member::<
             crate::primitives::whitewater_influence::WhitewaterInfluence,
@@ -40,42 +31,6 @@ pub fn member(kind: &str, id: u32, inputs: Vec<InputSource>) -> RegionNode<'stat
         _ => panic!("no water spec fixture for {kind}"),
     }
 }
-#[derive(Clone, Copy)]
-pub struct GridBox {
-    pub(crate) cells: [u32; 3],
-    #[cfg(test)]
-    pub(crate) center: [f32; 3],
-    pub(crate) size: [f32; 3],
-}
-impl GridBox {
-    pub fn new(cells: [u32; 3], _center: [f32; 3], size: [f32; 3]) -> Self {
-        Self {
-            cells,
-            #[cfg(test)]
-            center: _center,
-            size,
-        }
-    }
-}
-pub fn turbulence(
-    faces: [&[f32]; 3],
-    face_cells: [u32; 3],
-    distance: &[f32],
-    grid: GridBox,
-) -> Vec<f32> {
-    crate::primitives::whitewater_emitter_cpu::turbulence(
-        faces,
-        face_cells,
-        distance,
-        crate::primitives::whitewater_particle_cpu::Box3 {
-            cells: grid.cells,
-            #[cfg(test)]
-            center: grid.center,
-            size: grid.size,
-        },
-    )
-}
-
 pub fn source(
     influence: f32,
     dust_strength: f32,

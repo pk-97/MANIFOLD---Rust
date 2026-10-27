@@ -259,7 +259,6 @@ fn all_wgsl_shaders_validate() {
             [
                 "liquid_stats.wgsl",
                 "particle_publication.wgsl",
-                "liquid_frame_faces.wgsl",
             ]
             .iter()
             .any(|shader| name == *shader)

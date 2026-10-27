@@ -1,11 +1,11 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::whitewater_grid;
+use manifold_water_liquid::extent::whitewater_pool;
 
 fn whitewater_type(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (_, cells) = whitewater_grid(x)?;
-    x.covers("distance", cells * 4)?;
-    x.covers("cells", cells * 4)?;
+    let elements = whitewater_pool(x)?;
+    x.covers("distance", elements * 4)?;
+    x.covers("cells", elements * 4)?;
     x.covers("out", x.bytes("spawns").unwrap_or(0))
 }
 inventory::submit! {

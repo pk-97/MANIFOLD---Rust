@@ -1,44 +1,12 @@
-//! The face grid a liquid domain publishes: MAC faces in the FLIP engine's layout over
-//! the domain's cells, one f32 array per axis in m/s, scene space. Every
-//! solver resamples its own lattice into this layout; no consumer sees a
-//! native one.
+//! The MAC face grid layout over a liquid domain's cells: MAC faces in the
+//! FLIP engine's layout, one f32 array per axis in m/s, scene space. The
+//! solvers index their face arrays with these helpers, and so do their readers.
 
 use crate::fluid_particles::FaceSample;
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
-
-use crate::primitives::liquid_stats::with_stats_layout;
-use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-
-const PUBLISH_SHADER_SOURCE: &str = include_str!("primitives/shaders/liquid_frame_faces.wgsl");
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct FaceParams {
-    len: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
-}
-
-/// The frame ports that carry the grid: one array per axis, the cells per
-/// axis, and how many face layers past the liquid carry velocity.
-pub const FACE_GRID_PORTS: [&str; 7] = [
-    "face_u",
-    "face_v",
-    "face_w",
-    "face_cells_x",
-    "face_cells_y",
-    "face_cells_z",
-    "face_valid_layers",
-];
 
 /// FLIP's MAC trilinear on the face arrays, for bodies that sample velocity
 /// at a point.
 pub const LIQUID_FACES: &str = include_str!("primitives/shaders/liquid_faces.wgsl");
-
-/// A frame node's inputs for the grid it publishes, one array per axis
-/// (`FACE_GRID_PORTS[0..3]`).
-pub const FACE_INPUT_PORTS: [&str; 3] = ["face_u_in", "face_v_in", "face_w_in"];
 
 /// Faces per axis of `axis`'s array: one more than the cells along `axis`,
 /// the cells on the other two.
@@ -85,168 +53,9 @@ pub fn face_position(min: [f32; 3], cell_size: f32, axis: usize, f: [u32; 3]) ->
     })
 }
 
-/// A frame node's published face grid, frame B's only: storage per wired
-/// axis over the domain's cells, written when the frame publishes a tick and
-/// never from a tick whose stats flag a non-finite record. Every liquid frame
-/// publishes through this, so the grid holds while paused and I8 covers it
-/// for every solver.
-#[derive(Default)]
-pub struct PublishedFaces {
-    faces: [Option<GpuBuffer>; 3],
-    copy_pipeline: Option<GpuComputePipeline>,
-}
-
-/// A tick cannot be published when its particle reduction found non-finite
-/// records.
-pub fn stats_failed(stats: &[u32]) -> bool {
-    stats.first().copied().unwrap_or(1) != 0
-}
-
-impl PublishedFaces {
-    pub fn prepare(&mut self, device: &manifold_gpu::GpuDevice) {
-        if self.copy_pipeline.is_none() {
-            let shader = with_stats_layout(PUBLISH_SHADER_SOURCE);
-            self.copy_pipeline =
-                Some(device.create_compute_pipeline(&shader, "cs_main", "liquid.publish_faces"));
-        }
-    }
-
-    /// Whether `port` is one of the grid's arrays.
-    pub fn provides(port: &str) -> bool {
-        FACE_GRID_PORTS[..3].contains(&port)
-    }
-
-    /// The array published on `port`.
-    pub fn buffer(&self, port: &str) -> Option<&GpuBuffer> {
-        FACE_GRID_PORTS[..3]
-            .iter()
-            .position(|&p| p == port)
-            .and_then(|axis| self.faces[axis].as_ref())
-    }
-
-    /// Every axis has storage.
-    pub fn complete(&self) -> bool {
-        self.faces.iter().all(Option::is_some)
-    }
-
-    /// Publish `inputs` (one per axis, `None` unwired) over `cells`. Each
-    /// wired axis gets storage, zero until written and fresh per lattice (the
-    /// old one retires with its fence), and is written when `ticked` or when
-    /// its storage is new, since a new lattice's old faces never stand in for
-    /// it. `stats` word 0 is the tick's non-finite count; the kernel skips a
-    /// tick that has any. Returns a refusal naming what the device could not
-    /// give.
-    pub fn publish(
-        &mut self,
-        gpu: &mut GpuEncoder<'_>,
-        cells: [u32; 3],
-        inputs: [Option<&GpuBuffer>; 3],
-        stats: Option<&GpuBuffer>,
-        ticked: bool,
-        node: &str,
-    ) -> Option<String> {
-        let device = gpu.device;
-        let mut refused = None;
-        for (axis, input) in inputs.into_iter().enumerate() {
-            let bytes = face_len(cells, axis) * 4;
-            let Some(input) = input else {
-                self.faces[axis] = None;
-                continue;
-            };
-            let mut fresh = false;
-            if self.faces[axis].as_ref().is_none_or(|b| b.size < bytes) {
-                match device.try_create_buffer_shared(bytes.max(4)) {
-                    Ok(buffer) => {
-                        buffer.zero_fill();
-                        self.faces[axis] = Some(buffer);
-                        fresh = true;
-                    }
-                    Err(error) => {
-                        self.faces[axis] = None;
-                        refused = Some(format!(
-                            "{node}: the face grid needs 3 × {bytes} bytes the device cannot give: {error}. Raise Cell Size."
-                        ));
-                        continue;
-                    }
-                }
-            }
-            let (Some(stats), Some(target)) = (
-                stats.filter(|stats| stats.size >= 4),
-                self.faces[axis].as_ref(),
-            ) else {
-                continue;
-            };
-            if !(ticked || fresh) {
-                continue;
-            }
-            let len = bytes.min(input.size).min(target.size) / 4;
-            let Ok(len) = u32::try_from(len) else {
-                refused = Some(format!(
-                    "{node}: a face array of {len} faces is past 32-bit GPU indexing. Raise Cell Size."
-                ));
-                continue;
-            };
-            if len == 0 {
-                continue;
-            }
-            let pipeline = self
-                .copy_pipeline
-                .as_ref()
-                .expect("liquid face pipeline prepared at install");
-            let params = FaceParams {
-                len,
-                _pad0: 0,
-                _pad1: 0,
-                _pad2: 0,
-            };
-            gpu.native_enc.dispatch_compute(
-                pipeline,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&params),
-                    },
-                    GpuBinding::Buffer {
-                        binding: 1,
-                        buffer: input,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 2,
-                        buffer: stats,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 3,
-                        buffer: target,
-                        offset: 0,
-                    },
-                ],
-                [len.div_ceil(256), 1, 1],
-                "liquid.publish_faces",
-            );
-        }
-        refused
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn face_publish_params_match_the_shader() {
-        assert_eq!(std::mem::size_of::<FaceParams>(), 16);
-        let shader = with_stats_layout(PUBLISH_SHADER_SOURCE);
-        assert!(shader.contains("struct FaceParams"));
-        let module = naga::front::wgsl::parse_str(&shader).expect("liquid_frame_faces.wgsl parses");
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .expect("liquid_frame_faces.wgsl validates");
-    }
 
     /// The seam table's lengths and index rules, on unequal sides so a
     /// swapped axis shows.
@@ -269,14 +78,5 @@ mod tests {
             face_position([-2.0, 0.0, 1.0], 0.5, 1, [1, 2, 3]),
             [-1.25, 1.0, 2.75]
         );
-    }
-
-    #[test]
-    fn failed_stats_follow_the_nonfinite_word() {
-        assert!(!stats_failed(
-            &[0; crate::primitives::liquid_stats::LIQUID_STATS_WORDS as usize]
-        ));
-        assert!(stats_failed(&[1]));
-        assert!(stats_failed(&[]));
     }
 }

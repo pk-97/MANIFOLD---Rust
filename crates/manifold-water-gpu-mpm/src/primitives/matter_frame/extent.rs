@@ -1,17 +1,14 @@
 //! Buffer extent rule owned by this node.
 use crate::matter::MatterPoint;
 use crate::matter::STATS_WORDS;
-use crate::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_water_liquid::extent::liquid_lattice;
-use manifold_water_liquid::extent::{cover_frame_faces, provide_frame_faces};
 use manifold_water_liquid::frame_ring::RING;
 use std::mem::size_of;
 
 fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = liquid_lattice(x)?;
-    provide_frame_faces(x, lattice.cells(), MATTER_FACE_VALID_LAYERS as f32);
     let count = x.count("count", 0.0)?;
     x.covers("points", u64::from(count) * size_of::<MatterPoint>() as u64)?;
     x.covers("stats", u64::from(STATS_WORDS) * 4)?;
@@ -37,7 +34,7 @@ fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     {
         x.publish(port, n as f32);
     }
-    cover_frame_faces(x, lattice.cells())
+    Ok(())
 }
 inventory::submit! {
     ExtentRule { type_id: "node.matter_frame", check: matter_frame }

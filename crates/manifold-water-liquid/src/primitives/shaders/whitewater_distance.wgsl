@@ -1,13 +1,18 @@
 // FLIP Fluids particlelevelset.cpp::calculateCurvatureGrid and
 // levelsetsolver.cpp::reinitializeUpwind (MIT; see THIRD_PARTY_NOTICES.md).
-// Stage-only valid-band construction and convergence reduction.
-struct Params { nx: u32, ny: u32, nz: u32, count: u32, h: f32, iteration: u32, bx: u32, by: u32 };
+// Stage-only valid-band construction and convergence reduction over pooled
+// cell arrays on the step's world tiles (world_tiles_read.wgsl composes
+// before this file): `source`, `current`, `candidate` and `valid` hold one
+// element per pool index, the canonical element last.
+struct Params { count: u32, pool_tiles: u32, entries: u32, iteration: u32, h: f32, _pad0: u32, _pad1: u32, _pad2: u32 };
 @group(0) @binding(0) var<uniform> u: Params;
 @group(0) @binding(1) var<storage, read> source: array<f32>;
 @group(0) @binding(2) var<storage, read_write> current: array<f32>;
 @group(0) @binding(3) var<storage, read> candidate: array<f32>;
 @group(0) @binding(4) var<storage, read_write> valid: array<u32>;
-@group(0) @binding(5) var<storage, read_write> blocks: array<u32>;
+// One flag per pool slot: 1 when a cell of the slot's tile is within 2h of
+// the surface.
+@group(0) @binding(5) var<storage, read_write> slot_flags: array<u32>;
 @group(0) @binding(6) var<storage, read_write> state: array<atomic<u32>>;
 // The FLIP clock plan (gpu_flip_step/common.wgsl ClockPlan). An inactive substep slot
 // (live clock, zero step) does no work; a zero plan is always active.
@@ -19,6 +24,13 @@ struct ClockPlan {
 @group(0) @binding(7) var<storage, read> clock_plan: array<ClockPlan>;
 // The upwind sweep's indirect grid: zero groups in an inactive slot.
 @group(0) @binding(8) var<storage, read_write> sweep_args: array<u32>;
+// The world tile table.
+@group(0) @binding(9) var<storage, read> ts_table: array<u32>;
+
+fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
+fn ts_table_entries() -> u32 { return u.entries; }
+fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
+
 fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
 }
@@ -28,33 +40,40 @@ fn gate() {
     sweep_args[1] = 1u;
     sweep_args[2] = 1u;
 }
+// One thread per pool slot: its flag, 0 for a free slot.
 @compute @workgroup_size(256)
-fn mark_blocks(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn mark_slots(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let bz = (u.nz+5u)/6u;
-    if gid.x >= u.bx*u.by*bz { return; }
-    let base = vec3<u32>(gid.x%u.bx, gid.x/u.bx%u.by, gid.x/(u.bx*u.by))*6u;
+    let slot = gid.x;
+    if slot >= u.pool_tiles { return; }
     var hit = 0u;
-    for (var k=0u;k<6u;k=k+1u) { for (var j=0u;j<6u;j=j+1u) { for (var i=0u;i<6u;i=i+1u) {
-        let c = base+vec3<u32>(i,j,k);
-        if c.x<u.nx && c.y<u.ny && c.z<u.nz {
-            hit = max(hit,u32(abs(source[c.x+u.nx*(c.y+u.ny*c.z)])<2.0*u.h));
+    if ts_slot_entry(slot) != WT_NONE {
+        for (var l = 0u; l < 512u; l = l + 1u) {
+            hit = max(hit, u32(abs(source[slot * 512u + l]) < 2.0 * u.h));
         }
-    } } }
-    blocks[gid.x]=hit;
+    }
+    slot_flags[slot] = hit;
 }
+// A cell is valid in a flagged slot and in a slot sharing a face with one.
+// The canonical element and a free slot are not valid.
 @compute @workgroup_size(256)
 fn initialize(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let i=gid.x; if i>=u.count { return; }
-    let c=vec3<i32>(vec3<u32>(i%u.nx,i/u.nx%u.ny,i/(u.nx*u.ny)))/6;
-    let dims=vec3<i32>(i32(u.bx),i32(u.by),i32((u.nz+5u)/6u));
-    var hit=blocks[u32(c.x+dims.x*(c.y+dims.y*c.z))];
-    for(var a=0u;a<3u;a=a+1u) { for(var d=-1;d<=1;d=d+2) {
-        var q=c; q[a]=q[a]+d;
-        if all(q>=vec3<i32>(0)) && all(q<dims) { hit=max(hit,blocks[u32(q.x+dims.x*(q.y+dims.y*q.z))]); }
+    let i = gid.x; if i >= u.count { return; }
+    current[i] = source[i];
+    let slot = i >> 9u;
+    if slot >= u.pool_tiles || ts_slot_entry(slot) == WT_NONE {
+        valid[i] = 0u;
+        return;
+    }
+    var hit = slot_flags[slot];
+    for (var a = 0u; a < 3u; a = a + 1u) { for (var d = -1; d <= 1; d = d + 2) {
+        var step = vec3<i32>(0);
+        step[a] = d;
+        let neighbour = ts_neighbour_slot(slot, ts_neighbour_index(step));
+        if neighbour != WT_NONE { hit = max(hit, slot_flags[neighbour]); }
     } }
-    valid[i]=hit; current[i]=source[i];
+    valid[i]=hit;
 }
 @compute @workgroup_size(1)
 fn reset() {

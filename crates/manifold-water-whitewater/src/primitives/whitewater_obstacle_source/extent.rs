@@ -1,11 +1,13 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::whitewater_pool;
 
 fn whitewater_obstacle_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let bytes = liquid_lattice(x)?.solid_bytes() * 4;
-    x.provide("solid", bytes);
-    x.hold(bytes);
+    let elements = whitewater_pool(x)?;
+    let (source, distance) = (elements * 16, elements * 4);
+    x.provide("source", source);
+    x.provide("distance", distance);
+    x.hold(source + distance);
     Ok(())
 }
 inventory::submit! {

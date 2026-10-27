@@ -238,9 +238,11 @@ mod gpu {
     use super::super::emission_count::WAVECREST_RATE;
     use super::super::energy_potential::{MAX_ENERGY, MIN_ENERGY};
     use super::super::whitewater_cpu::Rng;
-    use super::super::whitewater_step::StepShape;
-    use manifold_node_engine::scene::transform::Transform;
+    use super::super::whitewater_step::fused_tests::gpu::identity_record;
+    use super::super::whitewater_step::fused_tests::{low_corner, middle, step_shape};
     use manifold_physics::clock::TICK;
+    use manifold_water_liquid::fluid_particles::FaceSample;
+    use manifold_water_liquid::testkit::world_box::BoxTable;
     /// Fast enough to emit, mostly upward.
     const FLOW: [f32; 3] = [0.9, 5.9, -0.7];
     const GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
@@ -256,24 +258,15 @@ mod gpu {
     /// proof. Capture every tick before another tick can reuse stage storage;
     /// a 30 fps frame encodes both ticks into one command buffer, without a
     /// host fence between them. The 120 fps run also checks held frames.
+    /// The liquid is a sphere centred on the corner where eight tiles meet,
+    /// so every stencil of the emitters crosses tile edges.
     #[test]
     fn whitewater_per_tick_gpu_rows_match_at_every_frame_rate() {
         let harness = Harness::new();
-        let cells = [8u32; 3];
-        let nodes = [13u32; 3];
+        let n = 12u32;
+        let table = BoxTable::new([-6; 3], [n; 3]);
         let h = 0.1;
-        let shape = StepShape::new(
-            nodes,
-            cells,
-            1.0,
-            Some(Transform {
-                pos: [0.6; 3],
-                scale: [1.2; 3],
-                ..Transform::default()
-            }),
-            256,
-        )
-        .unwrap();
+        let shape = step_shape(&table, h, 256);
         let shared = |bytes: &[u8]| {
             let b = harness.device.create_buffer_shared(bytes.len() as u64);
             // SAFETY: fresh shared storage, not submitted yet.
@@ -282,23 +275,25 @@ mod gpu {
         };
         // Analytic sphere sampled at the solver's cell centres. It exercises
         // the distance path directly, never the rendered surface level set.
-        let phi: Vec<f32> = (0..512)
+        let middle = middle(&table, h);
+        let phi: Vec<f32> = (0..n * n * n)
             .map(|i| {
-                let p = [i % 8, (i / 8) % 8, i / 64].map(|v| v as f32 + 0.5 - 4.0);
+                let p = [i % n, (i / n) % n, i / (n * n)].map(|v| v as f32 - 0.5 * (n - 1) as f32);
                 ((p.iter().map(|v| v * v).sum::<f32>()).sqrt() - 2.5).min(3.0) * h
             })
             .collect();
-        let (phi, table, pool_tiles) =
-            crate::primitives::whitewater_step::fused_tests::pooled_distance(&phi, &shape);
-        let distance = shared(bytemuck::cast_slice(&phi));
-        let tiles = shared(bytemuck::cast_slice(&table));
-        let solid = shared(bytemuck::cast_slice(&vec![10.0f32; 13 * 13 * 13]));
+        let distance = shared(bytemuck::cast_slice(&table.to_pool(&phi, 3.0 * h)));
+        let tiles = shared(bytemuck::cast_slice(&table.words));
+        let solid = shared(bytemuck::cast_slice(&vec![
+            10.0f32;
+            shape.elements() as usize
+        ]));
         let mut rng = Rng(0x215);
         let particles: Vec<FluidParticle> = (0..256)
             .map(|_| {
                 let d: [f32; 3] = std::array::from_fn(|_| 2.0 * rng.unit() - 1.0);
                 let norm = d.iter().map(|v| v * v).sum::<f32>().sqrt().max(0.001);
-                let p = d.map(|v| 0.6 + 0.24 * v / norm);
+                let p: [f32; 3] = std::array::from_fn(|a| middle[a] + 0.24 * d[a] / norm);
                 FluidParticle {
                     position_radius: [p[0], p[1], p[2], 0.05],
                     velocity: [0.0; 3],
@@ -307,21 +302,19 @@ mod gpu {
             })
             .collect();
         let particles = shared(bytemuck::cast_slice(&particles));
-        let identity = crate::primitives::whitewater_step::fused_tests::gpu::identity_record(
-            &harness.device,
-            256,
-        );
+        let identity = identity_record(&harness.device, 256);
         // Each tick owns immutable inputs, including when two ticks share an
         // encoder. CPU overwrites of a shared face array would hide this bug.
-        let faces: Vec<[GpuBuffer; 3]> = (0..12)
+        let faces: Vec<GpuBuffer> = (0..12)
             .map(|tick| {
-                std::array::from_fn(|a| {
-                    let velocity = FLOW[a] * (1.0 + tick as f32 / 60.0);
-                    shared(bytemuck::cast_slice(&vec![
-                        velocity;
-                        face_len(cells, a) as usize
-                    ]))
-                })
+                let scale = 1.0 + tick as f32 / 60.0;
+                let face = FaceSample {
+                    velocity: [FLOW[0] * scale, FLOW[1] * scale, FLOW[2] * scale, 0.0],
+                    weight: [1.0, 1.0, 1.0, 0.0],
+                };
+                let pooled =
+                    table.to_pool(&vec![face; (n * n * n) as usize], FaceSample::default());
+                shared(bytemuck::cast_slice(&pooled))
             })
             .collect();
         let run = |fps: u32| {
@@ -338,19 +331,15 @@ mod gpu {
                 let held = tick == due;
                 let mut native = harness.device.create_encoder("whitewater per tick frame");
                 while tick < due {
-                    let f = &faces[tick as usize];
                     let inputs = StepInputs {
                         motion: None,
                         obstacle_source: None,
                         particles: &particles,
                         identity: &identity,
                         solid: &solid,
-                        faces: crate::primitives::whitewater_step::FaceSource::Axes([
-                            &f[0], &f[1], &f[2],
-                        ]),
+                        faces: &faces[tick as usize],
                         distance: &distance,
                         tiles: &tiles,
-                        pool_tiles,
                     };
                     let settings = StepFrame {
                         shape,
@@ -359,6 +348,7 @@ mod gpu {
                         epoch: 0,
                         seed: tick as f32 * TICK as f32,
                         gravity: GRAVITY,
+                        bounds_lo: low_corner(&table, h),
                         wavecrest_emission: WAVECREST_RATE,
                         turbulence_emission: 175.0,
                         min_turbulence: 100.0,

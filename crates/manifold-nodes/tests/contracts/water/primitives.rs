@@ -1,4 +1,3 @@
-mod face_grid_extent_tests;
 mod fluid_role_source;
 mod liquid_bricks;
 mod whitewater_step;

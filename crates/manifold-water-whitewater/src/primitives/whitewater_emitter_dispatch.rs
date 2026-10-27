@@ -42,14 +42,22 @@ pub(super) fn run<P: Primitive>(
         }
     }
     if P::TYPE_ID == "node.turbulence_emission_count" {
-        let nodes = manifold_water_liquid::whitewater::grid_nodes(ctx);
-        if manifold_water_liquid::whitewater::grid_cells(nodes).is_none()
-            || ctx
-                .inputs
-                .array("influence")
-                .is_none_or(|b| b.size / 4 < manifold_water_liquid::whitewater::cell_total(nodes))
+        let pool = match manifold_water_liquid::whitewater::whitewater_pool(
+            ctx,
+            "Turbulence Emission Count",
+        ) {
+            Ok(pool) => pool,
+            Err(refusal) => {
+                ctx.error(refusal);
+                return;
+            }
+        };
+        if ctx
+            .inputs
+            .array("influence")
+            .is_none_or(|b| b.size / 4 < pool.elements())
         {
-            ctx.error("Turbulence Emission Count: influence does not cover the lattice".to_owned());
+            ctx.error("Turbulence Emission Count: influence does not cover the pool".to_owned());
             return;
         }
     }

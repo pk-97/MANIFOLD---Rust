@@ -1,12 +1,10 @@
-// FLIP's MAC trilinear (macvelocityfield.cpp:519, :551, :583) on the seam's
-// face arrays, placed `pad` grid
-// cells into the whitewater grid as the lifecycle places them in FLIP's own
-// arrays, which hold zeros around them. Positions are in whitewater cells.
-// Bodies read the arrays themselves: an include never names a buffer.
+// FLIP's MAC trilinear (macvelocityfield.cpp:519, :551, :583) on the liquid
+// step's pooled faces. Positions are in whitewater cells
+// (`ww_cell_position`); face f of axis a is world cell f's low face along a,
+// FaceSample record ts_face(f). Bodies read the records themselves: an
+// include never names a buffer.
 //
 // Ported from FLIP Fluids macvelocityfield.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
-
-const LF_NONE: u32 = 0xffffffffu;
 
 // Where component `axis`'s stencil starts at q: the faces of `axis` sit on
 // cell boundaries along it and at cell centres across it.
@@ -16,19 +14,8 @@ fn lf_stencil(q: vec3<f32>, axis: u32) -> vec3<f32> {
     return s;
 }
 
-// The seam array index of the `axis` face at whitewater face coordinates f,
-// or LF_NONE where FLIP's padded array holds 0.
-fn lf_face_at(f: vec3<i32>, axis: u32, pad: vec3<i32>, face_cells: vec3<u32>) -> u32 {
-    var dims = face_cells;
-    dims[axis] = dims[axis] + 1u;
-    let g = f - pad;
-    if any(g < vec3<i32>(0)) || any(g >= vec3<i32>(dims)) {
-        return LF_NONE;
-    }
-    return ts_grid_index(g, vec3<i32>(dims));
-}
-
-// Cells from the whitewater grid's first cell to the face grid's, per axis.
-fn lf_pad(cells: vec3<u32>, face_cells: vec3<u32>) -> vec3<i32> {
-    return (vec3<i32>(cells) - vec3<i32>(face_cells)) / 2;
+// The `axis` velocity of a pooled FaceSample: 0 where the face's weight is
+// not positive, as FLIP holds 0 at faces with no liquid velocity.
+fn lf_face_velocity(face_velocity: vec4<f32>, face_weight: vec4<f32>, axis: u32) -> f32 {
+    return select(0.0, face_velocity[axis], face_weight[axis] > 0.0);
 }

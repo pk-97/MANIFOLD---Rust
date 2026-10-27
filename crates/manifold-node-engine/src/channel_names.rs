@@ -188,10 +188,7 @@ pub mod well_known {
         // velocities a padded cell owns
         FACE_VELOCITY = "face_velocity";
         FACE_WEIGHT = "face_weight";
-        // A cell's nearest surface
-        // crossing and the level at its centre; a value still to extrapolate
-        CROSSING = "crossing";
-        LEVEL = "level";
+        // A value still to extrapolate
         KNOWN = "known";
         // A spawn record for the lifecycle
         POSITION_LIFETIME = "position_lifetime";

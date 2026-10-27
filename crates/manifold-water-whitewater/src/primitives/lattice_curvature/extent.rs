@@ -1,11 +1,11 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::{KNOWN_VALUE, whitewater_grid};
+use manifold_water_liquid::extent::{KNOWN_VALUE, whitewater_pool};
 
 fn lattice_curvature(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (_, cells) = whitewater_grid(x)?;
-    x.covers("distance", cells * 4)?;
-    x.covers("out", cells * KNOWN_VALUE)
+    let elements = whitewater_pool(x)?;
+    x.covers("distance", elements * 4)?;
+    x.covers("out", elements * KNOWN_VALUE)
 }
 inventory::submit! {
     ExtentRule { type_id: "node.lattice_curvature", check: lattice_curvature }

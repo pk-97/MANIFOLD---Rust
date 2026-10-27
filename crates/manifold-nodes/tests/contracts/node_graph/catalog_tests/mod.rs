@@ -89,8 +89,6 @@ mod image_fused;
 #[cfg(feature = "gpu-proofs")]
 mod nested_cubes_geometry;
 
-#[cfg(feature = "gpu-proofs")]
-mod face_grid_scene_tests;
 mod particle_frame_blend_tests;
 #[cfg(feature = "gpu-proofs")]
 mod particle_publication_gpu_tests;

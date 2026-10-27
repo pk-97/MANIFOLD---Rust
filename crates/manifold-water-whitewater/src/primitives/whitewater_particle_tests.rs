@@ -1,6 +1,9 @@
 //! GPU value proofs for the whitewater emitter atoms against their CPU
 //! statements (`whitewater_particle_cpu`), I7, and the chain folded into one
-//! kernel against the atoms run one by one.
+//! kernel against the atoms run one by one. The grid arrays sit on world
+//! tiles under one table, the box placed so it straddles tiles -1 and 0 on x
+//! and z. Particles lie well inside the box, where the dense statements and
+//! the pooled atoms read the same cells, or in no stored tile.
 
 use super::emission_count::EmissionCount;
 use super::energy_potential::EnergyPotential;
@@ -8,74 +11,165 @@ use super::jitter_particles::JitterParticles;
 use super::sample_faces_at_particles::SampleFacesAtParticles;
 use super::spawn_whitewater::SpawnWhitewater;
 use super::wavecrest_potential::WavecrestPotential;
-use super::whitewater_cpu::Rng;
+use super::whitewater_cpu::{CANONICAL_SOLID, Rng, canonical_distance};
 use super::whitewater_type::WhitewaterType;
+use manifold_gpu::GpuBuffer;
+use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::ports::KnownItem;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_node_engine::testkit::fused_atoms::run;
-use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
+use manifold_water_liquid::fluid_particles::{FaceSample, WhitewaterSpawn};
 use manifold_water_liquid::grid::face_len;
-use manifold_water_liquid::whitewater::KnownValue;
+use manifold_water_liquid::testkit::world_box::BoxTable;
+use manifold_water_liquid::whitewater::{CELL_AIR, KnownValue, cell_coords};
 use {
     super::whitewater_particle_cpu::Box3, super::whitewater_particle_cpu::Crest,
     super::whitewater_particle_cpu::Emission, crate::primitives::whitewater_particle_cpu as cpu,
 };
 
-/// Unequal sides, so a swapped axis shows; the face grid one cell in.
-const NODES: [u32; 3] = [11, 10, 9];
-const FACE_CELLS: [u32; 3] = [8, 7, 6];
+/// Unequal sides, so a swapped axis shows; room for emitters well inside.
+const NODES: [u32; 3] = [27, 25, 23];
 const H: f32 = 0.25;
-const ORIGIN: [f32; 3] = [-1.0, 0.5, 2.0];
+/// The world cell of the box's first cell: the box crosses tiles -1 and 0 on
+/// x and z.
+const ORIGIN: [i32; 3] = [-12, 2, -9];
 const SLOTS: usize = 700;
+/// Cells a particle keeps from the box's sides, past the reach of every
+/// atom's stencil.
+const REACH: f32 = 2.0;
+/// Cells an emitter keeps from them: its spawns land up to 3.3 cells away.
+const EMITTER_REACH: f32 = 6.0;
+/// Metres along x that carry a particle into a tile the table does not hold.
+const FAR: f32 = 64.0 * H;
 
+fn cell_dims() -> [u32; 3] {
+    NODES.map(|n| n - 1)
+}
+
+/// The scene position of the low corner of world cell `origin`, the first node
+/// of a box whose first cell it is.
+fn low_corner(origin: [i32; 3], h: f32) -> [f32; 3] {
+    origin.map(|c| (c as f32 - 0.5) * h)
+}
+
+/// The scene position of the box's first node.
+fn first_node() -> [f32; 3] {
+    low_corner(ORIGIN, H)
+}
+
+/// The dense grid the CPU statements read over the box's cells.
 fn grid() -> Box3 {
-    let cells = NODES.map(|n| n - 1);
-    let size: [f32; 3] = std::array::from_fn(|a| cells[a] as f32 * H);
+    let cells = cell_dims();
+    let size = cells.map(|n| n as f32 * H);
+    let first = first_node();
     Box3 {
         cells,
-        center: std::array::from_fn(|a| ORIGIN[a] + 0.5 * size[a]),
+        center: std::array::from_fn(|a| first[a] + 0.5 * size[a]),
         size,
     }
 }
 
-fn box_values() -> Vec<(&'static str, f32)> {
-    let g = grid();
-    vec![
-        ("center_x", g.center[0]),
-        ("center_y", g.center[1]),
-        ("center_z", g.center[2]),
-        ("size_x", g.size[0]),
-        ("size_y", g.size[1]),
-        ("size_z", g.size[2]),
-        ("nodes_x", NODES[0] as f32),
-        ("nodes_y", NODES[1] as f32),
-        ("nodes_z", NODES[2] as f32),
-    ]
+/// The box's tile table, shared by every pooled array: node arrays over its
+/// nodes, cell arrays over one fewer a side, on the same tiles. `h` is the
+/// cell size in metres.
+pub(super) struct Rig {
+    pub(super) nodes: BoxTable,
+    pub(super) cells: BoxTable,
+    h: f32,
 }
 
-fn box_params(extra: &[(&'static str, f32)]) -> ParamValues {
-    let mut all = box_values();
-    all.extend_from_slice(extra);
-    params(&all)
+impl Rig {
+    /// A box of `nodes` nodes whose first cell is world cell `origin`.
+    pub(super) fn new(origin: [i32; 3], nodes: [u32; 3], h: f32) -> Self {
+        let table = BoxTable::new(origin, nodes);
+        let cells = table.with_cells(nodes.map(|n| n - 1));
+        Self {
+            nodes: table,
+            cells,
+            h,
+        }
+    }
+
+    /// The scene position of the box's first node.
+    pub(super) fn first_node(&self) -> [f32; 3] {
+        low_corner(self.nodes.origin, self.h)
+    }
+
+    /// The scene position `offset` metres from the box's first node.
+    pub(super) fn point(&self, offset: [f32; 3]) -> [f32; 3] {
+        let first = self.first_node();
+        std::array::from_fn(|a| first[a] + offset[a])
+    }
+
+    /// The `cell_size` and `pool_tiles` values beside `extra`.
+    pub(super) fn values(&self, extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
+        let mut all = self.pool_values().to_vec();
+        all.extend_from_slice(extra);
+        all
+    }
+
+    /// [`Self::values`] as params.
+    pub(super) fn params(&self, extra: &[(&'static str, f32)]) -> ParamValues {
+        params(&self.values(extra))
+    }
+
+    pub(super) fn pool_values(&self) -> [(&'static str, f32); 2] {
+        [
+            ("cell_size", self.h),
+            ("pool_tiles", self.cells.pool_tiles as f32),
+        ]
+    }
+
+    /// The table words the atoms read the pool through.
+    pub(super) fn tiles(&self, harness: &mut Harness) -> (Slot, GpuBuffer) {
+        harness.array(&self.cells.words, self.cells.words.len())
+    }
+
+    /// A cell array over the box's cells (x fastest), `canon` elsewhere.
+    pub(super) fn cell_pool<T: KnownItem + Copy>(
+        &self,
+        harness: &mut Harness,
+        dense: &[T],
+        canon: T,
+    ) -> (Slot, GpuBuffer) {
+        let pool = self.cells.to_pool(dense, canon);
+        harness.array(&pool, pool.len())
+    }
+
+    /// A node array over the box's nodes (x fastest), `canon` elsewhere.
+    pub(super) fn node_pool<T: KnownItem + Copy>(
+        &self,
+        harness: &mut Harness,
+        dense: &[T],
+        canon: T,
+    ) -> (Slot, GpuBuffer) {
+        let pool = self.nodes.to_pool(dense, canon);
+        harness.array(&pool, pool.len())
+    }
 }
 
-fn face_params() -> [(&'static str, f32); 3] {
-    [
-        ("face_cells_x", FACE_CELLS[0] as f32),
-        ("face_cells_y", FACE_CELLS[1] as f32),
-        ("face_cells_z", FACE_CELLS[2] as f32),
-    ]
+/// A position `reach` cells in from the box's sides; one in six is carried
+/// `FAR` along x, into a tile the table does not hold.
+fn position(rng: &mut Rng, reach: f32) -> [f32; 3] {
+    let cells = cell_dims();
+    let first = first_node();
+    let mut p: [f32; 3] = std::array::from_fn(|a| {
+        first[a] + (reach + (cells[a] as f32 - 2.0 * reach) * rng.unit()) * H
+    });
+    if rng.unit() < 1.0 / 6.0 {
+        p[0] += FAR;
+    }
+    p
 }
 
-/// Particles over the grid and a cell past it, a tenth of the slots empty,
-/// velocities up to `speed` on each axis.
-fn particles(rng: &mut Rng, speed: f32) -> Vec<FluidParticle> {
-    let g = grid();
+/// Particles at `position(reach)`, a tenth of the slots empty, velocities up
+/// to `speed` on each axis.
+fn particles(rng: &mut Rng, speed: f32, reach: f32) -> Vec<FluidParticle> {
     (0..SLOTS)
         .map(|i| {
-            let p: [f32; 3] =
-                std::array::from_fn(|a| ORIGIN[a] - H + (g.size[a] + 2.0 * H) * rng.unit());
+            let p = position(rng, reach);
             let radius = if rng.unit() < 0.1 { 0.0 } else { 0.05 };
             let velocity = std::array::from_fn(|_| speed * (2.0 * rng.unit() - 1.0));
             FluidParticle {
@@ -87,13 +181,45 @@ fn particles(rng: &mut Rng, speed: f32) -> Vec<FluidParticle> {
         .collect()
 }
 
-/// Face velocities up to `speed` either way.
-fn faces(rng: &mut Rng, speed: f32) -> [Vec<f32>; 3] {
-    std::array::from_fn(|axis| {
-        (0..face_len(FACE_CELLS, axis))
-            .map(|_| speed * (2.0 * rng.unit() - 1.0))
-            .collect()
-    })
+/// The face arrays of the box's cells: the three dense arrays the CPU reads
+/// (FLIP's seam layout, one face more along their axis than the box has
+/// cells), and the pooled records that carry them (face f of an axis is cell
+/// f's low face). A tenth of the faces have no weight: they read 0 whatever
+/// velocity their record holds, and hold 0 in the dense array.
+struct Faces {
+    dense: [Vec<f32>; 3],
+    records: Vec<FaceSample>,
+}
+
+impl Faces {
+    fn new(rng: &mut Rng, speed: f32) -> Self {
+        let cells = cell_dims();
+        let mut dense: [Vec<f32>; 3] = std::array::from_fn(|axis| {
+            (0..face_len(cells, axis))
+                .map(|_| speed * (2.0 * rng.unit() - 1.0))
+                .collect()
+        });
+        let total: usize = cells.iter().map(|&n| n as usize).product();
+        let mut records = vec![FaceSample::default(); total];
+        for (i, record) in records.iter_mut().enumerate() {
+            let c = cell_coords(cells, i).map(|v| v as i32);
+            for (axis, axis_dense) in dense.iter_mut().enumerate() {
+                let face = cpu::face_index(c, axis, 0, cells).expect("a face of the box");
+                if rng.unit() < 0.1 {
+                    record.velocity[axis] = 7.0 * speed;
+                    axis_dense[face] = 0.0;
+                } else {
+                    record.velocity[axis] = axis_dense[face];
+                    record.weight[axis] = 1.0;
+                }
+            }
+        }
+        Self { dense, records }
+    }
+
+    fn arrays(&self) -> [&[f32]; 3] {
+        self.dense.each_ref().map(Vec::as_slice)
+    }
 }
 
 fn close(a: f32, b: f32, tolerance: f32) -> bool {
@@ -104,7 +230,7 @@ fn close(a: f32, b: f32, tolerance: f32) -> bool {
 /// axis, the same as the CPU draws; empty slots stay put.
 #[test]
 fn jitter_particles_matches_cpu() {
-    let input = particles(&mut Rng(0x7177_0001), 1.0);
+    let input = particles(&mut Rng(0x7177_0001), 1.0, REACH);
     let mut harness = Harness::new();
     let slot = harness.array(&input, SLOTS);
     let p = params(&[("cell_size", H), ("seed", 12.345), ("epoch", 3.0)]);
@@ -151,38 +277,33 @@ fn jitter_particles_matches_cpu() {
     );
 }
 
-/// FLIP's MAC trilinear of the face arrays at each live particle; 0 outside
-/// the grid.
+/// FLIP's MAC trilinear of the pooled faces at each live particle; 0 in a
+/// cell no stored tile holds.
 #[test]
 fn sample_faces_at_particles_matches_cpu() {
     let mut rng = Rng(0x5a4f_0001);
-    let input = particles(&mut rng, 1.0);
-    let face_values = faces(&mut rng, 2.0);
+    let rig = Rig::new(ORIGIN, NODES, H);
+    let input = particles(&mut rng, 1.0, REACH);
+    let faces = Faces::new(&mut rng, 2.0);
     let mut harness = Harness::new();
     let slot = harness.array(&input, SLOTS);
-    let arrays = face_values.each_ref().map(|f| harness.array(f, f.len()));
-    let p = box_params(&face_params());
+    let records = rig.cell_pool(&mut harness, &faces.records, FaceSample::default());
+    let tiles = rig.tiles(&mut harness);
     let got: Vec<FluidParticle> = run(
         &mut harness,
         &mut SampleFacesAtParticles::new(),
         &[
             ("particles", slot.0),
-            ("face_u", arrays[0].0),
-            ("face_v", arrays[1].0),
-            ("face_w", arrays[2].0),
+            ("faces", records.0),
+            ("tiles", tiles.0),
         ],
         SLOTS,
-        &p,
+        &rig.params(&[]),
     );
     let g = grid();
     let (mut outside, mut moving) = (0, 0);
     for (i, (got, p)) in got.iter().zip(&input).enumerate() {
-        let want = cpu::sample_faces(
-            *p,
-            face_values.each_ref().map(Vec::as_slice),
-            FACE_CELLS,
-            &g,
-        );
+        let want = cpu::sample_faces(*p, faces.arrays(), cell_dims(), &g);
         assert_eq!(
             (got.position_radius, got.id),
             (p.position_radius, p.id),
@@ -205,14 +326,14 @@ fn sample_faces_at_particles_matches_cpu() {
     }
     assert!(
         outside > 30 && moving > 300,
-        "{outside} live particles outside the grid, {moving} moving"
+        "{outside} live particles outside the stored tiles, {moving} moving"
     );
 }
 
 /// ½|v|², held and scaled, at energies below, inside and above the range.
 #[test]
 fn energy_potential_matches_cpu() {
-    let input = particles(&mut Rng(0xe4e7_0001), 12.0);
+    let input = particles(&mut Rng(0xe4e7_0001), 12.0, REACH);
     let mut harness = Harness::new();
     let slot = harness.array(&input, SLOTS);
     let p = params(&[("min_energy", 0.1), ("max_energy", 60.0)]);
@@ -246,7 +367,8 @@ fn energy_potential_matches_cpu() {
 #[test]
 fn wavecrest_potential_matches_cpu() {
     let mut rng = Rng(0xc4e5_0001);
-    let input = particles(&mut rng, 3.0);
+    let rig = Rig::new(ORIGIN, NODES, H);
+    let input = particles(&mut rng, 3.0, REACH);
     let g = grid();
     let total = g.cells.iter().map(|&n| n as usize).product::<usize>();
     let distance: Vec<f32> = (0..total).map(|_| (4.0 * rng.unit() - 2.0) * H).collect();
@@ -259,17 +381,16 @@ fn wavecrest_potential_matches_cpu() {
     let kinds: Vec<u32> = (0..total).map(|_| (3.0 * rng.unit()) as u32 % 3).collect();
     let mut harness = Harness::new();
     let slot = harness.array(&input, SLOTS);
-    let (d, k, c) = (
-        harness.array(&distance, total),
-        harness.array(&curvature, total),
-        harness.array(&kinds, total),
-    );
+    let d = rig.cell_pool(&mut harness, &distance, canonical_distance(H));
+    let k = rig.cell_pool(&mut harness, &curvature, KnownValue::default());
+    let c = rig.cell_pool(&mut harness, &kinds, CELL_AIR);
+    let tiles = rig.tiles(&mut harness);
     let crest = Crest {
         min_curvature: 0.4,
         max_curvature: 1.0,
         sharpness: 0.4,
     };
-    let p = box_params(&[
+    let p = rig.params(&[
         ("min_curvature", 0.4),
         ("max_curvature", 1.0),
         ("sharpness", 0.4),
@@ -282,6 +403,7 @@ fn wavecrest_potential_matches_cpu() {
             ("distance", d.0),
             ("curvature", k.0),
             ("cells", c.0),
+            ("tiles", tiles.0),
         ],
         SLOTS,
         &p,
@@ -311,7 +433,7 @@ fn wavecrest_potential_matches_cpu() {
 #[test]
 fn emission_count_matches_cpu() {
     let mut rng = Rng(0xe315_0001);
-    let mut input = particles(&mut rng, 2.0);
+    let mut input = particles(&mut rng, 2.0, REACH);
     for p in input.iter_mut().step_by(7) {
         p.velocity = p.velocity.map(|v| v * 1e-4);
     }
@@ -423,8 +545,8 @@ fn live_interval_whitewater_emission_duration() {
 
 /// The five emitter atoms folded into one kernel, as
 /// `whitewater_emitter_chain_fuses` finds them: the particles read in place,
-/// the faces and grid fields gathered, one register threaded from jitter to
-/// count. The fused counts equal the atoms run one by one, bit for bit, and
+/// the faces, grid fields and the one table gathered, one register threaded
+/// from jitter to count. The fused counts equal the atoms run one by one, bit for bit, and
 /// the atoms run one by one equal the CPU.
 #[test]
 fn whitewater_emitter_chain_fused_matches_unfused() {
@@ -437,9 +559,10 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
     use manifold_node_engine::primitive::PrimitiveSpec;
 
     let mut rng = Rng(0xf05e_0002);
-    let input = particles(&mut rng, 3.0);
+    let rig = Rig::new(ORIGIN, NODES, H);
+    let input = particles(&mut rng, 3.0, REACH);
     // Fast enough that most energy potentials reach 1.
-    let face_values = faces(&mut rng, 12.0);
+    let faces = Faces::new(&mut rng, 12.0);
     let g = grid();
     let total = g.cells.iter().map(|&n| n as usize).product::<usize>();
     let distance: Vec<f32> = (0..total).map(|_| (4.0 * rng.unit() - 2.0) * H).collect();
@@ -450,8 +573,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         })
         .collect();
     let kinds: Vec<u32> = (0..total).map(|_| (3.0 * rng.unit()) as u32 % 3).collect();
-    let values: Vec<(&'static str, f32)> = [
-        ("cell_size", H),
+    let values: Vec<(&'static str, f32)> = vec![
         ("seed", 7.25),
         ("epoch", 2.0),
         ("min_energy", 0.1),
@@ -464,20 +586,16 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         ("ticks", 2.0),
         ("live_count", (SLOTS - 30) as f32),
         ("dt", 0.1),
-    ]
-    .into_iter()
-    .chain(face_params())
-    .collect();
-    let all = box_params(&values);
+    ];
+    let all = rig.params(&values);
 
     let mut harness = Harness::new();
     let slot = harness.array(&input, SLOTS);
-    let arrays = face_values.each_ref().map(|f| harness.array(f, f.len()));
-    let (d, k, c) = (
-        harness.array(&distance, total),
-        harness.array(&curvature, total),
-        harness.array(&kinds, total),
-    );
+    let records = rig.cell_pool(&mut harness, &faces.records, FaceSample::default());
+    let d = rig.cell_pool(&mut harness, &distance, canonical_distance(H));
+    let k = rig.cell_pool(&mut harness, &curvature, KnownValue::default());
+    let c = rig.cell_pool(&mut harness, &kinds, CELL_AIR);
+    let tiles = rig.tiles(&mut harness);
     let jittered: Vec<FluidParticle> = run(
         &mut harness,
         &mut JitterParticles::new(),
@@ -491,9 +609,8 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         &mut SampleFacesAtParticles::new(),
         &[
             ("particles", jittered_in.0),
-            ("face_u", arrays[0].0),
-            ("face_v", arrays[1].0),
-            ("face_w", arrays[2].0),
+            ("faces", records.0),
+            ("tiles", tiles.0),
         ],
         SLOTS,
         &all,
@@ -514,6 +631,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
             ("distance", d.0),
             ("curvature", k.0),
             ("cells", c.0),
+            ("tiles", tiles.0),
         ],
         SLOTS,
         &all,
@@ -559,12 +677,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
             member!(
                 1,
                 SampleFacesAtParticles,
-                vec![
-                    node(0),
-                    InputSource::External(1),
-                    InputSource::External(2),
-                    InputSource::External(3)
-                ]
+                vec![node(0), InputSource::External(1), InputSource::External(2)]
             ),
             member!(2, EnergyPotential, vec![node(1)]),
             member!(
@@ -572,14 +685,15 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
                 WavecrestPotential,
                 vec![
                     node(1),
+                    InputSource::External(3),
                     InputSource::External(4),
                     InputSource::External(5),
-                    InputSource::External(6)
+                    InputSource::External(2)
                 ]
             ),
             member!(4, EmissionCount, vec![node(1), node(2), node(3)]),
         ],
-        num_external_inputs: 7,
+        num_external_inputs: 6,
         outputs: vec![(NodeInstanceId(4), "out".to_string())],
         in_place_alias: None,
         sampler_address_mode: "clamp",
@@ -596,10 +710,11 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         "fused WGSL parses:\n{}",
         fused.wgsl
     );
+    let pool_values = rig.pool_values();
     let lookup = |name: &str| {
         values
             .iter()
-            .chain(&box_values())
+            .chain(&pool_values)
             .find(|(n, _)| *n == name)
             .map(|(_, v)| *v)
             .or(match name {
@@ -626,15 +741,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
             .device
             .create_compute_pipeline(&fused.wgsl, ENTRY, "whitewater-emitter-fused");
     let mut enc = harness.device.create_encoder("whitewater-emitter-fused");
-    let externals = [
-        &slot.1,
-        &arrays[0].1,
-        &arrays[1].1,
-        &arrays[2].1,
-        &d.1,
-        &k.1,
-        &c.1,
-    ];
+    let externals = [&slot.1, &records.1, &tiles.1, &d.1, &k.1, &c.1];
     let mut bindings = vec![GpuBinding::Bytes {
         binding: 0,
         data: bytemuck::cast_slice(&words),
@@ -647,7 +754,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         });
     }
     bindings.push(GpuBinding::Buffer {
-        binding: 8,
+        binding: externals.len() as u32 + 1,
         buffer: &dst.1,
         offset: 0,
     });
@@ -681,8 +788,8 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         );
         let p = cpu::sample_faces(
             cpu::jitter(input[i], i as u32, H, 7.25, 2.0),
-            face_values.each_ref().map(Vec::as_slice),
-            FACE_CELLS,
+            faces.arrays(),
+            cell_dims(),
             &g,
         );
         let (w, margin) = cpu::wavecrest(p, &distance, &curvature, &kinds, &g, crest_limits);
@@ -702,19 +809,19 @@ struct SpawnFixture {
     particles: Vec<FluidParticle>,
     energy: Vec<f32>,
     offsets: Vec<u32>,
-    faces: [Vec<f32>; 3],
+    faces: Faces,
     solid: Vec<f32>,
     distance: Vec<f32>,
     kinds: Vec<u32>,
 }
 
 impl SpawnFixture {
-    /// Emitters with 0 to 3 spawns each, a solid lattice whose distance runs
-    /// from half a cell inside a wall to two cells clear, and random grid
-    /// fields.
+    /// Emitters with 0 to 3 spawns each, well inside the box or in no stored
+    /// tile, a solid lattice whose distance runs from half a cell inside a
+    /// wall to two cells clear, and random grid fields.
     fn new(rng: &mut Rng) -> Self {
         let g = grid();
-        let mut particles = particles(rng, 3.0);
+        let mut particles = particles(rng, 3.0, EMITTER_REACH);
         particles.truncate(EMITTERS);
         let energy: Vec<f32> = (0..EMITTERS).map(|_| rng.unit()).collect();
         let mut total = 0;
@@ -729,7 +836,7 @@ impl SpawnFixture {
                 total
             })
             .collect();
-        let faces = faces(rng, 2.0);
+        let faces = Faces::new(rng, 2.0);
         let nodes = NODES.iter().map(|&n| n as usize).product::<usize>();
         let solid = (0..nodes).map(|_| (2.5 * rng.unit() - 0.5) * H).collect();
         let cells = g.cells.iter().map(|&n| n as usize).product::<usize>();
@@ -751,8 +858,8 @@ impl SpawnFixture {
             offsets: &self.offsets,
             particles: &self.particles,
             energy: &self.energy,
-            faces: self.faces.each_ref().map(Vec::as_slice),
-            face_cells: FACE_CELLS,
+            faces: self.faces.arrays(),
+            face_cells: cell_dims(),
             solid: &self.solid,
         }
     }
@@ -763,7 +870,7 @@ impl SpawnFixture {
 }
 
 fn spawn_values(s: cpu::Spawn) -> Vec<(&'static str, f32)> {
-    let mut values = vec![
+    vec![
         ("capacity", s.capacity as f32),
         ("emitters", s.emitters as f32),
         ("seed", s.seed),
@@ -772,9 +879,7 @@ fn spawn_values(s: cpu::Spawn) -> Vec<(&'static str, f32)> {
         ("max_lifetime", s.max_lifetime),
         ("lifetime_variance", s.variance),
         ("dt", s.dt),
-    ];
-    values.extend(face_params());
-    values
+    ]
 }
 
 fn spawn_settings(capacity: u32) -> cpu::Spawn {
@@ -808,13 +913,7 @@ fn spawn_close(got: &WhitewaterSpawn, want: &WhitewaterSpawn, fixture: &SpawnFix
         velocity: [0.0; 3],
         id: 0,
     };
-    let v = cpu::sample_faces(
-        probe,
-        fixture.faces.each_ref().map(Vec::as_slice),
-        FACE_CELLS,
-        &g,
-    )
-    .velocity;
+    let v = cpu::sample_faces(probe, fixture.faces.arrays(), cell_dims(), &g).velocity;
     placed
         && (got.position_lifetime[3] - want.position_lifetime[3]).abs() <= 1e-5
         && (0..3).all(|a| (got.velocity[a] - v[a]).abs() <= 1e-5)
@@ -829,12 +928,14 @@ fn spawn_whitewater_matches_cpu() {
     let total = fixture.total();
     assert!(total > 300, "{total} spawns");
     let g = grid();
+    let rig = Rig::new(ORIGIN, NODES, H);
     let mut harness = Harness::new();
     let offsets = harness.array(&fixture.offsets, EMITTERS);
     let slot = harness.array(&fixture.particles, EMITTERS);
     let energy = harness.array(&fixture.energy, EMITTERS);
-    let faces = fixture.faces.each_ref().map(|f| harness.array(f, f.len()));
-    let solid = harness.array(&fixture.solid, fixture.solid.len());
+    let records = rig.cell_pool(&mut harness, &fixture.faces.records, FaceSample::default());
+    let solid = rig.node_pool(&mut harness, &fixture.solid, CANONICAL_SOLID);
+    let tiles = rig.tiles(&mut harness);
     for capacity in [total + 100, total / 3] {
         let settings = spawn_settings(capacity);
         let got: Vec<WhitewaterSpawn> = run(
@@ -844,13 +945,12 @@ fn spawn_whitewater_matches_cpu() {
                 ("offsets", offsets.0),
                 ("particles", slot.0),
                 ("energy", energy.0),
-                ("face_u", faces[0].0),
-                ("face_v", faces[1].0),
-                ("face_w", faces[2].0),
+                ("faces", records.0),
                 ("solid", solid.0),
+                ("tiles", tiles.0),
             ],
             capacity as usize,
-            &box_params(&spawn_values(settings)),
+            &rig.params(&spawn_values(settings)),
         );
         let (mut placed, mut dropped, mut edges) = (0, 0, 0);
         for (j, got) in got.iter().enumerate() {
@@ -884,8 +984,6 @@ fn spawn_whitewater_matches_cpu() {
     }
 }
 
-/// Spray outside FLIP's box, then foam, bubble or spray by depth, and no
-/// foam or spray away from air.
 /// A stretched live interval lengthens the emitter cylinder by the accepted
 /// duration. Compare every GPU spawn value with the CPU reference at 0.1 s.
 #[test]
@@ -903,12 +1001,14 @@ fn live_interval_whitewater_spawn_duration() {
         variance: 0.0,
     };
     let g = grid();
+    let rig = Rig::new(ORIGIN, NODES, H);
     let mut harness = Harness::new();
     let offsets = harness.array(&fixture.offsets, EMITTERS);
     let particles = harness.array(&fixture.particles, EMITTERS);
     let energy = harness.array(&fixture.energy, EMITTERS);
-    let faces = fixture.faces.each_ref().map(|f| harness.array(f, f.len()));
-    let solid = harness.array(&fixture.solid, fixture.solid.len());
+    let records = rig.cell_pool(&mut harness, &fixture.faces.records, FaceSample::default());
+    let solid = rig.node_pool(&mut harness, &fixture.solid, CANONICAL_SOLID);
+    let tiles = rig.tiles(&mut harness);
     let got: Vec<WhitewaterSpawn> = run(
         &mut harness,
         &mut SpawnWhitewater::new(),
@@ -916,13 +1016,12 @@ fn live_interval_whitewater_spawn_duration() {
             ("offsets", offsets.0),
             ("particles", particles.0),
             ("energy", energy.0),
-            ("face_u", faces[0].0),
-            ("face_v", faces[1].0),
-            ("face_w", faces[2].0),
+            ("faces", records.0),
             ("solid", solid.0),
+            ("tiles", tiles.0),
         ],
         capacity as usize,
-        &box_params(&spawn_values(settings)),
+        &rig.params(&spawn_values(settings)),
     );
     let fields = fixture.fields();
     let mut placed = 0;
@@ -943,10 +1042,13 @@ fn live_interval_whitewater_spawn_duration() {
     );
 }
 
+/// Spray in a cell no stored tile holds, then foam, bubble or spray by depth,
+/// and no foam or spray away from air.
 #[test]
 fn whitewater_type_matches_cpu() {
     let mut rng = Rng(0x7e9e_0001);
     let g = grid();
+    let rig = Rig::new(ORIGIN, NODES, H);
     let mut fixture = SpawnFixture::new(&mut rng);
     // Deep enough and closed enough that bubbles show: most cells liquid.
     fixture
@@ -959,7 +1061,7 @@ fn whitewater_type_matches_cpu() {
         .for_each(|k| *k = if rng.unit() < 0.15 { 0 } else { 1 });
     let spawns: Vec<WhitewaterSpawn> = (0..SLOTS)
         .map(|_| {
-            let p: [f32; 3] = std::array::from_fn(|a| ORIGIN[a] + g.size[a] * rng.unit());
+            let p = position(&mut rng, REACH);
             let lifetime = if rng.unit() < 0.1 {
                 0.0
             } else {
@@ -972,19 +1074,22 @@ fn whitewater_type_matches_cpu() {
             }
         })
         .collect();
-    let total = fixture.distance.len();
     let mut harness = Harness::new();
     let slot = harness.array(&spawns, SLOTS);
-    let (d, c) = (
-        harness.array(&fixture.distance, total),
-        harness.array(&fixture.kinds, total),
-    );
+    let d = rig.cell_pool(&mut harness, &fixture.distance, canonical_distance(H));
+    let c = rig.cell_pool(&mut harness, &fixture.kinds, CELL_AIR);
+    let tiles = rig.tiles(&mut harness);
     let got: Vec<WhitewaterSpawn> = run(
         &mut harness,
         &mut WhitewaterType::new(),
-        &[("spawns", slot.0), ("distance", d.0), ("cells", c.0)],
+        &[
+            ("spawns", slot.0),
+            ("distance", d.0),
+            ("cells", c.0),
+            ("tiles", tiles.0),
+        ],
         SLOTS,
-        &box_params(&[]),
+        &rig.params(&[]),
     );
     let mut seen = [0; 3];
     for (i, (got, spawn)) in got.iter().zip(&spawns).enumerate() {
@@ -1024,24 +1129,23 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
 
     let fixture = SpawnFixture::new(&mut Rng(0xf05e_0003));
     let g = grid();
+    let rig = Rig::new(ORIGIN, NODES, H);
     let capacity = fixture.total() + 64;
     let settings = cpu::Spawn {
         dt: 0.1,
         ..spawn_settings(capacity)
     };
     let values = spawn_values(settings);
-    let all = box_params(&values);
-    let cells = fixture.distance.len();
+    let all = rig.params(&values);
     let mut harness = Harness::new();
     let offsets = harness.array(&fixture.offsets, EMITTERS);
     let slot = harness.array(&fixture.particles, EMITTERS);
     let energy = harness.array(&fixture.energy, EMITTERS);
-    let faces = fixture.faces.each_ref().map(|f| harness.array(f, f.len()));
-    let solid = harness.array(&fixture.solid, fixture.solid.len());
-    let (d, c) = (
-        harness.array(&fixture.distance, cells),
-        harness.array(&fixture.kinds, cells),
-    );
+    let records = rig.cell_pool(&mut harness, &fixture.faces.records, FaceSample::default());
+    let solid = rig.node_pool(&mut harness, &fixture.solid, CANONICAL_SOLID);
+    let d = rig.cell_pool(&mut harness, &fixture.distance, canonical_distance(H));
+    let c = rig.cell_pool(&mut harness, &fixture.kinds, CELL_AIR);
+    let tiles = rig.tiles(&mut harness);
     let spawned: Vec<WhitewaterSpawn> = run(
         &mut harness,
         &mut SpawnWhitewater::new(),
@@ -1049,10 +1153,9 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
             ("offsets", offsets.0),
             ("particles", slot.0),
             ("energy", energy.0),
-            ("face_u", faces[0].0),
-            ("face_v", faces[1].0),
-            ("face_w", faces[2].0),
+            ("faces", records.0),
             ("solid", solid.0),
+            ("tiles", tiles.0),
         ],
         capacity as usize,
         &all,
@@ -1061,7 +1164,12 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
     let unfused: Vec<WhitewaterSpawn> = run(
         &mut harness,
         &mut WhitewaterType::new(),
-        &[("spawns", spawned_in.0), ("distance", d.0), ("cells", c.0)],
+        &[
+            ("spawns", spawned_in.0),
+            ("distance", d.0),
+            ("cells", c.0),
+            ("tiles", tiles.0),
+        ],
         capacity as usize,
         &all,
     );
@@ -1090,18 +1198,19 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
     let external = InputSource::External;
     let region = FusionRegion {
         nodes: vec![
-            member!(0, SpawnWhitewater, (0..7).map(external).collect()),
+            member!(0, SpawnWhitewater, (0..6).map(external).collect()),
             member!(
                 1,
                 WhitewaterType,
                 vec![
                     InputSource::Node(NodeInstanceId(0)),
+                    external(6),
                     external(7),
-                    external(8)
+                    external(5)
                 ]
             ),
         ],
-        num_external_inputs: 9,
+        num_external_inputs: 8,
         outputs: vec![(NodeInstanceId(1), "out".to_string())],
         in_place_alias: None,
         sampler_address_mode: "clamp",
@@ -1120,10 +1229,11 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
         "fused WGSL parses:\n{}",
         fused.wgsl
     );
+    let pool_values = rig.pool_values();
     let lookup = |name: &str| {
         values
             .iter()
-            .chain(&box_values())
+            .chain(&pool_values)
             .find(|(n, _)| *n == name)
             .map(|(_, v)| *v)
             .or(match name {
@@ -1151,15 +1261,7 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
             .create_compute_pipeline(&fused.wgsl, ENTRY, "whitewater-spawn-fused");
     let mut enc = harness.device.create_encoder("whitewater-spawn-fused");
     let externals = [
-        &offsets.1,
-        &slot.1,
-        &energy.1,
-        &faces[0].1,
-        &faces[1].1,
-        &faces[2].1,
-        &solid.1,
-        &d.1,
-        &c.1,
+        &offsets.1, &slot.1, &energy.1, &records.1, &solid.1, &tiles.1, &d.1, &c.1,
     ];
     let mut bindings = vec![GpuBinding::Bytes {
         binding: 0,

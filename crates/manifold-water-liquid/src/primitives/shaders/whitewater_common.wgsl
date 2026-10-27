@@ -1,11 +1,6 @@
-// Shared by the whitewater grid atoms.
-// The grid is the solid lattice read as cells: cells = nodes − 1 a side, cell
-// c at c.x + cells.x·(c.y + cells.y·c.z), its corners the solid nodes c..c+1.
-// Cell indexing is `ts_grid_index` / `ts_grid_coord` in `tile_grid.wgsl`.
-
-fn ww_on_border(c: vec3<u32>, cells: vec3<u32>) -> bool {
-    return any(c == vec3<u32>(0u)) || any(c + vec3<u32>(1u) == cells);
-}
+// Shared by the whitewater atoms. Their grid arrays live on the liquid step's
+// world tiles (`world_tiles_read.wgsl`): a cell array holds cell p's value at
+// its centre, a node array the value at cell p's low corner.
 
 // Corner `corner` of a cell: bit 0 x, bit 1 y, bit 2 z.
 fn ww_corner(corner: u32) -> vec3<u32> {
@@ -27,15 +22,12 @@ fn ww_face_step(n: u32) -> vec3<i32> {
     return step;
 }
 
-// Whether cell c lies in the grid; FLIP reads 0 (or solid) outside it.
-fn ww_in_grid(c: vec3<i32>, cells: vec3<u32>) -> bool {
-    return all(c >= vec3<i32>(0)) && all(c < vec3<i32>(cells));
-}
-
-// A scene position in grid cells from the grid's first node, the grid being
-// the box `center` ± `size`/2 over `cells`.
-fn ww_grid_position(p: vec3<f32>, center: vec3<f32>, size: vec3<f32>, cells: vec3<u32>) -> vec3<f32> {
-    return (p - (center - 0.5 * size)) * vec3<f32>(cells) / size;
+// A scene position in whitewater cells on the world tiles: world cell p
+// (centred on p·h) spans [p, p + 1), so a node array's values (cell p's low
+// corner) sit at whole numbers and a cell array's at half-integers, as on a
+// dense grid from its first node.
+fn ww_cell_position(x: vec3<f32>, h: f32) -> vec3<f32> {
+    return x / h + vec3<f32>(0.5);
 }
 
 // Stateless randomness: a 32-bit mix, and a

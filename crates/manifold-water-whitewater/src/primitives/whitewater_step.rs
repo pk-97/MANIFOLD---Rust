@@ -1,7 +1,8 @@
 //! `node.whitewater_step` — FLIP whitewater emission and lifecycle.
 //! GPU FLIP runs this stage once per liquid tick using solver particle phi.
 //! The liquid boundary captures the pool, IDs, counters and rendering arrays
-//! after each tick; the stage owns reusable scratch.
+//! after each tick; the stage owns reusable scratch. Every grid array lives on
+//! the liquid step's world tiles, read through its table.
 //!
 //! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
@@ -15,7 +16,6 @@ use super::energy_potential::{MAX_ENERGY, MIN_ENERGY};
 use super::extend_lattice::ExtendLattice;
 use super::keep_whitewater::KeepWhitewater;
 use super::lattice_curvature::LatticeCurvature;
-use super::pad_distance_lattice::{encode_pad_distance_lattice, prepare_pad_distance_lattice};
 use super::preserve_foam::PreserveFoam;
 use super::whitewater_influence::WhitewaterInfluence;
 use super::whitewater_obstacle_source::WhitewaterSource;
@@ -25,25 +25,23 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries};
+use manifold_node_engine::scene::world_tiles::{
+    READ_SIDE, SLOT_WORDS, lattice_origin, slot_row_word, table_entries,
+};
 use manifold_nodes_physics::force_lattice::ForceLatticeBinding;
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
-use manifold_water_liquid::fluid_particles::{FaceSample, MAX_BINS, bin_counts, bin_total};
-use manifold_water_liquid::grid::face_len;
-use manifold_water_liquid::primitives::face_sample_component::{
-    FaceSampleComponent, pool_tiles_wire, pooled_bytes, solver_origin_cell,
-};
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use manifold_water_liquid::primitives::particle_identity::{COUNT_OFFSET, IDENTITY_BYTES};
 use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
-    ParticleSorter, SortCount, SortJob, SortLabels, range_storage_bytes, whitewater_record_read,
+    ParticleSorter, SortCount, SortJob, SortLabels, key_storage_bytes, whitewater_record_read,
 };
+use manifold_water_liquid::primitives::whitewater_distance::{SurfaceDistance, scratch_bytes};
 use manifold_water_liquid::whitewater::{
-    DEFAULT_CAPACITY, KnownValue, MAX_CAPACITY, WhitewaterParticle, cell_total, face_offset,
-    grid_box, grid_cells, require_extended_faces,
+    DEFAULT_CAPACITY, KnownValue, MAX_CAPACITY, WhitewaterParticle, WhitewaterPool, whitewater_pool,
 };
 
 const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
@@ -55,14 +53,11 @@ const FUSED_ENTRIES: [(&str, &str); 5] = [
     ("ww_turbulence", "node.whitewater_step.turbulence"),
 ];
 
-/// Copies the pooled phi into the stage's dense face-cells lattice.
-const GATHER_DISTANCE_SHADER: &str = include_str!("shaders/gather_distance.wgsl");
-const GATHER_ENTRY: (&str, &str) = ("gather_distance", "node.whitewater_step.gather_distance");
-const UNPACK_LABEL: &str = "node.whitewater_step.unpack_faces";
-
-fn gather_source() -> String {
-    format!("{READ_SIDE}\n{GATHER_DISTANCE_SHADER}")
-}
+/// Restarts the influence of the pool slots the table gave to another tile.
+const RESTART_ENTRY: (&str, &str) = (
+    "restart_moved_influence",
+    "node.whitewater_step.restart_influence",
+);
 
 #[derive(Clone, Copy)]
 enum Fused {
@@ -82,10 +77,9 @@ impl Fused {
 fn fused_source() -> String {
     use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
     use manifold_water_liquid::grid::LIQUID_FACES;
-    use manifold_water_liquid::tile_storage::TILE_GRID;
     use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
     format!(
-        "{TILE_GRID}\n{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{FORCE_LATTICE}\n{WHITEWATER_FUSED_SHADER}"
+        "{READ_SIDE}\n{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{FORCE_LATTICE}\n{WHITEWATER_FUSED_SHADER}"
     )
 }
 
@@ -121,55 +115,34 @@ macro_rules! emitter_path {
     }};
 }
 
-/// `gather_distance.wgsl`'s uniform: the face cells, the pool's tiles, the
-/// world cell of the first face cell, the table's entries and the thread
-/// count, padded to 48 bytes.
+/// `whitewater_step.wgsl`'s influence restart uniform: the pool, the table's
+/// entries, the elements to visit (a slot's worth each) and the level a
+/// restarted element takes, padded to 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct GatherParams {
-    cells_x: u32,
-    cells_y: u32,
-    cells_z: u32,
+struct RestartParams {
     pool_tiles: u32,
-    cell_origin_x: i32,
-    cell_origin_y: i32,
-    cell_origin_z: i32,
-    table_entries: u32,
+    entries: u32,
     count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    base_level: f32,
 }
 
+/// The fused turbulence kernel's uniform, padded to 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TurbulenceParams {
-    face_cells_x: f32,
-    face_cells_y: f32,
-    face_cells_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
     cell_size: f32,
+    pool_tiles: f32,
     count: u32,
+    _pad0: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EmitParams {
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
-    face_cells_x: f32,
-    face_cells_y: f32,
-    face_cells_z: f32,
     cell_size: f32,
+    pool_tiles: f32,
+    bounds_lo_z: f32,
     seed: f32,
     epoch: f32,
     spray_speed: f32,
@@ -189,29 +162,17 @@ struct EmitParams {
     dt: f32,
     dust_enabled: f32,
     boundary_dust: f32,
+    _pad0: f32,
+    _pad1: f32,
 }
 
 impl EmitParams {
     fn new(frame: &StepFrame, dust: bool) -> Self {
         let s = &frame.shape;
-        let [center_x, center_y, center_z] = s.center;
-        let [size_x, size_y, size_z] = s.size;
-        let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
-        let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
         Self {
-            center_x,
-            center_y,
-            center_z,
-            size_x,
-            size_y,
-            size_z,
-            nodes_x,
-            nodes_y,
-            nodes_z,
-            face_cells_x,
-            face_cells_y,
-            face_cells_z,
-            cell_size: s.cell_size,
+            cell_size: s.pool.cell_size,
+            pool_tiles: s.pool.pool_tiles as f32,
+            bounds_lo_z: frame.bounds_lo[2],
             seed: if dust {
                 frame.seed + 104729.0
             } else {
@@ -239,6 +200,8 @@ impl EmitParams {
             dt: frame.dt,
             dust_enabled: f32::from(u8::from(frame.dust_emission)),
             boundary_dust: f32::from(u8::from(frame.boundary_dust)),
+            _pad0: 0.0,
+            _pad1: 0.0,
         }
     }
 }
@@ -247,18 +210,6 @@ impl EmitParams {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SpawnParams {
     capacity: f32,
-    face_cells_x: f32,
-    face_cells_y: f32,
-    face_cells_z: f32,
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
     seed: f32,
     epoch: f32,
     min_lifetime: f32,
@@ -269,28 +220,19 @@ struct SpawnParams {
     type_seed: f32,
     type_epoch: f32,
     dust: f32,
+    cell_size: f32,
+    pool_tiles: f32,
     count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
-    _pad3: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct LifecycleParams {
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
-    face_cells_x: f32,
-    face_cells_y: f32,
-    face_cells_z: f32,
+    bounds_lo_x: f32,
+    bounds_lo_y: f32,
+    bounds_lo_z: f32,
     gravity_x: f32,
     gravity_y: f32,
     gravity_z: f32,
@@ -310,34 +252,19 @@ struct LifecycleParams {
     force_lattices: f32,
     tick_index: f32,
     first_tick: f32,
+    cell_size: f32,
+    pool_tiles: f32,
     bubble_lifetime_modifier: f32,
     foam_lifetime_modifier: f32,
     spray_lifetime_modifier: f32,
     count: u32,
-    _pad0: u32,
 }
 
 impl SpawnParams {
     fn new(frame: &StepFrame, dust: bool) -> Self {
         let s = &frame.shape;
-        let [center_x, center_y, center_z] = s.center;
-        let [size_x, size_y, size_z] = s.size;
-        let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
-        let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
         Self {
             capacity: s.capacity as f32,
-            center_x,
-            center_y,
-            center_z,
-            size_x,
-            size_y,
-            size_z,
-            nodes_x,
-            nodes_y,
-            nodes_z,
-            face_cells_x,
-            face_cells_y,
-            face_cells_z,
             seed: if dust {
                 frame.seed + 104729.0
             } else {
@@ -352,11 +279,11 @@ impl SpawnParams {
             type_seed: if dust { 0.0 } else { frame.seed },
             type_epoch: if dust { 0.0 } else { frame.epoch as f32 },
             dust: f32::from(u8::from(dust)),
+            cell_size: s.pool.cell_size,
+            pool_tiles: s.pool.pool_tiles as f32,
             count: s.capacity,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
-            _pad3: 0,
         }
     }
 }
@@ -365,27 +292,15 @@ impl LifecycleParams {
     fn new(frame: &StepFrame, inputs: &StepInputs<'_>) -> Self {
         use super::{advect_whitewater as advect, age_whitewater as age};
         let s = &frame.shape;
-        let [center_x, center_y, center_z] = s.center;
-        let [size_x, size_y, size_z] = s.size;
-        let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
-        let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
+        let [bounds_lo_x, bounds_lo_y, bounds_lo_z] = frame.bounds_lo;
         let [gravity_x, gravity_y, gravity_z] = frame.gravity;
         let motion = inputs.motion.as_ref();
         let [field_nodes_x, field_nodes_y, field_nodes_z] =
             motion.map_or([2; 3], |m| m.fields.nodes).map(|n| n as f32);
         Self {
-            center_x,
-            center_y,
-            center_z,
-            size_x,
-            size_y,
-            size_z,
-            nodes_x,
-            nodes_y,
-            nodes_z,
-            face_cells_x,
-            face_cells_y,
-            face_cells_z,
+            bounds_lo_x,
+            bounds_lo_y,
+            bounds_lo_z,
             gravity_x,
             gravity_y,
             gravity_z,
@@ -405,11 +320,12 @@ impl LifecycleParams {
             force_lattices: motion.map_or(0.0, |m| m.fields.force_lattices as f32),
             tick_index: motion.map_or(0.0, |m| m.tick_index),
             first_tick: motion.map_or(0.0, |m| m.fields.first_tick as f32),
+            cell_size: s.pool.cell_size,
+            pool_tiles: s.pool.pool_tiles as f32,
             bubble_lifetime_modifier: age::BUBBLE_LIFETIME_MODIFIER,
             foam_lifetime_modifier: age::FOAM_LIFETIME_MODIFIER,
             spray_lifetime_modifier: age::SPRAY_LIFETIME_MODIFIER,
             count: s.capacity,
-            _pad0: 0,
         }
     }
 }
@@ -434,28 +350,29 @@ const PARTICLE: u64 = std::mem::size_of::<FluidParticle>() as u64;
 const POOL_SLOT: u64 = std::mem::size_of::<WhitewaterParticle>() as u64;
 const SPAWN: u64 = std::mem::size_of::<WhitewaterSpawn>() as u64;
 const KNOWN_VALUE: u64 = std::mem::size_of::<KnownValue>() as u64;
+const FACE_RECORD: u64 = std::mem::size_of::<FaceSample>() as u64;
+const SOURCE: u64 = std::mem::size_of::<WhitewaterSource>() as u64;
+/// Bytes of one pooled record of the substep face history: x, y, z and a zero.
+const HISTORY_RECORD: u64 = 16;
 
 manifold_node_engine::primitive! {
     name: WhitewaterStep,
     type_id: "node.whitewater_step",
-    purpose: "With distance and pool state wired from a liquid tick region, emit and advance exactly one tick and publish through captured boundary results. Emit from where the surface crests and the water moves fast, then step the pool (spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages, dies, and leaves when it strays or crowds its cell), each particle's radius its fade. Spawns past the pool's room are counted as pool full; emissions past Capacity in one frame are thinned evenly and counted.",
+    purpose: "With distance and pool state wired from a liquid tick region, emit and advance exactly one tick and publish through captured boundary results. Emit from where the surface crests and the water moves fast, then step the pool (spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages, dies, and leaves when it strays or crowds its cell), each particle's radius its fade. Every grid it reads or keeps lives on the liquid step's world tiles. Spawns past the pool's room are counted as pool full; emissions past Capacity in one frame are thinned evenly and counted.",
     inputs: {
         particles: Array(FluidParticle) required,
         identity: Array(u32) required,
         capacity: ScalarF32 optional,
         solid: Array(f32) required,
         obstacle_source: Array(WhitewaterSource) optional,
-        grid_bounds: Transform optional,
-        grid_nodes_x: ScalarF32 optional, grid_nodes_y: ScalarF32 optional, grid_nodes_z: ScalarF32 optional,
-        faces: Array(FaceSample) optional,
-        face_u: Array(f32) optional, face_v: Array(f32) optional, face_w: Array(f32) optional,
-        face_cells_x: ScalarF32 optional, face_cells_y: ScalarF32 optional, face_cells_z: ScalarF32 optional,
-        face_valid_layers: ScalarF32 optional,
+        faces: Array(FaceSample) required,
         distance: Array(f32) required,
         tiles: Array(u32) required,
         pool_tiles: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
         substep_schedule: Array(f32) optional,
-        substep_u: Array(f32) optional, substep_v: Array(f32) optional, substep_w: Array(f32) optional,
+        substep_faces: Array(f32) optional,
         substep_count: ScalarF32 optional,
         forces: Array(f32) optional, impulses: Array(f32) optional,
         field_nodes_x: ScalarF32 optional, field_nodes_y: ScalarF32 optional, field_nodes_z: ScalarF32 optional,
@@ -554,9 +471,14 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
+        float_param!("bounds_lo_x", "Bounds Min X", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_lo_y", "Bounds Min Y", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_lo_z", "Bounds Min Z", 0.0, -1.0e4, 1.0e4),
     ],
     depth_rule: Terminal,
-    composition_notes: "For per-tick GPU FLIP, wire the solver distance, tiles and pool_tiles from node.gpu_flip_step (its pooled phi and slot table), particles, identity (its identity_out, whose record counts the particles in use) and packed faces (or all three projected face components); wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
+    composition_notes: "For per-tick GPU FLIP, wire the solver's faces, distance, tiles, pool_tiles and cell_size from node.gpu_flip_step, particles and identity (its identity_out, whose record counts the particles in use), solid and obstacle_source from node.whitewater_obstacle_source, and substep_schedule, substep_faces and substep_count from its history; bounds_lo_x/y/z are the Bounds' low corner, where the force fields start. Wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
     examples: [],
     picker: { label: "Whitewater Step", category: Atom },
     summary: "Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU.",
@@ -570,76 +492,36 @@ manifold_node_engine::primitive! {
 }
 
 manifold_core::testkit_visible! {
-/// The grid and pool one frame's inputs describe, once every placement rule
-/// held. A change in any of it starts the pool over.
+/// The pool and capacity one frame's inputs describe, once every placement
+/// rule held. A change in either starts the stage's storage over.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct StepShape {
-    pub nodes: [u32; 3],
-    pub cells: [u32; 3],
-    pub face_cells: [u32; 3],
-    pub center: [f32; 3],
-    pub size: [f32; 3],
-    pub cell_size: f32,
-    /// The world cell of the face cells' first cell: the pooled fields are
-    /// read from there.
-    pub cell_origin: [i32; 3],
-    /// The pool sort's bins: one a cell.
-    pub bins: [u32; 3],
+    pub pool: WhitewaterPool,
     pub capacity: u32,
 }
 }
 
 impl StepShape {
-    /// Every placement rule, each a refusal by name: a lattice with cube
-    /// cells, a face grid centred on it and extended at least a layer, a
-    /// capacity in range.
-    pub fn new(
-        nodes: [u32; 3],
-        face_cells: [u32; 3],
-        face_valid_layers: f32,
-        bounds: Option<Transform>,
-        capacity: u32,
-    ) -> Result<Self, String> {
-        if nodes == [0; 3] {
-            return Err("the solid lattice is missing: grid_nodes_x/y/z are 0".into());
-        }
-        let cells = grid_cells(nodes)
-            .ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
-        let bounds = bounds.ok_or("the solid lattice is missing: grid_bounds is not wired")?;
-        let (origin, cell_size) = grid_box(bounds, nodes)?;
-        // The face cells sit centred in the grid, `pad` cells in; the step's
-        // pooled lattice is the face cells.
-        let [pad, ..] = face_offset(nodes, face_cells)?;
-        require_extended_faces(face_valid_layers)?;
+    /// Every placement rule, each a refusal by name: a capacity in range and
+    /// a pool one dispatch can count.
+    pub fn new(pool: WhitewaterPool, capacity: u32) -> Result<Self, String> {
         if !(1..=MAX_CAPACITY).contains(&capacity) {
             return Err(format!(
                 "capacity {capacity} is outside 1 to {MAX_CAPACITY}"
             ));
         }
-        let size: [f32; 3] = std::array::from_fn(|a| cells[a] as f32 * cell_size);
-        let center: [f32; 3] = std::array::from_fn(|a| origin[a] + 0.5 * size[a]);
-        let bins = bin_counts(size, cell_size);
-        if bin_total(bins) > MAX_BINS {
+        if pool.elements() > u64::from(u32::MAX) {
             return Err(format!(
-                "a {bins:?} sort grid is more than the {MAX_BINS} bins a search can index"
+                "a pool of {} tiles has more elements than one dispatch counts",
+                pool.pool_tiles
             ));
         }
-        let cell_origin = solver_origin_cell(origin, cell_size).map(|c| c + pad as i32);
-        Ok(Self {
-            nodes,
-            cells,
-            face_cells,
-            center,
-            size,
-            cell_size,
-            cell_origin,
-            bins,
-            capacity,
-        })
+        Ok(Self { pool, capacity })
     }
 
-    pub fn cell_count(&self) -> u64 {
-        cell_total(self.cells)
+    /// Elements of every grid array: 512 a tile and the canonical one.
+    pub fn elements(&self) -> u64 {
+        self.pool.elements()
     }
 
     /// Each population output: a particle per pool slot.
@@ -655,8 +537,9 @@ impl StepShape {
         u64::from(self.capacity) * SPAWN
     }
 
+    /// The pooled sort's ranges: one per element.
     pub fn range_bytes(&self) -> u64 {
-        range_storage_bytes(self.bins)
+        key_storage_bytes(self.elements())
     }
 
     /// The slot scan: keep flags over the pool, live flags over the spawns,
@@ -665,53 +548,26 @@ impl StepShape {
         4 * self.capacity as usize
     }
 
-    pub fn face_bytes(&self, axis: usize) -> u64 {
-        face_len(self.face_cells, axis) * 4
-    }
-
-    pub fn solid_bytes(&self) -> u64 {
-        cell_total(self.nodes) * 4
+    /// The table's slot rows (a tile and an entry per slot), the part of the
+    /// influence's owner the stage keeps between frames.
+    pub fn slot_row_bytes(&self) -> u64 {
+        u64::from(SLOT_WORDS) * 4 * u64::from(self.pool.pool_tiles)
     }
 
     /// Bytes the node holds for this shape and `particles` liquid particle
-    /// slots, axis-input scratch, scan, sort and output slots. Packed face
-    /// storage is added separately by unpacked_face_bytes. At pad
-    /// zero borrows distance fields instead of allocating them.
+    /// slots, grid fields, scan, sort and output slots.
     pub fn held_bytes(&self, particles: u64) -> u64 {
-        let cells = self.cell_count();
-        let distance_fields = if self.owns_distance_fields() { 8 } else { 0 };
-        let grid = cells * (distance_fields + 4 + 2 * KNOWN_VALUE + 4);
+        let elements = self.elements();
+        let grid = elements * (4 + 2 * KNOWN_VALUE + 4 + 2 * 4 + SOURCE) + self.slot_row_bytes();
         let per_particle =
             particles * (2 * PARTICLE + 4 + 4 + 4) + storage_words(particles as usize) as u64 * 4;
         let capacity = u64::from(self.capacity);
         let pool = self.spawn_bytes() + 2 * self.pool_bytes() + capacity * 4;
-        let sort = 2 * capacity * 4
-            + storage_words(bin_total(self.bins) as usize) as u64 * 4
-            + self.range_bytes();
+        let sort =
+            2 * capacity * 4 + storage_words(elements as usize) as u64 * 4 + self.range_bytes();
         let scan = storage_words(self.slot_scan_values()) as u64 * 4 + STATE_WORDS * 4;
         let outputs = 4 * self.population_bytes() + COUNT_WORDS as u64 * 4;
-        grid + per_particle
-            + self.raw_distance_bytes()
-            + pool
-            + sort
-            + scan
-            + outputs
-            + 6 * self.solid_bytes()
-            + manifold_water_liquid::primitives::whitewater_distance::scratch_bytes(self.face_cells)
-    }
-
-    /// The dense face-cells distance the stage gathers from the pooled phi.
-    pub fn raw_distance_bytes(&self) -> u64 {
-        cell_total(self.face_cells) * 4
-    }
-
-    /// Three adapter-sized arrays, including their zero tails, for packed input.
-    pub fn unpacked_face_bytes(&self) -> u64 {
-        3 * cell_total(self.face_cells.map(|n| n + 1)) * 4
-    }
-
-    fn owns_distance_fields(&self) -> bool {
-        face_offset(self.nodes, self.face_cells).expect("validated face placement")[0] > 0
+        grid + per_particle + pool + sort + scan + outputs + scratch_bytes(self.pool.pool_tiles)
     }
 }
 
@@ -728,6 +584,8 @@ pub(crate) struct StepFrame {
     pub epoch: u32,
     pub seed: f32,
     pub gravity: [f32; 3],
+    /// The Bounds' low corner, metres: where the force fields start.
+    pub bounds_lo: [f32; 3],
     pub wavecrest_emission: f32,
     pub turbulence_emission: f32,
     pub min_turbulence: f32,
@@ -749,7 +607,9 @@ pub(crate) struct StepFrame {
 manifold_core::testkit_visible! {
 pub(crate) struct MotionInputs<'a> {
     pub schedule: &'a GpuBuffer,
-    pub faces: [&'a GpuBuffer; 3],
+    /// The substeps' pooled faces, `count` rows of `pool_len` records of
+    /// four floats, on the table the step publishes.
+    pub faces: &'a GpuBuffer,
     pub count: u32,
     pub fields: ForceLatticeBinding<'a>,
     pub tick_index: f32,
@@ -761,69 +621,32 @@ pub(crate) struct MotionInputs<'a> {
 }
 
 manifold_core::testkit_visible! {
-#[derive(Clone, Copy)]
-pub(crate) enum FaceSource<'a> {
-    Packed(&'a GpuBuffer),
-    Axes([&'a GpuBuffer; 3]),
-}
-}
-
-/// Shared runtime/extent truth table. Packed input is unpacked before use;
-/// every floating-point kernel reads axes.
-pub(crate) fn packed_face_source(packed: bool, axes: [bool; 3]) -> Result<bool, &'static str> {
-    if packed && axes.iter().any(|&wired| wired) {
-        return Err("Whitewater Step: wire faces, or face_u, face_v and face_w, not both");
-    }
-    if packed {
-        return Ok(true);
-    }
-    match axes.into_iter().filter(|&wired| wired).count() {
-        3 => Ok(false),
-        0 => Err(
-            "Whitewater Step: wire faces, or face_u, face_v and face_w; neither source is wired",
-        ),
-        _ => Err("Whitewater Step: partial axes; wire all of face_u, face_v and face_w"),
-    }
-}
-
-impl<'a> FaceSource<'a> {
-    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-    fn axes(self) -> [&'a GpuBuffer; 3] {
-        match self {
-            Self::Axes(axes) => axes,
-            Self::Packed(_) => panic!("the atom oracle requires independently wired axis adapters"),
-        }
-    }
-}
-
-manifold_core::testkit_visible! {
 pub(crate) struct StepInputs<'a> {
     pub motion: Option<MotionInputs<'a>>,
     pub particles: &'a GpuBuffer,
     /// The particle identity: words 4-6 dispatch a pass over the particles in
     /// use, word 7 counts them. Slots at or past it are never read.
     pub identity: &'a GpuBuffer,
+    /// The solid distance, a pooled node array.
     pub solid: &'a GpuBuffer,
     pub obstacle_source: Option<&'a GpuBuffer>,
-    pub faces: FaceSource<'a>,
-    /// The step's pooled phi (`pool_len(pool_tiles)` floats) and, for packed
-    /// faces, its pooled records, both read through the slot table `tiles`.
+    /// The step's pooled faces (`pool_len` records), its pooled phi
+    /// (`pool_len` floats) and its table, all of the frame's pool.
+    pub faces: &'a GpuBuffer,
     pub distance: &'a GpuBuffer,
     pub tiles: &'a GpuBuffer,
-    pub pool_tiles: u32,
 }
 }
 
 /// Each input holds at least what the shape reads from it.
 fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), String> {
+    let elements = shape.elements();
     if let Some(m) = &inputs.motion {
         if m.schedule.size < u64::from(m.count) * 16 {
             return Err("substep schedule is too short".into());
         }
-        for axis in 0..3 {
-            if m.faces[axis].size < u64::from(m.count) * shape.face_bytes(axis) {
-                return Err("substep face history is too short".into());
-            }
+        if m.faces.size < u64::from(m.count) * elements * HISTORY_RECORD {
+            return Err("substep face history is too short".into());
         }
         if m.region_count > 0 && (m.regions.is_none() || m.shapes.is_none() || m.atlas.is_none()) {
             return Err("outflows require regions, shapes and atlas".into());
@@ -831,12 +654,9 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
     }
     if inputs
         .obstacle_source
-        .is_some_and(|source| source.size < shape.solid_bytes() * 4)
+        .is_some_and(|source| source.size < elements * SOURCE)
     {
-        return Err("obstacle source is shorter than the solid lattice".to_owned());
-    }
-    if inputs.pool_tiles == 0 {
-        return Err("the pool holds no tiles".into());
+        return Err("obstacle source is shorter than the pool's node array".to_owned());
     }
     if inputs.identity.size < IDENTITY_BYTES {
         return Err(format!(
@@ -844,45 +664,18 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
             inputs.identity.size
         ));
     }
-    let (pooled_face_bytes, table_bytes) = pooled_bytes(inputs.pool_tiles);
     let wanted = [
-        ("solid", inputs.solid, shape.solid_bytes()),
-        (
-            "liquid distance",
-            inputs.distance,
-            pool_len(inputs.pool_tiles) * 4,
-        ),
-        ("tiles", inputs.tiles, table_bytes),
+        ("solid", inputs.solid, elements * 4),
+        ("liquid distance", inputs.distance, elements * 4),
+        ("faces", inputs.faces, elements * FACE_RECORD),
+        ("tiles", inputs.tiles, shape.pool.table_bytes()),
     ];
     for (name, buffer, bytes) in wanted {
         if buffer.size < bytes {
             return Err(format!(
-                "{name} holds {} bytes, fewer than the {bytes} its grid reads",
+                "{name} holds {} bytes, fewer than the {bytes} its pool reads",
                 buffer.size
             ));
-        }
-    }
-    match inputs.faces {
-        FaceSource::Packed(faces) => {
-            let bytes = pooled_face_bytes;
-            if faces.size < bytes {
-                return Err(format!(
-                    "faces holds {} bytes, fewer than the {bytes} its grid reads",
-                    faces.size
-                ));
-            }
-        }
-        FaceSource::Axes(axes) => {
-            for (axis, buffer) in axes.into_iter().enumerate() {
-                let name = ["face_u", "face_v", "face_w"][axis];
-                let bytes = shape.face_bytes(axis);
-                if buffer.size < bytes {
-                    return Err(format!(
-                        "{name} holds {} bytes, fewer than the {bytes} its grid reads",
-                        buffer.size
-                    ));
-                }
-            }
         }
     }
     Ok(())
@@ -1087,21 +880,18 @@ fn atom_then<P: Primitive>(
 
 #[derive(Default)]
 struct Pipelines {
-    pad_distance: Option<GpuComputePipeline>,
     liquid: Option<GpuComputePipeline>,
     curvature: Option<GpuComputePipeline>,
     influence: Option<GpuComputePipeline>,
     extend: Option<GpuComputePipeline>,
     preserve: Option<GpuComputePipeline>,
     keep: Option<GpuComputePipeline>,
+    /// `whitewater_step.wgsl`'s influence restart.
+    restart: Option<GpuComputePipeline>,
     /// `whitewater_step.wgsl`, in [`Hand`] order.
     hand: Vec<GpuComputePipeline>,
     /// `whitewater_fused.wgsl` in [`FUSED_ENTRIES`] order.
     fused: Vec<GpuComputePipeline>,
-    /// The face component, once per axis, unpacks the pooled faces.
-    face_component: Option<GpuComputePipeline>,
-    /// `gather_distance.wgsl`.
-    gather: Option<GpuComputePipeline>,
 }
 
 #[derive(Clone, Copy)]
@@ -1164,16 +954,14 @@ const SPLIT_SCAN: ScanLabels = ScanLabels {
 
 impl Pipelines {
     fn prepare(&mut self, device: &GpuDevice) {
-        prepare_pad_distance_lattice(&mut self.pad_distance, device);
         standalone_pipeline::<LiquidCells>(&mut self.liquid, device);
         standalone_pipeline::<WhitewaterInfluence>(&mut self.influence, device);
         standalone_pipeline::<LatticeCurvature>(&mut self.curvature, device);
         standalone_pipeline::<ExtendLattice>(&mut self.extend, device);
         standalone_pipeline::<PreserveFoam>(&mut self.preserve, device);
         standalone_pipeline::<KeepWhitewater>(&mut self.keep, device);
-        standalone_pipeline::<FaceSampleComponent>(&mut self.face_component, device);
-        self.gather.get_or_insert_with(|| {
-            device.create_compute_pipeline(&gather_source(), GATHER_ENTRY.0, GATHER_ENTRY.1)
+        self.restart.get_or_insert_with(|| {
+            device.create_compute_pipeline(WHITEWATER_STEP_SHADER, RESTART_ENTRY.0, RESTART_ENTRY.1)
         });
         if self.fused.is_empty() {
             let source = fused_source();
@@ -1225,18 +1013,17 @@ fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, S
     }
 }
 
-/// The grid fields and the pool, sized from one [`StepShape`].
+/// The grid fields and the pool, sized from one [`StepShape`]. Every grid
+/// field holds one element per pool index.
 struct Fields {
-    unpacked_faces: Option<[GpuBuffer; 3]>,
-    /// The pooled phi gathered into the face-cells lattice, every run.
-    raw_distance: GpuBuffer,
-    distance: Option<GpuBuffer>,
-    surface: Option<GpuBuffer>,
     cells: GpuBuffer,
     curvature: [GpuBuffer; 2],
     turbulence: GpuBuffer,
     influence: [GpuBuffer; 2],
     empty_source: GpuBuffer,
+    /// Last frame's slot rows of the table (a tile and an entry per slot):
+    /// the influence outlives the frame, a slot may not.
+    slot_rows: GpuBuffer,
     typed: GpuBuffer,
     pools: [GpuBuffer; 2],
     order: GpuBuffer,
@@ -1247,24 +1034,18 @@ struct Fields {
 
 impl Fields {
     fn new(device: &GpuDevice, shape: &StepShape, scan: GpuBuffer) -> Result<Self, String> {
-        let cells = shape.cell_count();
+        let elements = shape.elements();
         let alloc = |bytes| allocate(device, bytes, false);
         Ok(Self {
-            unpacked_faces: None,
-            raw_distance: alloc(shape.raw_distance_bytes())?,
-            distance: shape
-                .owns_distance_fields()
-                .then(|| alloc(cells * 4))
-                .transpose()?,
-            surface: shape
-                .owns_distance_fields()
-                .then(|| alloc(cells * 4))
-                .transpose()?,
-            cells: alloc(cells * 4)?,
-            curvature: [alloc(cells * KNOWN_VALUE)?, alloc(cells * KNOWN_VALUE)?],
-            turbulence: alloc(cells * 4)?,
-            influence: [alloc(shape.solid_bytes())?, alloc(shape.solid_bytes())?],
-            empty_source: alloc(shape.solid_bytes() * 4)?,
+            cells: alloc(elements * 4)?,
+            curvature: [
+                alloc(elements * KNOWN_VALUE)?,
+                alloc(elements * KNOWN_VALUE)?,
+            ],
+            turbulence: alloc(elements * 4)?,
+            influence: [alloc(elements * 4)?, alloc(elements * 4)?],
+            empty_source: alloc(elements * SOURCE)?,
+            slot_rows: alloc(shape.slot_row_bytes())?,
             typed: alloc(shape.spawn_bytes())?,
             pools: [alloc(shape.pool_bytes())?, alloc(shape.pool_bytes())?],
             order: alloc(u64::from(shape.capacity) * 4)?,
@@ -1346,7 +1127,7 @@ pub(crate) struct Step {
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     reference: reference::Reference,
     pipelines: Pipelines,
-    surface_distance: manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance,
+    surface_distance: SurfaceDistance,
     shape: Option<StepShape>,
     fields: Option<Fields>,
     particles: ParticleScratch,
@@ -1380,10 +1161,6 @@ impl Step {
     }
 
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-    pub fn unpacked_faces_for_test(&self) -> Option<&[GpuBuffer; 3]> {
-        self.fields().unpacked_faces.as_ref()
-    }
-    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn turbulence_for_test(&self) -> &GpuBuffer {
         &self.fields().turbulence
     }
@@ -1392,7 +1169,7 @@ impl Step {
         pub(crate) fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64) -> Result<(), String> {
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             self.reference.reserve(device, particles as u32, shape.capacity)?;
-            self.surface_distance.reserve(device, shape.face_cells)?;
+            self.surface_distance.reserve(device, shape.pool.pool_tiles)?;
             if self.shape != Some(shape) {
                 self.shape = None;
                 self.fields = None;
@@ -1403,106 +1180,11 @@ impl Step {
                     .map_err(|error| format!("the pool and its scratch need {held} bytes: {error}"))?;
                 let scan = self.slot_scan.buffer(device, shape.slot_scan_values())?.clone();
                 self.fields = Some(Fields::new(device, &shape, scan)?);
-                self.sort.reserve_ranges(device, shape.bins)?;
+                self.sort.reserve_keys(device, shape.elements())?;
                 self.shape = Some(shape);
             }
             Ok(())
         }
-    }
-
-    manifold_core::testkit_visible! {
-        pub(crate) fn reserve_faces(&mut self, device: &GpuDevice, packed: bool) -> Result<(), String> {
-            let f = self.fields.as_mut().expect("whitewater fields allocated");
-            if packed {
-                if f.unpacked_faces.is_none() {
-                    let bytes = self.shape.expect("shape allocated").unpacked_face_bytes() / 3;
-                    f.unpacked_faces = Some([allocate(device, bytes, false)?, allocate(device, bytes, false)?, allocate(device, bytes, false)?]);
-                }
-            } else {
-                f.unpacked_faces = None;
-            }
-            Ok(())
-        }
-    }
-
-    fn face_axes<'a>(&'a self, faces: FaceSource<'a>) -> [&'a GpuBuffer; 3] {
-        match faces {
-            FaceSource::Axes(axes) => axes,
-            FaceSource::Packed(_) => self
-                .fields()
-                .unpacked_faces
-                .as_ref()
-                .expect("packed faces reserved")
-                .each_ref(),
-        }
-    }
-
-    manifold_core::testkit_visible! {
-        /// The face component, once per axis, over the whole adapter-sized
-        /// array: the zero tail past each axis's faces is written too.
-        pub(crate) fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, inputs: &StepInputs<'_>) {
-            if let FaceSource::Packed(packed) = inputs.faces {
-                let [nodes_x, nodes_y, nodes_z] = shape.face_cells.map(|n| (n + 4) as f32);
-                let [origin_x, origin_y, origin_z] = shape.cell_origin.map(|c| c as f32);
-                let count = (shape.unpacked_face_bytes() / 12) as u32;
-                for (axis, out) in self.face_axes(inputs.faces).into_iter().enumerate() {
-                    atom_then::<FaceSampleComponent>(
-                        enc,
-                        get(&self.pipelines.face_component),
-                        &[
-                            ("axis", axis as f32),
-                            ("nodes_x", nodes_x),
-                            ("nodes_y", nodes_y),
-                            ("nodes_z", nodes_z),
-                            ("pool_tiles", inputs.pool_tiles as f32),
-                            ("cell_origin_x", origin_x),
-                            ("cell_origin_y", origin_y),
-                            ("cell_origin_z", origin_z),
-                        ],
-                        &[packed, inputs.tiles, out],
-                        count,
-                        UNPACK_LABEL,
-                        if axis == 2 { Barrier::After } else { Barrier::None },
-                    );
-                }
-            }
-        }
-    }
-
-    /// The pooled phi through the slot table into the dense face-cells
-    /// lattice every distance reader of the stage reads.
-    fn gather_distance(
-        &self,
-        enc: &mut manifold_gpu::GpuEncoder,
-        shape: &StepShape,
-        inputs: &StepInputs<'_>,
-    ) {
-        let [cells_x, cells_y, cells_z] = shape.face_cells;
-        let count = cell_total(shape.face_cells) as u32;
-        let [cell_origin_x, cell_origin_y, cell_origin_z] = shape.cell_origin;
-        let params = GatherParams {
-            cells_x,
-            cells_y,
-            cells_z,
-            pool_tiles: inputs.pool_tiles,
-            cell_origin_x,
-            cell_origin_y,
-            cell_origin_z,
-            table_entries: table_entries(inputs.pool_tiles),
-            count,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-        };
-        dispatch(
-            enc,
-            get(&self.pipelines.gather),
-            bytemuck::bytes_of(&params),
-            &[inputs.tiles, inputs.distance, &self.fields().raw_distance],
-            count,
-            GATHER_ENTRY.1,
-            Barrier::After,
-        );
     }
 
     manifold_core::testkit_visible! {
@@ -1527,14 +1209,12 @@ impl Step {
             self.surface_distance.prepare(gpu.device);
             self.emission_scan.prepare(gpu.device);
             self.slot_scan.prepare(gpu.device);
-            self.sort.prepare(gpu.device);
+            self.sort.prepare_pooled(gpu.device);
             self.reserve(gpu.device, shape, inputs.particles.size / PARTICLE)?;
-            self.reserve_faces(gpu.device, matches!(inputs.faces, FaceSource::Packed(_)))?;
             self.outputs.ensure(gpu.device, &shape)?;
             self.current = 0;
             let enc = &mut *gpu.native_enc;
             if enabled {
-                self.unpack_faces(enc, &shape, inputs);
                 let f = self.fields();
                 enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
                 enc.copy_buffer_to_buffer(state, &f.state, STATE_WORDS * 4);
@@ -1629,6 +1309,53 @@ impl Step {
         self.hand(enc, Hand::SeedPool, params, bound);
     }
 
+    /// Influence belongs to world tiles, but the table hands out slots: every
+    /// element of a slot that holds a different tile than last frame, or was
+    /// free, starts over at the base level. `influence` is the array the
+    /// frame decays from; a free slot is never read, so is left as it is.
+    fn restart_moved_influence(
+        &self,
+        enc: &mut manifold_gpu::GpuEncoder,
+        frame: &StepFrame,
+        inputs: &StepInputs<'_>,
+        influence: &GpuBuffer,
+    ) {
+        let pool_tiles = frame.shape.pool.pool_tiles;
+        let params = RestartParams {
+            pool_tiles,
+            entries: table_entries(pool_tiles),
+            count: pool_tiles * 512,
+            base_level: frame.influence_base,
+        };
+        enc.dispatch_compute(
+            get(&self.pipelines.restart),
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 13,
+                    buffer: inputs.tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 14,
+                    buffer: &self.fields().slot_rows,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 15,
+                    buffer: influence,
+                    offset: 0,
+                },
+            ],
+            [params.count.div_ceil(256), 1, 1],
+            RESTART_ENTRY.1,
+        );
+        enc.compute_memory_barrier_buffers();
+    }
+
     /// FLIP's emitter: the surface's distance and curvature from the level
     /// set, each liquid particle's energy and wavecrest potential, how many
     /// it emits, the spawns, their kinds, appended to the pool. The emitters
@@ -1647,52 +1374,20 @@ impl Step {
         self.influence_epoch = Some(frame.epoch);
         let influence_previous = self.influence_current;
         let influence_next = 1 - influence_previous;
-        self.gather_distance(enc, s, inputs);
         let f = self.fields();
         let p = &self.pipelines;
-        let cells = s.cell_count() as u32;
-        let [nx, ny, nz] = s.nodes.map(|n| n as f32);
-        let nodes = [("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz)];
-        let label = |pass: &str| -> &'static str {
-            match pass {
-                "liquid" => "node.whitewater_step.liquid_cells",
-                "curvature" => "node.whitewater_step.curvature",
-                _ => "node.whitewater_step.extend_curvature",
-            }
-        };
+        let (pool_tiles, h) = (s.pool.pool_tiles, s.pool.cell_size);
+        let elements = s.elements() as u32;
+        let pooled = [("cell_size", h), ("pool_tiles", pool_tiles as f32)];
         // Resolve once for emit and lifecycle; the next encode overwrites
         // SurfaceDistance's current storage, so this view is never history.
-        let distance = &f.raw_distance;
-        let padding = face_offset(s.nodes, s.face_cells).expect("validated face placement")[0];
-        let (distance, surface) = if padding == 0 {
-            let surface = self.surface_distance.encode(enc, distance, s.cell_size);
-            enc.compute_memory_barrier_buffers();
-            (distance, surface)
-        } else {
-            let padded_distance = f.distance.as_ref().expect("padded distance allocated");
-            let padded_surface = f.surface.as_ref().expect("padded surface allocated");
-            encode_pad_distance_lattice(
-                enc,
-                get(&p.pad_distance),
-                distance,
-                padded_distance,
-                s.face_cells,
-                padding,
-                3.0 * s.cell_size,
-            );
-            let surface = self.surface_distance.encode(enc, distance, s.cell_size);
-            encode_pad_distance_lattice(
-                enc,
-                get(&p.pad_distance),
-                surface,
-                padded_surface,
-                s.face_cells,
-                padding,
-                5.0 * s.cell_size,
-            );
-            enc.compute_memory_barrier_buffers();
-            (padded_distance, padded_surface)
-        };
+        let distance = inputs.distance;
+        let surface = self
+            .surface_distance
+            .encode(enc, distance, inputs.tiles, pool_tiles, h);
+        if !reset_influence {
+            self.restart_moved_influence(enc, frame, inputs, &f.influence[influence_previous]);
+        }
         atom::<WhitewaterInfluence>(
             enc,
             get(&p.influence),
@@ -1700,7 +1395,7 @@ impl Step {
                 ("base_level", frame.influence_base),
                 ("decay_rate", frame.influence_decay),
                 ("dt", frame.dt),
-                ("cell_size", s.cell_size),
+                pooled[0],
                 ("reset", f32::from(u8::from(reset_influence))),
                 (
                     "source_present",
@@ -1713,37 +1408,48 @@ impl Step {
                 inputs.obstacle_source.unwrap_or(&f.empty_source),
                 &f.influence[influence_next],
             ],
-            cell_total(s.nodes) as u32,
+            elements,
             "node.whitewater_step.influence",
+        );
+        enc.copy_buffer_range(
+            inputs.tiles,
+            slot_row_word(table_entries(pool_tiles), 0) * 4,
+            &f.slot_rows,
+            0,
+            s.slot_row_bytes(),
         );
         // Liquid cells and curvature both read the distance; neither reads
         // the other, so one barrier after the pair.
         atom_then::<LiquidCells>(
             enc,
             get(&p.liquid),
-            &nodes,
-            &[distance, inputs.solid, &f.cells],
-            cells,
-            label("liquid"),
+            &pooled,
+            &[distance, inputs.solid, inputs.tiles, &f.cells],
+            elements,
+            "node.whitewater_step.liquid_cells",
             Barrier::None,
         );
         atom::<LatticeCurvature>(
             enc,
             get(&p.curvature),
-            &[nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
-            &[surface, &f.curvature[0]],
-            cells,
-            label("curvature"),
+            &pooled,
+            &[surface, inputs.tiles, &f.curvature[0]],
+            elements,
+            "node.whitewater_step.curvature",
         );
         let mut curvature = 0;
         for _ in 0..3 {
             atom::<ExtendLattice>(
                 enc,
                 get(&p.extend),
-                &nodes,
-                &[&f.curvature[curvature], &f.curvature[1 - curvature]],
-                cells,
-                label("extend"),
+                &pooled,
+                &[
+                    &f.curvature[curvature],
+                    inputs.tiles,
+                    &f.curvature[1 - curvature],
+                ],
+                elements,
+                "node.whitewater_step.extend_curvature",
             );
             curvature = 1 - curvature;
         }
@@ -1751,7 +1457,6 @@ impl Step {
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         let (reference, emitters) = (self.reference.enabled, self.reference.emitters(inputs));
         self.turbulence(enc, frame, inputs, distance);
-        let [u, v, w] = self.face_axes(inputs.faces);
         let fused = &p.fused;
         emitter_path!(
             reference,
@@ -1775,21 +1480,20 @@ impl Step {
                     &fused[pass.index()],
                     bytemuck::bytes_of(&EmitParams::new(frame, false)),
                     &[
+                        inputs.tiles,
                         inputs.particles,
-                        u,
-                        v,
-                        w,
+                        inputs.faces,
                         surface,
                         &f.cells,
                         &f.curvature[curvature],
                         &f.turbulence,
                         &f.influence[influence_next],
+                        inputs.identity,
                         sampled,
                         energy,
                         offsets,
                         unscaled,
                         wavecrest_bits,
-                        inputs.identity,
                     ],
                     inputs.identity,
                     FUSED_ENTRIES[pass.index()].1,
@@ -1886,26 +1590,28 @@ impl Step {
                 },
                 {
                     let pass = Fused::Dust;
+                    // Only the dust arrays are read here; the filler stands in
+                    // for the bindings this pass never touches.
+                    let filler = &f.state;
                     dispatch_particles(
                         enc,
                         &fused[pass.index()],
                         bytemuck::bytes_of(&EmitParams::new(frame, true)),
                         &[
+                            inputs.tiles,
                             unscaled,
-                            inputs.solid,
                             inputs.obstacle_source.expect("validated dust source"),
-                            &f.state,
-                            &f.state,
-                            &f.state,
-                            &f.state,
+                            filler,
+                            filler,
+                            inputs.solid,
                             &f.turbulence,
                             &f.influence[influence_next],
-                            &f.state,
+                            inputs.identity,
+                            filler,
                             dust_energy,
                             offsets,
-                            &f.state,
+                            filler,
                             wavecrest_bits,
-                            inputs.identity,
                         ],
                         inputs.identity,
                         FUSED_ENTRIES[pass.index()].1,
@@ -2003,26 +1709,19 @@ impl Step {
                     .turbulence_reference(enc, frame, inputs, distance, &f.turbulence);
             },
             {
-                let [u, v, w] = self.face_axes(inputs.faces);
                 let s = &frame.shape;
-                let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
-                let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
                 let params = TurbulenceParams {
-                    face_cells_x,
-                    face_cells_y,
-                    face_cells_z,
-                    nodes_x,
-                    nodes_y,
-                    nodes_z,
-                    cell_size: s.cell_size,
-                    count: s.cell_count() as u32,
+                    cell_size: s.pool.cell_size,
+                    pool_tiles: s.pool.pool_tiles as f32,
+                    count: s.elements() as u32,
+                    _pad0: 0,
                 };
                 let pass = Fused::Turbulence;
                 dispatch(
                     enc,
                     &self.pipelines.fused[pass.index()],
                     bytemuck::bytes_of(&params),
-                    &[&f.state, u, v, w, distance, &f.turbulence],
+                    &[inputs.tiles, &f.turbulence, inputs.faces, distance],
                     params.count,
                     FUSED_ENTRIES[pass.index()].1,
                     Barrier::After,
@@ -2056,7 +1755,6 @@ impl Step {
                 );
             },
             {
-                let [u, v, w] = self.face_axes(inputs.faces);
                 let pass = Fused::Spawn;
                 let label = if dust {
                     "node.whitewater_step.dust_spawn"
@@ -2068,17 +1766,16 @@ impl Step {
                     &self.pipelines.fused[pass.index()],
                     bytemuck::bytes_of(&SpawnParams::new(frame, dust)),
                     &[
+                        inputs.tiles,
                         sampled,
-                        u,
-                        v,
-                        w,
+                        inputs.faces,
                         surface,
                         &f.cells,
+                        inputs.solid,
                         offsets,
                         energy,
-                        inputs.solid,
-                        &f.typed,
                         inputs.identity,
+                        &f.typed,
                     ],
                     frame.shape.capacity,
                     label,
@@ -2093,8 +1790,9 @@ impl Step {
             .capture_particle(enc, &f.typed, usize::from(dust));
     }
 
-    /// The old a → b → a → b chain ends in b in both paths. Sort and all
-    /// current/preserve/compaction bookkeeping stay in tick.
+    /// Advect, retype and age `a` into `b`, in the fused kernel and through
+    /// the atoms alike. Sort and all current/preserve/compaction bookkeeping
+    /// stay in tick.
     fn lifecycle(
         &self,
         enc: &mut manifold_gpu::GpuEncoder,
@@ -2114,25 +1812,20 @@ impl Step {
             {
                 let motion = inputs.motion.as_ref();
                 let empty = &f.state;
-                let history = motion.map_or([empty; 3], |m| m.faces);
-                let [u, v, w] = self.face_axes(inputs.faces);
                 let pass = Fused::Lifecycle;
                 dispatch(
                     enc,
                     &self.pipelines.fused[pass.index()],
                     bytemuck::bytes_of(&LifecycleParams::new(frame, inputs)),
                     &[
+                        inputs.tiles,
                         a,
-                        u,
-                        v,
-                        w,
+                        inputs.faces,
                         surface,
                         &f.cells,
                         inputs.solid,
                         motion.map_or(empty, |m| m.schedule),
-                        history[0],
-                        history[1],
-                        history[2],
+                        motion.map_or(empty, |m| m.faces),
                         motion.and_then(|m| m.fields.forces).unwrap_or(empty),
                         motion.and_then(|m| m.fields.impulses).unwrap_or(empty),
                         b,
@@ -2168,60 +1861,38 @@ impl Step {
         let p = &self.pipelines;
         let cap = s.capacity;
         let (a, b) = (&f.pools[self.current], &f.pools[1 - self.current]);
-        let [nx, ny, nz] = s.nodes.map(|n| n as f32);
-        let [cx, cy, cz] = s.center;
-        let [sx, sy, sz] = s.size;
-        let [bx, by, bz] = s.bins.map(|n| n as f32);
+        let (pool_tiles, h) = (s.pool.pool_tiles, s.pool.cell_size);
+        let pooled = [("cell_size", h), ("pool_tiles", pool_tiles as f32)];
         let dt = frame.dt;
-        let place = [
-            ("center_x", cx),
-            ("center_y", cy),
-            ("center_z", cz),
-            ("size_x", sx),
-            ("size_y", sy),
-            ("size_z", sz),
-            ("nodes_x", nx),
-            ("nodes_y", ny),
-            ("nodes_z", nz),
-        ];
         self.lifecycle(enc, frame, inputs, surface, a, b);
         let motion = inputs.motion.as_ref();
         let empty = &f.state;
-        let bin_min: [f32; 3] = std::array::from_fn(|i| s.center[i] - 0.5 * s.size[i]);
         let job = SortJob {
             particles: b,
             read: whitewater_record_read(),
             capacity: cap,
             count: SortCount::Slots(cap),
-            bin_min,
-            inv_cell: 1.0 / s.cell_size,
-            bins: s.bins,
+            bin_min: lattice_origin(h),
+            inv_cell: 1.0 / h,
+            bins: [0; 3],
             sorted: None,
             order: Some(&f.order),
             gate: None,
         };
-        self.sort.encode(device, enc, &job, &SORT_LABELS)?;
+        self.sort
+            .encode_pooled(device, enc, &job, inputs.tiles, pool_tiles, &SORT_LABELS)?;
         let ranges = self.sort.ranges().expect("ranges reserved with the shape");
-        let bins = [("bins_x", bx), ("bins_y", by), ("bins_z", bz)];
         // Preserve foam off is the identity (FLIP skips the pass,
         // diffuseparticlesimulation.cpp:2124), so the aged pool `b` goes
         // straight to the keep and the compaction lands back in `a`; on, the
         // preserved pool is `a` and the compaction lands in `b`. Either way
         // `current` ends on the compacted pool.
         let (stepped, out) = if frame.preserve_foam {
-            let mut preserve = [("", 0.0); 12];
-            preserve[0] = ("enabled", 1.0);
-            preserve[1] = ("dt", dt);
-            preserve[2..8].copy_from_slice(&place[..6]);
-            preserve[8] = ("cell_size", s.cell_size);
-            preserve[9] = bins[0];
-            preserve[10] = bins[1];
-            preserve[11] = bins[2];
             atom::<PreserveFoam>(
                 enc,
                 get(&p.preserve),
-                &preserve,
-                &[b, b, ranges, &f.order, a],
+                &[("enabled", 1.0), ("dt", dt), pooled[0], pooled[1]],
+                &[b, b, ranges, &f.order, inputs.tiles, a],
                 cap,
                 "node.whitewater_step.preserve_foam",
             );
@@ -2229,10 +1900,7 @@ impl Step {
         } else {
             (b, a)
         };
-        let mut keep = [("", 0.0); 15];
-        keep[..9].copy_from_slice(&place[..9]);
-        keep[9..12].copy_from_slice(&bins);
-        keep[12..].copy_from_slice(&[
+        let keep = [
             (
                 "region_count",
                 motion.map_or(0.0, |m| m.region_count as f32),
@@ -2244,7 +1912,9 @@ impl Step {
                 }),
             ),
             ("tick_seconds", frame.dt),
-        ]);
+            pooled[0],
+            pooled[1],
+        ];
         atom::<KeepWhitewater>(
             enc,
             get(&p.keep),
@@ -2258,6 +1928,7 @@ impl Step {
                 motion.and_then(|m| m.regions).unwrap_or(empty),
                 motion.and_then(|m| m.shapes).unwrap_or(empty),
                 motion.and_then(|m| m.atlas).unwrap_or(empty),
+                inputs.tiles,
                 &f.scan,
             ],
             cap,
@@ -2335,9 +2006,8 @@ struct HandBuffers<'a> {
 }
 
 impl WhitewaterStep {
-    fn frame(ctx: &EffectNodeContext<'_, '_>) -> Result<StepFrame, String> {
+    fn frame(ctx: &EffectNodeContext<'_, '_>, pool: WhitewaterPool) -> Result<StepFrame, String> {
         let whole = |v: f32| v.round().max(0.0) as u32;
-        let triple = |names: [&str; 3]| names.map(|name| whole(ctx.scalar_or_param(name, 0.0)));
         let capacity = ctx
             .scalar_or_param("capacity", DEFAULT_CAPACITY as f32)
             .round();
@@ -2350,13 +2020,12 @@ impl WhitewaterStep {
         if !amount.is_finite() || amount < 0.0 {
             return Err(format!("Whitewater Amount {amount} must be 0 or more"));
         }
-        let shape = StepShape::new(
-            triple(["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]),
-            triple(["face_cells_x", "face_cells_y", "face_cells_z"]),
-            ctx.scalar_or_param("face_valid_layers", 0.0),
-            ctx.inputs.transform("grid_bounds"),
-            capacity as u32,
-        )?;
+        let shape = StepShape::new(pool, capacity as u32)?;
+        let bounds_lo = ["bounds_lo_x", "bounds_lo_y", "bounds_lo_z"]
+            .map(|name| ctx.scalar_or_param(name, 0.0));
+        if bounds_lo.iter().any(|v| !v.is_finite()) {
+            return Err("the Bounds' low corner must be finite".to_owned());
+        }
         let (min_t, max_t) = (
             ctx.param_f32("min_turbulence", 100.0),
             ctx.param_f32("max_turbulence", 200.0),
@@ -2378,6 +2047,7 @@ impl WhitewaterStep {
                 ctx.scalar_or_param("gravity", -9.81),
                 ctx.scalar_or_param("gravity_z", 0.0),
             ],
+            bounds_lo,
             wavecrest_emission: ctx.param_f32("wavecrest_emission", WAVECREST_RATE) * amount,
             dust_emission: matches!(
                 ctx.params.get("dust_emission"),
@@ -2415,7 +2085,7 @@ impl Primitive for WhitewaterStep {
         self.step.surface_distance.prepare(device);
         self.step.emission_scan.prepare(device);
         self.step.slot_scan.prepare(device);
-        self.step.sort.prepare(device);
+        self.step.sort.prepare_pooled(device);
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
@@ -2423,20 +2093,6 @@ impl Primitive for WhitewaterStep {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-        if let Some(axis) = ["proof_unpack_u", "proof_unpack_v", "proof_unpack_w"]
-            .iter()
-            .position(|&p| p == port)
-        {
-            assert!(self.step.reference.capture);
-            return self
-                .step
-                .fields
-                .as_ref()?
-                .unpacked_faces
-                .as_ref()
-                .map(|axes| &axes[axis]);
-        }
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         if port == "proof_turbulence" {
             assert!(
@@ -2471,66 +2127,44 @@ impl Primitive for WhitewaterStep {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let packed = match packed_face_source(
-            ctx.inputs.slot("faces").is_some(),
-            ["face_u", "face_v", "face_w"].map(|port| ctx.inputs.slot(port).is_some()),
-        ) {
-            Ok(packed) => packed,
+        let pool = match whitewater_pool(ctx, "Whitewater Step") {
+            Ok(pool) => pool,
             Err(refusal) => {
                 ctx.error(refusal);
                 return;
             }
         };
-        let frame = match Self::frame(ctx) {
+        let frame = match Self::frame(ctx, pool) {
             Ok(frame) => frame,
             Err(refusal) => {
                 ctx.error(format!("Whitewater Step: {refusal}"));
                 return;
             }
         };
-        let (Some(particles), Some(identity), Some(solid), Some(distance), Some(tiles)) = (
+        let (
+            Some(particles),
+            Some(identity),
+            Some(solid),
+            Some(faces),
+            Some(distance),
+            Some(tiles),
+        ) = (
             ctx.inputs.array("particles"),
             ctx.inputs.array("identity"),
             ctx.inputs.array("solid"),
+            ctx.inputs.array("faces"),
             ctx.inputs.array("distance"),
             ctx.inputs.array("tiles"),
-        ) else {
+        )
+        else {
             ctx.error(
-                "Whitewater Step: particles, identity, solid, distance and tiles must all be wired",
+                "Whitewater Step: particles, identity, solid, faces, distance and tiles must all be wired",
             );
             return;
         };
-        let Some(ParamValue::Float(pool_tiles)) = ctx.inputs.scalar("pool_tiles") else {
-            ctx.error("Whitewater Step: pool_tiles must be wired");
-            return;
-        };
-        let pool_tiles = match pool_tiles_wire(|_, _| pool_tiles) {
-            Ok(pool_tiles) => pool_tiles,
-            Err(refusal) => {
-                ctx.error(format!("Whitewater Step: {refusal}"));
-                return;
-            }
-        };
-        let faces = if packed {
-            let Some(faces) = ctx.inputs.array("faces") else {
-                ctx.error("Whitewater Step: faces buffer is unavailable");
-                return;
-            };
-            FaceSource::Packed(faces)
-        } else {
-            let [Some(u), Some(v), Some(w)] =
-                ["face_u", "face_v", "face_w"].map(|port| ctx.inputs.array(port))
-            else {
-                ctx.error("Whitewater Step: face_u, face_v and face_w buffers are unavailable");
-                return;
-            };
-            FaceSource::Axes([u, v, w])
-        };
         let motion = if let Some(schedule) = ctx.inputs.array("substep_schedule") {
-            let [Some(u), Some(v), Some(w)] =
-                ["substep_u", "substep_v", "substep_w"].map(|n| ctx.inputs.array(n))
-            else {
-                ctx.error("Whitewater Step: an accepted schedule requires all three substep face histories");
+            let Some(history) = ctx.inputs.array("substep_faces") else {
+                ctx.error("Whitewater Step: an accepted schedule requires the substep faces");
                 return;
             };
             let fields = match ForceLatticeBinding::read(
@@ -2547,7 +2181,7 @@ impl Primitive for WhitewaterStep {
             };
             Some(MotionInputs {
                 schedule,
-                faces: [u, v, w],
+                faces: history,
                 count: ctx.scalar_or_param("substep_count", 0.0) as u32,
                 fields,
                 tick_index: ctx.scalar_or_param("tick_index", 0.0),
@@ -2568,7 +2202,6 @@ impl Primitive for WhitewaterStep {
             faces,
             distance,
             tiles,
-            pool_tiles,
         };
         let (Some(pool), Some(state)) = (ctx.inputs.array("pool"), ctx.inputs.array("pool_state"))
         else {

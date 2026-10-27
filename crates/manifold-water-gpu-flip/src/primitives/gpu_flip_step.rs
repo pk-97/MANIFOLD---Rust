@@ -530,7 +530,8 @@ manifold_node_engine::primitive! {
         // The pool's capacity in tiles, `P`.
         pool_tiles: ScalarF32,
         substep_schedule: Array(f32),
-        substep_u: Array(f32), substep_v: Array(f32), substep_w: Array(f32),
+        // The substeps' pooled faces: slots · pool_len(pool_tiles) · 4 floats, all on `tiles`.
+        substep_faces: Array(f32),
         substep_count: ScalarF32,
         grid_bounds: Transform,
         grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,

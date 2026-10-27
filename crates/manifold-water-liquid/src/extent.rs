@@ -4,9 +4,8 @@
 //! this module supplies liquid-specific storage, lattice, and whitewater rules.
 
 use crate::fluid_particles::{CellRange, bin_counts, searched_bins};
-use crate::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
 use crate::lattice::LiquidLattice;
-use crate::whitewater::{KnownValue, cell_total, face_offset, grid_cells};
+use crate::whitewater::{KnownValue, grid_cells};
 use manifold_node_engine::exec::extent::{AtomExtent, Verdict};
 use manifold_node_engine::particles::FluidParticle;
 use std::mem::size_of;
@@ -42,40 +41,6 @@ pub fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
         u64::from(whole(x, "force_lattices", 0.0)) * force_bytes,
     )?;
     x.covers_if_bound("impulses", node_count * 16)
-}
-
-/// A frame's face grid storage: one array per wired axis over the domain's
-/// cells, the one-record hint otherwise. Provided before any check can stop
-/// the rule, since consumers size from it.
-pub fn provide_frame_faces(x: &mut AtomExtent<'_>, cells: [u32; 3], valid_layers: f32) {
-    let published = FACE_INPUT_PORTS.iter().all(|port| x.wired(port));
-    x.publish(
-        FACE_GRID_PORTS[6],
-        if published { valid_layers } else { 0.0 },
-    );
-    for axis in 0..3 {
-        let bytes = face_len(cells, axis) * 4;
-        if x.wired(FACE_INPUT_PORTS[axis]) {
-            x.provide(FACE_GRID_PORTS[axis], bytes);
-            x.hold(bytes);
-        } else {
-            x.provide(FACE_GRID_PORTS[axis], 4);
-        }
-    }
-    for (&port, n) in FACE_GRID_PORTS[3..6].iter().zip(cells) {
-        x.publish(port, n as f32);
-    }
-}
-
-/// Each wired face input holds its whole axis: the copy never publishes a
-/// partial grid.
-pub fn cover_frame_faces(x: &AtomExtent<'_>, cells: [u32; 3]) -> Result<(), Verdict> {
-    for (axis, port) in FACE_INPUT_PORTS.into_iter().enumerate() {
-        if x.wired(port) {
-            x.covers(port, face_len(cells, axis) * 4)?;
-        }
-    }
-    Ok(())
 }
 
 /// The sort's bin grid is searched with exactly the ranges it allocates, and
@@ -168,11 +133,12 @@ pub fn body_rows(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
 
 // ── Whitewater ──────────────────────────────────────────────────────────────
 //
-// The grid atoms dispatch over the cells of the solid lattice on their
-// nodes wires; the particle atoms over the smallest of their arrays, so each
-// rule asks that no output is the smaller one.
+// The grid atoms dispatch over the elements of the step's tile pool; the
+// particle atoms over the smallest of their arrays, so each rule asks that no
+// output is the smaller one.
 
-/// The whitewater grid's solid nodes and cells, as `grid_nodes` reads them.
+/// The lifecycle's dense grid: the solid lattice's nodes on its `names` wires
+/// (else params) and the cells between them.
 pub fn whitewater_lattice(
     x: &AtomExtent<'_>,
     names: [&str; 3],
@@ -186,24 +152,17 @@ pub fn whitewater_lattice(
     Ok((nodes, cells))
 }
 
-pub fn whitewater_grid(x: &AtomExtent<'_>) -> Result<(u64, u64), Verdict> {
-    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
-    Ok((cell_total(nodes), cell_total(cells)))
-}
-
-/// The face grid, placed centred in the whitewater grid, and each face
-/// array covering its axis.
-pub fn whitewater_faces(
-    x: &AtomExtent<'_>,
-    nodes: [u32; 3],
-    names: [&str; 3],
-) -> Result<[u32; 3], Verdict> {
-    let face_cells = names.map(|name| whole(x, name, 64.0));
-    face_offset(nodes, face_cells).map_err(Verdict::Refused)?;
-    for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
-        x.covers(port, face_len(face_cells, axis) * 4)?;
-    }
-    Ok(face_cells)
+/// A pooled whitewater atom's grid: the `tiles` covering the table of its
+/// `pool_tiles` pool, and the elements every grid array holds.
+pub fn whitewater_pool(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
+    let pool_tiles = whole(x, "pool_tiles", 1.0).max(1);
+    x.covers(
+        "tiles",
+        manifold_node_engine::scene::world_tiles::table_words(pool_tiles) * 4,
+    )?;
+    Ok(manifold_node_engine::scene::world_tiles::pool_len(
+        pool_tiles,
+    ))
 }
 
 pub const KNOWN_VALUE: u64 = size_of::<KnownValue>() as u64;
