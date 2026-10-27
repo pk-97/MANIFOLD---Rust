@@ -52,7 +52,60 @@ SCENES = {
         "no box at all: the water falls for ever, its cost should stay flat",
     ),
     "sea_wall": ("WaterSeaWallGpuFlip", {}, "the shipped Sea Wall: waves on a solid wall"),
+    "open_ground": (
+        "WaterDamBreakGpuFlip",
+        {"bounds": OPEN, "fill_height": {"type": "Float", "value": 0.0}},
+        "no box: the dam column runs out over a 14 m ground slab and pours off its edges",
+    ),
 }
+
+# The ground slab's side, metres: the tank floor made a Collider this wide.
+GROUND_SIDE = 14.0
+# Its depth, metres, so the slab's distance lattice holds it many cells deep.
+GROUND_DEPTH = 2.0
+
+
+def open_ground(graph: dict):
+    """The tank's floor as a Fixed body in a Physics World, as the scene
+    compiler makes a Collider, widened to GROUND_SIDE; the tank walls are not
+    drawn and the camera stands back to see the slab."""
+    nodes = {node.get("nodeId"): node for node in graph["nodes"]}
+    floor = nodes["floor_transform"]["params"]
+    floor["scale_x"]["value"] = GROUND_SIDE
+    floor["scale_z"]["value"] = GROUND_SIDE
+    # A thick slab, its top where the tank floor's was.
+    top = floor["pos_y"]["value"] + 0.5 * floor["scale_y"]["value"]
+    floor["scale_y"]["value"] = GROUND_DEPTH
+    floor["pos_y"]["value"] = top - 0.5 * GROUND_DEPTH
+    camera = nodes["camera"]["params"]
+    camera["distance"]["value"] = 17.0
+    camera["tilt"]["value"] = 0.55
+    camera["look_y"]["value"] = 0.0
+    walls = {nodes[name]["id"] for name in ["rear_object", "left_object", "right_object"]}
+    floor_object = nodes["floor_object"]["id"]
+    graph["wires"] = [
+        wire
+        for wire in graph["wires"]
+        if wire["fromNode"] not in walls
+        and not (wire["toNode"] == floor_object and wire["toPort"] == "transform")
+    ]
+    body, world = (max(node["id"] for node in graph["nodes"]) + 1 + i for i in range(2))
+    graph["nodes"] += [
+        {"id": body, "nodeId": "ground_body", "typeId": "node.rigid_body",
+         "params": {"motion": {"type": "Enum", "value": 0}}},
+        {"id": world, "nodeId": "ground_world", "typeId": "node.physics_world",
+         "params": {"bodies": {"type": "Int", "value": 1}}},
+    ]
+    wire = lambda a, out, b, into: {"fromNode": a, "fromPort": out, "toNode": b, "toPort": into}
+    graph["wires"] += [
+        wire(nodes["floor_transform"]["id"], "transform", body, "transform"),
+        wire(nodes["floor_mesh"]["id"], "source", body, "source"),
+        wire(body, "body", world, "body_0"),
+        wire(world, "pose_0", floor_object, "transform"),
+    ]
+
+
+DRESS = {"open_ground": open_ground}
 
 
 def scene_graph(preset: str, params: dict) -> dict:
@@ -104,11 +157,14 @@ def build(out: Path):
         with zipfile.ZipFile(path) as z:
             entries = {info.filename: z.read(info.filename) for info in z.infolist()}
         project = json.loads(entries["project.json"])
+        graph = scene_graph(preset, params)
+        if name in DRESS:
+            DRESS[name](graph)
         project["projectName"] = name
         project["timeline"]["layers"][0]["genParams"] = {
             "generatorType": preset,
             "params": {},
-            "graph": scene_graph(preset, params),
+            "graph": graph,
         }
         entries["project.json"] = json.dumps(project).encode()
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
