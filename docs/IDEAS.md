@@ -94,9 +94,6 @@ A GPU material solver for sand, snow, goo and lava, so these can play as instrum
 ### Cloth and rope simulation
 Lets cloth and ropes swing and drape live in the scene, and could move with the beat. Nothing solves cloth or rope motion yet.
 
-### Matter's tick beside the render
-Lets the Matter solver's next tick run on the second GPU queue while the frame renders, as the GPU FLIP water already does, which could hide most of the drawing behind the tick (Matter Dam Break: about 36 ms of tick and 19 ms of drawing a frame). Already built: the overlap itself, which engages when every reader of the tick publishes only finished frames. Still open: `node.matter_frame` showing only frames the GPU has finished (it writes an A/B ring this frame's render reads), and a timing run that counts Matter's ticks.
-
 ### Replay recorded GPU work every frame
 Records the GPU work of a repeated section once and replays it each frame, cutting the CPU cost of repeated steps and leaving more room in each frame. Already built: part of it is on the main line. The fluid step is still open.
 
