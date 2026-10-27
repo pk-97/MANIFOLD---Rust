@@ -1,8 +1,10 @@
 //! Buffer extent rule owned by this node.
 use crate::primitives::gpu_flip_bodies::held_bytes as body_pass_bytes;
 use crate::primitives::gpu_flip_pressure::scratch_bytes as pressure_scratch_bytes;
-use crate::primitives::gpu_flip_step::history_slots;
 use crate::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
+use crate::primitives::gpu_flip_step::{
+    growth_ceiling, history_slots, read_closed_faces, read_open_faces,
+};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::bodies::LiquidBody;
@@ -18,8 +20,12 @@ use std::mem::size_of;
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("identity", IDENTITY_BYTES)?;
     x.covers_if_bound("identity_out", IDENTITY_BYTES)?;
-    let pool = pool_tiles_wire(|name, default| x.scalar(name, default))
-        .map_err(|reason| Verdict::Refused(format!("GPU FLIP Step: {reason}")))?;
+    let refused = |reason: String| Verdict::Refused(format!("GPU FLIP Step: {reason}"));
+    let start = pool_tiles_wire(|name, default| x.scalar(name, default)).map_err(refused)?;
+    let walls = read_closed_faces(x.scalar("closed_faces", 0.0)).map_err(refused)?;
+    let open = read_open_faces(x.scalar("open_faces", 0.0)).map_err(refused)?;
+    // The most the pool can grow to.
+    let pool = growth_ceiling(start, walls, open);
     x.provide("faces", pool_len(pool) * size_of::<FaceSample>() as u64);
     x.provide("distance", pool_len(pool) * 4);
     x.provide("tiles", table_words(pool) * 4);

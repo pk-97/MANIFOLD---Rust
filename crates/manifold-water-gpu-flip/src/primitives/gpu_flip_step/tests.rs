@@ -1,4 +1,5 @@
 use super::*;
+use manifold_water_liquid::bounds::ALL_FACES;
 use manifold_water_liquid::tile_storage::TILE_CELLS;
 
 /// A live tick encodes the substeps the retired speed asks for at the CFL,
@@ -28,43 +29,74 @@ fn live_steps_follow_the_retired_speed() {
 /// pool only grows, past two thirds or short, and never past the ceiling.
 #[test]
 fn the_pool_fits_the_water_then_only_grows() {
-    assert_eq!(next_pool(2744, None, None), (2744, false));
+    assert_eq!(next_pool(2744, 2744, None, None), (2744, false));
     assert_eq!(
-        next_pool(2744, Some((2744, false)), Some((0, false))),
+        next_pool(2744, 2744, Some((2744, false)), Some((0, false))),
         (2744, false)
     );
     assert_eq!(
-        next_pool(2744, Some((2744, false)), Some((640, false))),
+        next_pool(2744, 2744, Some((2744, false)), Some((640, false))),
         (1280, true)
     );
     // A tank whose fill holds most of the ceiling stays at the ceiling.
     assert_eq!(
-        next_pool(2744, Some((2744, false)), Some((2000, false))),
+        next_pool(2744, 2744, Some((2744, false)), Some((2000, false))),
         (2744, true)
     );
     assert_eq!(
-        next_pool(2744, Some((1280, true)), Some((853, false))),
+        next_pool(2744, 2744, Some((1280, true)), Some((853, false))),
         (1280, true)
     );
     assert_eq!(
-        next_pool(2744, Some((1280, true)), Some((854, false))),
+        next_pool(2744, 2744, Some((1280, true)), Some((854, false))),
         (1792, true)
     );
     // Water drains: the fitted pool keeps its room for the next fill.
     assert_eq!(
-        next_pool(2744, Some((1792, true)), Some((10, false))),
+        next_pool(2744, 2744, Some((1792, true)), Some((10, false))),
         (1792, true)
     );
-    assert_eq!(next_pool(2744, Some((1792, true)), None), (1792, true));
     assert_eq!(
-        next_pool(2744, Some((1792, true)), Some((10, true))),
+        next_pool(2744, 2744, Some((1792, true)), None),
+        (1792, true)
+    );
+    assert_eq!(
+        next_pool(2744, 2744, Some((1792, true)), Some((10, true))),
         (2744, true)
     );
     // A box made smaller takes the pool down with it.
     assert_eq!(
-        next_pool(1024, Some((1792, true)), Some((300, false))),
+        next_pool(1024, 1024, Some((1792, true)), Some((300, false))),
         (1024, true)
     );
+    // With nothing bounding the water the first tick runs on the domain's
+    // pool and the pool grows past it as the water spreads.
+    assert_eq!(next_pool(2744, 5000, None, None), (2744, false));
+    assert_eq!(
+        next_pool(2744, 5000, Some((2744, true)), Some((2600, true))),
+        (5000, true)
+    );
+}
+
+/// A Wall or an Open face keeps the pool to the domain's; with neither the
+/// water may grow its pool to what the budget buys, never below the domain's.
+#[test]
+fn only_unbounded_water_grows_past_the_domain_pool() {
+    let budget = pool_capacity(
+        u64::MAX,
+        u64::from(TILE_CELLS) * pooled_bytes_per_cell(),
+        POOL_BUDGET_BYTES,
+    );
+    assert!(budget > 2744, "the budget buys {budget} tiles");
+    for (walls, open) in [(ALL_FACES, 0), (0, ALL_FACES), (0b100, 0b111011), (0, 0b1)] {
+        assert_eq!(
+            growth_ceiling(2744, walls, open),
+            2744,
+            "{walls:b} {open:b}"
+        );
+    }
+    assert_eq!(growth_ceiling(2744, 0, 0), budget);
+    assert_eq!(growth_ceiling(budget + 1, 0, 0), budget + 1);
 }
 
 /// Max Iterations rounds and is refused outside 1..=MAX_ITERATIONS or
@@ -294,7 +326,6 @@ fn band_layers_match_configured_engine_cfl() {
 /// table's ring on both sides; and what the budget buys when it is short.
 #[test]
 fn pool_size_follows_the_box_the_walls_and_the_budget() {
-    use manifold_water_liquid::bounds::ALL_FACES;
     let ring = step_reach().ring_max;
     let h = 0.0625_f32;
     for size in [[0.5_f32, 0.5, 0.5], [0.81, 0.5, 1.97], [4.0, 2.53, 0.6]] {

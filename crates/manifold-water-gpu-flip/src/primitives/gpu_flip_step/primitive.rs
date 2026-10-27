@@ -71,15 +71,32 @@ impl Primitive for GpuFlipStep {
             ctx.error(format!("{NAME}: cell_size is {h}; it must be positive"));
             return;
         }
-        // The domain's pool is the ceiling; the step runs on what its water holds.
-        let ceiling = match pool_tiles_wire(|name, default| ctx.scalar_or_param(name, default)) {
+        // The domain's pool is where the step starts; it runs on what its
+        // water holds, up to the growth ceiling.
+        let start = match pool_tiles_wire(|name, default| ctx.scalar_or_param(name, default)) {
             Ok(pool) => pool,
             Err(error) => {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
         };
-        let next = self.state.next_pool(ceiling);
+        let wall_faces = match read_closed_faces(ctx.scalar_or_param("closed_faces", 0.0)) {
+            Ok(mask) => mask,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        };
+        let open_faces = match read_open_faces(ctx.scalar_or_param("open_faces", 0.0)) {
+            Ok(mask) => mask,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        };
+        let next = self
+            .state
+            .next_pool(start, tiles::growth_ceiling(start, wall_faces, open_faces));
         let (pool, narrow_band) = self
             .state
             .narrow_band
@@ -152,20 +169,6 @@ impl Primitive for GpuFlipStep {
                 }
             };
         let ghost = ctx.scalar_or_param("ghost_fluid", 1.0) > 0.5;
-        let wall_faces = match read_closed_faces(ctx.scalar_or_param("closed_faces", 0.0)) {
-            Ok(mask) => mask,
-            Err(error) => {
-                ctx.error(format!("{NAME}: {error}"));
-                return;
-            }
-        };
-        let open_faces = match read_open_faces(ctx.scalar_or_param("open_faces", 0.0)) {
-            Ok(mask) => mask,
-            Err(error) => {
-                ctx.error(format!("{NAME}: {error}"));
-                return;
-            }
-        };
         let [bounds_lo, bounds_hi] = [
             ["bounds_lo_x", "bounds_lo_y", "bounds_lo_z"],
             ["bounds_hi_x", "bounds_hi_y", "bounds_hi_z"],
@@ -198,10 +201,10 @@ impl Primitive for GpuFlipStep {
             ));
             return;
         }
-        // Refused against the ceiling, as the domain refuses it; a pool that
-        // follows the water may hold fewer levels, and the gradient runs on
-        // the deepest it has.
-        let level = match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), ceiling) {
+        // Refused against the domain's pool, as the domain refuses it; a pool
+        // that follows the water may hold fewer levels, and the gradient runs
+        // on the deepest it has.
+        let level = match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), start) {
             Ok(level) => level.min(max_solve_level(pool)),
             Err(error) => {
                 ctx.error(format!("{NAME}: {error}"));

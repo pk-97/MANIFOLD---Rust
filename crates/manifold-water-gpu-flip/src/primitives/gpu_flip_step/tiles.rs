@@ -90,21 +90,39 @@ pub(crate) fn pool_tiles(cells: [u32; 3], walls: u32) -> u32 {
 }
 }
 
-/// The pool a tick runs on and whether it is fitted yet, from `ceiling`
-/// ([`pool_tiles`], every tile the box can touch), the last tick's pool and
-/// fit (`None` before the first tick) and its table's late read (held
-/// tiles, short). The first tick runs on the ceiling, so any fill fits; the
-/// first read that holds water fits the pool to it, and from then on it
-/// only grows, so a restart's fill finds the room the first one had. Never
-/// past the ceiling. The passes launch over the whole pool, so a pool that
-/// follows the water costs what the water does.
+/// The most tiles the step's pool may grow to, from the domain's pool
+/// ([`pool_tiles`], every tile the Bounds box can touch) and the Wall and
+/// Open faces: the domain's pool while a face bounds the water, and with
+/// neither (Bounds off) what the pool budget buys, since nothing bounds
+/// where the water goes.
+pub(crate) fn growth_ceiling(domain_pool: u32, walls: u32, open: u32) -> u32 {
+    if walls | open != 0 {
+        return domain_pool;
+    }
+    let budget = pool_capacity(
+        u64::MAX,
+        u64::from(TILE_CELLS) * pooled_bytes_per_cell(),
+        POOL_BUDGET_BYTES,
+    );
+    domain_pool.max(budget)
+}
+
+/// The pool a tick runs on and whether it is fitted yet, from the domain's
+/// pool `start`, the [`growth_ceiling`], the last tick's pool and fit
+/// (`None` before the first tick) and its table's late read (held tiles,
+/// short). The first tick runs on the domain's pool, so a fill in the box
+/// fits; the first read that holds water fits the pool to it, and from then
+/// on it only grows, so a restart's fill finds the room the first one had.
+/// Never past the ceiling. The passes launch over the whole pool, so a pool
+/// that follows the water costs what the water does.
 pub(super) fn next_pool(
+    start: u32,
     ceiling: u32,
     last: Option<(u32, bool)>,
     read: Option<(u32, bool)>,
 ) -> (u32, bool) {
     let (pool, fitted) = match (last, read) {
-        (None, _) => (ceiling, false),
+        (None, _) => (start, false),
         (Some((pool, true)), Some((held, short))) => {
             (grown_pool(pool, held, short).unwrap_or(pool), true)
         }
