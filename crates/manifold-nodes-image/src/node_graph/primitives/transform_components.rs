@@ -31,7 +31,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "Use it where a GPU atom needs a box or pose as scalar params: a fluid lattice's grid_bounds (position = centre, scale = full size) into the surface atoms' center_x/y/z and size_x/y/z, or an object's position into a field. Wire only the components you need. To read where a scene object sits inside a group, wire the object's transform into `transform`, its parent_transform's producer into `parent` and the group's transform into `frame`.",
+    composition_notes: "Use it where a GPU atom needs a box or pose as scalar params: a box's centre and full size, or an object's position into a field. Wire only the components you need. To read where a scene object sits inside a group, wire the object's transform into `transform`, its parent_transform's producer into `parent` and the group's transform into `frame`.",
     examples: [],
     picker: { label: "Transform Components", category: Driver },
     summary: "Breaks a transform into its separate position, rotation and scale numbers so each can drive something else.",
