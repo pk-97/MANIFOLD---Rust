@@ -33,7 +33,7 @@ use super::gpu_flip_step::{
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
-    CELL_SIZE_METRES, DEFAULT_CELL_SIZE, FluidDomainLayout, domain_layout,
+    CELL_SIZE_METRES, DEFAULT_CELL_SIZE, FluidDomainLayout, domain_layout, unbounded_seed,
 };
 use manifold_core::liquid_setup::{
     ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height,
@@ -51,9 +51,9 @@ use manifold_physics::tick_samples::TickSamples;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::bounds::{
-    ALL_FACES, NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, closed_faces,
-    face_masks, kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs,
-    within_key_span,
+    ALL_FACES, NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about,
+    closed_faces, face_masks, kill_height, lowest_source, on_world_cells, union_box,
+    wall_velocity_outputs, within_key_span,
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
@@ -226,10 +226,12 @@ manifold_core::testkit_visible! {
 /// The domain box and fill from the domain's params and wires
 /// (`read` is `scalar_or_param`, with the Bounds switch as 0 or 1: see
 /// [`geometry_read`]), the grid box moved onto whole world cells
-/// ([`on_world_cells`]) and the Bounds box as placed. Refused by name, in this
-/// order: a solve level the pool lacks, a Fill Height above 0 with Bounds
-/// off, a fill that is not a usable shape, and a fill past the count a wire
-/// carries exactly.
+/// ([`on_world_cells`]) and the Bounds box as placed. With Bounds off the
+/// grid starts from the Fill's own box, else the hidden one
+/// ([`unbounded_seed`]) and Fill Height, which fills the Bounds box from its
+/// floor, is 0. Refused by name, in this order: a solve level the pool
+/// lacks, a fill that is not a usable shape, and a fill past the count a
+/// wire carries exactly.
 pub fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
@@ -239,7 +241,16 @@ pub fn gpu_flip_geometry(
     let cell_size = read("cell_metres", DEFAULT_CELL_SIZE);
     let domain_size = read("domain_size", 4.0);
     let world = domain.map(manifold_water_liquid::world_pose::world_domain_box);
-    let layout = on_world_cells(domain_layout(world.map(Into::into), domain_size, f64::from(cell_size))?);
+    let seed = match bounds {
+        true => world.map(Into::into),
+        false => Some(unbounded_seed(
+            world.map(Into::into),
+            domain_size,
+            initial_fill.as_ref().map(|volume| box_about(volume.pos, volume.scale)),
+            f64::from(cell_size),
+        )),
+    };
+    let layout = on_world_cells(domain_layout(seed, domain_size, f64::from(cell_size))?);
     let bounds_box = match world {
         Some(pose) => box_about(pose.pos, pose.scale),
         // No Water item: the cube `domain_layout` places, centred in X/Z with
@@ -250,10 +261,7 @@ pub fn gpu_flip_geometry(
     let solve_level = read_solve_level(read("solve_level", 0.0), pool_tiles(layout.cells, wall_faces)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let sheet_fill_rate = read_sheet_fill_rate(read("sheet_fill_rate", 0.0)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
-    let fill_height = read("fill_height", DEFAULT_FILL_HEIGHT);
-    if !bounds && fill_height > 0.0 {
-        return Err("GPU FLIP: Fill Height fills the Bounds box from its floor, so with Bounds off it must be 0. Use an Initial Fill for the starting water.".into());
-    }
+    let fill_height = if bounds { read("fill_height", DEFAULT_FILL_HEIGHT) } else { 0.0 };
     let (pool_sites, box_sites, fit) = fill_sites(&layout, fill_height, initial_fill)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
     if particles > u64::from(EXACT_F32_COUNT) {
@@ -520,7 +528,7 @@ fn reaction_floats(buffer: Option<&GpuBuffer>) -> Option<&[f32]> {
 manifold_node_engine::primitive! {
     name: GpuFlipDomain,
     type_id: "node.gpu_flip_domain",
-    purpose: "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, cell size, initial fill height and the box an Initial Fill role places, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the scene box, the cell size, and pool_tiles, the tiles of the step's world-tile pool (every tile the box and its walls' 1.5-cell band can touch, with a ring round them, within the pool budget). Bounds is the Water item's box exactly as placed (bounds_lo_x/y/z, bounds_hi_x/y/z in metres) with six faces: a face is a Wall (closed_faces, bit 2d the low face of axis d, bit 2d + 1 the high one) unless its Closed param is off, which makes it Open (open_faces, same bits), where the water that reaches it is removed. Bounds off has no box to hold the water: both masks are 0, and kill_height is the height (metres) below which water is removed, the lowest Fixed body's lowest point (else the lowest body's, else the lowest Initial Fill or Inflow when the epoch began) minus drawn_radius, which defaults to the particle radius; with Bounds on kill_height is the lowest float and the scene box is the Bounds box. A Fill Height above 0 with Bounds off is refused. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, each body is one row per tick with a shape and a distance lattice packed in one half-precision atlas, the water flowing around it, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Beside each region row region_sites carries the half-cell sites its inflow can reach during the tick (an Outflow's and a disabled row's are empty), eight words a row, and region_site_total the most sites any tick's inflows hold together. The domain box is moved onto whole world cells (cell p of the world centred on p·h, under half a cell from where it was authored); the fill counts its half-cell sites from the box's first corner (fill_min_x/y/z, metres) over its cells (fill_cells_x/y/z). Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. An Initial Fill role is the water's starting box and never a body; a second Initial Fill switched on is refused by name.",
+    purpose: "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, cell size, initial fill height and the box an Initial Fill role places, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the scene box, the cell size, and pool_tiles, the tiles of the step's world-tile pool (every tile the box and its walls' 1.5-cell band can touch, with a ring round them, within the pool budget). Bounds is the Water item's box exactly as placed (bounds_lo_x/y/z, bounds_hi_x/y/z in metres) with six faces: a face is a Wall (closed_faces, bit 2d the low face of axis d, bit 2d + 1 the high one) unless its Closed param is off, which makes it Open (open_faces, same bits), where the water that reaches it is removed. Bounds off has no box to hold the water: both masks are 0, and kill_height is the height (metres) below which water is removed, the lowest Fixed body's lowest point (else the lowest body's, else the lowest Initial Fill or Inflow when the epoch began) minus drawn_radius, which defaults to the particle radius; with Bounds on kill_height is the lowest float and the scene box is the Bounds box. With Bounds off Fill Height is 0 and the cells start from the Initial Fill's own box, so no fill or cell size is refused or clipped for a box no one sees. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, each body is one row per tick with a shape and a distance lattice packed in one half-precision atlas, the water flowing around it, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Beside each region row region_sites carries the half-cell sites its inflow can reach during the tick (an Outflow's and a disabled row's are empty), eight words a row, and region_site_total the most sites any tick's inflows hold together. The domain box is moved onto whole world cells (cell p of the world centred on p·h, under half a cell from where it was authored); the fill counts its half-cell sites from the box's first corner (fill_min_x/y/z, metres) over its cells (fill_cells_x/y/z). Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. An Initial Fill role is the water's starting box and never a body; a second Initial Fill switched on is refused by name.",
     inputs: {
         domain: Transform optional,
         acceleration_field: VectorField optional,
@@ -2180,24 +2188,44 @@ mod tests {
     fn gpu_flip_domain_refuses_by_name() {
         let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
         assert!(refused(geometry(64.0, -1.0, None)).contains("Fill Height"));
-        // With Bounds off there is no floor to fill from; 0 is the way to say so.
-        let bounds_off = |fill: f32| {
+        // With Bounds off there is no floor to fill from: Fill Height fills
+        // nothing, and a Fill outside the hidden 4 m box, at a cell too
+        // coarse for that box, seeds all of itself.
+        let bounds_off = |fill: f32, cell: f32, volume: Option<Transform>| {
             gpu_flip_geometry(
                 |name, default| match name {
                     "bounds" => 0.0,
                     "fill_height" => fill,
+                    "cell_metres" => cell,
                     _ => default,
                 },
                 None,
-                None,
+                volume,
             )
         };
-        let reason = refused(bounds_off(0.16));
-        assert!(
-            reason.contains("Fill Height") && reason.contains("Bounds off"),
-            "{reason}"
+        assert_eq!(
+            bounds_off(0.16, 0.0625, None)
+                .expect("no box to fill")
+                .particles,
+            0
         );
-        assert_eq!(bounds_off(0.0).expect("no fill height").particles, 0);
+        let outside = Transform {
+            pos: [6.0, 1.0, 0.0],
+            scale: [1.0; 3],
+            ..Transform::default()
+        };
+        assert_eq!(
+            bounds_off(0.0, 0.0625, Some(outside))
+                .expect("seeds")
+                .particles,
+            32 * 32 * 32
+        );
+        assert!(
+            bounds_off(0.0, 0.6, Some(outside))
+                .expect("seeds")
+                .particles
+                > 0
+        );
         let turned = Transform {
             pos: [0.0, 1.0, 0.0],
             scale: [1.0; 3],

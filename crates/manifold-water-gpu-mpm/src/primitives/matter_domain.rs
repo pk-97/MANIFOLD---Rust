@@ -27,7 +27,7 @@ use crate::matter::{
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
-    CELL_SIZE_METRES, DEFAULT_CELL_SIZE, FluidDomainLayout, domain_layout,
+    CELL_SIZE_METRES, DEFAULT_CELL_SIZE, FluidDomainLayout, domain_layout, unbounded_seed,
 };
 use manifold_core::liquid_setup::{
     ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height,
@@ -218,8 +218,10 @@ pub(crate) fn fill_region(
 /// The domain box, pool and fill from the domain's params and
 /// wires (`read` is `scalar_or_param`; the Bounds switch and the enums come
 /// from `params`), the grid box moved onto whole world cells and the Bounds
-/// box as placed. Refused by name when the box's nodes are over Grid Budget, a
-/// Fill Height above 0 has Bounds off, or the fill is not a usable shape.
+/// box as placed. With Bounds off the grid starts from the Fill's own box,
+/// else the hidden one ([`unbounded_seed`]) and Fill Height, which fills the
+/// Bounds box from its floor, is 0. Refused by name when the box's nodes are
+/// over Grid Budget or the fill is not a usable shape.
 pub(crate) fn matter_geometry(
     read: impl Fn(&str, f32) -> f32,
     params: &ParamValues,
@@ -229,11 +231,19 @@ pub(crate) fn matter_geometry(
     let bounds = bounds_enabled(params);
     let domain_size = read("domain_size", 4.0);
     let world = domain.map(manifold_water_liquid::world_pose::world_domain_box);
-    let layout = on_world_cells(domain_layout(
-        world.map(Into::into),
-        domain_size,
-        f64::from(read("cell_metres", DEFAULT_CELL_SIZE)),
-    )?);
+    let cell_size = f64::from(read("cell_metres", DEFAULT_CELL_SIZE));
+    let seed = match bounds {
+        true => world.map(Into::into),
+        false => Some(unbounded_seed(
+            world.map(Into::into),
+            domain_size,
+            initial_fill
+                .as_ref()
+                .map(|volume| box_about(volume.pos, volume.scale)),
+            cell_size,
+        )),
+    };
+    let layout = on_world_cells(domain_layout(seed, domain_size, cell_size)?);
     let bounds_box = match world {
         Some(pose) => box_about(pose.pos, pose.scale),
         // No Water item: the cube `domain_layout` places, centred in X/Z with
@@ -246,10 +256,11 @@ pub(crate) fn matter_geometry(
         _ => 8.0,
     };
     admit_lattice(nodes, budget)?;
-    let fill_height = read("fill_height", DEFAULT_FILL_HEIGHT);
-    if !bounds && fill_height > 0.0 {
-        return Err("Matter: Fill Height fills the Bounds box from its floor, so with Bounds off it must be 0. Use an Initial Fill for the starting water.".into());
-    }
+    let fill_height = if bounds {
+        read("fill_height", DEFAULT_FILL_HEIGHT)
+    } else {
+        0.0
+    };
     let (pool_cells, column, fit) = fill_region(&layout, fill_height, initial_fill)?;
     let points_per_cell = match params.get("points_per_cell") {
         Some(ParamValue::Enum(1)) => 27,

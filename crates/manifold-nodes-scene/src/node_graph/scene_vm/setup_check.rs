@@ -62,16 +62,16 @@ impl SetupProblemKind {
     pub fn message(&self) -> String {
         match self {
             Self::DomainRefused(reason) => reason.strip_prefix("Fluid: ").unwrap_or(reason).to_owned(),
-            Self::FillCapped => "Fill is above the top; capped at the top".to_owned(),
-            Self::ColumnClipped => "Column leaves the domain; clipped to it".to_owned(),
-            Self::ColumnOutside => "Column is outside the domain; no water".to_owned(),
-            Self::SourceClipped(role) => format!("{} leaves the domain; the rest is unused", role.title()),
-            Self::SourceOutside(role) => format!("{} is outside the domain; it does nothing", role.title()),
+            Self::FillCapped => "Fill Height is above the Bounds box; the pool fills to its top".to_owned(),
+            Self::ColumnClipped => "Fill reaches past the Bounds box; the part inside fills".to_owned(),
+            Self::ColumnOutside => "Fill is outside the Bounds box; no water".to_owned(),
+            Self::SourceClipped(role) => format!("{} reaches past the Bounds box; the part outside does nothing", role.title()),
+            Self::SourceOutside(role) => format!("{} is outside the Bounds box; it does nothing", role.title()),
             Self::BodiesNotCoupled(1) => "1 body not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest".to_owned(),
             Self::BodiesNotCoupled(count) => format!("{count} bodies not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest"),
             Self::CopiesNotMade(1) => "1 copy not made; the world's copy pool is full".to_owned(),
             Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
-            Self::PoolFull => "The water is full, so inflows and sheets pause until some drains away. Add a Drain or raise Cell Size.".to_owned(),
+            Self::PoolFull => "Out of water particles: inflows and sheets pause until some water drains or falls away. Add a Drain or raise Cell Size.".to_owned(),
             Self::MemoryFull(count) => format!("Water memory is full: {count} particles removed. Raise Cell Size or make the water smaller."),
             Self::BodyRefused(reason) => sentence(reason),
         }
@@ -89,7 +89,7 @@ fn sentence(reason: &str) -> String {
 impl FluidRole {
     fn title(self) -> &'static str {
         match self {
-            Self::InitialFill => "Initial Fill",
+            Self::InitialFill => "Fill",
             Self::Inflow => "Inflow",
             Self::Outflow => "Drain",
         }
@@ -753,6 +753,9 @@ pub struct SetupSite {
     pub(super) fill: ParamAddr,
     pub(super) fill_authored: Option<f32>,
     pub(super) sources: Vec<(FluidRole, usize)>,
+    /// The Water's Bounds switch. Off, no box holds the water, so nothing is
+    /// checked against one.
+    pub(super) bounds: bool,
 }
 
 /// Where a value lookup overrides the authored value of a param, else the
@@ -784,6 +787,9 @@ impl SetupSite {
             box_shape,
             column,
         ));
+        if !self.bounds {
+            return;
+        }
         let layout = {
             let SiteLayout {
                 transform,
@@ -837,9 +843,9 @@ pub(super) fn water_sites(
     };
     let mut sites = Vec::new();
     doc.walk(|item, _| {
-        if !matches!(item.fields, ItemFields::Water(_)) {
+        let ItemFields::Water(water) = &item.fields else {
             return;
-        }
+        };
         let owner = ShapeOwner::LiquidDomain(NodeId::new(format!("{}:{DOMAIN_ROLE}", item.id)));
         let box_shape = shapes.len();
         shapes.push(card_shape(
@@ -915,6 +921,7 @@ pub(super) fn water_sites(
             fill: card("fill_height"),
             fill_authored: None,
             sources,
+            bounds: water.bounds,
         });
     });
     sites
@@ -982,6 +989,73 @@ mod tests {
         }
     }
 
+    /// A Water with a 4 m Bounds box at `cell_size`, a Fill wholly outside
+    /// it and an Inflow across its +x wall, checked with Bounds `bounds`.
+    fn water_problems(bounds: bool, cell_size: f32) -> Vec<SetupProblemKind> {
+        let addr = |id: &str| ParamAddr {
+            scope_path: Vec::new(),
+            node_doc_id: 0,
+            param_id: id.to_owned(),
+        };
+        let triple = |a: &str, b: &str, c: &str| (addr(a), addr(b), addr(c));
+        let transform = crate::node_graph::scene_vm::TransformVm {
+            node_doc_id: 0,
+            node: NodeId::new("water:transform"),
+            pos_addr: triple("pos_x", "pos_y", "pos_z"),
+            pos_value: (0.0, 2.0, 0.0),
+            pos_driven: (false, false, false),
+            rot_addr: triple("rot_x", "rot_y", "rot_z"),
+            rot_value: (0.0, 0.0, 0.0),
+            rot_driven: (false, false, false),
+            scale_addr: triple("scale_x", "scale_y", "scale_z"),
+            scale_value: (4.0, 4.0, 4.0),
+            scale_driven: (false, false, false),
+        };
+        let shapes = [
+            source([0.0, 2.0, 0.0], [4.0; 3], &[]),
+            source([6.0, 1.0, 0.0], [1.0; 3], &[]),
+            source([2.0, 3.0, 0.0], [0.5; 3], &[]),
+        ];
+        let site = SetupSite {
+            owner: ShapeOwner::LiquidDomain(NodeId::new("water")),
+            layout: SiteLayout {
+                transform: Box::new(transform),
+                cell_size: (addr("cell_size"), cell_size),
+            },
+            box_shape: Some(0),
+            column: Some(1),
+            fill: addr("fill_height"),
+            fill_authored: None,
+            sources: vec![(FluidRole::Inflow, 2)],
+            bounds,
+        };
+        let (mut problems, mut anchors) = (Vec::new(), Vec::new());
+        site.check(&shapes, &|_| None, &mut problems, &mut anchors);
+        assert_eq!(anchors.len(), 1, "the card anchors either way");
+        problems.into_iter().map(|problem| problem.kind).collect()
+    }
+
+    /// With Bounds on the box clips and refuses; with Bounds off nothing is
+    /// checked against a box no one sees, at a fine or a coarse cell.
+    #[test]
+    fn bounds_off_checks_nothing_against_the_hidden_box() {
+        assert_eq!(
+            water_problems(true, 0.125),
+            [
+                SetupProblemKind::ColumnOutside,
+                SetupProblemKind::SourceClipped(FluidRole::Inflow)
+            ]
+        );
+        let coarse = water_problems(true, 0.6);
+        assert!(
+            matches!(&coarse[..], [SetupProblemKind::DomainRefused(reason)] if reason.contains("0.600 m leaves fewer than 8 cells across the Bounds box")),
+            "{coarse:?}"
+        );
+        for cell_size in [0.125, 0.6] {
+            assert_eq!(water_problems(false, cell_size), [], "{cell_size}");
+        }
+    }
+
     fn problem(role: FluidRole, shape: &SceneShapeVm) -> Option<SetupProblem> {
         let mut out = Vec::new();
         check_source(&layout(), &shape.owner, role, shape, &mut out);
@@ -1000,7 +1074,7 @@ mod tests {
         );
         assert_eq!(
             clipped.kind.message(),
-            "Inflow leaves the domain; the rest is unused"
+            "Inflow reaches past the Bounds box; the part outside does nothing"
         );
         assert_eq!(
             clipped.bounds,

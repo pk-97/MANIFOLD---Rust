@@ -29,6 +29,48 @@ pub const DEFAULT_CELL_SIZE: f32 = 0.0625;
 /// The smallest and largest cell size a liquid domain accepts, in metres.
 pub const CELL_SIZE_METRES: (f32, f32) = (0.001, 1.0);
 
+/// The box a domain without one places: a `domain_size` cube centred in X/Z
+/// with its floor at Y = 0.
+fn default_box(domain_size: f32) -> DomainBox {
+    DomainBox {
+        pos: [0.0, domain_size * 0.5, 0.0],
+        scale: [domain_size; 3],
+        rot_euler: [0.0; 3],
+        billboard: false,
+    }
+}
+
+/// The box a liquid's cells start from with Bounds off, where no box holds
+/// the water: the Fill's box `fill` (min, max) with a cell to spare round
+/// it, else its own hidden box (or the `domain_size` cube without one), at
+/// least 8 cells a side and unturned. Any Cell Size and any Fill then lay
+/// out, so with Bounds off neither is refused nor clipped by a box no one
+/// sees, and a Fill far from the hidden box costs no cells between them.
+pub fn unbounded_seed(
+    domain: Option<DomainBox>,
+    domain_size: f32,
+    fill: Option<[[f32; 3]; 2]>,
+    cell_size: f64,
+) -> DomainBox {
+    let h = cell_size as f32;
+    let [lo, hi] = match fill {
+        Some([lo, hi]) => [lo.map(|v| v - h), hi.map(|v| v + h)],
+        None => {
+            let pose = domain.unwrap_or(default_box(domain_size));
+            [
+                std::array::from_fn(|i| pose.pos[i] - 0.5 * pose.scale[i]),
+                std::array::from_fn(|i| pose.pos[i] + 0.5 * pose.scale[i]),
+            ]
+        }
+    };
+    DomainBox {
+        pos: std::array::from_fn(|i| 0.5 * (lo[i] + hi[i])),
+        scale: std::array::from_fn(|i| (hi[i] - lo[i]).max(9.0 * h)),
+        rot_euler: [0.0; 3],
+        billboard: false,
+    }
+}
+
 /// The scene box and uniform cells of a liquid domain, shared by every
 /// liquid solver so they agree on cell size.
 /// `domain` is the authored axis-aligned box (scale = full size); without
@@ -43,12 +85,7 @@ pub fn domain_layout(
     if !cell_size.is_finite() || cell_size <= 0.0 {
         return Err("Fluid: Cell Size must be a positive number of metres".into());
     }
-    let pose = domain.unwrap_or(DomainBox {
-        pos: [0.0, domain_size * 0.5, 0.0],
-        scale: [domain_size; 3],
-        rot_euler: [0.0; 3],
-        billboard: false,
-    });
+    let pose = domain.unwrap_or(default_box(domain_size));
     if pose.billboard
         || pose
             .rot_euler
@@ -82,7 +119,7 @@ pub fn domain_layout(
     });
     if cells.iter().any(|n| *n < 8) {
         return Err(format!(
-            "Fluid: a Cell Size of {cell_size} m leaves fewer than 8 cells across the box; lower Cell Size or make the box larger"
+            "Fluid: a Cell Size of {cell_size:.3} m leaves fewer than 8 cells across the Bounds box; lower Cell Size or make the box larger"
         ));
     }
     if cells
@@ -183,6 +220,35 @@ mod tests {
     fn a_box_with_fewer_than_eight_cells_refuses() {
         let err = domain_layout(boxed([0.0; 3], [1.0, 1.0, 1.0]), 0.0, 0.3).unwrap_err();
         assert!(err.contains("fewer than 8 cells"), "{err}");
+    }
+
+    /// With Bounds off a Fill outside the hidden box, near or 500 m off, and
+    /// a Cell Size too coarse for that box all lay out: the cells cover the
+    /// Fill alone, at least 8 a side.
+    #[test]
+    fn an_unbounded_seed_takes_in_the_fill_at_any_cell_size() {
+        for x in [5.5, 500.0] {
+            let fill = [[x, 0.5, -1.0], [x + 1.0, 2.5, 1.0]];
+            for cell in [0.02, 0.23, 0.9] {
+                let hidden = boxed([0.0, 2.0, 0.0], [4.0, 4.0, 4.0]);
+                let seed = unbounded_seed(hidden, 0.0, Some(fill), cell);
+                let layout = domain_layout(Some(seed), 0.0, cell).unwrap();
+                let covers = (0..3).all(|i| {
+                    layout.min[i] <= fill[0][i] && fill[1][i] <= layout.min[i] + layout.size[i]
+                });
+                let snug = (0..3).all(|i| {
+                    layout.size[i]
+                        <= (fill[1][i] - fill[0][i]).max(9.0 * cell as f32) + 3.0 * cell as f32
+                });
+                assert!(covers && snug, "{x} {cell}: {layout:?}");
+                assert!(
+                    layout.cells.iter().all(|&n| n >= 8),
+                    "{x} {cell}: {layout:?}"
+                );
+            }
+        }
+        let tiny = unbounded_seed(None, 0.1, None, 0.5);
+        assert_eq!(domain_layout(Some(tiny), 0.0, 0.5).unwrap().cells, [9; 3]);
     }
 
     #[test]
