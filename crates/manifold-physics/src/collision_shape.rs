@@ -405,7 +405,7 @@ pub struct LatticePlan {
     pub shell_thickness: f32,
     /// Whether any part is open, so the solid has shells.
     pub open: bool,
-    /// Whether [`MAX_LATTICE_NODES`] forced a spacing coarser than the cells.
+    /// Whether [`MAX_LATTICE_NODES`] forced a spacing coarser than wanted.
     pub capped: bool,
     /// The meshes' joint local bounds.
     pub extent: [f32; 3],
@@ -427,12 +427,13 @@ impl LatticePlan {
 /// `meshes` at `scale`, over only the part inside `domain` (the water's box
 /// in the meshes' local frame) when one is given, so a 100 m ground under a
 /// 4 m water costs and resolves only the 4 m the water touches. A closed
-/// solid's surface is exact at any spacing, so it keeps a 32nd of the
-/// sampled part's longest side. A shell's faces sit at least one spacing
-/// from its surface, so with open parts the lattice is no coarser than the
-/// cells; if that needs more than [`MAX_LATTICE_NODES`], the spacing
-/// coarsens until it fits and the plan says so. The scale enters as
-/// [`scale_steps`].
+/// solid keeps a 32nd of the sampled part's longest side, finer where its
+/// thinnest side would hold fewer than two spacings, down to the cells: a
+/// 14 m slab 0.2 m thick is sampled every 0.1 m, not every 0.44 m. A
+/// shell's faces sit at least one spacing from its surface, so with open
+/// parts the lattice is no coarser than the cells. If either needs more
+/// than [`MAX_LATTICE_NODES`], the spacing coarsens until it fits and the
+/// plan says so. The scale enters as [`scale_steps`].
 pub fn water_plan(
     meshes: &[TriangleMesh],
     open: bool,
@@ -491,16 +492,6 @@ pub fn water_plan(
         })
     };
     let coarse = sampled_longest / DISTANCE_NODES_ALONG_LONGEST;
-    if !open {
-        return Ok(LatticePlan {
-            spacing: coarse,
-            shell_thickness: 0.0,
-            open,
-            capped: false,
-            extent,
-            crop: crop(2.0 * coarse),
-        });
-    }
     validate_scale(scale)?;
     if !(cell_size.is_finite() && cell_size > 0.0) {
         return Err(PhysicsError::InvalidInput(
@@ -509,23 +500,35 @@ pub fn water_plan(
     }
     let [smallest, largest] =
         scale_steps(scale).map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2());
-    let world_longest = sampled_longest * largest;
-    // One water cell each side of the surface: a shell thinner than two
-    // cells is one the water's grid cannot see, and liquid leaks through.
-    let shell_thickness = (2.0 * cell_size).max(SHELL_FRACTION * world_longest) / smallest;
-    let wanted = coarse.min(cell_size / largest);
+    let cell = cell_size / largest;
+    let (shell_thickness, wanted) = if open {
+        // One water cell each side of the surface: a shell thinner than two
+        // cells is one the water's grid cannot see, and liquid leaks through.
+        let world_longest = sampled_longest * largest;
+        let shell = (2.0 * cell_size).max(SHELL_FRACTION * world_longest) / smallest;
+        (shell, coarse.min(cell))
+    } else {
+        // Sampling steps over a part thinner than two spacings, so the
+        // thinnest side keeps two.
+        let thinnest = extent.into_iter().fold(f32::INFINITY, f32::min);
+        (0.0, coarse.min((0.5 * thinnest).max(cell)))
+    };
     let mut spacing = wanted;
     while union_lattice_nodes(
         sampled_extent,
         spacing,
         2.0 * spacing,
         shell_thickness,
-        true,
+        open,
     ) > MAX_LATTICE_NODES
     {
         spacing *= 1.125;
     }
-    let pad = 2.0 * spacing + (0.5 * shell_thickness).max(spacing);
+    let pad = if open {
+        2.0 * spacing + (0.5 * shell_thickness).max(spacing)
+    } else {
+        2.0 * spacing
+    };
     Ok(LatticePlan {
         spacing,
         shell_thickness,

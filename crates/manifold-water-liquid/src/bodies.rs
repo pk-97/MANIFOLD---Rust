@@ -359,8 +359,7 @@ type LatticeBuild = Result<Arc<DistanceLattice>, String>;
 /// domain; one build runs at a time and the newest plan wins.
 struct RoleLattice {
     geometry: Arc<PreparedFluidGeometry>,
-    /// The cell size and scale steps (`scale_steps`) `plan` was made from (a
-    /// closed solid's plan ignores both, so they are left at zero for it),
+    /// The cell size and scale steps (`scale_steps`) `plan` was made from,
     /// and the local domain box it was cropped to.
     asked: (f32, [i32; 2], Option<[[f32; 3]; 2]>),
     plan: LatticePlan,
@@ -396,11 +395,7 @@ fn resolve_lattice(
         }
         _ => with_margin(need),
     });
-    let asked = if geometry.has_open_parts() {
-        (cell_size, scale_steps(scale), domain)
-    } else {
-        (0.0, [0; 2], domain)
-    };
+    let asked = (cell_size, scale_steps(scale), domain);
     let index = match lattices
         .iter()
         .position(|entry| Arc::ptr_eq(&entry.geometry, geometry))

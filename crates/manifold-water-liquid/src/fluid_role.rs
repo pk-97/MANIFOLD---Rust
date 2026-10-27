@@ -302,42 +302,54 @@ mod tests {
         assert_eq!(got.friction, value.friction);
     }
 
+    /// A closed box from `min` to `max`.
+    fn cuboid(min: [f32; 3], max: [f32; 3]) -> TriangleMesh {
+        let v = |x: usize, y: usize, z: usize| {
+            [
+                [min[0], max[0]][x],
+                [min[1], max[1]][y],
+                [min[2], max[2]][z],
+            ]
+        };
+        TriangleMesh {
+            vertices: vec![
+                v(0, 0, 0),
+                v(1, 0, 0),
+                v(1, 1, 0),
+                v(0, 1, 0),
+                v(0, 0, 1),
+                v(1, 0, 1),
+                v(1, 1, 1),
+                v(0, 1, 1),
+            ],
+            triangles: vec![
+                [0, 2, 1],
+                [0, 3, 2],
+                [4, 5, 6],
+                [4, 6, 7],
+                [0, 1, 5],
+                [0, 5, 4],
+                [2, 3, 7],
+                [2, 7, 6],
+                [1, 2, 6],
+                [1, 6, 5],
+                [0, 4, 7],
+                [0, 7, 3],
+            ],
+        }
+    }
+
     /// A unit cube split in two closed halves, as a two-mesh compound role.
     fn two_part_cube() -> PreparedFluidGeometry {
-        let cuboid = |x0: f32, x1: f32| {
-            let v = |x: usize, y: usize, z: usize| [[x0, x1][x], [-0.5, 0.5][y], [-0.5, 0.5][z]];
-            TriangleMesh {
-                vertices: vec![
-                    v(0, 0, 0),
-                    v(1, 0, 0),
-                    v(1, 1, 0),
-                    v(0, 1, 0),
-                    v(0, 0, 1),
-                    v(1, 0, 1),
-                    v(1, 1, 1),
-                    v(0, 1, 1),
-                ],
-                triangles: vec![
-                    [0, 2, 1],
-                    [0, 3, 2],
-                    [4, 5, 6],
-                    [4, 6, 7],
-                    [0, 1, 5],
-                    [0, 5, 4],
-                    [2, 3, 7],
-                    [2, 7, 6],
-                    [1, 2, 6],
-                    [1, 6, 5],
-                    [0, 4, 7],
-                    [0, 7, 3],
-                ],
-            }
-        };
-        PreparedFluidGeometry::new(vec![cuboid(-0.5, 0.0), cuboid(0.0, 0.5)])
+        PreparedFluidGeometry::new(vec![
+            cuboid([-0.5; 3], [0.0, 0.5, 0.5]),
+            cuboid([0.0, -0.5, -0.5], [0.5; 3]),
+        ])
     }
 
     /// One lattice spans every mesh of the role, spacing = longest extent / 32
-    /// with two spacings of padding, whatever the liquid's cells. Outside the
+    /// with two spacings of padding: a cube is thick enough that the
+    /// liquid's cells and the scale change nothing. Outside the
     /// two halves it is the cube's exact distance; inside, each part's own
     /// distance (a bound on the union's depth, 0 on the faces where the halves
     /// touch) with the sign of the union.
@@ -349,7 +361,7 @@ mod tests {
         assert_eq!(
             plan,
             geometry.lattice_plan(0.5, [1.0; 3], None).unwrap(),
-            "a closed solid ignores cells and scale"
+            "a thick closed solid ignores cells and scale"
         );
         let lattice = geometry.build_lattice(&plan).unwrap();
         assert_eq!(lattice.spacing, 1.0 / DISTANCE_NODES_ALONG_LONGEST);
@@ -433,6 +445,30 @@ mod tests {
             sample(&lattice, [0.3, -0.5 * y, -0.7]) < 0.0,
             "the shell holds below the floor too"
         );
+    }
+
+    /// A closed slab 14 m wide and 0.22 m thick, a floor water rests on: a
+    /// 32nd of its width (0.44 m) is twice its thickness, so the lattice
+    /// keeps two spacings across it instead, and its middle reads inside
+    /// all along it while a cell above its top reads outside.
+    #[test]
+    fn scene_physics_fluid_role_thin_closed_slab_keeps_two_spacings_across() {
+        let cell = 0.0625;
+        let geometry =
+            PreparedFluidGeometry::new(vec![cuboid([-7.0, -0.11, -7.0], [7.0, 0.11, 7.0])]);
+        assert!(!geometry.has_open_parts());
+        let plan = geometry.lattice_plan(cell, [1.0; 3], None).unwrap();
+        assert!(!plan.capped);
+        assert!((plan.spacing - 0.11).abs() < 1e-6, "{plan:?}");
+        let lattice = geometry.build_lattice(&plan).unwrap();
+        for x in [-6.9f32, -3.3, 0.05, 4.7] {
+            let z = 0.3 * x;
+            assert!(sample(&lattice, [x, 0.0, z]) < 0.0, "inside at x = {x}");
+            assert!(
+                sample(&lattice, [x, 0.11 + cell, z]) > 0.0,
+                "above at x = {x}"
+            );
+        }
     }
 
     /// A plane too wide for the node cap at the liquid's cells coarsens until
