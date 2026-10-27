@@ -51,7 +51,7 @@ use manifold_physics::tick_samples::TickSamples;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::bounds::{
-    NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, closed_faces,
+    ALL_FACES, NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, closed_faces,
     face_masks, kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs,
     within_key_span,
 };
@@ -106,6 +106,9 @@ pub struct GpuFlipGeometry {
     /// The Water item's box exactly as placed (min then max), not moved onto
     /// whole cells: the Bounds box.
     pub(crate) bounds_box: [[f32; 3]; 2],
+    /// The Bounds faces that are Walls (`face_masks`); live, so not in the
+    /// setup.
+    pub(crate) wall_faces: u32,
     pub setup: GpuFlipSetup,
     /// The pool's height in half-cell sites of this frame's grid box.
     pub pool_sites: u32,
@@ -127,9 +130,9 @@ pub struct GpuFlipGeometry {
 
 impl GpuFlipGeometry {
     /// The step's pool: every tile the box and its walls' band can touch,
-    /// and the ring round them, within the pool budget.
+    /// and the ring past each side without a Wall, within the pool budget.
     pub(crate) fn pool_tiles(&self) -> u32 {
-        pool_tiles(self.layout.cells)
+        pool_tiles(self.layout.cells, self.wall_faces)
     }
 
     /// The scalar outputs fixed by the setup, by name.
@@ -243,7 +246,8 @@ pub fn gpu_flip_geometry(
         // its floor at Y = 0.
         None => box_about([0.0, 0.5 * domain_size, 0.0], [domain_size; 3]),
     };
-    let solve_level = read_solve_level(read("solve_level", 0.0), pool_tiles(layout.cells)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
+    let wall_faces = face_masks(bounds, read("closed_faces", ALL_FACES as f32) as u32).0;
+    let solve_level = read_solve_level(read("solve_level", 0.0), pool_tiles(layout.cells, wall_faces)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let sheet_fill_rate = read_sheet_fill_rate(read("sheet_fill_rate", 0.0)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let fill_height = read("fill_height", DEFAULT_FILL_HEIGHT);
@@ -264,13 +268,13 @@ pub fn gpu_flip_geometry(
         initial_fill: initial_fill.map(|volume| box_about(volume.pos, volume.scale)),
         particle_capacity: 0,
     };
-    Ok(GpuFlipGeometry { layout, bounds_box, setup, pool_sites, box_sites, particles, solve_level, max_iterations, sheet_fill_rate, fit })
+    Ok(GpuFlipGeometry { layout, bounds_box, wall_faces, setup, pool_sites, box_sites, particles, solve_level, max_iterations, sheet_fill_rate, fit })
 }
 }
 
 /// `scalar` (the wire, else a Float param, else the default) as
-/// [`gpu_flip_geometry`] reads it, plus the Bounds switch, a Bool param that
-/// `scalar` does not carry.
+/// [`gpu_flip_geometry`] reads it, plus the Bounds switch and the Closed
+/// faces' mask, Bool params that `scalar` does not carry.
 pub(crate) fn geometry_read<'a>(
     params: &'a ParamValues,
     scalar: impl Fn(&str, f32) -> f32 + 'a,
@@ -278,6 +282,8 @@ pub(crate) fn geometry_read<'a>(
     move |name, default| {
         if name == "bounds" {
             f32::from(bounds_enabled(params))
+        } else if name == "closed_faces" {
+            closed_faces(params) as f32
         } else {
             scalar(name, default)
         }

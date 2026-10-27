@@ -1,5 +1,4 @@
 use super::*;
-use manifold_node_engine::scene::world_tiles::tile_of_cell;
 use manifold_water_liquid::tile_storage::TILE_CELLS;
 
 /// A live tick encodes the substeps the retired speed asks for at the CFL,
@@ -245,7 +244,7 @@ fn gpu_flip_world_tile_bytes_follow_the_pool() {
     assert_eq!(ring_max(23), 3, "128³: 23 layers reach the third");
     assert_eq!(ring_max(FACE_VALID_LAYERS), 1);
     for cells in [[64, 64, 64], [60, 97, 5], [1, 9, 17]] {
-        let pool = pool_tiles(cells);
+        let pool = pool_tiles(cells, 0);
         assert_eq!(
             tile_scratch_bytes(pool),
             manifold_water_liquid::world_tiles::held_bytes(pool, step_reach().ring_max),
@@ -288,31 +287,59 @@ fn band_layers_match_configured_engine_cfl() {
     assert_eq!(band_layers(ENGINE_CFL), 12);
 }
 
-/// The pool holds every tile a box and its walls' band can touch, wherever
-/// it sits on the world lattice, and the table's rings round them: for small
-/// boxes, the most tiles any placement of the banded box touches (counted
-/// cell by cell), widened by the rings on both sides; and what the budget
-/// buys when it is short.
+/// The pool holds every tile the step's table may hold for a box wherever
+/// it sits on the world lattice: with every face a Wall, the most tiles any
+/// placement's wall clip spans (each axis swept a third of a cell at a time
+/// over a whole tile), and no ring; with none, those tiles widened by the
+/// table's ring on both sides; and what the budget buys when it is short.
 #[test]
-fn pool_size_follows_the_box_and_the_budget() {
-    let ring = step_reach().ring_max as usize;
-    for cells in [[1u32, 9, 17], [8, 8, 8], [13, 2, 30]] {
-        let most: Vec<usize> = cells
-            .iter()
-            .map(|&n| {
-                (-9i32..9)
-                    .map(|start| {
-                        let first = tile_of_cell([start, 0, 0])[0];
-                        let banded = (n + BOX_BAND_CELLS) as i32;
-                        let last = tile_of_cell([start + banded - 1, 0, 0])[0];
-                        (last - first + 1) as usize
-                    })
-                    .max()
-                    .expect("placements")
-            })
-            .collect();
-        let want: usize = most.iter().map(|&t| t + 2 * ring).product();
-        assert_eq!(pool_tiles(cells) as usize, want, "{cells:?}");
+fn pool_size_follows_the_box_the_walls_and_the_budget() {
+    use manifold_water_liquid::bounds::ALL_FACES;
+    let ring = step_reach().ring_max;
+    let h = 0.0625_f32;
+    for size in [[0.5_f32, 0.5, 0.5], [0.81, 0.5, 1.97], [4.0, 2.53, 0.6]] {
+        let layout = manifold_core::fluid_domain::domain_layout(
+            Some(manifold_core::fluid_domain::DomainBox {
+                pos: [0.0; 3],
+                rot_euler: [0.0; 3],
+                scale: size,
+                billboard: false,
+            }),
+            4.0,
+            f64::from(h),
+        )
+        .expect("a box of whole cells");
+        let most: [u32; 3] = std::array::from_fn(|a| {
+            (0..24)
+                .map(|third| {
+                    let mut params: StepParams = bytemuck::Zeroable::zeroed();
+                    params.bounds_lo[a] = third as f32 * h / 3.0 - 0.37;
+                    params.bounds_hi[a] = params.bounds_lo[a] + size[a];
+                    params.inv_cell = 1.0 / h;
+                    params.wall_faces = ALL_FACES;
+                    let [lo, hi] = tiles::wall_clip(&params).expect("Walls clip");
+                    (hi[a] - lo[a] + 1) as u32
+                })
+                .max()
+                .expect("placements")
+        });
+        let cells = layout.cells;
+        assert_eq!(
+            pool_tiles(cells, ALL_FACES),
+            most.iter().product::<u32>(),
+            "{size:?}"
+        );
+        assert_eq!(
+            pool_tiles(cells, 0),
+            most.iter().map(|&t| t + 2 * ring).product::<u32>(),
+            "{size:?}"
+        );
+        // An Open floor widens the y axis by one ring, below.
+        assert_eq!(
+            pool_tiles(cells, ALL_FACES & !0b100),
+            most[0] * (most[1] + ring) * most[2],
+            "{size:?}"
+        );
     }
     let tile_bytes = u64::from(TILE_CELLS) * pooled_bytes_per_cell();
     assert_eq!(pool_capacity(4913, tile_bytes, 10 * tile_bytes), 10);
@@ -324,7 +351,7 @@ fn pool_size_follows_the_box_and_the_budget() {
     assert_eq!(pool_capacity(7, tile_bytes, 10 * tile_bytes), 7);
     let huge = [1024u32; 3];
     assert_eq!(
-        u64::from(pool_tiles(huge)),
+        u64::from(pool_tiles(huge, 0)),
         POOL_BUDGET_BYTES / tile_bytes,
         "a box past the budget gets what the budget buys"
     );

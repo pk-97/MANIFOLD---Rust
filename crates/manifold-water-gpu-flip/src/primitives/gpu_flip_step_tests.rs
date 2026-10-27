@@ -114,7 +114,7 @@ fn node_lattice() -> [(&'static str, f32); 9] {
     let hi: [f32; 3] = std::array::from_fn(|a| NODE_MIN[a] + N[a] as f32 * H);
     [
         ("cell_size", H),
-        ("pool_tiles", pool_tiles(N.map(|n| n as u32)) as f32),
+        ("pool_tiles", pool_tiles(N.map(|n| n as u32), 0) as f32),
         ("bounds_lo_x", NODE_MIN[0]),
         ("bounds_lo_y", NODE_MIN[1]),
         ("bounds_lo_z", NODE_MIN[2]),

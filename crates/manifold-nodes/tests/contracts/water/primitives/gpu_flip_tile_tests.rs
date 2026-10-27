@@ -40,7 +40,7 @@ fn gpu_flip_step_tiles_two_particles_across_the_origin() {
     const H: f32 = 0.25;
     // The pool the domain gives a box of 8 cells.
     const CELLS: u32 = 8;
-    let pool = pool_tiles([CELLS; 3]);
+    let pool = pool_tiles([CELLS; 3], 0);
     let lattice = [
         ("pool_tiles", pool as f32),
         ("cell_size", H),

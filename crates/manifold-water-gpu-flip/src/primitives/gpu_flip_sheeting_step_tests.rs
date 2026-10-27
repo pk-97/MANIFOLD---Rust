@@ -202,7 +202,7 @@ impl Splash {
         let min = SOLVER_MIN + 1.5 * H;
         let max = min + n as f32 * H;
         let mut values = vec![
-            ("pool_tiles", pool_tiles([n; 3]) as f32),
+            ("pool_tiles", pool_tiles([n; 3], 0) as f32),
             ("cell_size", H),
             ("bounds_lo_x", min),
             ("bounds_lo_y", min),

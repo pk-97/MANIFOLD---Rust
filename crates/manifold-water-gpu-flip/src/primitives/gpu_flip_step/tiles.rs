@@ -62,16 +62,25 @@ pub(crate) fn pool_capacity(wanted: u64, tile_bytes: u64, budget: u64) -> u32 {
 /// force lattices are sized over the box and this band.
 pub const BOX_BAND_CELLS: u32 = 3;
 
+/// Cells past a Bounds box of `n` cells that [`band_box`] can span along an
+/// axis: the box as placed straddles at most one cell more than its `n`,
+/// and the band adds whole cells on both sides.
+pub(crate) const BAND_BOX_EXTRA_CELLS: u32 = 1 + 2 * BOX_BAND_CELLS.div_ceil(2);
+
 manifold_core::testkit_visible! {
-/// Tiles the pool holds for a Bounds box of `cells` (`P`): every tile the
-/// box and its walls' band can touch, wherever it sits on the world
-/// lattice, and the table's rings round them, so water anywhere in the box
-/// never runs the pool short; or what the budget buys.
-pub(crate) fn pool_tiles(cells: [u32; 3]) -> u32 {
+/// Tiles the pool holds for a Bounds box of `cells` (`P`) with Wall faces
+/// `walls` (bits −X +X −Y +Y −Z +Z): every tile the box and its walls' band
+/// can touch, wherever it sits on the world lattice, and the table's rings
+/// past each side without a Wall (the [`wall_clip`] holds none past a
+/// Wall), so water anywhere in the box never runs the pool short; or what
+/// the budget buys.
+pub(crate) fn pool_tiles(cells: [u32; 3], walls: u32) -> u32 {
     let ring = u64::from(step_reach().ring_max);
-    let wanted = cells
-        .iter()
-        .map(|&n| run_tiles(n + BOX_BAND_CELLS) + 2 * ring)
+    let wanted = (0..3)
+        .map(|a| {
+            let open_sides = 2 - ((walls >> (2 * a)) & 0b11).count_ones();
+            run_tiles(cells[a] + BAND_BOX_EXTRA_CELLS) + u64::from(open_sides) * ring
+        })
         .product();
     pool_capacity(
         wanted,
@@ -207,7 +216,7 @@ impl StepState {
 /// with a Wall face, none past the tile holding the wall's band, so no ring
 /// tile lies inside a wall or under the floor. An Open face, or no Bounds,
 /// clips nothing on its side.
-fn wall_clip(params: &StepParams) -> Option<TileClip> {
+pub(super) fn wall_clip(params: &StepParams) -> Option<TileClip> {
     if params.wall_faces == 0 {
         return None;
     }
