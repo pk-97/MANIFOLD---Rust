@@ -26,13 +26,14 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::transform::Transform;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries};
 use manifold_nodes_physics::force_lattice::ForceLatticeBinding;
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
 use manifold_water_liquid::fluid_particles::{FaceSample, MAX_BINS, bin_counts, bin_total};
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::primitives::face_sample_component::{
-    FaceSampleComponent, pool_tiles_wire, pooled_bytes,
+    FaceSampleComponent, pool_tiles_wire, pooled_bytes, solver_origin_cell,
 };
 use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use manifold_water_liquid::primitives::particle_identity::{COUNT_OFFSET, IDENTITY_BYTES};
@@ -40,7 +41,6 @@ use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels, sto
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortCount, SortJob, SortLabels, range_storage_bytes, whitewater_record_read,
 };
-use manifold_water_liquid::tile_storage::{TILE_STORAGE, pool_len};
 use manifold_water_liquid::whitewater::{
     DEFAULT_CAPACITY, KnownValue, MAX_CAPACITY, WhitewaterParticle, cell_total, face_offset,
     grid_box, grid_cells, require_extended_faces,
@@ -61,7 +61,7 @@ const GATHER_ENTRY: (&str, &str) = ("gather_distance", "node.whitewater_step.gat
 const UNPACK_LABEL: &str = "node.whitewater_step.unpack_faces";
 
 fn gather_source() -> String {
-    format!("{TILE_STORAGE}\n{GATHER_DISTANCE_SHADER}")
+    format!("{READ_SIDE}\n{GATHER_DISTANCE_SHADER}")
 }
 
 #[derive(Clone, Copy)]
@@ -121,8 +121,9 @@ macro_rules! emitter_path {
     }};
 }
 
-/// `gather_distance.wgsl`'s uniform: the face cells, the pool's tiles and the
-/// thread count, padded to 32 bytes.
+/// `gather_distance.wgsl`'s uniform: the face cells, the pool's tiles, the
+/// world cell of the first face cell, the table's entries and the thread
+/// count, padded to 48 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GatherParams {
@@ -130,6 +131,10 @@ struct GatherParams {
     cells_y: u32,
     cells_z: u32,
     pool_tiles: u32,
+    cell_origin_x: i32,
+    cell_origin_y: i32,
+    cell_origin_z: i32,
+    table_entries: u32,
     count: u32,
     _pad0: u32,
     _pad1: u32,
@@ -575,6 +580,9 @@ pub(crate) struct StepShape {
     pub center: [f32; 3],
     pub size: [f32; 3],
     pub cell_size: f32,
+    /// The world cell of the face cells' first cell: the pooled fields are
+    /// read from there.
+    pub cell_origin: [i32; 3],
     /// The pool sort's bins: one a cell.
     pub bins: [u32; 3],
     pub capacity: u32,
@@ -599,7 +607,9 @@ impl StepShape {
             .ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
         let bounds = bounds.ok_or("the solid lattice is missing: grid_bounds is not wired")?;
         let (origin, cell_size) = grid_box(bounds, nodes)?;
-        face_offset(nodes, face_cells)?;
+        // The face cells sit centred in the grid, `pad` cells in; the step's
+        // pooled lattice is the face cells.
+        let [pad, ..] = face_offset(nodes, face_cells)?;
         require_extended_faces(face_valid_layers)?;
         if !(1..=MAX_CAPACITY).contains(&capacity) {
             return Err(format!(
@@ -614,6 +624,7 @@ impl StepShape {
                 "a {bins:?} sort grid is more than the {MAX_BINS} bins a search can index"
             ));
         }
+        let cell_origin = solver_origin_cell(origin, cell_size).map(|c| c + pad as i32);
         Ok(Self {
             nodes,
             cells,
@@ -621,6 +632,7 @@ impl StepShape {
             center,
             size,
             cell_size,
+            cell_origin,
             bins,
             capacity,
         })
@@ -832,7 +844,7 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
             inputs.identity.size
         ));
     }
-    let (pooled_face_bytes, table_bytes) = pooled_bytes(shape.face_cells, inputs.pool_tiles);
+    let (pooled_face_bytes, table_bytes) = pooled_bytes(inputs.pool_tiles);
     let wanted = [
         ("solid", inputs.solid, shape.solid_bytes()),
         (
@@ -1431,6 +1443,7 @@ impl Step {
         pub(crate) fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, inputs: &StepInputs<'_>) {
             if let FaceSource::Packed(packed) = inputs.faces {
                 let [nodes_x, nodes_y, nodes_z] = shape.face_cells.map(|n| (n + 4) as f32);
+                let [origin_x, origin_y, origin_z] = shape.cell_origin.map(|c| c as f32);
                 let count = (shape.unpacked_face_bytes() / 12) as u32;
                 for (axis, out) in self.face_axes(inputs.faces).into_iter().enumerate() {
                     atom_then::<FaceSampleComponent>(
@@ -1442,6 +1455,9 @@ impl Step {
                             ("nodes_y", nodes_y),
                             ("nodes_z", nodes_z),
                             ("pool_tiles", inputs.pool_tiles as f32),
+                            ("cell_origin_x", origin_x),
+                            ("cell_origin_y", origin_y),
+                            ("cell_origin_z", origin_z),
                         ],
                         &[packed, inputs.tiles, out],
                         count,
@@ -1463,11 +1479,16 @@ impl Step {
     ) {
         let [cells_x, cells_y, cells_z] = shape.face_cells;
         let count = cell_total(shape.face_cells) as u32;
+        let [cell_origin_x, cell_origin_y, cell_origin_z] = shape.cell_origin;
         let params = GatherParams {
             cells_x,
             cells_y,
             cells_z,
             pool_tiles: inputs.pool_tiles,
+            cell_origin_x,
+            cell_origin_y,
+            cell_origin_z,
+            table_entries: table_entries(inputs.pool_tiles),
             count,
             _pad0: 0,
             _pad1: 0,

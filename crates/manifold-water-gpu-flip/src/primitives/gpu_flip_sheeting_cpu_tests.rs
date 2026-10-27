@@ -5,14 +5,14 @@
 pub(super) fn reference_shader() -> String {
     let source = super::gpu_flip_sheeting::source();
     let start = source.find("// Phase 2:").unwrap();
-    let end = source.find("fn bucket_dims()").unwrap();
+    let end = source.find("struct Evaluation").unwrap();
     let mut source = format!(
-        "{}{}\n@compute @workgroup_size(256)\nfn build_buckets() {{}}\n{}",
+        "{}{}\n@compute @workgroup_size(256)\nfn build_buckets() {{}}\n\n{}",
         &source[..start],
         OLD_SELECTION,
         &source[end..],
     );
-    let row_read = "let row = bucket_flat(nb);\n                let n = sheet_b[row];";
+    let row_read = "let row = bucket_flat(nb);\n                if row == WT_NONE { continue; }\n                let n = sheet_b[row];";
     assert_eq!(source.matches(row_read).count(), 2);
     assert_eq!(
         source
@@ -50,46 +50,50 @@ fn sheeting_bucket_shaders_validate_on_cpu() {
 }
 
 pub(super) struct BucketFixture {
+    /// Selected markers per pool cell (zero for a cell the fixture leaves out).
     pub(super) counts: Vec<u32>,
+    /// 32 marker places per bucket row, 64 rows a slot.
     pub(super) segments: Vec<[u32; 4]>,
+    /// Each bucket row's merged markers in input order.
     pub(super) merged: Vec<Vec<[u32; 4]>>,
 }
 
-/// Shuffled input indices are distributed to cells, then stably sorted per
+/// Shuffled input indices are distributed to `cells`, then stably sorted per
 /// cell as ParticleSorter does. CPU reference uses a stable sort of each
 /// bucket's concatenated lists, independent of the shader's eight-way merge.
-pub(super) fn bucket_fixture(cells: [usize; 3], saturated: bool) -> BucketFixture {
-    let buckets = cells.map(|n| n.div_ceil(2));
-    let n = cells.iter().product::<usize>();
-    let rows = buckets.iter().product::<usize>();
-    let mut indices: Vec<u32> = (0..4 * n as u32).collect();
+/// `pool_index` maps a cell to its place in the pool of `pool_tiles` slots; a
+/// bucket row is 64 per slot, x fastest, from the cell's bucket.
+pub(super) fn bucket_fixture(
+    cells: &[[i32; 3]],
+    pool_index: &dyn Fn([i32; 3]) -> usize,
+    pool_tiles: usize,
+    saturated: bool,
+) -> BucketFixture {
+    let mut indices: Vec<u32> = (0..4 * cells.len() as u32).collect();
     let mut rng = 0x1234_5678u32;
     for i in (1..indices.len()).rev() {
         rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
         indices.swap(i, rng as usize % (i + 1));
     }
     let mut fixture = BucketFixture {
-        counts: vec![0; n],
-        segments: vec![[0xdead_beef; 4]; 32 * rows],
-        merged: vec![Vec::new(); rows],
+        counts: vec![0; 512 * pool_tiles + 1],
+        segments: vec![[0xdead_beef; 4]; 32 * 64 * pool_tiles],
+        merged: vec![Vec::new(); 64 * pool_tiles],
     };
-    for c in 0..n {
-        let q = [
-            c % cells[0],
-            c / cells[0] % cells[1],
-            c / (cells[0] * cells[1]),
-        ];
-        let b = q.map(|v| v / 2);
-        let row = b[0] + buckets[0] * (b[1] + buckets[1] * b[2]);
-        let lane = (q[0] & 1) + 2 * (q[1] & 1) + 4 * (q[2] & 1);
-        let count = if saturated { 4 } else { c % 5 };
-        fixture.counts[c] = count as u32;
-        let list = &mut indices[4 * c..4 * c + count];
+    for (n, &c) in cells.iter().enumerate() {
+        let at = pool_index(c);
+        let b = c.map(|v| v >> 1);
+        let row =
+            64 * (at / 512) + (b[0] & 3) as usize + 4 * ((b[1] & 3) + 4 * (b[2] & 3)) as usize;
+        let lane = ((c[0] & 1) + 2 * (c[1] & 1) + 4 * (c[2] & 1)) as usize;
+        let count = if saturated { 4 } else { n % 5 };
+        fixture.counts[at] = count as u32;
+        let list = &mut indices[4 * n..4 * n + count];
         list.sort_unstable();
         for (m, &index) in list.iter().enumerate() {
             // High index bits include NaN encodings: .w is never numeric data.
             let marker = [
-                (c as f32).to_bits(),
+                (at as f32).to_bits(),
                 (m as f32).to_bits(),
                 (-0.0f32).to_bits(),
                 0x7fc0_0000 + index,
@@ -104,16 +108,34 @@ pub(super) fn bucket_fixture(cells: [usize; 3], saturated: bool) -> BucketFixtur
     fixture
 }
 
+/// The 2 x 2 x 1 tiles from cell (-8, -8, 0), slot = tile x + 2 tile y, every
+/// cell of them, and the pool index of a cell in that layout.
+fn block() -> (Vec<[i32; 3]>, impl Fn([i32; 3]) -> usize) {
+    let mut cells = Vec::new();
+    for z in 0..8 {
+        for y in -8..8 {
+            for x in -8..8 {
+                cells.push([x, y, z]);
+            }
+        }
+    }
+    let index = |c: [i32; 3]| {
+        let slot = ((c[0] >> 3) + 1) + 2 * ((c[1] >> 3) + 1);
+        512 * slot as usize + (c[0] & 7) as usize + 8 * ((c[1] & 7) + 8 * (c[2] & 7)) as usize
+    };
+    (cells, index)
+}
+
 #[test]
-fn sheeting_bucket_fixture_covers_padding_and_saturation() {
-    let fixture = bucket_fixture([5, 3, 7], true);
+fn sheeting_bucket_fixture_fills_whole_buckets_in_slot_rows() {
+    let (cells, index) = block();
+    let fixture = bucket_fixture(&cells, &index, 4, true);
     assert_eq!(
         fixture.merged.iter().map(Vec::len).sum::<usize>(),
-        4 * 5 * 3 * 7
+        4 * cells.len()
     );
-    assert_eq!(fixture.counts.iter().sum::<u32>(), 4 * 5 * 3 * 7);
-    assert!(fixture.merged.iter().any(|row| row.len() == 32));
-    assert_eq!(fixture.merged.last().unwrap().len(), 4);
+    assert_eq!(fixture.counts.iter().sum::<u32>() as usize, 4 * cells.len());
+    assert!(fixture.merged.iter().all(|row| row.len() == 32));
     assert!(
         fixture
             .merged
@@ -125,29 +147,31 @@ fn sheeting_bucket_fixture_covers_padding_and_saturation() {
         fixture.merged[0].as_slice(),
         "merge must reorder unread segments"
     );
-    let empty = bucket_fixture([1, 1, 1], false);
-    assert!(empty.merged[0].is_empty());
+    // Cell (-1, -1, 0) is in slot 0 (tile (-1, -1, 0)) bucket (-1, -1, 0):
+    // local bucket (3, 3, 0), row 15; its lane is 7.
+    assert_eq!(fixture.segments[32 * 15 + 4 * 7][2], (-0.0f32).to_bits());
+    let ragged = bucket_fixture(&cells, &index, 4, false);
+    assert!(ragged.merged.iter().any(|row| row.len() < 32));
+    assert!(ragged.merged.iter().any(|row| !row.is_empty()));
 }
 
-// Frozen selection/merge from 09813ff8f; test builds only.
+// Frozen selection/merge from 09813ff8f; test builds only. Markers wait in
+// four places per cell, indexed by the cell's pool index, and a bucket is
+// merged where it is read.
 const OLD_SELECTION: &str = r#"// Phase 2: the first four markers of each sheet cell, in input order, with
 // -2h <= phi < 2h.
 @compute @workgroup_size(256)
 fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let c = gid.x;
-    if c >= ts_cell_count() { return; }
-    let q = ts_box_cell(c);
-    if !ts_cell_stored(q) { return; }
-    let at = ts_cell_at(q);
+    let at = pass_cell(gid.x);
     if atomicLoad(&sheet_a[at]) == 0u { return; }
-    let range = ranges[ts_cell_at(q)];
+    let range = ranges[at];
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
         let p = local(particles[s]);
         let value = sample(p);
         if value >= u.max_depth || value < -u.max_depth { continue; }
-        selected[4u * c + n] = vec4<f32>(p, bitcast<f32>(order[s]));
+        selected[4u * at + n] = vec4<f32>(p, bitcast<f32>(order[s]));
         n = n + 1u;
     }
     selected_count[at] = n;
@@ -160,14 +184,13 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
     var heads: array<u32, 8>;
     var counts: array<u32, 8>;
     var cells: array<u32, 8>;
-    var dense: array<u32, 8>;
     for (var l = 0; l < 8; l = l + 1) {
         let c = 2 * b + vec3<i32>(l & 1, (l >> 1) & 1, (l >> 2) & 1);
         heads[l] = 0u;
         counts[l] = 0u;
-        if in_range(c) {
+        cells[l] = 0u;
+        if ts_cell_stored(c) {
             cells[l] = ts_cell_at(c);
-            dense[l] = ts_dense_cell(c);
             counts[l] = selected_count[cells[l]];
         }
     }
@@ -177,12 +200,12 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
         var best_index = 0xffffffffu;
         for (var l = 0; l < 8; l = l + 1) {
             if heads[l] < counts[l] {
-                let index = bitcast<u32>(selected[4u * dense[l] + heads[l]].w);
+                let index = bitcast<u32>(selected[4u * cells[l] + heads[l]].w);
                 if index < best_index { best_index = index; best = l; }
             }
         }
         if best < 0 { break; }
-        bucket[n] = selected[4u * dense[best] + heads[best]];
+        bucket[n] = selected[4u * cells[best] + heads[best]];
         heads[best] = heads[best] + 1u;
         n = n + 1u;
     }

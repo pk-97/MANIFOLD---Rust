@@ -41,6 +41,8 @@ Slot numbers follow tile order, so runs are bitwise reproducible even where an o
 - **Capacity and the exhausted word.** `P = min(T³, POOL_BUDGET_BYTES / tile_bytes)`, `tile_bytes` = 512 × the pooled bytes per cell summed over the step, solver, sheeting and sheet distance (368 bytes, so 8,548 tiles), `POOL_BUDGET_BYTES` the D4 live budget for the lattice (1.5 GiB: 128 live under 2 GB total, the rest particles and the render). At 64 and 128 in today's box `P = T³`. `exhausted` is a word in `tile_counts`; S3.4 makes sources stop and the card say why.
 - **First step after a pool build:** every slot free, every tile absent; the first `tiles_allocate` allocates A and `tiles_fresh` fills it.
 
+What exists now: the tiles' near and rank come from the particles (`tiles_clear` and `tiles_mark`, see GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-2), with no per-tile classify pass. The sort keys each point on its pool index (`ts_cell_at`; a point whose tile has no slot keys to the canonical index). `extend_faces` runs over the allocated tile list: the first `tile_counts[ring_max]` tiles of `tiles_by_ring`, skipping any listed tile without a slot. The frontier-only extend (S3.3) is not built.
+
 ## 5. Passes and consumers
 
 - **C passes** (particle_distance, particles_to_faces, phi_into_solids, water_from_phi, divergence, density_source): unchanged lists, indices through the helpers.

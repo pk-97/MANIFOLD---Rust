@@ -4,8 +4,8 @@
 // read side (`manifold_node_engine::scene::world_tiles::READ_SIDE`) and a
 // points snippet (`world_tiles_liquid.wgsl`, `world_tiles_parents.wgsl`),
 // which binds its source at binding 13 and defines
-// `fn wt_point_live(i: u32) -> bool` and `fn wt_point_cell(i: u32) -> vec3<i32>`,
-// the world cell of point i.
+// `fn wt_point_live(i: u32) -> bool` (false past the build's points) and
+// `fn wt_point_cell(i: u32) -> vec3<i32>`, the world cell of point i.
 //
 // Passes, a barrier between each (world_tiles.rs `encode_build`): wt_clear,
 // wt_seed, wt_seeds, wt_dilate, wt_rings, wt_near, wt_carry, wt_wants, the
@@ -36,6 +36,7 @@ struct WtParams {
     alloc_ring: u32,
     // The cell set C's reach from a point's cell, in cells.
     cell_reach: u32,
+    // The level below's slots, the parents build's points.
     point_count: u32,
     // 1: every slot is freed and handed out again in table order (the
     // coarse levels' parents build).
@@ -306,7 +307,7 @@ fn wt_point_tile(i: u32) -> vec3<i32> {
 }
 
 fn wt_live(i: u32) -> bool {
-    return i < wt.point_count && wt_point_live(i);
+    return wt_point_live(i);
 }
 
 // H threads: every key empty, every entry without a slot, ring and near past

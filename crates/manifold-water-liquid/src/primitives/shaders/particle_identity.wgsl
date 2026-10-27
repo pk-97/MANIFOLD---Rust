@@ -2,8 +2,9 @@
 // readback or atomics.
 struct Particle { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32 }
 struct Range { start: u32, count: u32 }
-// `record` is 1 when the step's own record is bound at binding 6.
-struct Params { slots: u32, ranges: u32, sites: u32, mode: u32, record: u32, _pad0: u32, _pad1: u32, _pad2: u32 }
+// `exhausted` is the word of `tile_counts` that is set when the tile pool ran
+// out this step. `record` is 1 when the step's own record is bound at binding 6.
+struct Params { slots: u32, ranges: u32, sites: u32, exhausted: u32, record: u32, _pad0: u32, _pad1: u32, _pad2: u32 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
 // Words 0-3: next (0 means u32 exhausted), identity epoch, reserved base,
@@ -15,6 +16,8 @@ struct Params { slots: u32, ranges: u32, sites: u32, mode: u32, record: u32, _pa
 @group(0) @binding(5) var<storage, read> plan: array<u32>;
 // The step's own record [groups, 1, 1, n], the identity's words 4-7 again.
 @group(0) @binding(6) var<storage, read_write> step_record: array<u32>;
+// The step's tile counts; only the pool's exhausted word is read.
+@group(0) @binding(7) var<storage, read> tile_counts: array<u32>;
 
 fn inactive() -> bool {
     return plan[11] != 0u && bitcast<f32>(plan[0]) <= 0.0;
@@ -72,7 +75,9 @@ fn settle() {
 }
 
 // After a birth stage: the slots in use are the live end plus the births
-// granted, as many of the requested as the slots hold.
+// granted. A stage is granted all of its request or none: none when it does
+// not fit the free slots or the tile pool ran out this step. The refused
+// request is the stage's tally, as the stage counts it.
 @compute @workgroup_size(1)
 fn reserve() {
     if inactive() || identity[3] != 0u { return; }
@@ -80,8 +85,10 @@ fn reserve() {
     let live = last.start + last.count;
     let requested = scan[p.sites - 1u];
     if live > p.slots { return; }
-    var births = min(requested, p.slots - live);
-    if p.mode == 2u && requested > p.slots - live { births = 0u; }
+    var births = 0u;
+    if requested <= p.slots - live && tile_counts[p.exhausted] == 0u {
+        births = requested;
+    }
     if births > 0u {
         var next = identity[0];
         if next == 0u || births - 1u > 0xffffffffu - next {

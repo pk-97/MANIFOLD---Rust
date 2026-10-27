@@ -2,8 +2,10 @@
 // node.liquid_fill — BUFFER source body. One thread per particle slot
 // (FluidParticle → Element3). Particles sit on the half-cell site lattice,
 // site j at (1/4 + j/2) cells along each axis (2·nodes sites per axis), the
-// FLIP Fluids engine's seeding lattice. Sites are enumerated in lattice
-// order: first the pool (every site below `pool_sites`), then the box
+// FLIP Fluids engine's seeding lattice. The domain puts the box on whole world
+// cells (cell p centred on p·h), so site j is world half cell 2p + 1 + j, at
+// a fixed world position whatever the box's corner. Sites are enumerated in
+// lattice order: first the pool (every site below `pool_sites`), then the box
 // [box_x0, x1) × [max(box_y0, pool), y1) × [box_z0, z1). Each particle is
 // jittered by up to jitter / 4 cells each way by a hash of (seed, slot) and
 // starts at rest; the radius is that of a sphere of an eighth of a cell;

@@ -16,6 +16,9 @@ const POCKET_CHANGED: u32 = 9u;
 
 const POCKET_UNRESOLVED: u32 = 10u;
 
+// The gate word holding the held slots, the bound of the sweeps' lines.
+const POCKET_HELD: u32 = 11u;
+
 // Eight-byte aligned {first command, command count} for sweeps and setup.
 const POCKET_RANGE: u32 = 12u;
 
@@ -24,58 +27,104 @@ const POCKET_ROUND_ARGS: u32 = 14u;
 // The pocket count's word among the solver words `capped` is bound at.
 const POCKET_WORD: u32 = 3u;
 
-fn pocket_linked(c: vec3<i32>, d: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> bool {
+// The sums' removed total starts at word 0; the per-label words follow it.
+const POCKET_TOTAL: u32 = 0u;
+
+const POCKET_SUM_HEAD: u32 = 2u;
+
+// Lines a tile starts along one axis: one per cell of a tile face.
+const POCKET_LINES: u32 = 64u;
+
+const NO_NEIGHBOUR: u32 = 0xffffffffu;
+
+// The tank box the walls and open faces sit on, in world cells: the first
+// cell and one past the last. Cells outside it are no part of the lattice:
+// the pocket passes class them dry and never link through them.
+fn pocket_box_lo() -> vec3<i32> {
+    return vec3<i32>(round((u.walls_lo - u.origin) * u.inv_cell));
+}
+
+fn pocket_box_end() -> vec3<i32> {
+    return vec3<i32>(round((u.walls_hi - u.origin) * u.inv_cell));
+}
+
+fn pocket_in_box(c: vec3<i32>) -> bool {
+    return all(c >= pocket_box_lo()) && all(c < pocket_box_end());
+}
+
+// Thread `gid` of a list dispatched at 512 threads a slot: the pool index of
+// its cell. Arithmetic on the list alone, so a coarse level's list works
+// beside the fine table.
+fn pocket_list_cell(gid: u32) -> u32 {
+    return ts_list_cell(tiles_by_ring[gid >> 9u], gid);
+}
+
+fn pocket_linked(c: vec3<i32>, d: vec3<i32>, a: i32) -> bool {
     // c and d are neighbours along a; the face between is the higher's low face.
     var f = c;
     f[a] = max(c[a], d[a]);
-    return open_at(f, a, n, m) >= POCKET_LINK;
+    return open_at(f, a) >= POCKET_LINK;
 }
 
-// One thread per cell: dry, sealed, or water touching air.
-@compute @workgroup_size(256)
-fn pocket_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_cell_count() {
-        return;
-    }
-    let p = ts_box_cell(idx);
-    if !ts_cell_stored(p) {
-        return;
-    }
-    let at = ts_cell_at(p);
-    if !(water[at] > 0.5) {
-        pocket[at] = POCKET_DRY;
-        return;
-    }
-    // A label is the box index of the pocket's lowest cell, so the leader
-    // does not depend on where the pool stores the cells.
-    pocket_label[at] = idx;
-    let n = ts_cells();
-    let m = n + vec3<i32>(1);
-    var air = false;
+// Why in-box water cell p touches air, as the seed decides it: the
+// neighbour's pool index (0xffffffff for an open tank face), the face's
+// open fraction bits, and axis * 2 + (1 on the high side); z is 0xffffffff
+// when it does not. The caller has set p's tile as its home.
+fn pocket_seed_reason(p: vec3<i32>) -> vec4<u32> {
+    let lo = pocket_box_lo();
+    let end = pocket_box_end();
     for (var a = 0; a < 3; a = a + 1) {
         let low_open = (u.closed_faces & (1u << u32(2 * a))) == 0u;
         let high_open = (u.closed_faces & (1u << u32(2 * a + 1))) == 0u;
-        if (low_open && p[a] == 0) || (high_open && p[a] == n[a] - 1) {
-            air = true;
+        if low_open && p[a] == lo[a] {
+            return vec4<u32>(NO_NEIGHBOUR, 0u, u32(2 * a), 0u);
+        }
+        if high_open && p[a] == end[a] - 1 {
+            return vec4<u32>(NO_NEIGHBOUR, 0u, u32(2 * a + 1), 0u);
         }
         for (var s = -1; s <= 1; s = s + 2) {
             var d = p;
             d[a] = p[a] + s;
-            if d[a] >= 0 && d[a] < n[a] && !(water[ts_cell_at(d)] > 0.5) && pocket_linked(p, d, a, n, m) {
-                air = true;
+            if !pocket_in_box(d) {
+                continue;
+            }
+            let near = ts_cell_at(d);
+            if !(water[near] > 0.5) && pocket_linked(p, d, a) {
+                var f = p;
+                f[a] = max(p[a], d[a]);
+                return vec4<u32>(near, bitcast<u32>(open_at(f, a)), u32(2 * a) + select(0u, 1u, s > 0), 0u);
             }
         }
     }
-    pocket[at] = select(POCKET_SEALED, POCKET_AIR, air);
+    return vec4<u32>(NO_NEIGHBOUR, 0u, NO_NEIGHBOUR, 0u);
 }
 
-// One thread: the first round runs. In an inactive clock slot no round
-// runs: every sweep's size is 0 and the rounds return.
+// One thread per cell of every held slot: dry, sealed, or water touching
+// air. Every held cell is written, so a tile that left the cell set holds no
+// pocket from an earlier step.
+@compute @workgroup_size(256)
+fn pocket_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let idx = pocket_list_cell(gid.x);
+    ts_home(idx);
+    let p = ts_cell_coord(idx);
+    if !pocket_in_box(p) || !(water[idx] > 0.5) {
+        pocket[idx] = POCKET_DRY;
+        return;
+    }
+    // A label is the pool index of the pocket's lowest cell.
+    pocket_label[idx] = idx;
+    pocket[idx] = select(POCKET_SEALED, POCKET_AIR, pocket_seed_reason(p).z != NO_NEIGHBOUR);
+}
+
+// One thread: the first round runs, and the sweeps' bound is the held
+// slots (the triple over every held slot, ring_max in, 512 threads a slot in
+// 256-thread groups). In an inactive clock slot no round runs: every sweep's
+// size is 0 and the rounds return.
 @compute @workgroup_size(1)
 fn pocket_start() {
     pocket_gate[POCKET_UNRESOLVED] = 0u;
+    pocket_gate[POCKET_HELD] = tile_args[3u * u.ring_max] / 2u;
     pocket_gate[POCKET_RANGE] = 0u;
     pocket_gate[POCKET_RANGE + 1u] = 0u;
     pocket_gate[POCKET_ROUND_ARGS] = 0u;
@@ -92,7 +141,7 @@ fn pocket_start() {
 }
 
 // One thread: this round's sweeps run only when the last round changed a
-// cell.
+// cell. A sweep thread is one line of one held slot, 64 a slot, 256 a group.
 @compute @workgroup_size(1)
 fn pocket_round() {
     if !clock_active() { return; }
@@ -100,10 +149,9 @@ fn pocket_round() {
     pocket_gate[POCKET_RANGE] = 0u;
     pocket_gate[POCKET_RANGE + 1u] = select(0u, 4u, go);
     pocket_gate[POCKET_ROUND_ARGS] = select(0u, 1u, go);
-    let n = u.n;
-    let lines = vec3<u32>(n.y * n.z, n.z * n.x, n.x * n.y);
+    let groups = (pocket_gate[POCKET_HELD] * POCKET_LINES + 255u) / 256u;
     for (var a = 0u; a < 3u; a = a + 1u) {
-        pocket_gate[3u * a] = select(0u, (lines[a] + 255u) / 256u, go);
+        pocket_gate[3u * a] = select(0u, groups, go);
         pocket_gate[3u * a + 1u] = 1u;
         pocket_gate[3u * a + 2u] = 1u;
     }
@@ -112,10 +160,10 @@ fn pocket_round() {
 
 // Cell c from its line neighbour b: sealed water linked to water reaching
 // air reaches air too; linked sealed water takes the lower label.
-fn pocket_step(c: vec3<i32>, b: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> bool {
+fn pocket_step(c: vec3<i32>, b: vec3<i32>, a: i32) -> bool {
     let at = ts_cell_at(c);
     let near = ts_cell_at(b);
-    if pocket[at] != POCKET_SEALED || pocket[near] == POCKET_DRY || !pocket_linked(c, b, a, n, m) {
+    if pocket[at] != POCKET_SEALED || pocket[near] == POCKET_DRY || !pocket_linked(c, b, a) {
         return false;
     }
     if pocket[near] == POCKET_AIR {
@@ -129,32 +177,54 @@ fn pocket_step(c: vec3<i32>, b: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -
     return false;
 }
 
-// One thread per line along axis a, forward then back; each line is its
-// thread's alone.
+// One thread per line along axis a, 64 per held slot: the slot starts its
+// lines when its tile on the low side of the axis is absent, and the line
+// then walks through the neighbour rows, forward then back, until it leaves
+// the held tiles. So a run of held tiles along the axis is swept whole by one
+// thread a line, and each cell has one thread that writes it.
 fn pocket_sweep(t: u32, a: i32) {
-    let n = ts_cells();
-    let m = n + vec3<i32>(1);
-    let axes = cross_axes(a);
-    if t >= u32(n[axes.x] * n[axes.y]) {
+    if t / POCKET_LINES >= pocket_gate[POCKET_HELD] {
         return;
     }
-    var p = vec3<i32>(0);
-    p[axes.x] = i32(t % u32(n[axes.x]));
-    p[axes.y] = i32(t / u32(n[axes.x]));
-    var changed = false;
-    for (var i = 1; i < n[a]; i = i + 1) {
-        var c = p;
-        c[a] = i;
-        var b = p;
-        b[a] = i - 1;
-        changed = pocket_step(c, b, a, n, m) || changed;
+    let first = tiles_by_ring[t / POCKET_LINES];
+    var along = vec3<i32>(0);
+    along[a] = 1;
+    if ts_neighbour_slot(first, ts_neighbour_index(-along)) != WT_NONE {
+        return;
     }
-    for (var i = n[a] - 2; i >= 0; i = i - 1) {
-        var c = p;
-        c[a] = i;
-        var b = p;
-        b[a] = i + 1;
-        changed = pocket_step(c, b, a, n, m) || changed;
+    // The line's place in each tile, on the two other axes.
+    let line = t % POCKET_LINES;
+    var local = vec3<i32>(0);
+    local[(a + 1) % 3] = i32(line & 7u);
+    local[(a + 2) % 3] = i32(line >> 3u);
+    var changed = false;
+    var slot = first;
+    var last = first;
+    for (var walked = 0u; walked < ts_pool_tiles(); walked = walked + 1u) {
+        ts_home(slot * 512u);
+        for (var i = 0; i < 8; i = i + 1) {
+            local[a] = i;
+            let c = ts_home_tile * 8 + local;
+            changed = pocket_step(c, c - along, a) || changed;
+        }
+        last = slot;
+        slot = ts_neighbour_slot(slot, ts_neighbour_index(along));
+        if slot == WT_NONE {
+            break;
+        }
+    }
+    slot = last;
+    for (var walked = 0u; walked < ts_pool_tiles(); walked = walked + 1u) {
+        ts_home(slot * 512u);
+        for (var i = 7; i >= 0; i = i - 1) {
+            local[a] = i;
+            let c = ts_home_tile * 8 + local;
+            changed = pocket_step(c, c + along, a) || changed;
+        }
+        slot = ts_neighbour_slot(slot, ts_neighbour_index(-along));
+        if slot == WT_NONE {
+            break;
+        }
     }
     if changed {
         pocket_gate[POCKET_CHANGED] = 1u;
@@ -176,13 +246,14 @@ fn pocket_sweep_z(@builtin(global_invocation_id) gid: vec3<u32>) {
     pocket_sweep(gid.x, 2);
 }
 
-// A sealed cell with a linked neighbour of the given state.
-fn pocket_neighbour(c: vec3<i32>, state: u32, n: vec3<i32>, m: vec3<i32>) -> bool {
+// A sealed cell with a linked neighbour of the given state. The caller has
+// set c's tile as its home.
+fn pocket_neighbour(c: vec3<i32>, state: u32) -> bool {
     for (var a = 0; a < 3; a = a + 1) {
         for (var s = -1; s <= 1; s = s + 2) {
             var d = c;
             d[a] = c[a] + s;
-            if d[a] >= 0 && d[a] < n[a] && pocket[ts_cell_at(d)] == state && pocket_linked(c, d, a, n, m) {
+            if pocket_in_box(d) && pocket[ts_cell_at(d)] == state && pocket_linked(c, d, a) {
                 return true;
             }
         }
@@ -190,30 +261,30 @@ fn pocket_neighbour(c: vec3<i32>, state: u32, n: vec3<i32>, m: vec3<i32>) -> boo
     return false;
 }
 
-// One thread per cell, after the last round: a sealed cell still linked to
-// one that reaches air means the spread hit its cap unfinished.
+// One thread per cell of the cell set C, after the last round: a sealed cell
+// still linked to one that reaches air means the spread hit its cap
+// unfinished. Sealed water is always in C, so no other tile can hold it.
 @compute @workgroup_size(256)
 fn pocket_check(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_cell_count() {
+    let idx = pocket_list_cell(gid.x);
+    if pocket[idx] != POCKET_SEALED {
         return;
     }
-    let n = ts_cells();
-    let c = ts_box_cell(idx);
-    let at = ts_cell_at(c);
-    if pocket[at] != POCKET_SEALED {
-        return;
-    }
-    let m = n + vec3<i32>(1);
-    var unfinished = pocket_neighbour(c, POCKET_AIR, n, m);
+    ts_home(idx);
+    let c = ts_cell_coord(idx);
+    var unfinished = pocket_neighbour(c, POCKET_AIR);
     // A pocket still split between two labels: each part's mean is removed
     // apart, which keeps the solve consistent but spreads unevenly.
     for (var a = 0; a < 3; a = a + 1) {
         for (var s = -1; s <= 1; s = s + 2) {
             var d = c;
             d[a] = c[a] + s;
-            if d[a] >= 0 && d[a] < n[a] && pocket[ts_cell_at(d)] == POCKET_SEALED && pocket_label[ts_cell_at(d)] != pocket_label[at] && pocket_linked(c, d, a, n, m) {
+            if !pocket_in_box(d) {
+                continue;
+            }
+            let near = ts_cell_at(d);
+            if pocket[near] == POCKET_SEALED && pocket_label[near] != pocket_label[idx] && pocket_linked(c, d, a) {
                 unfinished = true;
             }
         }
@@ -223,34 +294,29 @@ fn pocket_check(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// One thread per cell, `water` to `cell_out`: the solves' water, less each
-// sealed pocket's leader cell. With no air a pocket's L is singular, and in
-// f32 its residual never reaches the stop; the leader then stands as air at
-// p = 0, an identity row, and its neighbours see it as a pressure-0
-// neighbour as the subtract pass does.
+// One thread per cell of every held slot, `water` to `cell_out`: the
+// solves' water, less each sealed pocket's leader cell. With no air a
+// pocket's L is singular, and in f32 its residual never reaches the stop;
+// the leader then stands as air at p = 0, an identity row, and its
+// neighbours see it as a pressure-0 neighbour as the subtract pass does.
 @compute @workgroup_size(256)
 fn pocket_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_cell_count() {
-        return;
-    }
-    let p = ts_box_cell(idx);
-    if !ts_cell_stored(p) {
-        return;
-    }
-    let at = ts_cell_at(p);
-    let leader = pocket[at] == POCKET_SEALED && pocket_label[at] == idx;
-    cell_out[at] = select(water[at], 0.0, leader);
+    let idx = pocket_list_cell(gid.x);
+    let leader = pocket[idx] == POCKET_SEALED && pocket_label[idx] == idx;
+    cell_out[idx] = select(water[idx], 0.0, leader);
 }
 
-// One thread per word: the pocket sums start at 0.
+// One thread per cell of a list (the cell set C, or a coarse level's slots):
+// the sums of the cell's label start at 0. A label is a pool index of the
+// list's own pool.
 @compute @workgroup_size(256)
 fn pocket_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    if gid.x < 3u * ts_cell_count() + 2u {
-        atomicStore(&pocket_sum[gid.x], 0u);
-    }
+    let at = POCKET_SUM_HEAD + 3u * pocket_list_cell(gid.x);
+    atomicStore(&pocket_sum[at], 0u);
+    atomicStore(&pocket_sum[at + 1u], 0u);
+    atomicStore(&pocket_sum[at + 2u], 0u);
 }
 
 // A cell's right-hand side in the sums' fixed point, as (low, high) of a
@@ -289,22 +355,15 @@ var<workgroup> group_label: u32;
 
 var<workgroup> group_sum: array<atomic<u32>, 3>;
 
-// Where cell `idx` of the pass's lattice lives in `pocket`, `pocket_label`
-// and the right-hand side: the fine lattice's are pooled fields, a coarse
-// level's dense boxes (the same passes run over both).
-fn pocket_slot(idx: u32, fine: bool) -> u32 {
-    if fine {
-        return ts_cell_at(ts_box_cell(idx));
-    }
-    return idx;
-}
-
-// Cell `idx` is inside the pass's lattice and, on the fine lattice, stored.
-fn pocket_live(idx: u32, fine: bool) -> bool {
-    return idx < ts_cell_count() && (!fine || ts_cell_stored(ts_box_cell(idx)));
-}
-
-fn pocket_accumulate_cells(idx: u32, lane: u32, fine: bool) {
+// One thread per cell of a list, the right-hand side in `cell_out`: each
+// sealed cell adds itself to its pocket. A workgroup first folds the cells
+// sharing its first sealed cell's label, so a large pocket is not one
+// contended word. The list is the cell set C for the fine lattice, a coarse
+// level's slots for a level (its state, label and right-hand side bound in
+// place of the fine ones).
+@compute @workgroup_size(256)
+fn pocket_accumulate(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    if !clock_active() { return; }
     if lane == 0u {
         group_label = 0xffffffffu;
         atomicStore(&group_sum[0], 0u);
@@ -312,91 +371,68 @@ fn pocket_accumulate_cells(idx: u32, lane: u32, fine: bool) {
         atomicStore(&group_sum[2], 0u);
     }
     workgroupBarrier();
-    let sealed = pocket_live(idx, fine) && pocket[pocket_slot(idx, fine)] == POCKET_SEALED;
+    let idx = pocket_list_cell(gid.x);
+    let sealed = pocket[idx] == POCKET_SEALED;
     var label = 0u;
     if sealed {
-        label = pocket_label[pocket_slot(idx, fine)];
+        label = pocket_label[idx];
         // Any one sealed lane's label wins; the rest go straight to memory.
         group_label = label;
     }
     workgroupBarrier();
     let shared_label = workgroupUniformLoad(&group_label);
     if sealed {
-        let q = pocket_fixed(cell_out[pocket_slot(idx, fine)]);
+        let q = pocket_fixed(cell_out[idx]);
         if label == shared_label {
             let old = atomicAdd(&group_sum[0], q.x);
             let carry = select(0u, 1u, old + q.x < old);
             atomicAdd(&group_sum[1], q.y + carry);
             atomicAdd(&group_sum[2], 1u);
         } else {
-            pocket_add(3u * label, q);
-            atomicAdd(&pocket_sum[3u * label + 2u], 1u);
+            let at = POCKET_SUM_HEAD + 3u * label;
+            pocket_add(at, q);
+            atomicAdd(&pocket_sum[at + 2u], 1u);
         }
     }
     workgroupBarrier();
     if lane == 0u && shared_label != 0xffffffffu {
-        pocket_add(3u * shared_label, vec2<u32>(atomicLoad(&group_sum[0]), atomicLoad(&group_sum[1])));
-        atomicAdd(&pocket_sum[3u * shared_label + 2u], atomicLoad(&group_sum[2]));
+        let at = POCKET_SUM_HEAD + 3u * shared_label;
+        pocket_add(at, vec2<u32>(atomicLoad(&group_sum[0]), atomicLoad(&group_sum[1])));
+        atomicAdd(&pocket_sum[at + 2u], atomicLoad(&group_sum[2]));
     }
 }
 
-// One thread per cell, the right-hand side in `cell_out`: each sealed cell
-// adds itself to its pocket. A workgroup first folds the cells sharing its
-// first sealed cell's label, so a large pocket is not one contended word.
-// The fine lattice's, then a coarse level's.
-@compute @workgroup_size(256)
-fn pocket_accumulate(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
-    if !clock_active() { return; }
-    pocket_accumulate_cells(gid.x, lane, true);
-}
-
-@compute @workgroup_size(256)
-fn pocket_accumulate_coarse(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
-    if !clock_active() { return; }
-    pocket_accumulate_cells(gid.x, lane, false);
-}
-
-fn pocket_remove_cell(idx: u32, fine: bool) {
-    if !pocket_live(idx, fine) {
-        return;
-    }
-    let at = pocket_slot(idx, fine);
-    if pocket[at] != POCKET_SEALED {
-        return;
-    }
-    let label = pocket_label[at];
-    let low = atomicLoad(&pocket_sum[3u * label]);
-    let high = atomicLoad(&pocket_sum[3u * label + 1u]);
-    let count = atomicLoad(&pocket_sum[3u * label + 2u]);
-    let q = pocket_fixed(cell_out[at]);
-    cell_out[at] = pocket_value(q.x, q.y) - pocket_value(low, high) / f32(count);
-    if idx == label {
-        let total = pocket_value(low, high);
-        pocket_add(3u * ts_cell_count(), pocket_fixed(abs(total)));
-    }
-}
-
-// One thread per cell: a sealed cell's right-hand side less its pocket's
-// mean, so each pocket sums to 0 and its pure-Neumann solve has a solution.
-// The leader cell adds what its pocket lost to the removed total. The fine
-// lattice's, then a coarse level's.
+// One thread per cell of a list: a sealed cell's right-hand side less its
+// pocket's mean, so each pocket sums to 0 and its pure-Neumann solve has a
+// solution. The leader cell adds what its pocket lost to the removed total.
+// The same lists and arrays as pocket_accumulate.
 @compute @workgroup_size(256)
 fn pocket_remove(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    pocket_remove_cell(gid.x, true);
-}
-
-@compute @workgroup_size(256)
-fn pocket_remove_coarse(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !clock_active() { return; }
-    pocket_remove_cell(gid.x, false);
+    let idx = pocket_list_cell(gid.x);
+    if pocket[idx] != POCKET_SEALED {
+        return;
+    }
+    let label = pocket_label[idx];
+    let at = POCKET_SUM_HEAD + 3u * label;
+    let low = atomicLoad(&pocket_sum[at]);
+    let high = atomicLoad(&pocket_sum[at + 1u]);
+    let count = atomicLoad(&pocket_sum[at + 2u]);
+    let q = pocket_fixed(cell_out[idx]);
+    cell_out[idx] = pocket_value(q.x, q.y) - pocket_value(low, high) / f32(count);
+    if idx == label {
+        let total = pocket_value(low, high);
+        pocket_add(POCKET_TOTAL, pocket_fixed(abs(total)));
+    }
 }
 
 // One thread, `capped` bound at the solver words: the volume rate removed
-// from this step's pockets, h³ times the removed sum, added to `word`.
+// from this step's pockets, h³ times the removed sum, added to `word`. The
+// removed total goes back to 0 for the next solve.
 fn pocket_flux(word: u32) {
-    let at = 3u * ts_cell_count();
-    let total = pocket_value(atomicLoad(&pocket_sum[at]), atomicLoad(&pocket_sum[at + 1u]));
+    let total = pocket_value(atomicLoad(&pocket_sum[POCKET_TOTAL]), atomicLoad(&pocket_sum[POCKET_TOTAL + 1u]));
+    atomicStore(&pocket_sum[POCKET_TOTAL], 0u);
+    atomicStore(&pocket_sum[POCKET_TOTAL + 1u], 0u);
     let h = u.cell_size;
     let removed = total * h * h * h;
     if u.step_in_tick == 0 {
@@ -426,83 +462,81 @@ fn pocket_flux_density() {
 // the solve's level. A level cell is sealed when every fine cell under it
 // is sealed with one label; its label is the lowest level cell of that
 // pocket, so the pocket passes run over the level's right-hand side
-// unchanged.
+// unchanged. The level is a world-tiled lattice of its own (its pool, table
+// and list), so its pockets are pooled fields indexed by the level's pool
+// index.
 @group(0) @binding(39) var<storage, read_write> pocket_coarse: array<u32>;
 
 @group(0) @binding(40) var<storage, read_write> pocket_coarse_label: array<u32>;
 
-// By fine label: the lowest level cell of that pocket.
+// By fine label (a fine pool index): the lowest level cell of that pocket.
 @group(0) @binding(41) var<storage, read_write> pocket_leader: array<atomic<u32>>;
+
+// The level's table, read for nothing but its slots' tiles; the fine table
+// stays the one `ts_*` reads. `entries` is the level table's H.
+struct PocketLevel {
+    entries: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+};
+
+@group(0) @binding(63) var<uniform> pocket_level: PocketLevel;
+
+@group(0) @binding(64) var<storage, read> pocket_level_table: array<u32>;
 
 const NO_LEADER: u32 = 0xffffffffu;
 
-// The lattice `k` halvings down, each rounding up: the solver's levels.
-fn level_lattice(k: u32) -> vec3<i32> {
-    var n = ts_cells();
-    for (var j = 0u; j < k; j = j + 1u) {
-        n = (n + 1) / 2;
-    }
-    return n;
+// The tile a held slot of the level holds (its slot row, as ts_slot_tile
+// reads the fine table's).
+fn pocket_level_tile(slot: u32) -> vec3<i32> {
+    let row = 2u * pocket_level.entries + WT_SLOT_WORDS * slot;
+    return bitcast<vec3<i32>>(vec3<u32>(pocket_level_table[row], pocket_level_table[row + 1u], pocket_level_table[row + 2u]));
 }
 
-fn level_total(k: u32) -> u32 {
-    let c = level_lattice(k);
-    return u32(c.x * c.y * c.z);
-}
-
-// One thread per fine cell: no pocket has a leader yet.
+// One thread per cell of the cell set C: no pocket has a leader yet.
 @compute @workgroup_size(256)
 fn pocket_leader_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    if gid.x >= ts_cell_count() {
-        return;
-    }
-    let p = ts_box_cell(gid.x);
-    if ts_cell_stored(p) {
-        atomicStore(&pocket_leader[ts_cell_at(p)], NO_LEADER);
-    }
+    atomicStore(&pocket_leader[pocket_list_cell(gid.x)], NO_LEADER);
 }
 
 // A fine cell the solver coarsens as solid (gpu_flip_pressure.wgsl kind):
 // not water, every face closed. It is no part of any pocket.
-fn cell_solid(p: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
+fn cell_solid(p: vec3<i32>) -> bool {
     if water[ts_cell_at(p)] > 0.5 {
         return false;
     }
     for (var a = 0; a < 3; a = a + 1) {
         var above = p;
         above[a] = p[a] + 1;
-        if open_at(p, a, n, m) != 0.0 || open_at(above, a, n, m) != 0.0 {
+        if open_at(p, a) != 0.0 || open_at(above, a) != 0.0 {
             return false;
         }
     }
     return true;
 }
 
-// One thread per level cell: sealed with its children's fine label when
-// every in-lattice child that is not solid is sealed under that one label,
-// dry otherwise. The solver's level cell is water with solid children
-// inside it; they carry no label and never break the seal.
+// One thread per cell of every slot of the level (the level's list is
+// bound): sealed with its children's fine label when every in-lattice child
+// that is not solid is sealed under that one label, dry otherwise. The
+// solver's level cell is water with solid children inside it; they carry no
+// label and never break the seal. The block of children is read through the
+// fine table, with its first cell's tile as the home.
 @compute @workgroup_size(256)
 fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    let k = u.solve_level;
-    if idx >= level_total(k) {
-        return;
-    }
-    let n = ts_cells();
-    let m = n + vec3<i32>(1);
-    let c = level_lattice(k);
-    let side = 1 << k;
-    let base = ts_grid_coord(idx, c) * side;
+    let idx = pocket_list_cell(gid.x);
+    let side = 1 << u.solve_level;
+    let base = (pocket_level_tile(idx >> 9u) * 8 + ts_local_coord(idx & 511u)) * side;
+    ts_home(ts_cell_at(base));
     var sealed = true;
     var label = NO_LEADER;
     for (var z = 0; z < side && sealed; z = z + 1) {
         for (var y = 0; y < side && sealed; y = y + 1) {
             for (var x = 0; x < side && sealed; x = x + 1) {
                 let p = base + vec3<i32>(x, y, z);
-                if any(p >= n) || cell_solid(p, n, m) {
+                if !pocket_in_box(p) || cell_solid(p) {
                     continue;
                 }
                 let f = ts_cell_at(p);
@@ -521,52 +555,47 @@ fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
     pocket_coarse[idx] = select(POCKET_DRY, POCKET_SEALED, sealed);
     pocket_coarse_label[idx] = label;
     if sealed {
-        atomicMin(&pocket_leader[ts_cell_at(ts_grid_coord(label, n))], idx);
+        atomicMin(&pocket_leader[label], idx);
     }
 }
 
-// One thread per level cell: a sealed cell takes its pocket's leader.
+// One thread per cell of every slot of the level: a sealed cell takes its
+// pocket's leader.
 @compute @workgroup_size(256)
 fn pocket_relabel(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= level_total(u.solve_level) || pocket_coarse[idx] != POCKET_SEALED {
+    let idx = pocket_list_cell(gid.x);
+    if pocket_coarse[idx] != POCKET_SEALED {
         return;
     }
-    let label = ts_grid_coord(pocket_coarse_label[idx], ts_cells());
-    pocket_coarse_label[idx] = atomicLoad(&pocket_leader[ts_cell_at(label)]);
+    pocket_coarse_label[idx] = atomicLoad(&pocket_leader[pocket_coarse_label[idx]]);
 }
 
-// A cell of a sealed region of more than one cell; a lone sealed cell keeps
-// its solid velocity, as the engine skips a group of one.
-fn pocket_isolated(c: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
-    return pocket[ts_cell_at(c)] == POCKET_SEALED && pocket_neighbour(c, POCKET_SEALED, n, m);
-}
-
-// One thread per face record, in place on the solid velocity in
-// `faces_out`: each of the six faces of an isolated cell takes velocity 0.
+// One thread per cell of the cell set C: an isolated cell is sealed water in
+// a region of more than one cell (a lone sealed cell keeps its solid
+// velocity, as the engine skips a group of one). Each of its six faces
+// takes solid velocity 0, in place on `faces_out`. The high faces are the
+// next cells' records; where that tile is not held there is no record to
+// write.
 @compute @workgroup_size(256)
 fn pocket_condition(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_record_count() {
+    let idx = pocket_list_cell(gid.x);
+    if pocket[idx] != POCKET_SEALED {
         return;
     }
-    let n = ts_cells();
-    let m = n + vec3<i32>(1);
-    let p = ts_box_record(idx);
-    if !ts_record_stored(p) {
+    ts_home(idx);
+    let p = ts_cell_coord(idx);
+    if !pocket_neighbour(p, POCKET_SEALED) {
         return;
     }
-    let at = ts_face(p);
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) {
-            continue;
-        }
-        var below = p;
-        below[a] = p[a] - 1;
-        if (p[a] < n[a] && pocket_isolated(p, n, m)) || (p[a] > 0 && pocket_isolated(below, n, m)) {
-            faces_out[at].face_velocity[a] = 0.0;
+        faces_out[idx].face_velocity[a] = 0.0;
+        var above = p;
+        above[a] = p[a] + 1;
+        let high = ts_face(above);
+        if high != ts_canon() {
+            faces_out[high].face_velocity[a] = 0.0;
         }
     }
 }
@@ -582,19 +611,18 @@ var<workgroup> pocket_dry_floor: atomic<u32>;
 
 const POCKET_DRY_FLOOR_WORD: u32 = 16u;
 
-// A floor cell (y = 0) reading dry with water in every in-box face neighbour:
-// a hole under the water, not its edge.
-fn dry_floor_hole(idx: u32) -> bool {
-    let n = ts_cells();
-    let p = ts_box_cell(idx);
-    if p.y != 0 || water[ts_cell_at(p)] > 0.5 {
+// A floor cell (the box's lowest layer) reading dry with water in every
+// in-box face neighbour: a hole under the water, not its edge. The caller
+// has set p's tile as its home.
+fn dry_floor_hole(p: vec3<i32>, idx: u32) -> bool {
+    if p.y != pocket_box_lo().y || water[idx] > 0.5 {
         return false;
     }
     for (var a = 0; a < 3; a = a + 1) {
         for (var s = -1; s <= 1; s = s + 2) {
             var d = p;
             d[a] = p[a] + s;
-            if d[a] >= 0 && d[a] < n[a] && !(water[ts_cell_at(d)] > 0.5) {
+            if pocket_in_box(d) && !(water[ts_cell_at(d)] > 0.5) {
                 return false;
             }
         }
@@ -604,37 +632,10 @@ fn dry_floor_hole(idx: u32) -> bool {
 
 const POCKET_SEED_WORD: u32 = 10u;
 
-// Why water cell idx touches air, as pocket_seed decides it: the neighbour's
-// index (0xffffffff for an open box face), the face's open fraction bits,
-// and axis * 2 + (1 on the high side); x is 0xffffffff when it does not.
-fn pocket_seed_reason(idx: u32) -> vec4<u32> {
-    let n = ts_cells();
-    let m = n + vec3<i32>(1);
-    let p = ts_box_cell(idx);
-    for (var a = 0; a < 3; a = a + 1) {
-        let low_open = (u.closed_faces & (1u << u32(2 * a))) == 0u;
-        let high_open = (u.closed_faces & (1u << u32(2 * a + 1))) == 0u;
-        if low_open && p[a] == 0 {
-            return vec4<u32>(0xffffffffu, 0u, u32(2 * a), 0u);
-        }
-        if high_open && p[a] == n[a] - 1 {
-            return vec4<u32>(0xffffffffu, 0u, u32(2 * a + 1), 0u);
-        }
-        for (var s = -1; s <= 1; s = s + 2) {
-            var d = p;
-            d[a] = p[a] + s;
-            if d[a] >= 0 && d[a] < n[a] && !(water[ts_cell_at(d)] > 0.5) && pocket_linked(p, d, a, n, m) {
-                var f = p;
-                f[a] = max(p[a], d[a]);
-                return vec4<u32>(ts_dense_cell(d), bitcast<u32>(open_at(f, a, n, m)), u32(2 * a) + select(0u, 1u, s > 0), 0u);
-            }
-        }
-    }
-    return vec4<u32>(0xffffffffu, 0u, 0xffffffffu, 0u);
-}
-
 // One workgroup, `capped` bound at the solver words: steps this tick whose
-// spread hit its cap unfinished, and the step's dry, sealed and air cells.
+// spread hit its cap unfinished, and the step's dry, sealed and air cells
+// over the in-box cells of every held slot (the cells the seed classed). The
+// lowest air seed is reported by pool index.
 @compute @workgroup_size(256)
 fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
     if !clock_active() { return; }
@@ -647,13 +648,19 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
     }
     workgroupBarrier();
     var counts = vec3<u32>(0u);
-    for (var idx = lane; idx < ts_cell_count(); idx = idx + 256u) {
-        let state = pocket[ts_cell_at(ts_box_cell(idx))];
+    for (var i = lane; i < pocket_gate[POCKET_HELD] * 512u; i = i + 256u) {
+        let idx = pocket_list_cell(i);
+        ts_home(idx);
+        let p = ts_cell_coord(idx);
+        if !pocket_in_box(p) {
+            continue;
+        }
+        let state = pocket[idx];
         counts[min(state, 2u)] += 1u;
-        if state == POCKET_AIR && pocket_seed_reason(idx).z != 0xffffffffu {
+        if state == POCKET_AIR && pocket_seed_reason(p).z != NO_NEIGHBOUR {
             atomicMin(&pocket_first_seed, idx);
         }
-        if dry_floor_hole(idx) {
+        if dry_floor_hole(p, idx) {
             atomicAdd(&pocket_dry_floor, 1u);
         }
     }
@@ -671,13 +678,13 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
     let seed = atomicLoad(&pocket_first_seed);
     capped[POCKET_SEED_WORD] = seed;
     if seed != 0xffffffffu {
-        let why = pocket_seed_reason(seed);
+        let why = pocket_seed_reason(ts_cell_coord(seed));
         capped[POCKET_SEED_WORD + 1u] = why.x;
         capped[POCKET_SEED_WORD + 2u] = why.y;
         capped[POCKET_SEED_WORD + 3u] = why.z;
-        if why.x != 0xffffffffu {
-            capped[POCKET_SEED_WORD + 4u] = bitcast<u32>(phi[ts_cell_at(ts_box_cell(why.x))]);
-            capped[POCKET_SEED_WORD + 5u] = ranges[ts_cell_at(ts_box_cell(why.x))].count;
+        if why.x != NO_NEIGHBOUR {
+            capped[POCKET_SEED_WORD + 4u] = bitcast<u32>(phi[why.x]);
+            capped[POCKET_SEED_WORD + 5u] = ranges[why.x].count;
         }
     }
     let unresolved = pocket_gate[POCKET_UNRESOLVED];

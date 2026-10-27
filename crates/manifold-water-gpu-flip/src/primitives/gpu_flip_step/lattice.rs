@@ -1,5 +1,6 @@
 //! The step's per-lattice scratch arrays and what they cost.
 
+use super::super::gpu_flip_pressure::level_pools;
 use super::*;
 use manifold_water_liquid::tile_storage::pool_len;
 
@@ -15,28 +16,26 @@ pub(super) fn pool_face_bytes(pool_tiles: u32) -> u64 {
 
 /// Bytes the step holds for itself at `cells` with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
-/// [`LATTICE_CELL_ARRAYS`] pooled cell arrays, the dense solid corners,
-/// [`LATTICE_FACE_GRIDS`] pooled face grids, the pocket gate, the pocket sums
-/// (dense), the coarse pockets and the tile table. The pooled faces and φ
-/// are among them and are the node's `faces` and `distance` outputs.
+/// [`LATTICE_CELL_ARRAYS`] pooled cell arrays, [`LATTICE_FACE_GRIDS`] pooled
+/// face grids, the pocket gate, the pocket sums, the coarse pockets and the
+/// world tiles. The pooled faces and φ are among them and are the node's
+/// `faces` and `distance` outputs.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
-    let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
+pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64) -> u64 {
     let pool = pool_tiles(cells);
     slots.max(1) * size_of::<FluidParticle>() as u64
         + LATTICE_CELL_ARRAYS * pool_cell_bytes(pool)
-        + corners
         + LATTICE_FACE_GRIDS * pool_face_bytes(pool)
         + POCKET_GATE_WORDS * 4
-        + pocket_sum_bytes(cells)
-        + pocket_coarse_bytes(cells)
-        + tile_scratch_bytes(cells, ring_max)
+        + pocket_sum_bytes(pool)
+        + pocket_coarse_bytes(level_pools(pool)[1])
+        + tile_scratch_bytes(cells)
 }
 
 /// The lattice's pooled cell arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
-/// mask and the pocket leaders.
-pub(super) const LATTICE_CELL_ARRAYS: u64 = 8;
+/// mask, the pocket leaders and the solid corners.
+pub(super) const LATTICE_CELL_ARRAYS: u64 = 9;
 
 /// The lattice's pooled face grids: the gathered, saved, scratch, forced,
 /// open-fraction and solid-velocity grids and the step's internal faces.
@@ -48,9 +47,9 @@ pub(crate) const STEP_POOLED_BYTES_PER_CELL: u64 =
 
 /// Scratch for one lattice.
 ///
-/// Cell and face fields are tile-pool storage of `pool_tiles` tiles
-/// (`pool_len` elements, the canonical block last); `corners` and the pocket
-/// sums are dense.
+/// Cell and face fields are pooled per world tile, `pool_tiles` slots
+/// (`pool_len` elements, the canonical element last); the pocket sums are a
+/// dense array over the pool's cells.
 pub(super) struct LatticeBuffers {
     pub(super) cells: [u32; 3],
     pub(super) water: GpuBuffer,
@@ -59,6 +58,7 @@ pub(super) struct LatticeBuffers {
     pub(super) phi: GpuBuffer,
     pub(super) rhs: GpuBuffer,
     pub(super) pressure: GpuBuffer,
+    /// The solid distance at each held cell's low corner (`solid_corners`).
     pub(super) corners: GpuBuffer,
     /// The particles' faces as gathered over C; canonical elsewhere.
     pub(super) g: GpuBuffer,
@@ -86,11 +86,11 @@ pub(super) struct LatticeBuffers {
     /// The solves' water: `water` less each sealed pocket's leader cell.
     pub(super) solve_water: GpuBuffer,
     /// The pockets at the solve level: state and label per level cell,
-    /// sized for level 1 ([`pocket_coarse_bytes`]).
+    /// sized for level 1's pool ([`pocket_coarse_bytes`]).
     pub(super) pocket_coarse: GpuBuffer,
     pub(super) pocket_coarse_label: GpuBuffer,
-    /// By fine label (a box cell index), the lowest level cell of that
-    /// pocket; a pooled cell field.
+    /// By fine label (a pool index), the lowest level cell of that pocket; a
+    /// pooled cell field.
     pub(super) pocket_leader: GpuBuffer,
 }
 
@@ -124,15 +124,14 @@ impl LatticeBuffers {
     ) -> Result<Self, String> {
         let cell = pool_cell_bytes(pool_tiles);
         let face = pool_face_bytes(pool_tiles);
-        let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
-        let coarse = pocket_coarse_bytes(cells) / 2;
+        let coarse = pocket_coarse_bytes(level_pools(pool_tiles)[1]) / 2;
         Ok(Self {
             cells,
             water: allocate(device, cell)?,
             phi: allocate_zeroed(device, cell)?,
             rhs: allocate(device, cell)?,
             pressure: allocate(device, cell)?,
-            corners: allocate(device, corners)?,
+            corners: allocate(device, cell)?,
             g: allocate(device, face)?,
             a: allocate(device, face)?,
             b: allocate(device, face)?,
@@ -143,10 +142,10 @@ impl LatticeBuffers {
             pocket: allocate(device, cell)?,
             pocket_gate: allocate(device, POCKET_GATE_WORDS * 4)?,
             pocket_label: allocate(device, cell)?,
-            pocket_sum: allocate(device, pocket_sum_bytes(cells))?,
+            pocket_sum: allocate_zeroed(device, pocket_sum_bytes(pool_tiles))?,
             solve_water: allocate(device, cell)?,
-            pocket_coarse: allocate(device, coarse.max(4))?,
-            pocket_coarse_label: allocate(device, coarse.max(4))?,
+            pocket_coarse: allocate(device, coarse)?,
+            pocket_coarse_label: allocate(device, coarse)?,
             pocket_leader: allocate(device, cell)?,
         })
     }

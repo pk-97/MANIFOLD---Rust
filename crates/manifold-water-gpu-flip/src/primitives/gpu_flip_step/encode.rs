@@ -3,6 +3,7 @@
 use super::*;
 use manifold_water_liquid::primitives::sort_particles_into_cells::SortCount;
 use manifold_water_liquid::tile_storage::pool_len;
+use manifold_water_liquid::world_tiles::{allocated_args_offset, exhausted_word, list_args_offset};
 
 impl StepState {
     pub(super) fn encode(
@@ -44,11 +45,13 @@ impl StepState {
         let cells = l.cells;
         // The step's own faces, pooled: the `faces` output.
         let out_faces = &l.faces;
-        let table = &tiles.table;
-        let pool = tiles.pool_tiles;
+        let table = tiles.table();
+        let pool = tiles.pool_tiles();
+        let ring = tiles.reach().ring_max;
         let p = step.params;
         let capacity = p.capacity;
-        // Every sort covers the slots in use, from the slot record.
+        // Every sort covers the slots in use, from the slot record, and keys
+        // each particle on its world cell's pool index.
         let sort_job = |particles, sorted| SortJob {
             particles,
             read: LIQUID_PARTICLE_READ,
@@ -57,8 +60,8 @@ impl StepState {
                 buffer: record,
                 offset: 0,
             },
-            bin_min: p.box_min,
-            inv_cell: 1.0 / p.cell_size,
+            bin_min: p.origin,
+            inv_cell: p.inv_cell,
             bins: cells,
             sorted: Some(sorted),
             order: None,
@@ -67,17 +70,26 @@ impl StepState {
         // A copy of the params, so each Bytes binding borrows a value that
         // lives across its dispatch.
         let base = p;
-        let corners = cells.map(|n| n + 1);
-        // The box walls are in the solid with the bodies, as the engine's
-        // inverted domain object is: a body flush with a wall then seals
-        // against it, where the body's own lattice distance alone would leave
-        // a sub-cell open channel between them. The engine's domain object
-        // covers all six faces whichever are open, so this mask stays 63.
-        // First, since emission seeds only outside the solid. The bodies are
-        // posed once at the step's end and every solid pass reads that pose.
+        // The bodies are posed once at the step's end and every solid pass
+        // reads that pose.
         let posed = self.posed.as_ref().expect("posed rows reserved above");
         let mobility = self.mobility.as_ref().expect("mobility reserved above");
-        let zeros = self.zeros.as_ref().expect("zero storage prepared");
+        // The tick's birth words and its count of particles removed for want
+        // of a slot start at zero before anything adds to them, whether or
+        // not inflows or sheeting run this tick.
+        if p.step_in_tick == 0 {
+            enc.dispatch_compute(
+                &pipes.birth_tally_reset,
+                &[GpuBinding::Buffer {
+                    binding: 22,
+                    buffer: step.capped,
+                    offset: step.tally,
+                }],
+                [1, 1, 1],
+                "gpu_flip.step.birth_tally_reset",
+            );
+            enc.compute_memory_barrier_buffers();
+        }
         if p.body_count > 0 {
             enc.dispatch_compute(
                 &pipes.pose_bodies,
@@ -95,28 +107,6 @@ impl StepState {
             );
             enc.compute_memory_barrier_buffers();
         }
-        encode_solid_distance(
-            &mut self.solid,
-            device,
-            enc,
-            &SolidDistanceJob {
-                min: p.box_min,
-                cell_size: p.cell_size,
-                nodes: corners,
-                closed_faces: 63,
-                wall_inset: step.wall_inset,
-                body_count: p.body_count,
-                rows: p.body_count.min(p.rows),
-                // Posed already: no time on, and a zero plan keeps it off.
-                tick_seconds: 0.0,
-                bodies: posed,
-                shapes: step.shapes,
-                atlas: step.atlas,
-                out: &l.corners,
-                clock_plan: zeros,
-            },
-            "gpu_flip.step.solid_distance",
-        );
         // Sheet seeding (BUG-j9l9w) reads the markers in input order; off, the
         // sort is exactly as it was.
         let sheeting = step.sheet_rate > 0.0;
@@ -129,38 +119,38 @@ impl StepState {
         } else {
             None
         };
-        let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
-        let face_count: u64 = cells.iter().map(|&n| u64::from(n) + 1).product();
         let ghost = StepParams {
             ghost: u32::from(step.ghost),
             ..base
         };
-        let cells_groups = groups(cell_count);
-        let face_groups = groups(face_count);
 
-        // Which tiles hold water this step, from the particles themselves.
-        // The pool allocates the tiles within reach (design section 4 (The
-        // allocator)); the sort then keys each particle on its cell's pool
-        // index, so the ranges live in the pool like every other fine field;
-        // the lists follow. The cell passes run over the cell set C through
-        // its indirect triple; every other tile holds the canonical values
-        // (design section 4 (The defined-value rule)): set when the tile is
-        // allocated, restored by the retire when a tile leaves C. A new
-        // pool's canonical block is written first.
+        // Which tiles hold water this step, from the particles themselves:
+        // the shared build holds every tile within the table's reach of a
+        // particle's (design section 2), and the sort then keys each particle
+        // on its cell's pool index, so the ranges live in the pool like every
+        // other fine field. The cell passes run over the cell set C through
+        // its triple; every other cell holds the canonical values (design
+        // section 4 (The defined-value rule)): set when a slot is handed out,
+        // restored by the retire when a slot leaves C. A new pool's canonical
+        // element is written first.
         if self.pool_canon_pending {
             encode_pool_canon(enc, pipes, &base, l);
             self.pool_canon_pending = false;
         }
-        encode_tile_allocation(
-            enc,
-            pipes,
-            &base,
-            l,
-            tiles,
-            step.particles,
-            record,
-            step.clock_plan,
-        );
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+        let points = match &self.box_points {
+            Some((points, count)) => (points, count),
+            None => (step.particles, record),
+        };
+        #[cfg(not(all(any(test, feature = "testkit"), feature = "gpu-proofs")))]
+        let points = (step.particles, record);
+        encode_tiles(enc, pipes, &base, l, tiles, points, step.clock_plan);
+        // The solids at every held cell's corner: the walls, which are in the
+        // solid with the bodies as the engine's inverted domain object is (a
+        // body flush with a wall then seals against it, where the body's own
+        // lattice distance alone would leave a sub-cell open channel between
+        // them), every wall closed whichever faces are open.
+        encode_solid_corners(enc, pipes, &base, l, tiles, step, posed);
         self.sorter.encode_pooled(
             device,
             enc,
@@ -187,64 +177,40 @@ impl StepState {
             step.clock_plan,
             Some(record),
         );
-        encode_tile_lists(
-            enc,
-            pipes,
-            &base,
-            tiles,
-            step.capped,
-            step.tally,
-            step.clock_plan,
-        );
-        enc.dispatch_compute_indirect(
-            &pipes.tiles_retire,
-            &canonical(l, tiles, vec![uniform(&base), buffer(32, &tiles.retired)]),
-            &tiles.args,
-            retired_args_offset(tiles.ring_max),
-            "gpu_flip.step.tiles.retire",
-        );
-        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-        if POISON.load(std::sync::atomic::Ordering::SeqCst) {
-            enc.dispatch_compute(
-                &pipes.poison,
-                &canonical(
-                    l,
-                    tiles,
-                    vec![
-                        uniform(&base),
-                        buffer(28, &tiles.rank),
-                        buffer(30, &tiles.counts),
-                    ],
-                ),
-                cells_groups,
-                "gpu_flip.step.tiles.poison",
-            );
-        }
-        let over_c = |enc: &mut GpuEncoder,
-                      pipeline: &GpuComputePipeline,
-                      bindings: Vec<GpuBinding<'_>>,
-                      label: &str| {
+        encode_tile_tally(enc, pipes, &base, tiles, ranges, step);
+        let by_rank = &tiles.lists().by_rank;
+        let held = allocated_args_offset(ring);
+        // A pass over a list's cells, 512 threads a slot: C (`list_args_offset(0)`)
+        // or every held slot (`held`).
+        let over = |enc: &mut GpuEncoder,
+                    pipeline: &GpuComputePipeline,
+                    offset: u64,
+                    bindings: &[GpuBinding<'_>],
+                    label: &str| {
             let mut bound = vec![
                 uniform(&base),
-                buffer(29, &tiles.by_ring),
+                buffer(29, by_rank),
                 buffer(46, step.clock_plan),
                 buffer(51, table),
             ];
-            bound.extend(bindings);
-            enc.dispatch_compute_indirect(pipeline, &bound, &tiles.args, 0, label);
+            bound.extend_from_slice(bindings);
+            enc.dispatch_compute_indirect(pipeline, &bound, tiles.args(), offset, label);
         };
         // The water mask is φ < 0, so φ is built every step.
         let bodies = p.body_count > 0;
-        over_c(
+        let c = list_args_offset(0);
+        over(
             enc,
             &pipes.distance,
-            vec![buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
+            c,
+            &[buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
             "gpu_flip.step.distance",
         );
-        over_c(
+        over(
             enc,
             &pipes.gather,
-            vec![buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g)],
+            c,
+            &[buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g)],
             "gpu_flip.step.particles_to_faces",
         );
         // The saved faces: the particles' own, extended so FLIP's change is
@@ -259,10 +225,11 @@ impl StepState {
             step.band,
             "gpu_flip.step.extend_old",
         );
-        enc.dispatch_compute(
+        over(
+            enc,
             &pipes.gravity,
+            held,
             &[
-                uniform(&base),
                 buffer(3, &l.a),
                 buffer(4, &l.f),
                 buffer(12, step.forces),
@@ -270,39 +237,29 @@ impl StepState {
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
                 buffer(36, step.regions),
-                buffer(46, step.clock_plan),
-                buffer(51, table),
             ],
-            face_groups,
             "gpu_flip.step.forces",
         );
-        enc.dispatch_compute(
+        over(
+            enc,
             &pipes.open,
-            &[
-                buffer(46, step.clock_plan),
-                uniform(&base),
-                buffer(9, &l.corners),
-                buffer(4, &l.s),
-                buffer(51, table),
-            ],
-            face_groups,
+            held,
+            &[buffer(9, &l.corners), buffer(4, &l.s)],
             "gpu_flip.step.open_fractions",
         );
         if solid_velocity_needed(p.body_count) {
             self.solid_velocity_is_zero = false;
-            enc.dispatch_compute(
+            over(
+                enc,
                 &pipes.solid_velocity,
+                held,
                 &[
-                    uniform(&base),
                     buffer(10, &l.s),
                     buffer(4, &l.b),
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
-                    buffer(46, step.clock_plan),
                     buffer(48, posed),
-                    buffer(51, table),
                 ],
-                face_groups,
                 "gpu_flip.step.solid_velocity",
             );
             // The samples carried out over the open faces, every solid alike
@@ -315,16 +272,11 @@ impl StepState {
                 } else {
                     (&l.v, &l.b)
                 };
-                enc.dispatch_compute(
+                over(
+                    enc,
                     &pipes.solid_extrapolate,
-                    &[
-                        uniform(&base),
-                        buffer(3, from),
-                        buffer(4, to),
-                        buffer(46, step.clock_plan),
-                        buffer(51, table),
-                    ],
-                    face_groups,
+                    held,
+                    &[buffer(3, from), buffer(4, to)],
                     "gpu_flip.step.solid_extrapolate",
                 );
             }
@@ -338,16 +290,18 @@ impl StepState {
         }
         // The tank walls are always in the solid, so this runs with or
         // without bodies, as the engine's postProcessSignedDistanceField does.
-        over_c(
+        over(
             enc,
             &pipes.phi_into_solids,
-            vec![buffer(9, &l.corners), buffer(5, &l.phi)],
+            c,
+            &[buffer(9, &l.corners), buffer(5, &l.phi)],
             "gpu_flip.step.phi_into_solids",
         );
-        over_c(
+        over(
             enc,
             &pipes.water_from_phi,
-            vec![buffer(7, &l.phi), buffer(5, &l.water)],
+            c,
+            &[buffer(7, &l.phi), buffer(5, &l.water)],
             "gpu_flip.step.water_from_phi",
         );
         // Which water reaches air holds every step: the density source reads
@@ -359,49 +313,38 @@ impl StepState {
             pipes,
             &base,
             l,
-            table,
+            tiles,
             ranges,
-            cells,
             step.capped,
             step.tally,
             step.clock_plan,
         );
-        enc.dispatch_compute(
+        over(
+            enc,
             &pipes.pocket_pin,
+            held,
             &[
-                uniform(&base),
                 buffer(6, &l.water),
                 buffer(23, &l.pocket),
                 buffer(25, &l.pocket_label),
                 buffer(5, &l.solve_water),
-                buffer(46, step.clock_plan),
-                buffer(51, table),
             ],
-            cells_groups,
             "gpu_flip.step.pocket_pin",
         );
-        if step.level > 0 {
-            encode_pocket_coarsen(enc, pipes, &base, l, table, step.clock_plan);
-        }
         if bodies && !step.dynamic {
-            enc.dispatch_compute(
+            over(
+                enc,
                 &pipes.pocket_condition,
-                &[
-                    uniform(&base),
-                    buffer(4, &l.v),
-                    buffer(10, &l.s),
-                    buffer(23, &l.pocket),
-                    buffer(46, step.clock_plan),
-                    buffer(51, table),
-                ],
-                face_groups,
+                held,
+                &[buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket)],
                 "gpu_flip.step.pocket_condition",
             );
         }
-        over_c(
+        over(
             enc,
             &pipes.divergence,
-            vec![
+            c,
+            &[
                 buffer(3, &l.f),
                 buffer(5, &l.rhs),
                 buffer(6, &l.water),
@@ -415,7 +358,7 @@ impl StepState {
             pipes,
             &base,
             l.fine_pockets(),
-            table,
+            tiles,
             &l.rhs,
             0,
             step.capped,
@@ -426,9 +369,8 @@ impl StepState {
         // pocket's zero sum (design section 11), so the mean comes off once
         // more there; as a later substep's would, its flux adds to the word.
         let coarse_mean = |solve: usize| {
-            move |enc: &mut GpuEncoder, rhs: &GpuBuffer, lattice: [u32; 3], h: f32| {
+            move |enc: &mut GpuEncoder, rhs: &GpuBuffer, level: &WorldTiles, h: f32| {
                 let params = StepParams {
-                    n: lattice,
                     cell_size: h,
                     step_in_tick: 1,
                     ..base
@@ -438,7 +380,7 @@ impl StepState {
                     pipes,
                     &params,
                     l.coarse_pockets(),
-                    table,
+                    level,
                     rhs,
                     solve,
                     step.capped,
@@ -449,19 +391,23 @@ impl StepState {
         };
         enc.set_profile_tag("gpu_flip.stage.pressure");
         let water = Water {
-            lattice: cells,
             cell_size: p.cell_size,
             water: &l.solve_water,
             faces: &l.s,
             phi: step.ghost.then_some(&l.phi),
         };
         self.solver.set_clock_plan(step.clock_plan);
-        self.solver.prepare(device, enc, &water, table, pool)?;
+        self.solver.prepare(device, enc, &water, tiles)?;
+        // The pockets at the solve level, read through the level's table the
+        // prepare built.
+        if step.level > 0 {
+            let level = self.solver.level_tiles(step.level)?;
+            encode_pocket_coarsen(enc, pipes, &base, l, tiles, level, step.clock_plan);
+        }
         // Dynamic bodies join the solve as the engine's mass-aware PCG
         // (RigidFluidCoupling) has them, at the pose the solid takes.
         let coupled = Bodies {
-            lattice: cells,
-            lattice_min: p.box_min,
+            tiles,
             cell_size: p.cell_size,
             density: WATER_DENSITY,
             tick_seconds: p.tick_seconds,
@@ -475,7 +421,7 @@ impl StepState {
         };
         self.bodies.set_clock_plan(step.clock_plan);
         if step.dynamic {
-            self.bodies.prepare(device, cells, coupled.count)?;
+            self.bodies.prepare(device, pool, coupled.count)?;
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             if POISON.load(std::sync::atomic::Ordering::SeqCst) {
                 self.bodies.poison(enc, &coupled);
@@ -494,8 +440,7 @@ impl StepState {
                 level: step.level,
                 coarse_rhs: Some(&pressure_mean),
             },
-            table,
-            pool,
+            tiles,
         )?;
         let tally = step.tally;
         self.solver.tally(
@@ -514,10 +459,11 @@ impl StepState {
                         phi: &GpuBuffer,
                         faces: &GpuBuffer,
                         label: &str| {
-            enc.dispatch_compute(
+            enc.dispatch_compute_indirect(
                 &pipes.subtract,
                 &[
                     uniform(params),
+                    buffer(29, by_rank),
                     buffer(46, step.clock_plan),
                     buffer(20, faces),
                     buffer(10, &l.s),
@@ -526,7 +472,8 @@ impl StepState {
                     buffer(7, phi),
                     buffer(51, table),
                 ],
-                face_groups,
+                tiles.args(),
+                held,
                 label,
             );
         };
@@ -541,8 +488,6 @@ impl StepState {
                 self.solver.tiles()?,
                 &l.pressure,
                 step.reaction,
-                table,
-                pool,
             )?;
         }
         extend(
@@ -563,17 +508,11 @@ impl StepState {
             (out_faces, "gpu_flip.step.constrain"),
             (&l.a, "gpu_flip.step.constrain_old"),
         ] {
-            enc.dispatch_compute(
+            over(
+                enc,
                 &pipes.constrain,
-                &[
-                    buffer(46, step.clock_plan),
-                    uniform(&base),
-                    buffer(20, faces),
-                    buffer(10, &l.s),
-                    buffer(11, &l.v),
-                    buffer(51, table),
-                ],
-                face_groups,
+                held,
+                &[buffer(20, faces), buffer(10, &l.s), buffer(11, &l.v)],
                 label,
             );
         }
@@ -583,10 +522,11 @@ impl StepState {
         enc.set_profile_tag("gpu_flip.stage.density");
         let spread = if step.density {
             enc.copy_buffer_to_buffer(out_faces, &l.f, out_faces.size);
-            over_c(
+            over(
                 enc,
                 &pipes.density,
-                vec![
+                c,
+                &[
                     buffer(1, ranges),
                     buffer(2, sorted),
                     buffer(6, &l.water),
@@ -600,7 +540,7 @@ impl StepState {
                 pipes,
                 &base,
                 l.fine_pockets(),
-                table,
+                tiles,
                 &l.rhs,
                 1,
                 step.capped,
@@ -622,8 +562,7 @@ impl StepState {
                     level: step.level,
                     coarse_rhs: Some(&density_mean),
                 },
-                table,
-                pool,
+                tiles,
             )?;
             self.solver
                 .tally(enc, step.pressure, step.capped, tally, 1, false)?;
@@ -643,21 +582,6 @@ impl StepState {
         } else {
             out_faces
         };
-        // The tick's birth words start at zero before its first birth stage,
-        // whether or not inflows or sheeting run this tick.
-        if p.step_in_tick == 0 {
-            enc.dispatch_compute(
-                &pipes.birth_tally_reset,
-                &[GpuBinding::Buffer {
-                    binding: 22,
-                    buffer: step.capped,
-                    offset: step.tally,
-                }],
-                [1, 1, 1],
-                "gpu_flip.step.birth_tally_reset",
-            );
-            enc.compute_memory_barrier_buffers();
-        }
         // Sheet seeding (fluidsimulation.cpp _updateSheetSeeding), after the
         // engine's own marker update for this substep and before the FLIP
         // update: births join the move, so they take this substep's velocity
@@ -671,14 +595,9 @@ impl StepState {
             let order = sheet_order.ok_or("sheet seeding storage was not reserved")?;
             // The sheeter's own distance, true to SHEET_DISTANCE_CELLS deep,
             // from the liquid level set the pressure solve read.
-            let phi = self.sheet_distance.encode_gated(
-                enc,
-                &l.phi,
-                p.cell_size,
-                step.clock_plan,
-                table,
-                pool,
-            );
+            let phi =
+                self.sheet_distance
+                    .encode_gated(enc, &l.phi, p.cell_size, step.clock_plan, tiles);
             enc.compute_memory_barrier_buffers();
             let inputs = super::super::gpu_flip_sheeting::SheetInputs {
                 particles: sorted,
@@ -686,7 +605,6 @@ impl StepState {
                 ranges,
                 count: (record, 0),
                 phi,
-                origin: p.box_min,
                 h: p.cell_size,
                 threshold: super::super::gpu_flip_sheeting::FILL_THRESHOLD,
             };
@@ -700,7 +618,7 @@ impl StepState {
                 substep: p.step_in_tick.max(0) as u32,
             };
             self.sheeting
-                .encode_draw(enc, &inputs, step.clock_plan, &births, table, pool);
+                .encode_draw(enc, &inputs, step.clock_plan, &births, tiles);
             self.identity_ops.reserve(
                 enc,
                 manifold_water_liquid::primitives::particle_identity::BirthReservation {
@@ -709,18 +627,19 @@ impl StepState {
                     ranges,
                     scan: self.sheeting.winners(),
                     plan: step.clock_plan,
+                    tile_counts: tiles.counts(),
                     step_record: Some(record),
                     params: [
                         base.particles,
                         pool_len(pool) as u32,
                         self.sheeting.ranks(),
-                        1,
+                        exhausted_word(ring) as u32,
                     ],
                 },
             );
             enc.compute_memory_barrier_buffers();
             self.sheeting
-                .encode_write(enc, &inputs, step.clock_plan, &births, table, pool);
+                .encode_write(enc, &inputs, step.clock_plan, &births, tiles);
         }
         enc.set_profile_tag("gpu_flip.stage.move");
         enc.dispatch_compute_indirect(
@@ -774,16 +693,18 @@ impl StepState {
             .expect("live clock prepared")
             .remove_extreme(enc, sorted, record, clock_params);
         enc.compute_memory_barrier_buffers();
-        enc.dispatch_compute(
+        enc.dispatch_compute_indirect(
             &pipes.remove_crowded,
             &[
                 uniform(&base),
-                buffer(46, step.clock_plan),
                 buffer(1, ranges),
+                buffer(29, by_rank),
                 buffer(38, sorted),
+                buffer(46, step.clock_plan),
                 buffer(51, table),
             ],
-            cells_groups,
+            tiles.args(),
+            c,
             "gpu_flip.step.remove_crowded",
         );
         enc.compute_memory_barrier_buffers();
@@ -807,9 +728,10 @@ impl StepState {
             step.clock_plan,
             Some(record),
         );
-        // New inflow is first transferred and advected by the following step.
-        if p.region_count > 0 {
-            let sites = emit_sites(cells);
+        // New inflow is first transferred and advected by the following
+        // step. Each inflow enumerates its own site box (`region_sites`).
+        let sites = p.emit_sites;
+        if p.region_count > 0 && sites > 0 {
             let scan = self.emit_scan.buffer(device, sites as usize)?.clone();
             enc.compute_memory_barrier_buffers();
             enc.dispatch_compute(
@@ -818,15 +740,16 @@ impl StepState {
                     uniform(&base),
                     buffer(1, ranges),
                     buffer(2, step.out),
-                    buffer(9, &l.corners),
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
                     buffer(36, step.regions),
+                    buffer(44, step.region_sites),
                     buffer(46, step.clock_plan),
+                    buffer(48, posed),
                     buffer(37, &scan),
                     buffer(51, table),
                 ],
-                groups(sites),
+                groups(u64::from(sites)),
                 "gpu_flip.step.emit_flags",
             );
             enc.compute_memory_barrier_buffers();
@@ -847,8 +770,14 @@ impl StepState {
                     ranges,
                     scan: &scan,
                     plan: step.clock_plan,
+                    tile_counts: tiles.counts(),
                     step_record: Some(record),
-                    params: [base.particles, pool_len(pool) as u32, sites as u32, 1],
+                    params: [
+                        base.particles,
+                        pool_len(pool) as u32,
+                        sites,
+                        exhausted_word(ring) as u32,
+                    ],
                 },
             );
             enc.dispatch_compute(
@@ -859,12 +788,13 @@ impl StepState {
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
                     buffer(36, step.regions),
+                    buffer(44, step.region_sites),
                     buffer(46, step.clock_plan),
                     buffer(37, &scan),
                     buffer(38, step.out),
                     buffer(47, step.identity),
                 ],
-                groups(sites),
+                groups(u64::from(sites)),
                 "gpu_flip.step.emit_write",
             );
             enc.dispatch_compute(

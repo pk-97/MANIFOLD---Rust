@@ -6,15 +6,20 @@
 // The one sequential step, the mask grown seed by seed, becomes a claim: a
 // sub-cell goes to the lowest engine-order candidate that passes the plane
 // test, unless a marker already holds it.
+//
+// The grid is the held world tiles (world_tiles_read.wgsl): cells are signed,
+// counted from the lattice origin, positions are lattice-local (world minus
+// the origin), and a tile that holds no slot is outside the grid: it reads
+// zero and is no neighbour. Every per-cell pass runs over the held slots, 512
+// threads a slot, and calls `ts_home` once.
 struct Params {
-    nx: u32, ny: u32, nz: u32, pool_tiles: u32,
-    bx: u32, by: u32, bz: u32, capacity: u32,
+    pool_tiles: u32, entries: u32, capacity: u32, steps: u32,
     ox: f32, oy: f32, oz: f32, h: f32,
     inv_h: f32, inv_sub: f32, half_h: f32, sub_dx: f32,
-    max_depth: f32, step_distance: f32, steps: u32, max_seed_depth: f32,
-    max_radius: f32, threshold: f32, inv_h_bits_lo: u32, inv_h_bits_hi: u32,
-    inv_sub_bits_lo: u32, inv_sub_bits_hi: u32, rate: f32, tick: u32,
-    substep: u32, pad0: u32, pad1: u32, pad2: u32,
+    max_depth: f32, step_distance: f32, max_seed_depth: f32, max_radius: f32,
+    threshold: f32, inv_h_bits_lo: u32, inv_h_bits_hi: u32, inv_sub_bits_lo: u32,
+    inv_sub_bits_hi: u32, rate: f32, tick: u32, substep: u32,
+    in_step: u32, pad0: u32, pad1: u32, pad2: u32,
 };
 struct FluidParticle { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32 };
 struct CellRange { start: u32, count: u32 };
@@ -37,21 +42,25 @@ struct ClockPlan {
 @group(0) @binding(6) var<storage, read_write> sheet_b: array<u32>;
 // One bit per half-cell, by ParticleMaskGrid's two floors.
 @group(0) @binding(7) var<storage, read_write> mask: array<atomic<u32>>;
-// Fixed 32-slot bucket rows. Selection writes eight four-marker segments;
-// build_buckets merges each row before evaluation. w stays input index bits.
+// Bucket rows, 32 markers each, 64 buckets a slot. Selection writes eight
+// four-marker segments a bucket; build_buckets merges each row before
+// evaluation. w stays input index bits.
 @group(0) @binding(8) var<storage, read_write> selected: array<vec4<f32>>;
 // Hard cap: at most four selected markers per cell.
 @group(0) @binding(9) var<storage, read_write> cell_counts: array<u32>;
-// Per half-cell: the lowest claiming candidate rank.
+// Per half-cell: the lowest claiming candidate key.
 @group(0) @binding(10) var<storage, read_write> claims: array<atomic<u32>>;
-// Per cell: bit o marks offset o a candidate, bit 8 + o a claimant.
+// Per cell: bit o marks offset o a candidate, bit 8 + o a claimant, bit 16 + o
+// a birth the fill-rate draw kept.
 @group(0) @binding(11) var<storage, read_write> flags: array<atomic<u32>>;
-// Accepted births in rank order (the engine's): local position, w = rank.
+// Accepted births: local position, w = key. Numbered by slot, then the cell
+// in the slot, then the offset.
 @group(0) @binding(12) var<storage, read_write> births: array<vec4<f32>>;
 @group(0) @binding(13) var<storage, read_write> birth_count: array<atomic<u32>>;
 @group(0) @binding(14) var<storage, read> clock_plan: array<ClockPlan>;
-// Per rank: 1 for a claimant holding its sub-cell, scanned in place (inclusive).
-@group(0) @binding(15) var<storage, read_write> winners: array<u32>;
+// Per slot: the births its cells keep, scanned in place (inclusive) over the
+// pool's slots, so winners[P - 1] is the total.
+@group(0) @binding(15) var<storage, read_write> winners: array<atomic<u32>>;
 // In the step only. The constrained saved faces (gpu_flip_step/common.wgsl layout).
 @group(0) @binding(16) var<storage, read> old: array<FaceSample>;
 // liquid_state's birth identity: next, epoch, reserved base, reset request.
@@ -62,16 +71,19 @@ struct ClockPlan {
 // tick's refused births are summed at SHEET_REFUSED_TAIL (zeroed per tick by
 // the step's birth_tally_reset).
 @group(0) @binding(19) var<storage, read_write> capped: array<u32>;
-// The tile pool's slot and tile table. `phi`, `sheet_a`, `sheet_b` (as the
-// feather's cells), `mask`, `cell_counts`, `claims` (eight a cell), `flags`
-// and `old` are pooled fields, and so are the sort's `ranges` (keyed by
-// the pool index of the cell); the bucket rows are dense.
+// The world tile table. `phi`, `sheet_a`, `sheet_b` (as the feather's cells),
+// `mask`, `cell_counts`, `claims` (eight a cell), `flags`, `old` and the
+// sort's `ranges` are pooled fields; the bucket rows are pooled too, 64 a slot
+// (bucket_flat), and `sheet_b` holds their lengths once feathering is done.
 @group(0) @binding(20) var<storage, read> ts_table: array<u32>;
 // The slots in use, `[groups, 1, 1, n]` bound at the record's offset: slots
 // [0, n) may hold particles, none at or past n is read. In the step it is the
 // step's record, which the birth reservation raises to the live end plus the
 // births it grants.
 @group(0) @binding(21) var<storage, read> record: array<u32>;
+// The held slots the cell passes cover (the table's lists, dispatched 512
+// threads a slot).
+@group(0) @binding(22) var<storage, read> slots: array<u32>;
 
 const NO_CLAIM: u32 = 0xffffffffu;
 const MAX_PARTICLES_PER_CELL: u32 = 6u;
@@ -84,10 +96,9 @@ fn clock_active() -> bool {
 
 fn slots_in_use() -> u32 { return record[3]; }
 
-fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
+fn ts_table_entries() -> u32 { return u.entries; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
-fn in_range(c: vec3<i32>) -> bool { return all(c >= vec3<i32>(0)) && all(c < ts_cells()); }
 // Grid3d::positionToGridIndex floors the f64 product of the widened position
 // and the f64 reciprocal. Emulated exactly in integers: the 24-bit mantissa
 // times the 53-bit one, rounded to 53 bits nearest-even, then floored.
@@ -185,9 +196,19 @@ fn sub_of(p: vec3<f32>) -> vec3<i32> { return exact_cell(p, vec2<u32>(u.inv_sub_
 fn sub_case(s: vec3<i32>) -> u32 { return u32(s.x & 1) | (u32(s.y & 1) << 1u) | (u32(s.z & 1) << 2u); }
 fn local(p: FluidParticle) -> vec3<f32> { return p.position_radius.xyz - vec3<f32>(u.ox, u.oy, u.oz); }
 
+// The pool index of the cell thread `gid` covers in a cell pass, with its tile
+// kept as the thread's home.
+fn pass_cell(gid: u32) -> u32 {
+    let idx = ts_list_cell(slots[gid >> 9u], gid);
+    ts_home(idx);
+    return idx;
+}
+
+// A corner of the level set: zero where its tile holds no slot.
 fn corner(c: vec3<i32>) -> f32 {
-    if in_range(c) { return phi[ts_cell_at(c)]; }
-    return 0.0;
+    let at = ts_cell_at(c);
+    if at == ts_canon() { return 0.0; }
+    return phi[at];
 }
 
 // Interpolation::trilinearInterpolate at p, already shifted by half a cell.
@@ -234,19 +255,12 @@ fn sample(p: vec3<f32>) -> f32 { return trilinear(p - vec3<f32>(u.half_h)); }
 // vmath::normalize: v times (1 / |v|).
 fn unit(v: vec3<f32>) -> vec3<f32> { return v * (1.0 / length(v)); }
 
-fn in_grid(p: vec3<f32>) -> bool {
-    return all(p >= vec3<f32>(0.0)) && all(p < vec3<f32>(ts_cells()) * u.h);
-}
-
+// Zeroes every cell of the held slots, and the births' failure count. The
+// per-slot totals clear in `clear_totals`, which also runs on empty water.
 @compute @workgroup_size(256)
 fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let c = gid.x;
-    if c == 0u { atomicStore(&birth_count[1], 0u); }
-    if c >= ts_cell_count() { return; }
-    let p = ts_box_cell(c);
-    if !ts_cell_stored(p) { return; }
-    let at = ts_cell_at(p);
+    let at = ts_list_cell(slots[gid.x >> 9u], gid.x);
     atomicStore(&sheet_a[at], 0u);
     sheet_b[at] = 0u;
     atomicStore(&mask[at], 0u);
@@ -255,6 +269,15 @@ fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var o = 0u; o < 8u; o = o + 1u) {
         atomicStore(&claims[8u * at + o], NO_CLAIM);
     }
+}
+
+// One thread per pool slot, held or free: its birth total starts at zero, so
+// the scan over the slots sees only this step's.
+@compute @workgroup_size(256)
+fn clear_totals(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    if gid.x == 0u { atomicStore(&birth_count[1], 0u); }
+    if gid.x < u.pool_tiles { atomicStore(&winners[gid.x], 0u); }
 }
 
 // One thread per marker: its mask bit, and phase 1 (the depth walk).
@@ -267,9 +290,12 @@ fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !(particles[s].position_radius.w > 0.0) { return; }
     let p = local(particles[s]);
     let g = cell_of(p);
-    if !in_range(g) { return; }
-    atomicOr(&mask[ts_cell_at(g)], 1u << sub_case(sub_of(p)));
-    if ranges[ts_cell_at(g)].count >= MAX_PARTICLES_PER_CELL { return; }
+    // A marker whose tile has no slot is removed by the move; it seeds nothing.
+    let at = ts_cell_at(g);
+    if at == ts_canon() { return; }
+    ts_home(at);
+    atomicOr(&mask[at], 1u << sub_case(sub_of(p)));
+    if ranges[at].count >= MAX_PARTICLES_PER_CELL { return; }
     let value = sample(p);
     if value >= u.max_depth || value < -u.max_depth { return; }
     var dir = -gradient(p - vec3<f32>(u.half_h));
@@ -279,22 +305,25 @@ fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var step = 0u; step < u.steps; step = step + 1u) {
         let next = sample(p + (f32(step) * u.step_distance) * dir);
         if next > current || next >= 0.0 {
-            atomicStore(&sheet_a[ts_cell_at(g)], 1u);
+            atomicStore(&sheet_a[at], 1u);
             return;
         }
         current = next;
     }
 }
 
+// The six face neighbours of c and c itself, from `source` (0 sheet_a, 1
+// sheet_b): the largest flag among those whose tile holds a slot.
 fn grown(source: u32, c: vec3<i32>) -> u32 {
     var hit = 0u;
     for (var a = 0; a < 3; a = a + 1) {
         for (var d = -1; d <= 1; d = d + 1) {
             var q = c;
             q[a] = q[a] + d;
-            if in_range(q) {
-                var v = sheet_b[ts_cell_at(q)];
-                if source == 0u { v = atomicLoad(&sheet_a[ts_cell_at(q)]); }
+            let at = ts_cell_at(q);
+            if at != ts_canon() {
+                var v = sheet_b[at];
+                if source == 0u { v = atomicLoad(&sheet_a[at]); }
                 hit = max(hit, v);
             }
         }
@@ -306,21 +335,28 @@ fn grown(source: u32, c: vec3<i32>) -> u32 {
 @compute @workgroup_size(256)
 fn feather(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    if gid.x >= ts_cell_count() { return; }
-    let q = ts_box_cell(gid.x);
-    if !ts_cell_stored(q) { return; }
-    sheet_b[ts_cell_at(q)] = grown(0u, q);
+    let idx = pass_cell(gid.x);
+    sheet_b[idx] = grown(0u, ts_cell_coord(idx));
 }
 
-// The second feather pass, b into a, then the 3-cell border band cleared.
+// The second feather pass, b into a.
 @compute @workgroup_size(256)
-fn feather_border(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn feather_again(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    if gid.x >= ts_cell_count() { return; }
-    let q = ts_box_cell(gid.x);
-    if !ts_cell_stored(q) { return; }
-    let border = any(q < vec3<i32>(3)) || any(q >= ts_cells() - vec3<i32>(3));
-    atomicStore(&sheet_a[ts_cell_at(q)], select(grown(1u, q), 0u, border));
+    let idx = pass_cell(gid.x);
+    atomicStore(&sheet_a[idx], grown(1u, ts_cell_coord(idx)));
+}
+
+// The bucket (2-cell block) holding cell q, in the pool's bucket rows: 64 a
+// slot, x fastest. WT_NONE where the bucket's tile holds no slot.
+fn bucket_local(b: vec3<i32>) -> u32 {
+    return u32((b.x & 3) + 4 * ((b.y & 3) + 4 * (b.z & 3)));
+}
+
+fn bucket_flat(b: vec3<i32>) -> u32 {
+    let slot = ts_slot_of(b >> vec3<u32>(2u));
+    if slot == WT_NONE { return WT_NONE; }
+    return 64u * slot + bucket_local(b);
 }
 
 // Phase 2: the first four markers of each sheet cell, in input order, with
@@ -328,48 +364,39 @@ fn feather_border(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let c = gid.x;
-    if c >= ts_cell_count() { return; }
-    let q = ts_box_cell(c);
-    if !ts_cell_stored(q) { return; }
-    let at = ts_cell_at(q);
+    let at = pass_cell(gid.x);
     if atomicLoad(&sheet_a[at]) == 0u { return; }
-    let range = ranges[ts_cell_at(q)];
+    let q = ts_cell_coord(at);
+    let range = ranges[at];
+    let base = segment_base(at, q);
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
         let p = local(particles[s]);
         let value = sample(p);
         if value >= u.max_depth || value < -u.max_depth { continue; }
-        selected[segment_base(q) + n] = vec4<f32>(p, bitcast<f32>(order[s]));
+        selected[base + n] = vec4<f32>(p, bitcast<f32>(order[s]));
         n = n + 1u;
     }
     cell_counts[at] = n;
 }
 
-fn bucket_flat(b: vec3<i32>) -> u32 {
-    return ts_grid_index(b, bucket_dims());
-}
-
-fn segment_base(c: vec3<i32>) -> u32 {
-    let lane = u32(c.x & 1) + 2u * u32(c.y & 1) + 4u * u32(c.z & 1);
-    return 32u * bucket_flat(c / 2) + 4u * lane;
+// The first of cell q's four marker places in its bucket's row. q is in the
+// slot of pool index `at`, and so is its bucket.
+fn segment_base(at: u32, q: vec3<i32>) -> u32 {
+    let lane = u32(q.x & 1) + 2u * u32(q.y & 1) + 4u * u32(q.z & 1);
+    return 32u * (64u * (at >> 9u) + bucket_local(q >> vec3<u32>(1u))) + 4u * lane;
 }
 
 // One coarse 2-cell bucket's phase-2 markers in input order: the eight
-// cells' lists (each in input order) merged.
+// cells' lists (each in input order) merged. `row` is the bucket's pool index.
 var<private> bucket: array<vec4<f32>, 32>;
-fn fill_bucket(b: vec3<i32>) -> u32 {
+fn fill_bucket(b: vec3<i32>, row: u32) -> u32 {
     var heads: array<u32, 8>;
     var counts: array<u32, 8>;
-    var cells: array<u32, 8>;
     for (var l = 0; l < 8; l = l + 1) {
         let c = 2 * b + vec3<i32>(l & 1, (l >> 1) & 1, (l >> 2) & 1);
         heads[l] = 0u;
-        counts[l] = 0u;
-        if in_range(c) {
-            cells[l] = ts_cell_at(c);
-            counts[l] = cell_counts[cells[l]];
-        }
+        counts[l] = cell_counts[ts_cell_at(c)];
     }
     var n = 0u;
     loop {
@@ -377,27 +404,31 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
         var best_index = 0xffffffffu;
         for (var l = 0; l < 8; l = l + 1) {
             if heads[l] < counts[l] {
-                let index = bitcast<u32>(selected[32u * bucket_flat(b) + 4u * u32(l) + heads[l]].w);
+                let index = bitcast<u32>(selected[32u * row + 4u * u32(l) + heads[l]].w);
                 if index < best_index { best_index = index; best = l; }
             }
         }
         if best < 0 { break; }
-        bucket[n] = selected[32u * bucket_flat(b) + 4u * u32(best) + heads[best]];
+        bucket[n] = selected[32u * row + 4u * u32(best) + heads[best]];
         heads[best] = heads[best] + 1u;
         n = n + 1u;
     }
     return n;
 }
 
-// One invocation owns a whole row. Complete the merge in private memory
-// before overwriting any source segment (including unread heads).
+// One invocation owns a whole row, the 64 first threads of each slot's 512.
+// Complete the merge in private memory before overwriting any source segment
+// (including unread heads).
 @compute @workgroup_size(256)
 fn build_buckets(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let row = gid.x;
-    if row >= u.bx * u.by * u.bz { return; }
-    let b = vec3<i32>(i32(row % u.bx), i32(row / u.bx % u.by), i32(row / (u.bx * u.by)));
-    let n = fill_bucket(b);
+    let slot = slots[gid.x >> 9u];
+    let l = gid.x & 511u;
+    if l >= 64u { return; }
+    ts_home(slot * 512u);
+    let b = 4 * ts_slot_tile(slot) + vec3<i32>(i32(l & 3u), i32((l >> 2u) & 3u), i32(l >> 4u));
+    let row = 64u * slot + l;
+    let n = fill_bucket(b, row);
     for (var m = 0u; m < n; m = m + 1u) {
         selected[32u * row + m] = bucket[m];
     }
@@ -405,14 +436,22 @@ fn build_buckets(@builtin(global_invocation_id) gid: vec3<u32>) {
     sheet_b[row] = n;
 }
 
-fn bucket_dims() -> vec3<i32> { return vec3<i32>(i32(u.bx), i32(u.by), i32(u.bz)); }
-
 struct Evaluation {
     // 0: not a candidate, 1: a candidate that fails a test, 2: a claimant.
     state: u32,
     p: vec3<f32>,
-    rank: u32,
+    key: u32,
 };
+
+// The candidate's key: the engine's visiting order (bucket by z, y, x, then
+// the cell in the bucket, then the offset), which a claim resolves by lowest
+// key. Bucket coordinates are biased by 128 and wrap at 256, so the order
+// holds across the origin and over 512 cells either side of it; two sites a
+// wrap apart never compete for a sub-cell.
+fn site_key(b: vec3<i32>, in_bucket: u32, o: u32) -> u32 {
+    let k = bitcast<vec3<u32>>(b + vec3<i32>(128)) & vec3<u32>(255u);
+    return (((k.z << 16u) | (k.y << 8u) | k.x) << 6u) | (in_bucket << 3u) | o;
+}
 
 // One half-cell site (8 · the cell's pool index + offset): candidate test,
 // plane projection, mask and opposite-neighbour test. Deterministic, so
@@ -431,12 +470,9 @@ fn evaluate(site: u32) -> Evaluation {
     let value = sample(seed);
     if value >= 0.0 || value < -u.max_seed_depth { return e; }
     e.state = 1u;
-    // The engine visits candidates by bucket (k, j, i), then cell (k, j, i)
-    // within it, then offset: this rank is that visiting order.
-    let b = q / 2;
+    let b = q >> vec3<u32>(1u);
     let in_bucket = u32((q.z & 1) * 4 + (q.y & 1) * 2 + (q.x & 1));
-    let bucket_index = u32(b.x) + u.bx * (u32(b.y) + u.by * u32(b.z));
-    e.rank = (bucket_index * 8u + in_bucket) * 8u + o;
+    e.key = site_key(b, in_bucket, o);
 
     var centroid = vec3<f32>(0.0);
     var near = 0u;
@@ -446,8 +482,8 @@ fn evaluate(site: u32) -> Evaluation {
         for (var j = b.y - 1; j <= b.y + 1; j = j + 1) {
             for (var i = b.x - 1; i <= b.x + 1; i = i + 1) {
                 let nb = vec3<i32>(i, j, k);
-                if any(nb < vec3<i32>(0)) || any(nb >= bucket_dims()) { continue; }
                 let row = bucket_flat(nb);
+                if row == WT_NONE { continue; }
                 let n = sheet_b[row];
                 for (var m = 0u; m < n; m = m + 1u) {
                     let np = selected[32u * row + m].xyz;
@@ -478,9 +514,11 @@ fn evaluate(site: u32) -> Evaluation {
     let normal = unit(cr);
     let distance = -dot(normal, seed - p1);
     let p = seed + (0.75 * distance) * normal;
-    if !in_grid(p) { return e; }
+    // The projection must land in a tile that holds a slot.
     let ps = sub_of(p);
-    if (atomicLoad(&mask[ts_cell_at(ps / 2)]) & (1u << sub_case(ps))) != 0u { return e; }
+    let pc = ts_cell_at(ps >> vec3<u32>(1u));
+    if pc == ts_canon() { return e; }
+    if (atomicLoad(&mask[pc]) & (1u << sub_case(ps))) != 0u { return e; }
     var cdir = centroid - p;
     if length(cdir) < EPS { return e; }
     cdir = unit(cdir);
@@ -489,8 +527,8 @@ fn evaluate(site: u32) -> Evaluation {
         for (var j = b.y - 1; j <= b.y + 1; j = j + 1) {
             for (var i = b.x - 1; i <= b.x + 1; i = i + 1) {
                 let nb = vec3<i32>(i, j, k);
-                if any(nb < vec3<i32>(0)) || any(nb >= bucket_dims()) { continue; }
                 let row = bucket_flat(nb);
+                if row == WT_NONE { continue; }
                 let n = sheet_b[row];
                 for (var m = 0u; m < n; m = m + 1u) {
                     let np = selected[32u * row + m].xyz;
@@ -508,107 +546,112 @@ fn evaluate(site: u32) -> Evaluation {
     return e;
 }
 
-// One thread per half-cell site: flag candidates and claimants; a claimant
-// claims its sub-cell for its rank.
+// One thread per cell: flag its candidate sites and claimants; a claimant
+// claims its sub-cell for its key.
 @compute @workgroup_size(256)
 fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    if gid.x >= 8u * ts_cell_count() { return; }
-    let box_cell = ts_box_cell(gid.x / 8u);
-    if !ts_cell_stored(box_cell) { return; }
-    let site = 8u * ts_cell_at(box_cell) + gid.x % 8u;
-    let e = evaluate(site);
-    if e.state == 0u { return; }
-    let c = site / 8u;
-    let o = site % 8u;
-    atomicOr(&flags[c], 1u << o);
-    if e.state == 2u {
-        atomicOr(&flags[c], 1u << (8u + o));
-        let ps = sub_of(e.p);
-        atomicMin(&claims[8u * ts_cell_at(ps / 2) + sub_case(ps)], e.rank);
+    let idx = pass_cell(gid.x);
+    if atomicLoad(&sheet_a[idx]) == 0u { return; }
+    for (var o = 0u; o < 8u; o = o + 1u) {
+        let e = evaluate(8u * idx + o);
+        if e.state == 0u { continue; }
+        atomicOr(&flags[idx], 1u << o);
+        if e.state == 2u {
+            atomicOr(&flags[idx], 1u << (8u + o));
+            let ps = sub_of(e.p);
+            atomicMin(&claims[8u * ts_cell_at(ps >> vec3<u32>(1u)) + sub_case(ps)], e.key);
+        }
     }
 }
 
-fn rank_total() -> u32 { return 64u * u.bx * u.by * u.bz; }
-
-// The half-cell site a rank names (8 · pool index + offset), or NO_CLAIM
-// where its cell is past the grid (an odd side's last bucket).
-fn site_of_rank(r: u32) -> u32 {
-    let o = r % 8u;
-    let in_bucket = (r / 8u) % 8u;
-    let bucket = r / 64u;
-    let b = ts_grid_coord(bucket, bucket_dims());
-    let q = 2 * b + vec3<i32>(i32(in_bucket & 1u), i32((in_bucket >> 1u) & 1u), i32((in_bucket >> 2u) & 1u));
-    if !in_range(q) { return NO_CLAIM; }
-    return 8u * ts_cell_at(q) + o;
-}
-
 // A claimant that holds its sub-cell, recomputed: state 2 and its claim;
-// state 3 a claimant that passes but lost its sub-cell to a lower rank.
+// state 3 a claimant that passes but lost its sub-cell to a lower key.
 fn holds(site: u32) -> Evaluation {
     var e = Evaluation(0u, vec3<f32>(0.0), 0u);
-    if site == NO_CLAIM { return e; }
     if (atomicLoad(&flags[site / 8u]) & (1u << (8u + site % 8u))) == 0u { return e; }
     e = evaluate(site);
     if e.state != 2u { return e; }
     let ps = sub_of(e.p);
-    if atomicLoad(&claims[8u * ts_cell_at(ps / 2) + sub_case(ps)]) != e.rank { e.state = 3u; }
+    if atomicLoad(&claims[8u * ts_cell_at(ps >> vec3<u32>(1u)) + sub_case(ps)]) != e.key { e.state = 3u; }
     return e;
 }
 
-// One thread per rank: 1 where that candidate holds its sub-cell. The scan
-// over ranks then numbers the births in the engine's order.
+// One thread per cell: the claimants that hold their sub-cell and pass the
+// fill-rate draw keep a birth (flag bit 16 + o); the slot's total counts
+// them. The scan over the slots then numbers the births.
 @compute @workgroup_size(256)
 fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let r = gid.x;
-    if r >= rank_total() { return; }
-    // The engine keeps a seed unless its draw is over the rate; standalone
-    // runs at rate 1, which keeps every one (the draw is under 1).
-    let site = site_of_rank(r);
-    let e = holds(site);
-    // A flagged claimant that no longer passes on recomputation would lose
-    // its claim silently: count it with the failures (always 0).
-    if site != NO_CLAIM && (atomicLoad(&flags[site / 8u]) & (1u << (8u + site % 8u))) != 0u && e.state < 2u {
-        atomicAdd(&birth_count[1], 1u);
+    let idx = pass_cell(gid.x);
+    let claimants = (atomicLoad(&flags[idx]) >> 8u) & 255u;
+    var kept = 0u;
+    for (var o = 0u; o < 8u; o = o + 1u) {
+        if ((claimants >> o) & 1u) == 0u { continue; }
+        let e = holds(8u * idx + o);
+        // A flagged claimant that no longer passes on recomputation would lose
+        // its claim silently: count it with the failures (always 0).
+        if e.state < 2u {
+            atomicAdd(&birth_count[1], 1u);
+        }
+        // The engine keeps a seed unless its draw is over the rate; standalone
+        // runs at rate 1, which keeps every one (the draw is under 1).
+        if e.state == 2u && u.rate > 0.0 && fill_draw(e.key) <= u.rate {
+            kept = kept | (1u << o);
+        }
     }
-    winners[r] = select(0u, 1u, e.state == 2u && u.rate > 0.0 && fill_draw(r) <= u.rate);
+    if kept != 0u {
+        atomicOr(&flags[idx], kept << 16u);
+        atomicAdd(&winners[idx >> 9u], countOneBits(kept));
+    }
 }
 
-// After the scan: each birth at its index in engine order, up to the list's
-// capacity; word 0 of the count is the true total. Word 1 counts claimants
-// whose recomputed evaluation disagrees with the claim pass, here or in
-// resolve (a proof that must stay 0).
-@compute @workgroup_size(256)
-fn place(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !clock_active() { return; }
-    let r = gid.x;
-    let total = rank_total();
-    if r == 0u { atomicStore(&birth_count[0], winners[total - 1u]); }
-    if r >= total { return; }
-    var before = 0u;
-    if r > 0u { before = winners[r - 1u]; }
-    if winners[r] == before { return; }
-    let e = holds(site_of_rank(r));
-    if e.state != 2u || e.rank != r { atomicAdd(&birth_count[1], 1u); }
-    if before < u.capacity {
-        births[before] = vec4<f32>(e.p, bitcast<f32>(r));
+var<workgroup> kept_in_cell: array<u32, 512>;
+
+// The births kept before cell `cell` of the workgroup's slot, over the
+// slot's 512 cells in order. Each workgroup of a slot scans all 512 cells, so
+// the two halves agree without talking. Every thread of the workgroup calls
+// this together (it holds barriers).
+fn kept_before(base: u32, cell: u32, li: u32) -> u32 {
+    kept_in_cell[li] = countOneBits((atomicLoad(&flags[base + li]) >> 16u) & 255u);
+    kept_in_cell[li + 256u] = countOneBits((atomicLoad(&flags[base + li + 256u]) >> 16u) & 255u);
+    workgroupBarrier();
+    for (var width = 1u; width < 512u; width = width << 1u) {
+        var a = kept_in_cell[li];
+        var b = kept_in_cell[li + 256u];
+        if li >= width { a = a + kept_in_cell[li - width]; }
+        if li + 256u >= width { b = b + kept_in_cell[li + 256u - width]; }
+        workgroupBarrier();
+        kept_in_cell[li] = a;
+        kept_in_cell[li + 256u] = b;
+        workgroupBarrier();
     }
+    var before = 0u;
+    if cell > 0u { before = kept_in_cell[cell - 1u]; }
+    return before;
+}
+
+// The births before slot s in the scan: the totals of the slots below it.
+fn slot_base(slot: u32) -> u32 {
+    var base = 0u;
+    if slot > 0u { base = atomicLoad(&winners[slot - 1u]); }
+    return base;
 }
 
 // Proof only (GpuSheeting::encode_index_probe): each particle's cell and
-// half-cell as the stage decides them, two records a particle.
+// half-cell as the stage decides them, two records a particle. The position
+// is taken as lattice-local already, so the probe tests the floor alone.
 @compute @workgroup_size(256)
 fn index_probe(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = gid.x;
     if s >= slots_in_use() { return; }
-    let p = local(particles[s]);
+    let p = particles[s].position_radius.xyz;
     births[2u * s] = bitcast<vec4<f32>>(vec4<i32>(cell_of(p), 0));
     births[2u * s + 1u] = bitcast<vec4<f32>>(vec4<i32>(sub_of(p), 0));
 }
 
-// ---- In the step: the fill-rate draw (in resolve), then after the rank
-// scan and the caller's identity reservation, the tail write. ----
+// ---- In the step: the fill-rate draw (in resolve), then after the scan and
+// the caller's identity reservation, the tail write. ----
 
 // PCG hash (Jarzynski & Olano 2020).
 fn pcg(v: u32) -> u32 {
@@ -618,12 +661,12 @@ fn pcg(v: u32) -> u32 {
 }
 
 // The fill-rate draw, uniform in [0, 1) at 24 bits. A pure function of the
-// candidate's rank, the tick and the substep: no state to seed or reset, so
+// candidate's key, the tick and the substep: no state to seed or reset, so
 // a replayed or re-run tick draws the same births, and a reset (tick 0
 // again) repeats the first run's. A 24-bit draw can be 0, so rate 0 is
 // refused in resolve as well as never encoded.
-fn fill_draw(rank: u32) -> f32 {
-    let h = pcg(rank ^ pcg(u.tick ^ pcg(u.substep ^ 0x5eedf111u)));
+fn fill_draw(key: u32) -> f32 {
+    let h = pcg(key ^ pcg(u.tick ^ pcg(u.substep ^ 0x5eedf111u)));
     return f32(h >> 8u) * (1.0 / 16777216.0);
 }
 
@@ -632,30 +675,26 @@ fn finite3(v: vec3<f32>) -> bool {
     return all(bits != vec3<u32>(0x7f800000u));
 }
 
-// gpu_flip_step/move.wgsl `sample` on the saved faces: q in cells from the grid's
-// minimum, missing corners contributing zero.
+// gpu_flip_step/move.wgsl `sample` on the saved faces: q in cells from the
+// lattice origin, a corner whose tile holds no slot contributing zero.
 fn saved_velocity(q: vec3<f32>) -> vec3<f32> {
-    let n = ts_cells();
-    if !finite3(q) || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(n)) {
+    if !finite3(q) || any(abs(q) >= vec3<f32>(1073741824.0)) {
         return vec3<f32>(0.0);
     }
     var v = vec3<f32>(0.0);
     for (var a = 0; a < 3; a = a + 1) {
         var offset = vec3<f32>(0.5);
         offset[a] = 0.0;
-        var top = n - vec3<i32>(1);
-        top[a] = n[a];
         let s = q - offset;
         let base = vec3<i32>(floor(s));
         let t = s - vec3<f32>(base);
         var sum = 0.0;
         for (var corner = 0; corner < 8; corner = corner + 1) {
             let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
-            let c = base + bit;
-            if all(c >= vec3<i32>(0)) && all(c <= top) {
-                let face = old[ts_face(c)];
+            let at = ts_face(base + bit);
+            if at != ts_canon() {
                 let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
-                sum = sum + w3.x * w3.y * w3.z * face.face_velocity[a];
+                sum = sum + w3.x * w3.y * w3.z * old[at].face_velocity[a];
             }
         }
         v[a] = sum;
@@ -663,45 +702,98 @@ fn saved_velocity(q: vec3<f32>) -> vec3<f32> {
     return v;
 }
 
-// Each drawn birth into the slot after the live prefix its scan index gives,
-// in the saved velocity at its seed (the engine's birth velocity; the FLIP
+// The birth numbered `before` of cell `idx`'s bit o: its seed in the list at
+// its birth index, up to the list's capacity; true when the kept claimant
+// still holds its sub-cell (a proof that must stay so).
+fn record_birth(idx: u32, o: u32, before: u32) -> Evaluation {
+    let e = holds(8u * idx + o);
+    if e.state != 2u { atomicAdd(&birth_count[1], 1u); }
+    if before < u.capacity {
+        births[before] = vec4<f32>(e.p, bitcast<f32>(e.key));
+    }
+    return e;
+}
+
+// Standalone: each kept birth at its index, numbered by slot, then cell, then
+// offset; `tally` sets the true total. Word 1 of the count counts claimants
+// whose recomputed evaluation disagrees with the claim pass, here or in
+// resolve (a proof that must stay 0).
+@compute @workgroup_size(256)
+fn place(
+    @builtin(workgroup_id) wg: vec3<u32>,
+    @builtin(local_invocation_index) li: u32,
+) {
+    if !clock_active() { return; }
+    let slot = slots[wg.x >> 1u];
+    let base = slot_base(slot);
+    if atomicLoad(&winners[slot]) == base { return; }
+    let cell = (wg.x & 1u) * 256u + li;
+    let idx = 512u * slot + cell;
+    let before = base + kept_before(512u * slot, cell, li);
+    ts_home(idx);
+    let kept = (atomicLoad(&flags[idx]) >> 16u) & 255u;
+    var k = 0u;
+    for (var o = 0u; o < 8u; o = o + 1u) {
+        if ((kept >> o) & 1u) == 0u { continue; }
+        _ = record_birth(idx, o, before + k);
+        k = k + 1u;
+    }
+}
+
+// Each drawn birth into the slot after the live prefix its index gives, in
+// the saved velocity at its seed (the engine's birth velocity; the FLIP
 // update then gives it the new field's), with the identity the reservation
 // set aside. The reservation granted the slots from the live end to the
-// record's n; births past them are dropped and counted. The birth list keeps
-// each seed at its birth index, for the proofs.
+// record's n; births past them are dropped and counted by `tally`. The birth
+// list keeps each seed at its birth index, for the proofs.
 @compute @workgroup_size(256)
-fn write(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn write(
+    @builtin(workgroup_id) wg: vec3<u32>,
+    @builtin(local_invocation_index) li: u32,
+) {
     if !clock_active() { return; }
     if birth_identity[3] != 0u { return; }
-    let r = gid.x;
-    let total = rank_total();
+    let slot = slots[wg.x >> 1u];
+    let base = slot_base(slot);
+    if atomicLoad(&winners[slot]) == base { return; }
     let last = ranges[ts_pool_len() - 1u];
     let live = last.start + last.count;
     let n = slots_in_use();
-    // The sort set n to the live end and the reservation only raised it.
-    let granted = n - live;
-    if r == 0u {
-        let requested = winners[total - 1u];
-        atomicStore(&birth_count[0], requested);
-        stats[0] = requested;
-        stats[1] = granted;
-        stats[2] = stats[2] + requested;
-        stats[3] = stats[3] + granted;
-        capped[SHEET_REFUSED_TAIL] += requested - granted;
-    }
-    if r >= total { return; }
-    var before = 0u;
-    if r > 0u { before = winners[r - 1u]; }
-    if winners[r] == before { return; }
-    let e = holds(site_of_rank(r));
-    if e.state != 2u || e.rank != r { atomicAdd(&birth_count[1], 1u); }
-    if before < u.capacity {
-        births[before] = vec4<f32>(e.p, bitcast<f32>(r));
-    }
-    if live + before >= n { return; }
+    let cell = (wg.x & 1u) * 256u + li;
+    let idx = 512u * slot + cell;
+    let before = base + kept_before(512u * slot, cell, li);
+    ts_home(idx);
+    let kept = (atomicLoad(&flags[idx]) >> 16u) & 255u;
     let origin = vec3<f32>(u.ox, u.oy, u.oz);
-    let world = e.p + origin;
-    // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-    particles[live + before] = FluidParticle(vec4<f32>(world, 0.31017524 * u.h),
-        saved_velocity((world - origin) / u.h), birth_identity[2] + before);
+    var k = 0u;
+    for (var o = 0u; o < 8u; o = o + 1u) {
+        if ((kept >> o) & 1u) == 0u { continue; }
+        let birth = before + k;
+        k = k + 1u;
+        let e = record_birth(idx, o, birth);
+        if live + birth >= n { continue; }
+        let world = e.p + origin;
+        // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
+        particles[live + birth] = FluidParticle(vec4<f32>(world, 0.31017524 * u.h),
+            saved_velocity((world - origin) / u.h), birth_identity[2] + birth);
+    }
+}
+
+// One thread, last: the true birth total, and in the step the tick's
+// bookkeeping. Runs on empty water too.
+@compute @workgroup_size(1)
+fn tally() {
+    if !clock_active() { return; }
+    if u.in_step != 0u && birth_identity[3] != 0u { return; }
+    let requested = atomicLoad(&winners[u.pool_tiles - 1u]);
+    atomicStore(&birth_count[0], requested);
+    if u.in_step == 0u { return; }
+    let last = ranges[ts_pool_len() - 1u];
+    // The sort set n to the live end and the reservation only raised it.
+    let granted = slots_in_use() - (last.start + last.count);
+    stats[0] = requested;
+    stats[1] = granted;
+    stats[2] = stats[2] + requested;
+    stats[3] = stats[3] + granted;
+    capped[SHEET_REFUSED_TAIL] += requested - granted;
 }

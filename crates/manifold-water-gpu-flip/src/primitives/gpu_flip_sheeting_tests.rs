@@ -1,35 +1,31 @@
 //! GPU sheeting against `manifold_fluids::sheeter` (the CPU port proven
-//! against FLIP's own sheeter) on the same level set and ordered markers.
+//! against FLIP's own sheeter) on the same level set and ordered markers, on
+//! lattices of world tiles that straddle the origin.
+//!
+//! The port's grid is a dense box from its own origin. The stage's grid is the
+//! held tiles, with no border band, so a fixture sits inside a margin of air
+//! and the box is whole tiles: the port's zero outside and its border then
+//! fall where nothing happens, and the stage's tiles end where the port's box
+//! does. Marker positions go to the stage as world positions; the port gets
+//! them back in its own frame as the stage reads them, so every cell and
+//! half-cell decision sees the same floats.
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs};
 use super::gpu_flip_sheeting_cpu_tests::bucket_fixture;
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::scene::world_tiles::{
+    NONE, lattice_origin, local_index, pool_len, slot_row_word, table_entries, table_words,
+    tile_of_cell,
+};
 use manifold_node_engine::testkit::array_harness::read;
-use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
-use manifold_water_liquid::primitives::sort_particles_into_cells::{
-    LIQUID_PARTICLE_READ, ParticleSorter, SortCount, SortJob, SortLabels,
-};
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
-use manifold_water_liquid::tile_storage::pool_len;
-use manifold_water_liquid::tile_storage::testkit::{
-    from_pool, identity_table, records_to_pool, to_pool,
+use manifold_water_liquid::world_tiles::{
+    Allocation, LIQUID_POINTS, Reach, WorldTiles, exhausted_word,
 };
+use std::collections::HashMap;
 
-const LABELS: SortLabels = SortLabels {
-    clear: "sheeting proof sort clear",
-    count: "sheeting proof sort count",
-    scan: ScanLabels {
-        blocks: "sheeting proof scan blocks",
-        add: "sheeting proof scan add",
-    },
-    ranges: "sheeting proof sort ranges",
-    tail: "sheeting proof sort tail",
-    scatter: "sheeting proof sort scatter",
-    stabilise: "sheeting proof sort stabilise",
-};
-
-fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
+pub(super) fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
     let buffer = device.create_buffer_shared(bytes.len().max(16) as u64);
     buffer.zero_fill();
     // SAFETY: a fresh shared buffer sized for `bytes`; no GPU work in flight.
@@ -37,7 +33,7 @@ fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
     buffer
 }
 
-fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
+pub(super) fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     let staged = device.create_buffer_shared(buffer.size);
     let mut enc = device.create_encoder("sheeting proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
@@ -45,32 +41,132 @@ fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     read(&staged, (buffer.size / 4) as usize)
 }
 
-/// A lattice's identity pool: every box tile allocated, P = T.
-struct Pool {
-    table: GpuBuffer,
-    tiles: u32,
-    cells: [u32; 3],
+/// A world tile table over the whole tiles of a box of cells, built by the
+/// water's own build from one particle in each tile, so the slot order is the
+/// build's (table order), not the tile order.
+pub(super) struct World {
+    pub tiles: WorldTiles,
+    /// The box's first cell and its size in cells, both whole tiles.
+    pub lo: [i32; 3],
+    pub size: [i32; 3],
+    slot_of: HashMap<[i32; 3], u32>,
 }
 
-fn pool(device: &GpuDevice, cells: [u32; 3]) -> Pool {
-    let (words, tiles) = identity_table(cells);
-    Pool {
-        table: shared(device, bytemuck::cast_slice(&words)),
-        tiles,
-        cells,
+impl World {
+    pub(super) fn new(device: &GpuDevice, lo: [i32; 3], size: [i32; 3], h: f32) -> Self {
+        assert!(
+            lo.iter().chain(&size).all(|v| v % 8 == 0),
+            "{lo:?} {size:?}: whole tiles"
+        );
+        let mut points = Vec::new();
+        for tz in lo[2] / 8..(lo[2] + size[2]) / 8 {
+            for ty in lo[1] / 8..(lo[1] + size[1]) / 8 {
+                for tx in lo[0] / 8..(lo[0] + size[0]) / 8 {
+                    // The tile's first cell, at its centre.
+                    let cell = [tx * 8, ty * 8, tz * 8].map(|c| c as f32 * h);
+                    points.push(FluidParticle {
+                        position_radius: [cell[0], cell[1], cell[2], 0.05],
+                        velocity: [0.0; 3],
+                        id: points.len() as u32 + 1,
+                    });
+                }
+            }
+        }
+        let count = points.len() as u32;
+        let reach = Reach {
+            ring_max: 0,
+            alloc_ring: 0,
+            cell_reach: 0,
+        };
+        let mut tiles = WorldTiles::new(device, count, reach, LIQUID_POINTS).expect("world tiles");
+        tiles.prepare(device);
+        let records = shared(device, bytemuck::cast_slice(&points));
+        // The slots in use, as the step's slot record holds them.
+        let record = shared(
+            device,
+            bytemuck::cast_slice(&[count.div_ceil(256), 1, 1, count]),
+        );
+        let gate = shared(device, &[0u8; 48]);
+        let mut enc = device.create_encoder("sheeting proof tiles");
+        tiles.encode_allocation(
+            &mut enc,
+            &Allocation {
+                points: &records,
+                record: &record,
+                origin: lattice_origin(h),
+                inv_cell: 1.0 / h,
+                replay_count: 0,
+                gate: &gate,
+            },
+        );
+        enc.commit_and_wait_completed();
+        let words: Vec<u32> = read(tiles.table(), table_words(count) as usize);
+        let entries = table_entries(count);
+        let slot_of = (0..count)
+            .map(|slot| {
+                let row = slot_row_word(entries, slot) as usize;
+                assert_ne!(words[row + 3], NONE, "slot {slot} is held");
+                (
+                    [words[row], words[row + 1], words[row + 2]].map(|w| w as i32),
+                    slot,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(slot_of.len(), count as usize, "every tile has its own slot");
+        Self {
+            tiles,
+            lo,
+            size,
+            slot_of,
+        }
+    }
+
+    pub(super) fn pool_tiles(&self) -> u32 {
+        self.tiles.pool_tiles()
+    }
+
+    /// The pool index of cell `p`; None where its tile holds no slot.
+    pub(super) fn index(&self, p: [i32; 3]) -> Option<usize> {
+        let slot = *self.slot_of.get(&tile_of_cell(p))?;
+        Some(slot as usize * 512 + local_index(p) as usize)
+    }
+
+    /// Every cell of the box, x fastest.
+    pub(super) fn cells(&self) -> Vec<[i32; 3]> {
+        let mut cells = Vec::new();
+        for z in 0..self.size[2] {
+            for y in 0..self.size[1] {
+                for x in 0..self.size[0] {
+                    cells.push([self.lo[0] + x, self.lo[1] + y, self.lo[2] + z]);
+                }
+            }
+        }
+        cells
+    }
+
+    /// A dense field over the box (x fastest) in pool layout; the canonical
+    /// element holds `canon`.
+    pub(super) fn to_pool<T: Copy>(&self, dense: &[T], canon: T) -> Vec<T> {
+        let mut pool = vec![canon; pool_len(self.pool_tiles()) as usize];
+        let cells = self.cells();
+        assert_eq!(dense.len(), cells.len());
+        for (value, cell) in dense.iter().zip(cells) {
+            pool[self.index(cell).expect("a box cell is held")] = *value;
+        }
+        pool
+    }
+
+    /// A pooled field back to a dense one over the box.
+    pub(super) fn dense_of<T: Copy>(&self, pool: &[T]) -> Vec<T> {
+        self.cells()
+            .into_iter()
+            .map(|cell| pool[self.index(cell).expect("a box cell is held")])
+            .collect()
     }
 }
 
-/// A dense cell field uploaded in pool layout.
-fn pooled<T: bytemuck::Pod>(device: &GpuDevice, pool: &Pool, dense: &[T], canon: T) -> GpuBuffer {
-    shared(
-        device,
-        bytemuck::cast_slice(&to_pool(dense, pool.cells, &[canon])),
-    )
-}
-
 /// A clock plan (gpu_flip_step/common.wgsl ClockPlan): live, with `step_dt`.
-fn live_plan(device: &GpuDevice, step_dt: f32) -> GpuBuffer {
+pub(super) fn live_plan(device: &GpuDevice, step_dt: f32) -> GpuBuffer {
     let mut words = [0u32; 12];
     words[0] = step_dt.to_bits();
     words[11] = 1;
@@ -78,85 +174,155 @@ fn live_plan(device: &GpuDevice, step_dt: f32) -> GpuBuffer {
 }
 
 /// A record of `n` slots in use, as a step writes it: `[groups, 1, 1, n]`.
-fn slots_record(device: &GpuDevice, n: u32) -> GpuBuffer {
+pub(super) fn slots_record(device: &GpuDevice, n: u32) -> GpuBuffer {
     shared(
         device,
         bytemuck::cast_slice(&[n.div_ceil(256).max(1), 1, 1, n]),
     )
 }
 
-/// Markers sorted by cell (stable), and the order and ranges the stage reads.
-struct Sorted {
-    particles: GpuBuffer,
-    order: GpuBuffer,
-    sorter: ParticleSorter,
-    count: u32,
-    /// The slots in use: every marker.
-    record: GpuBuffer,
+/// Marker positions rounded to multiples of 2^-10 m: with a cell of 0.25 m,
+/// whole-cell offsets and the half-cell lattice origin, every frame change in
+/// the proofs is exact in f32.
+pub(super) fn quantised(markers: &[[f32; 3]]) -> Vec<[f32; 3]> {
+    markers
+        .iter()
+        .map(|m| m.map(|c| (c * 1024.0).round() / 1024.0))
+        .collect()
 }
 
-fn sort(device: &GpuDevice, markers: &[[f32; 3]], cells: [u32; 3], h: f32) -> Sorted {
-    let records: Vec<FluidParticle> = markers
+/// Cells of a box holding `cells` with `margin` cells of room on the low side
+/// and at least as much on the high side, in whole tiles.
+pub(super) fn padded_cells(cells: [u32; 3], margin: u32) -> [u32; 3] {
+    cells.map(|n| (n + 2 * margin).div_ceil(8) * 8)
+}
+
+/// The markers `margin` cells in from the box's low corner.
+pub(super) fn padded_markers(markers: &[[f32; 3]], margin: u32, h: f32) -> Vec<[f32; 3]> {
+    let shift = margin as f32 * h;
+    markers.iter().map(|m| m.map(|c| c + shift)).collect()
+}
+
+/// A level set over `cells` placed `margin` cells in from the low corner of a
+/// box of `big` cells, air (3h) everywhere else.
+pub(super) fn padded_phi(
+    phi: &[f32],
+    cells: [u32; 3],
+    big: [u32; 3],
+    margin: u32,
+    h: f32,
+) -> Vec<f32> {
+    let mut out = vec![3.0 * h; (big[0] * big[1] * big[2]) as usize];
+    for z in 0..cells[2] {
+        for y in 0..cells[1] {
+            for x in 0..cells[0] {
+                let at = (x + margin) + big[0] * ((y + margin) + big[1] * (z + margin));
+                out[at as usize] = phi[(x + cells[0] * (y + cells[1] * z)) as usize];
+            }
+        }
+    }
+    out
+}
+
+/// Port-frame marker positions of a box whose first cell is `lo` as world
+/// positions, and as the stage reads them back in the port's frame: the
+/// lattice frame (world minus the origin) less the box's low corner.
+pub(super) fn to_world(
+    markers: &[[f32; 3]],
+    lo: [i32; 3],
+    h: f32,
+) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+    let origin = lattice_origin(h);
+    let corner = lo.map(|c| c as f32 * h);
+    let world: Vec<[f32; 3]> = markers
+        .iter()
+        .map(|m| std::array::from_fn(|a| (m[a] + corner[a]) + origin[a]))
+        .collect();
+    let local = world
+        .iter()
+        .map(|w| std::array::from_fn(|a| (w[a] - origin[a]) - corner[a]))
+        .collect();
+    (world, local)
+}
+
+/// Markers sorted by cell (stable), and the order and ranges the stage reads.
+pub(super) struct Sorted {
+    pub particles: GpuBuffer,
+    pub order: GpuBuffer,
+    pub ranges: GpuBuffer,
+    pub count: u32,
+    /// The slots in use: every marker.
+    pub record: GpuBuffer,
+}
+
+/// Sort `markers` (world positions, radius 0.1) by the pool index of their
+/// cell, as the sort does, with room for `capacity` particles. A marker's cell
+/// is the engine's f64 floor of its lattice-local position, the stage's own.
+pub(super) fn sort(
+    device: &GpuDevice,
+    world: &World,
+    markers: &[[f32; 3]],
+    h: f32,
+    capacity: usize,
+) -> Sorted {
+    let origin = lattice_origin(h);
+    let inv = 1.0 / f64::from(h);
+    let cell_of = |m: &[f32; 3]| -> [i32; 3] {
+        std::array::from_fn(|a| (f64::from(m[a] - origin[a]) * inv).floor() as i32)
+    };
+    let mut keyed: Vec<(usize, usize)> = markers
         .iter()
         .enumerate()
-        .map(|(i, p)| FluidParticle {
-            position_radius: [p[0], p[1], p[2], 0.1],
-            velocity: [0.0; 3],
-            id: i as u32 + 1,
+        .map(|(i, m)| {
+            (
+                world.index(cell_of(m)).expect("a marker is in a held tile"),
+                i,
+            )
         })
         .collect();
-    let source = shared(device, bytemuck::cast_slice(&records));
-    let particles = device.create_buffer_shared(source.size);
-    let order = device.create_buffer_shared((4 * records.len()) as u64);
-    // The ranges are keyed by the cell's pool index, in the identity pool.
-    let pool = pool(device, cells);
-    let mut sorter = ParticleSorter::default();
-    sorter.prepare_pooled(device);
-    sorter
-        .reserve_keys(device, pool_len(pool.tiles))
-        .expect("ranges");
-    let mut enc = device.create_encoder("sheeting proof sort");
-    sorter
-        .encode_pooled(
-            device,
-            &mut enc,
-            &SortJob {
-                particles: &source,
-                read: LIQUID_PARTICLE_READ,
-                capacity: records.len() as u32,
-                count: SortCount::Slots(records.len() as u32),
-                bin_min: [0.0; 3],
-                inv_cell: 1.0 / h,
-                bins: cells,
-                sorted: Some(&particles),
-                order: Some(&order),
-                gate: None,
-            },
-            &pool.table,
-            pool.tiles,
-            &LABELS,
-        )
-        .expect("sort");
-    enc.commit_and_wait_completed();
+    // By cell, then by input index: stable within a cell.
+    keyed.sort_unstable();
+    let len = pool_len(world.pool_tiles()) as usize;
+    let mut ranges = vec![[0u32; 2]; len];
+    for (rank, &(cell, _)) in keyed.iter().enumerate() {
+        if ranges[cell][1] == 0 {
+            ranges[cell][0] = rank as u32;
+        }
+        ranges[cell][1] += 1;
+    }
+    // The canonical key holds no marker: the live end is every marker.
+    ranges[len - 1] = [markers.len() as u32, 0];
+    let mut particles = vec![FluidParticle::default(); capacity];
+    let mut order = vec![0u32; capacity];
+    for (slot, &(_, i)) in keyed.iter().enumerate() {
+        let m = markers[i];
+        particles[slot] = FluidParticle {
+            position_radius: [m[0], m[1], m[2], 0.1],
+            velocity: [0.0; 3],
+            id: i as u32 + 1,
+        };
+        order[slot] = i as u32;
+    }
     Sorted {
-        particles,
-        order,
-        sorter,
-        count: records.len() as u32,
-        record: slots_record(device, records.len() as u32),
+        particles: shared(device, bytemuck::cast_slice(&particles)),
+        order: shared(device, bytemuck::cast_slice(&order)),
+        ranges: shared(device, bytemuck::cast_slice(&ranges)),
+        count: markers.len() as u32,
+        record: slots_record(device, markers.len() as u32),
     }
 }
 
 struct Run {
-    /// Births: x, y, z, rank bits.
+    /// Births: x, y, z, key bits.
     births: Vec<[u32; 4]>,
     count: u32,
     /// Births whose recomputed claim failed in `place`.
     unresolved: u32,
-    /// Per cell: bit o marks offset o a candidate, bit 8 + o a claimant.
+    /// Per pool cell: bit o marks offset o a candidate, bit 8 + o a claimant,
+    /// bit 16 + o a birth the draw kept.
     flags: Vec<u32>,
-    /// Per half-cell: the winning rank.
-    claims: Vec<u32>,
+    /// Per pool cell and half-cell: the winning key.
+    claims: Vec<[u32; 8]>,
 }
 
 fn run(
@@ -166,22 +332,21 @@ fn run(
     phi: &GpuBuffer,
     h: f32,
     plan: Option<&GpuBuffer>,
-    pool: &Pool,
+    world: &World,
 ) -> Run {
     let inputs = SheetInputs {
         particles: &sorted.particles,
         order: &sorted.order,
-        ranges: sorted.sorter.ranges().expect("ranges"),
+        ranges: &sorted.ranges,
         count: (&sorted.record, 0),
         phi,
-        origin: [0.0; 3],
         h,
         threshold: FILL_THRESHOLD,
     };
     let mut enc = device.create_encoder("sheeting proof");
     match plan {
-        Some(plan) => stage.encode_gated(&mut enc, &inputs, plan, &pool.table, pool.tiles),
-        None => stage.encode(&mut enc, &inputs, &pool.table, pool.tiles),
+        Some(plan) => stage.encode_gated(&mut enc, &inputs, plan, &world.tiles),
+        None => stage.encode(&mut enc, &inputs, &world.tiles),
     }
     enc.commit_and_wait_completed();
     let (births, count) = stage.births();
@@ -194,79 +359,127 @@ fn run(
             .collect(),
         count: words[0],
         unresolved: words[1],
-        flags: from_pool(&copy_out(device, &stage.scratch()[6]), pool.cells),
-        claims: from_pool(
-            bytemuck::cast_slice::<u32, [u32; 8]>(&copy_out(device, &stage.scratch()[5])),
-            pool.cells,
-        )
-        .into_iter()
-        .flatten()
-        .collect(),
+        flags: copy_out(device, &stage.scratch()[6]),
+        claims: bytemuck::cast_slice::<u32, [u32; 8]>(&copy_out(device, &stage.scratch()[5]))
+            .to_vec(),
     }
 }
 
-/// The half-cell site of a candidate centre, and its engine-order rank.
-fn site_of(p: [f32; 3], cells: [u32; 3], h: f32) -> usize {
-    let s = p.map(|c| (c / (0.5 * h)).floor() as usize);
-    let c = [s[0] / 2, s[1] / 2, s[2] / 2];
-    let cell = c[0] + cells[0] as usize * (c[1] + cells[1] as usize * c[2]);
-    8 * cell + (s[0] & 1) * 4 + (s[1] & 1) * 2 + (s[2] & 1)
+/// The sheeter's key for offset `o` of world cell `cell`: the engine's
+/// visiting order, as the shader's `site_key` (buckets biased by 128 and
+/// wrapped at 256).
+fn site_key(cell: [i32; 3], o: usize) -> u32 {
+    let b = cell.map(|c| c >> 1);
+    let in_bucket = ((cell[2] & 1) * 4 + (cell[1] & 1) * 2 + (cell[0] & 1)) as u32;
+    let k = b.map(|v| ((v + 128) & 255) as u32);
+    (((k[2] << 16) | (k[1] << 8) | k[0]) << 6) | (in_bucket << 3) | o as u32
 }
 
-fn rank_of(site: usize, cells: [u32; 3]) -> u32 {
-    let n = cells.map(|c| c as usize);
-    let (cell, o) = (site / 8, site % 8);
-    let q = [cell % n[0], cell / n[0] % n[1], cell / (n[0] * n[1])];
-    let b = q.map(|c| c / 2);
-    let bn = n.map(|c| c.div_ceil(2));
-    let bucket = b[0] + bn[0] * (b[1] + bn[1] * b[2]);
-    let in_bucket = (q[2] & 1) * 4 + (q[1] & 1) * 2 + (q[0] & 1);
-    ((bucket * 8 + in_bucket) * 8 + o) as u32
+/// The cell and offset a key names, for keys of buckets within 128 of the
+/// origin.
+fn decode_key(key: u32) -> ([i32; 3], usize) {
+    let (o, in_bucket) = ((key & 7) as usize, ((key >> 3) & 7) as i32);
+    let k = [key >> 6, key >> 14, key >> 22].map(|v| (v & 255) as i32 - 128);
+    let cell = [
+        2 * k[0] + (in_bucket & 1),
+        2 * k[1] + ((in_bucket >> 1) & 1),
+        2 * k[2] + ((in_bucket >> 2) & 1),
+    ];
+    (cell, o)
+}
+
+/// The half-cell site a port candidate centre (port frame) names, in world
+/// cells of the box whose first cell is `lo`: the cell and the offset.
+fn site_of(p: [f32; 3], lo: [i32; 3], h: f32) -> ([i32; 3], usize) {
+    let s = p.map(|c| (c / (0.5 * h)).floor() as i32);
+    let cell = std::array::from_fn(|a| (s[a] >> 1) + lo[a]);
+    (
+        cell,
+        ((s[0] & 1) * 4 + (s[1] & 1) * 2 + (s[2] & 1)) as usize,
+    )
+}
+
+/// Births come out numbered by slot, then the cell in the slot, then the
+/// offset, whatever order the GPU's threads ran in.
+fn assert_numbered(world: &World, births: &[[u32; 4]], name: &str) {
+    let places: Vec<(usize, usize)> = births
+        .iter()
+        .map(|b| {
+            let (cell, o) = decode_key(b[3]);
+            (world.index(cell).expect("a birth is in a held tile"), o)
+        })
+        .collect();
+    assert!(
+        places.windows(2).all(|w| w[0] < w[1]),
+        "{name}: births are not numbered by slot, cell and offset"
+    );
 }
 
 /// GPU against the CPU port on one fixture: births, claimants (more than
 /// births when projections compete), cells holding several thin markers.
+/// `markers`, `phi` and `cells` are the fixture; the stage sees it `margin`
+/// cells in from the low corner of a box of whole tiles whose first cell is
+/// `lo`.
 fn matches_port(
     device: &GpuDevice,
     name: &str,
-    markers: &[[f32; 3]],
-    phi: &[f32],
-    cells: [u32; 3],
+    fixture: (&[[f32; 3]], Option<&[f32]>, [u32; 3]),
     h: f32,
+    lo: [i32; 3],
 ) -> (u32, u32, usize) {
-    let trace = sheeter::trace_sheet_particles(markers, phi, cells, f64::from(h), FILL_THRESHOLD)
+    const MARGIN: u32 = 8;
+    let (fixture_markers, fixture_phi, fixture_cells) = fixture;
+    let cells = padded_cells(fixture_cells, MARGIN);
+    let markers = padded_markers(fixture_markers, MARGIN, h);
+    let phi = match fixture_phi {
+        Some(phi) => padded_phi(phi, fixture_cells, cells, MARGIN, h),
+        None => marker_phi(&markers, cells, h),
+    };
+    let (world_markers, markers) = to_world(&markers, lo, h);
+    let trace = sheeter::trace_sheet_particles(&markers, &phi, cells, f64::from(h), FILL_THRESHOLD)
         .expect("port");
-    let sorted = sort(device, markers, cells, h);
-    let pool = pool(device, cells);
-    let phi_buffer = pooled(device, &pool, phi, 3.0 * h);
+    let world = World::new(device, lo, cells.map(|n| n as i32), h);
+    let sorted = sort(device, &world, &world_markers, h, markers.len());
+    let phi_buffer = shared(device, bytemuck::cast_slice(&world.to_pool(&phi, 3.0 * h)));
     let mut stage = GpuSheeting::default();
     stage.prepare(device);
     stage
-        .reserve(device, cells, 1 << 16, pool.tiles)
+        .reserve(device, 1 << 16, world.pool_tiles())
         .expect("reserve");
-    let gpu = run(device, &stage, &sorted, &phi_buffer, h, None, &pool);
+    let gpu = run(device, &stage, &sorted, &phi_buffer, h, None, &world);
+    assert_numbered(&world, &gpu.births[..gpu.count as usize], name);
 
     // Candidates by identity. The port lists them as generated; the engine
     // visits them bucket by bucket (k, j, i) in that order within a bucket,
-    // which is ascending rank when each bucket's ranks rise as generated.
-    let want_sites: Vec<usize> = trace
+    // which is ascending key when each bucket's keys rise as generated.
+    let want_sites: Vec<(usize, u32)> = trace
         .candidates
         .iter()
-        .map(|&p| site_of(p, cells, h))
+        .map(|&p| {
+            let (cell, o) = site_of(p, lo, h);
+            (8 * world.index(cell).unwrap() + o, site_key(cell, o))
+        })
         .collect();
-    let mut last = std::collections::HashMap::new();
-    for &s in &want_sites {
-        let rank = rank_of(s, cells);
-        let previous = last.insert(rank / 64, rank);
+    let mut last = HashMap::new();
+    for &(_, key) in &want_sites {
+        let previous = last.insert(key / 64, key);
         assert!(
-            previous.is_none_or(|p| p < rank),
-            "{name}: rank {rank} out of the engine's order in its bucket"
+            previous.is_none_or(|p| p < key),
+            "{name}: key {key} out of the engine's order in its bucket"
         );
     }
-    let mut got_sites: Vec<usize> = (0..8 * gpu.flags.len())
-        .filter(|&s| gpu.flags[s / 8] & (1 << (s % 8)) != 0)
+    let mut got_sites: Vec<usize> = world
+        .cells()
+        .into_iter()
+        .flat_map(|cell| {
+            let at = world.index(cell).unwrap();
+            let flags = gpu.flags[at];
+            (0..8)
+                .filter(move |o| flags & (1 << o) != 0)
+                .map(move |o| 8 * at + o)
+        })
         .collect();
-    let mut sorted_want = want_sites.clone();
+    let mut sorted_want: Vec<usize> = want_sites.iter().map(|s| s.0).collect();
     sorted_want.sort_unstable();
     got_sites.sort_unstable();
     assert_eq!(got_sites, sorted_want, "{name}: candidate sites differ");
@@ -276,46 +489,56 @@ fn matches_port(
         .seed_candidates
         .iter()
         .zip(&trace.seeds)
-        .map(|(&c, &p)| (rank_of(site_of(trace.candidates[c], cells, h), cells), p))
+        .map(|(&c, &p)| {
+            let (cell, o) = site_of(trace.candidates[c], lo, h);
+            (site_key(cell, o), p)
+        })
         .collect();
-    // The port seeds in visiting order, ascending rank; the GPU list is in
-    // that order too, unsorted.
+    // The port seeds in visiting order, ascending key.
     assert!(
         want.windows(2).all(|w| w[0].0 < w[1].0),
-        "{name}: the port seeds out of rank order"
+        "{name}: the port seeds out of key order"
     );
     assert_eq!(
         gpu.count as usize,
         want.len(),
         "{name}: birth counts differ"
     );
-    let got: Vec<(u32, [f32; 3])> = gpu.births[..gpu.count as usize]
+    let corner = lo.map(|c| f64::from(c) * f64::from(h));
+    let mut got: Vec<(u32, [f32; 3])> = gpu.births[..gpu.count as usize]
         .iter()
         .map(|b| (b[3], [b[0], b[1], b[2]].map(f32::from_bits)))
         .collect();
+    got.sort_by_key(|g| g.0);
     assert_eq!(
         got.iter().map(|g| g.0).collect::<Vec<_>>(),
         want.iter().map(|w| w.0).collect::<Vec<_>>(),
-        "{name}: births differ in identity or order"
+        "{name}: births differ in identity"
     );
     // Every winning claim resolves exactly once, into its own sub-cell.
     assert_eq!(gpu.unresolved, 0, "{name}: a recomputed claim failed");
     let inv_sub = 1.0 / (0.5 * f64::from(h));
     let mut held = std::collections::HashSet::new();
-    for (rank, p) in &got {
-        let s = p.map(|c| (f64::from(c) * inv_sub).floor() as usize);
-        let cell = s[0] / 2 + cells[0] as usize * (s[1] / 2 + cells[1] as usize * (s[2] / 2));
-        let index = 8 * cell + (s[0] & 1) + 2 * (s[1] & 1) + 4 * (s[2] & 1);
+    for (key, p) in &got {
+        let s = p.map(|c| (f64::from(c) * inv_sub).floor() as i32);
+        let at = world
+            .index(s.map(|v| v >> 1))
+            .expect("a birth is in a held tile");
+        let sub = ((s[0] & 1) + 2 * (s[1] & 1) + 4 * (s[2] & 1)) as usize;
         assert_eq!(
-            gpu.claims[index], *rank,
-            "{name}: birth {rank} does not hold its sub-cell"
+            gpu.claims[at][sub], *key,
+            "{name}: birth {key} does not hold its sub-cell"
         );
-        assert!(held.insert(index), "{name}: two births in one sub-cell");
+        assert!(
+            held.insert(8 * at + sub),
+            "{name}: two births in one sub-cell"
+        );
     }
     // And the other way: every sub-cell a claim won holds a birth of that
-    // rank, so no winner is lost between the claim and the births.
-    let claimed: std::collections::HashSet<usize> = (0..gpu.claims.len())
-        .filter(|&i| gpu.claims[i] != u32::MAX)
+    // key, so no winner is lost between the claim and the births.
+    // The pool's last element is the canonical one, which no pass clears.
+    let claimed: std::collections::HashSet<usize> = (0..8 * (gpu.claims.len() - 1))
+        .filter(|&i| gpu.claims[i / 8][i % 8] != u32::MAX)
         .collect();
     assert_eq!(
         claimed.len(),
@@ -323,7 +546,11 @@ fn matches_port(
         "{name}: claims won and births differ in number"
     );
     assert!(claimed == held, "{name}: a won claim has no birth");
-    let claimants: u32 = gpu.flags.iter().map(|f| (f >> 8).count_ones()).sum();
+    let claimants: u32 = world
+        .cells()
+        .into_iter()
+        .map(|cell| ((gpu.flags[world.index(cell).unwrap()] >> 8) & 255).count_ones())
+        .sum();
     // Several markers of one cell passing the depth walk: detect's shared flag.
     let mut thin_per_cell = std::collections::HashMap::new();
     for (_, p) in markers.iter().enumerate().filter(|(m, _)| trace.thin[*m]) {
@@ -332,14 +559,25 @@ fn matches_port(
             .or_insert(0) += 1;
     }
     let shared_cells = thin_per_cell.values().filter(|&&n| n > 1).count();
+    // The births come back in the lattice frame, so the box's corner and the
+    // frame's magnitude cost a few float steps beyond the port's own.
+    let reach = lo
+        .iter()
+        .zip(cells)
+        .map(|(&c, n)| f64::from(c.abs().max(c + n as i32)))
+        .fold(0.0, f64::max)
+        * f64::from(h);
+    let frame = 4.0 * f64::from(f32::EPSILON) * reach;
     let worst = got
         .iter()
         .zip(&want)
-        .flat_map(|(g, w)| (0..3).map(move |a| (g.1[a] - w.1[a]).abs()))
-        .fold(0.0f32, f32::max);
+        .flat_map(|(g, w)| {
+            (0..3).map(move |a| (f64::from(g.1[a]) - corner[a] - f64::from(w.1[a])).abs())
+        })
+        .fold(0.0f64, f64::max);
     // The port fuses multiply-adds as the engine build does; Metal fuses its own way.
     assert!(
-        worst < 1e-5 * h,
+        worst < 1e-5 * f64::from(h) + frame,
         "{name}: birth positions differ by {worst}"
     );
     assert!(gpu.count > 0, "{name}: no births");
@@ -354,10 +592,9 @@ fn matches_port(
     let inputs = SheetInputs {
         particles: &sorted.particles,
         order: &sorted.order,
-        ranges: sorted.sorter.ranges().expect("ranges"),
+        ranges: &sorted.ranges,
         count: (&sorted.record, 0),
         phi: &phi_buffer,
-        origin: [0.0; 3],
         h,
         threshold: FILL_THRESHOLD,
     };
@@ -365,7 +602,7 @@ fn matches_port(
     for _ in 0..5 {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut enc = device.create_encoder("sheeting timing");
-        stage.encode(&mut enc, &inputs, &pool.table, pool.tiles);
+        stage.encode(&mut enc, &inputs, &world.tiles);
         enc.add_gpu_time_handler(move |seconds| {
             let _ = tx.send(seconds);
         });
@@ -385,37 +622,42 @@ fn gpu_flip_sheeting_matches_the_port_on_a_splash() {
     let device = manifold_gpu::testkit::test_device();
     let (markers, analytic, cells, dx) = sheeter::fixtures::splash();
     let h = dx as f32;
-    let (births, claimants, shared) =
-        matches_port(&device, "analytic", &markers, &analytic, cells, h);
+    let markers = quantised(&markers);
+    // 56 cells of whole tiles from cell -24 on every axis: the origin is inside.
+    let lo = [-24; 3];
+    let (births, claimants, shared) = matches_port(
+        &device,
+        "analytic",
+        (&markers, Some(&analytic), cells),
+        h,
+        lo,
+    );
     assert!(
         claimants > births,
         "projections compete for sub-cells: {claimants} claimants, {births} births"
     );
     assert!(shared > 0, "several thin markers share a cell");
-    matches_port(
-        &device,
-        "markers",
-        &markers,
-        &marker_phi(&markers, cells, h),
-        cells,
-        h,
-    );
+    matches_port(&device, "markers", (&markers, None, cells), h, lo);
 }
 
 /// An inactive clock slot leaves every buffer the stage owns as the last
 /// active slot left it; a rerun repeats the births exactly; a short birth list
-/// keeps the engine's first births and the true count.
+/// keeps the first births and the true count.
 #[test]
 fn gpu_flip_sheeting_inactive_slot_and_capacity() {
     let device = manifold_gpu::testkit::test_device();
     let (markers, phi, cells, dx) = sheeter::fixtures::splash();
     let h = dx as f32;
-    let sorted = sort(&device, &markers, cells, h);
-    let pool = pool(&device, cells);
-    let phi_buffer = pooled(&device, &pool, &phi, 3.0 * h);
+    let lo = [-24; 3];
+    let big = padded_cells(cells, 8);
+    let (world_markers, _) = to_world(&padded_markers(&quantised(&markers), 8, h), lo, h);
+    let phi = padded_phi(&phi, cells, big, 8, h);
+    let world = World::new(&device, lo, big.map(|n| n as i32), h);
+    let sorted = sort(&device, &world, &world_markers, h, world_markers.len());
+    let phi_buffer = shared(&device, bytemuck::cast_slice(&world.to_pool(&phi, 3.0 * h)));
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
-    stage.reserve(&device, cells, 1 << 16, pool.tiles).unwrap();
+    stage.reserve(&device, 1 << 16, world.pool_tiles()).unwrap();
     let full = run(
         &device,
         &stage,
@@ -423,9 +665,10 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
         &phi_buffer,
         h,
         Some(&live_plan(&device, 0.01)),
-        &pool,
+        &world,
     );
     assert!(full.count > 3);
+    assert_numbered(&world, &full.births[..full.count as usize], "full");
     let snapshot = |stage: &GpuSheeting| -> Vec<Vec<u32>> {
         stage.scratch()[..9]
             .iter()
@@ -435,7 +678,10 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
     };
     let before = snapshot(&stage);
     let other: Vec<f32> = phi.iter().map(|v| -v).collect();
-    let other = pooled(&device, &pool, &other, 3.0 * h);
+    let other = shared(
+        &device,
+        bytemuck::cast_slice(&world.to_pool(&other, 3.0 * h)),
+    );
     run(
         &device,
         &stage,
@@ -443,13 +689,13 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
         &other,
         h,
         Some(&live_plan(&device, 0.0)),
-        &pool,
+        &world,
     );
     assert!(
         before == snapshot(&stage),
         "an inactive slot wrote to the stage"
     );
-    let again = run(&device, &stage, &sorted, &phi_buffer, h, None, &pool);
+    let again = run(&device, &stage, &sorted, &phi_buffer, h, None, &world);
     assert!(
         again.births == full.births && again.count == full.count,
         "a rerun changed the births"
@@ -457,8 +703,8 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
 
     let mut short = GpuSheeting::default();
     short.prepare(&device);
-    short.reserve(&device, cells, 3, pool.tiles).unwrap();
-    let three = run(&device, &short, &sorted, &phi_buffer, h, None, &pool);
+    short.reserve(&device, 3, world.pool_tiles()).unwrap();
+    let three = run(&device, &short, &sorted, &phi_buffer, h, None, &world);
     assert_eq!(
         three.count, full.count,
         "a short list still counts every birth"
@@ -466,15 +712,7 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
     assert_eq!(
         three.births[..3],
         full.births[..3],
-        "a short list keeps the engine's first births"
-    );
-    let ranks: Vec<u32> = full.births[..full.count as usize]
-        .iter()
-        .map(|b| b[3])
-        .collect();
-    assert!(
-        ranks.windows(2).all(|w| w[0] < w[1]),
-        "births in rank order"
+        "a short list keeps the first births"
     );
 }
 
@@ -482,11 +720,11 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
 /// spacing, on the floats either side of every cell and half-cell face, and
 /// of their mirrors below zero, where interpolation and the walk sample. A
 /// plain f32 product gets some of them wrong (f32 0.3 at 1.5 m: cell 5, where
-/// the engine's is 4), so the probe can tell.
+/// the engine's is 4), so the probe can tell. The probe takes positions as
+/// lattice-local already, so it tests the floor alone.
 #[test]
 fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
     let device = manifold_gpu::testkit::test_device();
-    let cells = [40u32; 3];
     for h in [0.3f32, 0.1, 0.7, 1.0] {
         let dx = f64::from(h);
         let mut points = vec![1.5f32];
@@ -537,11 +775,11 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
         let particles = shared(&device, bytemuck::cast_slice(&records));
         let zeros = shared(&device, &vec![0u8; 4 * 64000]);
         let record = slots_record(&device, records.len() as u32);
-        let pool = pool(&device, cells);
+        let world = World::new(&device, [0; 3], [8; 3], h);
         let mut stage = GpuSheeting::default();
         stage.prepare(&device);
         stage
-            .reserve(&device, cells, 2 * records.len() as u32, pool.tiles)
+            .reserve(&device, 2 * records.len() as u32, world.pool_tiles())
             .unwrap();
         let mut enc = device.create_encoder("sheeting index probe");
         let inputs = SheetInputs {
@@ -550,11 +788,10 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
             ranges: &zeros,
             count: (&record, 0),
             phi: &zeros,
-            origin: [0.0; 3],
             h,
             threshold: FILL_THRESHOLD,
         };
-        stage.encode_index_probe(&device, &mut enc, &inputs, &pool.table, pool.tiles);
+        stage.encode_index_probe(&device, &mut enc, &inputs, &world.tiles);
         enc.commit_and_wait_completed();
         let words = copy_out(&device, stage.births().0);
         // In contract: finite with both floors inside +-2^30, the engine's floor.
@@ -595,7 +832,9 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
 
 /// A flat sheet on a regular marker lattice (exact distance ties among the
 /// nearest three) with a hole, at non-binary spacing; and the splash scaled to
-/// the same spacings.
+/// the same spacings. The box starts at the lattice origin here: a frame
+/// change at these spacings would round the markers differently for the stage
+/// and the port.
 #[test]
 fn gpu_flip_sheeting_matches_the_port_at_non_binary_spacing() {
     let device = manifold_gpu::testkit::test_device();
@@ -604,7 +843,13 @@ fn gpu_flip_sheeting_matches_the_port_at_non_binary_spacing() {
         let s = h / dx as f32;
         let scaled: Vec<[f32; 3]> = markers.iter().map(|p| p.map(|c| c * s)).collect();
         let phi: Vec<f32> = analytic.iter().map(|v| v * s).collect();
-        matches_port(&device, &format!("splash h {h}"), &scaled, &phi, cells, h);
+        matches_port(
+            &device,
+            &format!("splash h {h}"),
+            (&scaled, Some(&phi), cells),
+            h,
+            [0; 3],
+        );
 
         // Cell-centre phi |y − 8.25 h| − 0.75 h, markers four to a cell at
         // y 8.1 h, none within 1 h of the hole's centre: the oracle's holed
@@ -625,27 +870,30 @@ fn gpu_flip_sheeting_matches_the_port_at_non_binary_spacing() {
         matches_port(
             &device,
             &format!("lattice h {h}"),
-            &sheet,
-            &lattice_phi,
-            [n as u32; 3],
+            (&sheet, Some(&lattice_phi), [n as u32; 3]),
             h,
+            [0; 3],
         );
     }
 }
 
 /// The depth walk below the grid's low x face: a level set rising along x,
-/// so each marker walks toward −x, past zero, where native reads only
-/// out-of-range corners (zero) and the walk ends. Markers swept across the
-/// first three and a half cells, one to a cell: the near ones feel the zero
-/// corners and turn thin, the far ones walk inside the grid and do not. The GPU's thin cells after detect
-/// equal the port's thin markers' cells; the port is the native sheeter's
-/// decisions bit for bit (sheet_oracle.rs), which exposes only seeds, and
-/// nothing seeds this close to the border.
+/// so each marker walks toward −x, past the box, where native reads only
+/// out-of-range corners (zero) and the walk ends; here the corners below the
+/// box are in tiles that hold no slot. Markers swept across the first three
+/// and a half cells, one to a cell: the near ones feel the zero corners and
+/// turn thin, the far ones walk inside the grid and do not. The GPU's thin
+/// cells after detect equal the port's thin markers' cells; the port is the
+/// native sheeter's decisions bit for bit (sheet_oracle.rs), which exposes
+/// only seeds, and nothing seeds this close to the border. The box sits across
+/// the origin.
 #[test]
-fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
+fn gpu_flip_sheeting_depth_walk_below_the_box_matches_the_port() {
     let device = manifold_gpu::testkit::test_device();
     let cells = [16u32; 3];
-    for h in [1.0f32, 0.3] {
+    // The non-binary spacing starts at the lattice origin: a frame change
+    // there would round its markers differently for the stage and the port.
+    for (h, lo) in [(1.0f32, [-8; 3]), (0.3, [0; 3])] {
         let n = 16usize;
         let phi: Vec<f32> = (0..n * n * n)
             .map(|i| 0.3 * ((i % n) as f32 + 0.5 - 5.0) * h)
@@ -659,6 +907,7 @@ fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
                 ]
             })
             .collect();
+        let (world_markers, markers) = to_world(&markers, lo, h);
         let trace =
             sheeter::trace_sheet_particles(&markers, &phi, cells, f64::from(h), FILL_THRESHOLD)
                 .expect("port");
@@ -678,32 +927,32 @@ fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
             thin > 0 && thin < markers.len(),
             "h {h}: the sweep crosses the walk's decision ({thin} thin)"
         );
-        let sorted = sort(&device, &markers, cells, h);
-        let pool = pool(&device, cells);
-        let phi_buffer = pooled(&device, &pool, &phi, 3.0 * h);
+        let world = World::new(&device, lo, cells.map(|n| n as i32), h);
+        let sorted = sort(&device, &world, &world_markers, h, markers.len());
+        let phi_buffer = shared(&device, bytemuck::cast_slice(&world.to_pool(&phi, 3.0 * h)));
         let mut stage = GpuSheeting::default();
         stage.prepare(&device);
-        stage.reserve(&device, cells, 16, pool.tiles).unwrap();
-        let mut enc = device.create_encoder("sheeting detect");
-        stage.encode_detect(
-            &mut enc,
-            &SheetInputs {
-                particles: &sorted.particles,
-                order: &sorted.order,
-                ranges: sorted.sorter.ranges().unwrap(),
-                count: (&sorted.record, 0),
-                phi: &phi_buffer,
-                origin: [0.0; 3],
-                h,
-                threshold: FILL_THRESHOLD,
-            },
-            &pool.table,
-            pool.tiles,
-        );
-        enc.commit_and_wait_completed();
-        let flags = from_pool(&copy_out(&device, &stage.scratch()[0]), cells);
-        let got: Vec<usize> = (0..flags.len()).filter(|&c| flags[c] != 0).collect();
-        assert_eq!(got, want, "h {h}: thin cells differ");
+        stage.reserve(&device, 16, world.pool_tiles()).unwrap();
+        let detect = |record: &GpuBuffer| -> Vec<usize> {
+            let mut enc = device.create_encoder("sheeting detect");
+            stage.encode_detect(
+                &mut enc,
+                &SheetInputs {
+                    particles: &sorted.particles,
+                    order: &sorted.order,
+                    ranges: &sorted.ranges,
+                    count: (record, 0),
+                    phi: &phi_buffer,
+                    h,
+                    threshold: FILL_THRESHOLD,
+                },
+                &world.tiles,
+            );
+            enc.commit_and_wait_completed();
+            let flags = world.dense_of(&copy_out(&device, &stage.scratch()[0]));
+            (0..flags.len()).filter(|&c| flags[c] != 0).collect()
+        };
+        assert_eq!(detect(&sorted.record), want, "h {h}: thin cells differ");
 
         // The marker pass covers the record's first n slots: with the last thin
         // marker's slot and everything after it left out, its cell raises no flag.
@@ -723,26 +972,11 @@ fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
             "h {h}: the count leaves a thin marker out"
         );
         let short = slots_record(&device, n as u32);
-        let mut enc = device.create_encoder("sheeting detect short");
-        stage.encode_detect(
-            &mut enc,
-            &SheetInputs {
-                particles: &sorted.particles,
-                order: &sorted.order,
-                ranges: sorted.sorter.ranges().unwrap(),
-                count: (&short, 0),
-                phi: &phi_buffer,
-                origin: [0.0; 3],
-                h,
-                threshold: FILL_THRESHOLD,
-            },
-            &pool.table,
-            pool.tiles,
+        assert_eq!(
+            detect(&short),
+            want_n,
+            "h {h}: a marker past the count raised a flag"
         );
-        enc.commit_and_wait_completed();
-        let flags = from_pool(&copy_out(&device, &stage.scratch()[0]), cells);
-        let got: Vec<usize> = (0..flags.len()).filter(|&c| flags[c] != 0).collect();
-        assert_eq!(got, want_n, "h {h}: a marker past the count raised a flag");
         eprintln!(
             "SHEETING WALK h {h}: {thin} of {} markers thin, cells agree",
             markers.len()
@@ -755,12 +989,23 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
     let device = manifold_gpu::testkit::test_device();
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
-    for cells in [[5u32, 3, 7], [4, 4, 4], [1, 1, 1]] {
-        let pool = pool(&device, cells);
-        stage.reserve(&device, cells, 1, pool.tiles).unwrap();
+    // One tile, a column of two across the origin, and a 2 x 2 x 2 block.
+    for (lo, size) in [
+        ([0, 0, 0], [8, 8, 8]),
+        ([-8, 0, -8], [8, 8, 16]),
+        ([-8, -8, -8], [16, 16, 16]),
+    ] {
+        let world = World::new(&device, lo, size, 1.0);
+        let pool_tiles = world.pool_tiles();
+        stage.reserve(&device, 1, pool_tiles).unwrap();
         for saturated in [true, false] {
-            let fixture = bucket_fixture(cells.map(|n| n as usize), saturated);
-            let counts = pooled(&device, &pool, &fixture.counts, 0u32);
+            let fixture = bucket_fixture(
+                &world.cells(),
+                &|c| world.index(c).unwrap(),
+                pool_tiles as usize,
+                saturated,
+            );
+            let counts = shared(&device, bytemuck::cast_slice(&fixture.counts));
             let segments = shared(&device, bytemuck::cast_slice(&fixture.segments));
             let dummy = shared(&device, &[0; 32]);
             let inputs = SheetInputs {
@@ -769,24 +1014,23 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
                 ranges: &dummy,
                 count: (&dummy, 0),
                 phi: &dummy,
-                origin: [0.0; 3],
                 h: 1.0,
                 threshold: FILL_THRESHOLD,
             };
             let mut enc = device.create_encoder("sheeting bucket proof");
             enc.copy_buffer_to_buffer(&counts, &stage.scratch()[3], counts.size);
             enc.copy_buffer_to_buffer(&segments, &stage.scratch()[4], segments.size);
-            stage.encode_buckets(&mut enc, &inputs, &pool.table, pool.tiles);
+            stage.encode_buckets(&mut enc, &inputs, &world.tiles);
             enc.commit_and_wait_completed();
             let lengths = copy_out(&device, &stage.scratch()[1]);
             let rows = copy_out(&device, &stage.scratch()[4]);
             for (r, want) in fixture.merged.iter().enumerate() {
-                assert_eq!(lengths[r] as usize, want.len(), "{cells:?}, row {r}");
+                assert_eq!(lengths[r] as usize, want.len(), "{lo:?}, row {r}");
                 let want: &[u32] = bytemuck::cast_slice(want);
                 assert_eq!(
                     &rows[128 * r..128 * r + want.len()],
                     want,
-                    "{cells:?}, row {r}"
+                    "{lo:?}, row {r}"
                 );
             }
         }
@@ -801,12 +1045,14 @@ fn gpu_flip_sheeting_rows_match_old_gpu_under_replay_and_fractional_rates() {
     rows_match_old_gpu_under_replay_and_fractional_rates(false);
 }
 
+/// The same with the scene one cell off the buckets' alignment, so the real
+/// marker selection and segment bases take the other parity of every cell.
 #[test]
-fn gpu_flip_sheeting_odd_grid_rows_match_old_gpu_under_replay_and_fractional_rates() {
+fn gpu_flip_sheeting_odd_cell_rows_match_old_gpu_under_replay_and_fractional_rates() {
     rows_match_old_gpu_under_replay_and_fractional_rates(true);
 }
 
-fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
+fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_cell: bool) {
     use super::gpu_flip_sheeting::StepBirths;
     use manifold_gpu::GpuReplayCache;
     use manifold_water_liquid::fluid_particles::FaceSample;
@@ -815,49 +1061,37 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
     };
 
     let device = manifold_gpu::testkit::test_device();
-    let (mut markers, mut analytic, mut cells, dx) = sheeter::fixtures::splash();
-    if odd_grid {
-        // Crop x/z and extend y with exterior samples. Real marker selection
-        // and segment bases now traverse partial 2-cell buckets.
-        let old_cells = cells;
-        cells = [39, 41, 37];
-        markers.retain(|p| (0..3).all(|axis| p[axis] < cells[axis] as f32 * dx as f32));
-        analytic = (0..cells.iter().product())
-            .map(|i| {
-                let x = i % cells[0];
-                let y = (i / cells[0]) % cells[1];
-                let z = i / (cells[0] * cells[1]);
-                if y >= old_cells[1] {
-                    return 1.0;
-                }
-                analytic[(x + old_cells[0] * (y + old_cells[1] * z)) as usize]
-            })
-            .collect();
-    }
+    let (markers, analytic, cells, dx) = sheeter::fixtures::splash();
+    let h = dx as f32;
+    let margin = if odd_cell { 9 } else { 8 };
+    let lo = [-24; 3];
+    let big = padded_cells(cells, margin);
+    let analytic = padded_phi(&analytic, cells, big, margin, h);
+    let mut markers = padded_markers(&quantised(&markers), margin, h);
     // Break spatial input order without changing the geometry.
     let mut rng = 0x0005_1eed_u32;
     for i in (1..markers.len()).rev() {
         rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
         markers.swap(i, rng as usize % (i + 1));
     }
-    let h = dx as f32;
-    let sorted = sort(&device, &markers, cells, h);
+    let (markers, _) = to_world(&markers, lo, h);
+    let world = World::new(&device, lo, big.map(|n| n as i32), h);
+    let capacity = markers.len() as u32 + 8000;
+    let sorted = sort(&device, &world, &markers, h, capacity as usize);
     let original = copy_out(&device, &sorted.particles);
-    let capacity = sorted.count + 8000;
     let mut initial = vec![0u32; 8 * capacity as usize];
     initial[..original.len()].copy_from_slice(&original);
-    let ranges = sorted.sorter.ranges().unwrap();
-    let pool = pool(&device, cells);
-    let phi = pooled(&device, &pool, &analytic, 3.0 * h);
+    let ranges = &sorted.ranges;
+    let phi = shared(
+        &device,
+        bytemuck::cast_slice(&world.to_pool(&analytic, 3.0 * h)),
+    );
     let face = FaceSample {
         velocity: [0.3, -0.2, 0.1, 0.0],
         weight: [1.0; 4],
     };
-    let faces = vec![face; cells.into_iter().map(|n| (n + 1) as usize).product()];
-    let old = shared(
-        &device,
-        bytemuck::cast_slice(&records_to_pool(&faces, cells, &[face; 8])),
-    );
+    let faces = vec![face; world.cells().len()];
+    let old = shared(&device, bytemuck::cast_slice(&world.to_pool(&faces, face)));
     let capped = shared(
         &device,
         &[0u8; 4 * manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize],
@@ -886,7 +1120,9 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             } else {
                 stage.prepare(&device);
             }
-            stage.reserve(&device, cells, capacity, pool.tiles).unwrap();
+            stage
+                .reserve(&device, capacity, world.pool_tiles())
+                .unwrap();
             (
                 stage,
                 shared(&device, bytemuck::cast_slice(&initial)),
@@ -931,7 +1167,6 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
                 ranges,
                 count: (&*identity, COUNT_OFFSET),
                 phi: &phi,
-                origin: [0.0; 3],
                 h,
                 threshold: FILL_THRESHOLD,
             };
@@ -946,7 +1181,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             };
             let mut enc = device.create_encoder("sheeting old GPU parity");
             let replay = cache.take().map(|c| enc.begin_replay(&device, c)).is_some();
-            stage.encode_draw(&mut enc, &inputs, &plan, &births, &pool.table, pool.tiles);
+            stage.encode_draw(&mut enc, &inputs, &plan, &births, &world.tiles);
             ids.reserve(
                 &mut enc,
                 BirthReservation {
@@ -955,12 +1190,18 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
                     ranges,
                     scan: stage.winners(),
                     plan: &plan,
+                    tile_counts: world.tiles.counts(),
                     step_record: None,
-                    params: [capacity, pool_len(pool.tiles) as u32, stage.ranks(), 1],
+                    params: [
+                        capacity,
+                        pool_len(world.pool_tiles()) as u32,
+                        stage.ranks(),
+                        exhausted_word(world.tiles.reach().ring_max) as u32,
+                    ],
                 },
             );
             enc.compute_memory_barrier_buffers();
-            stage.encode_write(&mut enc, &inputs, &plan, &births, &pool.table, pool.tiles);
+            stage.encode_write(&mut enc, &inputs, &plan, &births, &world.tiles);
             if replay {
                 *cache = Some(enc.end_replay());
             }

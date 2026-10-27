@@ -7,22 +7,22 @@ pub(super) const SOLID_N: [usize; 3] = [5, 4, 3];
 
 pub(super) const SOLID_H: f32 = 0.25;
 
-pub(super) const SOLID_MIN: [f32; 3] = [-0.6, 0.0, -0.4];
+/// World cells (-2, 0, -1) on: the box crosses the origin on x and z.
+pub(super) const SOLID_MIN: [f32; 3] = [-0.625, -0.125, -0.375];
 
 pub(super) const SOLID_TICK: f32 = 0.05;
 
-pub(super) fn solid_records() -> usize {
-    SOLID_N.iter().map(|v| v + 1).product()
-}
-
 pub(super) fn solid_lattice() -> StepParams {
     StepParams {
-        n: SOLID_N.map(|n| n as u32),
-        box_min: SOLID_MIN,
-        cell_size: SOLID_H,
         impulse_tick: -1,
         ..StepParams::default()
     }
+    .with_grid_for_test(SOLID_N.map(|n| n as u32), SOLID_MIN, SOLID_H)
+}
+
+/// A pass over the solids' box.
+pub(super) fn solid_pass() -> Pass {
+    Pass::at(SOLID_N, SOLID_MIN)
 }
 
 /// In-box neighbours of cell `c`, each with the axis and side of the face to it.
@@ -262,7 +262,7 @@ pub(super) fn cpu_open_fractions(
 pub(super) fn gpu_flip_open_fractions_match_the_engine() {
     let n = SOLID_N;
     let m = n.map(|v| v + 1);
-    let offset = 1.5_f32;
+    let offset = SOLID_MIN.iter().fold(0.0_f32, |m, v| m.max(v.abs()));
     let mut phi: Vec<f32> = random_values(m.iter().product(), 0x50f)
         .iter()
         .map(|v| v * 0.6)
@@ -272,16 +272,11 @@ pub(super) fn gpu_flip_open_fractions_match_the_engine() {
         phi[i + m[0] * (j + m[1] * k)] = 1.0e-7;
     }
     let tolerance = 8.0 * f64::from(f32::EPSILON) * (f64::from(SOLID_H) * 5.0 + f64::from(offset));
-    let step = StepParams {
-        box_offset: offset,
-        ..solid_lattice()
-    };
-    let got: Vec<f32> = Pass::on(SOLID_N).bind(9, &phi, Layout::Dense).run(
+    let got: Vec<f32> = solid_pass().bind(9, &phi, Layout::Records).run_list(
         "open_fractions",
-        &step,
+        &solid_lattice(),
         4,
         face_grid_len(n),
-        solid_records(),
     );
     let (want, branches) = cpu_open_fractions(&phi, n, tolerance);
     for case in [
@@ -361,18 +356,18 @@ pub(super) fn solids() -> Solids {
     };
     let mut bodies = vec![
         body(
-            [-0.21, 0.38, -0.02],
+            [-0.235, 0.255, 0.005],
             [0.7, -0.3, 0.2, 0.4],
             [0.0, 0.3, 1.5],
             0.0,
         ),
         body(
-            [0.33, 0.61, 0.03],
+            [0.305, 0.485, 0.055],
             [-0.5, 0.1, 0.1, 0.9],
             [0.8, 0.0, -0.2],
             1.0,
         ),
-        body([0.0, 0.5, 0.0], [3.0, 3.0, 3.0, 0.7], [0.0; 3], -1.0),
+        body([-0.025, 0.375, 0.025], [3.0, 3.0, 3.0, 0.7], [0.0; 3], -1.0),
     ];
     // The second body is dynamic: it moves at its predicted velocity.
     bodies[1].position_inv_mass[3] = 0.5;
@@ -685,7 +680,7 @@ pub(super) fn gpu_flip_pose_bodies_matches_coupled_motion() {
     let solids = solids();
     let (rows, reaction, contacts, step) = two_tick_bodies(&solids);
     let count = solids.bodies.len();
-    let mut pass = Pass::on(SOLID_N);
+    let mut pass = solid_pass();
     pass.bind(14, &rows, Layout::Dense)
         .bind(21, &reaction, Layout::Dense)
         .bind(49, &contacts, Layout::Dense)
@@ -761,7 +756,7 @@ pub(super) fn gpu_flip_solid_face_velocity_matches_cpu() {
     let open = random_open_faces(SOLID_N, 0x5fa, 0);
     let count = solids.bodies.len();
     let (rows, reaction, contacts, step) = two_tick_bodies(&solids);
-    let mut pass = Pass::on(SOLID_N);
+    let mut pass = solid_pass();
     pass.bind(10, &open, Layout::Records)
         .bind(14, &rows, Layout::Dense)
         .bind(15, &solids.shapes, Layout::Dense)
@@ -770,13 +765,7 @@ pub(super) fn gpu_flip_solid_face_velocity_matches_cpu() {
         .bind(49, &contacts, Layout::Dense);
     pass.bind(50, &vec![[0.0f32; 4]; 6 * count], Layout::Dense);
     let _: Vec<LiquidBody> = pass.run("pose_bodies", &step, 48, count, count);
-    let got: Vec<f32> = pass.run(
-        "solid_face_velocity",
-        &step,
-        4,
-        face_grid_len(SOLID_N),
-        solid_records(),
-    );
+    let got: Vec<f32> = pass.run_list("solid_face_velocity", &step, 4, face_grid_len(SOLID_N));
     let open64: Vec<f64> = open.iter().map(|&v| f64::from(v)).collect();
     let poses = posed(&solids, &reaction, &contacts[count..]);
     let (want, margin, moved) = cpu_solid_face_velocity(&open64, &solids, &poses);
@@ -892,14 +881,11 @@ pub(super) fn gpu_flip_solid_extrapolate_matches_cpu() {
             [r[0], r[1], r[2], code as f32, 0.0, 0.0, 0.0, known as f32]
         })
         .collect();
-    // The pool holds no record past the lattice but the canonical one: zero.
-    let records = zero_past_lattice(records, n);
-    let got: Vec<f32> = Pass::on(SOLID_N).bind(3, &records, Layout::Records).run(
+    let got: Vec<f32> = solid_pass().bind(3, &records, Layout::Records).run_list(
         "solid_extrapolate",
         &solid_lattice(),
         4,
         face_grid_len(n),
-        solid_records(),
     );
     let want = cpu_solid_extrapolate(&records, n);
     let grown = got
@@ -954,7 +940,7 @@ pub(super) fn cpu_constrain(
 #[test]
 pub(super) fn gpu_flip_constrain_solid_faces_matches_cpu() {
     let n = SOLID_N;
-    let faces = zero_past_lattice(random_values(face_grid_len(n), 0xc51), n);
+    let faces = random_values(face_grid_len(n), 0xc51);
     let open = random_open_faces(n, 0xc52, 0);
     let moving: Vec<f32> = random_values(face_grid_len(n), 0xc53)
         .chunks(FACE_FLOATS)
@@ -971,17 +957,15 @@ pub(super) fn gpu_flip_constrain_solid_faces_matches_cpu() {
             ]
         })
         .collect();
-    let moving = zero_past_lattice(moving, n);
-    let got: Vec<f32> = Pass::on(SOLID_N)
+    let got: Vec<f32> = solid_pass()
         .bind(20, &faces, Layout::Records)
         .bind(10, &open, Layout::Records)
         .bind(11, &moving, Layout::Records)
-        .run(
+        .run_list(
             "constrain_solid_faces",
             &solid_lattice(),
             20,
             face_grid_len(n),
-            solid_records(),
         );
     let open64: Vec<f64> = open.iter().map(|&v| f64::from(v)).collect();
     let moving64: Vec<f64> = moving.iter().map(|&v| f64::from(v)).collect();

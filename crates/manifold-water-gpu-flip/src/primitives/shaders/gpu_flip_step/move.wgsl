@@ -22,6 +22,11 @@ fn clamp_boundary(q: vec3<f32>, n: vec3<i32>, edge: f32) -> vec3<f32> {
     return min(max(q, low), high - upper_epsilon);
 }
 
+// The move works in box cells: q = (x − origin) / h − box_lo(), the box's
+// cell c holding q in [c, c + 1), so the walls, the boundary and the open
+// band sit where they sit in the box. A box cell c is world cell
+// c + box_lo().
+
 // Native's grid index range (Grid3d::isGridIndexInRange): the cells
 // themselves, walls and padding included.
 fn inside_grid(q: vec3<f32>, n: vec3<i32>) -> bool {
@@ -53,6 +58,7 @@ fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
     if !finite(q) || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(n)) {
         return vec3<f32>(0.0);
     }
+    let lo = box_lo();
     var v = vec3<f32>(0.0);
     for (var a = 0; a < 3; a = a + 1) {
         var offset = vec3<f32>(0.5);
@@ -67,7 +73,7 @@ fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
             let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
             let c = base + bit;
             if all(c >= vec3<i32>(0)) && all(c <= top) {
-                let face = face_record(ts_face(c), grid);
+                let face = face_record(ts_face(c + lo), grid);
                 let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
                 let w = w3.x * w3.y * w3.z;
                 sum = sum + w * face.face_velocity[a];
@@ -93,12 +99,13 @@ const SOLID_PUSH: f32 = 5.0;
 // the trilinear distance changes at most one cell per cell.
 const SOLID_SLOPE: f32 = 1.7320508;
 
+// Corner c of the box's corner lattice (0..=n per axis, clamped there).
 fn solid_corner(c: vec3<i32>, n: vec3<i32>) -> f32 {
-    return solid[ts_corner(clamp(c, vec3<i32>(0), n))];
+    return solid[ts_cell_at(clamp(c, vec3<i32>(0), n) + box_lo())];
 }
 
-// The solid distance in cells at q (cells from the box minimum), trilinear
-// over the corner lattice (MeshLevelSet::trilinearInterpolate).
+// The solid distance in cells at q (box cells), trilinear over the corner
+// lattice (MeshLevelSet::trilinearInterpolate).
 fn solid_at(q: vec3<f32>, n: vec3<i32>) -> f32 {
     let base = clamp(vec3<i32>(floor(q)), vec3<i32>(0), max(n - vec3<i32>(1), vec3<i32>(0)));
     let t = clamp(q - vec3<f32>(base), vec3<f32>(0.0), vec3<f32>(1.0));
@@ -238,8 +245,9 @@ fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
     return false;
 }
 
-// One thread per slot in use (`slot_record`), `sorted` to `particles_out`. A live particle
-// (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
+// One thread per slot in use (`slot_record`), `sorted` to `particles_out`. A
+// live particle (radius > 0) whose own tile has no slot (an exhausted pool;
+// `tiles_tally` counts them) is removed. Any other at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
 // and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus the density
 // projection's move. The native safety AABB and solid collision sequence is
@@ -266,10 +274,18 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
         particles_out[idx] = out;
         return;
     }
-    let n = ts_cells();
-    let lo = u.box_min;
+    let x0 = particle.position_radius.xyz;
+    let own = ts_cell_at(world_cell(x0));
+    ts_home(own);
+    if finite(x0) && own == ts_canon() {
+        out.position_radius.w = 0.0;
+        particles_out[idx] = out;
+        return;
+    }
+    let n = box_cells();
+    let lo = vec3<f32>(box_lo());
     let per_cell = adaptive_step_dt() / u.cell_size;
-    let q0 = (particle.position_radius.xyz - lo) / u.cell_size;
+    let q0 = (x0 - u.origin) * u.inv_cell - lo;
     let after = sample(q0, n, 0u);
     let k1 = after;
     let k2 = sample(q0 + 0.5 * per_cell * k1, n, 0u);
@@ -300,15 +316,14 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
         // An inflow sets the velocity of the water it holds
         // (_constrainMarkerParticleVelocities); an outflow removes the water
         // that ends the move inside it.
-        let x0 = particle.position_radius.xyz;
         let inflow = region_holding(x0, 2.0, true);
         if inflow >= 0 {
             out.velocity = region_velocity(inflow, x0);
         }
-        if region_holding(lo + q1 * u.cell_size, 3.0, false) >= 0 {
+        if region_holding(fma(q1 + lo, vec3<f32>(u.cell_size), u.origin), 3.0, false) >= 0 {
             radius = 0.0;
         }
     }
-    out.position_radius = vec4<f32>(lo + q1 * u.cell_size, radius);
+    out.position_radius = vec4<f32>(fma(q1 + lo, vec3<f32>(u.cell_size), u.origin), radius);
     particles_out[idx] = out;
 }

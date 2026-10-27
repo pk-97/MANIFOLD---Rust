@@ -1,7 +1,8 @@
 //! The step's pipelines and the shader text they build from.
 
 use super::*;
-use manifold_water_liquid::tile_storage::TILE_STORAGE;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
+use manifold_water_liquid::tile_storage::TILE_GRID;
 
 pub(super) struct Pipelines {
     pub(super) gather: GpuComputePipeline,
@@ -26,10 +27,9 @@ pub(super) struct Pipelines {
     pub(super) pocket_condition: GpuComputePipeline,
     pub(super) pocket_tally: GpuComputePipeline,
     pub(super) pocket_clear: GpuComputePipeline,
-    /// The pocket sums' accumulate and remove over the fine lattice (pooled
-    /// fields), then over a coarse level (dense boxes).
-    pub(super) pocket_accumulate: [GpuComputePipeline; 2],
-    pub(super) pocket_remove: [GpuComputePipeline; 2],
+    /// The pocket sums' accumulate and remove over a list's cells.
+    pub(super) pocket_accumulate: GpuComputePipeline,
+    pub(super) pocket_remove: GpuComputePipeline,
     pub(super) pocket_pin: GpuComputePipeline,
     /// The removed flux into the pressure, then the density, solver word.
     pub(super) pocket_flux: [GpuComputePipeline; 2],
@@ -46,14 +46,13 @@ pub(super) struct Pipelines {
     /// after each slot's clock plan (`count.wgsl`).
     pub(super) slot_load: GpuComputePipeline,
     pub(super) slot_open: GpuComputePipeline,
-    pub(super) tiles_clear: GpuComputePipeline,
-    pub(super) tiles_mark: GpuComputePipeline,
-    pub(super) tiles_rings: GpuComputePipeline,
-    pub(super) tiles_allocate: GpuComputePipeline,
     pub(super) tiles_fresh: GpuComputePipeline,
-    pub(super) tiles_lists: GpuComputePipeline,
     pub(super) tiles_retire: GpuComputePipeline,
-    /// The canonical block of every pooled field, once per pool build.
+    /// The solid corners of every held slot.
+    pub(super) solid_corners: GpuComputePipeline,
+    /// The pool's held share and the particles with no slot.
+    pub(super) tiles_tally: GpuComputePipeline,
+    /// The canonical element of every pooled field, once per pool build.
     pub(super) pool_canon: GpuComputePipeline,
     /// The proofs' poison entry, dispatched under [`POISON`].
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -63,10 +62,23 @@ pub(super) struct Pipelines {
     pub(super) poison_free: GpuComputePipeline,
 }
 
-pub(super) fn step_source() -> String {
+manifold_core::testkit_visible! {
+/// The step's shader: the poses, the colliders, the force lattice, the dense
+/// grid helpers and the world tiles' read side, then the step's own passes,
+/// with the stats layout ahead.
+pub(crate) fn step_source() -> String {
+    step_source_with(STEP_SHADER)
+}
+}
+
+manifold_core::testkit_visible! {
+/// [`step_source`] with `body` in place of the step's own passes, for a
+/// proof that composes one of them on its own.
+pub(crate) fn step_source_with(body: &str) -> String {
     with_stats_layout(&format!(
-        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_STORAGE}\n{STEP_SHADER}"
+        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_GRID}\n{READ_SIDE}\n{body}"
     ))
+}
 }
 
 impl Pipelines {
@@ -102,8 +114,8 @@ impl Pipelines {
             pocket_condition: pipe("pocket_condition"),
             pocket_tally: pipe("pocket_tally"),
             pocket_clear: pipe("pocket_clear"),
-            pocket_accumulate: [pipe("pocket_accumulate"), pipe("pocket_accumulate_coarse")],
-            pocket_remove: [pipe("pocket_remove"), pipe("pocket_remove_coarse")],
+            pocket_accumulate: pipe("pocket_accumulate"),
+            pocket_remove: pipe("pocket_remove"),
             pocket_pin: pipe("pocket_pin"),
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
             pocket_coarse: [
@@ -118,13 +130,10 @@ impl Pipelines {
             birth_tally_reset: pipe("birth_tally_reset"),
             slot_load: pipe("slot_load"),
             slot_open: pipe("slot_open"),
-            tiles_clear: pipe("tiles_clear"),
-            tiles_mark: pipe("tiles_mark"),
-            tiles_rings: pipe("tiles_rings"),
-            tiles_allocate: pipe("tiles_allocate"),
             tiles_fresh: pipe("tiles_fresh"),
-            tiles_lists: pipe("tiles_lists"),
             tiles_retire: pipe("tiles_retire"),
+            solid_corners: pipe("solid_corners"),
+            tiles_tally: pipe("tiles_tally"),
             pool_canon: pipe("pool_canon"),
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             poison: pipe(super::super::gpu_flip_tile_tests::POISON_ENTRY),

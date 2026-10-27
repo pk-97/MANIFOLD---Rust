@@ -39,6 +39,18 @@ pub(crate) fn history_bytes(cells: [u32; 3], slots: u32) -> u64 {
 }
 }
 
+/// The step's pooled face records as the history reads them.
+#[derive(Clone, Copy)]
+pub struct PooledFaces<'a> {
+    pub faces: &'a GpuBuffer,
+    /// The step's world-tile table over `pool_tiles` tiles.
+    pub table: &'a GpuBuffer,
+    pub pool_tiles: u32,
+    /// The world cell of the solver grid's first cell: the history's dense
+    /// faces are read from there.
+    pub cell_origin: [i32; 3],
+}
+
 #[derive(Default)]
 pub struct SubstepHistory {
     pub schedule: Option<GpuBuffer>,
@@ -89,17 +101,15 @@ impl SubstepHistory {
         self.shape = Some((cells, slots));
         Ok(())
     }
-    /// GPU FLIP adapts its scheduler and native face records here: `faces`
-    /// are its pooled records, `table` its slot table over `pool_tiles`
-    /// tiles. Consumers never see either solver-private layout.
+    /// GPU FLIP adapts its scheduler and native face records here: `pooled`
+    /// holds its pooled records and the table that finds them. Consumers
+    /// never see either solver-private layout.
     pub fn capture(
         &mut self,
         enc: &mut GpuEncoder,
         index: u32,
         plan: &GpuBuffer,
-        faces: &GpuBuffer,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        pooled: &PooledFaces<'_>,
     ) {
         let (cells, slots) = self.shape.expect("history reserved");
         assert!(index < slots);
@@ -153,7 +163,13 @@ impl SubstepHistory {
         {
             let count = face_len(cells, axis);
             // The component reads nodes − 4 cells: GPU FLIP's solver grid.
-            let uniforms = ComponentUniforms::new(axis, cells.map(|n| n + 4), pool_tiles, count);
+            let uniforms = ComponentUniforms::new(
+                axis,
+                cells.map(|n| n + 4),
+                pooled.pool_tiles,
+                pooled.cell_origin,
+                count,
+            );
             enc.dispatch_compute_indirect(
                 self.component.as_ref().expect("component prepared"),
                 &[
@@ -163,12 +179,12 @@ impl SubstepHistory {
                     },
                     GpuBinding::Buffer {
                         binding: 1,
-                        buffer: faces,
+                        buffer: pooled.faces,
                         offset: 0,
                     },
                     GpuBinding::Buffer {
                         binding: 2,
-                        buffer: table,
+                        buffer: pooled.table,
                         offset: 0,
                     },
                     GpuBinding::Buffer {
@@ -202,14 +218,29 @@ mod tests {
     }
 
     /// The history binds the component's own uniform: axis, the padded nodes,
-    /// the pool's tiles (all as f32 bits), the count, two pad words.
+    /// the pool's tiles (as f32 bits), the world cell origin (as i32), the
+    /// count, three pad words.
     #[test]
     fn liquid_substep_history_component_uniform_layout() {
-        let words: [u32; 8] = bytemuck::cast(ComponentUniforms::new(2, [10, 11, 12], 7, 99));
+        let words: [u32; 12] =
+            bytemuck::cast(ComponentUniforms::new(2, [10, 11, 12], 7, [-5, 6, -7], 99));
         let bits = |v: f32| v.to_bits();
         assert_eq!(
             words,
-            [2, bits(10.0), bits(11.0), bits(12.0), bits(7.0), 99, 0, 0]
+            [
+                2,
+                bits(10.0),
+                bits(11.0),
+                bits(12.0),
+                bits(7.0),
+                (-5i32) as u32,
+                6,
+                (-7i32) as u32,
+                99,
+                0,
+                0,
+                0
+            ]
         );
     }
 

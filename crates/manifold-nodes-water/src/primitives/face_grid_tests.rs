@@ -14,9 +14,7 @@ use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::{face_coords, face_len, face_position};
 use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
-use manifold_water_liquid::tile_storage::testkit::{
-    identity_table, records_from_pool, records_to_pool,
-};
+use manifold_water_liquid::testkit::world_box::{BoxTable, table_words_of};
 
 /// Unequal sides, so a swapped axis shows.
 const N: [u32; 3] = [6, 5, 4];
@@ -62,10 +60,17 @@ impl Rng {
     }
 }
 
-/// The FLIP component's params: the matter ones plus the pool's tiles.
+/// The FLIP component's params: the matter ones plus the pool's tiles and
+/// the world cell of the solver grid's first cell.
 fn flip_params(nodes: [u32; 3], axis: u32, pool_tiles: u32) -> ParamValues {
     let mut p = component_params(nodes, axis);
     p.insert("pool_tiles".into(), ParamValue::Float(pool_tiles as f32));
+    for (name, cell) in ["cell_origin_x", "cell_origin_y", "cell_origin_z"]
+        .into_iter()
+        .zip(ORIGIN)
+    {
+        p.insert(name.into(), ParamValue::Float(cell as f32));
+    }
     p
 }
 
@@ -131,26 +136,15 @@ fn gpu_flip_lattice(field: &Field) -> Vec<FaceSample> {
         .collect()
 }
 
-/// The canonical records of the pooled faces: every face absent except the
-/// masked axes, closed (velocity 0, weight 1).
-fn canonical_faces() -> [FaceSample; 8] {
-    std::array::from_fn(|mask| {
-        let mut s = FaceSample::default();
-        for a in 0..3 {
-            s.weight[a] = f32::from(u8::from(mask >> a & 1 == 1));
-        }
-        s
-    })
-}
+/// The world cell of the solver grid's first cell: below zero on every axis,
+/// so the (n+1)³ records span tiles -1 and 0 on all three.
+const ORIGIN: [i32; 3] = [-3, -2, -1];
 
-/// A dense face lattice in the step's pooled layout under the identity slot
-/// table: the pooled records, the table, the pool's tiles, and the dense
-/// lattice the pool reads back as (records past the cells read canonical).
-fn pooled(lattice: &[FaceSample]) -> (Vec<FaceSample>, Vec<u32>, u32, Vec<FaceSample>) {
-    let pool = records_to_pool(lattice, N, &canonical_faces());
-    let (table, pool_tiles) = identity_table(N);
-    let effective = records_from_pool(&pool, N);
-    (pool, table, pool_tiles, effective)
+/// A dense face lattice as the step's pooled faces: record p with world cell
+/// `ORIGIN + p`, under a world-tile table holding the tiles the records touch.
+fn pooled(lattice: &[FaceSample]) -> (Vec<FaceSample>, BoxTable) {
+    let table = BoxTable::new(ORIGIN, N.map(|n| n + 1));
+    (table.to_pool(lattice, FaceSample::default()), table)
 }
 
 /// The padded lattice over the box: n + 7 nodes, the first at m − 3h. The
@@ -191,16 +185,16 @@ fn matter_grid(field: &Field) -> Vec<MatterGridNode> {
 fn liquid_face_grid_layout_gpu_flip() {
     let mut harness = Harness::new();
     for (name, field) in [("uniform", Field::uniform()), ("shear", Field::shear())] {
-        let (pool, table, pool_tiles, _) = pooled(&gpu_flip_lattice(&field));
+        let (pool, table) = pooled(&gpu_flip_lattice(&field));
         let input = harness.array(&pool, pool.len());
-        let tiles = harness.array(&table, table.len());
+        let tiles = harness.array(&table.words, table.words.len());
         for axis in 0..3 {
             let got = run_component(
                 &mut harness,
                 &mut FaceSampleComponent::new(),
                 &[("faces", input.0), ("tiles", tiles.0)],
                 face_len(N, axis) as usize,
-                &flip_params(gpu_flip_nodes(), axis as u32, pool_tiles),
+                &flip_params(gpu_flip_nodes(), axis as u32, table.pool_tiles),
             );
             // The far face of the axis is the closed wall.
             assert_faces(
@@ -260,10 +254,9 @@ fn face_sample_component_zeroes_unweighted_faces() {
             }
         }
     }
-    // The far records read canonical, so the reference is what the pool holds.
-    let (pool, table, pool_tiles, lattice) = pooled(&lattice);
+    let (pool, table) = pooled(&lattice);
     let input = harness.array(&pool, pool.len());
-    let tiles = harness.array(&table, table.len());
+    let tiles = harness.array(&table.words, table.words.len());
     let m = N.map(|n| n + 1);
     let mut zeroed = 0;
     for axis in 0..3 {
@@ -272,7 +265,7 @@ fn face_sample_component_zeroes_unweighted_faces() {
             &mut FaceSampleComponent::new(),
             &[("faces", input.0), ("tiles", tiles.0)],
             face_len(N, axis) as usize,
-            &flip_params(gpu_flip_nodes(), axis as u32, pool_tiles),
+            &flip_params(gpu_flip_nodes(), axis as u32, table.pool_tiles),
         );
         assert_faces(
             axis,
@@ -290,6 +283,63 @@ fn face_sample_component_zeroes_unweighted_faces() {
         zeroed += got.iter().filter(|&&v| v == 0.0).count();
     }
     assert!(zeroed > 100, "the fixture zeroes faces, got {zeroed}");
+}
+
+/// A face whose world cell is in a tile the table does not hold reads the
+/// canonical record, which has no weight: 0. The records span tiles -1 and 0
+/// on every axis; the table drops the four tiles with x = -1 and the one
+/// with x = 0, y = -1, z = -1, and every other face reads its field value.
+#[test]
+fn face_sample_component_reads_zero_where_no_tile_is_held() {
+    let mut harness = Harness::new();
+    let field = Field::shear();
+    let lattice = gpu_flip_lattice(&field);
+    let (pool, table) = pooled(&lattice);
+    let absent = |tile: [i32; 3]| tile[0] == -1 || tile == [0, -1, -1];
+    let held: Vec<_> = table
+        .held()
+        .into_iter()
+        .filter(|(tile, _)| !absent(*tile))
+        .collect();
+    assert_eq!(held.len(), 3, "eight tiles, five dropped");
+    let words = table_words_of(table.pool_tiles, &held);
+    let input = harness.array(&pool, pool.len());
+    let tiles = harness.array(&words, words.len());
+    let m = N.map(|n| n + 1);
+    let (read, canonical) = (std::cell::Cell::new(0), std::cell::Cell::new(0));
+    for axis in 0..3 {
+        let got = run_component(
+            &mut harness,
+            &mut FaceSampleComponent::new(),
+            &[("faces", input.0), ("tiles", tiles.0)],
+            face_len(N, axis) as usize,
+            &flip_params(gpu_flip_nodes(), axis as u32, table.pool_tiles),
+        );
+        assert_faces(
+            axis,
+            &got,
+            |f| {
+                let cell: [i32; 3] = std::array::from_fn(|a| ORIGIN[a] + f[a] as i32);
+                if absent(cell.map(|c| c >> 3)) {
+                    canonical.set(canonical.get() + 1);
+                    return 0.0;
+                }
+                read.set(read.get() + 1);
+                let s = lattice[(f[0] + m[0] * (f[1] + m[1] * f[2])) as usize];
+                if s.weight[axis] > 0.0 {
+                    f64::from(s.velocity[axis])
+                } else {
+                    0.0
+                }
+            },
+            "GPU FLIP absent tiles",
+        );
+    }
+    let (read, canonical) = (read.get(), canonical.get());
+    assert!(
+        read > 100 && canonical > 100,
+        "read {read}, canonical {canonical}"
+    );
 }
 
 /// An MPM face reads the mean over its nodes with mass only; with none, 0.

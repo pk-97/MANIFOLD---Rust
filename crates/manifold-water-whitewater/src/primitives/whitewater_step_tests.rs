@@ -289,7 +289,7 @@ mod gpu {
             })
             .collect();
         let (phi, table, pool_tiles) =
-            crate::primitives::whitewater_step::fused_tests::pooled_distance(&phi, cells);
+            crate::primitives::whitewater_step::fused_tests::pooled_distance(&phi, &shape);
         let distance = shared(bytemuck::cast_slice(&phi));
         let tiles = shared(bytemuck::cast_slice(&table));
         let solid = shared(bytemuck::cast_slice(&vec![10.0f32; 13 * 13 * 13]));

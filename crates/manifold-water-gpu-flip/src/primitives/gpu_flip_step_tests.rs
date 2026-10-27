@@ -11,7 +11,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice};
 
-use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass};
+use super::gpu_flip_step::{StepParams, dispatch_pass};
 use super::liquid_fill::LiquidFill;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
@@ -22,16 +22,14 @@ use manifold_physics::coupled_motion::{
     Held, MAX_SUPPORT_POINTS, Mobility, SupportPoint, constrained_mobility, coupled_state_at,
 };
 use manifold_water_liquid::bodies::{
-    BodySupports, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, SUPPORT_VEC4S,
-    body_pose_at, pack_distance_atlas, pack_supports, unpack_supports,
+    BodySupports, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas,
+    pack_supports, unpack_supports,
 };
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
-use manifold_water_liquid::primitives::liquid_stats::{INFLOW_BIRTHS_TAIL, with_stats_layout};
-use manifold_water_liquid::tile_storage::testkit::{
-    from_pool, identity_table, records_from_pool, records_from_pool_with, records_to_pool, to_pool,
-};
-use manifold_water_liquid::tile_storage::{pool_len, tile_total};
+use manifold_water_liquid::primitives::liquid_stats::INFLOW_BIRTHS_TAIL;
+use manifold_water_liquid::testkit::world_box::{BoxTable, from_pool_under};
+use manifold_water_liquid::tile_storage::pool_len;
 mod cells;
 mod density;
 mod emit;
@@ -44,7 +42,6 @@ mod step_order;
 
 use emit::*;
 use manifold_node_engine::parameters::ParamValue;
-use manifold_nodes_physics::force_lattice::FORCE_LATTICE;
 use manifold_water_liquid::lattice::PADDING_NODES;
 pub(super) use motion::*;
 use solids::*;
@@ -63,12 +60,15 @@ pub(super) fn read_staged<T: bytemuck::Pod>(
     read(&staged, count)
 }
 
-/// The step's pooled `faces` output as the dense `(n+1)^3` record array,
-/// read through its `tiles` output.
+/// The step's pooled `faces` output as the dense `(n+1)^3` record array of
+/// the solver grid whose first world cell is `origin`, read through its
+/// `tiles` output; a record of a tile the table does not hold reads as the
+/// canonical element.
 pub(super) fn step_faces(
     h: &Harness,
     faces: manifold_node_engine::bindings::Slot,
     tiles: manifold_node_engine::bindings::Slot,
+    origin: [i32; 3],
     cells: [u32; 3],
 ) -> Vec<FaceSample> {
     let pool = h.buffer(faces);
@@ -79,13 +79,52 @@ pub(super) fn step_faces(
         (pool.size / std::mem::size_of::<FaceSample>() as u64) as usize,
     );
     let table: Vec<u32> = read_staged(&h.device, &table, (table.size / 4) as usize);
-    records_from_pool_with(&pool, &table, cells)
+    let pool_tiles = (pool.len() as u32 - 1) / 512;
+    from_pool_under(&pool, &table, pool_tiles, origin, cells.map(|n| n + 1))
+}
+
+/// Index i of a box of `dims`, x fastest.
+fn coords_in(i: usize, dims: [usize; 3]) -> [usize; 3] {
+    [
+        i % dims[0],
+        (i / dims[0]) % dims[1],
+        i / (dims[0] * dims[1]),
+    ]
 }
 
 /// A lattice with unequal sides, so a swapped axis shows.
 const N: [usize; 3] = [6, 5, 4];
 const H: f32 = 0.25;
-const MIN: [f32; 3] = [-0.5, 0.1, 0.3];
+/// The box's low corner: world cell (-3, -2, -2) is its first, so the box
+/// sits across the origin and across tiles -1 and 0 on every axis.
+const MIN: [f32; 3] = [-0.875, -0.625, -0.625];
+
+/// The authored box the node-level proofs give the step: N cells from
+/// NODE_MIN, a whole number of cells from the world origin (world cells
+/// (-3, -2, -2) on), so the solver grid 1.5 cells outside it starts on a
+/// world cell's low face, as the domain places it.
+const NODE_MIN: [f32; 3] = [-0.75, -0.5, -0.5];
+
+/// The lattice wires of the box of N cells from NODE_MIN, padded as the
+/// domain publishes them.
+fn node_lattice() -> [(&'static str, f32); 7] {
+    let pad = PADDING_NODES as f32;
+    let nodes = N.map(|n| n as f32 + 1.0 + 2.0 * pad);
+    [
+        ("nodes_x", nodes[0]),
+        ("nodes_y", nodes[1]),
+        ("nodes_z", nodes[2]),
+        ("lattice_min_x", NODE_MIN[0] - pad * H),
+        ("lattice_min_y", NODE_MIN[1] - pad * H),
+        ("lattice_min_z", NODE_MIN[2] - pad * H),
+        ("cell_size", H),
+    ]
+}
+
+/// The world cell of box cell 0 for a box from `min` at cell size `h`.
+fn box_origin(min: [f32; 3], h: f32) -> [i32; 3] {
+    manifold_water_liquid::primitives::face_sample_component::solver_origin_cell(min, h)
+}
 
 /// The native solid push target in cells.
 const WALL_MARGIN_CELLS: f64 = 0.2;
@@ -155,13 +194,11 @@ fn face_exists(p: [usize; 3], a: usize) -> bool {
 /// face closed.
 fn lattice() -> StepParams {
     StepParams {
-        n: N.map(|n| n as u32),
-        box_min: MIN,
-        cell_size: H,
         impulse_tick: -1,
         closed_faces: 63,
         ..StepParams::default()
     }
+    .with_grid_for_test(N.map(|n| n as u32), MIN, H)
 }
 
 fn wall_solid(n: [usize; 3], h: f32) -> Vec<f32> {
@@ -297,9 +334,11 @@ fn native_collision_move(
 }
 
 /// How a bound array is stored: a dense array as the CPU references hold it,
-/// or a pooled field of the identity-allocated tile pool, which the harness
-/// converts from and to the dense array. Cells are `n³`, records `(n + 1)³`
-/// with the records past the lattice answered by the canonical block.
+/// or a pooled field over the pass's world tiles, which the harness converts
+/// from and to the dense array. Cells are `n³`, records `(n + 1)³` (the solid
+/// corners among them), both from the box's first world cell, an element one
+/// value or a record's floats; every other element of the pool, the
+/// canonical one among them, is zero.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Layout {
     Dense,
@@ -311,52 +350,10 @@ enum Layout {
 /// binding numbers.
 fn output_layout(binding: u32) -> Layout {
     match binding {
-        3 | 4 | 10 | 11 | 17 | 18 | 20 => Layout::Records,
+        3 | 4 | 9 | 10 | 11 | 17 | 18 | 20 | 43 => Layout::Records,
         5..=8 | 23 | 25 | 33..=35 | 41 => Layout::Cells,
         _ => Layout::Dense,
     }
-}
-
-/// Bit a of the canonical mask of record `p` past the lattice `n`: face a
-/// exists and sits on a box wall.
-fn wall_mask(p: [usize; 3], n: [usize; 3]) -> usize {
-    (0..3)
-        .filter(|&a| {
-            let mut other = p;
-            other[a] = 0;
-            (0..3).all(|b| other[b] < n[b]) && (p[a] == 0 || p[a] == n[a])
-        })
-        .fold(0, |mask, a| mask | (1 << a))
-}
-
-/// The 8 canonical records of a record field, read off the dense array's
-/// records past the lattice. The pool stores none of them, so every one must
-/// hold the record of its wall mask (only masks 0, 1, 2 and 4 occur there).
-fn canonical_records(dense: &[FaceSample], cells: [u32; 3], binding: u32) -> [FaceSample; 8] {
-    let n = cells.map(|v| v as usize);
-    let at = |p: [usize; 3]| dense[p[0] + (n[0] + 1) * (p[1] + (n[1] + 1) * p[2])];
-    let mut canon = [at(n); 8];
-    canon[1] = at([n[0], 0, 0]);
-    canon[2] = at([0, n[1], 0]);
-    canon[4] = at([0, 0, n[2]]);
-    for (i, record) in dense.iter().enumerate() {
-        let p = [
-            i % (n[0] + 1),
-            (i / (n[0] + 1)) % (n[1] + 1),
-            i / ((n[0] + 1) * (n[1] + 1)),
-        ];
-        if (0..3).all(|a| p[a] < n[a]) {
-            continue;
-        }
-        let mask = wall_mask(p, n);
-        assert_eq!(
-            bytemuck::bytes_of(record),
-            bytemuck::bytes_of(&canon[mask]),
-            "binding {binding}: record {p:?} past the lattice differs from its canonical record \
-             (mask {mask}); a pooled field stores no record there"
-        );
-    }
-    canon
 }
 
 /// The records of a gathered face grid with nothing gathered: every face
@@ -383,33 +380,14 @@ fn canonical_faces() -> Vec<FaceSample> {
     canonical_faces_on(N)
 }
 
-/// `records` (32-byte records, one per padded cell of the lattice `n`) with
-/// every record past the lattice zeroed: the pool stores one record per wall
-/// mask there, so a fixture that wants the CPU reference and the pool to read
-/// the same value gives them zero.
-fn zero_past_lattice<T: bytemuck::Pod>(mut records: Vec<T>, n: [usize; 3]) -> Vec<T> {
-    let m = n.map(|v| v + 1);
-    let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut records);
-    assert_eq!(
-        bytes.len(),
-        32 * m.iter().product::<usize>(),
-        "one 32-byte record per padded cell"
-    );
-    for i in 0..m.iter().product::<usize>() {
-        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
-        if (0..3).any(|a| p[a] >= n[a]) {
-            bytes[32 * i..32 * (i + 1)].fill(0);
-        }
-    }
-    records
-}
-
 /// One entry of the step's shader with its buffers bound by number. Pooled
-/// arrays live in the identity-allocated tile pool (`P = T`, slot = tile) of
-/// the lattice `cells`; the binding at 51 is the slot table.
+/// arrays live in the world tiles of the box `cells` from MIN's world cell
+/// (`BoxTable` over the record range, slots in tile order); the binding at
+/// 51 is the table.
 struct Pass {
     device: manifold_gpu::testkit::TestDevice,
     cells: [u32; 3],
+    table: BoxTable,
     bound: Vec<(u32, GpuBuffer)>,
     layouts: Vec<(u32, Layout)>,
 }
@@ -419,11 +397,19 @@ impl Pass {
         Self::on(N)
     }
 
-    /// A pass over a lattice other than [`N`].
+    /// A pass over a lattice other than [`N`], from MIN.
     fn on(cells: [usize; 3]) -> Self {
+        Self::at(cells, MIN)
+    }
+
+    /// A pass over a box of `cells` from `min` (metres, half a cell below a
+    /// world cell's centre).
+    fn at(cells: [usize; 3], min: [f32; 3]) -> Self {
+        let records = cells.map(|n| n as u32 + 1);
         Self {
             device: manifold_gpu::testkit::test_device(),
             cells: cells.map(|n| n as u32),
+            table: BoxTable::new(box_origin(min, H), records),
             bound: Vec::new(),
             layouts: Vec::new(),
         }
@@ -431,21 +417,18 @@ impl Pass {
 
     /// Tiles the pool holds.
     fn pool_tiles(&self) -> u32 {
-        identity_table(self.cells).1
+        self.table.pool_tiles
     }
 
     /// `params` over this pass's pool.
     fn pooled(&self, params: &StepParams) -> StepParams {
-        StepParams {
-            pool_tiles: self.pool_tiles(),
-            ..*params
-        }
+        params.with_pool_for_test(self.pool_tiles())
     }
 
-    /// Binds the identity slot table at 51 once.
+    /// Binds the table at 51 once.
     fn table(&mut self) {
         if !self.bound.iter().any(|(binding, _)| *binding == 51) {
-            let (words, _) = identity_table(self.cells);
+            let words = self.table.words.clone();
             self.bind(51, &words, Layout::Dense);
         }
     }
@@ -458,21 +441,46 @@ impl Pass {
             .1
     }
 
+    /// The box of a layout's dense array.
+    fn dims(&self, layout: Layout) -> [usize; 3] {
+        let n = self.cells.map(|v| v as usize);
+        match layout {
+            Layout::Records => n.map(|v| v + 1),
+            _ => n,
+        }
+    }
+
+    /// Values a box element of `dims` holds in an array of `len` values:
+    /// one, or a record's floats.
+    fn per_element(len: usize, dims: [usize; 3]) -> usize {
+        let elements = dims.iter().product::<usize>();
+        assert!(
+            elements > 0 && len.is_multiple_of(elements),
+            "a dense box of {dims:?}: {len} values"
+        );
+        len / elements
+    }
+
+    /// `dense` (a box of `dims` from the box's first cell, each element one
+    /// or more values) as a pooled field, every other value `canon`.
+    fn to_pool<T: Copy>(&self, dense: &[T], dims: [usize; 3], canon: T) -> Vec<T> {
+        let per = Self::per_element(dense.len(), dims);
+        let mut pool = vec![canon; per * pool_len(self.pool_tiles()) as usize];
+        for (i, element) in dense.chunks(per).enumerate() {
+            let at = per * self.table.pool_index(coords_in(i, dims).map(|c| c as u32));
+            pool[at..at + per].copy_from_slice(element);
+        }
+        pool
+    }
+
     /// Binds a buffer holding `values` at `binding`, in `layout`: a pooled
-    /// layout converts the dense array to the pool (records past the lattice
-    /// must already hold their canonical records).
+    /// layout converts the dense array to the pool.
     fn bind<T: bytemuck::Pod>(&mut self, binding: u32, values: &[T], layout: Layout) -> &mut Self {
         let pooled: Vec<u8> = match layout {
             Layout::Dense => Vec::new(),
-            Layout::Cells => {
-                let pool = to_pool(values, self.cells, &[T::zeroed()]);
+            _ => {
+                let pool = self.to_pool(values, self.dims(layout), T::zeroed());
                 bytemuck::cast_slice::<T, u8>(&pool).to_vec()
-            }
-            Layout::Records => {
-                let records: Vec<FaceSample> = bytemuck::pod_collect_to_vec(values);
-                let canon = canonical_records(&records, self.cells, binding);
-                let pool = records_to_pool(&records, self.cells, &canon);
-                bytemuck::cast_slice::<FaceSample, u8>(&pool).to_vec()
             }
         };
         let bytes: &[u8] = if layout == Layout::Dense {
@@ -494,43 +502,57 @@ impl Pass {
     }
 
     /// Binds the sort's ranges at 1 as the step reads them: one per cell at
-    /// the cell's pool index, and the canonical block's last element ending
-    /// at the live total (the last key's range ends there).
+    /// the cell's pool index, and the canonical element, the sort's last key,
+    /// holding no particle and ending at the live total.
     fn bind_ranges(&mut self, ranges: &[CellRange]) -> &mut Self {
         let live = ranges.iter().map(|range| range.count).sum();
-        let mut canon = [CellRange::default(); 8];
-        canon[7] = CellRange {
+        let mut pooled = self.to_pool(ranges, self.dims(Layout::Cells), CellRange::default());
+        let canon = pooled.len() - 1;
+        pooled[canon] = CellRange {
             start: live,
             count: 0,
         };
-        let pooled = to_pool(ranges, self.cells, &canon);
         self.bind(1, &pooled, Layout::Dense)
     }
 
-    /// Binds the tile list at 29 as every tile in order, so a pass over the
-    /// cell set C covers the whole lattice; returns its thread count (512 a
-    /// tile).
+    /// Binds the slot list at 29 as every slot in order, so a pass over a
+    /// list covers the whole box; returns its thread count (512 a slot).
     fn every_tile(&mut self) -> usize {
-        let tiles: Vec<u32> = (0..tile_total(self.cells) as u32).collect();
-        self.bind(29, &tiles, Layout::Dense);
-        tiles.len() * 512
+        let slots: Vec<u32> = (0..self.pool_tiles()).collect();
+        self.bind(29, &slots, Layout::Dense);
+        slots.len() * 512
     }
 
-    /// Binds every tile as the allocated list `extend_faces` walks: the list
-    /// at 29 and its length in `tile_counts` (30) at `params.ring_max`;
-    /// returns its thread count (512 a tile).
+    /// Binds every slot as the held list `extend_faces` walks: the list at
+    /// 29 and its length in `tile_counts` (30) at `params.ring_max`; returns
+    /// its thread count (512 a slot).
     fn allocated_tiles(&mut self, params: &StepParams) -> usize {
         let threads = self.every_tile();
         let mut counts = vec![0u32; params.ring_max as usize + 8];
-        counts[params.ring_max as usize] =
-            u32::try_from(tile_total(self.cells)).expect("the tile count fits a word");
+        counts[params.ring_max as usize] = self.pool_tiles();
         self.bind(30, &counts, Layout::Dense);
         threads
     }
 
+    /// Runs a list pass `entry` over every slot (binding the list at 29 when
+    /// it is not bound) and reads `len` records of `out`.
+    fn run_list<T: bytemuck::Pod>(
+        &mut self,
+        entry: &str,
+        params: &StepParams,
+        out: u32,
+        len: usize,
+    ) -> Vec<T> {
+        let threads = if self.bound.iter().any(|(binding, _)| *binding == 29) {
+            self.pool_tiles() as usize * 512
+        } else {
+            self.every_tile()
+        };
+        self.run(entry, params, out, len, threads)
+    }
+
     /// Runs `entry` over `threads` threads and reads `len` records of
-    /// `out`: the bound buffer for a pass in place, else a zeroed one (zero
-    /// records past the lattice).
+    /// `out`: the bound buffer for a pass in place, else a zeroed one.
     fn run<T: bytemuck::Pod>(
         &mut self,
         entry: &str,
@@ -562,21 +584,19 @@ impl Pass {
             .find(|(b, _)| *b == binding)
             .expect("bound")
             .1;
-        let pool = pool_len(self.pool_tiles()) as usize;
-        match self.layout(binding) {
-            Layout::Dense => read(buffer, len),
-            Layout::Cells => {
-                let dense = from_pool(&read::<T>(buffer, pool), self.cells);
-                assert_eq!(dense.len(), len, "binding {binding}: cells read");
-                dense
-            }
-            Layout::Records => {
-                let dense = records_from_pool(&read::<FaceSample>(buffer, pool), self.cells);
-                let dense: Vec<T> = bytemuck::pod_collect_to_vec(&dense);
-                assert_eq!(dense.len(), len, "binding {binding}: records read");
-                dense
-            }
+        let layout = self.layout(binding);
+        if layout == Layout::Dense {
+            return read(buffer, len);
         }
+        let dims = self.dims(layout);
+        let per = Self::per_element(len, dims);
+        let pool = read::<T>(buffer, per * pool_len(self.pool_tiles()) as usize);
+        let mut dense = Vec::with_capacity(len);
+        for i in 0..len / per {
+            let at = per * self.table.pool_index(coords_in(i, dims).map(|c| c as u32));
+            dense.extend_from_slice(&pool[at..at + per]);
+        }
+        dense
     }
 }
 
@@ -590,7 +610,7 @@ fn close(got: f32, want: f64, scale: f64, what: &str) {
 /// Random faces over the padded grid; faces that do not exist are zero.
 /// `valid` draws weights of 0 or 1 (a projected grid) instead of positive
 /// particle weights. The faces on the far box walls are closed (velocity 0,
-/// weight 1), the canonical record there, as the pool holds no other.
+/// weight 1), as the gather leaves them.
 fn random_faces(seed: u64, valid: bool) -> Vec<FaceSample> {
     let mut rng = Stream::new(seed);
     (0..face_len())
@@ -689,7 +709,8 @@ fn random_particles(seed: u64, count: usize) -> Vec<FluidParticle> {
         .collect()
 }
 
-/// Counting sort by cell, stable: the contract the step's sort keeps.
+/// Counting sort by box cell, stable: the contract the step's sort keeps for
+/// particles inside the box.
 fn cpu_sort(particles: &[FluidParticle]) -> (Vec<FluidParticle>, Vec<CellRange>) {
     let cell_of = |p: &FluidParticle| {
         let c: [usize; 3] = std::array::from_fn(|a| {

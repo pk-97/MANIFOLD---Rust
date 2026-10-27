@@ -89,7 +89,8 @@ Each of these removes work rather than speeding it up. The design session looks 
 - Dispatch to live counts, never capacity: the GPU sizes its own work with no CPU readback.
 - One level set for solver and render: build the good one once, feed both.
 - Whitewater grid passes over active tiles only: falls out of sparse tiles.
-- Fewer passes: fuse smoother levels, warm-start the pressure solve from last tick's pressure, tie the solve tolerance to what is visible.
+- Fewer passes: fuse smoother levels, tie the solve tolerance to what is visible.
+- Warm start from last tick's pressure: landed. The init WARM bit keeps the pressure as x0, `warm_main` computes r = f - L*x0, and the stop stays relative to |f|inf. Level > 0 and bodies start cold.
 - Sim rate decoupled from display rate: landed; keep it.
 
 ## 5. Expected outcomes

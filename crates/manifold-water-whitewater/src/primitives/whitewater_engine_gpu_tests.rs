@@ -334,8 +334,9 @@ fn whitewater_engine_outflow_values_and_fusion() {
 
 #[test]
 fn whitewater_engine_seam_publishes_accepted_substeps() {
-    use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool};
-    use manifold_water_liquid::{fluid_particles::FaceSample, substep_history::SubstepHistory};
+    use manifold_water_liquid::fluid_particles::FaceSample;
+    use manifold_water_liquid::substep_history::{PooledFaces, SubstepHistory};
+    use manifold_water_liquid::testkit::world_box::BoxTable;
     let mut h = Harness::new();
     let faces: Vec<_> = (0..729)
         .map(|i| FaceSample {
@@ -343,16 +344,20 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
             weight: [1.0; 4],
         })
         .collect();
-    // Pooled under the identity slot table; the far records of each axis read
-    // the canonical block, which holds a known velocity here.
-    let canon = FaceSample {
-        velocity: [-1.0, -2.0, -3.0, 0.0],
-        weight: [1.0; 4],
-    };
-    let (table, pool_tiles) = identity_table([8; 3]);
-    let pool = records_to_pool(&faces, [8; 3], &[canon; 8]);
+    // Pooled under a world-tile table whose lattice starts below zero on
+    // every axis: the records cross tile faces on all three and the world
+    // origin on x and y.
+    let origin = [-5, -4, -9];
+    let table = BoxTable::new(origin, [9; 3]);
+    let pool = table.to_pool(&faces, FaceSample::default());
     let source = h.array(&pool, pool.len());
-    let tiles = h.array(&table, table.len());
+    let tiles = h.array(&table.words, table.words.len());
+    let pooled = PooledFaces {
+        faces: &source.1,
+        table: &tiles.1,
+        pool_tiles: table.pool_tiles,
+        cell_origin: origin,
+    };
     let plans = [
         [0.01f32.to_bits(), 0.01f32.to_bits(), 0, 0, 0, 0, 0, 0],
         [
@@ -372,7 +377,7 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
     history.reserve(&h.device, [8; 3], 2).unwrap();
     let mut enc = h.device.create_encoder("whitewater-engine-seam");
     for (i, plan) in plans.iter().enumerate() {
-        history.capture(&mut enc, i as u32, &plan.1, &source.1, &tiles.1, pool_tiles);
+        history.capture(&mut enc, i as u32, &plan.1, &pooled);
     }
     let staged = std::array::from_fn::<_, 3, _>(|_| h.array::<f32>(&[], 1152));
     for (source, target) in history.faces.as_ref().unwrap().iter().zip(&staged) {
@@ -400,32 +405,29 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
             let f = i % 576;
             let c = [f % dims[0], f / dims[0] % dims[1], f / (dims[0] * dims[1])];
             let index = c[0] + 9 * (c[1] + 9 * c[2]);
-            let want = if c[axis] == 8 {
-                canon.velocity[axis]
-            } else {
-                faces[index].velocity[axis]
-            };
-            assert_eq!(*value, want);
+            assert_eq!(*value, faces[index].velocity[axis]);
         }
     }
 }
 
 #[test]
 fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
-    use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool};
-    use manifold_water_liquid::{fluid_particles::FaceSample, substep_history::SubstepHistory};
+    use manifold_water_liquid::fluid_particles::FaceSample;
+    use manifold_water_liquid::substep_history::{PooledFaces, SubstepHistory};
+    use manifold_water_liquid::testkit::world_box::BoxTable;
     let mut h = Harness::new();
-    // A uniform grid pooled under the identity slot table, its canonical
-    // block the same sample, so every face reads `velocity`.
+    // A uniform grid pooled under a world-tile table at a negative origin, so
+    // every face reads `velocity`.
+    let origin = [-3, -8, 2];
+    let table = BoxTable::new(origin, [9; 3]);
     let faces = |velocity| {
         let sample = FaceSample {
             velocity,
             weight: [1.0; 4],
         };
-        records_to_pool(&vec![sample; 729], [8; 3], &[sample; 8])
+        table.to_pool(&vec![sample; 729], sample)
     };
-    let (table, pool_tiles) = identity_table([8; 3]);
-    let tiles = h.array(&table, table.len());
+    let tiles = h.array(&table.words, table.words.len());
     let [first, poison, resumed] =
         [[1.0, 2.0, 3.0, 0.0], [f32::NAN; 4], [4.0, 5.0, 6.0, 0.0]].map(|velocity| {
             let pool = faces(velocity);
@@ -442,16 +444,22 @@ fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
     let mut enc = h
         .device
         .create_encoder("whitewater-engine-inactive-history");
-    history.capture(&mut enc, 0, &active.1, &first.1, &tiles.1, pool_tiles);
+    let pooled = |faces| PooledFaces {
+        faces,
+        table: &tiles.1,
+        pool_tiles: table.pool_tiles,
+        cell_origin: origin,
+    };
+    history.capture(&mut enc, 0, &active.1, &pooled(&first.1));
     // An inactive row must neither read this poisoned grid nor overwrite a
     // previous active capture. A never-active row starts with zero storage.
-    history.capture(&mut enc, 0, &inactive.1, &poison.1, &tiles.1, pool_tiles);
-    history.capture(&mut enc, 1, &inactive.1, &poison.1, &tiles.1, pool_tiles);
+    history.capture(&mut enc, 0, &inactive.1, &pooled(&poison.1));
+    history.capture(&mut enc, 1, &inactive.1, &pooled(&poison.1));
     for (source, target) in history.faces.as_ref().unwrap().iter().zip(&held) {
         enc.copy_buffer_to_buffer(source, &target.1, 1152 * 4);
     }
     enc.copy_buffer_to_buffer(history.schedule.as_ref().unwrap(), &held_schedule.1, 32);
-    history.capture(&mut enc, 0, &active.1, &resumed.1, &tiles.1, pool_tiles);
+    history.capture(&mut enc, 0, &active.1, &pooled(&resumed.1));
     for (source, target) in history.faces.as_ref().unwrap().iter().zip(&final_grids) {
         enc.copy_buffer_to_buffer(source, &target.1, 1152 * 4);
     }

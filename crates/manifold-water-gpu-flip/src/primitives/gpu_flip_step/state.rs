@@ -2,6 +2,7 @@
 
 use super::*;
 use manifold_water_liquid::tile_storage::pool_len;
+use manifold_water_liquid::world_tiles::LIQUID_POINTS;
 
 impl StepState {
     /// Build every pipeline a step dispatches, at install.
@@ -10,6 +11,17 @@ impl StepState {
             self.pipelines = Some(Pipelines::new(device));
         }
         self.sorter.prepare_pooled(device);
+        // A one-slot table until the first reserve: its pipelines are the
+        // ones every pool builds (cached by source), so the build compiles here.
+        if self.tiles.is_none() {
+            match WorldTiles::new(device, 1, step_reach(), LIQUID_POINTS) {
+                Ok(mut tiles) => {
+                    tiles.prepare(device);
+                    self.tiles = Some(tiles);
+                }
+                Err(error) => log::warn!("GPU FLIP Step: world tiles at install: {error}"),
+            }
+        }
         self.identity_ops.prepare(device);
         self.emit_scan.prepare(device);
         self.solver.prepare_pipelines(device);
@@ -21,14 +33,13 @@ impl StepState {
     }
 
     /// Size every array for `cells` and `slots` before anything is encoded;
-    /// `sources` adds the emission scan; removal reuses the sorted array.
+    /// removal reuses the sorted array. The emission scan is sized by the
+    /// encode from the tick's sites.
     pub(super) fn reserve(
         &mut self,
         device: &GpuDevice,
         cells: [u32; 3],
         slots: u64,
-        ring_max: u32,
-        sources: bool,
         sheeting: bool,
     ) -> Result<(), String> {
         if self.zeros.is_none() {
@@ -44,15 +55,18 @@ impl StepState {
         // pool index of each cell.
         self.sorter.reserve_keys(device, pool_len(pool))?;
         if self.lattice.as_ref().is_none_or(|l| l.cells != cells) {
+            // A new lattice holds no tile yet: its table starts empty too.
             self.lattice = None;
             self.tiles = None;
             self.pool_canon_pending = true;
             self.solid_velocity_is_zero = false;
             self.lattice = Some(LatticeBuffers::new(device, cells, pool)?);
         }
-        if self.tiles.as_ref().is_none_or(|t| t.ring_max != ring_max) {
+        if self.tiles.as_ref().is_none_or(|t| t.pool_tiles() != pool) {
             self.tiles = None;
-            self.tiles = Some(TileTable::new(device, cells, ring_max)?);
+            let mut tiles = WorldTiles::new(device, pool, step_reach(), LIQUID_POINTS)?;
+            tiles.prepare(device);
+            self.tiles = Some(tiles);
         }
         let sorted = slots.max(1) * size_of::<FluidParticle>() as u64;
         if self
@@ -63,14 +77,11 @@ impl StepState {
             self.sorted = None;
             self.sorted = Some(allocate(device, sorted)?);
         }
-        if sources {
-            self.emit_scan.buffer(device, emit_sites(cells) as usize)?;
-        }
         if sheeting {
             let slot_count = u32::try_from(slots)
                 .map_err(|_| "sheeting particle capacity exceeds u32".to_string())?;
-            self.sheet_distance.reserve(device, cells, pool)?;
-            self.sheeting.reserve(device, cells, slot_count, pool)?;
+            self.sheet_distance.reserve(device, pool)?;
+            self.sheeting.reserve(device, slot_count, pool)?;
             if self
                 .sheet_order
                 .as_ref()

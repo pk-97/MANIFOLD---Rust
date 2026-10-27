@@ -156,28 +156,27 @@ fn cross_axes(a: i32) -> vec2<i32> {
     return vec2<i32>(1, 2);
 }
 
-// One thread per face record, the solid corners to `faces_out`: each inner
-// face's open fraction clamp(1 − inside) from its four corners
-// (MeshLevelSet::_getFaceWeight); a face on the interface at every corner
-// takes the symmetric limit ½. Weight w of a cell's record is its open
-// volume, 1 − the cube's inside fraction. Box wall faces are 0: the walls
-// are closed. Velocity is 0.
+// 512 threads a held slot, one per record of the box, the solid corners to
+// `faces_out`: each inner face's open fraction clamp(1 − inside) from its
+// four corners (MeshLevelSet::_getFaceWeight); a face on the interface at
+// every corner takes the symmetric limit ½, within the f32 rounding of a
+// distance over the box and its offset from the world origin. Weight w
+// of a cell's record is its open volume, 1 − the cube's inside fraction. Box
+// wall faces are 0: the walls are closed. Velocity is 0.
 @compute @workgroup_size(256)
 fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_record_count() {
-        return;
-    }
-    let n = ts_cells();
-    let p = ts_box_record(idx);
-    if !ts_record_stored(p) {
+    let at = list_cell(gid.x);
+    let p = ts_face_coord(at);
+    if !in_box_records(p) {
         return;
     }
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    let tolerance = 8.0 * 1.1920929e-7 * (u.cell_size * f32(max(n.x, max(n.y, n.z))) + u.box_offset);
+    let extent = u.walls_hi - u.walls_lo;
+    let offset = abs(u.walls_lo);
+    let tolerance = 8.0 * 1.1920929e-7 * (max(extent.x, max(extent.y, extent.z)) + max(offset.x, max(offset.y, offset.z)));
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] {
+        if !face_exists(p, a) || on_box_wall(p, a) {
             continue;
         }
         let axes = cross_axes(a);
@@ -185,24 +184,24 @@ fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
         var e2 = vec3<i32>(0);
         e1[axes.x] = 1;
         e2[axes.y] = 1;
-        let c0 = solid[ts_corner(p)];
-        let c1 = solid[ts_corner(p + e1)];
-        let c2 = solid[ts_corner(p + e2)];
-        let c3 = solid[ts_corner(p + e1 + e2)];
+        let c0 = solid[at];
+        let c1 = solid[ts_cell_at(p + e1)];
+        let c2 = solid[ts_cell_at(p + e2)];
+        let c3 = solid[ts_cell_at(p + e1 + e2)];
         var inside = solid_square_inside(c0, c1, c2, c3);
         if abs(c0) <= tolerance && abs(c1) <= tolerance && abs(c2) <= tolerance && abs(c3) <= tolerance {
             inside = 0.5;
         }
         out.face_weight[a] = clamp(1.0 - inside, 0.0, 1.0);
     }
-    if all(p < n) {
+    if in_box(p) {
         var corners: array<f32, 8>;
         for (var k = 0; k < 8; k = k + 1) {
-            corners[k] = solid[ts_corner(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
+            corners[k] = solid[ts_cell_at(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
         }
         out.face_weight.w = clamp(1.0 - solid_cube_inside(corners), 0.0, 1.0);
     }
-    faces_out[ts_face(p)] = out;
+    faces_out[at] = out;
 }
 
 fn liquid_atlas_half(index: u32) -> f32 {
@@ -213,10 +212,36 @@ fn liquid_atlas_half(index: u32) -> f32 {
 // The walls' distance at x inside the box: every wall closed, wall_inset
 // cells in, as the solid distance takes them.
 fn wall_distance(x: vec3<f32>) -> f32 {
-    let lo = u.box_min + vec3<f32>(u.wall_inset * u.cell_size);
-    let hi = u.box_min + (vec3<f32>(ts_cells()) - vec3<f32>(u.wall_inset)) * u.cell_size;
-    let gap = min(x - lo, hi - x);
+    let inset = vec3<f32>(u.wall_inset * u.cell_size);
+    let gap = min(x - (u.walls_lo + inset), (u.walls_hi - inset) - x);
     return min(gap.x, min(gap.y, gap.z));
+}
+
+// The posed bodies' signed distance at x, the smallest of them, sampled
+// from each shape's lattice (liquid_collider.wgsl); far (1e30) with none.
+fn bodies_distance(x: vec3<f32>) -> f32 {
+    var nearest = 1e30;
+    let held = min(u.body_count, u.rows);
+    for (var b = 0; b < held; b = b + 1) {
+        let bd = posed[u32(b)];
+        let shape_index = i32(bd.accel_shape.w);
+        if shape_index < 0 || u32(shape_index) >= u.shapes_len {
+            continue;
+        }
+        let sh = shapes[u32(shape_index)];
+        let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
+        let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
+        nearest = min(nearest, liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz));
+    }
+    return nearest;
+}
+
+// The solid's signed distance at x, positive in free space: the walls and
+// this step's posed bodies, as node.liquid_solid_distance writes its lattice
+// (every wall closed). The solid corners hold it at the corners; emission
+// tests a site with it directly, so a site needs no stored tile.
+fn solid_distance(x: vec3<f32>) -> f32 {
+    return min(walls_distance(x), bodies_distance(x));
 }
 
 // A body of this tick, `b` counted from its first row, posed at this step's
@@ -310,7 +335,8 @@ fn closest_body(x: vec3<f32>) -> i32 {
     return select(best, -1, best >= 0 && nearest > wall_distance(x));
 }
 
-// One thread per face record, `solid_faces` to `faces_out`. On an inner face
+// 512 threads a held slot, one per record of the box, `solid_faces` to
+// `faces_out`. On an inner face
 // a solid cuts (open fraction under 1): velocity is the normal part of the
 // closest body's rigid velocity at the face centre, as `posed` holds it (a
 // dynamic body by the coupled motion law, the same pose the solid distance
@@ -322,24 +348,19 @@ fn closest_body(x: vec3<f32>) -> i32 {
 @compute @workgroup_size(256)
 fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_record_count() {
+    let at_record = list_cell(gid.x);
+    let p = ts_face_coord(at_record);
+    if !in_box_records(p) {
         return;
     }
-    let n = ts_cells();
-    let p = ts_box_record(idx);
-    if !ts_record_stored(p) {
-        return;
-    }
-    let at_record = ts_face(p);
     let open = solid_faces[at_record];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    let lattice_min = u.box_min;
+    let lattice_min = u.origin;
     let h = u.cell_size;
     var code = 0.0;
     var known = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] {
+        if !face_exists(p, a) || on_box_wall(p, a) {
             continue;
         }
         // Only a face a solid covers is sampled (weight > 0 in
@@ -383,18 +404,19 @@ const SOLID_LAYERS: u32 = 5u;
 // first or last layer across it. The engine holds these done from the
 // start (GridUtils::_initializeStatusGridThread): never extrapolated, never
 // a seed, but counted with their value in a neighbour's mean.
-fn solid_border(p: vec3<i32>, a: i32, n: vec3<i32>) -> bool {
-    var top = n - vec3<i32>(1);
-    top[a] = n[a];
-    return any(p == vec3<i32>(0)) || any(p == top);
+fn solid_border(p: vec3<i32>, a: i32) -> bool {
+    let lo = box_lo();
+    var top = lo + box_cells() - vec3<i32>(1);
+    top[a] = top[a] + 1;
+    return any(p == lo) || any(p == top);
 }
 
 fn solid_known(s: FaceSample, a: i32) -> bool {
     return ((u32(s.face_weight.w) >> u32(a)) & 1u) != 0u;
 }
 
-// One thread per face record, `faces_in` to `faces_out`: one layer of the
-// solid velocity's extrapolation (MACVelocityField::extrapolateVelocityField
+// 512 threads a held slot, one per record of the box, `faces_in` to
+// `faces_out`: one layer of the solid velocity's extrapolation (MACVelocityField::extrapolateVelocityField
 // for every solid, GridUtils::extrapolateGridWithObserver). An unknown inner
 // face with a known neighbour in its axis's lattice takes the mean of its
 // known and border neighbours and is known from the next layer; the owner
@@ -404,25 +426,21 @@ fn solid_known(s: FaceSample, a: i32) -> bool {
 @compute @workgroup_size(256)
 fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_record_count() {
+    let at_record = list_cell(gid.x);
+    let p = ts_face_coord(at_record);
+    if !in_box_records(p) {
         return;
     }
-    let n = ts_cells();
-    let p = ts_box_record(idx);
-    if !ts_record_stored(p) {
-        return;
-    }
-    let at_record = ts_face(p);
+    let lo = box_lo();
     var out = faces_in[at_record];
     var known = u32(out.face_weight.w);
     var code = u32(out.face_velocity.w);
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) || solid_border(p, a, n) || solid_known(out, a) {
+        if !face_exists(p, a) || solid_border(p, a) || solid_known(out, a) {
             continue;
         }
-        var top = n - vec3<i32>(1);
-        top[a] = n[a];
+        var top = lo + box_cells() - vec3<i32>(1);
+        top[a] = top[a] + 1;
         var sum = 0.0;
         var count = 0.0;
         var seeded = false;
@@ -431,11 +449,11 @@ fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
             for (var d = -1; d <= 1; d = d + 2) {
                 var q = p;
                 q[b] = p[b] + d;
-                if q[b] < 0 || q[b] > top[b] {
+                if q[b] < lo[b] || q[b] > top[b] {
                     continue;
                 }
                 let s = faces_in[ts_face(q)];
-                let border = solid_border(q, a, n);
+                let border = solid_border(q, a);
                 if border || solid_known(s, a) {
                     sum = sum + s.face_velocity[a];
                     count = count + 1.0;
@@ -460,12 +478,12 @@ fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_out[at_record] = out;
 }
 
-// The solid distance at cell p's centre, the mean of its eight corners
-// (MeshLevelSet::getDistanceAtCellCenter).
-fn solid_centre(p: vec3<i32>, m: vec3<i32>) -> f32 {
+// The solid distance at world cell p's centre, the mean of its eight
+// corners (MeshLevelSet::getDistanceAtCellCenter).
+fn solid_centre(p: vec3<i32>) -> f32 {
     var sum = 0.0;
     for (var k = 0; k < 8; k = k + 1) {
-        sum = sum + solid[ts_corner(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
+        sum = sum + solid[ts_cell_at(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
     }
     return 0.125 * sum;
 }
@@ -476,29 +494,30 @@ fn solid_centre(p: vec3<i32>, m: vec3<i32>) -> f32 {
 // between water and the solid's empty inside is a free surface, and the
 // water beside a solid drains into it at every step.
 //
-// One thread per cell, in place on `cell_out`: the particles' φ.
+// 512 threads a slot of C, in place on `cell_out`: the particles' φ, in the
+// box's cells.
 @compute @workgroup_size(256)
 fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = c_cell_index(gid.x);
-    if idx == TS_NONE {
+    let idx = list_cell(gid.x);
+    let p = ts_cell_coord(idx);
+    if !in_box(p) {
         return;
     }
-    let n = ts_cells();
-    if cell_out[idx] < 0.5 * u.cell_size && solid_centre(ts_cell_coord(idx), n + vec3<i32>(1)) < 0.0 {
+    if cell_out[idx] < 0.5 * u.cell_size && solid_centre(p) < 0.0 {
         cell_out[idx] = -0.5 * u.cell_size;
     }
 }
 
-// One thread per cell, `phi` to `cell_out`: water is φ < 0, after
-// `phi_into_solids`. The engine's pressure cells are its liquid SDF's
-// negative cells (PressureSolver::_initialize), which reach 0.866h past the
-// particles rather than stopping at the cells that hold one.
+// 512 threads a slot of C, `phi` to `cell_out`: water is φ < 0 in the
+// box's cells, after `phi_into_solids`. The engine's pressure cells are its
+// liquid SDF's negative cells (PressureSolver::_initialize), which reach
+// 0.866h past the particles rather than stopping at the cells that hold one.
 @compute @workgroup_size(256)
 fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = c_cell_index(gid.x);
-    if idx == TS_NONE {
+    let idx = list_cell(gid.x);
+    if !in_box(ts_cell_coord(idx)) {
         return;
     }
     cell_out[idx] = select(0.0, 1.0, phi[idx] < 0.0);

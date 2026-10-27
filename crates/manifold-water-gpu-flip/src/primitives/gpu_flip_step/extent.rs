@@ -2,12 +2,9 @@
 use crate::primitives::gpu_flip_bodies::held_bytes as body_pass_bytes;
 use crate::primitives::gpu_flip_pressure::lattice_refusal;
 use crate::primitives::gpu_flip_pressure::scratch_bytes as pressure_scratch_bytes;
-use crate::primitives::gpu_flip_step::ENGINE_CFL;
 use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
-use crate::primitives::gpu_flip_step::band_layers;
 use crate::primitives::gpu_flip_step::history_slots;
 use crate::primitives::gpu_flip_step::pool_tiles;
-use crate::primitives::gpu_flip_step::ring_max;
 use crate::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
@@ -19,9 +16,8 @@ use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::FlipSolverGrid;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
-use manifold_water_liquid::primitives::prefix_scan::storage_words;
 use manifold_water_liquid::primitives::sort_particles_into_cells::key_storage_bytes;
-use manifold_water_liquid::tile_storage::{pool_len, tile_total};
+use manifold_water_liquid::tile_storage::{pool_len, table_words};
 use std::mem::size_of;
 
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -36,7 +32,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let pool = pool_tiles(cells);
     x.provide("faces", pool_len(pool) * size_of::<FaceSample>() as u64);
     x.provide("distance", pool_len(pool) * 4);
-    x.provide("tiles", (tile_total(cells) + u64::from(pool)) * 4);
+    x.provide("tiles", table_words(pool) * 4);
     x.publish("pool_tiles", pool as f32);
     let history = history_slots(whole(x, "live_hit_count", 0.0));
     x.provide("substep_schedule", u64::from(history) * 16);
@@ -70,20 +66,16 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         whole(x, "clock_obstacle_count", 0.0),
         whole(x, "clock_source_count", 0.0),
     ));
-    if x.wired("regions") {
-        x.hold(
-            storage_words(crate::primitives::gpu_flip_step::emit_sites(cells) as usize) as u64 * 4,
-        );
-    }
+    // The emission scan is sized at run time from the tick's sites, which the
+    // walk does not know.
     // The sort is keyed on the pool: a range and a count per element of a
     // pooled field, then rank and slot scratch.
     let keys = pool_len(pool);
     x.hold(key_storage_bytes(keys) + keys * 4 + 2 * slots.max(1) * 4);
-    // Same configured CFL as the step, never particle travel.
-    let ring = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
     // The pooled fields (the published faces and distance among them): the
-    // step's cell and face arrays and the solver's fine vectors.
-    x.hold(pressure_scratch_bytes(cells, pool) + step_scratch_bytes(cells, slots, ring));
+    // step's cell and face arrays, the world tiles and the solver's fine
+    // vectors.
+    x.hold(pressure_scratch_bytes(pool) + step_scratch_bytes(cells, slots));
     field_reads(x)?;
     x.covers_if_bound("clock_status", 32)?;
     for (buffer, count) in [
@@ -109,7 +101,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             .round()
             .clamp(0.0, MAX_LIQUID_BODIES as f32) as u64;
         x.covers("reaction", bodies * REACTION_FLOATS as u64 * 4)?;
-        x.hold(body_pass_bytes(cells, bodies as u32));
+        x.hold(body_pass_bytes(pool, bodies as u32));
     }
     // It moves min(particles, out) records: every one.
     x.covers("out", slots * PARTICLE)

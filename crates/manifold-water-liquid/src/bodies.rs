@@ -1169,7 +1169,7 @@ fn mesh_bounds(geometry: &PreparedFluidGeometry) -> [[f32; 3]; 2] {
 }
 
 /// `v` turned by the unit quaternion `q` (xyzw).
-fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+pub fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     let cross = |a: [f32; 3], b: [f32; 3]| {
         [
             a[1] * b[2] - a[2] * b[1],

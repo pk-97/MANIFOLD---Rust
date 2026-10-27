@@ -44,7 +44,12 @@ fn particles(device: &GpuDevice, cells: &[[i32; 3]]) -> (GpuBuffer, u32) {
         .iter()
         .enumerate()
         .map(|(i, p)| FluidParticle {
-            position_radius: [p[0] as f32 * CELL, p[1] as f32 * CELL, p[2] as f32 * CELL, 0.05],
+            position_radius: [
+                p[0] as f32 * CELL,
+                p[1] as f32 * CELL,
+                p[2] as f32 * CELL,
+                0.05,
+            ],
             velocity: [0.0; 3],
             id: i as u32 + 1,
         })
@@ -64,12 +69,14 @@ fn build(
     replay: u32,
 ) {
     let (records, count) = particles(device, cells);
+    // The slots in use, as the step's slot record holds them.
+    let record = shared(device, &[count.div_ceil(256).max(1), 1, 1, count]);
     let mut enc = device.create_encoder("world tiles proof");
     tiles.encode_allocation(
         &mut enc,
         &Allocation {
             points: &records,
-            count,
+            record: &record,
             origin: lattice_origin(CELL),
             inv_cell: 1.0 / CELL,
             replay_count: replay,
@@ -116,14 +123,29 @@ fn check(tiles: &WorldTiles, want: &Built, replay: u32, step: &str) {
     let (hu, pu) = (h as usize, p as usize);
     let table = read(tiles.table(), table_words(p) as usize);
     assert_eq!(table[..hu], want.keys[..], "{step}: keys");
-    assert_eq!(table[hu..2 * hu], want.entry_slot[..], "{step}: entry slots");
+    assert_eq!(
+        table[hu..2 * hu],
+        want.entry_slot[..],
+        "{step}: entry slots"
+    );
     for s in 0..p {
         let row = slot_row_word(h, s) as usize;
         let entry = table[row + 3];
-        assert_eq!(entry, want.slot_entry[s as usize], "{step}: slot {s}'s entry");
+        assert_eq!(
+            entry, want.slot_entry[s as usize],
+            "{step}: slot {s}'s entry"
+        );
         if let Some(t) = want.slot_tile[s as usize] {
-            assert_eq!(table[row..row + 3], t.map(|c| c as u32), "{step}: slot {s}'s tile");
-            assert_eq!(table[hu + entry as usize], s, "{step}: slot {s}'s entry points back");
+            assert_eq!(
+                table[row..row + 3],
+                t.map(|c| c as u32),
+                "{step}: slot {s}'s tile"
+            );
+            assert_eq!(
+                table[hu + entry as usize],
+                s,
+                "{step}: slot {s}'s entry points back"
+            );
         }
         let rows = neighbour_row_word(h, p, s) as usize;
         assert_eq!(
@@ -147,8 +169,16 @@ fn check(tiles: &WorldTiles, want: &Built, replay: u32, step: &str) {
     };
     let retired = counts[retired_word(r)];
     let fresh = counts[fresh_word(r)];
-    assert_eq!(set(&tiles.lists().retired, retired), want.retired, "{step}: retired");
-    assert_eq!(set(&tiles.lists().fresh, fresh), want.fresh, "{step}: fresh");
+    assert_eq!(
+        set(&tiles.lists().retired, retired),
+        want.retired,
+        "{step}: retired"
+    );
+    assert_eq!(
+        set(&tiles.lists().fresh, fresh),
+        want.fresh,
+        "{step}: fresh"
+    );
     let slots = read(&tiles.slot_scratch, 3 * pu);
     assert_eq!(
         slots[2 * pu..2 * pu + want.stack.len()],
@@ -158,10 +188,22 @@ fn check(tiles: &WorldTiles, want: &Built, replay: u32, step: &str) {
     let args = read(tiles.args(), args_words(r) as usize);
     let triple = |offset: u64| &args[offset as usize / 4..offset as usize / 4 + 3];
     for k in 0..=r {
-        assert_eq!(triple(list_args_offset(k)), [2 * counts[k as usize], 1, 1], "{step}: list {k}");
+        assert_eq!(
+            triple(list_args_offset(k)),
+            [2 * counts[k as usize], 1, 1],
+            "{step}: list {k}"
+        );
     }
-    assert_eq!(triple(retired_args_offset(r)), [2 * retired, 1, 1], "{step}: retired triple");
-    assert_eq!(triple(fresh_args_offset(r)), [2 * fresh, 1, 1], "{step}: fresh triple");
+    assert_eq!(
+        triple(retired_args_offset(r)),
+        [2 * retired, 1, 1],
+        "{step}: retired triple"
+    );
+    assert_eq!(
+        triple(fresh_args_offset(r)),
+        [2 * fresh, 1, 1],
+        "{step}: fresh triple"
+    );
     let range = 2 * replay_range_index(r) as usize;
     assert_eq!(args[range..range + 2], [0, replay], "{step}: replay range");
 }
@@ -197,11 +239,18 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
     for (i, cells) in steps.iter().enumerate() {
         build(&device, &tiles, cells, &run, 3);
         let want = mirror.build(cells);
-        assert_eq!(want.exhausted(2), 0, "step {i}: the pool and table hold it all");
+        assert_eq!(
+            want.exhausted(2),
+            0,
+            "step {i}: the pool and table hold it all"
+        );
         check(&tiles, &want, 3, &format!("step {i}"));
         if i == 1 {
             assert!(!want.freed.is_empty(), "step 1 frees slots");
-            assert!(want.freed.windows(2).all(|w| w[0] < w[1]), "frees in slot order");
+            assert!(
+                want.freed.windows(2).all(|w| w[0] < w[1]),
+                "frees in slot order"
+            );
             assert!(!want.retired.is_empty(), "step 1 retires slots out of C");
             assert!(!want.fresh.is_empty(), "step 1 hands out slots");
         }
@@ -212,8 +261,16 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
     let table = read(tiles.table(), table_words(512) as usize);
     let counts = read(tiles.counts(), count_words(2) as usize);
     build(&device, &tiles, &steps[0], &plan(&device, false), 3);
-    assert_eq!(read(tiles.table(), table.len()), table, "inactive: table kept");
-    assert_eq!(read(tiles.counts(), counts.len()), counts, "inactive: counts kept");
+    assert_eq!(
+        read(tiles.table(), table.len()),
+        table,
+        "inactive: table kept"
+    );
+    assert_eq!(
+        read(tiles.counts(), counts.len()),
+        counts,
+        "inactive: counts kept"
+    );
     let args = read(tiles.args(), args_words(2) as usize);
     for offset in [
         list_args_offset(0),
@@ -222,7 +279,11 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
         retired_args_offset(2),
         fresh_args_offset(2),
     ] {
-        assert_eq!(args[offset as usize / 4], 0, "inactive: triple at {offset} off");
+        assert_eq!(
+            args[offset as usize / 4],
+            0,
+            "inactive: triple at {offset} off"
+        );
     }
     let range = 2 * replay_range_index(2) as usize;
     assert_eq!(args[range..range + 2], [0, 0], "inactive: no replay");
@@ -249,7 +310,11 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
                 Some(t) => child.slot_of(std::array::from_fn(|a| 2 * t[a] + ((c >> a) & 1))),
                 None => NONE,
             };
-            assert_eq!(rows[8 * s + c as usize], expected, "parent slot {s}, child {c}");
+            assert_eq!(
+                rows[8 * s + c as usize],
+                expected,
+                "parent slot {s}, child {c}"
+            );
         }
     }
 }
@@ -276,20 +341,28 @@ fn a_short_pool_hands_out_ring_one_first() {
         let cells = cells_of(min, [3, 3, 3]);
         build(&device, &tiles, &cells, &run, 0);
         let want = mirror.build(&cells);
-        assert_eq!(want.exhausted(2), POOL_SHORT, "step {step}: pool short, table whole");
+        assert_eq!(
+            want.exhausted(2),
+            POOL_SHORT,
+            "step {step}: pool short, table whole"
+        );
         check(&tiles, &want, 0, &format!("step {step}"));
-        let ring_one_held = block_tiles(water)
-            .iter()
-            .all(|&t| want.slot_of(t) != NONE);
+        let ring_one_held = block_tiles(water).iter().all(|&t| want.slot_of(t) != NONE);
         let ring_two_fresh = want.fresh.iter().any(|&s| {
             let t = want.slot_tile[s as usize].expect("a fresh slot is held");
             (0..3).any(|a| t[a].abs_diff(water[a]) > 1)
         });
         if ring_two_fresh {
-            assert!(ring_one_held, "step {step}: ring 2 got a slot before ring 1");
+            assert!(
+                ring_one_held,
+                "step {step}: ring 2 got a slot before ring 1"
+            );
         }
         if step == 0 {
-            assert!(ring_one_held && ring_two_fresh, "step 0 fills ring 1 then part of ring 2");
+            assert!(
+                ring_one_held && ring_two_fresh,
+                "step 0 fills ring 1 then part of ring 2"
+            );
         }
     }
 }
@@ -329,7 +402,10 @@ fn alias_and_full_table_are_reported() {
     let all: BTreeSet<u32> = cells.iter().map(|&c| tile_key(tile_of_cell(c))).collect();
     let keys = read(tiny.table(), tiny.table_entries() as usize);
     assert_eq!(keys.len(), 4);
-    assert!(keys.iter().all(|k| all.contains(k)), "four of the five keys kept");
+    assert!(
+        keys.iter().all(|k| all.contains(k)),
+        "four of the five keys kept"
+    );
     assert_eq!(keys.iter().collect::<BTreeSet<_>>().len(), 4);
 }
 
@@ -403,7 +479,11 @@ fn cell_lookup_paths_agree_over_a_block_of_tiles() {
         None => NONE,
     };
     for t in &block {
-        assert_eq!(slot_of(*t) != NONE, stored.contains(t), "tile {t:?} stored as placed");
+        assert_eq!(
+            slot_of(*t) != NONE,
+            stored.contains(t),
+            "tile {t:?} stored as placed"
+        );
     }
     let canon = pool * 512;
     let mut homes: Vec<u32> = block
@@ -463,7 +543,11 @@ fn cell_lookup_paths_agree_over_a_block_of_tiles() {
             };
             let at = 2 * (k * n as usize + i as usize);
             assert_eq!(got[at], want, "home {k} ({home:#x}), cell {p:?}");
-            assert_eq!(got[at + 1], 1, "home {k}, cell {p:?}: stored and coordinate agree");
+            assert_eq!(
+                got[at + 1],
+                1,
+                "home {k}, cell {p:?}: stored and coordinate agree"
+            );
         }
     }
     // The centre tile is stored, so its home reads all 27 tiles through its

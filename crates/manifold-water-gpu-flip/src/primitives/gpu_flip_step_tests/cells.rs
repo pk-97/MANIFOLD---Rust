@@ -255,14 +255,13 @@ pub(super) fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
             .bind(6, &water, Layout::Cells)
             .bind(8, &pressure, Layout::Cells)
             .bind(7, &phi, Layout::Cells)
-            .run(
+            .run_list(
                 "subtract_pressure",
                 &StepParams {
                     ghost: 1,
                     ..lattice()
                 },
                 20,
-                face_len(),
                 face_len(),
             );
         let mut closed = 0;
@@ -743,7 +742,7 @@ pub(super) fn gpu_flip_pressure_clear_precedes_face_extension() {
         .bind(6, &water, Layout::Cells)
         .bind(8, &pressure, Layout::Cells)
         .bind(7, &phi, Layout::Cells)
-        .run("subtract_pressure", &lattice(), 20, face_len(), face_len());
+        .run_list("subtract_pressure", &lattice(), 20, face_len());
     assert_eq!(
         projected[target_index].velocity[0], 0.0,
         "closed inner velocity is cleared before extension"

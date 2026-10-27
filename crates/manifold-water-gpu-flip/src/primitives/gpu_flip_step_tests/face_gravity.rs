@@ -18,7 +18,7 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
         .bind(4, &faces, Layout::Records)
         .bind(12, &[0.0f32; 4], Layout::Dense)
         .bind(13, &[0.0f32; 4], Layout::Dense)
-        .run("face_gravity", &step, 4, face_len(), face_len());
+        .run_list("face_gravity", &step, 4, face_len());
     for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
         let p = pad_coords(i);
         for a in 0..3 {
@@ -95,7 +95,7 @@ fn face_gravity_case(air: bool) {
             .bind(4, &faces, Layout::Records)
             .bind(12, &flat(&forces), Layout::Dense)
             .bind(13, &flat(&impulses), Layout::Dense)
-            .run("face_gravity", &params, 4, face_len(), face_len());
+            .run_list("face_gravity", &params, 4, face_len());
         for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
             let p = pad_coords(i);
             for a in 0..3 {

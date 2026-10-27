@@ -567,7 +567,11 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((state, "identity"), step, "identity");
     b.wire((step, "identity_out"), state, "identity_in");
     b.wire((domain, "reaction"), step, "reaction");
-    b.wires(domain, step, &["regions", "region_count"]);
+    b.wires(
+        domain,
+        step,
+        &["regions", "region_count", "region_sites", "region_site_total"],
+    );
     let particles = (step, "out");
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
@@ -1527,7 +1531,9 @@ pub fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
             wires.push(serde_json::json!({"fromNode": step, "fromPort": pool, "toNode": adapter, "toPort": pool}));
         }
         for dim in ["x", "y", "z"] {
-            wires.push(serde_json::json!({"fromNode": domain, "fromPort": format!("nodes_{dim}"), "toNode": adapter, "toPort": format!("nodes_{dim}")}));
+            for port in [format!("nodes_{dim}"), format!("cell_origin_{dim}")] {
+                wires.push(serde_json::json!({"fromNode": domain, "fromPort": port, "toNode": adapter, "toPort": port}));
+            }
         }
         wires.push(serde_json::json!({"fromNode": adapter, "fromPort": "out", "toNode": whitewater, "toPort": port}));
     }

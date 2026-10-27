@@ -21,7 +21,7 @@ fn wt_child_tile(slot: u32) -> vec3<i32> {
 }
 
 fn wt_point_live(i: u32) -> bool {
-    return wt_child[wt_child_row(i) + 3u] != WT_NONE;
+    return i < wt.point_count && wt_child[wt_child_row(i) + 3u] != WT_NONE;
 }
 
 fn wt_point_cell(i: u32) -> vec3<i32> {

@@ -1,7 +1,10 @@
 //! `node.gpu_flip_step` as a primitive: install, run and outputs.
 
 use super::*;
+use manifold_node_engine::scene::world_tiles::lattice_origin;
+use manifold_water_liquid::primitives::face_sample_component::solver_origin_cell;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
+use manifold_water_liquid::substep_history::PooledFaces;
 
 impl Primitive for GpuFlipStep {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
@@ -26,7 +29,7 @@ impl Primitive for GpuFlipStep {
         match port {
             "faces" => self.state.lattice.as_ref().map(|l| &l.faces),
             "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
-            "tiles" => self.state.tiles.as_ref().map(|t| &t.table),
+            "tiles" => self.state.tiles.as_ref().map(|t| t.table()),
             "substep_schedule" => self.state.history.schedule.as_ref(),
             "substep_u" | "substep_v" | "substep_w" => self.state.history.faces.as_ref().map(|f| {
                 &f[match port {
@@ -171,15 +174,17 @@ impl Primitive for GpuFlipStep {
                 return;
             }
         };
-        let level = match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), cells) {
-            Ok(level) => level,
-            Err(error) => {
-                ctx.error(format!("{NAME}: {error}"));
-                return;
-            }
-        };
+        let level =
+            match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), pool_tiles(cells)) {
+                Ok(level) => level,
+                Err(error) => {
+                    ctx.error(format!("{NAME}: {error}"));
+                    return;
+                }
+            };
         let box_min = solver.min();
         let regions_in = ctx.inputs.array("regions");
+        let region_sites_in = ctx.inputs.array("region_sites");
         let region_count = match regions_in {
             Some(_) => ctx
                 .scalar_or_param("region_count", 0.0)
@@ -187,13 +192,21 @@ impl Primitive for GpuFlipStep {
                 .clamp(0.0, i32::MAX as f32) as i32,
             None => 0,
         };
-        let band = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
+        // The most sites one tick's inflows enumerate, at most the sites the
+        // wired rows' boxes hold; no emission without them.
+        let emit_sites = match region_sites_in {
+            Some(_) if region_count > 0 => ctx
+                .scalar_or_param("region_site_total", 0.0)
+                .round()
+                .clamp(0.0, manifold_node_engine::ports::EXACT_F32_COUNT as f32)
+                as u32,
+            _ => 0,
+        };
+        let band = step_band();
         if let Err(error) = self.state.reserve(
             ctx.gpu_encoder().device,
             cells,
             u64::from(capacity),
-            ring_max(band),
-            region_count > 0,
             sheet_rate > 0.0,
         ) {
             ctx.error(format!(
@@ -300,17 +313,26 @@ impl Primitive for GpuFlipStep {
         }
         let region_rows =
             (regions.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
+        let region_sites = region_sites_in.unwrap_or(&zeros);
+        let pool = self
+            .state
+            .tiles
+            .as_ref()
+            .expect("tiles reserved")
+            .pool_tiles();
         let step = Step {
             identity,
             params: StepParams {
-                n: cells,
+                walls_lo: box_min,
                 capacity,
-                box_min,
+                walls_hi: std::array::from_fn(|a| box_min[a] + cells[a] as f32 * h),
                 cell_size: h,
                 gravity,
                 step_dt,
                 field_nodes: field.nodes.map(|n| n as u32),
                 field_spacing: field.spacing,
+                origin: lattice_origin(h),
+                inv_cell: 1.0 / h,
                 tick_index,
                 step_in_tick: 0,
                 force_lattices: field.force_lattices,
@@ -322,7 +344,6 @@ impl Primitive for GpuFlipStep {
                 // The share is per step, as the engine's `_ratioPICFLIP`, whatever
                 // the step count.
                 flip,
-                box_offset: box_min.iter().fold(0.0_f32, |m, v| m.max(v.abs())),
                 ghost: u32::from(ghost),
                 particles: out_slots,
                 shapes_len,
@@ -334,7 +355,6 @@ impl Primitive for GpuFlipStep {
                 region_rows,
                 emit_jitter: 0.25 * inflow_jitter,
                 solve_level: level as u32,
-                all_tiles: u32::from(all_tiles()),
                 extension_layers: band,
                 ring_max: ring_max(band),
                 live_impulse_stride: field
@@ -348,9 +368,10 @@ impl Primitive for GpuFlipStep {
                 coupled_h: manifold_physics::coupled_motion::coupled_substep(
                     manifold_physics::Seconds(interval_duration),
                 ),
-                pool_tiles: pool_tiles(cells),
-                alloc_ring: ring_max(band),
-                inv_cell: 1.0 / h,
+                pool_tiles: pool,
+                table_entries: manifold_water_liquid::tile_storage::table_entries(pool),
+                emit_sites,
+                _pad: [0; 2],
             },
             clock_plan: &zeros,
             particles,
@@ -360,6 +381,7 @@ impl Primitive for GpuFlipStep {
             impulses: field.impulses.unwrap_or(&zeros),
             bodies,
             regions,
+            region_sites,
             shapes,
             atlas,
             reaction,
@@ -367,7 +389,6 @@ impl Primitive for GpuFlipStep {
             dynamic,
             pressure,
             level,
-            wall_inset: solver.wall_inset(),
             tally,
             band,
             ghost,
@@ -385,23 +406,22 @@ impl Primitive for GpuFlipStep {
             "tick={tick_index} slots={history_slots} interval={interval_duration} h={h} minimum={steps} hits={live_hit_count} sources={source_count}");
         ctx.outputs
             .set_scalar("substep_count", ParamValue::Float(history_slots as f32));
-        ctx.outputs.set_scalar(
-            "pool_tiles",
-            ParamValue::Float(
-                self.state
-                    .tiles
-                    .as_ref()
-                    .expect("tiles prepared")
-                    .pool_tiles as f32,
-            ),
-        );
+        ctx.outputs
+            .set_scalar("pool_tiles", ParamValue::Float(pool as f32));
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+        if let Err(error) =
+            self.state
+                .reserve_box_points(ctx.gpu_encoder().device, &step.params, cells)
+        {
+            ctx.error(format!("{NAME}: {error}"));
+            return;
+        }
+        // The history reads the pooled faces from the solver grid's first
+        // world cell.
+        let cell_origin = solver_origin_cell(box_min, h);
         let gpu = ctx.gpu_encoder();
         self.state.history.prepare(gpu.device);
-        if let Err(error) = self
-            .state
-            .history
-            .reserve(gpu.device, step.params.n, history_slots)
-        {
+        if let Err(error) = self.state.history.reserve(gpu.device, cells, history_slots) {
             ctx.error(format!("{NAME}: {error}"));
             return;
         }
@@ -471,7 +491,7 @@ impl Primitive for GpuFlipStep {
                             event_impulses: field.impulses.unwrap_or(&zeros),
                             impulse_stride: step.params.live_impulse_stride,
                             impulse_nodes: step.params.field_nodes,
-                            impulse_origin: step.params.box_min,
+                            impulse_origin: step.params.walls_lo,
                             impulse_spacing: step.params.field_spacing,
                             body_rows: bodies,
                             body_rows_offset: body_row_offset,
@@ -500,13 +520,12 @@ impl Primitive for GpuFlipStep {
                     gpu.native_enc,
                     k as u32,
                     &plan_buffer,
-                    &self.state.lattice.as_ref().expect("lattice prepared").faces,
-                    &self.state.tiles.as_ref().expect("tiles prepared").table,
-                    self.state
-                        .tiles
-                        .as_ref()
-                        .expect("tiles prepared")
-                        .pool_tiles,
+                    &PooledFaces {
+                        faces: &self.state.lattice.as_ref().expect("lattice prepared").faces,
+                        table: self.state.tiles.as_ref().expect("tiles prepared").table(),
+                        pool_tiles: pool,
+                        cell_origin,
+                    },
                 );
                 last_clock_plan = plan_buffer;
             }

@@ -6,12 +6,15 @@
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::ports::ArrayType;
+use manifold_node_engine::scene::world_tiles::{
+    lattice_origin, local_index, pool_len, table_words, tile_of_cell,
+};
 use manifold_water_gpu_mpm::matter::MatterPoint;
 use manifold_water_liquid::fluid_particles::{CellRange, bin_total};
 use manifold_water_liquid::primitives::particle_identity::COUNT_OFFSET;
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::*;
-use manifold_water_liquid::tile_storage::{pool_len, tile_counts, tile_total};
+use manifold_water_liquid::testkit::world_box::table_words_of;
 
 const LABELS: SortLabels = SortLabels {
     clear: "sort proof clear",
@@ -779,57 +782,54 @@ fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() 
     assert_words("order", &read_words(&order), &want_order, 1);
 }
 
-const NO_SLOT: u32 = u32::MAX;
-
-/// The slot table words for `bins` cells: `slot_of` per box tile, then
-/// `tile_of` per pool slot, from the slot each tile holds.
-fn slot_table(bins: [u32; 3], slot_of: &[u32], pool: u32) -> Vec<u32> {
-    assert_eq!(slot_of.len() as u64, tile_total(bins));
-    let mut words = slot_of.to_vec();
-    words.extend(std::iter::repeat_n(NO_SLOT, pool as usize));
-    for (tile, &slot) in slot_of.iter().enumerate() {
-        if slot != NO_SLOT {
-            words[slot_of.len() + slot as usize] = tile as u32;
-        }
-    }
-    words
-}
-
-/// The pooled sort puts each cell's particles in the range at the cell's pool
-/// index, whatever slot its tile holds, with the same members in the same
-/// order as the dense sort's range for that cell; the particles of a tile
-/// with no slot share the canonical bucket, in input order. Three tables over
-/// a lattice of 3 x 2 x 2 tiles, the last of each axis partial: the identity,
-/// a permutation, and one with two tiles absent from a short pool.
+/// The pooled sort keys each live particle on the pool index of its world
+/// cell, `floor((x - origin) * inv_cell)` with no clamp, through whatever
+/// slot its tile holds; the particles of a tile the table does not hold, the
+/// ones outside the fixture's box among them, share the canonical element's
+/// range. Each range keeps input order. The box sits across the world origin
+/// (cells -8..12 on x, 0..13 on y, -8..1 on z, so tiles -1, 0 and 1 on x and
+/// negative cells on z), under three tables: slots in tile order, a
+/// permutation, and a short pool with two of the box's tiles absent.
 #[test]
-fn sort_particles_into_cells_pooled_matches_the_dense_sort_per_cell() {
+fn sort_particles_into_cells_pooled_keys_world_cells_through_the_table() {
     let device = manifold_gpu::testkit::test_device();
     let n = 20_000;
+    let cell = 0.125;
+    let origin = lattice_origin(cell);
+    // Corner of world cell (-8, 0, -8): a binary fraction, so the fixture's
+    // faces fall exactly on world cell faces.
     let grid = Grid {
-        min: [-1.0, 0.0, -1.0],
-        cell: 0.125,
+        min: [origin[0] - 8.0 * cell, origin[1], origin[2] - 8.0 * cell],
+        cell,
         bins: [20, 13, 9],
     };
     let input = Input::build(LIQUID_PARTICLE_READ, grid, n, 6, &[1, 33, 250], 0x5eed_0006);
     input.check_fixture();
     let particles = input.upload(&device);
-    let (dense_ranges, members) = input.cpu_sort(n);
-    let bins = grid.bins;
-    let tiles = tile_counts(bins);
-    let total = tile_total(bins) as u32;
-    assert_eq!(total, 12);
-    let identity: Vec<u32> = (0..total).collect();
-    let permuted: Vec<u32> = (0..total).map(|t| (5 * t + 3) % total).collect();
-    let mut short = vec![NO_SLOT; total as usize];
-    for (i, t) in (0..total).filter(|&t| t != 4 && t != 7).enumerate() {
-        short[t as usize] = 9 - i as u32;
+    let inv_cell = 1.0 / cell;
+    let world_cell = |i: usize| -> [i32; 3] {
+        let p = input.position(i).map(f32::from_bits);
+        std::array::from_fn(|a| ((p[a] - origin[a]) * inv_cell).floor() as i32)
+    };
+    let tiles: Vec<[i32; 3]> = (0..12).map(|t| [t % 3 - 1, t / 3 % 2, t / 6 - 1]).collect();
+    let identity: Vec<Option<u32>> = (0..12).map(Some).collect();
+    let permuted: Vec<Option<u32>> = (0..12).map(|t| Some((5 * t + 3) % 12)).collect();
+    let mut short = vec![None; 12];
+    for (i, t) in (0..12).filter(|&t| t != 4 && t != 7).enumerate() {
+        short[t] = Some(9 - i as u32);
     }
     for (name, slot_of, pool) in [
-        ("identity", identity, total),
-        ("permuted", permuted, total),
+        ("tile order", identity, 12u32),
+        ("permuted", permuted, 12),
         ("short pool", short, 10),
     ] {
-        let words = slot_table(bins, &slot_of, pool);
+        let held: Vec<([i32; 3], u32)> = tiles
+            .iter()
+            .zip(&slot_of)
+            .filter_map(|(&tile, slot)| slot.map(|slot| (tile, slot)))
+            .collect();
+        let words = table_words_of(pool, &held);
+        assert_eq!(words.len() as u64, table_words(pool));
         let table = device.create_buffer_shared(4 * words.len() as u64);
         // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
         unsafe { table.write(0, bytemuck::cast_slice(&words)) };
@@ -849,9 +849,9 @@ fn sort_particles_into_cells_pooled_matches_the_dense_sort_per_cell() {
                     read: input.read,
                     capacity: n as u32,
                     count: SortCount::Slots(n as u32),
-                    bin_min: grid.min,
-                    inv_cell: 1.0 / grid.cell,
-                    bins,
+                    bin_min: origin,
+                    inv_cell,
+                    bins: [0; 3],
                     sorted: None,
                     order: Some(&order),
                     gate: None,
@@ -862,50 +862,59 @@ fn sort_particles_into_cells_pooled_matches_the_dense_sort_per_cell() {
             )
             .expect("the pooled sort encodes");
         encoder.commit_and_wait_completed();
-        let ranges = read_words(sorter.ranges().expect("the cell ranges"));
-        let order = read_words(&order);
-        let range = |key: u32| (ranges[2 * key as usize] as usize, ranges[2 * key as usize + 1] as usize);
-        let canonical = pool * 512;
-        let mut canonical_members = Vec::new();
-        let mut keyed = 0;
-        for z in 0..bins[2] {
-            for y in 0..bins[1] {
-                for x in 0..bins[0] {
-                    let dense = dense_ranges[(x + bins[0] * (y + bins[1] * z)) as usize];
-                    let want = &members[dense.start as usize..(dense.start + dense.count) as usize];
-                    let tile = (x >> 3) + tiles[0] * ((y >> 3) + tiles[1] * (z >> 3));
-                    let slot = slot_of[tile as usize];
-                    if slot == NO_SLOT {
-                        canonical_members.extend_from_slice(want);
-                        continue;
-                    }
-                    let local = (x & 7) + 8 * ((y & 7) + 8 * (z & 7));
-                    let (start, count) = range(slot * 512 + local);
-                    assert_eq!(
-                        &order[start..start + count],
-                        want,
-                        "{name}: cell ({x}, {y}, {z}) in slot {slot}"
-                    );
-                    keyed += count;
-                }
+
+        // The CPU sort: the key of each live particle, ranges by key, members
+        // in input order.
+        let canonical = pool_len(pool) as usize - 1;
+        let key_of = |i: usize| -> usize {
+            let c = world_cell(i);
+            let at = tiles.iter().position(|&t| t == tile_of_cell(c));
+            match at.and_then(|t| slot_of[t]) {
+                Some(slot) => slot as usize * 512 + local_index(c) as usize,
+                None => canonical,
+            }
+        };
+        let keyed: Vec<Option<usize>> = (0..n).map(|i| input.live(i).then(|| key_of(i))).collect();
+        let mut want_ranges = vec![[0u32; 2]; pool_len(pool) as usize];
+        for key in keyed.iter().flatten() {
+            want_ranges[*key][1] += 1;
+        }
+        let mut start = 0;
+        for range in &mut want_ranges {
+            range[0] = start;
+            start += range[1];
+        }
+        let live = start as usize;
+        let mut next: Vec<u32> = want_ranges.iter().map(|range| range[0]).collect();
+        let mut want_order = vec![u32::MAX; n];
+        for (i, key) in keyed.iter().enumerate() {
+            if let Some(key) = key {
+                want_order[next[*key] as usize] = i as u32;
+                next[*key] += 1;
             }
         }
-        canonical_members.sort_unstable();
-        let (start, count) = range(canonical);
-        assert_eq!(
-            &order[start..start + count],
-            &canonical_members[..],
-            "{name}: the canonical bucket holds the absent tiles' particles in input order"
+        let canonical_count = want_ranges[canonical][1];
+        assert_words(
+            &format!("{name}: cell ranges"),
+            &read_words(sorter.ranges().expect("the cell ranges")),
+            bytemuck::cast_slice(&want_ranges),
+            2,
         );
-        assert_eq!(keyed + count, members.len(), "{name}: every live particle is keyed");
-        // The last key ends where the live particles do.
-        let (start, count) = range(pool_len(pool) as u32 - 1);
-        assert_eq!(start + count, members.len(), "{name}: the last range's end");
+        assert_words(
+            &format!("{name}: order"),
+            &read_words(&order),
+            &want_order,
+            1,
+        );
+        // The fixture reaches every case it names.
+        assert!(live > n / 2, "{name}: most particles are live");
+        assert!(
+            canonical_count > 0,
+            "{name}: particles outside the held tiles"
+        );
         if name == "short pool" {
-            assert!(
-                !canonical_members.is_empty(),
-                "{name}: the absent tiles hold particles"
-            );
+            let held_cells: usize = want_ranges[..canonical].iter().map(|r| r[1] as usize).sum();
+            assert!(held_cells > 0 && held_cells + (canonical_count as usize) == live);
         }
     }
 }

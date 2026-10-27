@@ -570,8 +570,20 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         ],
         32,
     );
+    let shape = StepShape::new(
+        [9; 3],
+        [8; 3],
+        1.0,
+        Some(Transform {
+            pos: [4.0; 3],
+            scale: [8.0; 3],
+            ..Default::default()
+        }),
+        256,
+    )
+    .unwrap();
     let (phi, table, pool_tiles) =
-        super::whitewater_step::fused_tests::pooled_distance(&[-5.0f32; 512], [8; 3]);
+        super::whitewater_step::fused_tests::pooled_distance(&[-5.0f32; 512], &shape);
     let phi = h.array(&phi, phi.len());
     let tiles = h.array(&table, table.len());
     let solid = h.array(&vec![1.0f32; 729], 729);
@@ -600,18 +612,6 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
     let identity = h.array(&[0u32, 0, 0, 0, 1, 1, 1, 32], 8);
     let pool = h.array(&vec![super::whitewater_step::empty_slot(); 256], 256);
     let state = h.array(&[0u32; 8], 8);
-    let shape = StepShape::new(
-        [9; 3],
-        [8; 3],
-        1.0,
-        Some(Transform {
-            pos: [4.0; 3],
-            scale: [8.0; 3],
-            ..Default::default()
-        }),
-        256,
-    )
-    .unwrap();
     for dust in [false, true] {
         let mut step = Step::default();
         let frame = StepFrame {

@@ -64,7 +64,7 @@ impl Fixture {
                 }))
             })
             .collect();
-        let (phi, table, pool_tiles) = pooled_distance(&phi, face_cells);
+        let (phi, table, pool_tiles) = pooled_distance(&phi, &shape);
         let particles: Vec<_> = (0..EMITTERS)
             .map(|i| {
                 let q = [i % 4, i / 4 % 4, i / 16];

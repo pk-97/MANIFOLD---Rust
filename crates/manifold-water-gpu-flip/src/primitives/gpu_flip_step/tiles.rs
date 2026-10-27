@@ -1,15 +1,15 @@
-//! The step's tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3): its sizes, storage and per-step build.
+//! The step on world tiles: the pool's size, the table's reach, and FLIP's
+//! own passes over the table the shared build leaves
+//! (`manifold_water_liquid::world_tiles`).
 
 use super::*;
-use manifold_water_liquid::tile_storage::{TILE, tile_total};
+use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
+use manifold_water_liquid::world_tiles::{
+    Allocation, Reach, allocated_args_offset, fresh_args_offset, held_bytes, retired_args_offset,
+};
 
-/// The table's word for no slot and no tile (`TS_NONE`).
-const TS_NONE: u32 = u32::MAX;
-
-/// The cell passes' reach from a particle-holding cell, in cells: the tile
-/// set C is every tile within it (`tiles_mark` writes the distance).
-/// The shader holds its own copy; the proofs' CPU model reads this one.
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+/// The cell passes' reach from a particle-holding cell, in cells: the cell
+/// set C is every tile within it. The proofs' CPU model reads it too.
 pub const CELL_REACH: u32 = 2;
 
 manifold_core::testkit_visible! {
@@ -21,14 +21,25 @@ pub(crate) fn ring_max(band: u32) -> u32 {
 }
 }
 
+/// The table's reach at the step's band: tiles within `ring_max` of a
+/// particle's tile are held, C within [`CELL_REACH`] cells.
+pub(super) fn step_reach() -> Reach {
+    let ring = ring_max(step_band());
+    Reach {
+        ring_max: ring,
+        alloc_ring: ring,
+        cell_reach: CELL_REACH,
+    }
+}
+
 /// Bytes the pool budget covers for the fine lattice: the D4 live budget
 /// (docs/GPU_FLIP_END_GAME_DESIGN.md), 1.5 GiB.
 pub(crate) const POOL_BUDGET_BYTES: u64 = 3 << 29;
 
 /// Bytes per fine cell of every pooled field: the step's own (the lattice's
-/// cell arrays and face grids), the solver's vectors
-/// and rows, the sheeting's arrays and the sheet distance's two fields. The
-/// bodies hold none (their partials are per tile).
+/// cell arrays and face grids), the solver's vectors and rows, the
+/// sheeting's arrays and the sheet distance's two fields. The bodies hold
+/// none (their partials are per slot).
 pub(crate) fn pooled_bytes_per_cell() -> u64 {
     STEP_POOLED_BYTES_PER_CELL
         + crate::primitives::gpu_flip_pressure::POOLED_BYTES_PER_CELL
@@ -36,64 +47,44 @@ pub(crate) fn pooled_bytes_per_cell() -> u64 {
         + crate::primitives::gpu_flip_sheet_distance::POOLED_BYTES_PER_CELL
 }
 
-/// Tiles a pool of `budget` bytes holds when a tile costs `tile_bytes`,
-/// at most the box's `box_tiles`.
-pub(crate) fn pool_capacity(box_tiles: u64, tile_bytes: u64, budget: u64) -> u32 {
-    box_tiles.min(budget / tile_bytes) as u32
+/// Tiles a pool of `budget` bytes holds when a tile costs `tile_bytes`, at
+/// most the `wanted` tiles.
+pub(crate) fn pool_capacity(wanted: u64, tile_bytes: u64, budget: u64) -> u32 {
+    wanted.min(budget / tile_bytes) as u32
 }
 
-/// Tiles the pool holds for `cells` (`P`): the whole box, or what the budget
-/// buys.
+/// World tiles a run of `n` cells touches at most, wherever it starts.
+fn run_tiles(n: u32) -> u64 {
+    u64::from((n + TILE - 2) / TILE + 1)
+}
+
+manifold_core::testkit_visible! {
+/// Tiles the pool holds for a box of `cells` (`P`): every tile the box can
+/// touch, wherever it sits on the world lattice, and the table's rings round
+/// them, so water anywhere in the box never runs the pool short; or what
+/// the budget buys.
 pub(crate) fn pool_tiles(cells: [u32; 3]) -> u32 {
+    let ring = u64::from(step_reach().ring_max);
+    let wanted = cells.iter().map(|&n| run_tiles(n) + 2 * ring).product();
     pool_capacity(
-        tile_total(cells),
-        u64::from(TILE).pow(3) * pooled_bytes_per_cell(),
+        wanted,
+        u64::from(TILE_CELLS) * pooled_bytes_per_cell(),
         POOL_BUDGET_BYTES,
     )
 }
-
-/// Words of the tile counts: word 0 the cell set C's size, word k in
-/// 1..=ring_max + 1 the tiles with ring ≤ k, then the retired count, the
-/// ring halves' parity, and the allocator's three: the free stack's top, the
-/// exhausted flag and the fresh list's length.
-pub(super) fn tile_count_words(ring_max: u32) -> u64 {
-    u64::from(ring_max) + 7
 }
 
-/// Word of the counts holding the free stack's top (the other allocator
-/// words follow it).
-pub(super) fn free_top_word(ring_max: u32) -> usize {
-    ring_max as usize + 4
-}
-
-/// Indirect triples for C, each ring cap and the retired tiles, followed by
-/// one aligned replay range for the extension layers and the fresh list's
-/// triple.
-pub(super) fn tile_args_words(ring_max: u32) -> u64 {
-    2 * (u64::from(extension_range_index(ring_max)) + 1) + 3
-}
-
-/// Bytes of the tile table at `cells` for `ring_max`: the nearness, two
-/// ring halves, the list by ring, the retired list, the slot table
-/// (`T + P` words), the free stack (`P`), the fresh list (`T`), the counts
-/// and the triples.
+/// Bytes of the world tiles at `cells`: the table, its lists, counts,
+/// triples and build scratch for the pool [`pool_tiles`] sizes.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
-    let tiles = tile_total(cells);
-    let pool = u64::from(pool_tiles(cells));
-    (5 * tiles
-        + (tiles + pool)
-        + pool
-        + tiles
-        + tile_count_words(ring_max)
-        + tile_args_words(ring_max))
-        * 4
+pub(crate) fn tile_scratch_bytes(cells: [u32; 3]) -> u64 {
+    held_bytes(pool_tiles(cells), step_reach().ring_max)
 }
 
-/// Test-only lever, approved 2026-10-02 lead; un-suppressed when the executor
-/// exposes node access. With it set, `tiles_clear` marks every tile
-/// occupied and `tiles_rings` writes ring 0 everywhere, so the sparse passes
-/// run dense through the same kernels and lists (design D-6).
+/// Test-only lever. With it set, the table is built from one point in every
+/// tile of the box instead of the particles, so every box tile is in C and
+/// the passes run dense through the same kernels and lists: the proofs'
+/// oracle for the sparse lists.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub(super) static ALL_TILES: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -114,66 +105,89 @@ pub(crate) fn all_tiles() -> bool {
     }
 }
 
-/// The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
-/// table)), built on the GPU every step from the particles and never read
-/// back. Sized for one `ring_max`.
-pub(super) struct TileTable {
-    pub(super) ring_max: u32,
-    /// Per tile, the Chebyshev cell distance from its box to the nearest
-    /// particle-holding cell: 0..=CELL_REACH, or CELL_REACH + 1 beyond.
-    pub(super) near: GpuBuffer,
-    /// Two halves of one tile each, the tile's list rank (0 in C); the
-    /// parity word in `counts` names the current half. Zeroed once: the
-    /// first step's "previous" ranks are all 0, so every tile outside C is
-    /// retired then.
-    pub(super) rank: GpuBuffer,
-    /// Every tile: C first, then the rest of rings 0 and 1, then ring by ring.
-    pub(super) by_ring: GpuBuffer,
-    /// [`tile_count_words`]; zero but the free stack's top (every slot free).
-    pub(super) counts: GpuBuffer,
-    /// [`tile_args_words`] indirect triples.
-    pub(super) args: GpuBuffer,
-    /// Tiles in C on the previous step and not on this one.
-    pub(super) retired: GpuBuffer,
-    /// Pool slots the fine-lattice fields hold (`P`).
-    pub(super) pool_tiles: u32,
-    /// `slot_of` per box tile, then `tile_of` per slot (`T + P` words):
-    /// every tile absent in a new table, filled by the allocator.
-    pub(super) table: GpuBuffer,
-    /// The free slots, `P` words, `free_top` of them live (a counts word);
-    /// every slot in a new table.
-    pub(super) free_list: GpuBuffer,
-    /// The tiles allocated this step, `T` words.
-    pub(super) fresh: GpuBuffer,
+/// One liquid record at the centre of a box cell in every world tile the box
+/// of `cells` from world cell `lo` touches, and their record
+/// `[groups, 1, 1, count]`: the [`set_all_tiles`] table's points.
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub(super) fn box_points(
+    device: &GpuDevice,
+    lo: [i32; 3],
+    cells: [u32; 3],
+    cell_size: f32,
+) -> Result<(GpuBuffer, GpuBuffer), String> {
+    use manifold_node_engine::scene::world_tiles::tile_of_cell;
+    let last: [i32; 3] = std::array::from_fn(|a| lo[a] + cells[a] as i32 - 1);
+    let (first, end) = (tile_of_cell(lo), tile_of_cell(last));
+    let mut points = Vec::new();
+    for z in first[2]..=end[2] {
+        for y in first[1]..=end[1] {
+            for x in first[0]..=end[0] {
+                // The tile's first cell, clamped into the box.
+                let cell: [i32; 3] =
+                    std::array::from_fn(|a| ([x, y, z][a] * TILE as i32).clamp(lo[a], last[a]));
+                points.push(FluidParticle {
+                    position_radius: [
+                        cell[0] as f32 * cell_size,
+                        cell[1] as f32 * cell_size,
+                        cell[2] as f32 * cell_size,
+                        1.0,
+                    ],
+                    ..FluidParticle::default()
+                });
+            }
+        }
+    }
+    let count = points.len() as u32;
+    let records = allocate_zeroed(device, u64::from(count) * size_of::<FluidParticle>() as u64)?;
+    let record = allocate_zeroed(device, SLOT_RECORD_BYTES)?;
+    // SAFETY: two new shared buffers sized for what is written; no GPU work
+    // has touched them.
+    unsafe {
+        records.write(0, bytemuck::cast_slice(&points));
+        record.write(
+            0,
+            bytemuck::cast_slice(&[count.div_ceil(256).max(1), 1, 1, count]),
+        );
+    }
+    Ok((records, record))
 }
 
-/// Byte offset of the retired list's indirect triple in `args`.
-pub(super) fn retired_args_offset(ring_max: u32) -> u64 {
-    12 * (u64::from(ring_max) + 1)
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+impl StepState {
+    /// Under [`set_all_tiles`], the box's points for the table `params`
+    /// places; none otherwise.
+    pub(super) fn reserve_box_points(
+        &mut self,
+        device: &GpuDevice,
+        params: &StepParams,
+        cells: [u32; 3],
+    ) -> Result<(), String> {
+        self.box_points = if all_tiles() {
+            Some(box_points(
+                device,
+                box_cell_origin(params),
+                cells,
+                params.cell_size,
+            )?)
+        } else {
+            None
+        };
+        Ok(())
+    }
 }
 
-/// Byte offset of the triple over every allocated tile (ring at most
-/// `ring_max`) in `args`.
-pub(super) fn allocated_args_offset(ring_max: u32) -> u64 {
-    12 * u64::from(ring_max)
-}
-
-/// Byte offset of the fresh list's indirect triple in `args`, after the
-/// replay range.
-pub(super) fn fresh_args_offset(ring_max: u32) -> u64 {
-    8 * (u64::from(extension_range_index(ring_max)) + 1)
-}
-
-/// Index of the 8-byte replay range after the indirect triples.
-pub(super) fn extension_range_index(ring_max: u32) -> u32 {
-    (3 * (ring_max + 2)).div_ceil(2)
+/// The box's first world cell, as `box_lo()` in the shader finds it.
+pub(super) fn box_cell_origin(params: &StepParams) -> [i32; 3] {
+    std::array::from_fn(|a| {
+        ((params.walls_lo[a] - params.origin[a]) * params.inv_cell).round() as i32
+    })
 }
 
 /// `bound` plus the table and the arrays the retire and the poison write:
 /// the gathered faces and the C passes' cell arrays.
 pub(super) fn canonical<'a>(
     l: &'a LatticeBuffers,
-    table: &'a TileTable,
+    tiles: &'a WorldTiles,
     mut bound: Vec<GpuBinding<'a>>,
 ) -> Vec<GpuBinding<'a>> {
     bound.extend([
@@ -181,12 +195,12 @@ pub(super) fn canonical<'a>(
         buffer(33, &l.water),
         buffer(34, &l.phi),
         buffer(35, &l.rhs),
-        buffer(51, &table.table),
+        buffer(51, tiles.table()),
     ]);
     bound
 }
 
-/// `bound` plus every pooled field the pool build and a fresh tile set to
+/// `bound` plus every pooled field the pool build and a fresh slot set to
 /// their canonical values (`pool_canon`, `tiles_fresh`).
 pub(super) fn pooled<'a>(
     l: &'a LatticeBuffers,
@@ -197,6 +211,7 @@ pub(super) fn pooled<'a>(
         buffer(33, &l.water),
         buffer(34, &l.phi),
         buffer(35, &l.rhs),
+        buffer(43, &l.corners),
         buffer(55, &l.a),
         buffer(56, &l.b),
         buffer(57, &l.f),
@@ -212,171 +227,147 @@ pub(super) fn pooled<'a>(
     bound
 }
 
-/// A shared buffer holding `words`, written before any GPU work sees it.
-fn allocate_words(device: &GpuDevice, words: &[u32]) -> Result<GpuBuffer, String> {
-    let buffer = allocate_zeroed(device, (words.len() * 4) as u64)?;
-    // SAFETY: shared buffer sized for `words`; no GPU work has touched it yet.
-    unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
-    Ok(buffer)
-}
-
-impl TileTable {
-    pub(super) fn new(device: &GpuDevice, cells: [u32; 3], ring_max: u32) -> Result<Self, String> {
-        let tiles = tile_total(cells) * 4;
-        let pool = pool_tiles(cells);
-        // Every tile absent, every slot free: the first active step's
-        // allocation takes the whole pool.
-        let table = vec![TS_NONE; tile_total(cells) as usize + pool as usize];
-        let free_list: Vec<u32> = (0..pool).rev().collect();
-        let mut counts = vec![0u32; tile_count_words(ring_max) as usize];
-        counts[free_top_word(ring_max)] = pool;
-        Ok(Self {
-            ring_max,
-            near: allocate(device, tiles)?,
-            rank: allocate_zeroed(device, 2 * tiles)?,
-            by_ring: allocate(device, tiles)?,
-            counts: allocate_words(device, &counts)?,
-            args: allocate(device, tile_args_words(ring_max) * 4)?,
-            retired: allocate(device, tiles)?,
-            pool_tiles: pool,
-            table: allocate_words(device, &table)?,
-            free_list: allocate_words(device, &free_list)?,
-            fresh: allocate(device, tiles)?,
-        })
-    }
-}
-
-/// The table's first half for this step, from the particles: nearness per
-/// tile (`tiles_clear`, then `tiles_mark` over the slots in use, which
-/// `record` names, of `particles`), rings, then the pool's allocation (`tiles_allocate`: tiles
-/// past `alloc_ring` freed, absent ones within it allocated, rings 0 and 1
-/// first) and the new tiles set to their canonical values. The sort keys on
-/// the table this leaves. An inactive slot of `plan` keeps the last active
-/// step's table.
-pub(super) fn encode_tile_allocation(
+/// The step's tiles for this step, before the sort: the shared build from
+/// `particles` (the slots in use `record` names), or under
+/// [`set_all_tiles`] from one point per box tile; then the fresh slots set to
+/// their canonical values and the slots that left C retired. The sort keys
+/// on the table this leaves. An inactive slot of `plan` keeps the last
+/// active step's table and runs none of it.
+pub(super) fn encode_tiles(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
     params: &StepParams,
     l: &LatticeBuffers,
-    t: &TileTable,
-    particles: &GpuBuffer,
-    record: &GpuBuffer,
+    tiles: &WorldTiles,
+    points: (&GpuBuffer, &GpuBuffer),
     plan: &GpuBuffer,
 ) {
-    let tiles = groups(tile_total(params.n));
-    enc.dispatch_compute(
-        &pipes.tiles_clear,
-        &[
-            uniform(params),
-            buffer(27, &t.near),
-            buffer(30, &t.counts),
-            buffer(46, plan),
-        ],
-        tiles,
-        "gpu_flip.step.tiles.clear",
+    let (points, record) = points;
+    tiles.encode_allocation(
+        enc,
+        &Allocation {
+            points,
+            record,
+            origin: params.origin,
+            inv_cell: params.inv_cell,
+            replay_count: params.extension_layers,
+            gate: plan,
+        },
     );
-    enc.dispatch_compute_indirect(
-        &pipes.tiles_mark,
-        &[
-            uniform(params),
-            buffer(2, particles),
-            buffer(27, &t.near),
-            buffer(46, plan),
-            buffer(42, record),
-        ],
-        record,
-        0,
-        "gpu_flip.step.tiles.mark",
-    );
-    enc.dispatch_compute(
-        &pipes.tiles_rings,
-        &[
-            uniform(params),
-            buffer(27, &t.near),
-            buffer(28, &t.rank),
-            buffer(30, &t.counts),
-            buffer(46, plan),
-        ],
-        tiles,
-        "gpu_flip.step.tiles.rings",
-    );
-    enc.dispatch_compute(
-        &pipes.tiles_allocate,
-        &[
-            uniform(params),
-            buffer(28, &t.rank),
-            buffer(30, &t.counts),
-            buffer(31, &t.args),
-            buffer(46, plan),
-            buffer(52, &t.free_list),
-            buffer(53, &t.fresh),
-            buffer(54, &t.table),
-        ],
-        [1, 1, 1],
-        "gpu_flip.step.tiles.allocate",
-    );
+    let ring = tiles.reach().ring_max;
     enc.dispatch_compute_indirect(
         &pipes.tiles_fresh,
         &pooled(
             l,
-            vec![uniform(params), buffer(51, &t.table), buffer(53, &t.fresh)],
+            vec![
+                uniform(params),
+                buffer(51, tiles.table()),
+                buffer(53, &tiles.lists().fresh),
+            ],
         ),
-        &t.args,
-        fresh_args_offset(t.ring_max),
+        tiles.args(),
+        fresh_args_offset(ring),
         "gpu_flip.step.tiles.fresh",
     );
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     if POISON.load(std::sync::atomic::Ordering::SeqCst) {
         enc.dispatch_compute(
             &pipes.poison_free,
-            &pooled(
+            &pooled(l, vec![uniform(params), buffer(51, tiles.table())]),
+            groups(u64::from(tiles.pool_tiles()) * u64::from(TILE_CELLS)),
+            "gpu_flip.step.tiles.poison_free",
+        );
+    }
+    enc.dispatch_compute_indirect(
+        &pipes.tiles_retire,
+        &canonical(
+            l,
+            tiles,
+            vec![uniform(params), buffer(32, &tiles.lists().retired)],
+        ),
+        tiles.args(),
+        retired_args_offset(ring),
+        "gpu_flip.step.tiles.retire",
+    );
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    if POISON.load(std::sync::atomic::Ordering::SeqCst) {
+        enc.dispatch_compute_indirect(
+            &pipes.poison,
+            &canonical(
                 l,
+                tiles,
                 vec![
                     uniform(params),
-                    buffer(30, &t.counts),
-                    buffer(52, &t.free_list),
+                    buffer(29, &tiles.lists().by_rank),
+                    buffer(30, tiles.counts()),
                 ],
             ),
-            groups(u64::from(t.pool_tiles) * 512),
-            "gpu_flip.step.tiles.poison_free",
+            tiles.args(),
+            allocated_args_offset(ring),
+            "gpu_flip.step.tiles.poison",
         );
     }
 }
 
-/// The table's second half, after the sort: the lists, counts, triples and
-/// the active-fraction stats word (`capped` at the solver words).
-pub(super) fn encode_tile_lists(
+/// The solid corners of every held slot, from this step's posed bodies and
+/// the walls (`solid_corners`), before any pass reads the solids.
+pub(super) fn encode_solid_corners(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
     params: &StepParams,
-    t: &TileTable,
-    capped: &GpuBuffer,
-    tally: u64,
-    plan: &GpuBuffer,
+    l: &LatticeBuffers,
+    tiles: &WorldTiles,
+    step: &Step<'_>,
+    posed: &GpuBuffer,
 ) {
-    enc.dispatch_compute(
-        &pipes.tiles_lists,
+    enc.dispatch_compute_indirect(
+        &pipes.solid_corners,
         &[
             uniform(params),
-            buffer(46, plan),
-            buffer(27, &t.near),
-            buffer(28, &t.rank),
-            buffer(29, &t.by_ring),
-            buffer(30, &t.counts),
-            buffer(31, &t.args),
-            buffer(32, &t.retired),
-            GpuBinding::Buffer {
-                binding: 22,
-                buffer: capped,
-                offset: tally,
-            },
+            buffer(15, step.shapes),
+            buffer(16, step.atlas),
+            buffer(29, &tiles.lists().by_rank),
+            buffer(43, &l.corners),
+            buffer(46, step.clock_plan),
+            buffer(48, posed),
+            buffer(51, tiles.table()),
         ],
-        [1, 1, 1],
-        "gpu_flip.step.tiles.lists",
+        tiles.args(),
+        allocated_args_offset(tiles.reach().ring_max),
+        "gpu_flip.step.solid_corners",
     );
 }
 
-/// The canonical block of every pooled field of `l`, once after the pool is
+/// After the step's first sort: the pool's held share into solver word 6 and
+/// the particles with no slot into the tick's removed count (`tiles_tally`,
+/// `capped` at the solver words).
+pub(super) fn encode_tile_tally(
+    enc: &mut GpuEncoder,
+    pipes: &Pipelines,
+    params: &StepParams,
+    tiles: &WorldTiles,
+    ranges: &GpuBuffer,
+    step: &Step<'_>,
+) {
+    enc.dispatch_compute(
+        &pipes.tiles_tally,
+        &[
+            uniform(params),
+            buffer(1, ranges),
+            buffer(30, tiles.counts()),
+            buffer(46, step.clock_plan),
+            GpuBinding::Buffer {
+                binding: 22,
+                buffer: step.capped,
+                offset: step.tally,
+            },
+        ],
+        [1, 1, 1],
+        "gpu_flip.step.tiles.tally",
+    );
+}
+
+/// The canonical element of every pooled field of `l`, once after the pool is
 /// built (`pool_canon`).
 pub(super) fn encode_pool_canon(
     enc: &mut GpuEncoder,

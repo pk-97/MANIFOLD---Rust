@@ -1,22 +1,30 @@
-// GPU FLIP's water step: every pass of one step but the sort, the solid
-// distance and the pressure solve, each a separate entry point. Included
-// after liquid_pose.wgsl, liquid_collider.wgsl and force_lattice.wgsl.
+// GPU FLIP's water step: every pass of one step but the sort, the world
+// tiles build and the pressure solve, each a separate entry point. Included
+// after liquid_pose.wgsl, liquid_collider.wgsl, force_lattice.wgsl,
+// tile_grid.wgsl and the world tiles read side (world_tiles_read.wgsl).
 // FLIP Fluids attribution below covers the explicitly named baseline
 // transfers, boundaries and source operations.
 //
-// Cells are n per axis from the box minimum. A face grid has one FaceSample
-// record per cell and a record past the lattice on some axis: record p holds
-// the low x, y and z faces of cell p, face a existing when every other
-// coordinate is under n. Face a of p sits at p on axis a and p + ½ on the
-// other two, in cells from the box minimum. The step's cell and face fields
-// are stored in the tile pool (tile_storage.wgsl): reached through
-// `ts_cell_at` / `ts_face`, never written where `ts_cell_stored` /
-// `ts_record_stored` is false. The solid corner lattice is a dense
-// (n + 1)³ array from the box minimum, reached through `ts_corner`, and the
-// sort's ranges are keyed by the pool index of the cell, through `ts_cell_at`.
+// Cells are world cells: cell p (any sign) is centred on p·h, counted from
+// the lattice origin −h/2, so (x − origin) / h is a position in cells with
+// cell p spanning [p, p + 1). Every cell and face field is pooled per world
+// tile (world_tiles_read.wgsl): reached through `ts_cell_at` / `ts_face`,
+// the canonical element where no tile is stored. A record holds the low x,
+// y and z faces of its cell; face a of record p sits at p on axis a and
+// p + ½ on the other two. The solid corner field is pooled the same way:
+// corner p, at origin + p·h, is stored with cell p.
 //
-// The CPU sizes every buffer for the lattice and the particle slots before
-// it dispatches; each pass only checks its thread is inside its range.
+// The tank is a box of world cells, [box_lo(), box_lo() + box_cells()), from
+// the walls_lo/walls_hi box in metres. Its walls stay where they were: the
+// box's edge faces are closed, the inset walls are in the solid, and a face
+// of record p exists when p lies in the box's record range (`face_exists`).
+// The list passes run over held slots, 512 threads a slot, and touch only
+// the box's cells and records; the rest of a held tile keeps the canonical
+// values a fresh tile starts with (`tiles_fresh`). Each list thread sets its
+// cell's tile as its home (`ts_home`), so neighbour reads cost no hash.
+//
+// The CPU sizes every buffer before it dispatches; each pass only checks its
+// thread is inside its range.
 //
 // The density projection (density_source) is ported from blub (MIT,
 // Copyright (c) 2020 Andreas Reich; see THIRD_PARTY_NOTICES.md):
@@ -38,16 +46,23 @@
 // constrained velocity.
 
 struct Params {
-    // Cells per axis.
-    n: vec3<u32>,
+    // The tank box's low corner in metres: the solver grid's minimum, the
+    // force and impulse lattices' origin.
+    walls_lo: vec3<f32>,
     // Slots of `sorted`.
     capacity: u32,
-    box_min: vec3<f32>,
+    // The box's high corner in metres, walls_lo + cells · h.
+    walls_hi: vec3<f32>,
     cell_size: f32,
     gravity: vec3<f32>,
     step_dt: f32,
     field_nodes: vec3<u32>,
     field_spacing: f32,
+    // The lattice origin (−h/2 on every axis) and 1 / cell_size as the host
+    // computes it, the sort's `inv_cell`: every pass bins a particle to the
+    // same world cell (`ts_world_cell`).
+    origin: vec3<f32>,
+    inv_cell: f32,
     tick_index: i32,
     step_in_tick: i32,
     force_lattices: i32,
@@ -59,8 +74,6 @@ struct Params {
     tick_seconds: f32,
     // The FLIP share for this step.
     flip: f32,
-    // The largest |box_min| component, for the solid faces' tolerance.
-    box_offset: f32,
     // subtract: 1 reads `phi` for the free surface, 0 keeps air at zero.
     ghost: u32,
     // Particle slots the pool holds: the births' bound.
@@ -82,11 +95,10 @@ struct Params {
     // The V-cycle level the pressure solves run on; the pocket coarsening
     // reads it.
     solve_level: u32,
-    // 1: every tile is active (the test-only oracle).
-    all_tiles: u32,
-    // The ring a sparse pass's reads are capped at.
+    // Dispatches in each velocity-extension replay segment.
     extension_layers: u32,
-    // The farthest ring the table holds; ring_max + 1 means none within it.
+    // The farthest ring the table holds (world_tiles.rs Reach): tile_counts
+    // word ring_max counts every held slot.
     ring_max: u32,
     live_impulse_stride: u32,
     // Cells from the grid's minimum to each wall (FlipSolverGrid::wall_inset);
@@ -95,14 +107,14 @@ struct Params {
     // Box3D's substep over this tick, dt / box3d_substep_count(dt): the h in
     // the coupled motion law (liquid_body_state).
     coupled_h: f32,
-    // Tiles the pool holds (P), the words after the lattice's tiles in
-    // `ts_table`.
+    // Tiles the pool holds (P) and the table's entries (H).
     pool_tiles: u32,
-    // Tiles with ring at most this are allocated (the step's `ring_max`).
-    alloc_ring: u32,
-    // 1 / cell_size as the host computes it, the sort's `inv_cell`: a particle
-    // bins to the same cell in `tiles_mark` as in the sort.
-    inv_cell: f32,
+    table_entries: u32,
+    // Half-cell sites the inflows of one tick enumerate at most: the
+    // emission passes' thread count (`region_sites`).
+    emit_sites: u32,
+    _pad0: u32,
+    _pad1: u32,
 };
 
 struct CellRange {
@@ -251,25 +263,101 @@ fn clock_active() -> bool {
     return !clock_live() || clock_plan[0].step_dt > 0.0;
 }
 
-fn ts_cells() -> vec3<i32> {
-    return vec3<i32>(u.n);
-}
-
 fn ts_pool_tiles() -> u32 {
     return u.pool_tiles;
+}
+
+fn ts_table_entries() -> u32 {
+    return u.table_entries;
 }
 
 fn ts_table_word(i: u32) -> u32 {
     return ts_table[i];
 }
 
-// The tile table: `slot_of` per box tile, then `tile_of` per pool slot
-// (tile_storage.wgsl).
+// The world tile table (world_tiles_read.wgsl has its layout).
 @group(0) @binding(51) var<storage, read> ts_table: array<u32>;
 
-// Face a of record p exists when every other coordinate is inside the cells.
-fn face_exists(p: vec3<i32>, n: vec3<i32>, a: i32) -> bool {
-    var other = p;
-    other[a] = 0;
-    return all(other < n);
+// The box's first world cell and its cells per axis.
+fn box_lo() -> vec3<i32> {
+    return vec3<i32>(round((u.walls_lo - u.origin) * u.inv_cell));
+}
+
+fn box_cells() -> vec3<i32> {
+    return vec3<i32>(round((u.walls_hi - u.walls_lo) * u.inv_cell));
+}
+
+fn in_box(p: vec3<i32>) -> bool {
+    let lo = box_lo();
+    return all(p >= lo) && all(p < lo + box_cells());
+}
+
+// Record p of the box's record range: one past the cells on every axis.
+fn in_box_records(p: vec3<i32>) -> bool {
+    let lo = box_lo();
+    return all(p >= lo) && all(p <= lo + box_cells());
+}
+
+// Face a of record p exists when p is in the box's record range and every
+// other coordinate is inside the cells.
+fn face_exists(p: vec3<i32>, a: i32) -> bool {
+    let lo = box_lo();
+    var top = lo + box_cells() - vec3<i32>(1);
+    top[a] = top[a] + 1;
+    return all(p >= lo) && all(p <= top);
+}
+
+// Face a of record p is on a box wall: the low or high edge face of axis a.
+fn on_box_wall(p: vec3<i32>, a: i32) -> bool {
+    let lo = box_lo();
+    return p[a] == lo[a] || p[a] == lo[a] + box_cells()[a];
+}
+
+// The canonical face mask of record p: bit a set when face a exists and
+// lies on a box wall.
+fn box_wall_mask(p: vec3<i32>) -> u32 {
+    var mask = 0u;
+    for (var a = 0; a < 3; a = a + 1) {
+        if face_exists(p, a) && on_box_wall(p, a) {
+            mask = mask | (1u << u32(a));
+        }
+    }
+    return mask;
+}
+
+// The sort's range of the cell at pool index idx. The canonical element's
+// range holds the particles whose tile has no slot (an exhausted pool): no
+// cell's, so it reads as empty.
+fn cell_range(idx: u32) -> CellRange {
+    if idx == ts_canon() {
+        return CellRange(0u, 0u);
+    }
+    return ranges[idx];
+}
+
+// The world cell holding position x.
+fn world_cell(x: vec3<f32>) -> vec3<i32> {
+    return ts_world_cell(x, u.origin, u.inv_cell);
+}
+
+// The tank walls' signed distance at x: every wall closed, wall_inset cells
+// in from the box, as node.liquid_solid_distance takes them
+// (liquid_solid_distance_body.wgsl): the nearest wall's distance inside,
+// minus the distance to the walls' box outside.
+fn walls_distance(x: vec3<f32>) -> f32 {
+    let inset = vec3<f32>(max(u.wall_inset, 0.0) * u.cell_size);
+    let low = u.walls_lo + inset;
+    let high = u.walls_hi - inset;
+    let far = length(u.walls_hi - u.walls_lo + vec3<f32>(u.cell_size));
+    var distance = far;
+    var outside = vec3<f32>(0.0);
+    for (var d = 0; d < 3; d = d + 1) {
+        let axis = min(far, min(x[d] - low[d], high[d] - x[d]));
+        distance = min(distance, axis);
+        outside[d] = min(axis, 0.0);
+    }
+    if any(outside < vec3<f32>(0.0)) {
+        distance = -length(outside);
+    }
+    return distance;
 }

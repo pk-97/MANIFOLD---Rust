@@ -107,10 +107,12 @@ pub(super) fn gpu_flip_liquid_fill_places_pool_then_box() {
     assert!(snapshot.fit.fill_capped, "{snapshot:?}");
 }
 
-/// One region row over a box of whole cells, `lo` to `lo + cells`, its
-/// lattice holding −1 everywhere, so a point is inside exactly when it is in
-/// the box (sites sit at quarter cells, never on a face); its shape and atlas.
+/// One region row over a box of whole cells, `lo` to `lo + cells` of the box
+/// from `min`, its lattice holding −1 everywhere, so a point is inside
+/// exactly when it is in the box (sites sit at quarter cells, never on a
+/// face); its shape and atlas.
 pub(super) fn region_box(
+    min: [f32; 3],
     code: f32,
     lo: [usize; 3],
     cells: [u32; 3],
@@ -130,7 +132,7 @@ pub(super) fn region_box(
         atlas_offset: 0,
         scale_min: [1.0; 4],
     };
-    let p: [f32; 3] = std::array::from_fn(|a| MIN[a] + lo[a] as f32 * H);
+    let p: [f32; 3] = std::array::from_fn(|a| min[a] + lo[a] as f32 * H);
     let row = LiquidBody {
         position_inv_mass: [p[0], p[1], p[2], 0.0],
         rotation: [0.0, 0.0, 0.0, 1.0],
@@ -149,11 +151,46 @@ pub(super) fn in_box(x: [f64; 3], lo: [usize; 3], cells: [u32; 3]) -> bool {
     })
 }
 
+/// The box's half-cell sites, `2N` per axis.
+pub(super) fn box_site_count() -> usize {
+    N.iter().map(|n| 2 * n).product()
+}
+
+/// One region row's site box (gpu_flip_domain's `RegionSites`, 8 words:
+/// first world half cell, first index in its tick, sites per axis, count):
+/// `size` half cells from world half cell `first`, half cell J at
+/// (J/2 − 1/4)·h.
+pub(super) fn site_box(first: [i32; 3], size: [u32; 3], index: u32) -> [u32; 8] {
+    let first = first.map(|j| j as u32);
+    [
+        first[0],
+        first[1],
+        first[2],
+        index,
+        size[0],
+        size[1],
+        size[2],
+        size.iter().product(),
+    ]
+}
+
+/// The site box over every half-cell site of the box, so emission thread
+/// idx is box site idx, x fastest: the box's first world cell p holds half
+/// cells 2p and 2p + 1.
+pub(super) fn box_sites() -> [u32; 8] {
+    site_box(
+        box_origin(MIN, H).map(|p| 2 * p),
+        N.map(|n| 2 * n as u32),
+        0,
+    )
+}
+
 pub(super) fn region_params() -> StepParams {
     StepParams {
         region_count: 1,
         region_rows: 1,
         shapes_len: 1,
+        emit_sites: box_site_count() as u32,
         ..lattice()
     }
 }
@@ -165,12 +202,12 @@ pub(super) fn region_params() -> StepParams {
 #[test]
 pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     let (lo, cells, velocity) = ([1, 2, 1], [3, 2, 2], [0.4, -1.5, 0.2]);
-    let (row, shape, atlas) = region_box(2.0, lo, cells, velocity);
+    let (row, shape, atlas) = region_box(MIN, 2.0, lo, cells, velocity);
     let site = |j: [usize; 3]| -> [f64; 3] {
         std::array::from_fn(|a| f64::from(MIN[a]) + (0.25 + 0.5 * j[a] as f64) * f64::from(H))
     };
     let sites: [usize; 3] = N.map(|n| 2 * n);
-    let site_count: usize = sites.iter().product();
+    let site_count = box_site_count();
     let mut live: Vec<FluidParticle> = random_particles(0xe31, 120)
         .into_iter()
         .filter(|p| p.position_radius[3] > 0.0)
@@ -223,12 +260,12 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         inside > flagged && flagged > 0,
         "the fixture holds taken and empty inflow sites: {flagged} of {inside} empty"
     );
-    let corners = vec![1.0f32; face_len()];
     let params = region_params();
     let got: Vec<u32> = Pass::new()
         .bind_ranges(&ranges)
         .bind(2, &sorted, Layout::Dense)
-        .bind(9, &corners, Layout::Dense)
+        .bind(44, &box_sites(), Layout::Dense)
+        .bind(48, &[LiquidBody::default()], Layout::Dense)
         .bind(15, &[shape], Layout::Dense)
         .bind(16, &atlas, Layout::Dense)
         .bind(36, &[row], Layout::Dense)
@@ -256,6 +293,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(36, &[row], Layout::Dense)
         .bind(37, &scan, Layout::Dense)
         .bind(38, &pool, Layout::Dense)
+        .bind(44, &box_sites(), Layout::Dense)
         .bind(47, &identity, Layout::Dense)
         .run("emit_write", &params, 38, pool.len(), site_count);
     assert_eq!(
@@ -307,11 +345,13 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     // the tick's substeps into stats words 27 and 28 (the solver tail from
     // INFLOW_BIRTHS_TAIL), so a full pool is reported. The step runs
     // birth_tally_reset before the tick's first substep's births, which also
-    // clears the sheet refusals.
+    // clears the sheet refusals and the particles removed for want of a tile
+    // slot; the words are the whole solver tail.
     let tail = INFLOW_BIRTHS_TAIL as usize;
     let sheet = manifold_water_liquid::primitives::liquid_stats::SHEET_REFUSED_TAIL as usize;
+    let solver = manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize;
     let tally = |first_substep: bool, before: [u32; 2]| -> ([u32; 2], u32) {
-        let mut words = vec![0u32; sheet + 1];
+        let mut words = vec![0u32; solver];
         words[tail..tail + 2].copy_from_slice(&before);
         words[sheet] = 3;
         if first_substep {
@@ -319,7 +359,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
                 "birth_tally_reset",
                 &params,
                 22,
-                sheet + 1,
+                solver,
                 1,
             );
         }
@@ -335,7 +375,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
                     ..params
                 },
                 22,
-                sheet + 1,
+                solver,
                 1,
             );
         ([got[tail], got[tail + 1]], got[sheet])
@@ -370,6 +410,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(36, &[row], Layout::Dense)
         .bind(37, &scan, Layout::Dense)
         .bind(38, &pool, Layout::Dense)
+        .bind(44, &box_sites(), Layout::Dense)
         .bind(47, &identity, Layout::Dense)
         .run("emit_write", &params, 38, pool.len(), site_count);
     let substep = 3u32 * 64 + 1;
@@ -406,12 +447,128 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     );
 }
 
+/// Shared words on the device, for the birth reservation's inputs.
+fn device_words(device: &GpuDevice, words: &[u32]) -> GpuBuffer {
+    let buffer = device.create_buffer_shared((words.len() * 4) as u64);
+    // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
+    unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
+    buffer
+}
+
+/// A full pool refuses an inflow's whole request. The birth reservation grants
+/// no slot, so the write places no particle and the tally counts the request
+/// as refused, not as births.
+#[test]
+pub(super) fn gpu_flip_inflow_into_a_pool_with_no_room_writes_nothing_and_refuses_the_request() {
+    use manifold_water_liquid::primitives::particle_identity::{
+        BirthReservation, ParticleIdentity,
+    };
+
+    let (lo, cells, velocity) = ([1, 2, 1], [3, 2, 2], [0.4, -1.5, 0.2]);
+    let (row, shape, atlas) = region_box(MIN, 2.0, lo, cells, velocity);
+    let site = |j: [usize; 3]| -> [f64; 3] {
+        std::array::from_fn(|a| f64::from(MIN[a]) + (0.25 + 0.5 * j[a] as f64) * f64::from(H))
+    };
+    let site_count = box_site_count();
+    let mut live: Vec<FluidParticle> = random_particles(0xe31, 120)
+        .into_iter()
+        .filter(|p| p.position_radius[3] > 0.0)
+        .collect();
+    let held = site([2 * lo[0] + 1, 2 * lo[1], 2 * lo[2] + 1]);
+    live.push(FluidParticle {
+        position_radius: [held[0] as f32, held[1] as f32, held[2] as f32, 0.08],
+        velocity: [0.0; 3],
+        id: 999,
+    });
+    let (sorted, mut ranges) = cpu_sort(&live);
+    let mut end = 0;
+    for r in &mut ranges {
+        r.start = end;
+        end += r.count;
+    }
+    let params = region_params();
+    let flags: Vec<u32> = Pass::new()
+        .bind_ranges(&ranges)
+        .bind(2, &sorted, Layout::Dense)
+        .bind(44, &box_sites(), Layout::Dense)
+        .bind(48, &[LiquidBody::default()], Layout::Dense)
+        .bind(15, &[shape], Layout::Dense)
+        .bind(16, &atlas, Layout::Dense)
+        .bind(36, &[row], Layout::Dense)
+        .run("emit_flags", &params, 37, site_count, site_count);
+    let scan: Vec<u32> = flags
+        .iter()
+        .scan(0, |sum, &f| {
+            *sum += f;
+            Some(*sum)
+        })
+        .collect();
+    let requested = scan[site_count - 1];
+    assert!(requested > 0, "the fixture has empty inflow sites");
+
+    // The pool's slots are all live: no room for the request.
+    let device = manifold_gpu::testkit::test_device();
+    let live_end = sorted.len() as u32;
+    let mut plan = [0u32; 12];
+    plan[0] = 0.01f32.to_bits();
+    plan[11] = 1;
+    let plan = device_words(&device, &plan);
+    let particles = device_words(&device, &vec![0u32; sorted.len() * 8]);
+    let ranges_buf = device_words(&device, bytemuck::cast_slice(&ranges));
+    let scan_buf = device_words(&device, &scan);
+    let counts = device_words(&device, &[0u32; 8]);
+    let identity = device_words(&device, &[1000, 0, 0, 0, 0, 0, 0, 0]);
+    let mut ops = ParticleIdentity::default();
+    ops.prepare(&device);
+    let mut enc = device.create_encoder("inflow birth reservation, no room");
+    ops.reserve(
+        &mut enc,
+        BirthReservation {
+            particles: &particles,
+            identity: &identity,
+            ranges: &ranges_buf,
+            scan: &scan_buf,
+            plan: &plan,
+            tile_counts: &counts,
+            step_record: None,
+            params: [live_end, ranges.len() as u32, site_count as u32, 5],
+        },
+    );
+    enc.commit_and_wait_completed();
+    let granted: Vec<u32> = read_staged(&device, &identity, 8);
+    assert_eq!(granted[7], live_end, "no room: n stays the live end");
+    assert_eq!(granted[3], 0, "no reset is requested");
+
+    let written: Vec<FluidParticle> = Pass::new()
+        .bind_ranges(&ranges)
+        .bind(15, &[shape], Layout::Dense)
+        .bind(16, &atlas, Layout::Dense)
+        .bind(36, &[row], Layout::Dense)
+        .bind(37, &scan, Layout::Dense)
+        .bind(38, &sorted, Layout::Dense)
+        .bind(44, &box_sites(), Layout::Dense)
+        .bind(47, &granted, Layout::Dense)
+        .run("emit_write", &params, 38, sorted.len(), site_count);
+    assert_eq!(written, sorted, "no particle is written into a full pool");
+
+    let tail = INFLOW_BIRTHS_TAIL as usize;
+    let solver = manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize;
+    let words: Vec<u32> = Pass::new()
+        .bind_ranges(&ranges)
+        .bind(37, &scan, Layout::Dense)
+        .bind(47, &granted, Layout::Dense)
+        .bind(22, &vec![0u32; solver], Layout::Dense)
+        .run("emit_tally", &params, 22, solver, 1);
+    assert_eq!(words[tail], 0, "no inflow birth");
+    assert_eq!(words[tail + 1], requested, "the whole request is refused");
+}
+
 /// An outflow empties (fluidsimulation.cpp 9011-9031): a particle whose new
 /// position its distance holds below zero dies; every other keeps its radius.
 #[test]
 pub(super) fn gpu_flip_outflow_kills_the_particles_it_holds() {
     let (lo, cells) = ([2, 1, 0], [3, 3, 2]);
-    let (row, shape, atlas) = region_box(3.0, lo, cells, [0.0; 3]);
+    let (row, shape, atlas) = region_box(MIN, 3.0, lo, cells, [0.0; 3]);
     let particles: Vec<FluidParticle> = random_particles(0xd7a, 300)
         .into_iter()
         .map(|mut p| {
@@ -430,7 +587,7 @@ pub(super) fn gpu_flip_outflow_kills_the_particles_it_holds() {
     let got: Vec<FluidParticle> = Pass::new()
         .bind(2, &particles, Layout::Dense)
         .bind(3, &faces, Layout::Records)
-        .bind(9, &wall_solid(N, H), Layout::Dense)
+        .bind(9, &wall_solid(N, H), Layout::Records)
         .bind(17, &faces, Layout::Records)
         .bind(18, &faces, Layout::Records)
         .bind(22, &vec![0u32; 2 * particles.len()], Layout::Dense)

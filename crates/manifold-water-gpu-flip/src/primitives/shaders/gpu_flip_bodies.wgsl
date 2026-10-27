@@ -12,12 +12,14 @@
 // 8 floats per body: linear, then angular impulse, each with w = 0.
 //
 // The impulse and the body product run over the pressure solve's fine
-// active tiles (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9): the solve's
-// level-0 flags, lists and live count bound at 12–14, read exactly as
-// gpu_flip_pressure.wgsl reads them. A face a body owns contributes only
-// beside water, and every cell beside water lies in an active tile. Partials
-// are two a tile, indexed by tile; the finalize reads an inactive tile's as
-// 0, which a dense run computes as +0.0, so sparse and dense are bitwise.
+// active slots: the solve's level-0 flags, lists and live count bound at
+// 12–14, read exactly as gpu_flip_pressure.wgsl reads them (the lists hold
+// pool slots, the flags are indexed by slot). A face a body owns contributes
+// only beside water, and every cell beside water lies in an active slot.
+// Partials are two a slot, indexed by slot; the finalize reads an inactive
+// slot's as 0, which a run over every slot computes as +0.0, so sparse and
+// full are bitwise. The velocity change runs over every held slot (binding
+// 18), as a record lives with its cell.
 //
 // Fixed slots and a fixed reduction tree, so every result is identical run
 // to run.
@@ -30,15 +32,15 @@
 // order: solve, impulse, velocity change, then the constraint).
 
 struct Params {
-    n: vec3<u32>,
-    // Partial slots per body: two a fine tile.
-    slots: u32,
-    lattice_min: vec3<f32>,
+    // The lattice origin, world minus half a cell on every axis.
+    origin: vec3<f32>,
     cell_size: f32,
     // The liquid's density, kg/m³.
     density: f32,
     // The pose time into the tick, as the step's solid passes take it.
     tick_seconds: f32,
+    // Partial slots per body: two a pool slot.
+    slots: u32,
     // This tick's first body row in `bodies`.
     first: u32,
     body_count: u32,
@@ -47,8 +49,12 @@ struct Params {
     // impulse_finalize inside a round: the gate's solve-live triple
     // (`armed` is the gate there); 0 outside rounds, where it always runs.
     live: u32,
-    // The tile pool's capacity P (tile_storage.wgsl ts_pool_tiles).
+    // The tile pool's capacity P and the table's entries H
+    // (world_tiles_read.wgsl ts_pool_tiles, ts_table_entries).
     pool_tiles: u32,
+    entries: u32,
+    _pad0: u32,
+    _pad1: u32,
     _pad2: u32,
 };
 
@@ -95,7 +101,7 @@ struct ClockPlan {
 @group(0) @binding(10) var<storage, read_write> product: array<f32>;
 @group(0) @binding(11) var<storage, read_write> solid_rw: array<FaceSample>;
 // The pressure solve's fine level, at word 0 of each: the gate triples
-// (word 0 the live workgroup count), the tile flags and the active list.
+// (word 0 the live workgroup count), the slot flags and the active slot list.
 @group(0) @binding(12) var<storage, read> armed: array<u32>;
 @group(0) @binding(13) var<storage, read> flags: array<u32>;
 @group(0) @binding(14) var<storage, read> lists: array<u32>;
@@ -103,9 +109,11 @@ struct ClockPlan {
 // Six vec4 per row of `bodies`: the body's packed 6 × 6 response to an
 // impulse while it stays on its supports.
 @group(0) @binding(16) var<storage, read> mobility: array<vec4<f32>>;
-// The tile pool's slot and tile table (tile_storage.wgsl): `water`, `open`,
-// `solid`, `x`, `product` and `solid_rw` are pooled fields.
+// The world tile table (world_tiles_read.wgsl): `water`, `open`, `solid`, `x`,
+// `product` and `solid_rw` are pooled fields.
 @group(0) @binding(17) var<storage, read> ts_table: array<u32>;
+// Every held slot, for the pass over all records (velocity_change).
+@group(0) @binding(18) var<storage, read> held: array<u32>;
 
 // Entry (i, j) of body b's packed mobility.
 fn mobility_at(b: u32, i: u32, j: u32) -> f32 {
@@ -119,12 +127,12 @@ const THREADS: u32 = 256u;
 
 var<workgroup> scratch: array<array<f32, 256>, 6>;
 
-fn ts_cells() -> vec3<i32> {
-    return vec3<i32>(u.n);
-}
-
 fn ts_pool_tiles() -> u32 {
     return u.pool_tiles;
+}
+
+fn ts_table_entries() -> u32 {
+    return u.entries;
 }
 
 fn ts_table_word(i: u32) -> u32 {
@@ -137,7 +145,7 @@ fn listed(gid: u32) -> bool {
     return (gid >> 8u) < armed[0];
 }
 
-// Thread gid's partial slot: its tile's two, by workgroup.
+// Thread gid's partial slot: its pool slot's two, by workgroup.
 fn listed_partial(gid: u32) -> u32 {
     return 2u * lists[gid >> 9u] + ((gid >> 8u) & 1u);
 }
@@ -154,8 +162,8 @@ fn solid_owner(code: f32, a: i32) -> i32 {
 // Axis a's face of the record at p: the cell centre moved half a cell down
 // along a.
 fn face_centre(p: vec3<i32>, a: i32) -> vec3<f32> {
-    var c = u.lattice_min + (vec3<f32>(p) + vec3<f32>(0.5)) * u.cell_size;
-    c[a] = u.lattice_min[a] + f32(p[a]) * u.cell_size;
+    var c = u.origin + (vec3<f32>(p) + vec3<f32>(0.5)) * u.cell_size;
+    c[a] = u.origin[a] + f32(p[a]) * u.cell_size;
     return c;
 }
 
@@ -214,12 +222,11 @@ fn face_impulse(p: vec3<i32>, a: i32) -> f32 {
 }
 
 // Workgroup (g, b): body b's linear and angular impulse over the three low
-// faces it owns of each cell in half g of the fine level's active list
-// (listed_cell), tree-reduced into partials[(b · slots + listed_partial) ·
-// 8 ..]. A workgroup past the live count returns whole. A body that takes
-// no reaction sums 0. Every inner face lies on the cell lattice as some
-// cell's low face, and one a body owns pushes only beside water, inside the
-// active tiles.
+// faces it owns of each cell in half g of the fine level's active list,
+// tree-reduced into partials[(b · slots + listed_partial) · 8 ..]. A
+// workgroup past the live count returns whole. A body that takes no reaction
+// sums 0. Every face lies on the cell lattice as some cell's low face, and
+// one a body owns pushes only beside water, inside the active slots.
 @compute @workgroup_size(256, 1, 1)
 fn impulse_partial(
     @builtin(local_invocation_index) li: u32,
@@ -236,13 +243,14 @@ fn impulse_partial(
     let idx = ts_list_cell(lists[gid >> 9u], gid);
     var linear = vec3<f32>(0.0);
     var angular = vec3<f32>(0.0);
-    if idx != TS_NONE && b < u.body_count && dynamic_body(b) {
+    if b < u.body_count && dynamic_body(b) {
+        ts_home(idx);
         let c = body_centre(b);
         let p = ts_cell_coord(idx);
         let e = ts_face(p);
         let code = solid[e].face_velocity.w;
         for (var a = 0; a < 3; a = a + 1) {
-            if p[a] == 0 || solid_owner(code, a) != i32(b) {
+            if solid_owner(code, a) != i32(b) {
                 continue;
             }
             var push = vec3<f32>(0.0);
@@ -272,7 +280,7 @@ fn impulse_partial(
 }
 
 // One workgroup per body slot b: every partial of the fine level, in slot
-// order, an inactive tile's read as 0, tree-reduced into the sums record;
+// order, an inactive slot's read as 0, tree-reduced into the sums record;
 // the velocity change M_c·impulse for a body that takes a reaction
 // (rigidpressurecoupling.h Body::response, M_c the mobility held on the
 // body's supports, which is symmetric, so the operator stays so), 0
@@ -344,13 +352,13 @@ fn impulse_finalize(
 }
 
 // One thread per cell of the fine level's active list, in place on
-// `product`: in a water cell, plus (1/h)·Σ over its six inner owned faces of
+// `product`: in a water cell, plus (1/h)·Σ over its six owned faces of
 // sign·(c − w)·(dv + dω × r)[a], sign +1 on the cell's high face and −1 on
 // its low, c the cell's open volume, w the face's open fraction, r the face
 // centre less the posed centre of mass, (dv, dω) the owner's sums. With the
 // sums of the same vector's pressure impulse this is ρh·G M⁻¹ Gᵀ x, the
 // bodies' share of the coupled operator (rigidpressurecoupling.h
-// addMatrixProduct). Every water cell is in an active tile.
+// addMatrixProduct). Every water cell is in an active slot.
 @compute @workgroup_size(256)
 fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() {
@@ -359,11 +367,11 @@ fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !listed(gid.x) {
         return;
     }
-    let n = ts_cells();
     let idx = ts_list_cell(lists[gid.x >> 9u], gid.x);
-    if idx == TS_NONE || !(water[idx] > 0.5) {
+    if !(water[idx] > 0.5) {
         return;
     }
+    ts_home(idx);
     let p = ts_cell_coord(idx);
     let c = open[ts_face(p)].face_weight.w;
     var total = 0.0;
@@ -371,9 +379,6 @@ fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
         for (var side = 0; side < 2; side = side + 1) {
             var f = p;
             f[a] = p[a] + side;
-            if f[a] == 0 || f[a] == n[a] {
-                continue;
-            }
             let at = ts_face(f);
             let owner = solid_owner(solid[at].face_velocity.w, a);
             if owner < 0 || u32(owner) >= u.body_count {
@@ -388,44 +393,38 @@ fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
     product[idx] = product[idx] + total / u.cell_size;
 }
 
-// One thread per face record, in place on `solid_rw`: every inner face a
-// body owns gains its owner's velocity change at the face centre
-// (RigidBoundaryVelocityMap::addVelocityChange), so the constraint after it
-// gives the water the body's velocity after the push.
+// One thread per cell of every held slot, in place on `solid_rw` (a record
+// lives with its cell): every face a body owns gains its owner's velocity
+// change at the face centre (RigidBoundaryVelocityMap::addVelocityChange), so
+// the constraint after it gives the water the body's velocity after the push.
 @compute @workgroup_size(256)
 fn velocity_change(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() {
         return;
     }
-    let n = ts_cells();
-    if gid.x >= ts_record_count() {
-        return;
-    }
-    let p = ts_box_record(gid.x);
-    // A record past the lattice is never changed (the loop below skips every
-    // face of it), so the canonical block is left alone.
-    if !ts_record_stored(p) {
-        return;
-    }
-    let idx = ts_face(p);
+    let idx = ts_list_cell(held[gid.x >> 9u], gid.x);
+    ts_home(idx);
+    let p = ts_face_coord(idx);
     var out = solid_rw[idx];
+    var changed = false;
     for (var a = 0; a < 3; a = a + 1) {
-        var other = p;
-        other[a] = 0;
         let owner = solid_owner(out.face_velocity.w, a);
-        if !all(other < n) || p[a] == 0 || p[a] == n[a] || owner < 0 || u32(owner) >= u.body_count {
+        if owner < 0 || u32(owner) >= u.body_count {
             continue;
         }
         let b = u32(owner);
         let r = face_centre(p, a) - body_centre(b);
         out.face_velocity[a] = out.face_velocity[a] + basis_dot(a, r, sums_dv(b), sums_dw(b));
+        changed = true;
     }
-    solid_rw[idx] = out;
+    if changed {
+        solid_rw[idx] = out;
+    }
 }
 
 // Test-only: NaN into every partial of every body slot before an impulse, so
 // a finalize that reads a slot the partial pass did not write, or an
-// inactive tile's, shows in the sums. Never named outside the proofs.
+// inactive slot's, shows in the sums. Never named outside the proofs.
 @compute @workgroup_size(256)
 fn poison_partials(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gid.x < u.body_count * u.slots * 8u {

@@ -173,6 +173,7 @@ mod fused_tests {
         use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
         use manifold_node_engine::particles::FluidParticle;
         use manifold_node_engine::scene::transform::Transform;
+        use manifold_node_engine::scene::world_tiles::table_words;
         use manifold_node_engine::testkit::array_harness::read;
         use manifold_nodes_physics::force_lattice::ForceLatticeBinding;
         use manifold_nodes_water::presets::gpu_flip::WaterScene;
@@ -180,7 +181,6 @@ mod fused_tests {
             Show, whitewater_render_def, with_tick_probe,
         };
         use manifold_water_liquid::grid::face_len;
-        use manifold_water_liquid::tile_storage::tile_total;
         use manifold_water_liquid::whitewater::WhitewaterParticle;
         use manifold_water_liquid::whitewater::face_offset;
         use manifold_water_whitewater::primitives::whitewater_step::fused_tests::gpu::*;
@@ -208,11 +208,18 @@ mod fused_tests {
                 }
                 let bytes = show.provided_all_bytes("step", "faces");
                 let packed = shared(&device, &bytes);
-                let tiles = shared(&device, &show.provided_all_bytes("step", "tiles"));
-                // Resolution 64 has 67 solver cells after native lattice padding.
+                let table = show.provided_all_bytes("step", "tiles");
+                let tiles = shared(&device, &table);
+                // The pool whose table has exactly these words.
+                let pool_tiles = (1..)
+                    .find(|&p| table_words(p) * 4 >= table.len() as u64)
+                    .expect("a pool holds the table");
+                assert_eq!(table_words(pool_tiles) * 4, table.len() as u64);
+                // Resolution 64 has 67 solver cells after native lattice
+                // padding, the first at world cell (-33, -1, -33).
                 let cells = [67; 3];
                 let axes =
-                    adapter_outputs(&device, &packed, &tiles, tile_total(cells) as u32, cells);
+                    adapter_outputs(&device, &packed, &tiles, pool_tiles, cells, [-33, -1, -33]);
                 let mut saw_nonzero_axis = false;
                 for (axis, port) in ["proof_unpack_u", "proof_unpack_v", "proof_unpack_w"]
                     .into_iter()
@@ -243,10 +250,17 @@ mod fused_tests {
 
             let shape = synthetic_shape();
             assert_eq!(face_offset(shape.nodes, shape.face_cells).unwrap(), [2; 3]);
-            let (pooled, table, pool_tiles) = pooled_faces(&mixed_faces(), shape.face_cells);
+            let (pooled, table, pool_tiles) = pooled_faces(&mixed_faces(), &shape);
             let packed = shared(&device, &pooled);
             let tiles = shared(&device, &table);
-            let axes = adapter_outputs(&device, &packed, &tiles, pool_tiles, shape.face_cells);
+            let axes = adapter_outputs(
+                &device,
+                &packed,
+                &tiles,
+                pool_tiles,
+                shape.face_cells,
+                shape.cell_origin,
+            );
             let [mut stage, _reference] = particle_stages(&device, shape, 8);
             assert!(
                 stage.unpacked_faces_for_test().is_none(),
@@ -338,10 +352,17 @@ mod fused_tests {
             assert_eq!(face_offset(shape.nodes, shape.face_cells).unwrap(), [2; 3]);
             // Nonzero values behind invalid weights must be masked, including
             // negative weights. The fourth lanes and unused axis tails are poison.
-            let (pooled, table, pool_tiles) = pooled_faces(&mixed_faces(), shape.face_cells);
+            let (pooled, table, pool_tiles) = pooled_faces(&mixed_faces(), &shape);
             let packed = shared(&device, &pooled);
             let tiles = shared(&device, &table);
-            let axes = adapter_outputs(&device, &packed, &tiles, pool_tiles, shape.face_cells);
+            let axes = adapter_outputs(
+                &device,
+                &packed,
+                &tiles,
+                pool_tiles,
+                shape.face_cells,
+                shape.cell_origin,
+            );
             let schedule = shared(
                 &device,
                 &[1.0f32 / 128.0, 0.0, 0.0, 0.0, 1.0 / 128.0, 0.0, 0.0, 0.0],

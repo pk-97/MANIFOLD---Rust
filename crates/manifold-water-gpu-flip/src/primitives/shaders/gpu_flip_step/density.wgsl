@@ -22,8 +22,9 @@ fn solid_neighbour_density(d: vec3<i32>) -> f32 {
 // cell.
 const MAX_DENSITY_ERROR: f32 = 0.5;
 
-// Kugelstadt et al. 2019's density source (see gpu_flip_step.rs). One thread
-// per cell, the sorted particles to `cell_out`. In a water cell, ρ is the sum
+// Kugelstadt et al. 2019's density source (see gpu_flip_step.rs). 512
+// threads a slot of C, the sorted particles to `cell_out`. In a water cell of
+// the box, ρ is the sum
 // of the tent weights Π(1 − |c − q|) of the particles within a cell of its
 // centre c, plus what solid rest sites would weigh: solid_neighbour_density
 // for each neighbour outside the box, each body site's tent weight. Beside
@@ -34,26 +35,28 @@ const MAX_DENSITY_ERROR: f32 = 0.5;
 @compute @workgroup_size(256)
 fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = c_cell_index(gid.x);
-    if idx == TS_NONE {
+    let idx = list_cell(gid.x);
+    let p = ts_cell_coord(idx);
+    if !in_box(p) {
         return;
     }
     if !(water[idx] > 0.5) {
         cell_out[idx] = 0.0;
         return;
     }
-    let n = ts_cells();
-    let m = n + vec3<i32>(1);
-    let p = ts_cell_coord(idx);
+    let lo = box_lo();
+    let n = box_cells();
+    // Positions in world cells; `solid_at` takes box cells.
+    let to_box = vec3<f32>(lo);
     let centre = vec3<f32>(p) + vec3<f32>(0.5);
     let slots = u.capacity;
     var density = 0.0;
-    let first = max(p - vec3<i32>(1), vec3<i32>(0));
-    let last = min(p + vec3<i32>(1), n - vec3<i32>(1));
+    let first = max(p - vec3<i32>(1), lo);
+    let last = min(p + vec3<i32>(1), lo + n - vec3<i32>(1));
     for (var z = first.z; z <= last.z; z = z + 1) {
         for (var y = first.y; y <= last.y; y = y + 1) {
             for (var x = first.x; x <= last.x; x = x + 1) {
-                let range = ranges[ts_cell_at(vec3<i32>(x, y, z))];
+                let range = cell_range(ts_cell_at(vec3<i32>(x, y, z)));
                 let start = min(range.start, slots);
                 let end = start + min(range.count, slots - start);
                 for (var s = start; s < end; s = s + 1u) {
@@ -61,7 +64,7 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if !(particle.position_radius.w > 0.0) {
                         continue;
                     }
-                    let q = (particle.position_radius.xyz - u.box_min) / u.cell_size;
+                    let q = (particle.position_radius.xyz - u.origin) * u.inv_cell;
                     // A particle the solid has swept over is removed by this
                     // step's move; the solid's rest sites below already count
                     // that volume, so counting it too reads as crowding.
@@ -70,7 +73,7 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {
                         continue;
                     }
-                    if u.body_count > 0 && solid_at(q, n) < 0.0 {
+                    if u.body_count > 0 && solid_at(q - to_box, n) < 0.0 {
                         continue;
                     }
                     let w = clamp(vec3<f32>(1.0) - abs(centre - q), vec3<f32>(0.0), vec3<f32>(1.0));
@@ -91,13 +94,13 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // Air is read on the six face neighbours only, as blub's live
                 // branch does (density_projection_gather_error.comp:182-184).
                 let face = abs(d.x) + abs(d.y) + abs(d.z) == 1;
-                if any(q < vec3<i32>(0)) || any(q >= n) {
+                if !in_box(q) {
                     density = density + solid_neighbour_density(d);
                     continue;
                 }
                 var inside_body = false;
                 if u.body_count > 0 {
-                    let distance = solid_centre(q, m);
+                    let distance = solid_centre(q);
                     inside_body = distance < 0.0;
                     // Bodies are sampled per rest site, so a cell a body only
                     // cuts weighs its solid part; liquid_fill seeds exactly
@@ -106,14 +109,14 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if distance < SOLID_SITE_REACH * u.cell_size {
                         for (var k = 0; k < 8; k = k + 1) {
                             let site = vec3<f32>(q) + vec3<f32>(0.25) + 0.5 * vec3<f32>(vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1));
-                            if solid_at(site, n) < 0.0 {
+                            if solid_at(site - to_box, n) < 0.0 {
                                 let w = clamp(vec3<f32>(1.0) - abs(centre - site), vec3<f32>(0.0), vec3<f32>(1.0));
                                 density = density + w.x * w.y * w.z;
                             }
                         }
                     }
                 }
-                if face && !inside_body && ranges[ts_cell_at(q)].count == 0u {
+                if face && !inside_body && cell_range(ts_cell_at(q)).count == 0u {
                     beside_air = true;
                 }
             }

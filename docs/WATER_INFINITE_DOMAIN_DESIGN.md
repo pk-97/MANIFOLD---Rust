@@ -4,7 +4,7 @@
 
 **Status:** DESIGN (S4, S4b and M3 of `WATER_FIELD_WAVE_PLAN.md`). Builds on `WATER_TILE_POOL_DESIGN.md` (the pool, built) and on S3.3 to S3.5 (sort by pool index, tiles marked from particles, live-count dispatch, full pool pauses sources: `WATER_PARTICLE_POOL_DESIGN.md`, being written). Rulings: plan I1 to I3; end-game D4, D14, D15, D18. Anchors are from the working tree of 2026-10-27 with S3.2 written and S3.3 in flight; S3.3 to S3.5 and SP move them, so the lead re-anchors each job at handoff.
 
-**Peter's calls** (the card or behaviour on stage):
+**Peter's calls** (the card or behaviour on stage; all six approved as written):
 1. Card: Resolution becomes Cell Size in metres, default 6.25 cm (the Dam Break's 4 m / 64), range 1 mm to 1 m. Changing it restarts the water, as Resolution does today.
 2. Card: a Bounds switch, off by default, and six face rows (Left, Right, Floor, Ceiling, Back, Front), each Wall or Open, shown when Bounds is on. Size X/Y/Z show only with Bounds on and lose their 0.5 to 20 m limit.
 3. Switching Bounds on or off restarts the water. Moving, resizing and Wall/Open switches are live and never restart it.

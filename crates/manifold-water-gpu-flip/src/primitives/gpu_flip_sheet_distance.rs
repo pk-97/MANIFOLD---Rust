@@ -15,17 +15,16 @@
 //! the curvature distance for the sheeter only; the whitewater keeps its own.
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len};
+use manifold_water_liquid::world_tiles::{WorldTiles, allocated_args_offset};
 
 use super::gpu_flip_sheeting::SHEET_DISTANCE_CELLS;
 
 const SHADER_BODY: &str = include_str!("shaders/gpu_flip_sheet_distance.wgsl");
 
-/// The kernels with the storage helpers they index the lattice through.
+/// The kernels with the world tile read side they index the lattice through.
 fn shader() -> String {
-    format!(
-        "{}\n{SHADER_BODY}",
-        manifold_water_liquid::tile_storage::TILE_STORAGE
-    )
+    format!("{READ_SIDE}\n{SHADER_BODY}")
 }
 /// Bytes per fine cell of the two pooled distance fields.
 pub(crate) const POOLED_BYTES_PER_CELL: u64 = 2 * 4;
@@ -47,15 +46,12 @@ const fn ceil_cells(x: f64) -> u32 {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
-    nx: u32,
-    ny: u32,
-    nz: u32,
-    count: u32,
     h: f32,
     depth: f32,
-    /// The tile pool's capacity P (gpu_flip_sheet_distance.wgsl ts_pool_tiles).
+    /// The tile pool's capacity P and the table's entries H
+    /// (gpu_flip_sheet_distance.wgsl ts_pool_tiles, ts_table_entries).
     pool_tiles: u32,
-    pad1: u32,
+    entries: u32,
 }
 
 /// The depth the distance is true to, in metres.
@@ -68,7 +64,6 @@ pub(crate) struct SheetDistance {
     pipelines: Vec<GpuComputePipeline>,
     /// The two ping-pong fields, pooled cell fields of `pool_len` elements.
     buffers: Option<[GpuBuffer; 2]>,
-    cells: [u32; 3],
     pool_tiles: u32,
 }
 
@@ -88,26 +83,20 @@ impl SheetDistance {
         }
     }
 
-    pub(crate) fn reserve(
-        &mut self,
-        device: &GpuDevice,
-        cells: [u32; 3],
-        pool_tiles: u32,
-    ) -> Result<(), String> {
-        if self.buffers.is_some() && self.cells == cells && self.pool_tiles == pool_tiles {
+    pub(crate) fn reserve(&mut self, device: &GpuDevice, pool_tiles: u32) -> Result<(), String> {
+        if self.buffers.is_some() && self.pool_tiles == pool_tiles {
             return Ok(());
         }
-        let bytes = manifold_water_liquid::tile_storage::pool_len(pool_tiles) * 4;
+        let bytes = pool_len(pool_tiles) * 4;
         manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(),
-            manifold_water_liquid::tile_storage::pool_len(pool_tiles) * POOLED_BYTES_PER_CELL,
+            pool_len(pool_tiles) * POOLED_BYTES_PER_CELL,
         )
         .map_err(|e| e.to_string())?;
         self.buffers = Some([
             device.try_create_buffer(bytes)?,
             device.try_create_buffer(bytes)?,
         ]);
-        self.cells = cells;
         self.pool_tiles = pool_tiles;
         Ok(())
     }
@@ -119,33 +108,32 @@ impl SheetDistance {
     }
 
     /// Builds the distance of `source` (the liquid level set, a pooled cell
-    /// field) and returns the pooled buffer holding it. Gated by the FLIP
-    /// clock plan: an inactive substep slot (live clock, zero step) changes
-    /// nothing.
+    /// field) over every cell of the held slots of `tiles` and returns the
+    /// pooled buffer holding it. Gated by the FLIP clock plan: an inactive
+    /// substep slot (live clock, zero step) changes nothing.
     pub(crate) fn encode_gated(
         &self,
         enc: &mut GpuEncoder,
         source: &GpuBuffer,
         h: f32,
         plan: &GpuBuffer,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        tiles: &WorldTiles,
     ) -> &GpuBuffer {
+        assert_eq!(
+            tiles.pool_tiles(),
+            self.pool_tiles,
+            "the sheet distance was reserved for another pool"
+        );
         let [a, b] = self.buffers.as_ref().expect("sheet distance reserved");
-        let [nx, ny, nz] = self.cells;
-        let count = nx * ny * nz;
         let params = Params {
-            nx,
-            ny,
-            nz,
-            count,
             h,
             depth: depth_metres(h),
-            pool_tiles,
-            pad1: 0,
+            pool_tiles: tiles.pool_tiles(),
+            entries: tiles.table_entries(),
         };
+        let held = allocated_args_offset(tiles.reach().ring_max);
         let mut pass = |entry: usize, from: &GpuBuffer, to: &GpuBuffer, label: &'static str| {
-            enc.dispatch_compute(
+            enc.dispatch_compute_indirect(
                 &self.pipelines[entry],
                 &[
                     GpuBinding::Bytes {
@@ -174,11 +162,17 @@ impl SheetDistance {
                     },
                     GpuBinding::Buffer {
                         binding: 5,
-                        buffer: table,
+                        buffer: tiles.table(),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 6,
+                        buffer: &tiles.lists().by_rank,
                         offset: 0,
                     },
                 ],
-                [count.div_ceil(256).max(1), 1, 1],
+                tiles.args(),
+                held,
                 label,
             );
             enc.compute_memory_barrier_buffers();
@@ -197,11 +191,14 @@ impl SheetDistance {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
+    use super::super::gpu_flip_sheeting_tests::World;
     use super::*;
     use manifold_node_engine::testkit::array_harness::read;
-    use manifold_water_liquid::tile_storage::testkit::{from_pool, identity_table, to_pool};
 
-    const CELLS: [u32; 3] = [24, 40, 20];
+    const CELLS: [u32; 3] = [24, 40, 24];
+    /// The box's first cell: whole tiles, with the lattice origin inside the
+    /// box on every axis.
+    const LO: [i32; 3] = [-8, -16, -8];
     const H: f32 = 0.0625;
     /// The water's top, in cells.
     const Y0: f32 = 30.3;
@@ -263,32 +260,36 @@ mod gpu_tests {
         shared(device, &words)
     }
 
-    /// Every box tile allocated: the identity pool table and its capacity.
-    fn pool(device: &GpuDevice) -> (GpuBuffer, u32) {
-        let (words, pool_tiles) = identity_table(CELLS);
-        (shared(device, &words), pool_tiles)
+    /// The box's tiles, every one held.
+    fn world(device: &GpuDevice) -> World {
+        World::new(device, LO, CELLS.map(|n| n as i32), H)
     }
 
-    fn stage(device: &GpuDevice) -> SheetDistance {
+    fn stage(device: &GpuDevice, world: &World) -> SheetDistance {
         let mut stage = SheetDistance::default();
         stage.prepare(device);
-        stage.reserve(device, CELLS, pool(device).1).unwrap();
+        stage.reserve(device, world.pool_tiles()).unwrap();
         stage
     }
 
     /// The distance of the dense `phi`, read back as a dense array.
-    fn run(device: &GpuDevice, stage: &SheetDistance, phi: &[f32], plan: &GpuBuffer) -> Vec<f32> {
-        let (table, pool_tiles) = pool(device);
-        let pooled = to_pool(phi, CELLS, &[3.0 * H]);
+    fn run(
+        device: &GpuDevice,
+        stage: &SheetDistance,
+        world: &World,
+        phi: &[f32],
+        plan: &GpuBuffer,
+    ) -> Vec<f32> {
+        let pooled = world.to_pool(phi, 3.0 * H);
         let source = shared(device, bytemuck::cast_slice(&pooled));
         let mut enc = device.create_encoder("sheet distance");
-        let out = stage.encode_gated(&mut enc, &source, H, plan, &table, pool_tiles);
+        let out = stage.encode_gated(&mut enc, &source, H, plan, &world.tiles);
         enc.commit_and_wait_completed();
         let out: Vec<f32> = copy_out(device, out)
             .into_iter()
             .map(f32::from_bits)
             .collect();
-        from_pool(&out, CELLS)
+        world.dense_of(&out)
     }
 
     /// The same seed and sweeps on the CPU, in f32 and the kernel's order.
@@ -382,8 +383,15 @@ mod gpu_tests {
     #[test]
     fn deep_water_gets_its_true_depth() {
         let device = manifold_gpu::testkit::test_device();
-        let stage = stage(&device);
-        let out = run(&device, &stage, &deep_water(), &plan(&device, 0, 0.0));
+        let world = world(&device);
+        let stage = stage(&device, &world);
+        let out = run(
+            &device,
+            &stage,
+            &world,
+            &deep_water(),
+            &plan(&device, 0, 0.0),
+        );
         let depth = depth_metres(H);
         let reach = SHEET_DISTANCE_CELLS as f32;
         let top = (Y0 - 0.5).floor() as u32; // the highest water cell
@@ -419,7 +427,8 @@ mod gpu_tests {
     #[test]
     fn thin_sheet_stays_thin() {
         let device = manifold_gpu::testkit::test_device();
-        let stage = stage(&device);
+        let world = world(&device);
+        let stage = stage(&device, &world);
         let (lo, hi) = (10.2f32, 11.7f32);
         let mut phi = vec![0.0; (CELLS[0] * CELLS[1] * CELLS[2]) as usize];
         for z in 0..CELLS[2] {
@@ -436,7 +445,7 @@ mod gpu_tests {
                 }
             }
         }
-        let out = run(&device, &stage, &phi, &plan(&device, 0, 0.0));
+        let out = run(&device, &stage, &world, &phi, &plan(&device, 0, 0.0));
         let deepest = out.iter().map(|v| -v / H).fold(f32::MIN, f32::max);
         assert!(
             deepest <= 0.75 + 0.1,
@@ -450,8 +459,15 @@ mod gpu_tests {
     #[test]
     fn inactive_slot_changes_nothing() {
         let device = manifold_gpu::testkit::test_device();
-        let stage = stage(&device);
-        run(&device, &stage, &deep_water(), &plan(&device, 0, 0.0));
+        let world = world(&device);
+        let stage = stage(&device, &world);
+        run(
+            &device,
+            &stage,
+            &world,
+            &deep_water(),
+            &plan(&device, 0, 0.0),
+        );
         let snapshot = |stage: &SheetDistance| -> Vec<Vec<u32>> {
             stage
                 .fields()
@@ -461,9 +477,9 @@ mod gpu_tests {
         };
         let before = snapshot(&stage);
         let flipped: Vec<f32> = deep_water().iter().map(|v| -v).collect();
-        run(&device, &stage, &flipped, &plan(&device, 1, 0.0));
+        run(&device, &stage, &world, &flipped, &plan(&device, 1, 0.0));
         assert!(before == snapshot(&stage), "an inactive slot wrote");
-        run(&device, &stage, &flipped, &plan(&device, 1, 0.01));
+        run(&device, &stage, &world, &flipped, &plan(&device, 1, 0.01));
         assert!(before != snapshot(&stage), "an active live slot writes");
     }
 
@@ -474,9 +490,10 @@ mod gpu_tests {
     #[test]
     fn matches_the_cpu_reference() {
         let device = manifold_gpu::testkit::test_device();
-        let stage = stage(&device);
+        let world = world(&device);
+        let stage = stage(&device, &world);
         let phi = deep_water();
-        let got = run(&device, &stage, &phi, &plan(&device, 0, 0.0));
+        let got = run(&device, &stage, &world, &phi, &plan(&device, 0, 0.0));
         let want = cpu_reference(&phi);
         for (i, (g, w)) in got.iter().zip(&want).enumerate() {
             assert!(

@@ -2,17 +2,17 @@
 //! clamped, so a value the step cannot run is a named error.
 use super::super::gpu_flip_pressure::{MAX_ITERATIONS, Stop, level_refusal};
 
-/// The Solve Level, refused unless it is a whole number the lattice's
-/// levels reach (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11 (Solve Level)):
-/// never clamped, so a level the lattice lacks is a named error.
-pub(crate) fn read_solve_level(value: f32, lattice: [u32; 3]) -> Result<usize, String> {
+/// The Solve Level, refused unless it is a whole number the levels of a
+/// pool of `pool_tiles` reach: never clamped, so a level the pool lacks is a
+/// named error.
+pub(crate) fn read_solve_level(value: f32, pool_tiles: u32) -> Result<usize, String> {
     if !(value.is_finite() && value >= 0.0 && value.fract() == 0.0) {
         return Err(format!(
             "Coarse Solve must be a whole number from 0, not {value}"
         ));
     }
     let level = value as usize;
-    match level_refusal(lattice, level) {
+    match level_refusal(pool_tiles, level) {
         Some(reason) => Err(reason),
         None => Ok(level),
     }

@@ -15,6 +15,8 @@ use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, SOLVER
 
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::particles::FluidParticle;
+#[cfg(test)]
+use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::{
     exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::ExecutionPlan,
@@ -24,14 +26,13 @@ use manifold_node_engine::{
 };
 use manifold_nodes_water::presets::gpu_flip::{STEP_NODE, WaterScene, water_def};
 #[cfg(test)]
+use manifold_water_gpu_flip::primitives::gpu_flip_step::pool_tiles;
+#[cfg(test)]
 use manifold_water_liquid::fluid_particles::FaceSample;
 #[cfg(test)]
+use manifold_water_liquid::primitives::face_sample_component::solver_origin_cell;
 #[cfg(test)]
-use manifold_water_liquid::tile_storage::{
-    pool_len,
-    testkit::{from_pool_with, records_from_pool_with},
-    tile_total,
-};
+use manifold_water_liquid::testkit::world_box::from_pool_under;
 
 #[cfg(test)]
 const G: f64 = 9.81;
@@ -393,31 +394,38 @@ impl Run {
         [words[n], words[n + 1], words[n + 2]]
     }
 
+    /// The step's pool, `P` tiles, and the world cell of its solver grid's
+    /// first cell.
+    #[cfg(test)]
+    fn pool(&self) -> (u32, [i32; 3]) {
+        let grid = self.solver_grid();
+        (
+            pool_tiles(grid.cells()),
+            solver_origin_cell(grid.min(), self.scene.cell_size() as f32),
+        )
+    }
+
     /// The last substep's face grid: projected, constrained to the solids
-    /// and extended, read from the step's pool through its slot table into
-    /// the dense `(n + 1)^3` records.
+    /// and extended, read from the step's pool through its world tile table
+    /// into the dense `(n + 1)^3` records.
     #[cfg(test)]
     pub(super) fn faces(&self) -> Vec<FaceSample> {
         let cells = self.solver_grid().cells();
-        let pool_tiles = tile_total(cells) as usize;
-        let pool: Vec<FaceSample> =
-            self.read(STEP_NODE, "faces", pool_len(pool_tiles as u32) as usize);
-        let table: Vec<u32> = self.read(STEP_NODE, "tiles", 2 * pool_tiles);
-        records_from_pool_with(&pool, &table, cells)
+        let (pool_tiles, origin) = self.pool();
+        let (pool, _, table) = self.pooled_outputs();
+        from_pool_under(&pool, &table, pool_tiles, origin, cells.map(|n| n + 1))
     }
 
-    /// The step's pooled `faces` and `distance` as stored, canonical block
-    /// last, and its slot table (`T + P` words), with `P` the box's tile
-    /// count (the pool is the whole box at this resolution).
+    /// The step's pooled `faces` and `distance` as stored, canonical element
+    /// last, and their world tile table (`table_words(P)` words).
     #[cfg(test)]
     pub(super) fn pooled_outputs(&self) -> (Vec<FaceSample>, Vec<f32>, Vec<u32>) {
-        let cells = self.solver_grid().cells();
-        let tiles = tile_total(cells) as usize;
-        let len = pool_len(tiles as u32) as usize;
+        let (pool_tiles, _) = self.pool();
+        let len = pool_len(pool_tiles) as usize;
         (
             self.read(STEP_NODE, "faces", len),
             self.read(STEP_NODE, "distance", len),
-            self.read(STEP_NODE, "tiles", 2 * tiles),
+            self.read(STEP_NODE, "tiles", table_words(pool_tiles) as usize),
         )
     }
 
@@ -816,13 +824,13 @@ mod native_reference {
             .to_vec()
         };
         let cells = [n as u32; 3];
-        let pool_tiles = tile_total(cells);
-        let pool: Vec<f32> = dumped("distance", pool_len(pool_tiles as u32) as usize)
+        let (pool_tiles, origin) = run.pool();
+        let pool: Vec<f32> = dumped("distance", pool_len(pool_tiles) as usize)
             .into_iter()
             .map(f32::from_bits)
             .collect();
-        let table = dumped("tiles", 2 * pool_tiles as usize);
-        let phi = from_pool_with(&pool, &table, cells);
+        let table = dumped("tiles", table_words(pool_tiles) as usize);
+        let phi = from_pool_under(&pool, &table, pool_tiles, origin, cells);
         let (mut extended, mut wrong) = (0, Vec::new());
         for k in 0..n {
             for j in 0..n {

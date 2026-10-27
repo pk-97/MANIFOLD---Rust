@@ -18,13 +18,15 @@
 //! alone. An explicit friction reaction diverges once ρ·h·f·A_wet/m passes 2.
 //!
 //! The impulse and the body product run over the pressure solve's fine
-//! active tiles (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9): the solver's
-//! level-0 tile buffers come in with every call. The partials are two a
-//! tile per body, so they grow with the lattice and the body count.
+//! active slots: the solver's level-0 buffers come in with every call (the
+//! gate triples, the flags indexed by slot, the list of slots). The partials
+//! are two a pool slot per body, so they grow with the pool and the body
+//! count. The solid velocity change runs over every held slot of the step's
+//! world tiles.
 //!
 //! Every fine-lattice buffer a call takes (the water, open fractions, solid
-//! velocity, direction, `s`) is a pooled field: the call also takes the
-//! pool's table and capacity P and the kernels index through them.
+//! velocity, direction, `s`) is a pooled field of the world tiles in
+//! [`Bodies::tiles`], and the kernels index through its table.
 //!
 //! The reaction holds 8 floats per body (linear then angular impulse, N·s and
 //! N·m·s about the posed centre of mass), added up over a tick's steps.
@@ -33,15 +35,15 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 
 use super::gpu_flip_pressure::Sink;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin};
 pub(crate) use manifold_water_liquid::coupling::REACTION_FLOATS;
-
-use manifold_water_liquid::tile_storage::TILE_STORAGE;
+use manifold_water_liquid::world_tiles::{WorldTiles, allocated_args_offset};
 
 const SHADER_BODY: &str = include_str!("shaders/gpu_flip_bodies.wgsl");
 
-/// The kernels with the storage helpers they index the lattice through.
+/// The kernels with the world tile read side they index the lattice through.
 fn shader() -> String {
-    format!("{TILE_STORAGE}\n{SHADER_BODY}")
+    format!("{READ_SIDE}\n{SHADER_BODY}")
 }
 
 const THREADS: u64 = 256;
@@ -52,8 +54,9 @@ const PARTIAL_FLOATS: u64 = 8;
 const _: () = assert!(MAX_LIQUID_BODIES <= 255);
 const SUM_BYTES: u64 = MAX_LIQUID_BODIES as u64 * SUM_FLOATS * 4;
 
-/// The pressure solver's fine-level tile buffers the passes read their
-/// cells and partial slots through: the gate triples, the flags, the lists.
+/// The pressure solver's fine-level buffers the passes read their cells and
+/// partial slots through: the gate triples, the flags (indexed by slot, zero
+/// for every slot not in the list) and the list of active slots.
 pub(crate) type Tiles<'a> = [&'a GpuBuffer; 3];
 
 /// Where a solve's gate holds the body product's group counts
@@ -74,8 +77,9 @@ pub(crate) struct BodyGate<'a> {
 manifold_core::testkit_visible! {
 /// The bodies a step couples into its solve, and what their passes read.
 pub(crate) struct Bodies<'a> {
-    pub lattice: [u32; 3],
-    pub lattice_min: [f32; 3],
+    /// The fine level's world tiles: the table the pooled buffers below are
+    /// read through, the pool's size, and the held slots.
+    pub tiles: &'a WorldTiles,
     pub cell_size: f32,
     pub density: f32,
     pub tick_seconds: f32,
@@ -98,19 +102,22 @@ pub(crate) struct Bodies<'a> {
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
-    n: [u32; 3],
-    slots: u32,
-    lattice_min: [f32; 3],
+    origin: [f32; 3],
     cell_size: f32,
     density: f32,
     tick_seconds: f32,
+    slots: u32,
     first: u32,
     body_count: u32,
     accumulate: u32,
     /// impulse_finalize inside a round: the gate's solve-live triple; 0 runs always.
     live: u32,
-    /// The tile pool's capacity P (gpu_flip_bodies.wgsl ts_pool_tiles).
+    /// The tile pool's capacity P and the table's entries H
+    /// (gpu_flip_bodies.wgsl ts_pool_tiles, ts_table_entries).
     pool_tiles: u32,
+    entries: u32,
+    _pad0: u32,
+    _pad1: u32,
     _pad2: u32,
 }
 
@@ -134,29 +141,22 @@ pub(crate) struct BodyPasses {
 }
 }
 
-fn records(n: [u32; 3]) -> u64 {
-    n.iter().map(|&side| u64::from(side) + 1).product()
-}
-
-/// Partial slots per body: two a fine tile (gpu_flip_pressure.rs
+/// Partial slots per body: two a pool slot (gpu_flip_pressure.rs
 /// `partial_count`).
-fn partial_slots(n: [u32; 3]) -> u64 {
-    2 * n
-        .iter()
-        .map(|&side| u64::from(side.div_ceil(manifold_water_liquid::tile_storage::TILE)))
-        .product::<u64>()
+fn partial_slots(pool_tiles: u32) -> u64 {
+    2 * u64::from(pool_tiles)
 }
 
-/// Bytes the partials hold for `count` bodies on lattice `n`.
-fn partial_bytes(n: [u32; 3], count: u32) -> u64 {
-    u64::from(count.max(1)) * partial_slots(n) * PARTIAL_FLOATS * 4
+/// Bytes the partials hold for `count` bodies on a pool of `pool_tiles`.
+fn partial_bytes(pool_tiles: u32, count: u32) -> u64 {
+    u64::from(count.max(1)) * partial_slots(pool_tiles) * PARTIAL_FLOATS * 4
 }
 
-/// Device bytes the passes hold once a step has `count` dynamic bodies on
-/// lattice `n`, for the extent proof (gated as `liquid::extent` is).
+/// Device bytes the passes hold once a step has `count` dynamic bodies on a
+/// pool of `pool_tiles`, for the extent proof (gated as `liquid::extent` is).
 #[cfg(any(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub(crate) fn held_bytes(n: [u32; 3], count: u32) -> u64 {
-    partial_bytes(n, count) + SUM_BYTES
+pub(crate) fn held_bytes(pool_tiles: u32, count: u32) -> u64 {
+    partial_bytes(pool_tiles, count) + SUM_BYTES
 }
 
 fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
@@ -171,10 +171,10 @@ fn groups(threads: u64) -> [u32; 3] {
     [threads.div_ceil(THREADS).max(1) as u32, 1, 1]
 }
 
-/// Every fine tile's two workgroups: what a listed dispatch is launched
+/// Every pool slot's two workgroups: what a listed dispatch is launched
 /// with; the kernels return whole workgroups past the live count.
-fn tile_groups(n: [u32; 3]) -> u32 {
-    partial_slots(n) as u32
+fn slot_groups(pool_tiles: u32) -> u32 {
+    partial_slots(pool_tiles) as u32
 }
 
 impl BodyPasses {
@@ -219,12 +219,13 @@ impl BodyPasses {
     }
 
     manifold_core::testkit_visible! {
-        /// Allocate the sums once and the partials for `count` bodies on
-        /// lattice `n`, growing them when a larger lattice or more bodies
-        /// arrive. The pipelines come from `prepare_pipelines` at install.
-        pub(crate) fn prepare(&mut self, device: &GpuDevice, n: [u32; 3], count: u32) -> Result<(), String> {
+        /// Allocate the sums once and the partials for `count` bodies on a
+        /// pool of `pool_tiles`, growing them when a larger pool or more
+        /// bodies arrive. The pipelines come from `prepare_pipelines` at
+        /// install.
+        pub(crate) fn prepare(&mut self, device: &GpuDevice, pool_tiles: u32, count: u32) -> Result<(), String> {
             assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
-            let need = partial_bytes(n, count);
+            let need = partial_bytes(pool_tiles, count);
             if self.partials.as_ref().is_none_or(|p| p.size < need) {
                 self.partials = Some(device.try_create_buffer(need)?);
             }
@@ -258,22 +259,25 @@ impl BodyPasses {
                 },
                 buffer(7, partials),
             ],
-            groups(u64::from(bodies.count) * partial_slots(bodies.lattice) * PARTIAL_FLOATS),
+            groups(
+                u64::from(bodies.count) * partial_slots(bodies.tiles.pool_tiles()) * PARTIAL_FLOATS,
+            ),
             "gpu_flip.bodies.poison",
         );
     }
 
     fn params(bodies: &Bodies<'_>, accumulate: bool) -> Params {
         Params {
-            n: bodies.lattice,
-            slots: partial_slots(bodies.lattice) as u32,
-            lattice_min: bodies.lattice_min,
+            origin: lattice_origin(bodies.cell_size),
             cell_size: bodies.cell_size,
             density: bodies.density,
             tick_seconds: bodies.tick_seconds,
+            slots: partial_slots(bodies.tiles.pool_tiles()) as u32,
             first: bodies.first,
             body_count: bodies.count,
             accumulate: u32::from(accumulate),
+            pool_tiles: bodies.tiles.pool_tiles(),
+            entries: bodies.tiles.table_entries(),
             ..Params::default()
         }
     }
@@ -295,19 +299,17 @@ impl BodyPasses {
         pressure: &GpuBuffer,
         reaction: Option<&GpuBuffer>,
         gate: Option<&BodyGate<'_>>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
     ) -> Result<(), String> {
         let (pipes, partials, sums) = self.parts()?;
-        if partials.size < partial_bytes(bodies.lattice, bodies.count) {
+        let pool_tiles = bodies.tiles.pool_tiles();
+        if partials.size < partial_bytes(pool_tiles, bodies.count) {
             return Err(format!(
-                "the body partials were prepared for fewer than {} bodies on {:?}",
-                bodies.count, bodies.lattice
+                "the body partials were prepared for fewer than {} bodies on a pool of {pool_tiles}",
+                bodies.count
             ));
         }
         let params = Params {
             live: gate.map_or(0, |g| g.live),
-            pool_tiles,
             ..Self::params(bodies, reaction.is_some())
         };
         let data = bytemuck::bytes_of(&params);
@@ -322,9 +324,9 @@ impl BodyPasses {
             buffer(12, tiles[0]),
             buffer(14, tiles[2]),
             self.clock_binding(),
-            buffer(17, table),
+            buffer(17, bodies.tiles.table()),
         ];
-        let groups = [tile_groups(bodies.lattice), bodies.count.max(1), 1];
+        let groups = [slot_groups(pool_tiles), bodies.count.max(1), 1];
         match gate {
             Some(gate) => enc.gated(
                 &pipes.partial,
@@ -382,10 +384,8 @@ impl BodyPasses {
         tiles: Tiles<'_>,
         direction: &GpuBuffer,
         s: &GpuBuffer,
-        table: &GpuBuffer,
-        pool_tiles: u32,
     ) -> Result<(), String> {
-        self.apply_on(enc, bodies, tiles, direction, s, None, table, pool_tiles)
+        self.apply_on(enc, bodies, tiles, direction, s, None)
     }
 
     /// [`Self::apply`] on the solve's gate: a round the stop switched off,
@@ -398,19 +398,8 @@ impl BodyPasses {
         direction: &GpuBuffer,
         s: &GpuBuffer,
         gate: &BodyGate<'_>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
     ) -> Result<(), String> {
-        self.apply_on(
-            enc,
-            bodies,
-            tiles,
-            direction,
-            s,
-            Some(gate),
-            table,
-            pool_tiles,
-        )
+        self.apply_on(enc, bodies, tiles, direction, s, Some(gate))
     }
 
     fn apply_on<S: Sink>(
@@ -421,15 +410,10 @@ impl BodyPasses {
         direction: &GpuBuffer,
         s: &GpuBuffer,
         gate: Option<&BodyGate<'_>>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
     ) -> Result<(), String> {
-        self.impulse(enc, bodies, tiles, direction, None, gate, table, pool_tiles)?;
+        self.impulse(enc, bodies, tiles, direction, None, gate)?;
         let (pipes, _, sums) = self.parts()?;
-        let params = Params {
-            pool_tiles,
-            ..Self::params(bodies, false)
-        };
+        let params = Self::params(bodies, false);
         let product = [
             GpuBinding::Bytes {
                 binding: 0,
@@ -444,9 +428,9 @@ impl BodyPasses {
             buffer(12, tiles[0]),
             buffer(14, tiles[2]),
             self.clock_binding(),
-            buffer(17, table),
+            buffer(17, bodies.tiles.table()),
         ];
-        let groups = [tile_groups(bodies.lattice), 1, 1];
+        let groups = [slot_groups(bodies.tiles.pool_tiles()), 1, 1];
         match gate {
             Some(gate) => enc.gated(
                 &pipes.product,
@@ -464,7 +448,8 @@ impl BodyPasses {
     manifold_core::testkit_visible! {
         /// After the projection, as the engine finishes its pressure stage: the
         /// pressure's impulse into `reaction` and its velocity change into the
-        /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`).
+        /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`) over
+        /// every held slot.
         pub(crate) fn react(
             &self,
             enc: &mut GpuEncoder,
@@ -472,16 +457,11 @@ impl BodyPasses {
             tiles: Tiles<'_>,
             pressure: &GpuBuffer,
             reaction: &GpuBuffer,
-            table: &GpuBuffer,
-            pool_tiles: u32,
         ) -> Result<(), String> {
-            self.impulse(enc, bodies, tiles, pressure, Some(reaction), None, table, pool_tiles)?;
+            self.impulse(enc, bodies, tiles, pressure, Some(reaction), None)?;
             let (pipes, _, sums) = self.parts()?;
-            let params = Params {
-                pool_tiles,
-                ..Self::params(bodies, false)
-            };
-            enc.dispatch_compute(
+            let params = Self::params(bodies, false);
+            enc.dispatch_compute_indirect(
                 &pipes.velocity,
                 &[
                     GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
@@ -489,9 +469,11 @@ impl BodyPasses {
                     buffer(8, sums),
                     buffer(11, bodies.solid),
                     self.clock_binding(),
-                    buffer(17, table),
+                    buffer(17, bodies.tiles.table()),
+                    buffer(18, &bodies.tiles.lists().by_rank),
                 ],
-                groups(records(bodies.lattice)),
+                bodies.tiles.args(),
+                allocated_args_offset(bodies.tiles.reach().ring_max),
                 "gpu_flip.bodies.velocity_change",
             );
             Ok(())
@@ -554,14 +536,14 @@ mod tests {
         assert_eq!(size_of::<Params>(), 64);
     }
 
-    /// Two slots a tile, partial edge tiles counted, as the solver counts
-    /// its fine partials.
+    /// Two slots a pool slot, as the solver counts its fine partials.
     #[test]
-    fn partial_slots_are_two_a_tile() {
-        assert_eq!(partial_slots([8, 8, 8]), 2);
-        assert_eq!(partial_slots([17, 16, 15]), 2 * 3 * 2 * 2);
-        assert_eq!(partial_slots([64; 3]), 2 * 512);
-        assert_eq!(partial_bytes([64; 3], 0), partial_bytes([64; 3], 1));
-        assert_eq!(partial_bytes([64; 3], 3), 3 * 1024 * 32);
+    fn partial_slots_are_two_a_pool_slot() {
+        assert_eq!(partial_slots(1), 2);
+        assert_eq!(partial_slots(12), 24);
+        assert_eq!(partial_slots(512), 2 * 512);
+        assert_eq!(partial_bytes(512, 0), partial_bytes(512, 1));
+        assert_eq!(partial_bytes(512, 3), 3 * 1024 * 32);
+        assert_eq!(slot_groups(12), 24);
     }
 }

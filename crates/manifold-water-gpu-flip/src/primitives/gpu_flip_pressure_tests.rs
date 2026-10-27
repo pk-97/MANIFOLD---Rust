@@ -1,21 +1,30 @@
 //! Checked against FLIP Fluids pressuresolver.cpp and pcgsolver.h (MIT); see THIRD_PARTY_NOTICES.md.
-//! The pressure solver module against the f64 reference
-//! (`scripts/mgpcg_reference.py`, the default rule: halve rounding up to 4
-//! or less, then the exact inverse) on the saved Dam Break and deep pool
-//! problems at 64³ and refined to 128³, and resampled to the odd and uneven
-//! sides 25, 37 and 40. The residual is the true relative residual of the
-//! masked Poisson equation.
+//! The pressure solver module on world tiles, on the saved Dam Break and
+//! deep pool problems at 64³ and 128³ and resampled to the odd sides 25 and
+//! 37. Each problem is a box of cells placed across the world origin on tile
+//! boundaries, in tiles the water's own allocation builds, so every level
+//! holds negative tiles and its slots are the build's order. The residual is
+//! the true relative residual of the masked Poisson equation.
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuEncoder, GpuReplayCache};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use super::gpu_flip_pressure::{
-    MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water,
-    level_lattices, max_solve_level, passes, shader,
+use manifold_gpu::testkit::{TestDevice, test_device};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice, GpuEncoder, GpuReplayCache};
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::scene::world_tiles::{
+    EMPTY, NONE, TILE, TILE_CELLS, find, insert, lattice_origin, local_index, neighbour_row_word,
+    pool_len, slot_row_word, table_entries, table_words, tile_key, tile_of_cell,
 };
 use manifold_node_engine::testkit::array_harness::read;
-use manifold_water_liquid::tile_storage::pool_len;
-use manifold_water_liquid::tile_storage::testkit::{
-    from_pool, identity_table, records_to_pool, to_pool,
+use manifold_water_liquid::testkit::world_box::table_words_of;
+use manifold_water_liquid::world_tiles::{
+    Allocation, LIQUID_POINTS, POOL_SHORT, Reach, WorldTiles, count_words, exhausted_word,
+    rank_count_word,
+};
+
+use super::gpu_flip_pressure::{
+    MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water, level_pools,
+    max_solve_level, passes, shader,
 };
 
 /// One saved problem: water cells and the divergence f (zero in air).
@@ -141,46 +150,36 @@ fn ghost_residual(
     (miss / size).sqrt()
 }
 
-/// Every inner face of an `n`³ box whole, the walls closed, as FaceSample
-/// records (velocity, then weight per axis).
-fn open_face_records(n: usize) -> Vec<[f32; 8]> {
-    let m = n + 1;
-    (0..m * m * m)
-        .map(|i| {
-            let p = [i % m, (i / m) % m, i / (m * m)];
-            let open = |a: usize| {
-                f32::from(u8::from(
-                    (0..3).all(|b| b == a || p[b] < n) && p[a] > 0 && p[a] < n,
-                ))
-            };
-            [0.0, 0.0, 0.0, 0.0, open(0), open(1), open(2), 0.0]
-        })
-        .collect()
+/// A shared buffer holding `data`, written before any GPU work sees it.
+fn shared<T: bytemuck::Pod>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
+    let bytes: &[u8] = bytemuck::cast_slice(data);
+    let buffer = device.create_buffer_shared(bytes.len().max(4) as u64);
+    // SAFETY: a new shared buffer at least `bytes` long; no GPU work in flight.
+    unsafe { buffer.write(0, bytes) };
+    buffer
 }
 
-/// `Params` of `shaders/gpu_flip_pressure.wgsl` as the Lentine flux entry reads it.
+fn bind(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
+    GpuBinding::Buffer {
+        binding,
+        buffer,
+        offset: 0,
+    }
+}
+
+/// `LentineParams` of `shaders/gpu_flip_pressure.wgsl`: the Lentine flux
+/// entry's dense boxes.
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 struct LentineFluxParams {
     nx: u32,
     ny: u32,
     nz: u32,
-    color: u32,
+    cell_size: f32,
     cx: u32,
     cy: u32,
     cz: u32,
-    mode: u32,
-    cell_size: f32,
-    slot: u32,
-    ghost: u32,
-    tolerance: f32,
-    list_base: u32,
-    level: u32,
-    all_tiles: u32,
-    /// The solve-live triple; 0 outside rounds, as these direct dispatches are.
-    live: u32,
-    pool_tiles: u32,
-    pad: [u32; 3],
+    pad: u32,
 }
 
 fn lattice_index(p: [usize; 3], n: [usize; 3]) -> usize {
@@ -398,98 +397,44 @@ fn pressure_module_lentine_flux_conserves_blocks() {
         let output_n = c.map(|side| side + 1);
         let h = 0.37_f32;
         let (water_values, face_values, fluid_values, solid_values) = lentine_fixture(n);
-        let device = manifold_gpu::testkit::test_device();
+        let device = test_device();
         let pipeline = device.create_compute_pipeline(
             &shader,
             "lentine_flux_main",
             "gpu-flip-pressure-lentine-flux",
         );
-        // The fine fields are pooled; every box tile is allocated.
-        let n3 = n.map(|side| side as u32);
-        let (table_words, pool_tiles) = identity_table(n3);
-        let table = device.create_buffer_shared((table_words.len() * 4) as u64);
-        let water_pool = to_pool(&water_values, n3, &[0.0f32]);
-        let face_pool = records_to_pool(&face_values, n3, &[[0.0f32; 8]; 8]);
-        let records8 = |flat: &[f32]| -> Vec<[f32; 8]> {
-            records_to_pool(
-                bytemuck::cast_slice::<f32, [f32; 8]>(flat),
-                n3,
-                &[[0.0f32; 8]; 8],
-            )
-        };
-        let fluid_pool = records8(&fluid_values);
-        let solid_pool = records8(&solid_values);
-        let water = device.create_buffer_shared((water_pool.len() * 4) as u64);
-        let faces = device.create_buffer_shared((face_pool.len() * 32) as u64);
-        let fluid = device.create_buffer_shared((fluid_pool.len() * 32) as u64);
-        let solid = device.create_buffer_shared((solid_pool.len() * 32) as u64);
-        let output =
-            device.create_buffer_shared((output_n[0] * output_n[1] * output_n[2] * 32) as u64);
-        // SAFETY: each shared buffer is sized for the typed fixture and no GPU
-        // work is in flight before these writes.
-        unsafe {
-            table.write(0, bytemuck::cast_slice(&table_words));
-            water.write(0, bytemuck::cast_slice(&water_pool));
-            faces.write(0, bytemuck::cast_slice(&face_pool));
-            fluid.write(0, bytemuck::cast_slice(&fluid_pool));
-            solid.write(0, bytemuck::cast_slice(&solid_pool));
-            output.write(
-                0,
-                bytemuck::cast_slice(&vec![
-                    f32::from_bits(0x7fc00000);
-                    output_n[0] * output_n[1] * output_n[2] * 8
-                ]),
-            );
-        }
+        // The gather's lattices are dense boxes.
+        let water = shared(&device, &water_values);
+        let faces = shared(&device, &face_values);
+        let fluid = shared(&device, &fluid_values);
+        let solid = shared(&device, &solid_values);
+        let output = shared(
+            &device,
+            &vec![f32::from_bits(0x7fc00000); output_n[0] * output_n[1] * output_n[2] * 8],
+        );
         let params = LentineFluxParams {
             nx: n[0] as u32,
             ny: n[1] as u32,
             nz: n[2] as u32,
+            cell_size: h,
             cx: c[0] as u32,
             cy: c[1] as u32,
             cz: c[2] as u32,
-            cell_size: h,
-            pool_tiles,
-            ..LentineFluxParams::default()
+            pad: 0,
         };
         let mut encoder = device.create_encoder("gpu-flip-pressure-lentine-flux");
         encoder.dispatch_compute(
             &pipeline,
             &[
                 GpuBinding::Bytes {
-                    binding: 0,
+                    binding: 27,
                     data: bytemuck::bytes_of(&params),
                 },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &water,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: &faces,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: &fluid,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 4,
-                    buffer: &solid,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 9,
-                    buffer: &output,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 22,
-                    buffer: &table,
-                    offset: 0,
-                },
+                bind(1, &water),
+                bind(2, &faces),
+                bind(3, &fluid),
+                bind(4, &solid),
+                bind(9, &output),
             ],
             [
                 ((output_n[0] * output_n[1] * output_n[2]) as u32).div_ceil(256),
@@ -634,410 +579,7 @@ fn pressure_module_lentine_flux_conserves_blocks() {
     }
 }
 
-/// The box side in metres the fixtures were saved at.
-const BOX_METRES: f64 = 4.0;
-
-/// The residual f32 arithmetic holds on these problems: past it the f64
-/// reference keeps falling and the GPU cannot follow.
-const F32_FLOOR: f64 = 3e-5;
-
-/// One solve of a rig's problem at its level, no bodies; a macro so the
-/// solver stays borrowable beside the rig's buffers.
-macro_rules! run_at {
-    ($rig:expr, $stop:expr) => {
-        Solve {
-            rhs: &$rig.rhs,
-            pressure: &$rig.pressure,
-            stop: $stop,
-            bodies: None,
-            level: $rig.level,
-            coarse_rhs: None,
-        }
-    };
-}
-
-/// The solver on one cubic lattice, its inputs in shared buffers. The fine
-/// fields are pooled with every box tile allocated (the identity table); the
-/// rig converts its dense inputs to the pool layout and its outputs back.
-struct Rig {
-    n: usize,
-    device: manifold_gpu::testkit::TestDevice,
-    solver: PressureSolver,
-    water: GpuBuffer,
-    faces: GpuBuffer,
-    rhs: GpuBuffer,
-    pressure: GpuBuffer,
-    /// The free surface's distance, when the rig solves the ghost rows.
-    phi: Option<GpuBuffer>,
-    /// The V-cycle level the gradient runs on; 0 is the fine lattice.
-    level: usize,
-    /// The identity pool table (`slot_of[t] = t`, `tile_of[s] = s`) and P = T.
-    table: GpuBuffer,
-    pool_tiles: u32,
-    /// Solves start from the pressure the last one left (the warm start);
-    /// off, every upload zeroes it and the solve starts cold.
-    keep_pressure: bool,
-}
-
-impl Rig {
-    fn at_level(mut self, level: usize) -> Self {
-        self.level = level;
-        self
-    }
-
-    fn new(n: usize) -> Self {
-        let device = manifold_gpu::testkit::test_device();
-        let cells3 = [n as u32; 3];
-        let (words, pool_tiles) = identity_table(cells3);
-        let table = device.create_buffer_shared(words.len() as u64 * 4);
-        // SAFETY: a shared buffer sized for the table; no GPU work is queued.
-        unsafe { table.write(0, bytemuck::cast_slice(&words)) };
-        let cells = pool_len(pool_tiles) * 4;
-        // Walls and the records past the lattice are closed: all zero.
-        let records = records_to_pool(&open_face_records(n), cells3, &[[0.0f32; 8]; 8]);
-        let faces = device.create_buffer_shared(records.len() as u64 * 32);
-        // SAFETY: a shared buffer sized for the records; no GPU work is queued.
-        unsafe { faces.write(0, bytemuck::cast_slice(&records)) };
-        let mut solver = PressureSolver::default();
-        solver.prepare_pipelines(&device);
-        Self {
-            n,
-            water: device.create_buffer_shared(cells),
-            rhs: device.create_buffer_shared(cells),
-            pressure: device.create_buffer_shared(cells),
-            faces,
-            device,
-            solver,
-            phi: None,
-            level: 0,
-            table,
-            pool_tiles,
-            keep_pressure: false,
-        }
-    }
-
-    fn cells3(&self) -> [u32; 3] {
-        [self.n as u32; 3]
-    }
-
-    fn with_phi(mut self, phi: &[f32]) -> Self {
-        let air = 3.0 * self.cell_size() as f32;
-        let pooled = to_pool(phi, self.cells3(), &[air]);
-        let buffer = self.device.create_buffer_shared(pooled.len() as u64 * 4);
-        // SAFETY: a shared buffer sized for φ; no GPU work is queued.
-        unsafe { buffer.write(0, bytemuck::cast_slice(&pooled)) };
-        self.phi = Some(buffer);
-        self
-    }
-
-    /// Dense water (1 water, 0 air) and right-hand side into the pooled
-    /// buffers; the canonical block holds 0, an absent tile's value. The
-    /// pressure is zeroed unless the rig keeps it.
-    fn upload(&self, water: &[f32], rhs: &[f32]) {
-        let (water, rhs) = (
-            to_pool(water, self.cells3(), &[0.0f32]),
-            to_pool(rhs, self.cells3(), &[0.0f32]),
-        );
-        // SAFETY: shared buffers sized for the pool; the last solve completed.
-        unsafe {
-            self.water.write(0, bytemuck::cast_slice(&water));
-            self.rhs.write(0, bytemuck::cast_slice(&rhs));
-            if !self.keep_pressure {
-                let zeros = vec![0u32; pool_len(self.pool_tiles) as usize];
-                self.pressure.write(0, bytemuck::cast_slice(&zeros));
-            }
-        }
-    }
-
-    /// The fine pressure as a dense `n`³ array.
-    fn pressure(&self) -> Vec<f32> {
-        let ptr = self.pressure.mapped_ptr().expect("shared pressure");
-        // SAFETY: the solve completed; the buffer holds `pool_len` floats.
-        let pooled = unsafe {
-            std::slice::from_raw_parts(
-                ptr.cast::<f32>().cast_const(),
-                pool_len(self.pool_tiles) as usize,
-            )
-        };
-        from_pool(pooled, self.cells3())
-    }
-
-    fn cell_size(&self) -> f64 {
-        BOX_METRES / self.n as f64
-    }
-
-    /// One prepare and solve in its own command buffer: the profile.
-    fn run(
-        &mut self,
-        p: &Problem,
-        iterations: u32,
-        profile: bool,
-    ) -> manifold_gpu::GpuFrameProfile {
-        let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
-        self.upload(&water, &p.f);
-        let mut enc = self.device.create_encoder("gpu-flip-pressure-module");
-        if profile {
-            let sampler = self
-                .device
-                .create_timestamp_sampler(8192)
-                .expect("timestamp sampling");
-            enc.enable_dispatch_profiling(sampler, &self.device);
-        }
-        let n = self.n as u32;
-        let lattice = Water {
-            lattice: [n; 3],
-            cell_size: self.cell_size() as f32,
-            water: &self.water,
-            faces: &self.faces,
-            phi: self.phi.as_ref(),
-        };
-        self.solver
-            .prepare(
-                &self.device,
-                &mut enc,
-                &lattice,
-                &self.table,
-                self.pool_tiles,
-            )
-            .expect("prepares");
-        self.solver
-            .solve(
-                &mut enc,
-                &lattice,
-                run_at!(self, Stop::Fixed(iterations)),
-                &self.table,
-                self.pool_tiles,
-            )
-            .expect("solves");
-        enc.commit_and_wait_profiled(&self.device)
-    }
-
-    /// The last solve's residual on the fine lattice, as the problem is posed.
-    fn residual_of(&self, p: &Problem) -> f64 {
-        residual(&self.pressure(), &p.water, &p.f, self.n, self.cell_size())
-    }
-
-    /// The last solve's residual on its own level: the fine one at level 0,
-    /// else level k's rows against its restricted right-hand side.
-    fn level_residual_of(&self, p: &Problem) -> f64 {
-        if self.level == 0 {
-            return self.residual_of(p);
-        }
-        let lattice = level_lattices([self.n as u32; 3])[self.level];
-        let cells = lattice.iter().map(|&v| v as usize).product::<usize>();
-        let rows = self
-            .device
-            .create_buffer_shared((cells * ROW_FLOATS * 4) as u64);
-        let rhs = self.device.create_buffer_shared((cells * 4) as u64);
-        let e = self.device.create_buffer_shared((cells * 4) as u64);
-        let mut enc = self.device.create_encoder("gpu-flip-pressure-level");
-        let (n, h) = self
-            .solver
-            .copy_level(&mut enc, self.level, &rows, &rhs, &e);
-        enc.commit_and_wait_completed();
-        assert_eq!(n, lattice);
-        let rows: Vec<f32> = read(&rows, cells * ROW_FLOATS);
-        row_residual(
-            &rows,
-            &read(&rhs, cells),
-            &read(&e, cells),
-            lattice,
-            f64::from(h),
-        )
-    }
-
-    fn solve(&mut self, p: &Problem, iterations: u32) -> f64 {
-        self.run(p, iterations, false);
-        self.level_residual_of(p)
-    }
-}
-
-/// |L_k p − f_k| / |f_k| on one level's own rows (gpu_flip_pressure.wgsl
-/// Row: six weights to water neighbours, low then high per axis, the ghost
-/// and the plain diagonal), its right-hand side and its solution; a cell
-/// with a zero plain diagonal is off the level's water.
-fn row_residual(rows: &[f32], rhs: &[f32], p: &[f32], n: [u32; 3], h: f64) -> f64 {
-    let n = n.map(|v| v as usize);
-    let stride = [1, n[0], n[0] * n[1]];
-    let (mut miss, mut size) = (0.0, 0.0);
-    for c in 0..n[0] * n[1] * n[2] {
-        let row = &rows[c * ROW_FLOATS..(c + 1) * ROW_FLOATS];
-        if row[7] <= 0.0 {
-            continue;
-        }
-        let mut sum = -f64::from(row[7]) * f64::from(p[c]);
-        for (k, &w) in row.iter().enumerate().take(6) {
-            if w == 0.0 {
-                continue;
-            }
-            let q = if k % 2 == 0 {
-                c - stride[k / 2]
-            } else {
-                c + stride[k / 2]
-            };
-            sum += f64::from(w) * f64::from(p[q]);
-        }
-        let f = f64::from(rhs[c]);
-        miss += (sum / (h * h) - f).powi(2);
-        size += f * f;
-    }
-    (miss / size).sqrt()
-}
-
-/// Solve every problem at `m` cells a side. At 3 iterations the GPU runs the
-/// reference's algorithm step for step, so its residual is within 10% of the
-/// f64 one. At 8 it is within 2× the reference, or of what f32 reaches at
-/// all: the larger of F32_FLOOR and the residual after 16 iterations. Pins
-/// are (frame, residual after 3, after 8) from
-/// `scripts/mgpcg_reference.py FIXTURE [--refine 2 | --side M] --iterations 3,8,16`.
-fn check(fixture: &str, m: usize, pinned: &[(u32, f64, f64)]) {
-    check_at(fixture, m, 0, pinned);
-}
-
-/// [`check`] with the gradient on V-cycle level `level`: the residual is the
-/// level's own, on its rows against its restricted right-hand side, as
-/// `scripts/mgpcg_reference.py --solve-level LEVEL` measures it.
-fn check_at(fixture: &str, m: usize, level: usize, pinned: &[(u32, f64, f64)]) {
-    let (n, problems) = load_fixture(fixture);
-    assert_eq!(
-        problems.len(),
-        pinned.len(),
-        "{fixture}: one pin per problem"
-    );
-    let mut rig = Rig::new(m).at_level(level);
-    let mut failures = Vec::new();
-    for (problem, &(frame, at3, at8)) in problems.iter().zip(pinned) {
-        assert_eq!(problem.frame, frame);
-        let problem = resample(problem, n, m);
-        let got3 = rig.solve(&problem, 3);
-        let floor = rig.solve(&problem, 16).max(F32_FLOOR);
-        let got8 = rig.solve(&problem, 8);
-        let again = rig.solve(&problem, 8);
-        println!(
-            "pressure module {fixture} {m}³ level {level} frame {frame:3}: 3 iterations {got3:.3e} (f64 {at3:.3e}, {:.3}×); 8 iterations {got8:.3e} (f64 {at8:.3e}, f32 floor {floor:.3e})",
-            got3 / at3
-        );
-        assert_eq!(got8, again, "frame {frame}: repeat solves differ");
-        if !(got3 / at3 - 1.0).abs().lt(&0.1) {
-            failures.push(format!(
-                "frame {frame}: 3 iterations {got3:.3e} against {at3:.3e}"
-            ));
-        }
-        if got8.is_nan() || got8 > 2.0 * at8.max(floor) {
-            failures.push(format!(
-                "frame {frame}: 8 iterations {got8:.3e} against {at8:.3e} (floor {floor:.3e})"
-            ));
-        }
-    }
-    assert!(failures.is_empty(), "{fixture} {m}³: {failures:?}");
-}
-
 const DAM_BREAK: &str = "dambreak_pressure_problems";
-
-#[test]
-fn pressure_module_matches_reference_64() {
-    check(
-        DAM_BREAK,
-        64,
-        &[
-            (0, 1.339e-02, 5.914e-07),
-            (15, 2.168e-02, 3.360e-06),
-            (30, 5.072e-02, 7.789e-06),
-            (45, 2.588e-02, 7.831e-06),
-            (60, 2.061e-02, 7.406e-06),
-            (90, 1.206e-02, 3.585e-06),
-            (120, 1.246e-02, 5.902e-06),
-        ],
-    );
-}
-
-#[test]
-fn pressure_module_matches_reference_128() {
-    check(
-        DAM_BREAK,
-        128,
-        &[
-            (0, 8.780e-03, 2.374e-07),
-            (15, 2.614e-02, 3.853e-06),
-            (30, 3.620e-02, 5.937e-06),
-            (45, 2.719e-02, 3.435e-06),
-            (60, 2.351e-02, 3.072e-06),
-            (90, 1.338e-02, 2.408e-06),
-            (120, 1.475e-02, 3.619e-06),
-        ],
-    );
-}
-
-/// Odd sides, whose coarse levels carry the virtual solid half-cell: 25
-/// (25, 13, 7, 4) and 37 (37, 19, 10, 5, 3); and 40, even down to 5.
-#[test]
-fn pressure_module_matches_reference_odd_sides() {
-    check(
-        DAM_BREAK,
-        25,
-        &[
-            (0, 1.264e-03, 2.351e-08),
-            (15, 2.315e-03, 2.610e-08),
-            (30, 3.554e-03, 1.053e-07),
-            (45, 4.025e-03, 5.635e-08),
-            (60, 2.851e-03, 9.921e-08),
-            (90, 2.227e-03, 9.913e-08),
-            (120, 1.328e-03, 7.313e-08),
-        ],
-    );
-    check(
-        DAM_BREAK,
-        37,
-        &[
-            (0, 5.880e-03, 1.099e-07),
-            (15, 1.392e-02, 6.265e-07),
-            (30, 1.108e-02, 5.916e-07),
-            (45, 5.470e-03, 2.777e-07),
-            (60, 6.904e-03, 6.417e-07),
-            (90, 5.333e-03, 4.049e-07),
-            (120, 5.361e-03, 4.309e-07),
-        ],
-    );
-    check(
-        DAM_BREAK,
-        40,
-        &[
-            (0, 2.568e-03, 1.988e-08),
-            (15, 1.067e-02, 2.733e-07),
-            (30, 2.242e-02, 3.175e-06),
-            (45, 7.727e-03, 2.149e-06),
-            (60, 6.061e-03, 5.958e-07),
-            (90, 1.205e-02, 1.916e-06),
-            (120, 7.300e-03, 1.429e-06),
-        ],
-    );
-}
-
-/// The deep still pool's main solve and the deep drop's density solves: the
-/// coarsest level is water but for its top row.
-#[test]
-fn pressure_module_matches_reference_deep_pool() {
-    check(
-        "deep_pool_pressure_problems",
-        64,
-        &[(60, 1.188e-02, 5.352e-08)],
-    );
-    check(
-        "deep_pool_pressure_problems",
-        128,
-        &[(60, 2.614e-02, 3.440e-07)],
-    );
-    check(
-        "deep_pool_density_problems",
-        64,
-        &[(30, 6.912e-03, 5.795e-07), (60, 5.103e-03, 2.577e-07)],
-    );
-    check(
-        "deep_pool_density_problems",
-        128,
-        &[(30, 6.632e-03, 3.220e-07), (60, 6.508e-03, 2.830e-07)],
-    );
-}
 
 /// A spread of surface distances: water cells by an air neighbour sit 0.01h
 /// to 0.9h under the surface, air cells 0.05h to 0.95h above it, so θ runs
@@ -1116,77 +658,402 @@ fn pressure_module_solves_the_ghost_rows() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// The original classifier's boolean rule, independently scanning each
-/// clipped tile box grown by one cell. No lane partition or reduction here.
-fn pressure_tile_flags(n: [usize; 3], water: &[f32], all_tiles: bool) -> Vec<u32> {
-    let tiles = n.map(|side| side.div_ceil(8));
-    (0..tiles.iter().product())
-        .map(|tile| {
-            if all_tiles {
-                return 1;
+/// The box side in metres the fixtures were saved at.
+const BOX_METRES: f64 = 4.0;
+
+/// The residual f32 arithmetic holds on these problems: past it the f64
+/// reference keeps falling and the GPU cannot follow.
+const F32_FLOOR: f64 = 3e-5;
+
+/// One solve of a rig's problem at its level, no bodies; a macro so the
+/// solver stays borrowable beside the rig's buffers.
+macro_rules! run_at {
+    ($rig:expr, $stop:expr) => {
+        Solve {
+            rhs: &$rig.rhs,
+            pressure: &$rig.pressure,
+            stop: $stop,
+            bodies: None,
+            level: $rig.level,
+            coarse_rhs: None,
+        }
+    };
+}
+
+/// A rig's water as the solver takes it; a macro for the same reason.
+macro_rules! water_of {
+    ($rig:expr) => {
+        Water {
+            cell_size: $rig.h as f32,
+            water: &$rig.water,
+            faces: &$rig.faces,
+            phi: $rig.phi.as_ref(),
+        }
+    };
+}
+
+/// World tiles built by the water's own allocation from one particle in
+/// each of a set of tiles, so the slots are the build's order, not the
+/// tiles'.
+struct FineTiles {
+    tiles: WorldTiles,
+    /// Each slot's tile; every slot is held.
+    tile_of: Vec<[i32; 3]>,
+    slot_of: HashMap<[i32; 3], u32>,
+}
+
+impl FineTiles {
+    fn build(device: &GpuDevice, h: f32, tiles: &[[i32; 3]]) -> Self {
+        let points: Vec<FluidParticle> = tiles
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                // The tile's first cell, at its centre.
+                let at = t.map(|c| (c * TILE as i32) as f32 * h);
+                FluidParticle {
+                    position_radius: [at[0], at[1], at[2], 0.05],
+                    velocity: [0.0; 3],
+                    id: i as u32 + 1,
+                }
+            })
+            .collect();
+        let count = points.len() as u32;
+        let reach = Reach {
+            ring_max: 0,
+            alloc_ring: 0,
+            cell_reach: 0,
+        };
+        let mut built = WorldTiles::new(device, count, reach, LIQUID_POINTS).expect("world tiles");
+        built.prepare(device);
+        let records = shared(device, &points);
+        let record = shared(device, &[count.div_ceil(256), 1, 1, count]);
+        let gate = shared(device, &[0u32; 12]);
+        let mut enc = device.create_encoder("pressure rig tiles");
+        built.encode_allocation(
+            &mut enc,
+            &Allocation {
+                points: &records,
+                record: &record,
+                origin: lattice_origin(h),
+                inv_cell: 1.0 / h,
+                replay_count: 0,
+                gate: &gate,
+            },
+        );
+        enc.commit_and_wait_completed();
+        let words: Vec<u32> = read(built.table(), table_words(count) as usize);
+        let entries = table_entries(count);
+        let tile_of: Vec<[i32; 3]> = (0..count)
+            .map(|slot| {
+                let row = slot_row_word(entries, slot) as usize;
+                assert_ne!(words[row + 3], NONE, "slot {slot} holds a tile");
+                [words[row], words[row + 1], words[row + 2]].map(|w| w as i32)
+            })
+            .collect();
+        let slot_of: HashMap<[i32; 3], u32> = tile_of
+            .iter()
+            .enumerate()
+            .map(|(slot, &t)| (t, slot as u32))
+            .collect();
+        assert!(
+            tiles.iter().all(|t| slot_of.contains_key(t)),
+            "every tile has its own slot"
+        );
+        Self {
+            tiles: built,
+            tile_of,
+            slot_of,
+        }
+    }
+}
+
+/// The low corner of a box of `n` cells a side placed across the origin on
+/// tile boundaries, a different number of tiles below 0 on each axis: the
+/// box holds ⌈n/8⌉³ tiles, so the solver's depth is the dense box's.
+fn across_origin(n: usize) -> [i32; 3] {
+    let tiles = n.div_ceil(TILE as usize) as i32;
+    assert!(tiles >= 2, "a box across the origin spans two tiles");
+    [0, -1, 1].map(|d| -(TILE as i32) * (tiles / 2 + d).clamp(1, tiles - 1))
+}
+
+/// Every cell of a box of `side` cells from `min`, x fastest.
+fn box_cells(min: [i32; 3], side: i32) -> impl Iterator<Item = [i32; 3]> {
+    (0..side)
+        .flat_map(move |z| (0..side).flat_map(move |y| (0..side).map(move |x| [x, y, z])))
+        .map(move |c| std::array::from_fn(|a| min[a] + c[a]))
+}
+
+/// Every cell of `tile`, x fastest.
+fn tile_cells(tile: [i32; 3]) -> impl Iterator<Item = [i32; 3]> {
+    box_cells(tile.map(|t| t * TILE as i32), TILE as i32)
+}
+
+/// The solver on a set of cells in world tiles, its inputs in shared
+/// buffers. A rig's dense arrays run over its cells (a box's x fastest);
+/// it converts them to the pooled layout and its outputs back.
+struct Rig {
+    /// The box side the problems are posed on; 0 for any other cell set.
+    n: usize,
+    h: f64,
+    /// The world cell of each dense entry.
+    cells: Vec<[i32; 3]>,
+    /// The pool index of each dense entry.
+    index: Vec<usize>,
+    fine: FineTiles,
+    device: TestDevice,
+    solver: PressureSolver,
+    water: GpuBuffer,
+    faces: GpuBuffer,
+    rhs: GpuBuffer,
+    pressure: GpuBuffer,
+    /// The free surface's distance, when the rig solves the ghost rows.
+    phi: Option<GpuBuffer>,
+    /// The V-cycle level the gradient runs on; 0 is the fine level.
+    level: usize,
+    /// Solves start from the pressure the last one left (the warm start);
+    /// off, every upload zeroes it and the solve starts cold.
+    keep_pressure: bool,
+}
+
+impl Rig {
+    fn at_level(mut self, level: usize) -> Self {
+        self.level = level;
+        self
+    }
+
+    /// A box of `n`³ cells across the origin ([`across_origin`]), cell size
+    /// BOX_METRES / n, its walls closed.
+    fn new(n: usize) -> Self {
+        let min = across_origin(n);
+        let side = n as i32;
+        let cells: Vec<[i32; 3]> = box_cells(min, side).collect();
+        let (first, last) = (tile_of_cell(min), tile_of_cell(min.map(|c| c + side - 1)));
+        let mut tiles = Vec::new();
+        for z in first[2]..=last[2] {
+            for y in first[1]..=last[1] {
+                for x in first[0]..=last[0] {
+                    tiles.push([x, y, z]);
+                }
             }
-            let origin = lattice_coords(tile, tiles).map(|v| 8 * v);
-            let first = origin.map(|v| v.saturating_sub(1));
-            let last: [usize; 3] = std::array::from_fn(|a| (origin[a] + 8).min(n[a] - 1));
-            for z in first[2]..=last[2] {
-                for y in first[1]..=last[1] {
-                    for x in first[0]..=last[0] {
-                        if water[lattice_index([x, y, z], n)] > 0.5 {
-                            return 1;
-                        }
+        }
+        let inside = |p: [i32; 3]| (0..3).all(|a| p[a] >= min[a] && p[a] < min[a] + side);
+        let mut rig = Self::on(cells, &tiles, BOX_METRES / n as f64, inside);
+        rig.n = n;
+        rig
+    }
+
+    /// The solver over `cells` in `tiles` at cell size `h`: a face is open
+    /// between two cells `inside` holds, every other face closed.
+    fn on(
+        cells: Vec<[i32; 3]>,
+        tiles: &[[i32; 3]],
+        h: f64,
+        inside: impl Fn([i32; 3]) -> bool,
+    ) -> Self {
+        let device = test_device();
+        let fine = FineTiles::build(&device, h as f32, tiles);
+        let pool = fine.tiles.pool_tiles();
+        let at = |slot: usize, p: [i32; 3]| slot * TILE_CELLS as usize + local_index(p) as usize;
+        // Cells run x fastest, so a tile's slot is looked up once a run.
+        let mut last = ([i32::MIN; 3], 0);
+        let index: Vec<usize> = cells
+            .iter()
+            .map(|&p| {
+                let tile = tile_of_cell(p);
+                if tile != last.0 {
+                    last = (tile, fine.slot_of[&tile] as usize);
+                }
+                at(last.1, p)
+            })
+            .collect();
+        // A record holds its cell's low faces; the canonical one is closed.
+        let mut records = vec![[0.0f32; 8]; pool_len(pool) as usize];
+        for (slot, &tile) in fine.tile_of.iter().enumerate() {
+            for p in tile_cells(tile).filter(|&p| inside(p)) {
+                for a in 0..3 {
+                    let mut below = p;
+                    below[a] -= 1;
+                    if inside(below) {
+                        records[at(slot, p)][4 + a] = 1.0;
                     }
                 }
             }
-            0
-        })
-        .collect()
-}
-
-#[test]
-fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
-    fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
-        GpuBinding::Buffer {
-            binding,
-            buffer,
-            offset: 0,
+        }
+        let floats = pool_len(pool) * 4;
+        let mut solver = PressureSolver::default();
+        solver.prepare_pipelines(&device);
+        Self {
+            n: 0,
+            h,
+            cells,
+            index,
+            faces: shared(&device, &records),
+            water: device.create_buffer_shared(floats),
+            rhs: device.create_buffer_shared(floats),
+            pressure: device.create_buffer_shared(floats),
+            fine,
+            device,
+            solver,
+            phi: None,
+            level: 0,
+            keep_pressure: false,
         }
     }
-    let device = manifold_gpu::testkit::test_device();
-    let shader = shader();
-    let classify =
-        device.create_compute_pipeline(&shader, "classify_main", "pressure.classify.proof");
-    let lists = device.create_compute_pipeline(&shader, "lists_main", "pressure.lists.proof");
-    const BASE: usize = 3;
-    const SENTINEL: u32 = 0xa17e_5afe;
-    for n in [
-        [1, 1, 1],
-        [7, 9, 5],
-        [17, 10, 25],
-        [64, 64, 64],
-        [128, 128, 128],
-    ] {
-        let cells: usize = n.iter().product();
-        let total: usize = n.map(|v| v.div_ceil(8)).iter().product();
-        // The touched mask is a pooled cell field, every box tile allocated.
-        let n3 = n.map(|v| v as u32);
-        let (table_words, pool_tiles) = identity_table(n3);
-        let table = device.create_buffer_shared((table_words.len() * 4) as u64);
-        // SAFETY: a shared buffer sized for the table; no GPU work is queued.
-        unsafe { table.write(0, bytemuck::cast_slice(&table_words)) };
-        let water_buffer = device.create_buffer_shared(pool_len(pool_tiles) * 4);
-        let flags = device.create_buffer_shared(((total + 2 * BASE) * 4) as u64);
-        let active_list = device.create_buffer_shared(flags.size);
-        let armed = device.create_buffer_shared(9 * 4);
-        let plan = device.create_buffer_shared(16 * 4);
-        let mut expected_flags = vec![SENTINEL; total + 2 * BASE];
-        let mut expected_list = expected_flags.clone();
-        let mut expected_armed = vec![SENTINEL; 9];
-        // SAFETY: shared buffers hold these words and no GPU work is queued.
-        unsafe {
-            flags.write(0, bytemuck::cast_slice(&expected_flags));
-            active_list.write(0, bytemuck::cast_slice(&expected_list));
-            armed.write(0, bytemuck::cast_slice(&expected_armed));
+
+    fn pool_floats(&self) -> usize {
+        pool_len(self.fine.tiles.pool_tiles()) as usize
+    }
+
+    /// `dense` as a pooled field: each cell in place, everything else `fill`.
+    fn to_pool<T: Copy>(&self, dense: &[T], fill: T) -> Vec<T> {
+        assert_eq!(dense.len(), self.cells.len());
+        let mut pool = vec![fill; self.pool_floats()];
+        for (&at, &value) in self.index.iter().zip(dense) {
+            pool[at] = value;
         }
+        pool
+    }
+
+    /// The rig's cells out of a pooled field.
+    fn dense_of<T: Copy>(&self, pool: &[T]) -> Vec<T> {
+        self.index.iter().map(|&at| pool[at]).collect()
+    }
+
+    /// φ per cell; air (3h) everywhere else.
+    fn with_phi(mut self, phi: &[f32]) -> Self {
+        let pooled = self.to_pool(phi, 3.0 * self.h as f32);
+        self.phi = Some(shared(&self.device, &pooled));
+        self
+    }
+
+    /// Dense water (1 water, 0 air) and right-hand side into the pooled
+    /// buffers, 0 off the cells. The pressure is zeroed unless the rig keeps
+    /// it.
+    fn upload(&self, water: &[f32], rhs: &[f32]) {
+        let (water, rhs) = (self.to_pool(water, 0.0f32), self.to_pool(rhs, 0.0f32));
+        // SAFETY: shared buffers sized for the pool; the last solve completed.
+        unsafe {
+            self.water.write(0, bytemuck::cast_slice(&water));
+            self.rhs.write(0, bytemuck::cast_slice(&rhs));
+            if !self.keep_pressure {
+                let zeros = vec![0u32; self.pool_floats()];
+                self.pressure.write(0, bytemuck::cast_slice(&zeros));
+            }
+        }
+    }
+
+    /// The fine pressure over the rig's cells.
+    fn pressure(&self) -> Vec<f32> {
+        self.dense_of(&read::<f32>(&self.pressure, self.pool_floats()))
+    }
+
+    fn cell_size(&self) -> f64 {
+        self.h
+    }
+
+    fn prepare(&mut self, enc: &mut GpuEncoder) {
+        let water = water_of!(self);
+        self.solver
+            .prepare(&self.device, enc, &water, &self.fine.tiles)
+            .expect("prepares");
+    }
+
+    fn solve_on(&mut self, enc: &mut GpuEncoder, stop: Stop) {
+        let water = water_of!(self);
+        self.solver
+            .solve(enc, &water, run_at!(self, stop), &self.fine.tiles)
+            .expect("solves");
+    }
+
+    /// One prepare and solve in its own command buffer: the profile.
+    fn run(
+        &mut self,
+        p: &Problem,
+        iterations: u32,
+        profile: bool,
+    ) -> manifold_gpu::GpuFrameProfile {
+        let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+        self.upload(&water, &p.f);
+        let mut enc = self.device.create_encoder("gpu-flip-pressure-module");
+        if profile {
+            let sampler = self
+                .device
+                .create_timestamp_sampler(8192)
+                .expect("timestamp sampling");
+            enc.enable_dispatch_profiling(sampler, &self.device);
+        }
+        self.prepare(&mut enc);
+        self.solve_on(&mut enc, Stop::Fixed(iterations));
+        enc.commit_and_wait_profiled(&self.device)
+    }
+
+    /// The last solve's residual on the fine level, as the problem is posed.
+    fn residual_of(&self, p: &Problem) -> f64 {
+        residual(&self.pressure(), &p.water, &p.f, self.n, self.cell_size())
+    }
+
+    fn solve(&mut self, p: &Problem, iterations: u32) -> f64 {
+        self.run(p, iterations, false);
+        self.residual_of(p)
+    }
+
+    /// The fine level's slot flags (1 active) and active list, P words each,
+    /// and its gate triple, after the last prepare.
+    fn slot_words(&self) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+        let pool = u64::from(self.fine.tiles.pool_tiles());
+        let [armed, flags, lists] = self.solver.tiles().expect("prepared");
+        let mut enc = self.device.create_encoder("gpu-flip-pressure-slot-words");
+        let copies = [flags, lists].map(|from| {
+            let into = self.device.create_buffer_shared(pool * 4);
+            enc.copy_buffer_to_buffer(from, &into, pool * 4);
+            into
+        });
+        enc.commit_and_wait_completed();
+        (
+            read(&copies[0], pool as usize),
+            read(&copies[1], pool as usize),
+            read(armed, 3),
+        )
+    }
+}
+
+/// The classifier's boolean rule per slot of `rig`: active when a water
+/// cell (> 0.5) lies in the slot's tile grown by one cell, or with
+/// `all_tiles` every slot.
+fn slot_flags(rig: &Rig, water: &[f32], all_tiles: bool) -> Vec<u32> {
+    let mut lit = vec![u32::from(all_tiles); rig.fine.tile_of.len()];
+    for (c, _) in water.iter().enumerate().filter(|&(_, &w)| w > 0.5) {
+        let p = rig.cells[c];
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let t = tile_of_cell([p[0] + dx, p[1] + dy, p[2] + dz]);
+                    if let Some(&slot) = rig.fine.slot_of.get(&t) {
+                        lit[slot as usize] = 1;
+                    }
+                }
+            }
+        }
+    }
+    lit
+}
+
+/// Classification through prepare against the boolean rule, on boxes with
+/// a partial edge tile and without: a held slot is active when a water cell
+/// lies in its tile grown by one cell, the list holds the active slots in
+/// slot order and the level's triple two workgroups each. Exactly 0.5 is
+/// air, its next representable neighbour water. All tiles marks every held
+/// slot; an inactive clock slot keeps the last classification.
+#[test]
+fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
+    use super::gpu_flip_step::set_all_tiles;
+    for m in [12, 25, 64] {
+        let n = [m; 3];
+        let cells = m * m * m;
+        let mut rig = Rig::new(m);
+        let plan = rig.device.create_buffer_shared(48);
+        rig.solver.set_clock_plan(&plan);
+        let mut expected: Option<(Vec<u32>, Vec<u32>)> = None;
         // Empty -> full -> sparse -> halo-only -> empty reuses the storage, then
         // all_tiles and an inactive clock prove the override and preservation.
         for (mask, all_tiles, inactive) in [
@@ -1209,7 +1076,6 @@ fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
                 ] {
                     water[lattice_index(p, n)] = 1.0;
                 }
-                // Exactly 0.5 is air; its next representable neighbour is wet.
                 for (index, value) in [
                     0.5_f32,
                     0.5_f32.next_down(),
@@ -1219,90 +1085,39 @@ fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
                 ]
                 .into_iter()
                 .enumerate()
-                .take(cells)
                 {
                     water[index] = value;
                 }
             } else if mask == 3 {
-                // At x=8, this cell touches both tile 0's halo and tile 1.
-                water[lattice_index([8.min(n[0] - 1), 0, 0], n)] = 1.0;
+                // At x = 8 the cell touches the first tile's halo and the second tile.
+                water[lattice_index([8, 0, 0], n)] = 1.0;
             }
-            let mut clock = [0u32; 16];
+            let mut clock = [0u32; 12];
             clock[11] = 1;
             clock[0] = if inactive { 0.0_f32 } else { 1.0_f32 / 60.0 }.to_bits();
-            // SAFETY: previous command buffer completed; storage covers all values.
-            unsafe {
-                water_buffer.write(0, bytemuck::cast_slice(&to_pool(&water, n3, &[0.0f32])));
-                plan.write(0, bytemuck::cast_slice(&clock));
-            }
-            let params = LentineFluxParams {
-                nx: n[0] as u32,
-                ny: n[1] as u32,
-                nz: n[2] as u32,
-                list_base: BASE as u32,
-                level: 1,
-                all_tiles: u32::from(all_tiles),
-                pool_tiles,
-                ..LentineFluxParams::default()
-            };
-            let mut enc = device.create_encoder("pressure classifier boolean proof");
-            enc.dispatch_compute(
-                &classify,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&params),
-                    },
-                    buffer(1, &water_buffer),
-                    buffer(19, &flags),
-                    buffer(21, &plan),
-                    buffer(22, &table),
-                ],
-                [((total * 32).div_ceil(256)) as u32, 1, 1],
-                "pressure.classify.proof",
-            );
-            enc.dispatch_compute(
-                &lists,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&params),
-                    },
-                    buffer(14, &armed),
-                    buffer(19, &flags),
-                    buffer(20, &active_list),
-                    buffer(21, &plan),
-                ],
-                [1, 1, 1],
-                "pressure.lists.proof",
-            );
+            // SAFETY: a shared buffer sized for the plan; the last prepare completed.
+            unsafe { plan.write(0, bytemuck::cast_slice(&clock)) };
+            rig.upload(&water, &vec![0.0; cells]);
+            set_all_tiles(all_tiles);
+            let mut enc = rig.device.create_encoder("pressure classifier proof");
+            rig.prepare(&mut enc);
             enc.commit_and_wait_completed();
+            set_all_tiles(false);
             if !inactive {
-                let oracle = pressure_tile_flags(n, &water, all_tiles);
-                expected_flags[BASE..BASE + total].copy_from_slice(&oracle);
-                let mut count = 0;
-                for (tile, &lit) in oracle.iter().enumerate() {
-                    if lit != 0 {
-                        expected_list[BASE + count] = tile as u32;
-                        count += 1;
-                    }
-                }
-                expected_armed[3..6].copy_from_slice(&[2 * count as u32, 1, 1]);
+                let flags = slot_flags(&rig, &water, all_tiles);
+                let list = (0..flags.len() as u32)
+                    .filter(|&s| flags[s as usize] != 0)
+                    .collect();
+                expected = Some((flags, list));
             }
-            let context = format!("{n:?} mask {mask}, all_tiles {all_tiles}, inactive {inactive}");
+            let (want_flags, want_list) = expected.as_ref().expect("an active prepare first");
+            let (flags, lists, armed) = rig.slot_words();
+            let context = format!("{m}³ mask {mask}, all_tiles {all_tiles}, inactive {inactive}");
+            assert_eq!(&flags, want_flags, "flags: {context}");
+            assert_eq!(&lists[..want_list.len()], &want_list[..], "list: {context}");
             assert_eq!(
-                read::<u32>(&flags, expected_flags.len()),
-                expected_flags,
-                "flags: {context}"
-            );
-            assert_eq!(
-                read::<u32>(&active_list, expected_list.len()),
-                expected_list,
-                "lists and retained tail: {context}"
-            );
-            assert_eq!(
-                read::<u32>(&armed, expected_armed.len()),
-                expected_armed,
+                armed,
+                [2 * want_list.len() as u32, 1, 1],
                 "armed counts: {context}"
             );
         }
@@ -1310,7 +1125,8 @@ fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
 }
 
 /// The solve encodes exactly the passes `passes` counts, every one labelled
-/// as the solver's; and its GPU time per solve, printed.
+/// as the solver's (the coarse levels' world tile builds aside); and its GPU
+/// time per solve, printed.
 #[test]
 fn pressure_module_passes_match_the_count() {
     let (n, problems) = load_fixture(DAM_BREAK);
@@ -1331,20 +1147,25 @@ fn pressure_module_passes_match_the_count() {
         for (label, (count, ms)) in costs {
             println!("pressure active-pass {m}: {label} count {count} sampled_ms {ms:.5}");
         }
-        let (prepare, solve) = passes([m as u32; 3], Stop::Fixed(8));
+        let pool = rig.fine.tiles.pool_tiles();
+        let (prepare, solve) = passes(pool, Stop::Fixed(8));
         // The rounds run as the template's executes, one span each at
         // Dispatch granularity; the prelude (arm, init, the start's check,
         // the warm start's residual) is what a solve encodes besides them.
-        let round =
-            passes([m as u32; 3], Stop::Fixed(2)).1 - passes([m as u32; 3], Stop::Fixed(1)).1;
+        let round = passes(pool, Stop::Fixed(2)).1 - passes(pool, Stop::Fixed(1)).1;
         let prelude = solve - 8 * round;
         let executes =
             manifold_gpu::template_chunks(8, super::gpu_flip_pressure::ROUND_CHUNK).count();
+        let own = profile
+            .spans
+            .iter()
+            .filter(|s| s.label.starts_with("gpu_flip.pressure."))
+            .count();
         assert_eq!(
-            profile.spans.len(),
-            prepare + prelude + executes,
+            own,
+            prepare + prelude,
             "{m}³ ({} levels)",
-            level_lattices([m as u32; 3]).len()
+            level_pools(pool).len()
         );
         assert_eq!(
             profile
@@ -1359,7 +1180,9 @@ fn pressure_module_passes_match_the_count() {
             profile
                 .spans
                 .iter()
-                .all(|s| s.label.starts_with("gpu_flip.pressure.") || s.label == "pressure rounds"),
+                .all(|s| s.label.starts_with("gpu_flip.pressure.")
+                    || s.label.starts_with("world_tiles.")
+                    || s.label == "pressure rounds"),
             "{m}³: an unlabelled pass"
         );
         let mut times: Vec<f64> = (0..5)
@@ -1381,33 +1204,11 @@ fn rz(rig: &mut Rig, p: &Problem, iterations: u32) -> Vec<(f32, f32)> {
         .device
         .create_buffer_shared(u64::from(2 * MAX_ITERATIONS) * 4);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-rz");
-    let n = rig.n as u32;
-    let lattice = Water {
-        lattice: [n; 3],
-        cell_size: rig.cell_size() as f32,
-        water: &rig.water,
-        faces: &rig.faces,
-        phi: rig.phi.as_ref(),
-    };
-    rig.solver
-        .prepare(&rig.device, &mut enc, &lattice, &rig.table, rig.pool_tiles)
-        .expect("prepares");
-    rig.solver
-        .solve(
-            &mut enc,
-            &lattice,
-            run_at!(rig, Stop::Fixed(iterations)),
-            &rig.table,
-            rig.pool_tiles,
-        )
-        .expect("solves");
+    rig.prepare(&mut enc);
+    rig.solve_on(&mut enc, Stop::Fixed(iterations));
     rig.solver.copy_scalars(&mut enc, &scalars);
     enc.commit_and_wait_completed();
-    let ptr = scalars.mapped_ptr().expect("shared scalars");
-    // SAFETY: the copy completed; the buffer holds 2 · MAX_ITERATIONS floats.
-    let all = unsafe {
-        std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), 2 * MAX_ITERATIONS as usize)
-    };
+    let all: Vec<f32> = read(&scalars, 2 * MAX_ITERATIONS as usize);
     (0..iterations as usize)
         .map(|k| (all[2 * k], all[2 * k + 1]))
         .collect()
@@ -1533,32 +1334,12 @@ fn converge(rig: &mut Rig, p: &Problem, cap: u32) -> Converged {
     let floats = PROGRESS_FLOATS as usize;
     let record = rig.device.create_buffer_shared(floats as u64 * 4);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-converge");
-    let n = rig.n as u32;
-    let lattice = Water {
-        lattice: [n; 3],
-        cell_size: rig.cell_size() as f32,
-        water: &rig.water,
-        faces: &rig.faces,
-        phi: rig.phi.as_ref(),
-    };
-    rig.solver
-        .prepare(&rig.device, &mut enc, &lattice, &rig.table, rig.pool_tiles)
-        .expect("prepares");
-    rig.solver
-        .solve(
-            &mut enc,
-            &lattice,
-            run_at!(rig, Stop::Converged(cap)),
-            &rig.table,
-            rig.pool_tiles,
-        )
-        .expect("solves");
+    rig.prepare(&mut enc);
+    rig.solve_on(&mut enc, Stop::Converged(cap));
     let progress = rig.solver.progress().expect("prepared");
     enc.copy_buffer_to_buffer(progress, &record, record.size);
     enc.commit_and_wait_completed();
-    let ptr = record.mapped_ptr().expect("shared record");
-    // SAFETY: the copy completed; the buffer holds PROGRESS_FLOATS floats.
-    let all = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), floats) };
+    let all: Vec<f32> = read(&record, floats);
     let iterations = all[1] as u32;
     Converged {
         f_norm: all[0],
@@ -1580,7 +1361,7 @@ fn solve_bits(
     solve_bits_under(rig, p, stop, cache, false)
 }
 
-/// [`solve_bits`], poisoning the solver's vectors outside its active tiles
+/// [`solve_bits`], poisoning the solver's vectors outside its active slots
 /// between the prepare and the solve when `poison`.
 fn solve_bits_under(
     rig: &mut Rig,
@@ -1598,49 +1379,31 @@ fn solve_bits_under(
         .take()
         .map(|cache| enc.begin_replay(&rig.device, cache))
         .is_some();
-    let n = rig.n as u32;
-    let lattice = Water {
-        lattice: [n; 3],
-        cell_size: rig.cell_size() as f32,
-        water: &rig.water,
-        faces: &rig.faces,
-        phi: rig.phi.as_ref(),
-    };
-    rig.solver
-        .prepare(&rig.device, &mut enc, &lattice, &rig.table, rig.pool_tiles)
-        .expect("prepares");
+    rig.prepare(&mut enc);
     if poison {
         rig.solver
-            .poison(&mut enc, rig.level, &rig.table, rig.pool_tiles);
+            .poison(&mut enc, &water_of!(rig), rig.level, &rig.fine.tiles);
     }
-    rig.solver
-        .solve(
-            &mut enc,
-            &lattice,
-            run_at!(rig, stop),
-            &rig.table,
-            rig.pool_tiles,
-        )
-        .expect("solves");
+    rig.solve_on(&mut enc, stop);
     if spanned {
         *cache = Some(enc.end_replay());
     }
     let progress = rig.solver.progress().expect("prepared");
     enc.copy_buffer_to_buffer(progress, &record, record.size);
     enc.commit_and_wait_completed();
-    let ptr = record.mapped_ptr().expect("shared record");
-    // SAFETY: the copy completed; the buffer holds PROGRESS_FLOATS floats.
-    let all = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>().cast_const(), floats) };
-    (bytemuck::cast_slice(&rig.pressure()).to_vec(), all.to_vec())
+    (
+        bytemuck::cast_slice(&rig.pressure()).to_vec(),
+        read(&record, floats),
+    )
 }
 
 /// A solve replayed from a recording (every round one gated segment the
 /// GPU switches off once the stop fires) gives the same pressure and the
 /// same stop record, bit for bit, as encoding it directly, on the engine's
 /// stop and at a fixed count, over frames whose problem changes. Once warm,
-/// a frame records nothing and runs no round directly. Two direct solves
-/// of one problem agree bit for bit too: the folded reductions sum in a
-/// fixed order.
+/// a frame records nothing, runs no round directly and validates the same
+/// prelude every frame. Two direct solves of one problem agree bit for bit
+/// too: the folded reductions sum in a fixed order.
 #[test]
 fn pressure_module_replay_matches_direct() {
     let (n, saved) = load_fixture(DAM_BREAK);
@@ -1653,6 +1416,7 @@ fn pressure_module_replay_matches_direct() {
         let mut none = None;
         let mut last = GpuReplayCache::default().stats();
         let mut last_template = replay.solver.template_stats();
+        let mut prelude = None;
         for frame in 0..6 {
             let p = &problems[frame % problems.len()];
             let (dp, dr) = solve_bits(&mut direct, p, stop, &mut none);
@@ -1696,7 +1460,7 @@ fn pressure_module_replay_matches_direct() {
                     "{stop:?} frame {frame}: no round runs directly"
                 );
                 let rounds = match stop {
-                    Stop::Converged(cap) | Stop::Fixed(cap) => u64::from(cap),
+                    Stop::Converged(cap) | Stop::Fixed(cap) => cap,
                 };
                 // The rounds are the template's executes, outside the frame
                 // recording: one walk, no build, one execute per chunk.
@@ -1706,7 +1470,7 @@ fn pressure_module_replay_matches_direct() {
                 );
                 assert_eq!(
                     template.executes - last_template.executes,
-                    manifold_gpu::template_chunks(rounds as u32, 32).count() as u64,
+                    manifold_gpu::template_chunks(rounds, 32).count() as u64,
                     "{stop:?} frame {frame}: one execute per chunk of rounds"
                 );
                 assert_eq!(
@@ -1719,17 +1483,13 @@ fn pressure_module_replay_matches_direct() {
                     (last_template.builds, last_template.command_writes),
                     "{stop:?} frame {frame}: a warm solve writes no command"
                 );
-                // The prepare and the prelude: `passes` of a one-round solve on
-                // the same stop, less the round.
-                let same_stop = |k| match stop {
-                    Stop::Converged(_) => Stop::Converged(k),
-                    Stop::Fixed(_) => Stop::Fixed(k),
-                };
-                let (prepare, one) = passes([64; 3], same_stop(1));
-                let round = passes([64; 3], same_stop(2)).1 - one;
+                // The prepare (the solver's passes and the coarse levels'
+                // world tile builds) and the prelude, the same every frame.
+                let validated = stats.replayed - last.replayed;
+                assert!(validated > 0, "{stop:?} frame {frame}: the prelude replays");
                 assert_eq!(
-                    stats.replayed - last.replayed,
-                    (prepare + one - round) as u64,
+                    *prelude.get_or_insert(validated),
+                    validated,
                     "{stop:?} frame {frame}: the warm solve validates its prelude"
                 );
             }
@@ -1757,9 +1517,8 @@ fn rearm_frame(
     plan: &GpuBuffer,
     cache: &mut Option<GpuReplayCache>,
 ) -> Vec<(Vec<u32>, Vec<u32>)> {
-    let cells = rig.n * rig.n * rig.n;
-    let pooled = pool_len(rig.pool_tiles) as usize;
-    let cells3 = rig.cells3();
+    let cells = rig.cells.len();
+    let pooled = rig.pool_floats();
     let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
     let density: Vec<f32> = p.f.iter().map(|f| 0.5 * f).collect();
     let rhs: [Vec<f32>; 2] = std::array::from_fn(|s| {
@@ -1781,38 +1540,26 @@ fn rearm_frame(
     // SAFETY: shared buffers sized for what is written; the last frame completed.
     unsafe {
         rig.water
-            .write(0, bytemuck::cast_slice(&to_pool(&water, cells3, &[0.0f32])));
+            .write(0, bytemuck::cast_slice(&rig.to_pool(&water, 0.0f32)));
         plan.write(0, bytemuck::cast_slice(&words));
         sentinel.write(
             0,
             bytemuck::cast_slice(&vec![SENTINEL; (sentinel.size / 4) as usize]),
         );
         for s in 0..2 {
-            rhs_buffers[s].write(
-                0,
-                bytemuck::cast_slice(&to_pool(&rhs[s], cells3, &[0.0f32])),
-            );
+            rhs_buffers[s].write(0, bytemuck::cast_slice(&rig.to_pool(&rhs[s], 0.0f32)));
             pressures[s].write(0, bytemuck::cast_slice(&vec![0u32; pooled]));
         }
     }
     rig.solver.set_clock_plan(plan);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-rearm");
-    let n = rig.n as u32;
-    let lattice = Water {
-        lattice: [n; 3],
-        cell_size: rig.cell_size() as f32,
-        water: &rig.water,
-        faces: &rig.faces,
-        phi: None,
-    };
-    rig.solver
-        .prepare(&rig.device, &mut enc, &lattice, &rig.table, rig.pool_tiles)
-        .expect("prepares");
+    rig.prepare(&mut enc);
     rig.solver.seed_records(&mut enc, sentinel);
     let spanned = cache
         .take()
         .map(|cache| enc.begin_replay(&rig.device, cache))
         .is_some();
+    let water = water_of!(rig);
     for s in 0..2 {
         let solve = Solve {
             rhs: &rhs_buffers[s],
@@ -1823,7 +1570,7 @@ fn rearm_frame(
             coarse_rhs: None,
         };
         rig.solver
-            .solve(&mut enc, &lattice, solve, &rig.table, rig.pool_tiles)
+            .solve(&mut enc, &water, solve, &rig.fine.tiles)
             .expect("solves");
         enc.copy_buffer_to_buffer(
             rig.solver.progress().expect("prepared"),
@@ -1838,7 +1585,7 @@ fn rearm_frame(
     (0..2)
         .map(|s| {
             (
-                from_pool(&read::<u32>(&pressures[s], pooled), cells3),
+                rig.dense_of(&read::<u32>(&pressures[s], pooled)),
                 read::<u32>(&records[s], PROGRESS_FLOATS as usize),
             )
         })
@@ -1869,7 +1616,7 @@ fn pressure_module_rearms_between_solves() {
     let direct_plan = direct.device.create_buffer_shared(48);
     let replay_plan = replay.device.create_buffer_shared(48);
     let bufs = |rig: &Rig| -> Vec<GpuBuffer> {
-        let cells = pool_len(rig.pool_tiles) * 4;
+        let cells = rig.pool_floats() as u64 * 4;
         let record = u64::from(PROGRESS_FLOATS) * 4;
         let sentinel = (u64::from(2 * MAX_ITERATIONS) * 4).max(record);
         [cells, cells, cells, cells, record, record, sentinel]
@@ -1927,7 +1674,7 @@ fn pressure_module_rearms_between_solves() {
                 );
             } else if live[s] {
                 assert!(
-                    (10.0..=16.0).contains(&iterations) && stopped == 1.0,
+                    (1.0..=16.0).contains(&iterations) && stopped == 1.0,
                     "frame {frame} {solve}: a live solve converges on its own"
                 );
             } else {
@@ -1955,11 +1702,11 @@ fn pressure_module_rearms_between_solves() {
     }
 }
 
-/// The solve over each level's active tiles equals the solve over every
-/// tile, bit for bit, in the pressure and the stop record, on the engine's
-/// stop and at a fixed count, direct and replayed, over Dam Break frames at
-/// 64³ and 25³ (odd sides: partial edge tiles); and the same with NaN
-/// written into every vector cell and fine partial outside the active tiles
+/// The solve over each level's active slots equals the solve over every
+/// held slot, bit for bit, in the pressure and the stop record, on the
+/// engine's stop and at a fixed count, direct and replayed, over Dam Break
+/// frames at 64³ and 25³ (a partial edge tile); and the same with NaN
+/// written into every vector cell and partial outside the active slots
 /// before the solve, so nothing the solve reads lies outside its lists
 /// (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 7 (Phase 2)); at Solve
 /// Level 0 and 1 (section 11 (Solve Level)).
@@ -2029,15 +1776,19 @@ fn resting_pool_problem(m: usize) -> Problem {
     Problem { frame: 0, water, f }
 }
 
-/// The engine's stop on every shipped problem: each solve stops on the
-/// tolerance, never the cap. The still and resting pools stop within 12
-/// iterations (measured 11), the Dam Break splash frames within 16 (measured
-/// 12 to 14). The stop reads the recursive residual, as the engine's PCG
-/// does, and f32 carries it below 1e-9 · |f|∞ on all of them.
+/// The engine's stop on every shipped problem, the Dam Break at 64³ and
+/// 128³: each solve stops on the tolerance, never the cap. The dense box
+/// solver with the exact coarsest inverse took 11 iterations on the still
+/// and resting pools and 12 to 14 on the Dam Break splash frames at 64³; the
+/// sparse levels take more (up to 25 on the pools), and more coarsest sweeps
+/// do not change that, so the bar of 26 catches a broken V-cycle, not a slow
+/// one. The counts print beside the dense ones. The stop reads the recursive
+/// residual, as the engine's PCG does, and f32 carries it below
+/// 1e-9 · |f|∞ on all of them.
 #[test]
 fn pressure_module_converges_on_the_engine_tolerance() {
     let mut failures = Vec::new();
-    let mut problems: Vec<(String, Problem)> = Vec::new();
+    let mut problems: Vec<(String, usize, Problem)> = Vec::new();
     for fixture in [
         DAM_BREAK,
         "deep_pool_pressure_problems",
@@ -2045,31 +1796,39 @@ fn pressure_module_converges_on_the_engine_tolerance() {
     ] {
         let (n, saved) = load_fixture(fixture);
         for p in &saved {
-            problems.push((fixture.to_string(), resample(p, n, 64)));
+            problems.push((fixture.to_string(), 64, resample(p, n, 64)));
         }
     }
-    problems.push(("still_pool".into(), still_pool_problem(64)));
-    problems.push(("resting_pool".into(), resting_pool_problem(64)));
-    for (name, p) in &problems {
-        let mut rig = Rig::new(64);
+    let (n, saved) = load_fixture(DAM_BREAK);
+    for p in &saved {
+        problems.push((DAM_BREAK.to_string(), 128, resample(p, n, 128)));
+    }
+    problems.push(("still_pool".into(), 64, still_pool_problem(64)));
+    problems.push(("resting_pool".into(), 64, resting_pool_problem(64)));
+    for (name, m, p) in &problems {
+        let mut rig = Rig::new(*m);
         let c = converge(&mut rig, p, MAX_ITERATIONS);
         let rel: Vec<String> = c
             .norms
             .iter()
             .map(|r| format!("{:.1e}", r / c.f_norm))
             .collect();
+        let (limit, before) = if name.ends_with("pool") {
+            (26, "11")
+        } else {
+            (26, "12 to 14 at 64³")
+        };
         println!(
-            "curve {name} frame {}: |f| {:.3e} it {} stopped {} rel {}",
+            "curve {name} {m}³ frame {}: |f| {:.3e} it {} (dense solver {before}) stopped {} rel {}",
             p.frame,
             c.f_norm,
             c.iterations,
             c.stopped,
             rel.join(" ")
         );
-        let limit = if name.ends_with("pool") { 12 } else { 16 };
         if !c.stopped || c.iterations > limit {
             failures.push(format!(
-                "{name} frame {}: {} iterations, stopped {}",
+                "{name} {m}³ frame {}: {} iterations, stopped {}",
                 p.frame, c.iterations, c.stopped
             ));
         }
@@ -2077,12 +1836,12 @@ fn pressure_module_converges_on_the_engine_tolerance() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// The warm start: a solve starts from the pressure its buffer holds. A Dam
-/// Break problem solved again from its own converged pressure stops on the
-/// tolerance in fewer iterations than cold. It need not stop at the start:
-/// the stop reads the recursive residual down to 1e-9 of |f|∞, and the
-/// converged f32 pressure's own residual (printed) sits far above that.
-/// Each later saved frame from the frame before's converged pressure,
+/// The warm start: a solve starts from the pooled pressure its buffer
+/// holds. A Dam Break problem solved again from its own converged pressure
+/// stops on the tolerance in fewer iterations than cold. It need not stop at
+/// the start: the stop reads the recursive residual down to 1e-9 of |f|∞,
+/// and the converged f32 pressure's own residual (printed) sits far above
+/// that. Each later saved frame from the frame before's converged pressure,
 /// beside cold, printed; over the run warm takes at most cold's iterations.
 #[test]
 fn pressure_module_warm_start_stops_sooner() {
@@ -2223,13 +1982,12 @@ fn cpu_row(water: &[bool], phi: Option<&[f32]>, c: usize, n: usize, h: f32) -> [
     row
 }
 
-/// The rows prepare assembles are what the face stencil computed per sweep:
-/// the fused (assembled once) operator against the unfused (recomputed)
-/// one, with the ghost rows and plain, on a Dam Break frame at 64 and the
-/// odd side 37. The weights and the plain diagonal match the CPU bit for
-/// bit; the ghost diagonal's θ is a division the GPU rounds its own way, so
-/// that slot is within `GHOST_ULPS`. (GPU against GPU, the row solve was
-/// bit-equal to the stencil solve it replaced, with and without φ.)
+/// The rows prepare assembles are what the face stencil computed per sweep,
+/// with the ghost rows and plain, on a Dam Break frame at 64 and the odd
+/// side 37: every cell of an active slot (the only rows a solve reads). The
+/// weights and the plain diagonal match the CPU bit for bit; the ghost
+/// diagonal's θ is a division the GPU rounds its own way, so that slot is
+/// within `GHOST_ULPS`.
 #[test]
 fn pressure_module_rows_match_the_stencil() {
     const GHOST_ULPS: u32 = 2;
@@ -2244,24 +2002,24 @@ fn pressure_module_rows_match_the_stencil() {
                 rig = rig.with_phi(&phi);
             }
             rig.run(&problem, 1, false);
-            let cells = m * m * m;
-            let pooled = pool_len(rig.pool_tiles) as usize;
+            let pooled = rig.pool_floats();
             let copy = rig
                 .device
                 .create_buffer_shared((pooled * ROW_FLOATS * 4) as u64);
             let mut enc = rig.device.create_encoder("gpu-flip-pressure-rows");
             rig.solver.copy_rows(&mut enc, &copy);
             enc.commit_and_wait_completed();
-            let ptr = copy.mapped_ptr().expect("shared rows");
-            // SAFETY: the copy completed; the buffer holds one row per pool cell.
-            let pooled_rows = unsafe {
-                std::slice::from_raw_parts(ptr.cast::<[f32; ROW_FLOATS]>().cast_const(), pooled)
-            };
-            let rows = from_pool(pooled_rows, rig.cells3());
+            let rows = rig.dense_of(&read::<[f32; ROW_FLOATS]>(&copy, pooled));
+            let (flags, _, _) = rig.slot_words();
             let mut wrong = 0;
             let mut ghosted = 0;
             let mut ulps = 0;
-            for (c, got) in rows.iter().enumerate().take(cells) {
+            let mut compared = 0;
+            for (c, got) in rows.iter().enumerate() {
+                if flags[rig.index[c] / TILE_CELLS as usize] == 0 {
+                    continue;
+                }
+                compared += 1;
                 let expected = cpu_row(&problem.water, with_phi.then_some(phi.as_slice()), c, m, h);
                 let exact = (0..ROW_FLOATS)
                     .filter(|&k| k != 6)
@@ -2281,7 +2039,17 @@ fn pressure_module_rows_match_the_stencil() {
                 }
                 ghosted += usize::from(expected[6].to_bits() != expected[7].to_bits());
             }
-            println!("rows {m}³ phi {with_phi}: ghost diagonal at most {ulps} ulp from the CPU's");
+            println!(
+                "rows {m}³ phi {with_phi}: {compared} cells, ghost diagonal at most {ulps} ulp from the CPU's"
+            );
+            assert!(
+                problem
+                    .water
+                    .iter()
+                    .zip(&rig.index)
+                    .all(|(&w, &at)| !w || flags[at / TILE_CELLS as usize] != 0),
+                "{m}³: every water cell's slot is active"
+            );
             assert_eq!(
                 wrong, 0,
                 "{m}³ with phi {with_phi}: rows differ from the stencil"
@@ -2299,9 +2067,7 @@ fn pressure_module_rows_match_the_stencil() {
 
 /// Solve Level 0 is the fine solve: on the first three Dam Break problems at
 /// 64³ the engine's stop lands within the Dam Break bar of 16 iterations,
-/// never on the cap, and a run repeats bit for bit. The value-level pin is
-/// [`pressure_module_matches_reference_64`] (3 and 8 iterations against the
-/// f64 reference).
+/// never on the cap, and a run repeats bit for bit.
 #[test]
 fn gpu_flip_solve_level_zero_is_the_fine_step() {
     let (n, saved) = load_fixture(DAM_BREAK);
@@ -2341,181 +2107,6 @@ fn gpu_flip_solve_level_zero_is_the_fine_step() {
     assert!(failures.is_empty(), "level 0 moved: {failures:#?}");
 }
 
-/// The solve on V-cycle level 1 against the reference run there
-/// (`scripts/mgpcg_reference.py FIXTURE --solve-level 1 --iterations 3,8,16`):
-/// the level's own residual, at the fine pins' bars.
-#[test]
-fn pressure_module_solve_level_matches_reference_64() {
-    check_at(
-        DAM_BREAK,
-        64,
-        1,
-        &[
-            (0, 4.898e-03, 7.396e-08),
-            (15, 1.253e-02, 5.298e-07),
-            (30, 2.716e-02, 6.876e-07),
-            (45, 9.892e-03, 1.073e-06),
-            (60, 2.282e-02, 1.595e-06),
-            (90, 1.042e-02, 3.412e-07),
-            (120, 9.030e-03, 1.300e-06),
-        ],
-    );
-}
-
-#[test]
-fn pressure_module_solve_level_matches_reference_128() {
-    check_at(
-        DAM_BREAK,
-        128,
-        1,
-        &[
-            (0, 1.500e-02, 5.702e-07),
-            (15, 2.760e-02, 4.391e-06),
-            (30, 7.460e-02, 1.074e-05),
-            (45, 3.245e-02, 9.446e-06),
-            (60, 3.688e-02, 1.074e-05),
-            (90, 1.972e-02, 5.322e-06),
-            (120, 1.942e-02, 8.970e-06),
-        ],
-    );
-}
-
-/// Odd and uneven sides at level 1: the virtual solid cell past an odd side
-/// restricts as the script pads it.
-#[test]
-fn pressure_module_solve_level_matches_reference_odd_sides() {
-    check_at(
-        DAM_BREAK,
-        25,
-        1,
-        &[
-            (0, 3.575e-04, 1.371e-10),
-            (15, 8.813e-04, 8.661e-10),
-            (30, 1.163e-03, 1.613e-09),
-            (45, 1.510e-03, 3.253e-09),
-            (60, 1.838e-03, 7.043e-09),
-            (90, 1.755e-03, 1.049e-08),
-            (120, 4.252e-04, 1.184e-09),
-        ],
-    );
-    check_at(
-        DAM_BREAK,
-        37,
-        1,
-        &[
-            (0, 2.826e-03, 2.159e-08),
-            (15, 2.816e-03, 3.288e-08),
-            (30, 6.902e-03, 1.761e-07),
-            (45, 4.523e-03, 3.903e-08),
-            (60, 2.012e-03, 1.056e-08),
-            (90, 4.742e-03, 2.070e-08),
-            (120, 4.631e-03, 7.286e-08),
-        ],
-    );
-    check_at(
-        DAM_BREAK,
-        40,
-        1,
-        &[
-            (0, 4.102e-03, 6.875e-08),
-            (15, 4.303e-03, 3.565e-08),
-            (30, 6.129e-03, 7.271e-08),
-            (45, 5.492e-03, 2.154e-07),
-            (60, 4.579e-03, 7.953e-08),
-            (90, 7.210e-03, 1.326e-07),
-            (120, 4.939e-03, 2.259e-07),
-        ],
-    );
-}
-
-/// The divergence left on the fine faces after a project from the fine
-/// pressure P·p₁: per cell f − L₀(P p₁) on the box (the step's project is
-/// that subtraction, the walls closed), as |·|∞ over |f|∞, its 2-norm over
-/// |f|₂, and the largest box mean over a coarse cell's water children over
-/// |f|∞, beside the same box mean of f itself. Level 0 is the side column.
-/// The coarse solve guarantees the Rᵀ-weighted means, not the box means or
-/// the fine remainder, and a particle divergence is mostly finer than a
-/// coarse cell: level 1 leaves the cell-scale divergence in place (the
-/// measured ratios sit near 1), which is the trade the level makes. The
-/// ceilings are pinned from the run that introduced the level (every Dam
-/// Break problem at 64³ on the engine's stop); a change that raises one
-/// fails.
-#[test]
-fn gpu_flip_solve_level_divergence_bound() {
-    // (frame, |r|∞/|f|∞ at level 1, largest box mean / |f|∞ at level 1) plus 5%.
-    const CEILINGS: [(u32, f64, f64); 7] = [
-        (0, 1.542, 1.379),
-        (15, 1.220, 0.7301),
-        (30, 1.050, 0.5687),
-        (45, 1.172, 0.5434),
-        (60, 1.055, 0.8567),
-        (90, 1.017, 0.8210),
-        (120, 1.043, 0.9151),
-    ];
-    let (n, saved) = load_fixture(DAM_BREAK);
-    let m = 64;
-    let mut rigs = [Rig::new(m), Rig::new(m).at_level(1)];
-    let mut failures = Vec::new();
-    for (p, &(frame, inf_ceiling, mean_ceiling)) in saved.iter().zip(&CEILINGS) {
-        assert_eq!(p.frame, frame);
-        let problem = resample(p, n, m);
-        let f_inf = problem
-            .f
-            .iter()
-            .map(|v| f64::from(v.abs()))
-            .fold(0.0, f64::max);
-        let f64s: Vec<f64> = problem.f.iter().map(|&v| f64::from(v)).collect();
-        let f_mean = box_means(&f64s, &problem.water, m)
-            .into_iter()
-            .map(f64::abs)
-            .fold(0.0, f64::max)
-            / f_inf;
-        println!("divergence bound frame {frame:3}: largest box mean of f/|f|∞ {f_mean:.4e}");
-        let mut got = [(0.0, 0.0, 0.0); 2];
-        for (level, rig) in rigs.iter_mut().enumerate() {
-            let c = converge(rig, &problem, MAX_ITERATIONS);
-            assert!(
-                c.stopped,
-                "frame {frame} level {level}: {} iterations to the cap",
-                c.iterations
-            );
-            let r = fine_remainder(
-                &rig.pressure(),
-                &problem.water,
-                &problem.f,
-                m,
-                rig.cell_size(),
-            );
-            let inf = r.iter().map(|v| v.abs()).fold(0.0, f64::max) / f_inf;
-            let two = residual(
-                &rig.pressure(),
-                &problem.water,
-                &problem.f,
-                m,
-                rig.cell_size(),
-            );
-            let mean = box_means(&r, &problem.water, m)
-                .into_iter()
-                .map(f64::abs)
-                .fold(0.0, f64::max)
-                / f_inf;
-            got[level] = (inf, two, mean);
-            println!(
-                "divergence bound frame {frame:3} level {level}: {} iterations; |r|∞/|f|∞ {inf:.4e}, |r|₂/|f|₂ {two:.4e}, largest box mean/|f|∞ {mean:.4e}",
-                c.iterations
-            );
-        }
-        let (inf, _, mean) = got[1];
-        if inf > inf_ceiling || mean > mean_ceiling {
-            failures.push(format!("frame {frame}: |r|∞/|f|∞ {inf:.4e} (ceiling {inf_ceiling:.4e}), box mean {mean:.4e} (ceiling {mean_ceiling:.4e})"));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "the level 1 remainder rose: {failures:#?}"
-    );
-}
-
 /// Per cell f − L p on the water (zero off it): the divergence a project
 /// from `p` leaves, with air at zero pressure and the box walls closed.
 fn fine_remainder(p: &[f32], water: &[bool], f: &[f32], n: usize, h: f64) -> Vec<f64> {
@@ -2542,41 +2133,10 @@ fn fine_remainder(p: &[f32], water: &[bool], f: &[f32], n: usize, h: f64) -> Vec
         .collect()
 }
 
-/// The mean of `r` over each level-1 cell's water children (zero with none).
-fn box_means(r: &[f64], water: &[bool], n: usize) -> Vec<f64> {
-    let c = n.div_ceil(2);
-    (0..c * c * c)
-        .map(|i| {
-            let at = [i % c, (i / c) % c, i / (c * c)];
-            let (mut sum, mut count) = (0.0, 0);
-            for child in 0..8 {
-                let q = [
-                    2 * at[0] + (child & 1),
-                    2 * at[1] + (child >> 1 & 1),
-                    2 * at[2] + (child >> 2),
-                ];
-                if q.iter().any(|&v| v >= n) {
-                    continue;
-                }
-                let cell = q[0] + n * (q[1] + n * q[2]);
-                if water[cell] {
-                    sum += r[cell];
-                    count += 1;
-                }
-            }
-            if count == 0 {
-                0.0
-            } else {
-                sum / f64::from(count)
-            }
-        })
-        .collect()
-}
-
 /// The engine's stop at Solve Levels 0 and 1 on every shipped problem: each
 /// solve stops on the tolerance, never the cap, within the fine level's bar
 /// (pools 12 iterations, the rest 16); the counts side by side. The deepest
-/// level each lattice offers is levels − 2, and that level stops too.
+/// level a pool offers is levels − 2, and that level stops too.
 #[test]
 fn pressure_module_solve_level_converges_on_the_engine_tolerance() {
     let mut failures = Vec::new();
@@ -2593,17 +2153,18 @@ fn pressure_module_solve_level_converges_on_the_engine_tolerance() {
     }
     problems.push(("still_pool".into(), still_pool_problem(64)));
     problems.push(("resting_pool".into(), resting_pool_problem(64)));
-    let deepest = max_solve_level([64; 3]);
+    let deepest = max_solve_level(512);
     assert_eq!(
         deepest, 3,
-        "64³ halves to 32, 16, 8, 4: the gradient runs on 0 to 3"
+        "a 64³ box's 512 tiles halve to 256, 128, 64, 32: the gradient runs on 0 to 3"
     );
     for (name, p) in &problems {
         let mut counts = Vec::new();
         for level in [0, 1, deepest] {
             let mut rig = Rig::new(64).at_level(level);
             let c = converge(&mut rig, p, MAX_ITERATIONS);
-            let limit = if name.ends_with("pool") { 12 } else { 16 };
+            // The same bar as the level-0 convergence test.
+            let limit = 26;
             if !c.stopped || (level <= 1 && c.iterations > limit) {
                 failures.push(format!(
                     "{name} frame {} level {level}: {} iterations, stopped {}",
@@ -2625,9 +2186,9 @@ fn pressure_module_solve_level_converges_on_the_engine_tolerance() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// A level the lattice lacks is refused by name before any GPU work, at the
+/// A level the pool lacks is refused by name before any GPU work, at the
 /// solver and at the step's reading of the param; the deepest level is the
-/// one above the exactly-solved coarsest.
+/// one above the coarsest.
 #[test]
 fn pressure_module_refuses_a_level_past_the_coarsest() {
     use super::gpu_flip_step::read_solve_level;
@@ -2641,39 +2202,29 @@ fn pressure_module_refuses_a_level_past_the_coarsest() {
         .collect();
     rig.upload(&water, &problem.f);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-refusal");
-    let lattice = Water {
-        lattice: [64; 3],
-        cell_size: rig.cell_size() as f32,
-        water: &rig.water,
-        faces: &rig.faces,
-        phi: None,
-    };
-    rig.solver
-        .prepare(&rig.device, &mut enc, &lattice, &rig.table, rig.pool_tiles)
-        .expect("prepares");
+    rig.prepare(&mut enc);
     let refused = rig
         .solver
         .solve(
             &mut enc,
-            &lattice,
+            &water_of!(rig),
             run_at!(rig, Stop::Fixed(1)),
-            &rig.table,
-            rig.pool_tiles,
+            &rig.fine.tiles,
         )
-        .expect_err("level 4 on 64³");
+        .expect_err("level 4 with 512 tiles");
     assert_eq!(
         refused,
-        "Coarse Solve must be 0 to 3 on a [64, 64, 64] lattice, not 4"
+        "Coarse Solve must be 0 to 3 with a pool of 512 tiles, not 4"
     );
     assert_eq!(
-        read_solve_level(4.0, [64; 3]).expect_err("the step's reading"),
+        read_solve_level(4.0, 512).expect_err("the step's reading"),
         refused
     );
-    assert_eq!(read_solve_level(3.0, [64; 3]), Ok(3));
-    assert_eq!(read_solve_level(1.0, [25; 3]), Ok(1));
+    assert_eq!(read_solve_level(3.0, 512), Ok(3));
+    assert_eq!(read_solve_level(1.0, 64), Ok(1));
     assert!(
-        read_solve_level(3.0, [25; 3]).is_err(),
-        "25³ halves to 13, 7, 4: level 3 is the coarsest"
+        read_solve_level(3.0, 64).is_err(),
+        "64 tiles halve to 32, 16, 8: level 3 is the coarsest"
     );
 }
 
@@ -2803,7 +2354,7 @@ fn chunk_solve(
     cache: &mut Option<GpuReplayCache>,
 ) -> ChunkSolve {
     let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
-    let pooled = pool_len(rig.pool_tiles) as usize;
+    let pooled = rig.pool_floats();
     let scalar_bytes = u64::from(2 * MAX_ITERATIONS) * 4;
     let record_bytes = u64::from(PROGRESS_FLOATS) * 4;
     let sentinel = rig
@@ -2820,31 +2371,13 @@ fn chunk_solve(
     let scalars = rig.device.create_buffer_shared(scalar_bytes);
     let record = rig.device.create_buffer_shared(record_bytes);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-chunk-ranges");
-    let n = rig.n as u32;
-    let lattice = Water {
-        lattice: [n; 3],
-        cell_size: rig.cell_size() as f32,
-        water: &rig.water,
-        faces: &rig.faces,
-        phi: rig.phi.as_ref(),
-    };
-    rig.solver
-        .prepare(&rig.device, &mut enc, &lattice, &rig.table, rig.pool_tiles)
-        .expect("prepares");
+    rig.prepare(&mut enc);
     rig.solver.seed_records(&mut enc, &sentinel);
     let spanned = cache
         .take()
         .map(|c| enc.begin_replay(&rig.device, c))
         .is_some();
-    rig.solver
-        .solve(
-            &mut enc,
-            &lattice,
-            run_at!(rig, stop),
-            &rig.table,
-            rig.pool_tiles,
-        )
-        .expect("solves");
+    rig.solve_on(&mut enc, stop);
     if spanned {
         *cache = Some(enc.end_replay());
     }
@@ -2875,5 +2408,226 @@ fn chunk_solve(
         record: words(&record),
         pressure: read::<u32>(&rig.pressure, pooled),
         vectors: vectors.iter().map(words).collect(),
+    }
+}
+
+// ── World-tile levels (docs/WATER_INFINITE_DOMAIN_DESIGN.md section 7) ──────
+
+/// Every coarse level prepare builds equals a CPU mirror of the parent
+/// build, on a sheet of tiles and on a line, both across the origin: the
+/// parents (tile >> 1) of the level below's held tiles keyed into an empty
+/// table (keys and entry slots), slot j for the j-th key in table order with
+/// its tile and its 27 neighbours, each slot's 8 children (the level below's
+/// slots of tiles 2t + (c & 1, (c >> 1) & 1, c >> 2), NONE where absent),
+/// the solver's parent of each slot below, and the held count with no
+/// shortfall.
+#[test]
+fn pressure_levels_mirror_the_parent_build() {
+    let device = test_device();
+    let sheet: Vec<[i32; 3]> = (-2..=2)
+        .flat_map(|z| (-3..=3).map(move |x| [x, -1, z]))
+        .collect();
+    let line: Vec<[i32; 3]> = (-4..=2).map(|x| [x, 2, -1]).collect();
+    for (name, tiles) in [("sheet", sheet), ("line", line)] {
+        let h = 0.25;
+        let fine = FineTiles::build(&device, h, &tiles);
+        let pool = fine.tiles.pool_tiles();
+        let pools = level_pools(pool);
+        // Dry water: the levels' tables need only the tiles.
+        let dry = device.create_buffer_shared(pool_len(pool) * 32);
+        dry.zero_fill();
+        let mut solver = PressureSolver::default();
+        solver.prepare_pipelines(&device);
+        let mut enc = device.create_encoder("pressure levels mirror");
+        let water = Water {
+            cell_size: h,
+            water: &dry,
+            faces: &dry,
+            phi: None,
+        };
+        solver
+            .prepare(&device, &mut enc, &water, &fine.tiles)
+            .expect("prepares");
+        let parents: Vec<GpuBuffer> = (1..pools.len())
+            .map(|level| {
+                let from = solver.level_parents(level).expect("a coarse level");
+                let into = device.create_buffer_shared(from.size);
+                enc.copy_buffer_to_buffer(from, &into, from.size);
+                into
+            })
+            .collect();
+        enc.commit_and_wait_completed();
+        let mut below = fine.tile_of.clone();
+        let mut below_slot = fine.slot_of.clone();
+        for level in 1..pools.len() {
+            let at = solver.level_tiles(level).expect("a coarse level");
+            let p = pools[level];
+            assert_eq!(at.pool_tiles(), p, "{name} level {level}: the pool");
+            let wanted: BTreeSet<[i32; 3]> = below.iter().map(|t| t.map(|c| c >> 1)).collect();
+            assert!(
+                wanted.len() <= p as usize,
+                "{name} level {level}: the pool holds every parent"
+            );
+            let entries = table_entries(p);
+            let mut keys = vec![EMPTY; entries as usize];
+            for &t in &wanted {
+                assert!(insert(&mut keys, tile_key(t)), "{name} level {level}: room");
+            }
+            let mut order: Vec<[i32; 3]> = wanted.into_iter().collect();
+            order.sort_by_key(|&t| find(&keys, tile_key(t)).expect("an inserted key"));
+            let held: Vec<([i32; 3], u32)> = order
+                .iter()
+                .enumerate()
+                .map(|(slot, &t)| (t, slot as u32))
+                .collect();
+            let want = table_words_of(p, &held);
+            let got: Vec<u32> = read(at.table(), table_words(p) as usize);
+            let e = entries as usize;
+            assert_eq!(
+                got[..2 * e],
+                want[..2 * e],
+                "{name} level {level}: keys and entry slots"
+            );
+            for &(_, slot) in &held {
+                let row = slot_row_word(entries, slot) as usize;
+                assert_eq!(
+                    got[row..row + 4],
+                    want[row..row + 4],
+                    "{name} level {level}: slot {slot}'s row"
+                );
+                let row = neighbour_row_word(entries, p, slot) as usize;
+                assert_eq!(
+                    got[row..row + 27],
+                    want[row..row + 27],
+                    "{name} level {level}: slot {slot}'s neighbours"
+                );
+            }
+            let rows: Vec<u32> = read(at.child_rows().expect("children rows"), 8 * p as usize);
+            for &(t, slot) in &held {
+                for c in 0..8 {
+                    let child: [i32; 3] = std::array::from_fn(|a| 2 * t[a] + ((c >> a) & 1));
+                    let want = below_slot.get(&child).copied().unwrap_or(NONE);
+                    assert_eq!(
+                        rows[8 * slot as usize + c as usize],
+                        want,
+                        "{name} level {level}: slot {slot}'s child {c}"
+                    );
+                }
+            }
+            let here: HashMap<[i32; 3], u32> = held.iter().copied().collect();
+            let up: Vec<u32> = read(&parents[level - 1], below.len());
+            for (slot, t) in below.iter().enumerate() {
+                assert_eq!(
+                    up[slot],
+                    here[&t.map(|c| c >> 1)],
+                    "{name} level {level}: the parent of slot {slot} below"
+                );
+            }
+            let counts: Vec<u32> = read(at.counts(), count_words(0) as usize);
+            assert_eq!(
+                counts[rank_count_word(0)],
+                held.len() as u32,
+                "{name} level {level}: held"
+            );
+            assert_eq!(
+                counts[exhausted_word(0)],
+                0,
+                "{name} level {level}: no shortfall"
+            );
+            println!("{name} level {level}: {} of {p} slots held", held.len());
+            below = order;
+            below_slot = here;
+        }
+    }
+}
+
+/// The V-cycle is a symmetric operator M: ⟨M x, y⟩ = ⟨x, M y⟩ to f32
+/// rounding for two random right-hand sides, plain and with the ghost rows,
+/// on a small sparse set across the origin: the 8 tiles around it (a 16³
+/// cube, whose 8 parents stay apart at every level) and a pair of tiles off
+/// to one side, water in each block but its outer layer. Level 1 holds 5 of
+/// the 10 parents, so restriction and prolongation both skip the orphaned
+/// tiles. M x is z after a cold first iteration on right-hand side x.
+#[test]
+fn pressure_vcycle_is_symmetric() {
+    let mut tiles: Vec<[i32; 3]> = Vec::new();
+    for z in -1..=0 {
+        for y in -1..=0 {
+            for x in -1..=0 {
+                tiles.push([x, y, z]);
+            }
+        }
+    }
+    tiles.extend([[3, -2, 1], [4, -2, 1]]);
+    let cells: Vec<[i32; 3]> = tiles.iter().flat_map(|&t| tile_cells(t)).collect();
+    let set: HashSet<[i32; 3]> = cells.iter().copied().collect();
+    let within =
+        |p: [i32; 3], lo: [i32; 3], hi: [i32; 3]| (0..3).all(|a| p[a] >= lo[a] && p[a] <= hi[a]);
+    let water: Vec<f32> = cells
+        .iter()
+        .map(|&p| {
+            let wet = within(p, [-7; 3], [6; 3]) || within(p, [25, -15, 9], [38, -10, 14]);
+            f32::from(u8::from(wet))
+        })
+        .collect();
+    let spread = |c: usize, seed: u64| {
+        ((c as u64 ^ seed).wrapping_mul(2_654_435_761) >> 8) as f32 % 1000.0 / 500.0 - 1.0
+    };
+    let random = |seed: u64| -> Vec<f32> {
+        (0..cells.len())
+            .map(|c| if water[c] > 0.5 { spread(c, seed) } else { 0.0 })
+            .collect()
+    };
+    let (x, y) = (random(0x51), random(0xa7));
+    let h = 0.125;
+    let phi: Vec<f32> = (0..cells.len())
+        .map(|c| {
+            let s = 0.5 * (spread(c, 0x3c) + 1.0);
+            if water[c] > 0.5 {
+                -(h as f32) * (0.01 + 0.89 * s)
+            } else {
+                h as f32 * (0.05 + 0.9 * s)
+            }
+        })
+        .collect();
+    for ghost in [false, true] {
+        let mut rig = Rig::on(cells.clone(), &tiles, h, |p| set.contains(&p));
+        if ghost {
+            rig = rig.with_phi(&phi);
+        }
+        let mut precondition = |v: &[f32]| -> Vec<f32> {
+            rig.upload(&water, v);
+            let mut enc = rig.device.create_encoder("gpu-flip-pressure-symmetry");
+            rig.prepare(&mut enc);
+            rig.solve_on(&mut enc, Stop::Fixed(1));
+            let z = rig.solver.work_vectors().expect("prepared")[1];
+            let into = rig.device.create_buffer_shared(z.size);
+            enc.copy_buffer_to_buffer(z, &into, z.size);
+            enc.commit_and_wait_completed();
+            rig.dense_of(&read::<f32>(&into, rig.pool_floats()))
+        };
+        let (mx, my) = (precondition(&x), precondition(&y));
+        let short = read::<u32>(
+            rig.solver.level_tiles(1).expect("level 1").counts(),
+            count_words(0) as usize,
+        )[exhausted_word(0)];
+        assert_ne!(short & POOL_SHORT, 0, "level 1 runs out of slots");
+        let dot = |a: &[f32], b: &[f32]| {
+            a.iter()
+                .zip(b)
+                .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                .sum::<f64>()
+        };
+        let norm = |a: &[f32]| dot(a, a).sqrt();
+        let (mxy, xmy) = (dot(&mx, &y), dot(&x, &my));
+        let scale = norm(&mx) * norm(&y);
+        println!(
+            "V-cycle symmetry ghost {ghost}: ⟨Mx, y⟩ {mxy:.6e}, ⟨x, My⟩ {xmy:.6e}, scale {scale:.3e}"
+        );
+        assert!(scale > 0.0, "ghost {ghost}: the V-cycle is not zero");
+        assert!(
+            (mxy - xmy).abs() <= 1e-4 * scale,
+            "ghost {ghost}: ⟨Mx, y⟩ {mxy:e} against ⟨x, My⟩ {xmy:e} (scale {scale:e})"
+        );
     }
 }

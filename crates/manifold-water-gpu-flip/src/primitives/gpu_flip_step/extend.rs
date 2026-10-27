@@ -1,7 +1,8 @@
-//! Face extension into air over the allocated tiles.
+//! Face extension into air over the held slots.
 
 use super::*;
-use manifold_water_liquid::tile_storage::tile_total;
+use manifold_water_liquid::tile_storage::TILE_CELLS;
+use manifold_water_liquid::world_tiles::{allocated_args_offset, replay_range_index};
 
 /// `layers` extension passes from `source` into `target`, ping-ponging
 /// through `scratch` so the last pass lands in `target`. `source` may be
@@ -11,7 +12,7 @@ pub(super) fn extend(
     pipes: &Pipelines,
     clock_plan: &GpuBuffer,
     params: &StepParams,
-    table: &TileTable,
+    tiles: &WorldTiles,
     [source, target, scratch]: [&GpuBuffer; 3],
     layers: u32,
     label: &str,
@@ -23,14 +24,15 @@ pub(super) fn extend(
         enc.copy_buffer_to_buffer(source, scratch, source.size.min(scratch.size));
         from = scratch;
     }
-    // The replayed dispatch covers every tile and its threads past the
-    // allocated list return; the direct one reads the list's own triple.
-    let every_tile = groups(tile_total(params.n) * 512);
-    let allocated = allocated_args_offset(table.ring_max);
-    let gate = (params.step_in_tick > 0 && indirect_extend()).then_some(table);
-    if let Some(table) = gate {
+    // The replayed dispatch covers every pool slot and its threads past the
+    // held list return; the direct one reads the list's own triple.
+    let every_slot = groups(u64::from(tiles.pool_tiles()) * u64::from(TILE_CELLS));
+    let ring = tiles.reach().ring_max;
+    let allocated = allocated_args_offset(ring);
+    let gate = params.step_in_tick > 0 && indirect_extend();
+    if gate {
         debug_assert_eq!(params.extension_layers, layers);
-        enc.begin_gated_segment(&table.args, extension_range_index(table.ring_max), layers);
+        enc.begin_gated_segment(tiles.args(), replay_range_index(ring), layers);
     }
     for i in 0..layers {
         let to = if (layers - i) % 2 == 1 {
@@ -43,28 +45,28 @@ pub(super) fn extend(
             uniform(params),
             buffer(3, from),
             buffer(4, to),
-            buffer(29, &table.by_ring),
-            buffer(30, &table.counts),
-            buffer(51, &table.table),
+            buffer(29, &tiles.lists().by_rank),
+            buffer(30, tiles.counts()),
+            buffer(51, tiles.table()),
         ];
-        if let Some(table) = gate {
+        if gate {
             // The first slot is normally active and keeps ordinary replay.
-            // Later slots run every tile's groups when active, zero groups
-            // otherwise; tiles_lists already writes that decision each slot.
+            // Later slots run every slot's groups when active, zero groups
+            // otherwise; the build's finish writes that decision each slot.
             enc.dispatch_compute_gated(
                 &pipes.extend,
                 &bindings,
-                every_tile,
-                &table.args,
+                every_slot,
+                tiles.args(),
                 allocated,
                 label,
             );
         } else {
-            enc.dispatch_compute_indirect(&pipes.extend, &bindings, &table.args, allocated, label);
+            enc.dispatch_compute_indirect(&pipes.extend, &bindings, tiles.args(), allocated, label);
         }
         from = to;
     }
-    if gate.is_some() {
+    if gate {
         enc.end_gated_segments();
     }
 }

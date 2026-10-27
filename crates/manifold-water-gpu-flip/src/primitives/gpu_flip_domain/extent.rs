@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
 use crate::primitives::gpu_flip_domain::gpu_flip_geometry;
+use crate::primitives::gpu_flip_domain::region_sites::RegionSites;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
@@ -33,6 +34,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("body_rows", 0.0);
     x.publish("dynamic_bodies", 0.0);
     x.publish("region_count", 0.0);
+    x.publish("region_site_total", 0.0);
     x.publish("clock_obstacle_count", 0.0);
     x.publish("clock_source_count", 0.0);
     x.publish("live_hit_count", 0.0);
@@ -55,6 +57,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             size_of::<manifold_water_liquid::bodies::BodySupports>() as u64,
         ),
         ("regions", size_of::<LiquidBody>() as u64),
+        ("region_sites", size_of::<RegionSites>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
         ("clock_obstacles", 96),

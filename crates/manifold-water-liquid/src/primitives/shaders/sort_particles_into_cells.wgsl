@@ -22,11 +22,12 @@
 // record holds, capped at `params.count`. The dispatch is sized from the same
 // record, so no thread reads a slot past it.
 //
-// A bin's key is `sort_key(coord)`, defined by the source composed before this
-// body: the dense grid index of the bin, or (the step's tile pool) the pool
-// index `ts_cell_at(coord)` of its cell, with `bin_total` keys either way. A
-// pooled bin whose tile has no slot keys to the canonical index, the bucket
-// no stored cell reads.
+// A point's key is `sort_key_of(p)`, defined by the source composed before
+// this body: the dense grid index of the bin holding the point (clamped into
+// the grid), or (the world tiles) the pool index `ts_cell_at` of the world
+// cell holding it, with `bin_total` keys either way. A pooled point whose
+// tile has no slot keys to the canonical index, the bucket no stored cell
+// reads.
 
 struct CellRange {
     start: u32,
@@ -50,8 +51,9 @@ struct SortParams {
     pool_tiles: u32,
     // The word of `counts` holding the slots in use, or NO_COUNT_WORD.
     count_word: u32,
-    _pad1: u32,
-    _pad2: u32,
+    // H of the world-tile table (`ts_table_entries`); 0 when dense.
+    table_entries: u32,
+    _pad: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: SortParams;
@@ -105,12 +107,6 @@ fn is_live(i: u32) -> bool {
     return word != 0u && finite3(position_of(i));
 }
 
-fn bin_of(p: vec3<f32>) -> u32 {
-    let last = vec3<i32>(params.bins) - vec3<i32>(1);
-    let b = clamp(vec3<i32>(floor((p - params.bin_min) * params.inv_cell)), vec3<i32>(0), last);
-    return sort_key(b);
-}
-
 fn bin_start(b: u32) -> u32 {
     if b == 0u {
         return 0u;
@@ -135,7 +131,7 @@ fn count_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
         rank[i] = NO_RANK;
         return;
     }
-    rank[i] = atomicAdd(&cell_counts[bin_of(position_of(i))], 1u);
+    rank[i] = atomicAdd(&cell_counts[sort_key_of(position_of(i))], 1u);
 }
 
 @compute @workgroup_size(256)
@@ -174,7 +170,7 @@ fn scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gated_off() || i >= live_slots() || rank[i] == NO_RANK {
         return;
     }
-    let slot = bin_start(bin_of(position_of(i))) + rank[i];
+    let slot = bin_start(sort_key_of(position_of(i))) + rank[i];
     slot_input[slot] = i;
 }
 
@@ -194,7 +190,7 @@ fn stabilise(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let i = slot_input[s];
     // The bin the count and the scatter put input i in, by the same rule.
-    let b = bin_of(position_of(i));
+    let b = sort_key_of(position_of(i));
     let end = atomicLoad(&cell_counts[b]);
     let start = bin_start(b);
     var place = start;

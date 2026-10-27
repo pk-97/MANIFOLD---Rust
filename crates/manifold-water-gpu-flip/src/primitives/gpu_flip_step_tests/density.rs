@@ -1,7 +1,6 @@
 //! The density support source against the original.
 
 use super::*;
-use manifold_water_liquid::tile_storage::TILE_STORAGE;
 
 pub(super) fn density_support_sources() -> [String; 2] {
     const CULL: &str = "                    if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {\n                        continue;\n                    }\n";
@@ -12,11 +11,7 @@ pub(super) fn density_support_sources() -> [String; 2] {
         "density support predicate occurs once"
     );
     let original = source.replacen(CULL, "", 1);
-    [original.as_str(), source].map(|shader| {
-        with_stats_layout(&format!(
-            "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_STORAGE}\n{shader}"
-        ))
-    })
+    [original.as_str(), source].map(super::super::gpu_flip_step::step_source_with)
 }
 
 #[test]
@@ -112,7 +107,7 @@ pub(super) fn gpu_flip_density_support_matches_original() {
             pass.bind_ranges(&ranges)
                 .bind(2, &sorted, Layout::Dense)
                 .bind(6, &water, Layout::Cells)
-                .bind(9, &vec![distance; face_len()], Layout::Dense)
+                .bind(9, &vec![distance; face_len()], Layout::Records)
                 .bind(46, &[0_u32; 12], Layout::Dense)
                 .bind(5, &vec![f32::NAN; cell_len()], Layout::Cells);
             pass.table();

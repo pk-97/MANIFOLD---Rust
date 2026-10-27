@@ -1,12 +1,12 @@
 //! Buffer extent rule owned by this node.
 use crate::primitives::whitewater_step::StepShape;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::scene::world_tiles::pool_len;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::extent::{field_reads, whole};
 use manifold_water_liquid::primitives::face_sample_component::{pool_tiles_wire, pooled_bytes};
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
-use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
 use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
 use std::mem::size_of;
@@ -48,7 +48,7 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     let pool_tiles =
         pool_tiles_wire(|name, default| x.scalar(name, default)).map_err(Verdict::Refused)?;
-    let (face_bytes, table_bytes) = pooled_bytes(shape.face_cells, pool_tiles);
+    let (face_bytes, table_bytes) = pooled_bytes(pool_tiles);
     x.covers("tiles", table_bytes)?;
     x.covers("distance", pool_len(pool_tiles) * 4)?;
     if packed {

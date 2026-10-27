@@ -159,6 +159,8 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
                 ranges: &ranges,
                 scan: &scan,
                 plan: &plan,
+                // Tile counts with the exhausted word (1) clear.
+                tile_counts: &shared(&device, &[0u32; 4]),
                 step_record: None,
                 params: [4, 1, 2, 1],
             },
@@ -196,6 +198,8 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
             ranges: &ranges,
             scan: &scan,
             plan: &plan,
+            // Tile counts with the exhausted word (1) clear.
+            tile_counts: &shared(&device, &[0u32; 4]),
             step_record: None,
             params: [4, 1, 2, 1],
         },
@@ -253,6 +257,8 @@ fn particle_identity_multiple_substeps_keep_birth_ids() {
                 ranges: &ranges,
                 scan: &scan,
                 plan: &plan,
+                // Tile counts with the exhausted word (1) clear.
+                tile_counts: &shared(&device, &[0u32; 4]),
                 step_record: None,
                 params: [4, 1, 1, 1],
             },

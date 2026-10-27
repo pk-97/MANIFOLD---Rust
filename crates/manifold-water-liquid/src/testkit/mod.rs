@@ -7,3 +7,6 @@ pub mod fluid_role_source;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod marker_phi;
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod world_box;

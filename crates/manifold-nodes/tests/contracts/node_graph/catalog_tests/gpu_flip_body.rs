@@ -2,17 +2,25 @@
 //! GPU value proofs for the passes that put dynamic bodies inside the GPU
 //! FLIP pressure solve (solids in the water) against CPU f64 references: each body's impulse, the bodies'
 //! share of the operator, the velocity change on the solid faces and the
-//! reaction. The lattice spans twelve tiles, partial edge tiles among them,
-//! so the slot order of the sum is exercised. Then the passes over the
-//! solver's active tiles against every tile, bitwise and under NaN poison,
-//! on their own and through a step with a Box3D body
-//! (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9).
+//! reaction. The lattice is a box of cells across the origin on every axis,
+//! on eighteen world tiles with partial edge tiles among them, in the slot
+//! order the water's own build gave them, so the slot order of the sum is
+//! exercised. Then the passes over the active slots against every slot,
+//! bitwise and under NaN poison, on their own and through a step with a
+//! Box3D body (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9).
+
+use std::collections::HashMap;
 
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
 use manifold_physics::coupled_motion::{
     Held, Mobility, SupportPoint, constrained_mobility, mobility_index,
 };
 
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::scene::world_tiles::{
+    NONE, TILE, lattice_origin, local_index, pool_len, slot_row_word, table_entries, table_words,
+    tile_of_cell,
+};
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_node_engine::testkit::atom::{
     FACE_FLOATS, assert_close, face_grid_len, random_values, random_water,
@@ -25,17 +33,20 @@ use manifold_water_gpu_flip::primitives::gpu_flip_step::{set_all_tiles, set_pois
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
-use manifold_water_liquid::tile_storage::testkit::{
-    from_pool, identity_table, records_from_pool, records_to_pool, to_pool,
-};
-use manifold_water_liquid::tile_storage::{TILE, pool_len};
+use manifold_water_liquid::world_tiles::{Allocation, LIQUID_POINTS, Reach, WorldTiles};
 
 /// Tail index of stats word 16 (active-tile share): the tail starts at stats word 10 (liquid_stats.rs `SOLVER_WORDS`).
 const TILE_SHARE: usize = 16 - 10;
 
 const N: [usize; 3] = [17, 16, 15];
 const H: f32 = 0.25;
-const MIN: [f32; 3] = [-2.1, -1.9, -1.8];
+/// The lattice's first cell: world cells, the origin inside the box on every
+/// axis, and the box off the tile grid on each (tiles -1 to 1 on x, -2 to 0 on
+/// y, -1 to 0 on z).
+const LO: [i32; 3] = [-8, -9, -7];
+/// The lattice's low corner in metres: cell p is centred on p*H, so counted
+/// from half a cell below.
+const MIN: [f32; 3] = [-2.125, -2.375, -1.875];
 const TICK: f32 = 0.05;
 const DENSITY: f32 = 1000.0;
 /// Rows 1 and 2 are the bodies (rows 3, body_count 2).
@@ -335,6 +346,152 @@ fn assert_sums(got: &[f32], want: &[f64], scale: &[f64], what: &str) {
     }
 }
 
+/// The world tiles holding the test lattice, built by the water's own
+/// allocation from one particle in each tile the box touches, so the slot
+/// order is the build's, not the tile order.
+struct Lattice {
+    tiles: WorldTiles,
+    slot_of: HashMap<[i32; 3], u32>,
+}
+
+impl Lattice {
+    fn new(device: &GpuDevice) -> Self {
+        let last: [i32; 3] = std::array::from_fn(|a| LO[a] + N[a] as i32 - 1);
+        let (first, end) = (tile_of_cell(LO), tile_of_cell(last));
+        let mut points = Vec::new();
+        for tz in first[2]..=end[2] {
+            for ty in first[1]..=end[1] {
+                for tx in first[0]..=end[0] {
+                    // The tile's first cell, at its centre.
+                    let corner = [tx, ty, tz].map(|t| (t * TILE as i32) as f32 * H);
+                    points.push(FluidParticle {
+                        position_radius: [corner[0], corner[1], corner[2], 0.05],
+                        velocity: [0.0; 3],
+                        id: points.len() as u32 + 1,
+                    });
+                }
+            }
+        }
+        let count = points.len() as u32;
+        let reach = Reach {
+            ring_max: 0,
+            alloc_ring: 0,
+            cell_reach: 0,
+        };
+        let mut tiles = WorldTiles::new(device, count, reach, LIQUID_POINTS).expect("world tiles");
+        tiles.prepare(device);
+        let records = shared(device, &points);
+        // The slots in use, as the step's slot record holds them.
+        let record = shared(device, &[count.div_ceil(256), 1, 1, count]);
+        let gate = shared(device, &[0u32; 12]);
+        let mut enc = device.create_encoder("body scene tiles");
+        tiles.encode_allocation(
+            &mut enc,
+            &Allocation {
+                points: &records,
+                record: &record,
+                origin: lattice_origin(H),
+                inv_cell: 1.0 / H,
+                replay_count: 0,
+                gate: &gate,
+            },
+        );
+        enc.commit_and_wait_completed();
+        let words: Vec<u32> = read(tiles.table(), table_words(count) as usize);
+        let entries = table_entries(count);
+        let slot_of: HashMap<[i32; 3], u32> = (0..count)
+            .map(|slot| {
+                let row = slot_row_word(entries, slot) as usize;
+                assert_ne!(words[row + 3], NONE, "slot {slot} holds a tile");
+                (
+                    [words[row], words[row + 1], words[row + 2]].map(|w| w as i32),
+                    slot,
+                )
+            })
+            .collect();
+        assert_eq!(slot_of.len(), count as usize, "every tile has its own slot");
+        Self { tiles, slot_of }
+    }
+
+    fn pool_tiles(&self) -> u32 {
+        self.tiles.pool_tiles()
+    }
+
+    /// Floats in a pooled cell field.
+    fn pool_floats(&self) -> usize {
+        pool_len(self.pool_tiles()) as usize
+    }
+
+    /// The pool index of world cell `p`; None where its tile holds no slot.
+    fn index(&self, p: [i32; 3]) -> Option<usize> {
+        let slot = *self.slot_of.get(&tile_of_cell(p))?;
+        Some(slot as usize * 512 + local_index(p) as usize)
+    }
+
+    /// A dense field of `dims` cells from [`LO`] (x fastest) as a pooled one;
+    /// cells whose tile holds no slot are dropped and the rest of the pool,
+    /// the canonical element included, holds `canon`.
+    fn to_pool<T: Copy>(&self, dense: &[T], dims: [usize; 3], canon: T) -> Vec<T> {
+        assert_eq!(dense.len(), dims.iter().product::<usize>());
+        let mut pool = vec![canon; self.pool_floats()];
+        for (i, value) in dense.iter().enumerate() {
+            let c = coords(i, dims);
+            if let Some(at) = self.index(std::array::from_fn(|a| LO[a] + c[a] as i32)) {
+                pool[at] = *value;
+            }
+        }
+        pool
+    }
+
+    /// The dense field of `dims` cells from [`LO`] out of a pooled one; a
+    /// cell whose tile holds no slot reads the canonical element, the last.
+    fn dense_of<T: Copy>(&self, pool: &[T], dims: [usize; 3]) -> Vec<T> {
+        (0..dims.iter().product::<usize>())
+            .map(|i| {
+                let c = coords(i, dims);
+                let at = self.index(std::array::from_fn(|a| LO[a] + c[a] as i32));
+                pool[at.unwrap_or(pool.len() - 1)]
+            })
+            .collect()
+    }
+}
+
+/// The world tile holding lattice cell `i`.
+fn tile_of(cell: usize) -> [i32; 3] {
+    let c = coords(cell, N);
+    tile_of_cell(std::array::from_fn(|a| LO[a] + c[a] as i32))
+}
+
+/// Every tile the lattice touches, and whether the solver classifies it
+/// active on `water`: a water cell lies in the tile's box grown by one cell
+/// (gpu_flip_pressure.wgsl classify_main).
+fn active_tiles(water: &[f32]) -> HashMap<[i32; 3], bool> {
+    let last: [i32; 3] = std::array::from_fn(|a| LO[a] + N[a] as i32 - 1);
+    let (first, end) = (tile_of_cell(LO), tile_of_cell(last));
+    let size = TILE as i32;
+    let mut out = HashMap::new();
+    for tz in first[2]..=end[2] {
+        for ty in first[1]..=end[1] {
+            for tx in first[0]..=end[0] {
+                let tile = [tx, ty, tz];
+                let low = tile.map(|t| t * size - 1);
+                let high = tile.map(|t| t * size + size);
+                let wet = (low[2]..=high[2]).any(|z| {
+                    (low[1]..=high[1]).any(|y| {
+                        (low[0]..=high[0]).any(|x| {
+                            let c = [x - LO[0], y - LO[1], z - LO[2]];
+                            (0..3).all(|a| c[a] >= 0 && (c[a] as usize) < N[a])
+                                && water[at(c.map(|v| v as usize), N)] > 0.5
+                        })
+                    })
+                });
+                out.insert(tile, wet);
+            }
+        }
+    }
+    out
+}
+
 struct Scene {
     device: manifold_gpu::testkit::TestDevice,
     open: Vec<f32>,
@@ -345,17 +502,16 @@ struct Scene {
     /// [`Self::hold`] held the dynamic body.
     mobility: Vec<Mobility>,
     buffers: [GpuBuffer; 5],
-    /// The identity slot table (every box tile allocated) and its pool size.
-    table: GpuBuffer,
-    pool_tiles: u32,
+    lattice: Lattice,
+    /// The fine active set as the pressure solve hands it on: the gate triple
+    /// (word 0 the live workgroups, two a slot), the flags by slot and the
+    /// list of active slots. `all` means every held slot is listed.
+    active: [GpuBuffer; 3],
     passes: BodyPasses,
-    /// Prepared on the scene's water for its fine tile set; `all` means
-    /// every tile was classified active.
-    solver: PressureSolver,
 }
 
 impl Scene {
-    /// Random water everywhere, every tile active: the CPU references sum
+    /// Random water everywhere, every slot active: the CPU references sum
     /// every face.
     fn new(seed: u64) -> Self {
         Self::with_water(seed, random_water(N.iter().product(), seed + 1), true)
@@ -369,28 +525,23 @@ impl Scene {
             .iter()
             .map(|row| constrained_mobility(&coupled_start(row), &[], Held::default()))
             .collect();
-        let cells = N.map(|v| v as u32);
-        let (table_words, pool_tiles) = identity_table(cells);
-        let table = shared(&device, &table_words);
-        // Records past the lattice are answered by the canonical block, so the
-        // CPU references read the round trip the GPU sees.
+        let lattice = Lattice::new(&device);
+        // Records past the held tiles are answered by the canonical element,
+        // so the CPU references read the round trip the GPU sees.
         let pool_records = |dense: &[f32]| -> Vec<[f32; 8]> {
-            records_to_pool(
+            lattice.to_pool(
                 bytemuck::cast_slice::<f32, [f32; 8]>(dense),
-                cells,
-                &[[0.0f32; 8]; 8],
+                m(),
+                [0.0f32; 8],
             )
         };
         let (open_pool, solid_pool) = (pool_records(&open), pool_records(&solid));
         let dense_records = |pool: &[[f32; 8]]| -> Vec<f32> {
-            records_from_pool(pool, cells)
-                .into_iter()
-                .flatten()
-                .collect()
+            lattice.dense_of(pool, m()).into_iter().flatten().collect()
         };
         let (open, solid) = (dense_records(&open_pool), dense_records(&solid_pool));
         let buffers = [
-            shared(&device, &to_pool(&water, cells, &[0.0f32])),
+            shared(&device, &lattice.to_pool(&water, N, 0.0f32)),
             shared(&device, &open_pool),
             shared(&device, &solid_pool),
             shared(&device, &rows),
@@ -399,24 +550,25 @@ impl Scene {
         let mut passes = BodyPasses::default();
         passes.prepare_pipelines(&device);
         passes
-            .prepare(&device, N.map(|v| v as u32), BODIES as u32)
+            .prepare(&device, lattice.pool_tiles(), BODIES as u32)
             .expect("body passes");
-        let mut solver = PressureSolver::default();
-        solver.prepare_pipelines(&device);
-        let mut enc = device.create_encoder("body scene tiles");
-        set_all_tiles(all);
-        let lattice = Water {
-            lattice: N.map(|v| v as u32),
-            cell_size: H,
-            water: &buffers[0],
-            faces: &buffers[1],
-            phi: None,
-        };
-        solver
-            .prepare(&device, &mut enc, &lattice, &table, pool_tiles)
-            .expect("the solver prepares its tile lists");
-        set_all_tiles(false);
-        enc.commit_and_wait_completed();
+        let wet = active_tiles(&water);
+        let mut listed = vec![0u32; lattice.pool_tiles() as usize];
+        let mut slots: Vec<u32> = lattice
+            .slot_of
+            .iter()
+            .filter(|(tile, _)| all || wet[*tile])
+            .map(|(_, &slot)| slot)
+            .collect();
+        slots.sort_unstable();
+        for &slot in &slots {
+            listed[slot as usize] = 1;
+        }
+        let active = [
+            shared(&device, &[2 * slots.len() as u32, 1, 1]),
+            shared(&device, &listed),
+            shared(&device, &slots),
+        ];
         Self {
             device,
             open,
@@ -425,36 +577,28 @@ impl Scene {
             rows,
             mobility,
             buffers,
-            table,
-            pool_tiles,
+            lattice,
+            active,
             passes,
-            solver,
         }
     }
 
-    fn cells(&self) -> [u32; 3] {
-        N.map(|v| v as u32)
-    }
-
-    /// Floats in a pooled cell field.
-    fn pool_floats(&self) -> usize {
-        pool_len(self.pool_tiles) as usize
-    }
-
-    /// A dense cell field uploaded pooled (the canonical block holds 0).
+    /// A dense cell field uploaded pooled (everything else holds 0).
     fn cells_to_gpu(&self, dense: &[f32]) -> GpuBuffer {
-        shared(&self.device, &to_pool(dense, self.cells(), &[0.0f32]))
+        shared(&self.device, &self.lattice.to_pool(dense, N, 0.0f32))
     }
 
     /// A pooled cell field read back dense.
     fn cells_from_gpu(&self, buffer: &GpuBuffer) -> Vec<f32> {
-        from_pool(&read::<f32>(buffer, self.pool_floats()), self.cells())
+        self.lattice
+            .dense_of(&read::<f32>(buffer, self.lattice.pool_floats()), N)
     }
 
     /// A pooled record array read back dense, flattened to floats.
     fn records_from_gpu(&self, buffer: &GpuBuffer) -> Vec<f32> {
-        let pool: Vec<[f32; 8]> = read(buffer, self.pool_floats());
-        records_from_pool(&pool, self.cells())
+        let pool: Vec<[f32; 8]> = read(buffer, self.lattice.pool_floats());
+        self.lattice
+            .dense_of(&pool, m())
             .into_iter()
             .flatten()
             .collect()
@@ -490,13 +634,13 @@ impl Scene {
     }
 
     fn tiles(&self) -> [&GpuBuffer; 3] {
-        self.solver.tiles().expect("prepared")
+        let [armed, flags, lists] = &self.active;
+        [armed, flags, lists]
     }
 
     fn bodies(&self) -> Bodies<'_> {
         Bodies {
-            lattice: N.map(|v| v as u32),
-            lattice_min: MIN,
+            tiles: &self.lattice.tiles,
             cell_size: H,
             density: DENSITY,
             tick_seconds: TICK,
@@ -527,15 +671,7 @@ fn gpu_flip_body_operator_matches_cpu() {
     let mut enc = scene.device.create_encoder("body operator");
     scene
         .passes
-        .apply(
-            &mut enc,
-            &scene.bodies(),
-            scene.tiles(),
-            &direction_gpu,
-            &s,
-            &scene.table,
-            scene.pool_tiles,
-        )
+        .apply(&mut enc, &scene.bodies(), scene.tiles(), &direction_gpu, &s)
         .expect("apply");
     enc.commit_and_wait_completed();
 
@@ -594,8 +730,6 @@ fn gpu_flip_body_reaction_matches_cpu() {
             scene.tiles(),
             &pressure_gpu,
             &scratch,
-            &scene.table,
-            scene.pool_tiles,
         )
         .expect("apply");
     enc.commit_and_wait_completed();
@@ -617,8 +751,6 @@ fn gpu_flip_body_reaction_matches_cpu() {
             scene.tiles(),
             &pressure_gpu,
             &reaction,
-            &scene.table,
-            scene.pool_tiles,
         )
         .expect("react");
     enc.commit_and_wait_completed();
@@ -664,15 +796,7 @@ fn gpu_flip_body_operator_holds_a_supported_body_symmetric() {
         let mut enc = scene.device.create_encoder("held body operator");
         scene
             .passes
-            .apply(
-                &mut enc,
-                &scene.bodies(),
-                scene.tiles(),
-                &x_gpu,
-                &s,
-                &scene.table,
-                scene.pool_tiles,
-            )
+            .apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s)
             .expect("apply");
         enc.commit_and_wait_completed();
         scene.cells_from_gpu(&s)
@@ -778,7 +902,7 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
             stop: Stop,
             active: bool,
         ) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
-            let pooled_rhs = to_pool(rhs, self.scene.cells(), &[0.0f32]);
+            let pooled_rhs = self.scene.lattice.to_pool(rhs, N, 0.0f32);
             let mut plan = [0_u32; 12];
             plan[0] = if active { TICK.to_bits() } else { 0 };
             plan[11] = 1;
@@ -794,7 +918,6 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
                 .map(|cache| enc.begin_replay(&self.scene.device, cache))
                 .is_some();
             let water = Water {
-                lattice: N.map(|v| v as u32),
                 cell_size: H,
                 water: &self.scene.buffers[0],
                 faces: &self.scene.buffers[1],
@@ -805,8 +928,7 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
                     &self.scene.device,
                     &mut enc,
                     &water,
-                    &self.scene.table,
-                    self.scene.pool_tiles,
+                    &self.scene.lattice.tiles,
                 )
                 .expect("prepare coupled solve");
             self.solver
@@ -821,8 +943,7 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
                         level: 0,
                         coarse_rhs: None,
                     },
-                    &self.scene.table,
-                    self.scene.pool_tiles,
+                    &self.scene.lattice.tiles,
                 )
                 .expect("coupled solve");
             if replay {
@@ -937,34 +1058,6 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
 
 // ── Sparse against every tile ──────────────────────────────────────────────
 
-fn tile_dims() -> [usize; 3] {
-    N.map(|v| v.div_ceil(TILE as usize))
-}
-
-fn tile_of(cell: usize) -> usize {
-    let t = coords(cell, N).map(|v| v / TILE as usize);
-    at(t, tile_dims())
-}
-
-/// The fine tiles the solver classifies active on `water`: a water cell
-/// lies in the tile's box grown by one cell (gpu_flip_pressure.wgsl
-/// classify_main).
-fn active_tiles(water: &[f32]) -> Vec<bool> {
-    let dims = tile_dims();
-    (0..dims.iter().product::<usize>())
-        .map(|t| {
-            let origin = coords(t, dims).map(|v| v * TILE as usize);
-            let first = origin.map(|v| v.saturating_sub(1));
-            let last: [usize; 3] =
-                std::array::from_fn(|a| (origin[a] + TILE as usize).min(N[a] - 1));
-            (first[2]..=last[2]).any(|z| {
-                (first[1]..=last[1])
-                    .any(|y| (first[0]..=last[0]).any(|x| water[at([x, y, z], N)] > 0.5))
-            })
-        })
-        .collect()
-}
-
 fn bits(values: &[f32]) -> Vec<u32> {
     values.iter().map(|v| v.to_bits()).collect()
 }
@@ -1001,7 +1094,7 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
         .map(|(i, &w)| if coords(i, N)[0] < 6 { w } else { 0.0 })
         .collect();
     let active = active_tiles(&water);
-    let inactive = active.iter().filter(|a| !**a).count();
+    let inactive = active.values().filter(|a| !**a).count();
     assert!(
         inactive >= 6,
         "{inactive} of {} tiles inactive",
@@ -1016,7 +1109,7 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
             v.iter()
                 .enumerate()
                 .map(|(i, &v)| {
-                    if poison && !active[tile_of(i)] {
+                    if poison && !active[&tile_of(i)] {
                         f32::NAN
                     } else {
                         v
@@ -1033,15 +1126,7 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
         }
         scene
             .passes
-            .apply(
-                &mut enc,
-                &scene.bodies(),
-                scene.tiles(),
-                &x_gpu,
-                &s,
-                &scene.table,
-                scene.pool_tiles,
-            )
+            .apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s)
             .expect("apply");
         enc.commit_and_wait_completed();
         let pushed = bits(&scene.sums());
@@ -1051,15 +1136,7 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
         }
         scene
             .passes
-            .react(
-                &mut enc,
-                &scene.bodies(),
-                scene.tiles(),
-                &x_gpu,
-                &reaction,
-                &scene.table,
-                scene.pool_tiles,
-            )
+            .react(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &reaction)
             .expect("react");
         enc.commit_and_wait_completed();
         let s = scene.cells_from_gpu(&s);
@@ -1069,7 +1146,7 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
             .iter()
             .enumerate()
             .map(|(i, v)| {
-                if active[tile_of(i)] {
+                if active[&tile_of(i)] {
                     v.to_bits()
                 } else {
                     base[i].to_bits()

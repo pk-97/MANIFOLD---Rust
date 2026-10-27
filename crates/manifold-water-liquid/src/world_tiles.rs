@@ -30,7 +30,7 @@ use manifold_node_engine::scene::world_tiles::{
     EMPTY, NONE, READ_SIDE, TILE, table_entries, table_words,
 };
 
-use crate::primitives::prefix_scan::{PrefixScan, ScanLabels};
+use crate::primitives::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
@@ -51,6 +51,9 @@ pub const POINTS_BINDING: u32 = 13;
 
 /// Where a parents build writes its children rows.
 const CHILD_ROWS_BINDING: u32 = 14;
+
+/// Where a particle build binds its slot record (`world_tiles_liquid.wgsl`).
+const RECORD_BINDING: u32 = 15;
 
 // LIQUID_POINTS reads a record as two vec4s.
 const _: () = assert!(std::mem::size_of::<FluidParticle>() == 32);
@@ -148,6 +151,34 @@ fn build_words(ring_max: u32) -> u64 {
     2 * (u64::from(ring_max) + 2) + 4
 }
 
+/// Bytes a particle build ([`WorldTiles::new`]) holds for a pool of
+/// `pool_tiles` slots at `ring_max`: the table, counts, triples and lists,
+/// and the build's scratch and scan. For a memory check before the table
+/// exists; [`WorldTiles::bytes`] reads the buffers themselves.
+pub fn held_bytes(pool_tiles: u32, ring_max: u32) -> u64 {
+    let entries = table_entries(pool_tiles);
+    let p = u64::from(pool_tiles);
+    let words = table_words(pool_tiles)
+        + count_words(ring_max)
+        + args_words(ring_max)
+        + 3 * p
+        + 6 * u64::from(entries)
+        + 3 * p
+        + build_words(ring_max)
+        + 3
+        + storage_words(scan_len(pool_tiles, entries)) as u64;
+    words * 4
+}
+
+/// Children a parents table's slot rows hold: the 2³ tiles below a tile.
+const CHILDREN_PER_SLOT: u64 = 8;
+
+/// Bytes a parents build ([`WorldTiles::new_parents`]) holds for a pool of
+/// `pool_tiles` slots: a particle build's at ring 0 and the children rows.
+pub fn parents_bytes(pool_tiles: u32) -> u64 {
+    held_bytes(pool_tiles, 0) + CHILDREN_PER_SLOT * u64::from(pool_tiles) * 4
+}
+
 /// Values the build's prefix scan covers: freed flags per slot, then the
 /// two want sections per entry.
 fn scan_len(pool_tiles: u32, entries: u32) -> usize {
@@ -206,9 +237,12 @@ struct Pipelines {
 
 /// One particle build's inputs.
 pub struct Allocation<'a> {
-    /// The records the points snippet reads, at least `count` of them.
+    /// The records the points snippet reads.
     pub points: &'a GpuBuffer,
-    pub count: u32,
+    /// The slots in use, `[groups, 1, 1, n]` (the GPU FLIP step's slot
+    /// record): the point passes dispatch from its triple and read records
+    /// [0, n) of `points`, so records past n are never binned.
+    pub record: &'a GpuBuffer,
     /// The lattice origin (`lattice_origin`) and 1 / cell size.
     pub origin: [f32; 3],
     pub inv_cell: f32,
@@ -342,7 +376,10 @@ impl WorldTiles {
         let mut scan = PrefixScan::default();
         scan.buffer(device, scan_len(pool_tiles, entries))?;
         let child_rows = if parents {
-            Some(words_buffer(device, &vec![NONE; 8 * p])?)
+            Some(words_buffer(
+                device,
+                &vec![NONE; CHILDREN_PER_SLOT as usize * p],
+            )?)
         } else {
             None
         };
@@ -411,14 +448,14 @@ impl WorldTiles {
             ring_max: self.reach.ring_max,
             alloc_ring: self.reach.alloc_ring,
             cell_reach: self.reach.cell_reach,
-            point_count: job.count,
+            point_count: 0,
             from_scratch: 0,
             replay_count: job.replay_count,
             child_entries: 0,
             child_pool_tiles: 0,
             _pad: [0; 2],
         };
-        self.encode_build(enc, &params, job.points, job.gate);
+        self.encode_build(enc, &params, job.points, Some(job.record), job.gate);
     }
 
     /// Build a coarse level from `child`, the level below, encoded earlier
@@ -444,7 +481,7 @@ impl WorldTiles {
             child_pool_tiles: child.pool_tiles,
             _pad: [0; 2],
         };
-        self.encode_build(enc, &params, &child.table, gate);
+        self.encode_build(enc, &params, &child.table, None, gate);
     }
 
     fn encode_build(
@@ -452,10 +489,11 @@ impl WorldTiles {
         enc: &mut GpuEncoder,
         params: &BuildParams,
         points: &GpuBuffer,
+        record: Option<&GpuBuffer>,
         gate: &GpuBuffer,
     ) {
         let pipes = self.pipelines.as_ref().expect("world tiles prepared");
-        let bindings = [
+        let fixed = [
             GpuBinding::Bytes {
                 binding: 0,
                 data: bytemuck::bytes_of(params),
@@ -474,26 +512,49 @@ impl WorldTiles {
             buffer(12, gate),
             buffer(POINTS_BINDING, points),
         ];
+        // Room after the fixed bindings for the slot record (a particle
+        // build) or the children rows (the parents' last pass).
+        let mut bound = [fixed[0]; 15];
+        bound[..14].copy_from_slice(&fixed);
+        let mut len = 14;
+        if let Some(record) = record {
+            bound[len] = buffer(RECORD_BINDING, record);
+            len += 1;
+        }
+        let bindings = &bound[..len];
         let per_entry = groups(u64::from(self.entries));
         let per_slot = groups(u64::from(self.pool_tiles));
-        let per_point = groups(u64::from(params.point_count));
         let pass = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, grid, label| {
-            enc.dispatch_compute(pipeline, &bindings, grid, label);
+            enc.dispatch_compute(pipeline, bindings, grid, label);
+            enc.compute_memory_barrier_buffers();
+        };
+        // A particle build's point passes cover the record's slots in use; a
+        // parents build's every slot of the level below.
+        let per_point = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, label| {
+            match record {
+                Some(record) => enc.dispatch_compute_indirect(pipeline, bindings, record, 0, label),
+                None => enc.dispatch_compute(
+                    pipeline,
+                    bindings,
+                    groups(u64::from(params.point_count)),
+                    label,
+                ),
+            }
             enc.compute_memory_barrier_buffers();
         };
         pass(enc, &pipes.clear, per_entry, "world_tiles.clear");
-        pass(enc, &pipes.seed, per_point, "world_tiles.seed");
-        pass(enc, &pipes.seeds, per_point, "world_tiles.seeds");
+        per_point(enc, &pipes.seed, "world_tiles.seed");
+        per_point(enc, &pipes.seeds, "world_tiles.seeds");
         if self.reach.ring_max > 0 {
             for (pipeline, label) in [
                 (&pipes.dilate, "world_tiles.dilate"),
                 (&pipes.rings, "world_tiles.rings"),
             ] {
-                enc.dispatch_compute_indirect(pipeline, &bindings, &self.build_args, 0, label);
+                enc.dispatch_compute_indirect(pipeline, bindings, &self.build_args, 0, label);
                 enc.compute_memory_barrier_buffers();
             }
         }
-        pass(enc, &pipes.near, per_point, "world_tiles.near");
+        per_point(enc, &pipes.near, "world_tiles.near");
         pass(enc, &pipes.carry, per_slot, "world_tiles.carry");
         pass(enc, &pipes.wants, per_entry, "world_tiles.wants");
         self.scan.encode_labelled_gated(
@@ -506,10 +567,9 @@ impl WorldTiles {
         pass(enc, &pipes.allocate, per_entry, "world_tiles.allocate");
         pass(enc, &pipes.slots, per_slot, "world_tiles.slots");
         if let (Some(children), Some(rows)) = (&pipes.children, &self.child_rows) {
-            let mut with_rows = [bindings[0]; 15];
-            with_rows[..14].copy_from_slice(&bindings);
+            let mut with_rows = bound;
             with_rows[14] = buffer(CHILD_ROWS_BINDING, rows);
-            enc.dispatch_compute(children, &with_rows, per_slot, "world_tiles.children");
+            enc.dispatch_compute(children, &with_rows[..15], per_slot, "world_tiles.children");
             enc.compute_memory_barrier_buffers();
         }
         pass(enc, &pipes.finish, [1, 1, 1], "world_tiles.finish");
@@ -603,8 +663,14 @@ mod tests {
     fn args_layout_holds_every_triple_apart() {
         for ring_max in 0..5 {
             let range = 8 * u64::from(replay_range_index(ring_max));
-            assert!(retired_args_offset(ring_max) + 12 <= range, "ring_max {ring_max}");
-            assert_eq!(allocated_args_offset(ring_max) + 12, retired_args_offset(ring_max));
+            assert!(
+                retired_args_offset(ring_max) + 12 <= range,
+                "ring_max {ring_max}"
+            );
+            assert_eq!(
+                allocated_args_offset(ring_max) + 12,
+                retired_args_offset(ring_max)
+            );
             assert_eq!(fresh_args_offset(ring_max), range + 8);
             assert_eq!(fresh_args_offset(ring_max) + 12, 4 * args_words(ring_max));
             assert!(free_top_word(ring_max) < count_words(ring_max) as usize);

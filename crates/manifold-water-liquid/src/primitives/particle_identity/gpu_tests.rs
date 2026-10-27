@@ -7,6 +7,8 @@ use crate::fluid_particles::CellRange;
 
 const SLOTS: u32 = 512;
 const SENTINEL: u32 = 0xdead_beef;
+/// The tile counts word `reserve` reads as the tile pool's exhausted flag.
+const EXHAUSTED: u32 = 5;
 
 fn shared(device: &GpuDevice, words: &[u32]) -> GpuBuffer {
     let buffer = device.create_buffer_shared((words.len() * 4) as u64);
@@ -54,6 +56,13 @@ fn ranges_ending_at(device: &GpuDevice, live: u32, tail: u32) -> GpuBuffer {
     buffer
 }
 
+/// Tile counts with only the exhausted word set to `exhausted`.
+fn counts_with_exhausted(device: &GpuDevice, exhausted: u32) -> GpuBuffer {
+    let mut words = [0u32; 8];
+    words[EXHAUSTED as usize] = exhausted;
+    shared(device, &words)
+}
+
 fn prepared(device: &GpuDevice) -> ParticleIdentity {
     let mut identity = ParticleIdentity::default();
     identity.prepare(device);
@@ -78,7 +87,11 @@ fn settle_publishes_the_live_end_to_the_identity_and_the_step_record() {
             enc.commit_and_wait_completed();
             let words = read(&identity);
             assert_eq!(words[..4], before[..4], "live {live}: the allocator words");
-            assert_eq!(words[4..], record(live), "live {live}, tail {tail}: identity");
+            assert_eq!(
+                words[4..],
+                record(live),
+                "live {live}, tail {tail}: identity"
+            );
             assert_eq!(read(&step), record(live), "live {live}, tail {tail}: step");
 
             // Without a step record, only the identity is written.
@@ -86,7 +99,11 @@ fn settle_publishes_the_live_end_to_the_identity_and_the_step_record() {
             let mut enc = device.create_encoder("identity settle proof, no step record");
             ops.settle(&mut enc, &ranges, 2, &identity, &active, None);
             enc.commit_and_wait_completed();
-            assert_eq!(read(&identity)[4..], record(live), "live {live}: identity alone");
+            assert_eq!(
+                read(&identity)[4..],
+                record(live),
+                "live {live}: identity alone"
+            );
         }
     }
 }
@@ -100,6 +117,7 @@ fn an_inactive_plan_writes_nothing() {
     let ranges = ranges_ending_at(&device, 300, 3);
     let particles = shared(&device, &[0u32; SLOTS as usize * 8]);
     let scan = shared(&device, &[0, 40]);
+    let counts = counts_with_exhausted(&device, 0);
     let before = [11, 4, 6, 0, 7, 8, 9, 10];
     let identity = shared(&device, &before);
     let step = shared(&device, &[SENTINEL; 4]);
@@ -113,8 +131,9 @@ fn an_inactive_plan_writes_nothing() {
             ranges: &ranges,
             scan: &scan,
             plan: &idle,
+            tile_counts: &counts,
             step_record: Some(&step),
-            params: [SLOTS, 2, 2, 1],
+            params: [SLOTS, 2, 2, EXHAUSTED],
         },
     );
     enc.commit_and_wait_completed();
@@ -122,20 +141,25 @@ fn an_inactive_plan_writes_nothing() {
     assert_eq!(read(&step), [SENTINEL; 4]);
 }
 
-/// `reserve` grants as many of the requested births as the slots hold, and
-/// publishes the live end plus the grant. The allocator words move only when
-/// births are granted.
+/// `reserve` grants a stage all of its request when it fits the free slots,
+/// and none when it does not: the live end plus the grant is published. The
+/// allocator words move only when births are granted. 212 is the room left
+/// past 300 live, so 212 fits and 213 does not.
 #[test]
-fn reserve_publishes_the_live_end_plus_the_grant() {
+fn reserve_grants_all_or_nothing_and_publishes_the_live_end_plus_the_grant() {
     let device = manifold_gpu::testkit::test_device();
     let ops = prepared(&device);
     let active = plan(&device, 0.01);
     let particles = shared(&device, &[0u32; SLOTS as usize * 8]);
+    let counts = counts_with_exhausted(&device, 0);
     for live in [0, 1, 300] {
-        for requested in [0, 5, 1000] {
+        for requested in [0, 5, 212, 213, 1000] {
             let ranges = ranges_ending_at(&device, live, 2);
             let scan = shared(&device, &[0, requested]);
-            let identity = shared(&device, &[11, 4, 6, 0, SENTINEL, SENTINEL, SENTINEL, SENTINEL]);
+            let identity = shared(
+                &device,
+                &[11, 4, 6, 0, SENTINEL, SENTINEL, SENTINEL, SENTINEL],
+            );
             let step = shared(&device, &[SENTINEL; 4]);
             let mut enc = device.create_encoder("identity reserve proof");
             ops.reserve(
@@ -146,12 +170,17 @@ fn reserve_publishes_the_live_end_plus_the_grant() {
                     ranges: &ranges,
                     scan: &scan,
                     plan: &active,
+                    tile_counts: &counts,
                     step_record: Some(&step),
-                    params: [SLOTS, 2, 2, 1],
+                    params: [SLOTS, 2, 2, EXHAUSTED],
                 },
             );
             enc.commit_and_wait_completed();
-            let births = requested.min(SLOTS - live);
+            let births = if requested <= SLOTS - live {
+                requested
+            } else {
+                0
+            };
             let words = read(&identity);
             let what = format!("live {live}, requested {requested}");
             assert_eq!(words[4..], record(live + births), "{what}: identity");
@@ -165,6 +194,41 @@ fn reserve_publishes_the_live_end_plus_the_grant() {
     }
 }
 
+/// A tile pool that ran out this step refuses a stage that fits the slots:
+/// the live end stays `n` and the allocator words do not move.
+#[test]
+fn reserve_grants_nothing_once_the_tile_pool_is_exhausted() {
+    let device = manifold_gpu::testkit::test_device();
+    let ops = prepared(&device);
+    let active = plan(&device, 0.01);
+    let particles = shared(&device, &[0u32; SLOTS as usize * 8]);
+    let ranges = ranges_ending_at(&device, 300, 2);
+    let scan = shared(&device, &[0, 5]);
+    let counts = counts_with_exhausted(&device, 1);
+    let before = [11, 4, 6, 0, SENTINEL, SENTINEL, SENTINEL, SENTINEL];
+    let identity = shared(&device, &before);
+    let step = shared(&device, &[SENTINEL; 4]);
+    let mut enc = device.create_encoder("identity exhausted proof");
+    ops.reserve(
+        &mut enc,
+        BirthReservation {
+            particles: &particles,
+            identity: &identity,
+            ranges: &ranges,
+            scan: &scan,
+            plan: &active,
+            tile_counts: &counts,
+            step_record: Some(&step),
+            params: [SLOTS, 2, 2, EXHAUSTED],
+        },
+    );
+    enc.commit_and_wait_completed();
+    let words = read(&identity);
+    assert_eq!(words[..4], [11, 4, 6, 0], "the allocator words stay");
+    assert_eq!(words[4..], record(300), "n stays the live end");
+    assert_eq!(read(&step), record(300), "the step's record too");
+}
+
 /// A full-reset request stops `reserve` before it writes anything.
 #[test]
 fn reserve_leaves_the_record_alone_while_a_reset_is_requested() {
@@ -174,6 +238,7 @@ fn reserve_leaves_the_record_alone_while_a_reset_is_requested() {
     let particles = shared(&device, &[0u32; SLOTS as usize * 8]);
     let ranges = ranges_ending_at(&device, 100, 2);
     let scan = shared(&device, &[0, 9]);
+    let counts = counts_with_exhausted(&device, 0);
     let before = [11, 4, 6, 1, 3, 1, 1, 77];
     let identity = shared(&device, &before);
     let mut enc = device.create_encoder("identity reset request proof");
@@ -185,8 +250,9 @@ fn reserve_leaves_the_record_alone_while_a_reset_is_requested() {
             ranges: &ranges,
             scan: &scan,
             plan: &active,
+            tile_counts: &counts,
             step_record: None,
-            params: [SLOTS, 2, 2, 1],
+            params: [SLOTS, 2, 2, EXHAUSTED],
         },
     );
     enc.commit_and_wait_completed();
@@ -205,7 +271,10 @@ fn seed_publishes_the_fills_count() {
     }
     let particles = shared(&device, &fill);
     for count in [0, 1, 256, 300] {
-        let identity = shared(&device, &[0, 0, 0, 0, SENTINEL, SENTINEL, SENTINEL, SENTINEL]);
+        let identity = shared(
+            &device,
+            &[0, 0, 0, 0, SENTINEL, SENTINEL, SENTINEL, SENTINEL],
+        );
         let mut enc = device.create_encoder("identity seed proof");
         ops.seed(&mut enc, &particles, &identity, count, 0);
         enc.commit_and_wait_completed();

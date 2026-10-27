@@ -20,7 +20,7 @@ fn resting_block() -> Vec<FluidParticle> {
                     let at = [x, y, z];
                     let corner = [sub & 1, (sub >> 1) & 1, (sub >> 2) & 1];
                     let position: [f32; 3] = std::array::from_fn(|a| {
-                        MIN[a] + (at[a] as f32 + 0.25 + 0.5 * corner[a] as f32) * H
+                        NODE_MIN[a] + (at[a] as f32 + 0.25 + 0.5 * corner[a] as f32) * H
                     });
                     block.push(FluidParticle {
                         position_radius: [position[0], position[1], position[2], 0.31017524 * H],
@@ -47,9 +47,9 @@ fn stale_record(slot: usize) -> FluidParticle {
     } else {
         FluidParticle {
             position_radius: [
-                MIN[0] + 0.5 * H,
-                MIN[1] + (N[1] as f32 - 0.5) * H,
-                MIN[2] + 0.5 * H,
+                NODE_MIN[0] + 0.5 * H,
+                NODE_MIN[1] + (N[1] as f32 - 0.5) * H,
+                NODE_MIN[2] + 0.5 * H,
                 0.08,
             ],
             velocity: [3.0, 3.0, 3.0],
@@ -94,18 +94,16 @@ impl RestingPool {
         let faces = h.array::<FaceSample>(&[], 1);
         let distance = h.array::<f32>(&[], 1);
         let tiles = h.array::<u32>(&[], 1);
-        let pad = PADDING_NODES as f32;
-        let params = params(&[
-            ("nodes_x", N[0] as f32 + 1.0 + 2.0 * pad),
-            ("nodes_y", N[1] as f32 + 1.0 + 2.0 * pad),
-            ("nodes_z", N[2] as f32 + 1.0 + 2.0 * pad),
-            ("lattice_min_x", MIN[0] - pad * H),
-            ("lattice_min_y", MIN[1] - pad * H),
-            ("lattice_min_z", MIN[2] - pad * H),
-            ("cell_size", H),
-            ("interval_duration", 1.0 / 60.0),
-            ("volume_projection", 0.0),
-        ]);
+        let params = params(
+            &[
+                &node_lattice()[..],
+                &[
+                    ("interval_duration", 1.0 / 60.0),
+                    ("volume_projection", 0.0),
+                ],
+            ]
+            .concat(),
+        );
         let groups = live.div_ceil(256).max(1) as u32;
         let identity = h.array::<u32>(&[live as u32 + 1, 1, 0, 0, groups, 1, 1, live as u32], 8);
         let inputs = [("particles", particles.0), ("identity", identity.0)];

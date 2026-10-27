@@ -36,16 +36,17 @@ pub(crate) fn partial_bytes(slots: u32) -> u64 {
 /// reached their cap without converging, 13 steps whose sealed-pocket spread
 /// reached its cap unfinished, 14 and 15 the volume rate (m³/s) taken off
 /// sealed pockets' pressure and density right-hand sides so their solves
-/// have a solution, 16 the share of the lattice's 8³ tiles the cell passes
-/// ran over, 17-19 the last substep's dry, sealed and air cells as the
+/// have a solution, 16 the share of the pool's tiles the water holds
+/// (|C| / P), 17-19 the last substep's dry, sealed and air cells as the
 /// sealed-pocket pass classed them, 20-25 its lowest water cell that touches
 /// air directly (its index, the dry neighbour's index or 0xffffffff for an
 /// open box face, the face's open fraction bits, axis * 2 + 1 on the high
 /// side, the neighbour's phi bits and its particle count), 26 its floor cells
 /// reading dry with water on every in-box side (8-26 are 0 without a `capped`
 /// input). Word 27 is the particles inflows added this tick, 28 the ones they
-/// wanted to add but the pool had no free slot for, and 29 the sheet births
-/// the pool had no free slot for. Floats are stored as bits.
+/// wanted to add but the pool had no free slot for, 29 the sheet births the
+/// pool had no free slot for, and 30 the particles removed because their tile
+/// had no slot. Floats are stored as bits.
 /// The first solver word in the published stats array.
 pub const SOLVER_STATS_START: u32 = 10;
 /// The published stats word counting this tick's inflow births.
@@ -54,8 +55,11 @@ pub const INFLOW_BIRTHS_WORD: u32 = 27;
 pub const INFLOW_REFUSED_WORD: u32 = 28;
 /// The published stats word counting sheet births a full pool refused.
 pub const SHEET_REFUSED_WORD: u32 = 29;
+/// The published stats word counting particles removed because their tile
+/// had no slot in the pool.
+pub const TILE_REMOVED_WORD: u32 = 30;
 /// The number of words in the stats array.
-pub const LIQUID_STATS_WORDS: u32 = SHEET_REFUSED_WORD + 1;
+pub const LIQUID_STATS_WORDS: u32 = TILE_REMOVED_WORD + 1;
 /// The number of solver words copied from the capped counters.
 pub const SOLVER_WORDS: u32 = LIQUID_STATS_WORDS - SOLVER_STATS_START;
 /// The inflow births' offset within the solver tail.
@@ -64,6 +68,8 @@ pub const INFLOW_BIRTHS_TAIL: u32 = INFLOW_BIRTHS_WORD - SOLVER_STATS_START;
 pub const INFLOW_REFUSED_TAIL: u32 = INFLOW_REFUSED_WORD - SOLVER_STATS_START;
 /// The refused sheet births' offset within the solver tail.
 pub const SHEET_REFUSED_TAIL: u32 = SHEET_REFUSED_WORD - SOLVER_STATS_START;
+/// The tile-removed count's offset within the solver tail.
+pub const TILE_REMOVED_TAIL: u32 = TILE_REMOVED_WORD - SOLVER_STATS_START;
 
 /// One tick's statistics, decoded from the stats words.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -111,6 +117,9 @@ pub struct LiquidTickStats {
     pub inflow_refused: u32,
     /// Sheet births this tick wanted a slot the pool did not have.
     pub sheet_refused: u32,
+    /// Particles removed this tick because their tile had no slot: the pool
+    /// is full where the water went.
+    pub tile_removed: u32,
 }
 
 impl LiquidTickStats {
@@ -138,6 +147,7 @@ impl LiquidTickStats {
             inflow_births: w[INFLOW_BIRTHS_WORD as usize],
             inflow_refused: w[INFLOW_REFUSED_WORD as usize],
             sheet_refused: w[SHEET_REFUSED_WORD as usize],
+            tile_removed: w[TILE_REMOVED_WORD as usize],
         }
     }
 }
@@ -148,7 +158,7 @@ impl LiquidTickStats {
 /// writers on one source of truth.
 pub fn with_stats_layout(source: &str) -> String {
     format!(
-        "const SOLVER_STATS_START: u32 = {SOLVER_STATS_START}u;\nconst SOLVER_WORDS: u32 = {SOLVER_WORDS}u;\nconst INFLOW_BIRTHS_TAIL: u32 = {INFLOW_BIRTHS_TAIL}u;\nconst INFLOW_REFUSED_TAIL: u32 = {INFLOW_REFUSED_TAIL}u;\nconst SHEET_REFUSED_TAIL: u32 = {SHEET_REFUSED_TAIL}u;\n\n{source}"
+        "const SOLVER_STATS_START: u32 = {SOLVER_STATS_START}u;\nconst SOLVER_WORDS: u32 = {SOLVER_WORDS}u;\nconst INFLOW_BIRTHS_TAIL: u32 = {INFLOW_BIRTHS_TAIL}u;\nconst INFLOW_REFUSED_TAIL: u32 = {INFLOW_REFUSED_TAIL}u;\nconst SHEET_REFUSED_TAIL: u32 = {SHEET_REFUSED_TAIL}u;\nconst TILE_REMOVED_TAIL: u32 = {TILE_REMOVED_TAIL}u;\n\n{source}"
     )
 }
 
@@ -443,6 +453,7 @@ mod tests {
         words[INFLOW_BIRTHS_WORD as usize] = 640;
         words[INFLOW_REFUSED_WORD as usize] = 64;
         words[SHEET_REFUSED_WORD as usize] = 7;
+        words[TILE_REMOVED_WORD as usize] = 3;
         let stats = LiquidTickStats::from_words(&words);
         assert_eq!(
             stats,
@@ -468,6 +479,7 @@ mod tests {
                 inflow_births: 640,
                 inflow_refused: 64,
                 sheet_refused: 7,
+                tile_removed: 3,
             }
         );
         assert_eq!(words.len(), LIQUID_STATS_WORDS as usize);

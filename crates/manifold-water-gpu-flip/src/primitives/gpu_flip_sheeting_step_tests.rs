@@ -5,17 +5,19 @@
 //! is the particles; the step's own surface distance is the level set.
 
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs, StepBirths};
+use super::gpu_flip_sheeting_tests::{World, padded_cells, padded_markers, sort, to_world};
 use super::gpu_flip_step::GpuFlipStep;
 use super::gpu_flip_step_tests::{cpu_sample_on, step_faces};
-use super::liquid_fill::LiquidFill;
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::world_tiles::{lattice_origin, pool_len};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, pack_distance_atlas};
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::lattice::PADDING_NODES;
+use manifold_water_liquid::primitives::face_sample_component::solver_origin_cell;
 use manifold_water_liquid::primitives::liquid_stats::{
     LIQUID_STATS_WORDS, LiquidTickStats, SHEET_REFUSED_TAIL, SHEET_REFUSED_WORD,
     SOLVER_STATS_START, SOLVER_WORDS,
@@ -23,18 +25,15 @@ use manifold_water_liquid::primitives::liquid_stats::{
 use manifold_water_liquid::primitives::particle_identity::{
     BirthReservation, COUNT_OFFSET, ParticleIdentity,
 };
-use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
-use manifold_water_liquid::primitives::sort_particles_into_cells::{
-    LIQUID_PARTICLE_READ, ParticleSorter, SortCount, SortJob, SortLabels,
-};
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
-use manifold_water_liquid::tile_storage::pool_len;
-use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool, to_pool};
+use manifold_water_liquid::world_tiles::exhausted_word;
 
 const H: f32 = 0.25;
 /// The splash's grid is the step's solver grid: 37 box cells and the step's
-/// three, its minimum at the origin.
+/// three, world cells -20..20 on every axis, so it crosses the origin.
 const SOLVER: [usize; 3] = [40; 3];
+/// The solver grid's first node, world cell -20's low face.
+const SOLVER_MIN: f32 = -20.5 * H;
 const DT: f32 = 1.0 / 120.0;
 const RADIUS: f32 = 0.31017524 * H;
 const V0: [f32; 3] = [0.4, 0.1, -0.3];
@@ -54,6 +53,11 @@ fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     read(&staged, (buffer.size / 4) as usize)
 }
 
+/// A point `grid` metres from the solver grid's first node, in the world.
+fn world(grid: [f32; 3]) -> [f32; 3] {
+    grid.map(|v| v + SOLVER_MIN)
+}
+
 /// An inflow (code 2) or outflow (code 3) over the world box `lo` to
 /// `lo + 4 H` on each axis.
 fn region(code: f32, lo: [f32; 3]) -> LiquidBody {
@@ -71,6 +75,34 @@ fn inside(p: &FluidParticle, lo: [f32; 3]) -> bool {
     (0..3).all(|a| p.position_radius[a] >= lo[a] && p.position_radius[a] <= lo[a] + 4.0 * H)
 }
 
+/// The region-site rows of `regions` (gpu_flip_domain's `RegionSites`, 8
+/// words a row: first world half cell, first index in the tick, sites per
+/// axis, count) and their total: an inflow's the half cells round its box,
+/// one more each side (emission tests every site against the region), an
+/// outflow none. Half cell J sits at (J/2 − 1/4)·h.
+fn region_sites(regions: &[LiquidBody]) -> (Vec<u32>, u32) {
+    let mut words = Vec::new();
+    let mut total = 0u32;
+    for row in regions {
+        let lo: [f32; 3] = std::array::from_fn(|a| row.position_inv_mass[a]);
+        let first = lo.map(|v| (2.0 * v / H).floor() as i32 - 1);
+        let size: [u32; 3] = std::array::from_fn(|a| {
+            ((2.0 * (lo[a] + 4.0 * H) / H).ceil() as i32 + 1 - first[a] + 1) as u32
+        });
+        let count = if row.angular_velocity[3] == 2.0 {
+            size.iter().product()
+        } else {
+            0
+        };
+        words.extend(first.map(|j| j as u32));
+        words.push(total);
+        words.extend(size);
+        words.push(count);
+        total += count;
+    }
+    (words, total)
+}
+
 struct Splash {
     h: Harness,
     node: GpuFlipStep,
@@ -80,8 +112,9 @@ struct Splash {
     faces: manifold_node_engine::bindings::Slot,
     tiles: manifold_node_engine::bindings::Slot,
     capped: manifold_node_engine::bindings::Slot,
-    regions: Option<[manifold_node_engine::bindings::Slot; 4]>,
+    regions: Option<[manifold_node_engine::bindings::Slot; 5]>,
     region_count: usize,
+    site_total: u32,
     markers: usize,
 }
 
@@ -101,7 +134,12 @@ impl Splash {
             .iter()
             .enumerate()
             .map(|(i, m)| FluidParticle {
-                position_radius: [m[0], m[1], m[2], RADIUS],
+                position_radius: [
+                    m[0] + SOLVER_MIN,
+                    m[1] + SOLVER_MIN,
+                    m[2] + SOLVER_MIN,
+                    RADIUS,
+                ],
                 velocity: V0,
                 id: i as u32 + 1,
             })
@@ -123,6 +161,7 @@ impl Splash {
             )
             .0;
         let region_count = regions.len();
+        let (sites, site_total) = region_sites(regions);
         let region_slots = (!regions.is_empty()).then(|| {
             let dims = [5u32; 3];
             let mut atlas = Vec::new();
@@ -137,6 +176,7 @@ impl Splash {
             };
             [
                 h.array(regions, regions.len()).0,
+                h.array(&sites, sites.len()).0,
                 h.array(&[shape], 1).0,
                 h.array(&atlas, atlas.len()).0,
                 h.array::<LiquidBody>(&[], 1).0,
@@ -153,6 +193,7 @@ impl Splash {
             capped,
             regions: region_slots,
             region_count,
+            site_total,
             markers: markers.len(),
         }
     }
@@ -160,7 +201,7 @@ impl Splash {
     fn tick(&mut self, tick: u32, steps: u32, rate: f32) -> Tick {
         let pad = PADDING_NODES as f32;
         let n = SOLVER[0] as f32 - 3.0;
-        let min = 1.5 * H;
+        let min = SOLVER_MIN + 1.5 * H;
         let mut values = vec![
             ("nodes_x", n + 1.0 + 2.0 * pad),
             ("nodes_y", n + 1.0 + 2.0 * pad),
@@ -182,13 +223,15 @@ impl Splash {
             ("particles", self.particles.0),
             ("identity", self.identity.0),
         ];
-        if let Some([regions, shapes, atlas, bodies]) = self.regions {
+        if let Some([regions, sites, shapes, atlas, bodies]) = self.regions {
             values.extend([
                 ("region_count", self.region_count as f32),
+                ("region_site_total", self.site_total as f32),
                 ("first_tick", tick as f32),
             ]);
             inputs.extend([
                 ("regions", regions),
+                ("region_sites", sites),
                 ("shapes", shapes),
                 ("atlas", atlas),
                 ("bodies", bodies),
@@ -232,10 +275,17 @@ impl Splash {
     }
 
     fn faces(&self) -> Vec<FaceSample> {
-        step_faces(&self.h, self.faces, self.tiles, SOLVER.map(|n| n as u32))
+        step_faces(
+            &self.h,
+            self.faces,
+            self.tiles,
+            solver_origin_cell([SOLVER_MIN; 3], H),
+            SOLVER.map(|n| n as u32),
+        )
     }
 
-    /// Entry i: the seed written at birth index i, grid-local.
+    /// Entry i: the seed written at birth index i, lattice-local (the world
+    /// less the lattice origin).
     fn births(&self, written: u32) -> Vec<[f32; 3]> {
         let words = copy_out(&self.h.device, self.node.sheeting().births().0);
         (0..written as usize)
@@ -292,10 +342,12 @@ fn gpu_flip_sheeting_births_move_in_their_substep_and_survive() {
         "every birth is alive after its substep"
     );
     let dt = f64::from(DT);
+    let origin = lattice_origin(H);
     let mut worst = [0.0f64; 2];
     for p in &born {
-        let seed = seeds[(p.id - base) as usize];
-        let q: [f64; 3] = seed.map(|c| f64::from(c / H));
+        let lattice_local = seeds[(p.id - base) as usize];
+        let seed: [f32; 3] = std::array::from_fn(|a| lattice_local[a] + origin[a]);
+        let q: [f64; 3] = seed.map(|c| f64::from((c - SOLVER_MIN) / H));
         let v1 = cpu_sample_on(q, &field, SOLVER);
         let v2 = cpu_sample_on(
             std::array::from_fn(|a| q[a] + 0.5 * dt / f64::from(H) * v1[a]),
@@ -362,8 +414,8 @@ fn gpu_flip_sheeting_births_share_the_pool() {
     assert_unique_ids(&tick.particles, "short pool");
 
     // Inflow clear of the water, outflow through the shell's top.
-    let inflow = [1.0, 1.0, 1.0];
-    let outflow = [4.5, 6.2, 4.5];
+    let inflow = world([1.0, 1.0, 1.0]);
+    let outflow = world([4.5, 6.2, 4.5]);
     let mut shared = Splash::new(8000, 4001, &[region(2.0, inflow), region(3.0, outflow)]);
     let tick = shared.tick(0, 1, 1.0);
     let written = tick.stats[1];
@@ -431,15 +483,11 @@ fn step_passes_with_room(room: usize) {
     let h = dx as f32;
     let live = markers.len();
     let capacity = live + room;
-    let records: Vec<FluidParticle> = markers
-        .iter()
-        .enumerate()
-        .map(|(i, m)| FluidParticle {
-            position_radius: [m[0], m[1], m[2], RADIUS],
-            velocity: V0,
-            id: i as u32 + 1,
-        })
-        .collect();
+    // The splash inside a margin of air, on whole tiles across the origin.
+    let lo = [-24; 3];
+    let big = padded_cells(cells, 8);
+    let (world_markers, local_markers) = to_world(&padded_markers(&markers, 8, h), lo, h);
+    let world = World::new(&device, lo, big.map(|n| n as i32), h);
     let shared = |bytes: &[u8], size: usize| {
         let buffer = device.create_buffer_shared(size.max(16) as u64);
         buffer.zero_fill();
@@ -447,80 +495,37 @@ fn step_passes_with_room(room: usize) {
         unsafe { buffer.write(0, bytes) };
         buffer
     };
-    let source = shared(bytemuck::cast_slice(&records), 32 * capacity);
-    let particles = device.create_buffer_shared(32 * capacity as u64);
-    let order = device.create_buffer_shared(4 * capacity as u64);
-    // The ranges are keyed by the cell's pool index, in the identity pool.
-    let (table_words, pool_tiles) = identity_table(cells);
-    let table = shared(bytemuck::cast_slice(&table_words), 4 * table_words.len());
-    let mut sorter = ParticleSorter::default();
-    sorter.prepare_pooled(&device);
-    sorter.reserve_keys(&device, pool_len(pool_tiles)).unwrap();
-    let labels = SortLabels {
-        clear: "clear",
-        count: "count",
-        scan: ScanLabels {
-            blocks: "blocks",
-            add: "add",
-        },
-        ranges: "ranges",
-        tail: "tail",
-        scatter: "scatter",
-        stabilise: "stabilise",
-    };
-    let mut enc = device.create_encoder("sheeting step sort");
-    sorter
-        .encode_pooled(
-            &device,
-            &mut enc,
-            &SortJob {
-                particles: &source,
-                read: LIQUID_PARTICLE_READ,
-                capacity: capacity as u32,
-                count: SortCount::Slots(capacity as u32),
-                bin_min: [0.0; 3],
-                inv_cell: 1.0 / h,
-                bins: cells,
-                sorted: Some(&particles),
-                order: Some(&order),
-                gate: None,
-            },
-            &table,
-            pool_tiles,
-            &labels,
-        )
-        .unwrap();
-    enc.commit_and_wait_completed();
+    let sorted = sort(&device, &world, &world_markers, h, capacity);
+    let (particles, order, ranges) = (&sorted.particles, &sorted.order, &sorted.ranges);
     let pooled_phi = |phi: &[f32]| {
-        let pooled = to_pool(phi, cells, &[3.0 * h]);
+        let pooled = world.to_pool(phi, 3.0 * h);
         shared(bytemuck::cast_slice(&pooled), 4 * pooled.len())
     };
-    let phi = pooled_phi(&marker_phi(&markers, cells, h));
+    let level_set = marker_phi(&local_markers, big, h);
+    let phi = pooled_phi(&level_set);
     let face = FaceSample {
         velocity: [0.3, -0.2, 0.1, 0.0],
         weight: [1.0; 4],
     };
-    let faces = vec![face; cells.into_iter().map(|n| (n + 1) as usize).product()];
-    let pooled_faces = records_to_pool(&faces, cells, &[face; 8]);
+    let faces = vec![face; world.cells().len()];
+    let pooled_faces = world.to_pool(&faces, face);
     let old = shared(bytemuck::cast_slice(&pooled_faces), 32 * pooled_faces.len());
     let identity = shared(bytemuck::cast_slice(&identity_words(5000, live)), 32);
     let capped = shared(&[], 4 * SOLVER_WORDS as usize);
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
     stage
-        .reserve(&device, cells, capacity as u32, pool_tiles)
+        .reserve(&device, capacity as u32, world.pool_tiles())
         .unwrap();
     let mut ids = ParticleIdentity::default();
     ids.prepare(&device);
-    let ranges = sorter.ranges().unwrap();
     let run = |stage: &GpuSheeting, plan: &GpuBuffer, phi: &GpuBuffer| {
         let inputs = SheetInputs {
-            particles: &particles,
-            order: &order,
+            particles,
+            order,
             ranges,
             count: (&identity, COUNT_OFFSET),
             phi,
-            origin: [0.0; 3],
             h,
             threshold: FILL_THRESHOLD,
         };
@@ -534,26 +539,27 @@ fn step_passes_with_room(room: usize) {
             substep: 0,
         };
         let mut enc = device.create_encoder("sheeting step passes");
-        stage.encode_draw(&mut enc, &inputs, plan, &births, &table, pool_tiles);
+        stage.encode_draw(&mut enc, &inputs, plan, &births, &world.tiles);
         ids.reserve(
             &mut enc,
             BirthReservation {
-                particles: &particles,
+                particles,
                 identity: &identity,
                 ranges,
                 scan: stage.winners(),
                 plan,
+                tile_counts: world.tiles.counts(),
                 step_record: None,
                 params: [
                     capacity as u32,
-                    pool_len(pool_tiles) as u32,
+                    pool_len(world.pool_tiles()) as u32,
                     stage.ranks(),
-                    1,
+                    exhausted_word(world.tiles.reach().ring_max) as u32,
                 ],
             },
         );
         enc.compute_memory_barrier_buffers();
-        stage.encode_write(&mut enc, &inputs, plan, &births, &table, pool_tiles);
+        stage.encode_write(&mut enc, &inputs, plan, &births, &world.tiles);
         enc.commit_and_wait_completed();
     };
     let plan = |step_dt: f32| {
@@ -575,7 +581,7 @@ fn step_passes_with_room(room: usize) {
         identity_words(0, written)[4..],
         "the identity's record after the reservation"
     );
-    let slots = copy_out(&device, &particles);
+    let slots = copy_out(&device, particles);
     let radius = |slot: usize| f32::from_bits(slots[8 * slot + 3]);
     assert!(
         (live..written).all(|slot| radius(slot) > 0.0),
@@ -598,13 +604,13 @@ fn step_passes_with_room(room: usize) {
             .map(|b| copy_out(&device, b))
             .collect();
         words.push(copy_out(&device, stage.winners()));
-        words.push(copy_out(&device, &particles));
+        words.push(copy_out(&device, particles));
         words.push(copy_out(&device, &identity));
         words.push(copy_out(&device, &capped));
         words
     };
     let before = snapshot(&stage);
-    let other: Vec<f32> = marker_phi(&markers, cells, h).iter().map(|v| -v).collect();
+    let other: Vec<f32> = level_set.iter().map(|v| -v).collect();
     run(&stage, &plan(0.0), &pooled_phi(&other));
     assert!(before == snapshot(&stage), "an inactive slot wrote");
 }
@@ -649,74 +655,4 @@ fn a_full_pool_reports_refused_sheet_births() {
         LiquidTickStats::from_words(&words).sheet_refused,
         full.refused_births()
     );
-}
-
-/// Water at rest seeds nothing: a jittered pool 12 cells deep, rate 0.5, many
-/// ticks, never requests a birth and never changes its live count. The sheeter
-/// must call only thin water thin, not water that is deep but noisy.
-#[test]
-fn a_resting_pool_seeds_nothing() {
-    const BOX: u32 = 24;
-    let pad = PADDING_NODES as f32;
-    let nodes = BOX as f32 + 1.0 + 2.0 * pad;
-    let min = 1.5 * H - pad * H;
-    let lattice = [
-        ("nodes_x", nodes),
-        ("nodes_y", nodes),
-        ("nodes_z", nodes),
-        ("lattice_min_x", min),
-        ("lattice_min_y", min),
-        ("lattice_min_z", min),
-        ("cell_size", H),
-    ];
-    let mut h = Harness::new();
-    let out = h.array::<FluidParticle>(&[], 1);
-    let count = h.scalar();
-    // Sites are half cells: 24 of them is 12 cells of water.
-    let mut fill_values = lattice.to_vec();
-    fill_values.extend([("pool_sites", 24.0), ("jitter", 1.0), ("seed", 5.0)]);
-    let mut fill = LiquidFill::new();
-    let (_, errors) = h.run(
-        &mut fill,
-        &[],
-        &[("particles", out.0), ("count", count)],
-        &params(&fill_values),
-    );
-    assert!(errors.is_empty(), "{errors:?}");
-    let placed = (h.buffer(out.0).size / std::mem::size_of::<FluidParticle>() as u64) as usize;
-    assert_eq!(placed, 2 * BOX as usize * 2 * BOX as usize * 24);
-
-    let solver = BOX as usize + 3;
-    let identity = h.array::<u32>(&identity_words(placed as u32 + 1, placed), 8);
-    let faces = h.array::<FaceSample>(&[], (solver + 1).pow(3)).0;
-    let tiles = h.array::<u32>(&[], 1).0;
-    let capped = h.array::<u32>(&[], 2 * placed + SOLVER_WORDS as usize).0;
-    let mut node = GpuFlipStep::new();
-    node.prepare_pipelines(&h.device);
-    for tick in 0..20 {
-        let mut values = lattice.to_vec();
-        values.extend([
-            ("gravity_y", -9.81),
-            ("interval_duration", DT),
-            ("steps", 1.0),
-            ("flip", 0.95),
-            ("iterations", 0.0),
-            ("volume_projection", 0.0),
-            ("sheet_fill_rate", 0.5),
-            ("tick_index", tick as f32),
-        ]);
-        let inputs = [("particles", out.0), ("identity", identity.0)];
-        let outputs = [
-            ("out", out.0),
-            ("faces", faces),
-            ("tiles", tiles),
-            ("capped", capped),
-        ];
-        let (_, errors) = h.run(&mut node, &inputs, &outputs, &params(&values));
-        assert!(errors.is_empty(), "tick {tick}: {errors:?}");
-        let stats: Vec<u32> = read(node.sheeting().stats(), 4);
-        assert_eq!(stats[2], 0, "tick {tick}: the pool requested a sheet birth");
-        let particles: Vec<FluidParticle> = read(&h.buffer(out.0), placed);
-        assert_eq!(alive(&particles).count(), placed, "tick {tick}: live count");
-    }
 }

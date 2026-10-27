@@ -5,13 +5,17 @@
 //! `manifold_fluids::sheeter`, the CPU port proven against the native
 //! sheeter; this stage is proven against that port.
 //!
-//! Output: the births the sheeter would seed before its fill-rate draw, in
-//! the engine's order (ascending candidate rank), each a grid-local position
-//! and its rank, and their true count. A list of `capacity` keeps the engine's
-//! first `capacity` births.
+//! Output: the births the sheeter would seed before its fill-rate draw, each
+//! a lattice-local position and its key (the engine's visiting order, see the
+//! shader's `site_key`), and their true count. The grid is the held world
+//! tiles of the step's table: a tile that holds no slot is outside it (zero
+//! level set, no neighbour). Births are numbered by pool slot, then the cell
+//! in the slot, then the offset, so a run is bitwise the same whatever order
+//! the GPU's threads arrive in. A list of `capacity` keeps the first
+//! `capacity` births.
 //!
 //! In the step, per substep before the move (fluidsimulation.cpp
-//! `_updateSheetSeeding`): selection with the fill-rate draw and the rank
+//! `_updateSheetSeeding`): selection with the fill-rate draw and the slot
 //! scan (`encode_draw`), the caller's identity reservation over
 //! [`GpuSheeting::winners`], then `encode_write` puts each birth after the
 //! live prefix in the saved velocity at its seed, as many as the reservation
@@ -19,8 +23,8 @@
 //!
 //! Parity contract. Exact: cell and half-cell indexing (the f64 floor for
 //! results inside +-2^30, see the shader's `exact_floor`; beyond that and for
-//! non-finite positions it clamps outside every lattice), candidate centres, visiting order, the claim
-//! resolution. Narrowed: interpolation and vector arithmetic run in f32 under
+//! non-finite positions it clamps outside every lattice), candidate centres, the
+//! claim resolution by visiting order. Narrowed: interpolation and vector arithmetic run in f32 under
 //! Metal fast math where the engine widens weights to f64 and contracts its
 //! own way, so a decision within rounding of its threshold (band, depth walk,
 //! radius, nearest-three, plane guard, mindot) can differ; and a marker's
@@ -32,7 +36,7 @@
 //! stream at 32 bits (fluidsimulation.h `_randomDouble`) in seed order and,
 //! within 2h of a solid, multiplies the rate by that solid's sheeting
 //! strength (fluidsimulation.cpp 7158-7170). Here the draw is a stateless
-//! 24-bit PCG hash of (rank, tick, substep) and there is no solid multiplier
+//! 24-bit PCG hash of (key, tick, substep) and there is no solid multiplier
 //! (bodies carry no sheeting strength yet: BUG-g5nm1 (GPU FLIP sheeting solid
 //! strength)). So selection parity gives birth parity only at rate 1 and only
 //! while native's effective rate stays 1 (a solid sheeting strength under 1
@@ -41,12 +45,13 @@
 //! solid with strength other than 1 or below the 24-bit draw's resolution.
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin, pool_len};
+use manifold_water_liquid::world_tiles::{WorldTiles, allocated_args_offset};
 
-/// The kernel with the storage helpers it indexes the lattice through.
+/// The kernel with the world tile read side it indexes the lattice through.
 pub(super) fn source() -> String {
     format!(
-        "{}\n{}",
-        manifold_water_liquid::tile_storage::TILE_STORAGE,
+        "{READ_SIDE}\n{}",
         include_str!("shaders/gpu_flip_sheeting.wgsl")
     )
 }
@@ -55,18 +60,68 @@ pub(super) fn source() -> String {
 fn shader() -> String {
     manifold_water_liquid::primitives::liquid_stats::with_stats_layout(&source())
 }
-const ENTRIES: [&str; 10] = [
+
+/// The kernels, in the order [`CLEAR_TOTALS`] and the rest name them.
+const ENTRIES: [&str; 12] = [
+    "clear_totals",
     "clear",
     "detect",
     "feather",
-    "feather_border",
+    "feather_again",
     "select_markers",
     "build_buckets",
     "candidates",
     "resolve",
     "place",
     "write",
+    "tally",
 ];
+const CLEAR_TOTALS: usize = 0;
+const CLEAR: usize = 1;
+const DETECT: usize = 2;
+const FEATHER: usize = 3;
+const FEATHER_AGAIN: usize = 4;
+const SELECT: usize = 5;
+const BUCKETS: usize = 6;
+const CANDIDATES: usize = 7;
+const RESOLVE: usize = 8;
+#[cfg(all(test, feature = "gpu-proofs"))]
+const PLACE: usize = 9;
+const WRITE: usize = 10;
+const TALLY: usize = 11;
+const LABELS: [&str; 12] = [
+    "gpu_flip.sheeting.clear_totals",
+    "gpu_flip.sheeting.clear",
+    "gpu_flip.sheeting.detect",
+    "gpu_flip.sheeting.feather",
+    "gpu_flip.sheeting.feather_again",
+    "gpu_flip.sheeting.select",
+    "gpu_flip.sheeting.buckets",
+    "gpu_flip.sheeting.candidates",
+    "gpu_flip.sheeting.resolve",
+    "gpu_flip.sheeting.place",
+    "gpu_flip.sheeting.write",
+    "gpu_flip.sheeting.tally",
+];
+
+/// The passes before the birth numbering: totals and cells cleared, detection
+/// through the draw. The scan over the slots follows [`RESOLVE`].
+const DRAW: [usize; 9] = [
+    CLEAR_TOTALS,
+    CLEAR,
+    DETECT,
+    FEATHER,
+    FEATHER_AGAIN,
+    SELECT,
+    BUCKETS,
+    CANDIDATES,
+    RESOLVE,
+];
+/// The numbered births into the birth list, then the true total.
+#[cfg(all(test, feature = "gpu-proofs"))]
+const NUMBER: [usize; 2] = [PLACE, TALLY];
+/// The births into the particles after the reservation, then the bookkeeping.
+const WRITE_BIRTHS: [usize; 2] = [WRITE, TALLY];
 /// gpu_flip_step/common.wgsl `ClockPlan`.
 const PLAN_BYTES: u64 = 48;
 /// A particle is a sheet candidate only within this many cells of the
@@ -88,15 +143,12 @@ pub(crate) const FILL_THRESHOLD: f32 = -0.95;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
-    nx: u32,
-    ny: u32,
-    nz: u32,
-    /// The tile pool's capacity P (gpu_flip_sheeting.wgsl ts_pool_tiles).
+    /// The tile pool's capacity P and the table's entries H
+    /// (gpu_flip_sheeting.wgsl ts_pool_tiles, ts_table_entries).
     pool_tiles: u32,
-    bx: u32,
-    by: u32,
-    bz: u32,
+    entries: u32,
     capacity: u32,
+    steps: u32,
     ox: f32,
     oy: f32,
     oz: f32,
@@ -107,7 +159,6 @@ struct Params {
     sub_dx: f32,
     max_depth: f32,
     step_distance: f32,
-    steps: u32,
     max_seed_depth: f32,
     max_radius: f32,
     threshold: f32,
@@ -119,43 +170,44 @@ struct Params {
     rate: f32,
     tick: u32,
     substep: u32,
+    /// 1 inside the step: `tally` also does the tick's bookkeeping.
+    in_step: u32,
     pad0: u32,
     pad1: u32,
     pad2: u32,
 }
 
-/// Bytes per pooled cell excluding padded bucket rows: two sheet flags (the
-/// second becomes row lengths), mask, cell count, flags and eight claims.
-pub(crate) const POOLED_BYTES_PER_CELL: u64 = 5 * 4 + 8 * 4;
+/// Bytes per cell of the per-cell arrays: two sheet flags (the second becomes
+/// row lengths), mask, cell count, flags and eight claims.
+const CELL_BYTES: u64 = 5 * 4 + 8 * 4;
 
-fn bucket_bytes(cells: [u32; 3]) -> u64 {
-    // 32 vec4 markers per bucket, including padded cells on odd sides.
-    8 * ranks(cells)
+/// Bytes per cell of the bucket rows: 32 markers of 16 bytes for every eight
+/// cells of a bucket.
+const BUCKET_BYTES_PER_CELL: u64 = 64;
+
+/// Bytes per pooled cell the stage holds.
+pub(crate) const POOLED_BYTES_PER_CELL: u64 = CELL_BYTES + BUCKET_BYTES_PER_CELL;
+
+/// Bytes of bucket rows a pool of `pool_tiles` holds: 64 buckets a slot, 32
+/// vec4 markers a bucket.
+fn bucket_bytes(pool_tiles: u32) -> u64 {
+    BUCKET_BYTES_PER_CELL * 512 * u64::from(pool_tiles)
 }
 
-/// Everything the stage holds for `cells` and a birth list of `capacity`,
-/// the rank scan included; the per-cell arrays are pooled fields of a pool of
-/// `pool_tiles` tiles.
-pub(crate) fn scratch_bytes(cells: [u32; 3], capacity: u32, pool_tiles: u32) -> u64 {
-    let n = manifold_water_liquid::tile_storage::pool_len(pool_tiles);
+/// Everything the stage holds for a pool of `pool_tiles` and a birth list of
+/// `capacity`, the slot scan included; the per-cell arrays and bucket rows
+/// are pooled fields.
+pub(crate) fn scratch_bytes(capacity: u32, pool_tiles: u32) -> u64 {
     let scan =
-        4 * manifold_water_liquid::primitives::prefix_scan::storage_words(ranks(cells) as usize)
+        4 * manifold_water_liquid::primitives::prefix_scan::storage_words(pool_tiles as usize)
             as u64;
-    POOLED_BYTES_PER_CELL * n
-        + bucket_bytes(cells)
+    CELL_BYTES * pool_len(pool_tiles)
+        + bucket_bytes(pool_tiles)
         + 16 * u64::from(capacity.max(1))
         + 16
         + PLAN_BYTES
         + scan
         + 16
-}
-
-/// Candidate ranks: eight offsets of eight cells of every 2-cell bucket.
-fn ranks(cells: [u32; 3]) -> u64 {
-    64 * cells
-        .into_iter()
-        .map(|c| u64::from(c.div_ceil(2)))
-        .product::<u64>()
 }
 
 fn words(x: f64) -> [u32; 2] {
@@ -170,7 +222,8 @@ pub(crate) struct SheetInputs<'a> {
     pub particles: &'a GpuBuffer,
     /// Per sorted slot, the particle's input index (the engine's marker order).
     pub order: &'a GpuBuffer,
-    /// One range per cell of the sort, its bins being the solver cells.
+    /// One range per cell of the sort, its bins being the pool indices of the
+    /// cells.
     pub ranges: &'a GpuBuffer,
     /// The slots in use, on the GPU: a record `[groups, 1, 1, n]` at a byte
     /// offset of a buffer (a particle identity's at `COUNT_OFFSET`, or a
@@ -182,8 +235,6 @@ pub(crate) struct SheetInputs<'a> {
     /// The signed distance to the surface at the cell centres, a pooled cell
     /// field, true to `SHEET_DISTANCE_CELLS` deep (gpu_flip_sheet_distance).
     pub phi: &'a GpuBuffer,
-    /// The grid's minimum corner; positions are made grid-local by it.
-    pub origin: [f32; 3],
     pub h: f32,
     pub threshold: f32,
 }
@@ -212,9 +263,9 @@ pub(crate) struct GpuSheeting {
     /// sheet a, sheet b / row lengths, mask, cell counts, bucket rows, claims, candidate
     /// flags, births, birth count, zero plan, birth stats.
     buffers: Option<[GpuBuffer; 11]>,
-    /// Per rank: the winners, scanned in place into birth indices.
+    /// Per pool slot: the births its cells keep, scanned in place into the
+    /// births before each slot's end.
     scan: manifold_water_liquid::primitives::prefix_scan::PrefixScan,
-    cells: [u32; 3],
     capacity: u32,
     pool_tiles: u32,
 }
@@ -255,8 +306,7 @@ impl GpuSheeting {
         &self,
         enc: &mut GpuEncoder,
         inputs: &SheetInputs<'_>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        tiles: &WorldTiles,
     ) {
         self.dispatch_with(
             enc,
@@ -264,32 +314,26 @@ impl GpuSheeting {
             &self.buffers.as_ref().expect("sheeting reserved")[9],
             None,
             None,
-            5..6,
-            table,
-            pool_tiles,
+            &[BUCKETS],
+            tiles,
         );
     }
 
     pub(crate) fn reserve(
         &mut self,
         device: &GpuDevice,
-        cells: [u32; 3],
         capacity: u32,
         pool_tiles: u32,
     ) -> Result<(), String> {
-        if self.buffers.is_some()
-            && self.cells == cells
-            && self.capacity == capacity
-            && self.pool_tiles == pool_tiles
-        {
+        if self.buffers.is_some() && self.capacity == capacity && self.pool_tiles == pool_tiles {
             return Ok(());
         }
         manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(),
-            scratch_bytes(cells, capacity, pool_tiles),
+            scratch_bytes(capacity, pool_tiles),
         )
         .map_err(|e| e.to_string())?;
-        let n = manifold_water_liquid::tile_storage::pool_len(pool_tiles);
+        let n = pool_len(pool_tiles);
         let plan = device.try_create_buffer_shared(PLAN_BYTES)?;
         plan.zero_fill();
         let stats = device.try_create_buffer_shared(16)?;
@@ -299,7 +343,7 @@ impl GpuSheeting {
             device.try_create_buffer(4 * n)?,
             device.try_create_buffer(4 * n)?,
             device.try_create_buffer(4 * n)?,
-            device.try_create_buffer(bucket_bytes(cells))?,
+            device.try_create_buffer(bucket_bytes(pool_tiles))?,
             device.try_create_buffer(8 * 4 * n)?,
             device.try_create_buffer(4 * n)?,
             device.try_create_buffer(16 * u64::from(capacity.max(1)))?,
@@ -307,29 +351,29 @@ impl GpuSheeting {
             plan,
             stats,
         ]);
-        self.scan.buffer(device, ranks(cells) as usize)?;
-        self.cells = cells;
+        self.scan.buffer(device, pool_tiles as usize)?;
         self.capacity = capacity;
         self.pool_tiles = pool_tiles;
         Ok(())
     }
 
-    /// The birth list in the engine's order and its count buffer: word 0 the
-    /// true count, word 1 claimants whose recomputed evaluation disagreed (always 0).
+    /// The birth list in birth order and its count buffer: word 0 the true
+    /// count, word 1 claimants whose recomputed evaluation disagreed (always 0).
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn births(&self) -> (&GpuBuffer, &GpuBuffer) {
         let b = self.buffers.as_ref().expect("sheeting reserved");
         (&b[7], &b[8])
     }
 
-    /// The draw's winners per rank, scanned: what the identity reservation reads.
+    /// The draw's births per pool slot, scanned: what the identity reservation
+    /// reads (its last word over [`Self::ranks`] is the total).
     pub(crate) fn winners(&self) -> &GpuBuffer {
         self.scan.buffer_ref()
     }
 
-    /// Candidate ranks, the scan's length.
+    /// The scan's length: one per pool slot.
     pub(crate) fn ranks(&self) -> u32 {
-        ranks(self.cells) as u32
+        self.pool_tiles
     }
 
     /// Four words: the last active substep's requested and written births,
@@ -355,23 +399,22 @@ impl GpuSheeting {
         &self,
         enc: &mut GpuEncoder,
         inputs: &SheetInputs<'_>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        tiles: &WorldTiles,
     ) {
         let zeros = &self.buffers.as_ref().expect("sheeting reserved")[9];
-        self.encode_gated(enc, inputs, zeros, table, pool_tiles);
+        self.encode_gated(enc, inputs, zeros, tiles);
     }
 
     /// Proof only: each particle's cell and half-cell into the birth list,
-    /// two records a particle (`capacity` must cover `2 * count`).
+    /// two records a particle (`capacity` must cover `2 * count`), the
+    /// position taken as lattice-local already.
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn encode_index_probe(
         &self,
         device: &GpuDevice,
         enc: &mut GpuEncoder,
         inputs: &SheetInputs<'_>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        tiles: &WorldTiles,
     ) {
         let probe =
             device.create_compute_pipeline(&shader(), "index_probe", "gpu_flip.sheeting.probe");
@@ -381,9 +424,8 @@ impl GpuSheeting {
             &self.buffers.as_ref().expect("sheeting reserved")[9],
             None,
             Some(&probe),
-            0..0,
-            table,
-            pool_tiles,
+            &[],
+            tiles,
         );
     }
 
@@ -393,8 +435,7 @@ impl GpuSheeting {
         &self,
         enc: &mut GpuEncoder,
         inputs: &SheetInputs<'_>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        tiles: &WorldTiles,
     ) {
         self.dispatch_with(
             enc,
@@ -402,9 +443,8 @@ impl GpuSheeting {
             &self.buffers.as_ref().expect("sheeting reserved")[9],
             None,
             None,
-            0..2,
-            table,
-            pool_tiles,
+            &[CLEAR, DETECT],
+            tiles,
         );
     }
 
@@ -416,34 +456,24 @@ impl GpuSheeting {
         enc: &mut GpuEncoder,
         inputs: &SheetInputs<'_>,
         plan: &GpuBuffer,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        tiles: &WorldTiles,
     ) {
-        self.dispatch_with(enc, inputs, plan, None, None, 0..9, table, pool_tiles);
+        self.dispatch_with(enc, inputs, plan, None, None, &DRAW, tiles);
+        self.dispatch_with(enc, inputs, plan, None, None, &NUMBER, tiles);
     }
 
-    /// In the step: selection, the fill-rate draw and the rank scan. The
-    /// caller reserves identities from [`Self::winners`] over [`Self::ranks`],
-    /// then calls [`Self::encode_write`].
+    /// In the step: selection, the fill-rate draw and the scan over the pool's
+    /// slots. The caller reserves identities from [`Self::winners`] over
+    /// [`Self::ranks`], then calls [`Self::encode_write`].
     pub(crate) fn encode_draw(
         &self,
         enc: &mut GpuEncoder,
         inputs: &SheetInputs<'_>,
         plan: &GpuBuffer,
         births: &StepBirths<'_>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        tiles: &WorldTiles,
     ) {
-        self.dispatch_with(
-            enc,
-            inputs,
-            plan,
-            Some(births),
-            None,
-            0..8,
-            table,
-            pool_tiles,
-        );
+        self.dispatch_with(enc, inputs, plan, Some(births), None, &DRAW, tiles);
     }
 
     /// In the step, after the reservation: the births after the live prefix.
@@ -453,19 +483,9 @@ impl GpuSheeting {
         inputs: &SheetInputs<'_>,
         plan: &GpuBuffer,
         births: &StepBirths<'_>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        tiles: &WorldTiles,
     ) {
-        self.dispatch_with(
-            enc,
-            inputs,
-            plan,
-            Some(births),
-            None,
-            9..10,
-            table,
-            pool_tiles,
-        );
+        self.dispatch_with(enc, inputs, plan, Some(births), None, &WRITE_BIRTHS, tiles);
     }
 
     fn dispatch_with(
@@ -475,10 +495,14 @@ impl GpuSheeting {
         plan: &GpuBuffer,
         step: Option<&StepBirths<'_>>,
         probe: Option<&GpuComputePipeline>,
-        entries: std::ops::Range<usize>,
-        table: &GpuBuffer,
-        pool_tiles: u32,
+        entries: &[usize],
+        tiles: &WorldTiles,
     ) {
+        assert_eq!(
+            tiles.pool_tiles(),
+            self.pool_tiles,
+            "sheeting was reserved for another pool"
+        );
         let [
             sheet_a,
             sheet_b,
@@ -492,24 +516,20 @@ impl GpuSheeting {
             zeros,
             stats,
         ] = self.buffers.as_ref().expect("sheeting reserved");
-        let n = self.cells;
         let h = inputs.h;
         let dx = f64::from(h);
+        let origin = lattice_origin(h);
         // The sheeter's constants, rounded as manifold_fluids::sheeter rounds them.
         let test_distance = (DEPTH_TEST_CELLS * dx) as f32;
         let step_distance = (DEPTH_TEST_STEP_CELLS * dx) as f32;
         let params = Params {
-            nx: n[0],
-            ny: n[1],
-            nz: n[2],
-            pool_tiles,
-            bx: n[0].div_ceil(2),
-            by: n[1].div_ceil(2),
-            bz: n[2].div_ceil(2),
+            pool_tiles: tiles.pool_tiles(),
+            entries: tiles.table_entries(),
             capacity: self.capacity,
-            ox: inputs.origin[0],
-            oy: inputs.origin[1],
-            oz: inputs.origin[2],
+            steps: (test_distance / step_distance).ceil() as u32,
+            ox: origin[0],
+            oy: origin[1],
+            oz: origin[2],
             h,
             inv_h: (1.0 / dx) as f32,
             inv_sub: (1.0 / (0.5 * dx)) as f32,
@@ -517,7 +537,6 @@ impl GpuSheeting {
             sub_dx: (0.5 * dx) as f32,
             max_depth: (MAX_SHEET_DEPTH_CELLS * dx) as f32,
             step_distance,
-            steps: (test_distance / step_distance).ceil() as u32,
             max_seed_depth: dx as f32,
             max_radius: (2.0 * dx) as f32,
             threshold: inputs.threshold,
@@ -529,6 +548,7 @@ impl GpuSheeting {
             rate: step.map_or(1.0, |s| s.rate),
             tick: step.map_or(0, |s| s.tick),
             substep: step.map_or(0, |s| s.substep),
+            in_step: u32::from(step.is_some()),
             pad0: 0,
             pad1: 0,
             pad2: 0,
@@ -563,73 +583,66 @@ impl GpuSheeting {
             buffer(16, step.map_or(zeros, |s| s.old)),
             buffer(17, step.map_or(zeros, |s| s.identity)),
             buffer(18, stats),
-            // Standalone never runs `write`, the one kernel that writes this.
+            // Standalone never runs the in-step bookkeeping, the one place
+            // that writes this.
             GpuBinding::Buffer {
                 binding: 19,
                 buffer: step.map_or(stats, |s| s.capped),
                 offset: step.map_or(0, |s| s.capped_offset),
             },
-            buffer(20, table),
+            buffer(20, tiles.table()),
             GpuBinding::Buffer {
                 binding: 21,
                 buffer: inputs.count.0,
                 offset: inputs.count.1,
             },
+            buffer(22, &tiles.lists().by_rank),
         ];
-        let cells = n[0] * n[1] * n[2];
-        let groups = |work: u32| [work.div_ceil(256).max(1), 1, 1];
-        // One thread per slot in use: dispatched from the record.
-        let over_slots = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, label| {
+        let held = allocated_args_offset(tiles.reach().ring_max);
+        if let Some(pipeline) = probe {
             enc.dispatch_compute_indirect(
                 pipeline,
                 &bindings,
                 inputs.count.0,
                 inputs.count.1,
-                label,
+                "gpu_flip.sheeting.probe",
             );
-        };
-        if let Some(pipeline) = probe {
-            over_slots(enc, pipeline, "gpu_flip.sheeting.probe");
             return;
         }
-        let ranks = ranks(n) as u32;
-        // The threads of each entry; `None` is one per slot in use.
-        let work = [
-            Some(cells),
-            None,
-            Some(cells),
-            Some(cells),
-            Some(cells),
-            Some(ranks / 64),
-            Some(8 * cells),
-            Some(ranks),
-            Some(ranks),
-            Some(ranks),
-        ];
-        let labels = [
-            "gpu_flip.sheeting.clear",
-            "gpu_flip.sheeting.detect",
-            "gpu_flip.sheeting.feather",
-            "gpu_flip.sheeting.feather_border",
-            "gpu_flip.sheeting.select",
-            "gpu_flip.sheeting.buckets",
-            "gpu_flip.sheeting.candidates",
-            "gpu_flip.sheeting.resolve",
-            "gpu_flip.sheeting.place",
-            "gpu_flip.sheeting.write",
-        ];
-        for i in entries {
-            match work[i] {
-                Some(threads) => {
-                    enc.dispatch_compute(&self.pipelines[i], &bindings, groups(threads), labels[i])
-                }
-                None => over_slots(enc, &self.pipelines[i], labels[i]),
+        for &i in entries {
+            let pipeline = &self.pipelines[i];
+            match i {
+                // One thread per slot in use: dispatched from the record.
+                DETECT => enc.dispatch_compute_indirect(
+                    pipeline,
+                    &bindings,
+                    inputs.count.0,
+                    inputs.count.1,
+                    LABELS[i],
+                ),
+                // One thread per pool slot, held or not.
+                CLEAR_TOTALS => enc.dispatch_compute(
+                    pipeline,
+                    &bindings,
+                    [self.pool_tiles.div_ceil(256).max(1), 1, 1],
+                    LABELS[i],
+                ),
+                TALLY => enc.dispatch_compute(pipeline, &bindings, [1, 1, 1], LABELS[i]),
+                // The rest run over the cells of the held slots, 512 threads
+                // a slot (`place` and `write` as two workgroups a slot).
+                _ => enc.dispatch_compute_indirect(
+                    pipeline,
+                    &bindings,
+                    tiles.args(),
+                    held,
+                    LABELS[i],
+                ),
             }
             enc.compute_memory_barrier_buffers();
-            if i == 7 {
+            if i == RESOLVE {
                 self.scan.encode_labelled_gated(
                     enc,
-                    ranks as usize,
+                    self.pool_tiles as usize,
                     manifold_water_liquid::primitives::prefix_scan::ScanLabels {
                         blocks: "gpu_flip.sheeting.scan.blocks",
                         add: "gpu_flip.sheeting.scan.add",

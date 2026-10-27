@@ -74,7 +74,8 @@ fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {
     return bd.inv_inertia_x.xyz + bd.inv_inertia_x.w * rigid;
 }
 
-// One thread per face record, `faces_in` to `faces_out`: each face gains
+// 512 threads a held slot, one per record of the box, `faces_in` to
+// `faces_out`: each face gains
 // step_dt · (g + forces(x)) along its normal a, x its centre, relaxing toward
 // the wind at the air's drag rate where the field carries air (exactly
 // integrated, force_lattice_drag_step), plus the
@@ -84,19 +85,14 @@ fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {
 @compute @workgroup_size(256)
 fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= ts_record_count() {
+    let at = list_cell(gid.x);
+    let p = ts_face_coord(at);
+    if !in_box_records(p) {
         return;
     }
-    let n = ts_cells();
-    let p = ts_box_record(idx);
-    if !ts_record_stored(p) {
-        return;
-    }
-    let at = ts_face(p);
     let here = faces_in[at];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    let origin = u.box_min;
+    let origin = u.walls_lo;
     var force_base = 0u;
     if u.force_lattices > 0 {
         force_base = force_lattice_base(u.tick_index, u.first_tick, u.force_lattices, u.field_nodes);
@@ -105,13 +101,13 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let impulse = select(u.tick_index == u.impulse_tick && u.step_in_tick == 0,
         live_event, clock_live());
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) {
+        if !face_exists(p, a) {
             continue;
         }
         out.face_weight[a] = here.face_weight[a];
         var centre = vec3<f32>(p) + vec3<f32>(0.5);
         centre[a] = f32(p[a]);
-        let x = fma(centre, vec3<f32>(u.cell_size), origin);
+        let x = fma(centre, vec3<f32>(u.cell_size), u.origin);
         var accel = u.gravity[a];
         var air = vec2<f32>(0.0);
         if u.force_lattices > 0 {
@@ -135,7 +131,7 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         if impulse {
             v = v + gravity_impulse(x, origin, u32(a));
         }
-        out.face_velocity[a] = select(v, 0.0, p[a] == 0 || p[a] == n[a]);
+        out.face_velocity[a] = select(v, 0.0, on_box_wall(p, a));
     }
     faces_out[at] = out;
 }

@@ -38,8 +38,12 @@ pub struct BirthReservation<'a> {
     pub ranges: &'a GpuBuffer,
     pub scan: &'a GpuBuffer,
     pub plan: &'a GpuBuffer,
+    /// The step's tile counts; `params[3]` names the word that is set when
+    /// the tile pool ran out, which refuses the whole stage.
+    pub tile_counts: &'a GpuBuffer,
     /// The step's own record, written beside the identity's.
     pub step_record: Option<&'a GpuBuffer>,
+    /// `[slots, ranges, sites, exhausted word]`.
     pub params: [u32; 4],
 }
 }
@@ -132,6 +136,7 @@ impl ParticleIdentity {
             assert!(u64::from(job.params[0]) * 32 <= job.particles.size);
             assert!(job.params[1] > 0 && u64::from(job.params[1]) * 8 <= job.ranges.size);
             assert!(job.params[2] > 0 && u64::from(job.params[2]) * 4 <= job.scan.size);
+            assert!((u64::from(job.params[3]) + 1) * 4 <= job.tile_counts.size);
             assert!(job.identity.size >= IDENTITY_BYTES && job.plan.size >= 12 * 4);
             assert!(
                 job.step_record
@@ -160,6 +165,7 @@ impl ParticleIdentity {
                     binding(4, job.scan),
                     binding(5, job.plan),
                     binding(6, job.step_record.unwrap_or(job.identity)),
+                    binding(7, job.tile_counts),
                 ],
                 [1, 1, 1],
                 "particle_identity.reserve",

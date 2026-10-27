@@ -1,5 +1,6 @@
 //! Shader checks on the CPU, bitwise stage oracles on the GPU.
 use super::*;
+use manifold_water_liquid::testkit::world_box::BoxTable;
 
 #[cfg(test)]
 fn validate_wgsl(source: &str) -> naga::Module {
@@ -21,7 +22,7 @@ fn whitewater_fused_and_gather_validate_on_cpu() {
     assert_eq!(std::mem::size_of::<SpawnParams>(), 112);
     assert_eq!(std::mem::size_of::<LifecycleParams>(), 144);
     assert_eq!(std::mem::size_of::<TurbulenceParams>(), 32);
-    assert_eq!(std::mem::size_of::<GatherParams>(), 32);
+    assert_eq!(std::mem::size_of::<GatherParams>(), 48);
     assert_eq!(module.entry_points.len(), 5);
     for entry in &module.entry_points {
         assert_eq!(entry.workgroup_size, [256, 1, 1]);
@@ -32,27 +33,26 @@ fn whitewater_fused_and_gather_validate_on_cpu() {
     assert_eq!(gather.entry_points[0].workgroup_size, [256, 1, 1]);
 }
 
-/// A dense face-cells distance lattice in the step's pooled layout under the
-/// identity slot table: the pooled phi, the table words and the pool's tiles.
-/// Every tile is stored, so the canonical value is never read.
-pub fn pooled_distance(dense: &[f32], cells: [u32; 3]) -> (Vec<f32>, Vec<u32>, u32) {
-    use manifold_water_liquid::tile_storage::testkit::{identity_table, to_pool};
-    let (table, pool_tiles) = identity_table(cells);
-    (to_pool(dense, cells, &[0.0]), table, pool_tiles)
+/// A dense face-cells distance lattice as the step's pooled field: the cells
+/// at the shape's world cell origin, in a world-tile table holding the tiles
+/// they touch. Returns the pooled phi, the table words and the pool's tiles.
+/// Cells of those tiles outside the lattice read 0, the canonical value.
+pub fn pooled_distance(dense: &[f32], shape: &StepShape) -> (Vec<f32>, Vec<u32>, u32) {
+    let table = BoxTable::new(shape.cell_origin, shape.face_cells);
+    (table.to_pool(dense, 0.0), table.words, table.pool_tiles)
 }
 
-/// A dense face-record lattice (`(n+1)^3`) in the step's pooled layout under
-/// the identity slot table: the pooled records, the table words and the
-/// pool's tiles. Records past the cells read the canonical block (closed
-/// walls), so a dense reference reads `records_from_pool` of the result.
-pub fn pooled_faces(dense: &[FaceSample], cells: [u32; 3]) -> (Vec<FaceSample>, Vec<u32>, u32) {
-    use manifold_water_liquid::tile_storage::testkit::{identity_table, records_to_pool};
-    let canon: [FaceSample; 8] = std::array::from_fn(|mask| FaceSample {
-        weight: std::array::from_fn(|a| f32::from(u8::from(a < 3 && mask >> a & 1 == 1))),
-        ..FaceSample::default()
-    });
-    let (table, pool_tiles) = identity_table(cells);
-    (records_to_pool(dense, cells, &canon), table, pool_tiles)
+/// A dense face-record lattice (`(n+1)^3`) as the step's pooled faces: record
+/// p lives with world cell cell_origin + p, in a world-tile table holding the
+/// tiles the records touch. Returns the pooled records, the table words and
+/// the pool's tiles. Cells of those tiles outside the lattice hold no face.
+pub fn pooled_faces(dense: &[FaceSample], shape: &StepShape) -> (Vec<FaceSample>, Vec<u32>, u32) {
+    let table = BoxTable::new(shape.cell_origin, shape.face_cells.map(|n| n + 1));
+    (
+        table.to_pool(dense, FaceSample::default()),
+        table.words,
+        table.pool_tiles,
+    )
 }
 
 #[cfg(any(test, feature = "gpu-proofs"))]
@@ -204,7 +204,7 @@ pub mod gpu {
         pub fn new(device: &GpuDevice) -> Self {
             let shape = synthetic_shape();
             let records = synthetic_records();
-            let (phi, table, pool_tiles) = pooled_distance(&vec![-1.0f32; 8 * 8 * 8], [8; 3]);
+            let (phi, table, pool_tiles) = pooled_distance(&vec![-1.0f32; 8 * 8 * 8], &shape);
             Self {
                 shape,
                 particles: shared(device, &records),
@@ -444,6 +444,7 @@ pub mod gpu {
         tiles: &GpuBuffer,
         pool_tiles: u32,
         cells: [u32; 3],
+        cell_origin: [i32; 3],
     ) -> [GpuBuffer; 3] {
         use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
         let mut pipeline = None;
@@ -451,6 +452,7 @@ pub mod gpu {
         let count = cell_total(cells.map(|n| n + 1)) as u32;
         let out = std::array::from_fn(|_| shared(device, &vec![12345.0f32; count as usize]));
         let [nx, ny, nz] = cells.map(|n| (n + 4) as f32);
+        let [ox, oy, oz] = cell_origin.map(|c| c as f32);
         let mut enc = device.create_encoder("whitewater face adapter oracle");
         for (axis, output) in out.iter().enumerate() {
             atom::<FaceSampleComponent>(
@@ -462,6 +464,9 @@ pub mod gpu {
                     ("nodes_y", ny),
                     ("nodes_z", nz),
                     ("pool_tiles", pool_tiles as f32),
+                    ("cell_origin_x", ox),
+                    ("cell_origin_y", oy),
+                    ("cell_origin_z", oz),
                 ],
                 &[packed, tiles, output],
                 count,

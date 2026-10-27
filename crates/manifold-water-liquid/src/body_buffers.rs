@@ -193,34 +193,62 @@ impl LiquidBodyBuffers {
                 bytemuck::cast_slice(bodies.clock_sources()),
             ),
         ] {
-            for (chunk_index, chunk) in groups.chunks(UPLOAD_GROUPS).enumerate() {
-                let mut params: UploadParams = bytemuck::Zeroable::zeroed();
-                let UploadParams {
-                    start,
-                    count,
-                    words,
-                    ..
-                } = &mut params;
-                *start = (chunk_index * UPLOAD_GROUPS) as u32;
-                *count = chunk.len() as u32;
-                words[..chunk.len()].copy_from_slice(chunk);
-                gpu.native_enc.dispatch_compute(
-                    pipeline,
-                    &[
-                        GpuBinding::Bytes {
-                            binding: 0,
-                            data: bytemuck::bytes_of(&params),
-                        },
-                        GpuBinding::Buffer {
-                            binding: 1,
-                            buffer: target,
-                            offset: 0,
-                        },
-                    ],
-                    [(chunk.len() as u32).div_ceil(64), 1, 1],
-                    label,
-                );
-            }
+            write_groups(gpu, pipeline, target, groups, label);
         }
+    }
+
+    /// Writes `groups`, 16-byte rows, from the start of `target` in encoder
+    /// order, as the body and region rows are: the domain's own row arrays
+    /// (its region site boxes) use the same upload.
+    pub fn write_rows(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        target: &GpuBuffer,
+        groups: &[[u32; 4]],
+        label: &'static str,
+    ) {
+        let pipeline = self.upload.get_or_insert_with(|| {
+            gpu.device
+                .create_compute_pipeline(UPLOAD_SHADER, "cs_main", label)
+        });
+        write_groups(gpu, pipeline, target, groups, label);
+    }
+}
+
+/// One inline-bytes dispatch per [`UPLOAD_GROUPS`] rows of `groups`.
+fn write_groups(
+    gpu: &mut GpuEncoder<'_>,
+    pipeline: &GpuComputePipeline,
+    target: &GpuBuffer,
+    groups: &[[u32; 4]],
+    label: &'static str,
+) {
+    for (chunk_index, chunk) in groups.chunks(UPLOAD_GROUPS).enumerate() {
+        let mut params: UploadParams = bytemuck::Zeroable::zeroed();
+        let UploadParams {
+            start,
+            count,
+            words,
+            ..
+        } = &mut params;
+        *start = (chunk_index * UPLOAD_GROUPS) as u32;
+        *count = chunk.len() as u32;
+        words[..chunk.len()].copy_from_slice(chunk);
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: target,
+                    offset: 0,
+                },
+            ],
+            [(chunk.len() as u32).div_ceil(64), 1, 1],
+            label,
+        );
     }
 }

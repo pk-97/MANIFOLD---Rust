@@ -13,11 +13,13 @@
 //! the birth identity's words 4-7), and every pass over the particles
 //! dispatches from it and stops at `n`, so a slot the clock plan leaves no
 //! time for launches no particle work and writes nothing. The
-//! lattice's cell and face fields live in the tile pool (`tiles.rs`): their
-//! passes index them through the storage helpers, and a tile is stored while
-//! the allocator holds it. The `faces` and `distance` outputs are the pooled
-//! internal faces and φ themselves, read through the `tiles` slot table and
-//! `pool_tiles` (`manifold_water_liquid::tile_storage`); they are
+//! lattice's cell and face fields are pooled per world tile (`tiles.rs`):
+//! every active step builds the world tile table from the particles
+//! (`manifold_water_liquid::world_tiles`), and every lattice pass runs over
+//! its lists, 512 threads a slot. The tank stays a box of world cells: the
+//! passes touch only its cells and records, and its walls are where they
+//! were. The `faces` and `distance` outputs are the pooled internal faces and
+//! φ themselves, read through the `tiles` table and `pool_tiles`; they are
 //! reallocated when the lattice changes.
 //!
 //! Extrapolation order/count, marker removal, inflow emission/placement,
@@ -46,10 +48,9 @@ use super::gpu_flip_clock::{
     GpuFlipClock, GpuFlipClockInputs, GpuFlipClockParams, flags as clock_flags,
 };
 use super::gpu_flip_pressure::{
-    MAX_ITERATIONS, PressureSolver, Solve, Stop, Water, lattice_refusal, level_lattices,
+    MAX_ITERATIONS, PressureSolver, Solve, Stop, Water, lattice_refusal,
 };
 mod read_params;
-use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -68,12 +69,12 @@ use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, int_param,
 };
+use manifold_water_liquid::world_tiles::WorldTiles;
 use read_params::read_iterations;
 pub(crate) use read_params::{
     read_closed_faces, read_max_iterations, read_sheet_fill_rate, read_solve_level,
 };
 
-mod emit;
 mod encode;
 mod extend;
 mod lattice;
@@ -83,13 +84,14 @@ mod primitive;
 mod state;
 mod tiles;
 
-pub(crate) use emit::*;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub use extend::set_force_dense_extend;
 use extend::*;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(crate) use lattice::scratch_bytes;
 use lattice::*;
+#[cfg(test)]
+pub(crate) use pipelines::step_source_with;
 use pipelines::*;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub use pockets::set_force_indirect_pockets;
@@ -147,15 +149,16 @@ pub(crate) fn band_layers(cfl: u32) -> u32 {
 }
 }
 
-fn cell_bytes(cells: [u32; 3]) -> u64 {
-    cells.iter().map(|&n| u64::from(n)).product::<u64>() * 4
+/// The step's extension layers: the engine's band at its CFL, never under the
+/// face grid's guarantee. The world tiles reach [`ring_max`] of it.
+pub(crate) fn step_band() -> u32 {
+    band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS)
 }
 
-/// Test-only lever, approved 2026-10-02 lead; un-suppressed when the executor
-/// exposes node access. With it set, the step runs the poison entry
+/// Test-only lever. With it set, the step runs the poison entry
 /// (gpu_flip_tile_tests.rs) after the retire: NaN into every cell array of
-/// the tiles outside rings 0 and 1 (design section 4 (The defined-value
-/// rule)).
+/// the held slots outside rings 0 and 1 (design section 4 (The defined-value
+/// rule)), and NaN into every pooled field of the free slots.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static POISON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -215,14 +218,20 @@ manifold_core::testkit_visible! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct StepParams {
-    pub(crate) n: [u32; 3],
+    /// The tank box's low corner in metres: the solver grid's minimum.
+    pub(crate) walls_lo: [f32; 3],
     pub(crate) capacity: u32,
-    pub(crate) box_min: [f32; 3],
+    /// The box's high corner in metres, `walls_lo` + cells · h.
+    pub(crate) walls_hi: [f32; 3],
     pub(crate) cell_size: f32,
     pub(crate) gravity: [f32; 3],
     pub(crate) step_dt: f32,
     pub(crate) field_nodes: [u32; 3],
     pub(crate) field_spacing: f32,
+    /// The lattice origin (`lattice_origin`).
+    pub(crate) origin: [f32; 3],
+    /// `1.0 / cell_size`, the value the sort bins by (`SortJob::inv_cell`).
+    pub(crate) inv_cell: f32,
     pub(crate) tick_index: i32,
     pub(crate) step_in_tick: i32,
     pub(crate) force_lattices: i32,
@@ -232,7 +241,6 @@ pub(crate) struct StepParams {
     pub(crate) rows: i32,
     pub(crate) tick_seconds: f32,
     pub(crate) flip: f32,
-    pub(crate) box_offset: f32,
     pub(crate) ghost: u32,
     pub(crate) particles: u32,
     pub(crate) shapes_len: u32,
@@ -246,11 +254,9 @@ pub(crate) struct StepParams {
     pub(crate) emit_jitter: f32,
     /// The V-cycle level the pressure solves run on (`Step::level`).
     pub(crate) solve_level: u32,
-    /// 1: every tile is active (the test-only oracle, [`set_all_tiles`]).
-    pub(crate) all_tiles: u32,
     /// Dispatches in each velocity-extension replay segment.
     pub(crate) extension_layers: u32,
-    /// [`ring_max`] for this step: the table's extent.
+    /// [`ring_max`] of the step's band: the table's reach.
     pub(crate) ring_max: u32,
     pub(crate) live_impulse_stride: u32,
     /// Cells from the grid's minimum to each wall (`FlipSolverGrid::wall_inset`);
@@ -259,12 +265,12 @@ pub(crate) struct StepParams {
     /// Box3D's substep over this tick: the coupled motion law's h
     /// (`manifold_physics::coupled_motion::coupled_substep`).
     pub(crate) coupled_h: f32,
-    /// Tiles the pool holds ([`pool_tiles`]).
+    /// Tiles the pool holds ([`pool_tiles`]) and the table's entries.
     pub(crate) pool_tiles: u32,
-    /// Tiles with ring at most this are allocated: the step's [`ring_max`].
-    pub(crate) alloc_ring: u32,
-    /// `1.0 / cell_size`, the value the sort bins by (`SortJob::inv_cell`).
-    pub(crate) inv_cell: f32,
+    pub(crate) table_entries: u32,
+    /// Sites the inflows of one tick enumerate at most (`region_site_total`).
+    pub(crate) emit_sites: u32,
+    pub(crate) _pad: [u32; 2],
 }
 }
 
@@ -308,17 +314,22 @@ pub(crate) struct StepState {
     pipelines: Option<Pipelines>,
     sorter: ParticleSorter,
     solver: PressureSolver,
-    solid: Option<GpuComputePipeline>,
     lattice: Option<LatticeBuffers>,
-    /// Keyed on the lattice (with `lattice`) and its own `ring_max`.
-    tiles: Option<TileTable>,
-    /// A lattice was just built: its pooled fields' canonical blocks are
+    /// The world tiles over the lattice's pool, kept with `lattice`. One slot
+    /// from install until the first reserve, so the build's pipelines compile
+    /// at install.
+    tiles: Option<WorldTiles>,
+    /// Under [`set_all_tiles`]: one point in every tile of the box, the
+    /// table's points in place of the particles, and their record.
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    box_points: Option<(GpuBuffer, GpuBuffer)>,
+    /// A lattice was just built: its pooled fields' canonical elements are
     /// written by the next step (`pool_canon`).
     pool_canon_pending: bool,
     /// No-body solid scratch stays zero until a body pass writes it.
     solid_velocity_is_zero: bool,
     sorted: Option<GpuBuffer>,
-    /// The emission flags' scan, one word a half-cell site.
+    /// The emission flags' scan, one word a site of the tick's enumeration.
     emit_scan: PrefixScan,
     /// The slot's record `[groups, 1, 1, n]` (`count.wgsl`): written on the GPU
     /// at the start of every slot, read by every pass over the particles.
@@ -405,6 +416,9 @@ struct Step<'a> {
     atlas: &'a GpuBuffer,
     /// Inflow and outflow rows; read when `params.region_count` > 0.
     regions: &'a GpuBuffer,
+    /// Each region row's half-cell site box (`gpu_flip_domain` RegionSites),
+    /// `params.emit_sites` sites a tick at most.
+    region_sites: &'a GpuBuffer,
     /// What the water has pushed on each body so far this tick, read by the
     /// bodies' pose; added to when `dynamic`.
     reaction: &'a GpuBuffer,
@@ -418,7 +432,6 @@ struct Step<'a> {
     /// The V-cycle level both solves' gradients run on; 0 is the fine
     /// lattice.
     level: usize,
-    wall_inset: f32,
     band: u32,
     ghost: bool,
     /// Run the density projection.
@@ -458,6 +471,8 @@ manifold_node_engine::primitive! {
         body_count: ScalarF32 optional,
         regions: Array(LiquidBody) optional,
         region_count: ScalarF32 optional,
+        region_sites: Array(u32) optional,
+        region_site_total: ScalarF32 optional,
         rows: ScalarF32 optional,
         reaction: Array(f32) optional,
         contacts: Array(f32) optional,
@@ -480,7 +495,7 @@ manifold_node_engine::primitive! {
         faces: Array(FaceSample),
         // The pooled distance (`pool_len(pool_tiles)` values).
         distance: Array(f32),
-        // The slot table of both pooled outputs: `slot_of` per box tile, then `tile_of` per slot.
+        // The world tile table of both pooled outputs (`table_words(pool_tiles)` words).
         tiles: Array(u32),
         // The pool's capacity in tiles, `P`.
         pool_tiles: ScalarF32,
@@ -571,11 +586,21 @@ impl StepParams {
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl StepParams {
+    /// A box of `n` cells from `min` (metres) at `cell_size`, on world tiles:
+    /// the walls box, the lattice origin and the inverse cell size.
     pub fn with_grid_for_test(mut self, n: [u32; 3], min: [f32; 3], cell_size: f32) -> Self {
-        self.n = n;
-        self.box_min = min;
+        self.walls_lo = min;
+        self.walls_hi = std::array::from_fn(|a| min[a] + n[a] as f32 * cell_size);
         self.cell_size = cell_size;
         self.inv_cell = 1.0 / cell_size;
+        self.origin = manifold_node_engine::scene::world_tiles::lattice_origin(cell_size);
+        self
+    }
+
+    /// The pool and table the passes read through.
+    pub fn with_pool_for_test(mut self, pool_tiles: u32) -> Self {
+        self.pool_tiles = pool_tiles;
+        self.table_entries = manifold_node_engine::scene::world_tiles::table_entries(pool_tiles);
         self
     }
 
@@ -584,16 +609,9 @@ impl StepParams {
         self.capacity = capacity;
         self
     }
-    pub fn with_tiles_for_test(
-        mut self,
-        ring_max: u32,
-        extension_layers: u32,
-        all_tiles: u32,
-    ) -> Self {
+    pub fn with_tiles_for_test(mut self, ring_max: u32, extension_layers: u32) -> Self {
         self.ring_max = ring_max;
-        self.alloc_ring = ring_max;
         self.extension_layers = extension_layers;
-        self.all_tiles = all_tiles;
         self
     }
 }

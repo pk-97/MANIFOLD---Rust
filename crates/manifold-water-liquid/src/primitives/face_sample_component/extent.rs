@@ -12,7 +12,7 @@ fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     };
     let pool_tiles =
         pool_tiles_wire(|name, default| x.scalar(name, default)).map_err(Verdict::Refused)?;
-    let (faces, tiles) = pooled_bytes(cells, pool_tiles);
+    let (faces, tiles) = pooled_bytes(pool_tiles);
     x.covers("faces", faces)?;
     x.covers("tiles", tiles)?;
     x.covers("out", face_len(cells, axis) * 4)

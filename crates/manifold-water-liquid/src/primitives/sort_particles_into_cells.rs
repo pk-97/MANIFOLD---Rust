@@ -17,7 +17,6 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 
 use super::prefix_scan::{PrefixScan, ScanLabels};
 use crate::fluid_particles::{CellRange, MAX_BINS, bin_counts, bin_total, searched_bins};
-use crate::tile_storage::{TILE_STORAGE, pool_len};
 use crate::whitewater::WHITEWATER_EMPTY;
 use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -25,31 +24,36 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::{FLUID_PARTICLE_SPECS, FluidParticle};
 use manifold_node_engine::ports::{ArrayType, ChannelElementType, std430_channel};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries, table_words};
 
 /// The sort's passes. Composed after a key source: [`DENSE_KEYS`] or
-/// [`POOLED_KEYS`] (with `TILE_STORAGE` before it), which define `sort_key`.
+/// [`POOLED_KEYS`] (with `READ_SIDE` before it), which define `sort_key_of`.
 pub const SHADER: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
 
-/// A bin's key is its grid index: one range per bin of the grid.
-const DENSE_KEYS: &str = "fn sort_key(b: vec3<i32>) -> u32 {\n\
+/// A point's key is the index of its bin in the grid, the point clamped into
+/// the grid: one range per bin.
+const DENSE_KEYS: &str = "fn sort_key_of(p: vec3<f32>) -> u32 {\n\
+    let last = vec3<i32>(params.bins) - vec3<i32>(1);\n\
+    let b = clamp(vec3<i32>(floor((p - params.bin_min) * params.inv_cell)), vec3<i32>(0), last);\n\
     return u32(b.x) + params.bins.x * (u32(b.y) + params.bins.y * u32(b.z));\n\
 }\n";
 
-/// A bin's key is its cell's index in the tile pool (`ts_cell_at`): one
-/// range per element of a pooled field, the canonical block's included. The
-/// table is the step's slot table; the bins are the lattice's cells.
+/// A point's key is the pool index (`ts_cell_at`) of its world cell, counted
+/// from the lattice origin with no clamp: one range per element of a pooled
+/// field, the canonical element's included. The table is the world-tile
+/// table; a point in a tile it does not hold keys to the canonical element.
 const POOLED_KEYS: &str = "@group(0) @binding(9) var<storage, read> ts_table: array<u32>;\n\
-fn ts_cells() -> vec3<i32> { return vec3<i32>(params.bins); }\n\
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }\n\
+fn ts_table_entries() -> u32 { return params.table_entries; }\n\
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }\n\
-fn sort_key(b: vec3<i32>) -> u32 { return ts_cell_at(b); }\n";
+fn sort_key_of(p: vec3<f32>) -> u32 { return ts_cell_at(ts_world_cell(p, params.bin_min, params.inv_cell)); }\n";
 
 fn dense_source() -> String {
     format!("{DENSE_KEYS}\n{SHADER}")
 }
 
 fn pooled_source() -> String {
-    format!("{TILE_STORAGE}\n{POOLED_KEYS}\n{SHADER}")
+    format!("{READ_SIDE}\n{POOLED_KEYS}\n{SHADER}")
 }
 const ENTRIES: [&str; 6] = [
     "clear_counts",
@@ -90,8 +94,9 @@ struct SortParams {
     /// The word of the count record (binding 10) holding the slots in use, or
     /// [`NO_COUNT_WORD`] when `count` is the slot count.
     count_word: u32,
-    _pad1: u32,
-    _pad2: u32,
+    /// H of a pooled sort's table; 0 when dense.
+    table_entries: u32,
+    _pad: u32,
 }
 
 /// `SortParams::count_word` for a sort over a CPU slot count.
@@ -162,8 +167,12 @@ pub struct SortJob<'a> {
     /// Records the particles buffer holds.
     pub capacity: u32,
     pub count: SortCount<'a>,
+    /// Dense sort: the grid's minimum corner. Pooled sort: the lattice
+    /// origin (`lattice_origin`), cells counted from it.
     pub bin_min: [f32; 3],
     pub inv_cell: f32,
+    /// Dense sort: the grid's bins per axis. A pooled sort has no grid and
+    /// does not read it.
     pub bins: [u32; 3],
     /// Liquid particle records only; `None` leaves it unwritten.
     pub sorted: Option<&'a GpuBuffer>,
@@ -177,8 +186,8 @@ manifold_core::testkit_visible! {
 /// The counting sort itself, shared by `node.sort_particles_into_cells` and
 /// the stage nodes that sort inside one dispatch chain (`node.gpu_flip_step`).
 /// Owns the cell ranges and its scratch. Built for one key rule: dense bins
-/// ([`ParticleSorter::prepare`], [`ParticleSorter::encode`]) or the tile pool's
-/// cell indices ([`ParticleSorter::prepare_pooled`],
+/// ([`ParticleSorter::prepare`], [`ParticleSorter::encode`]) or the world
+/// tiles' pool indices ([`ParticleSorter::prepare_pooled`],
 /// [`ParticleSorter::encode_pooled`]).
 #[derive(Default)]
 pub struct ParticleSorter {
@@ -200,7 +209,7 @@ impl ParticleSorter {
         self.create_pipelines(device, false);
     }
 
-    /// Create the pipelines for bins keyed by the tile pool's cell indices.
+    /// Create the pipelines for keys that are world-tile pool indices.
     pub fn prepare_pooled(&mut self, device: &GpuDevice) {
         self.create_pipelines(device, true);
     }
@@ -276,9 +285,10 @@ impl ParticleSorter {
         self.encode_keyed(device, encoder, job, None, labels)
     }
 
-    /// Encode the six passes keyed by the tile pool: `job.bins` are the
-    /// lattice's cells, a particle's key is `ts_cell_at` of its clamped bin
-    /// through `table` (`T + P` words, `P` = `pool_tiles`). A particle whose
+    /// Encode the six passes keyed by the world tiles: a particle's key is
+    /// `ts_cell_at` of its world cell, `floor((x - job.bin_min) * job.inv_cell)`
+    /// with no clamp, through `table` (the world-tile table of a pool of
+    /// `pool_tiles` slots, `table_words(pool_tiles)` words). A particle whose
     /// tile has no slot lands in the canonical bucket, which no stored cell
     /// reads. `prepare_pooled` and `reserve_keys(pool_len(pool_tiles))` first.
     pub fn encode_pooled(
@@ -305,7 +315,12 @@ impl ParticleSorter {
         labels: &SortLabels,
     ) -> Result<(), String> {
         let keys = match pool {
-            Some((_, pool_tiles)) => pool_len(pool_tiles),
+            Some((table, pool_tiles)) => {
+                if table.size < table_words(pool_tiles) * 4 {
+                    return Err("the table holds fewer words than its pool's".into());
+                }
+                pool_len(pool_tiles)
+            }
             None => bin_total(job.bins),
         };
         let bin_total = keys as u32;
@@ -369,8 +384,8 @@ impl ParticleSorter {
             live_rule: read.live_rule,
             pool_tiles: pool.map_or(0, |(_, pool_tiles)| pool_tiles),
             count_word,
-            _pad1: 0,
-            _pad2: 0,
+            table_entries: pool.map_or(0, |(_, pool_tiles)| table_entries(pool_tiles)),
+            _pad: 0,
         };
         let mut bindings = vec![
             GpuBinding::Bytes {
@@ -434,16 +449,15 @@ impl ParticleSorter {
         let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
         // One thread per slot in use: direct over the CPU's count, indirect
         // from the GPU's record.
-        let over_slots = |encoder: &mut GpuEncoder, pipeline: &GpuComputePipeline, label| {
-            match job.count {
+        let over_slots =
+            |encoder: &mut GpuEncoder, pipeline: &GpuComputePipeline, label| match job.count {
                 SortCount::Slots(_) => {
                     encoder.dispatch_compute(pipeline, &bindings, groups(count), label);
                 }
                 SortCount::Record { buffer, offset } => {
                     encoder.dispatch_compute_indirect(pipeline, &bindings, buffer, offset, label);
                 }
-            }
-        };
+            };
         let [
             clear,
             count_pass,

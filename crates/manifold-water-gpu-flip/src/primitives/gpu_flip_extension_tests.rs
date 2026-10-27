@@ -283,7 +283,6 @@ fn gpu_flip_step_order_dispatch_extents() {
         manifold_water_liquid::grid::face_bytes([6, 5, 4]),
         face_count * 32
     );
-    assert_eq!(super::gpu_flip_step::emit_sites([6, 5, 4]), cell_count * 8);
     for threads in [cell_count, face_count, cell_count * 8, 300, 512] {
         assert!(threads.div_ceil(256) * 256 >= threads);
         assert!(threads.div_ceil(256) * 256 < threads + 256);

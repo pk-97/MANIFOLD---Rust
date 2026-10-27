@@ -1,5 +1,6 @@
 use super::*;
-use manifold_water_liquid::tile_storage::{TILE, tile_counts, tile_total};
+use manifold_node_engine::scene::world_tiles::tile_of_cell;
+use manifold_water_liquid::tile_storage::TILE_CELLS;
 
 /// Max Iterations rounds and is refused outside 1..=MAX_ITERATIONS or
 /// non-finite; Auto converges within it; a fixed count runs as saved even
@@ -129,18 +130,15 @@ fn step_shader_validates_with_every_entry() {
         "remove_crowded_markers",
         "density_source",
         "faces_to_particles",
-        "tiles_clear",
-        "tiles_mark",
-        "tiles_rings",
-        "tiles_allocate",
         "tiles_fresh",
-        "tiles_lists",
         "tiles_retire",
+        "solid_corners",
+        "tiles_tally",
         "slot_load",
         "slot_open",
         "pool_canon",
-        "pocket_accumulate_coarse",
-        "pocket_remove_coarse",
+        "pocket_accumulate",
+        "pocket_remove",
         "pocket_leader_clear",
         "pocket_coarsen",
         "pocket_relabel",
@@ -151,58 +149,43 @@ fn step_shader_validates_with_every_entry() {
 
 #[test]
 fn step_params_match_the_shader_uniform() {
-    assert_eq!(size_of::<StepParams>(), 176);
-    assert_eq!(std::mem::offset_of!(StepParams, box_offset), 100);
-    assert_eq!(std::mem::offset_of!(StepParams, particles), 108);
-    assert_eq!(std::mem::offset_of!(StepParams, live_impulse_stride), 152);
-    assert_eq!(std::mem::offset_of!(StepParams, wall_inset), 156);
-    assert_eq!(std::mem::offset_of!(StepParams, coupled_h), 160);
-    assert_eq!(std::mem::offset_of!(StepParams, pool_tiles), 164);
-    assert_eq!(std::mem::offset_of!(StepParams, alloc_ring), 168);
-    assert_eq!(std::mem::offset_of!(StepParams, inv_cell), 172);
+    assert_eq!(size_of::<StepParams>(), 192);
+    assert_eq!(std::mem::offset_of!(StepParams, walls_hi), 16);
+    assert_eq!(std::mem::offset_of!(StepParams, origin), 64);
+    assert_eq!(std::mem::offset_of!(StepParams, inv_cell), 76);
+    assert_eq!(std::mem::offset_of!(StepParams, tick_index), 80);
+    assert_eq!(std::mem::offset_of!(StepParams, ghost), 116);
+    assert_eq!(std::mem::offset_of!(StepParams, live_impulse_stride), 160);
+    assert_eq!(std::mem::offset_of!(StepParams, wall_inset), 164);
+    assert_eq!(std::mem::offset_of!(StepParams, pool_tiles), 172);
+    assert_eq!(std::mem::offset_of!(StepParams, table_entries), 176);
+    assert_eq!(std::mem::offset_of!(StepParams, emit_sites), 180);
 }
 
-/// The tile table's bytes, by an independent count: five words a tile
-/// (nearness, two ring halves, the list, the retired list), the slot table
-/// (a word per tile and per pool slot, the pool as large as the box), the
-/// free stack (a word per slot), the fresh list (a word per tile), the
-/// counts and the triples; partial edge tiles counted whole; the extent's
-/// hold grows by exactly that.
+/// The tile rings the band reaches, and the world tiles' bytes: the
+/// table's own figure for the pool the lattice sizes, which the step's
+/// scratch holds once.
 #[test]
-fn gpu_flip_tile_table_bytes_follow_the_lattice() {
-    assert_eq!(tile_counts([64, 64, 64]), [8, 8, 8]);
-    assert_eq!(tile_counts([63, 100, 8]), [8, 13, 1]);
-    assert_eq!(tile_counts([1, 9, 17]), [1, 2, 3]);
+fn gpu_flip_world_tile_bytes_follow_the_pool() {
     assert_eq!(ring_max(14), 2, "64³: 14 layers reach the second ring");
     assert_eq!(ring_max(23), 3, "128³: 23 layers reach the third");
     assert_eq!(ring_max(FACE_VALID_LAYERS), 1);
-    for (cells, tiles) in [
-        ([64, 64, 64], 512u64),
-        ([63, 100, 8], 104),
-        ([128, 128, 128], 4096),
-        ([1, 9, 17], 6),
-    ] {
-        for r in 1..5u32 {
-            // Counts: |C|, the rings 1..=r + 1, the retired count, the parity,
-            // then the free top, the exhausted flag and the
-            // fresh count.
-            let counts = u64::from(r) + 2 + 1 + 1 + 3;
-            let triples = 3 * (u64::from(r) + 1 + 1);
-            // The triples, the aligned replay range, the fresh triple.
-            let arguments = triples + triples % 2 + 2 + 3;
-            assert_eq!(
-                tile_scratch_bytes(cells, r),
-                (5 * tiles + 2 * tiles + tiles + tiles + counts + arguments) * 4,
-                "{cells:?} ring_max {r}"
-            );
-            assert_eq!(
-                scratch_bytes(cells, 1000, r) - tile_scratch_bytes(cells, r),
-                scratch_bytes(cells, 1000, 1) - tile_scratch_bytes(cells, 1)
-            );
-        }
+    for cells in [[67, 67, 67], [63, 100, 8], [1, 9, 17]] {
+        assert_eq!(
+            tile_scratch_bytes(cells),
+            manifold_water_liquid::world_tiles::held_bytes(
+                pool_tiles(cells),
+                step_reach().ring_max
+            ),
+            "{cells:?}"
+        );
+        assert_eq!(
+            scratch_bytes(cells, 1000) - scratch_bytes(cells, 1),
+            999 * size_of::<FluidParticle>() as u64,
+            "{cells:?}: the slots add only the sorted particles"
+        );
     }
 }
-
 #[test]
 fn closed_faces_takes_the_six_bit_mask_and_refuses_the_rest() {
     assert_eq!(read_closed_faces(0.0), Ok(0));
@@ -228,22 +211,31 @@ fn band_layers_match_configured_engine_cfl() {
     assert_eq!(band_layers(ENGINE_CFL), 12);
 }
 
-/// The pool holds the whole box at Matter/FLIP resolution 64 and 128 (the
-/// solver lattice is resolution + 3 cells a side) and what the budget buys
-/// when it is short.
+/// The pool holds every tile a box can touch, wherever it sits on the world
+/// lattice, and the table's rings round them: for small boxes, the most
+/// tiles any placement touches (counted cell by cell), widened by the rings
+/// on both sides; and what the budget buys when it is short.
 #[test]
-fn pool_size_follows_the_budget() {
-    let tile_bytes = u64::from(TILE).pow(3) * pooled_bytes_per_cell();
-    assert_eq!(tile_bytes, 512 * 368);
-    for resolution in [64u32, 128] {
-        let cells = [resolution + 3; 3];
-        assert_eq!(
-            u64::from(pool_tiles(cells)),
-            tile_total(cells),
-            "resolution {resolution}"
-        );
-        assert!(tile_total(cells) * tile_bytes <= POOL_BUDGET_BYTES);
+fn pool_size_follows_the_box_and_the_budget() {
+    let ring = step_reach().ring_max as usize;
+    for cells in [[1u32, 9, 17], [8, 8, 8], [13, 2, 30]] {
+        let most: Vec<usize> = cells
+            .iter()
+            .map(|&n| {
+                (-9i32..9)
+                    .map(|start| {
+                        let first = tile_of_cell([start, 0, 0])[0];
+                        let last = tile_of_cell([start + n as i32 - 1, 0, 0])[0];
+                        (last - first + 1) as usize
+                    })
+                    .max()
+                    .expect("placements")
+            })
+            .collect();
+        let want: usize = most.iter().map(|&t| t + 2 * ring).product();
+        assert_eq!(pool_tiles(cells) as usize, want, "{cells:?}");
     }
+    let tile_bytes = u64::from(TILE_CELLS) * pooled_bytes_per_cell();
     assert_eq!(pool_capacity(4913, tile_bytes, 10 * tile_bytes), 10);
     assert_eq!(
         pool_capacity(4913, tile_bytes, 10 * tile_bytes + tile_bytes - 1),
@@ -251,4 +243,10 @@ fn pool_size_follows_the_budget() {
     );
     assert_eq!(pool_capacity(4913, tile_bytes, u64::MAX / 2), 4913);
     assert_eq!(pool_capacity(7, tile_bytes, 10 * tile_bytes), 7);
+    let huge = [1024u32; 3];
+    assert_eq!(
+        u64::from(pool_tiles(huge)),
+        POOL_BUDGET_BYTES / tile_bytes,
+        "a box past the budget gets what the budget buys"
+    );
 }

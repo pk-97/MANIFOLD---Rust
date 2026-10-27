@@ -1,21 +1,25 @@
-//! Sealed pockets: seeds, rounds, sums and the coarse levels.
+//! Sealed pockets: seeds, rounds, sums and the coarse levels, over world
+//! tiles. The cell passes run over the table's lists (512 threads a slot) and
+//! the line sweeps start in every held slot with no held neighbour on the low
+//! side of the axis.
 
 use super::*;
+use manifold_node_engine::scene::world_tiles::{TILE, pool_len};
+use manifold_water_liquid::world_tiles::{WorldTiles, allocated_args_offset, list_args_offset};
 
-/// The coarse pockets' bytes: a state and a label per level-1 cell (every
-/// deeper level has fewer). A lattice with no level 1 has no solve level
-/// above 0 and never reads them.
-pub(super) fn pocket_coarse_bytes(cells: [u32; 3]) -> u64 {
-    level_lattices(cells)
-        .get(1)
-        .map_or(0, |&coarse| 2 * cell_bytes(coarse))
+/// The coarse pockets' bytes: a state and a label (4 bytes each) per cell of
+/// the level-1 pool of `level_tiles` slots (every deeper level has fewer). A
+/// lattice with no level 1 has no solve level above 0 and never reads them.
+pub(super) fn pocket_coarse_bytes(level_tiles: u32) -> u64 {
+    2 * 4 * pool_len(level_tiles)
 }
 
-/// Three words a cell (a pocket's 64-bit sum and its count, indexed by its
-/// leader cell's box index), then the removed total's two. A dense array,
-/// not a pooled field.
-pub(super) fn pocket_sum_bytes(cells: [u32; 3]) -> u64 {
-    3 * cell_bytes(cells) + 8
+/// The removed total's two words, then three words a cell (a pocket's 64-bit
+/// sum and its count, indexed by its leader cell's pool index). A dense array
+/// over the pool's cells, not a pooled field. It must start at zero: the
+/// removed total is zeroed again by each solve's flux, not cleared before it.
+pub(super) fn pocket_sum_bytes(pool_tiles: u32) -> u64 {
+    4 * (2 + 3 * pool_len(pool_tiles))
 }
 
 /// Words of the pocket spread's gate (gpu_flip_step/pockets.wgsl `pocket_gate`).
@@ -26,10 +30,18 @@ pub(super) const POCKET_RANGE_INDEX: u32 = 6;
 
 pub(super) const POCKET_ROUND_OFFSET: u64 = 14 * 4;
 
+/// Line sweeps a held slot starts along one axis: one per cell of a tile face.
+const LINES_PER_TILE: u64 = (TILE * TILE) as u64;
+
 /// Rounds of the sealed-pocket spread: one round of line sweeps crosses the
-/// lattice along each axis, so the cap is the longest side.
-pub(crate) fn pocket_rounds(cells: [u32; 3]) -> u32 {
-    cells.into_iter().max().unwrap_or(1)
+/// held tiles along each axis, so the cap is the side, in cells, of a cube
+/// holding the pool's tiles.
+pub(crate) fn pocket_rounds(pool_tiles: u32) -> u32 {
+    let mut side = 1u32;
+    while u64::from(side).pow(3) < u64::from(pool_tiles) {
+        side += 1;
+    }
+    TILE * side
 }
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -49,23 +61,25 @@ pub(super) fn segment_pockets() -> bool {
     true
 }
 
-/// Which water reaches air (gpu_flip_step/pockets.wgsl pocket_*): seed, up to
-/// [`pocket_rounds`] rounds of indirect sweeps that stop once a round changes
-/// nothing, the unfinished check, then the tally.
+/// Which water reaches air (gpu_flip_step/pockets.wgsl pocket_*), over the
+/// fine table `tiles`: seed every held cell, up to [`pocket_rounds`] rounds of
+/// line sweeps that stop once a round changes nothing, the unfinished check
+/// over the cell set C, then the tally over the held cells.
 pub(super) fn encode_pockets(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
     params: &StepParams,
     l: &LatticeBuffers,
-    table: &GpuBuffer,
+    tiles: &WorldTiles,
     ranges: &GpuBuffer,
-    cells: [u32; 3],
     capped: &GpuBuffer,
     tally: u64,
     plan: &GpuBuffer,
 ) {
-    let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
-    enc.dispatch_compute(
+    let held = allocated_args_offset(tiles.reach().ring_max);
+    let list = buffer(29, &tiles.lists().by_rank);
+    let table = buffer(51, tiles.table());
+    enc.dispatch_compute_indirect(
         &pipes.pocket_seed,
         &[
             uniform(params),
@@ -73,29 +87,30 @@ pub(super) fn encode_pockets(
             buffer(10, &l.s),
             buffer(23, &l.pocket),
             buffer(25, &l.pocket_label),
+            list,
             buffer(46, plan),
-            buffer(51, table),
+            table,
         ],
-        groups(cell_count),
+        tiles.args(),
+        held,
         "gpu_flip.step.pocket_seed",
     );
     enc.dispatch_compute(
         &pipes.pocket_start,
-        &[buffer(24, &l.pocket_gate), buffer(46, plan)],
+        &[
+            uniform(params),
+            buffer(24, &l.pocket_gate),
+            buffer(31, tiles.args()),
+            buffer(46, plan),
+        ],
         [1, 1, 1],
         "gpu_flip.step.pocket_start",
     );
     let segmented = segment_pockets();
-    let lines = [
-        u64::from(cells[1]) * u64::from(cells[2]),
-        u64::from(cells[2]) * u64::from(cells[0]),
-        u64::from(cells[0]) * u64::from(cells[1]),
-    ];
-    let round_bindings = [
-        uniform(params),
-        buffer(24, &l.pocket_gate),
-        buffer(46, plan),
-    ];
+    // The most threads the sweeps can need: every pool slot held. The gate's
+    // sizes (and the sweeps' own bound) cut it to the held slots.
+    let sweep_groups = groups(u64::from(tiles.pool_tiles()) * LINES_PER_TILE);
+    let round_bindings = [buffer(24, &l.pocket_gate), buffer(46, plan)];
     if segmented {
         enc.dispatch_compute(
             &pipes.pocket_round,
@@ -104,7 +119,7 @@ pub(super) fn encode_pockets(
             "gpu_flip.step.pocket_round",
         );
     }
-    for _ in 0..pocket_rounds(cells) {
+    for _ in 0..pocket_rounds(tiles.pool_tiles()) {
         if segmented {
             // The last command prepares the next round. Once no cell changes,
             // subsequent segments skip their sweeps and their setup together.
@@ -126,13 +141,14 @@ pub(super) fn encode_pockets(
                 buffer(23, &l.pocket),
                 buffer(24, &l.pocket_gate),
                 buffer(25, &l.pocket_label),
-                buffer(51, table),
+                list,
+                table,
             ];
             if segmented {
                 enc.dispatch_compute_gated(
                     sweep,
                     &bindings,
-                    groups(lines[axis]),
+                    sweep_groups,
                     &l.pocket_gate,
                     12 * axis as u64,
                     "gpu_flip.step.pocket_sweep",
@@ -159,7 +175,7 @@ pub(super) fn encode_pockets(
             enc.end_gated_segments();
         }
     }
-    enc.dispatch_compute(
+    enc.dispatch_compute_indirect(
         &pipes.pocket_check,
         &[
             uniform(params),
@@ -167,10 +183,12 @@ pub(super) fn encode_pockets(
             buffer(23, &l.pocket),
             buffer(24, &l.pocket_gate),
             buffer(25, &l.pocket_label),
+            list,
             buffer(46, plan),
-            buffer(51, table),
+            table,
         ],
-        groups(cell_count),
+        tiles.args(),
+        list_args_offset(0),
         "gpu_flip.step.pocket_check",
     );
     // Adds the step's unfinished spread to the solver word, cleared on the
@@ -190,8 +208,9 @@ pub(super) fn encode_pockets(
                 buffer: capped,
                 offset: tally,
             },
+            list,
             buffer(46, plan),
-            buffer(51, table),
+            table,
         ],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",
@@ -199,12 +218,9 @@ pub(super) fn encode_pockets(
 }
 
 /// The pockets one lattice's right-hand side is corrected over: each
-/// cell's sealed state and its pocket's label (a cell of that lattice), and
-/// the sums, three words a cell plus the removed total's two.
+/// cell's sealed state and its pocket's label (a pool index of that lattice's
+/// pool), and the sums, three words a cell plus the removed total's two.
 pub(super) struct Pockets<'a> {
-    /// The fine lattice's pockets are pooled fields; a coarse level's are
-    /// dense boxes.
-    pub(super) fine: bool,
     pub(super) state: &'a GpuBuffer,
     pub(super) label: &'a GpuBuffer,
     pub(super) sums: &'a GpuBuffer,
@@ -213,7 +229,6 @@ pub(super) struct Pockets<'a> {
 impl LatticeBuffers {
     pub(super) fn fine_pockets(&self) -> Pockets<'_> {
         Pockets {
-            fine: true,
             state: &self.pocket,
             label: &self.pocket_label,
             sums: &self.pocket_sum,
@@ -222,7 +237,6 @@ impl LatticeBuffers {
 
     pub(super) fn coarse_pockets(&self) -> Pockets<'_> {
         Pockets {
-            fine: false,
             state: &self.pocket_coarse,
             label: &self.pocket_coarse_label,
             sums: &self.pocket_sum,
@@ -230,52 +244,54 @@ impl LatticeBuffers {
     }
 }
 
-/// Each sealed pocket's mean taken off the right-hand side `rhs` on the
-/// lattice `params.n` (gpu_flip_step/pockets.wgsl pocket_accumulate,
+/// Each sealed pocket's mean taken off the right-hand side `rhs` of the
+/// lattice `tiles` holds (gpu_flip_step/pockets.wgsl pocket_accumulate,
 /// pocket_remove): with no air cell its solve is pure Neumann, solvable only
 /// for a right-hand side summing to 0. What was removed goes to solver word
 /// 4 (`solve` 0, pressure) or 5 (1, density): h³ of the lattice's cell
-/// size, so a coarse level adds its own volume rate.
+/// size (`params.cell_size`), so a coarse level adds its own volume rate.
+/// The passes run over `tiles`' cell set C: the fine table's, or a coarse
+/// level's own (every slot of it); they read no table, only the list.
 pub(super) fn encode_pocket_mean(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
     params: &StepParams,
     pockets: Pockets<'_>,
-    table: &GpuBuffer,
+    tiles: &WorldTiles,
     rhs: &GpuBuffer,
     solve: usize,
     capped: &GpuBuffer,
     tally: u64,
     plan: &GpuBuffer,
 ) {
-    let which = usize::from(!pockets.fine);
-    let cell_count: u64 = params.n.iter().map(|&n| u64::from(n)).product();
-    let sums = [uniform(params), buffer(26, pockets.sums), buffer(46, plan)];
-    enc.dispatch_compute(
+    let list = buffer(29, &tiles.lists().by_rank);
+    enc.dispatch_compute_indirect(
         &pipes.pocket_clear,
-        &sums,
-        groups(3 * cell_count + 2),
+        &[buffer(26, pockets.sums), list, buffer(46, plan)],
+        tiles.args(),
+        list_args_offset(0),
         "gpu_flip.step.pocket_clear",
     );
     let cells = [
-        uniform(params),
         buffer(5, rhs),
         buffer(23, pockets.state),
         buffer(25, pockets.label),
         buffer(26, pockets.sums),
+        list,
         buffer(46, plan),
-        buffer(51, table),
     ];
-    enc.dispatch_compute(
-        &pipes.pocket_accumulate[which],
+    enc.dispatch_compute_indirect(
+        &pipes.pocket_accumulate,
         &cells,
-        groups(cell_count),
+        tiles.args(),
+        list_args_offset(0),
         "gpu_flip.step.pocket_accumulate",
     );
-    enc.dispatch_compute(
-        &pipes.pocket_remove[which],
+    enc.dispatch_compute_indirect(
+        &pipes.pocket_remove,
         &cells,
-        groups(cell_count),
+        tiles.args(),
+        list_args_offset(0),
         "gpu_flip.step.pocket_remove",
     );
     enc.dispatch_compute(
@@ -295,35 +311,45 @@ pub(super) fn encode_pocket_mean(
     );
 }
 
+/// The coarse level's table as the coarsening reads it: its H, to find its
+/// slot rows (gpu_flip_step/pockets.wgsl `PocketLevel`).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PocketLevel {
+    entries: u32,
+    _pad: [u32; 3],
+}
+
 /// The pockets at solve level `params.solve_level` from the fine ones
-/// (gpu_flip_step/pockets.wgsl pocket_coarsen): a level cell is sealed when every
-/// fine cell under it is sealed with one label, and takes the lowest such
-/// level cell of its pocket as its label.
+/// (gpu_flip_step/pockets.wgsl pocket_coarsen): a level cell is sealed when
+/// every fine cell under it is sealed with one label, and takes the lowest
+/// such level cell of its pocket as its label. `fine` is the step's table
+/// and `level` the table of the solve level, whose slots the level's passes
+/// run over.
 pub(super) fn encode_pocket_coarsen(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
     params: &StepParams,
     l: &LatticeBuffers,
-    table: &GpuBuffer,
+    fine: &WorldTiles,
+    level: &WorldTiles,
     plan: &GpuBuffer,
 ) {
-    let level = params.solve_level as usize;
-    let coarse_count: u64 = level_lattices(l.cells)[level]
-        .iter()
-        .map(|&n| u64::from(n))
-        .product();
-    let cell_count: u64 = l.cells.iter().map(|&n| u64::from(n)).product();
-    enc.dispatch_compute(
+    enc.dispatch_compute_indirect(
         &pipes.pocket_coarse[0],
         &[
-            uniform(params),
             buffer(41, &l.pocket_leader),
+            buffer(29, &fine.lists().by_rank),
             buffer(46, plan),
-            buffer(51, table),
         ],
-        groups(cell_count),
+        fine.args(),
+        list_args_offset(0),
         "gpu_flip.step.pocket_leader_clear",
     );
+    let entries = PocketLevel {
+        entries: level.table_entries(),
+        _pad: [0; 3],
+    };
     let bindings = [
         uniform(params),
         buffer(6, &l.water),
@@ -333,19 +359,27 @@ pub(super) fn encode_pocket_coarsen(
         buffer(39, &l.pocket_coarse),
         buffer(40, &l.pocket_coarse_label),
         buffer(41, &l.pocket_leader),
+        buffer(29, &level.lists().by_rank),
         buffer(46, plan),
-        buffer(51, table),
+        buffer(51, fine.table()),
+        GpuBinding::Bytes {
+            binding: 63,
+            data: bytemuck::bytes_of(&entries),
+        },
+        buffer(64, level.table()),
     ];
-    enc.dispatch_compute(
+    enc.dispatch_compute_indirect(
         &pipes.pocket_coarse[1],
         &bindings,
-        groups(coarse_count),
+        level.args(),
+        list_args_offset(0),
         "gpu_flip.step.pocket_coarsen",
     );
-    enc.dispatch_compute(
+    enc.dispatch_compute_indirect(
         &pipes.pocket_coarse[2],
         &bindings,
-        groups(coarse_count),
+        level.args(),
+        list_args_offset(0),
         "gpu_flip.step.pocket_relabel",
     );
 }
