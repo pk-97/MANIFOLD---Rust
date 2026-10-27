@@ -4806,7 +4806,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 1.0,
+        "defaultValue": 3.0,
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "target": {
@@ -5087,7 +5087,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 1.0,
+        "defaultValue": 3.0,
         "formatString": "F3",
         "id": "surface_particle_scale",
         "isToggle": false,

@@ -1199,7 +1199,7 @@
         },
         "roughness": {
           "type": "Float",
-          "value": 0.5540391206741333
+          "value": 0.15
         },
         "transmission": {
           "type": "Float",
@@ -1227,19 +1227,19 @@
         },
         "volume_scattering_color_b": {
           "type": "Float",
-          "value": 0.9200000166893005
+          "value": 0.6
         },
         "volume_scattering_color_g": {
           "type": "Float",
-          "value": 0.8600000143051147
+          "value": 0.5
         },
         "volume_scattering_color_r": {
           "type": "Float",
-          "value": 0.6800000071525574
+          "value": 0.15
         },
         "volume_scattering_density": {
           "type": "Float",
-          "value": 0.0882653295993805
+          "value": 0.6
         },
         "volume_thickness": {
           "type": "Float",
@@ -2277,7 +2277,7 @@
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.0882653295993805,
+        "defaultValue": 0.6,
         "id": "water_scattering",
         "label": "Water Scattering",
         "target": {
@@ -2304,7 +2304,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 1.0,
+        "defaultValue": 3.0,
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "target": {
@@ -2513,7 +2513,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 1.0,
+        "defaultValue": 3.0,
         "formatString": "F3",
         "id": "surface_particle_scale",
         "isToggle": false,
@@ -2647,7 +2647,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.0882653295993805,
+        "defaultValue": 0.6,
         "formatString": "F2",
         "id": "water_scattering",
         "isToggle": false,
