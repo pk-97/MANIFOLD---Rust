@@ -1,9 +1,11 @@
 //! `node.surface_tiles` — the display's world tiles. Every drawn water field
 //! (level set, velocity, foam, mist, wetness, solid) lives on the table this
 //! node builds each frame from the displayed particles, foam and spray, at the
-//! display cell size. A tile the liquid touched stays held, in its slot, for
-//! `keep_seconds` after the water leaves, so the wetness stored in it can dry;
-//! foam and spray hold their tiles only while they are there.
+//! display cell size. A tile the liquid touches is held, in its slot, while it
+//! does and for `keep_seconds` after: 0 by default, so a tile is let go once
+//! the water leaves and costs the surface passes only while water is on it;
+//! the wetness in a slot lasts as long as the slot. Foam and spray hold their
+//! tiles only while they are there.
 //! The pool follows the water: it starts at [`START_POOL_TILES`] and grows
 //! ahead of the tiles the table holds, read a frame or two late. With GPU
 //! FLIP Narrow Band on, the deep water has no particles: the step's grid
@@ -401,7 +403,7 @@ impl Kernels {
 manifold_node_engine::primitive! {
     name: SurfaceTiles,
     type_id: "node.surface_tiles",
-    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed particles, foam and spray at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile the liquid particles touched stays held, in the same slot, for keep_seconds after the water leaves (a slot that changes tiles or was free forgets), so the wetness stored in it can dry; foam and spray hold their tiles only while they are there; an epoch change, a new cell size, or display time running back past keep_seconds drops what was kept. The pool starts at 1024 tiles and follows the water: once the held tiles fill two thirds of it, or a tile finds no free slot, it grows to twice the tiles held in grains of 256, read a frame or two late, and the table starts over at the new size. It only grows. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
+    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed particles, foam and spray at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile the liquid particles touch is held, in the same slot, while they touch it and for keep_seconds after (0 by default: a tile is let go once the water leaves, so a tile costs the surface passes only while water is on it; a slot that changes tiles or was free forgets, and wetness stored in a slot lasts as long as the slot); foam and spray hold their tiles only while they are there; an epoch change, a new cell size, or display time running back past keep_seconds drops what was kept. The pool starts at 1024 tiles and follows the water: once the held tiles fill two thirds of it, or a tile finds no free slot, it grows to twice the tiles held in grains of 256, read a frame or two late, and the table starts over at the new size. It only grows. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
     inputs: {
         particles: Array(FluidParticle) required,
         foam: Array(FluidParticle) optional,
@@ -421,7 +423,7 @@ manifold_node_engine::primitive! {
     params: [
         int_param!("resolution_scale", "Resolution Scale", 1.0, 1.0, 4.0),
         // How long a tile the liquid touched stays held, so wetness can dry.
-        float_param!("keep_seconds", "Keep Seconds", 1800.0, 0.0, 86400.0),
+        float_param!("keep_seconds", "Keep Seconds", 0.0, 0.0, 86400.0),
         float_param!("sim_cell_size", "Water Cell Size", 0.0625, 0.0001, 100.0),
     ],
     depth_rule: Terminal,
@@ -490,7 +492,7 @@ impl Primitive for SurfaceTiles {
             Some(ParamValue::Float(epoch)) => Some(epoch),
             _ => None,
         };
-        let keep_seconds = ctx.param_f32("keep_seconds", 1800.0);
+        let keep_seconds = ctx.param_f32("keep_seconds", 0.0);
         if !(keep_seconds.is_finite() && keep_seconds >= 0.0) {
             ctx.error("Surface Tiles: keep seconds must be finite and at least 0");
             return;

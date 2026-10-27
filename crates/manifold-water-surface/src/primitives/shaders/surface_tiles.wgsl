@@ -7,8 +7,9 @@
 // particles, foam and spray (copied in, `head` records), then one keep record
 // per slot of the pool, then GPU FLIP Narrow Band's interior records. A keep
 // record is a point at the middle of a tile the liquid touched within
-// `keep_seconds`, so the next build still holds that tile and its slot
-// (wetness lives in slots, and a wet tile must keep its own). Foam and spray
+// `keep_seconds` (0 by default: this frame), so the next build still holds
+// that tile and its slot (wetness lives in slots, and a wet tile keeps its
+// own while it is held). Foam and spray
 // hold their tiles only while they are there: their fields are made fresh
 // each frame and leave nothing to keep. An interior record holds the display
 // tiles over grid water no particle marks.
