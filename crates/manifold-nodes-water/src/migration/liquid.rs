@@ -663,6 +663,62 @@ pub(crate) fn fold_smoothing_into_blend(def: &mut EffectGraphDef) -> bool {
     !retired.is_empty()
 }
 
+/// The material a new Water used to get: blue-teal glass, tinted cyan,
+/// absorbing over 10 cm and lit by teal scattering.
+const STYLISED_WATER: [(&str, f32); 12] = [
+    ("color_r", 0.3725),
+    ("color_g", 0.7294),
+    ("color_b", 1.0),
+    ("roughness", 0.15),
+    ("volume_attenuation_color_r", 0.35),
+    ("volume_attenuation_color_g", 0.72),
+    ("volume_attenuation_color_b", 0.8),
+    ("volume_attenuation_distance", 0.1),
+    ("volume_scattering_color_r", 0.15),
+    ("volume_scattering_color_g", 0.5),
+    ("volume_scattering_color_b", 0.6),
+    ("volume_scattering_density", 0.6),
+];
+
+/// Give a saved material still on the old stylised water default the clear
+/// water a new Water gets, after flattening. A material with any of those
+/// values changed is the user's look and stays. Idempotent.
+pub(crate) fn clear_stylised_water(def: &mut EffectGraphDef) -> bool {
+    use crate::presets::gpu_flip::CLEAR_WATER;
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    let mut changed = false;
+    for node in def
+        .nodes
+        .iter_mut()
+        .filter(|n| n.type_id == "node.pbr_material")
+    {
+        let stylised = STYLISED_WATER.iter().all(|&(name, old)| {
+            matches!(node.params.get(name), Some(SerializedParamValue::Float { value }) if (value - old).abs() < 1e-3)
+        });
+        if !stylised {
+            continue;
+        }
+        for (name, _) in STYLISED_WATER {
+            node.params.remove(name);
+        }
+        for (name, value) in CLEAR_WATER {
+            node.params
+                .insert(name.to_owned(), SerializedParamValue::Float { value });
+        }
+        changed = true;
+    }
+    changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "clear_stylised_water",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 390,
+        apply: clear_stylised_water,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "fold_smoothing_into_blend",
@@ -890,6 +946,52 @@ mod tests {
         );
         let migrated = def.clone();
         assert!(!fold_smoothing_into_blend(&mut def));
+        assert_eq!(def, migrated);
+    }
+
+    /// A saved material on the old stylised default, its colour stored at f32
+    /// precision as a colour picker leaves it, turns into the clear water a
+    /// new Water gets. One with a single value changed keeps the user's look,
+    /// and a second run changes nothing.
+    #[test]
+    fn saved_stylised_water_turns_clear() {
+        use crate::presets::gpu_flip::CLEAR_WATER;
+        use manifold_core::effect_graph_def::SerializedParamValue;
+        let material = |id, roughness: f32| {
+            let mut node = bare_node(id, "node.pbr_material");
+            for (name, value) in STYLISED_WATER {
+                node.params
+                    .insert(name.to_owned(), SerializedParamValue::Float { value });
+            }
+            for (name, value) in [
+                ("color_r", 0.372_549_03),
+                ("color_g", 0.729_411_8),
+                ("roughness", roughness),
+            ] {
+                node.params
+                    .insert(name.to_owned(), SerializedParamValue::Float { value });
+            }
+            node
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![material(1, 0.15), material(2, 0.4)],
+            wires: Vec::new(),
+        };
+        let users = def.nodes[1].clone();
+        assert!(clear_stylised_water(&mut def));
+        let clear: std::collections::BTreeMap<String, SerializedParamValue> = CLEAR_WATER
+            .iter()
+            .map(|&(name, value)| (name.to_owned(), SerializedParamValue::Float { value }))
+            .collect();
+        assert_eq!(def.nodes[0].params, clear);
+        assert_eq!(def.nodes[1], users);
+        let migrated = def.clone();
+        assert!(!clear_stylised_water(&mut def));
         assert_eq!(def, migrated);
     }
 

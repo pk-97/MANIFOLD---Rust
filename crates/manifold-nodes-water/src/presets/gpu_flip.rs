@@ -74,6 +74,27 @@ manifold_core::testkit_visible! {
 pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
 }
 
+/// The material a new Water draws with: clear water at stage scale, a look
+/// the user stylises from. Pure water absorbs about 0.26, 0.054 and 0.0098
+/// per metre at 615, 545 and 465 nm (Pope and Fry 1997), so a metre passes
+/// 77, 95 and 99 % of red, green and blue; it scatters too little to see
+/// over metres, has no colour of its own, and a calm surface is close to a
+/// mirror.
+pub(crate) const CLEAR_WATER: [(&str, f32); 12] = [
+    ("ambient", 0.0),
+    ("color_r", 1.0),
+    ("color_g", 1.0),
+    ("color_b", 1.0),
+    ("metallic", 0.0),
+    ("roughness", 0.03),
+    ("ior", 1.333),
+    ("transmission", 1.0),
+    ("volume_attenuation_color_r", 0.77),
+    ("volume_attenuation_color_g", 0.95),
+    ("volume_attenuation_color_b", 0.99),
+    ("volume_attenuation_distance", 1.0),
+];
+
 manifold_core::testkit_visible! {
 /// A liquid in a cubic tank: a pool `fill_height` deep plus one box, both
 /// in metres.
@@ -1606,27 +1627,15 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
         .retain(|w| !(w.to_node == surface as u32 && w.to_port == "particles"));
     b.wire((push_out, "out"), surface, "particles");
 
-    // Blue-teal glass. Clear water on a dark stage shows only the black behind
-    // it, so the look is stylised: the base colour tints thin sheets cyan,
-    // absorption over 10 cm turns thick water deep blue, and a little teal
-    // scattering lights the body from the sky.
     let material = b.node(
         "water_material",
         "node.pbr_material",
-        json!({
-            "ambient": float(0.0),
-            "color_r": float(0.3725), "color_g": float(0.7294), "color_b": float(1.0),
-            "metallic": float(0.0), "roughness": float(0.15),
-            "ior": float(1.333), "transmission": float(1.0),
-            "volume_attenuation_color_r": float(0.35),
-            "volume_attenuation_color_g": float(0.72),
-            "volume_attenuation_color_b": float(0.8),
-            "volume_attenuation_distance": float(0.1),
-            "volume_scattering_color_r": float(0.15),
-            "volume_scattering_color_g": float(0.5),
-            "volume_scattering_color_b": float(0.6),
-            "volume_scattering_density": float(0.6),
-        }),
+        serde_json::Value::Object(
+            CLEAR_WATER
+                .iter()
+                .map(|&(name, value)| (name.to_owned(), float(f64::from(value))))
+                .collect(),
+        ),
     );
     let water = b.node("water_object", "node.scene_object", json!({}));
     b.wire((material, "out"), water, "material");
