@@ -8,7 +8,8 @@ use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_gpu_mpm::matter::lattice_nodes;
+use manifold_node_engine::scene::world_tiles::pool_len;
+use manifold_water_gpu_mpm::matter::matter_pool_tiles;
 use manifold_water_gpu_mpm::primitives::matter_face_component::{
     MatterFaceComponent, matter_cells,
 };
@@ -37,15 +38,12 @@ fn gpu_flip_last_read(cells: [u32; 3], axis: usize) -> u64 {
     last[0] + m[0] * (last[1] + m[1] * last[2])
 }
 
-/// The last grid node the matter component reads for `axis`: its last face
-/// plus the padding, and one node on along the other two axes.
-fn matter_last_read(nodes: [u32; 3], axis: usize) -> u64 {
+/// The last lattice node the matter component reads for `axis`, per axis:
+/// its last face, past the padding, one more on the other two axes.
+fn matter_last_read(nodes: [u32; 3], axis: usize) -> [u32; 3] {
     let cells = matter_cells(nodes).expect("a lattice with cells");
-    let last = face_dims(cells, axis).map(|d| u64::from(d) - 1);
-    let q: [u64; 3] =
-        std::array::from_fn(|b| last[b] + u64::from(PADDING_NODES) + u64::from(b != axis));
-    let n = nodes.map(u64::from);
-    q[0] + n[0] * (q[1] + n[1] * q[2])
+    let last = face_dims(cells, axis).map(|d| d - 1);
+    std::array::from_fn(|b| last[b] + PADDING_NODES + u32::from(b != axis))
 }
 
 /// The component's out holds one float per record of the dense face grid the
@@ -79,7 +77,7 @@ fn check_gpu_flip(cells: [u32; 3]) {
 }
 
 fn check_matter(lattice: &LiquidLattice) {
-    let nodes = lattice_nodes(lattice.nodes());
+    let nodes = lattice.nodes();
     assert_eq!(
         matter_cells(lattice.nodes()),
         Some(lattice.cells()),
@@ -88,18 +86,18 @@ fn check_matter(lattice: &LiquidLattice) {
     );
     for axis in 0..3 {
         let count = face_len(lattice.cells(), axis);
+        let pool = pool_len(matter_pool_tiles(lattice, u64::MAX)) as u32;
         let capacity = MatterFaceComponent::new()
-            .array_output_capacity("out", &ParamValues::default(), &[("grid", nodes as u32)])
+            .array_output_capacity("out", &ParamValues::default(), &[("grid", pool)])
             .expect("out capacity");
         assert!(
             count <= u64::from(capacity),
-            "{:?} axis {axis}: out is shorter than the faces",
-            lattice.nodes()
+            "{nodes:?} axis {axis}: out is shorter than the faces"
         );
+        let last = matter_last_read(nodes, axis);
         assert!(
-            matter_last_read(lattice.nodes(), axis) < nodes,
-            "{:?} axis {axis}: read past the grid",
-            lattice.nodes()
+            (0..3).all(|b| last[b] < nodes[b]),
+            "{nodes:?} axis {axis}: read past the lattice"
         );
     }
 }

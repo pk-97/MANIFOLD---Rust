@@ -11,10 +11,10 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_words};
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_water_liquid::primitives::face_sample_component::{AXES, axis_param};
-use manifold_water_liquid::tile_storage::TILE_GRID;
 
 /// Face layers past the liquid whose velocity is the grid's own, counted as
 /// FLIP's extrapolation counts them: a layer holds when every face in it
@@ -43,10 +43,14 @@ struct ComponentUniforms {
     nodes_x: i32,
     nodes_y: i32,
     nodes_z: i32,
+    lattice_min_x: f32,
+    lattice_min_y: f32,
+    lattice_min_z: f32,
+    cell_size: f32,
+    pool_tiles: i32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
@@ -55,7 +59,11 @@ manifold_node_engine::primitive! {
     purpose: "Resample one axis of a matter grid onto the liquid seam's face array for that axis: each face of the authored box, (cells + 1) along the axis by cells on the other two, x fastest, reads the mean velocity of the four lattice nodes around its centre that carry mass, in m/s; 0 when none do. The lattice's three padding nodes per side are skipped.",
     inputs: {
         grid: Array(MatterGridNode) required,
+        tiles: Array(u32) required,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         out: Array(f32),
@@ -65,9 +73,14 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("nodes_x"), label: "Nodes X", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((8.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((8.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((8.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("pool_tiles"), label: "Pool Tiles", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 16_777_216.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "After the Live Matter region, on node.matter_state's grid (the last substep's velocities; held while paused). Three of them, one per axis, feed node.matter_frame's face_u_in, face_v_in and face_w_in; the lattice nodes come from node.matter_domain. out is sized to the grid's node count, which is more than any axis's faces; the dispatch covers the faces.",
+    composition_notes: "After the Live Matter region, on node.matter_state's grid (the last substep's velocities; held while paused). Three of them, one per axis, feed node.matter_frame's face_u_in, face_v_in and face_w_in; the lattice nodes come from node.matter_domain. Wire tiles and pool_tiles from the same step as grid, and lattice_min_x/y/z and cell_size from the domain: lattice node q is the world node round(lattice_min / cell_size) + q. out is sized to the axis's faces.",
     examples: [],
     picker: { label: "Matter Face Component", category: Atom },
     summary: "Hands one direction of the simulated liquid's velocity grid to effects that follow the liquid.",
@@ -76,8 +89,9 @@ manifold_node_engine::primitive! {
     aliases: ["face grid", "grid velocity", "mac faces"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_face_component_body.wgsl"),
-    input_access: [BufferGather],
-    wgsl_includes: [TILE_GRID],
+    input_access: [BufferGather, BufferGather],
+    output_capacity: manifold_node_engine::freeze::classify::FusedOutputCapacity::FromInput { input: "grid" },
+    wgsl_includes: [READ_SIDE],
 }
 
 impl Primitive for MatterFaceComponent {
@@ -87,6 +101,8 @@ impl Primitive for MatterFaceComponent {
         _params: &ParamValues,
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
+        // One float per node of the pooled grid: the pool holds every node
+        // of the lattice the wired node counts name, so every face fits.
         (port == "out")
             .then(|| {
                 inputs
@@ -104,15 +120,35 @@ impl Primitive for MatterFaceComponent {
             ctx.error(format!("Matter Face Component: a {nodes:?} node lattice has no cells, or the axis is not X, Y or Z"));
             return;
         };
+        let lattice_min = ["lattice_min_x", "lattice_min_y", "lattice_min_z"]
+            .map(|name| ctx.scalar_or_param(name, 0.0));
+        let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
+        if cell_size <= 0.0 {
+            ctx.error(format!(
+                "Matter Face Component: cell_size is {cell_size}; it must be above 0"
+            ));
+            return;
+        }
+        let pool_tiles = ctx
+            .scalar_or_param("pool_tiles", 1.0)
+            .round()
+            .clamp(1.0, 16_777_216.0) as u32;
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(grid), Some(out)) = (ctx.inputs.array("grid"), ctx.outputs.array("out")) else {
+        let (Some(grid), Some(tiles), Some(out)) = (
+            ctx.inputs.array("grid"),
+            ctx.inputs.array("tiles"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
         let count = face_len(cells, axis);
-        if count * 4 > out.size || grid_bytes(nodes) > grid.size {
+        if count * 4 > out.size
+            || grid_bytes(pool_tiles) > grid.size
+            || table_words(pool_tiles) * 4 > tiles.size
+        {
             ctx.error(format!(
-                "Matter Face Component: a {nodes:?} node lattice is larger than its arrays"
+                "Matter Face Component: a {nodes:?} node lattice with {pool_tiles} pool tiles is larger than its arrays"
             ));
             return;
         }
@@ -121,10 +157,14 @@ impl Primitive for MatterFaceComponent {
             nodes_x: nodes[0] as i32,
             nodes_y: nodes[1] as i32,
             nodes_z: nodes[2] as i32,
+            lattice_min_x: lattice_min[0],
+            lattice_min_y: lattice_min[1],
+            lattice_min_z: lattice_min[2],
+            cell_size,
+            pool_tiles: pool_tiles as i32,
             dispatch_count: count as u32,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
@@ -141,6 +181,11 @@ impl Primitive for MatterFaceComponent {
                 },
                 GpuBinding::Buffer {
                     binding: 2,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
                     buffer: out,
                     offset: 0,
                 },
@@ -153,3 +198,23 @@ impl Primitive for MatterFaceComponent {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matter_face_component_generates_a_pooled_gather_kernel() {
+        let wgsl =
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<MatterFaceComponent>()
+                .expect("matter_face_component codegen");
+        let module = naga::front::wgsl::parse_str(&wgsl)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+    }
+}

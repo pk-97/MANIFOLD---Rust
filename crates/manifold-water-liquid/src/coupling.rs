@@ -24,7 +24,6 @@ use manifold_physics::{BodyHandle, BodyImpulse, PhysicsWorld, Seconds, TickStamp
 
 use super::bodies::{BodySupports, LiquidBody, pack_supports, unpack_supports};
 use crate::fluid_role::PreparedFluidGeometry;
-use manifold_core::fluid_domain::FluidDomainLayout;
 #[cfg(test)]
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::scene_impulse::RigidImpulseTargets;
@@ -137,17 +136,6 @@ impl DomainWalls {
             bounds: Some([lo, hi]),
             walls,
         }
-    }
-
-    /// The walls of `layout`'s grid box (the liquid's own walls).
-    pub fn of(layout: &FluidDomainLayout, closed: u32) -> Self {
-        let size: [f32; 3] =
-            std::array::from_fn(|d| (f64::from(layout.cells[d]) * layout.cell_size) as f32);
-        Self::new(
-            layout.min,
-            std::array::from_fn(|axis| layout.min[axis] + size[axis]),
-            closed,
-        )
     }
 
     /// The Bounds box, min then max; `None` with Bounds off.

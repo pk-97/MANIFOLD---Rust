@@ -20,8 +20,8 @@ use manifold_physics::FieldValue;
 
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{
-    MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks,
-    lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda,
+    MAX_SUBSTEPS, RADIUS_SCALE, REACTION_WORDS, WATER_DENSITY, free_fall_speed, lattice_nodes,
+    matter_pool_tiles, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda,
     wave_speed,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
@@ -43,6 +43,10 @@ use manifold_physics::clock::TICK;
 use manifold_physics::tick_samples::TickSamples;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
+use manifold_water_liquid::bounds::{
+    NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, face_masks,
+    kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs,
+};
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
     DomainWalls, LiquidRigidOwner, PendingTick, SharedSolids, SharesSolids, takes_reaction,
@@ -60,13 +64,16 @@ use {
     manifold_water_liquid::fields::LiquidImpulses,
 };
 
-/// Everything whose change restarts the simulation.
+/// Everything whose change restarts the simulation. The Bounds box's
+/// position, size and faces are not in it: the grid lives on world tiles, so
+/// moving or resizing the box keeps the water.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MatterSetup {
-    pub(crate) lattice: LiquidLattice,
-    pub(crate) closed_faces: u32,
-    pub(crate) pool_cells: u32,
-    pub(crate) column: [[u32; 2]; 3],
+    pub(crate) cell_size: f64,
+    pub(crate) bounds: bool,
+    pub(crate) fill_height: f32,
+    /// The Initial Fill's box as placed (min then max).
+    pub(crate) initial_fill: Option<[[f32; 3]; 2]>,
     pub(crate) points_per_cell: u32,
     pub(crate) seed: u32,
 }
@@ -76,29 +83,40 @@ pub struct MatterSetup {
 /// [`matter_geometry`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MatterGeometry {
+    /// The grid box of this frame, moved onto whole world cells.
     pub(crate) layout: FluidDomainLayout,
+    /// The Water item's box exactly as placed (min then max): the Bounds box.
+    pub(crate) bounds_box: [[f32; 3]; 2],
     pub(crate) setup: MatterSetup,
+    /// The padded lattice over this frame's grid box: the seam's dense
+    /// arrays, the fill and the force field lattice.
+    pub(crate) lattice: LiquidLattice,
+    /// The pool's height in cells and the Initial Fill's cell range per axis
+    /// in this frame's grid box (empty without one).
+    pub(crate) pool_cells: u32,
+    pub(crate) column: [[u32; 2]; 3],
+    /// Tiles of the grid's world tile pool.
+    pub(crate) pool_tiles: u32,
     /// What the fill changed to fit the domain, on the values this frame ran.
     pub(crate) fit: SetupFit,
 }
 
 impl MatterGeometry {
-    /// The scalar outputs fixed by the setup, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 33] {
-        let MatterSetup {
+    /// The scalar outputs fixed by this frame's geometry, by name.
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 17] {
+        let MatterGeometry {
             lattice,
-            closed_faces,
             pool_cells,
             column,
+            pool_tiles,
+            setup,
+            ..
+        } = *self;
+        let MatterSetup {
             points_per_cell,
             seed,
-        } = self.setup;
-        let blocks = lattice_blocks(&lattice);
-        let (centre, size, bin) = block_sort_box(&lattice);
-        // The walls' box: the authored box inside the lattice's padding.
-        let lo = lattice.box_min();
-        let hi: [f32; 3] =
-            std::array::from_fn(|d| lo[d] + lattice.cells()[d] as f32 * lattice.cell_size());
+            ..
+        } = setup;
         [
             ("lattice_min_x", lattice.min()[0]),
             ("lattice_min_y", lattice.min()[1]),
@@ -107,7 +125,7 @@ impl MatterGeometry {
             ("nodes_x", lattice.nodes()[0] as f32),
             ("nodes_y", lattice.nodes()[1] as f32),
             ("nodes_z", lattice.nodes()[2] as f32),
-            ("closed_faces", closed_faces as f32),
+            ("pool_tiles", pool_tiles as f32),
             ("pool_cells", pool_cells as f32),
             ("column_x0", column[0][0] as f32),
             ("column_x1", column[0][1] as f32),
@@ -117,23 +135,17 @@ impl MatterGeometry {
             ("column_z1", column[2][1] as f32),
             ("points_per_cell", points_per_cell as f32),
             ("fill_seed", seed as f32),
-            ("blocks_x", blocks[0] as f32),
-            ("blocks_y", blocks[1] as f32),
-            ("blocks_z", blocks[2] as f32),
-            ("block_center_x", centre[0]),
-            ("block_center_y", centre[1]),
-            ("block_center_z", centre[2]),
-            ("block_size_x", size[0]),
-            ("block_size_y", size[1]),
-            ("block_size_z", size[2]),
-            ("block_cell_size", bin),
-            ("bounds_lo_x", lo[0]),
-            ("bounds_lo_y", lo[1]),
-            ("bounds_lo_z", lo[2]),
-            ("bounds_hi_x", hi[0]),
-            ("bounds_hi_y", hi[1]),
-            ("bounds_hi_z", hi[2]),
         ]
+    }
+
+    /// The rigid world's walls for the Wall faces `walls`: slabs round the
+    /// Bounds box, and none with Bounds off.
+    pub(crate) fn domain_walls(&self, walls: u32) -> DomainWalls {
+        if self.setup.bounds {
+            DomainWalls::new(self.bounds_box[0], self.bounds_box[1], walls)
+        } else {
+            DomainWalls::default()
+        }
     }
 }
 
@@ -188,31 +200,42 @@ pub(crate) fn fill_region(
     Ok((pool_cells, column, fit))
 }
 
-/// The domain box, lattice, walls and fill from the domain's params and
-/// wires (`read` is `scalar_or_param`), refused by name when the lattice is
-/// over Grid Budget or the fill is not a usable shape.
+/// The domain box, lattice, pool and fill from the domain's params and
+/// wires (`read` is `scalar_or_param`; the Bounds switch and the enums come
+/// from `params`), the grid box moved onto whole world cells and the Bounds
+/// box as placed. Refused by name when the lattice is over Grid Budget, a
+/// Fill Height above 0 has Bounds off, or the fill is not a usable shape.
 pub(crate) fn matter_geometry(
     read: impl Fn(&str, f32) -> f32,
     params: &ParamValues,
     domain: Option<Transform>,
     initial_fill: Option<Transform>,
 ) -> Result<MatterGeometry, String> {
-    let layout = domain_layout(
-        domain.map(|domain| manifold_water_liquid::world_pose::world_domain_box(domain).into()),
-        read("domain_size", 4.0),
+    let bounds = bounds_enabled(params);
+    let domain_size = read("domain_size", 4.0);
+    let world = domain.map(manifold_water_liquid::world_pose::world_domain_box);
+    let layout = on_world_cells(domain_layout(
+        world.map(Into::into),
+        domain_size,
         f64::from(read("cell_metres", DEFAULT_CELL_SIZE)),
-    )?;
+    )?);
+    let bounds_box = match world {
+        Some(pose) => box_about(pose.pos, pose.scale),
+        // No Water item: the cube `domain_layout` places, centred in X/Z with
+        // its floor at Y = 0.
+        None => box_about([0.0, 0.5 * domain_size, 0.0], [domain_size; 3]),
+    };
     let lattice = LiquidLattice::from_layout(&layout);
     let budget = match params.get("grid_budget_mcells") {
         Some(ParamValue::Float(budget)) => *budget,
         _ => 8.0,
     };
     admit_lattice(&lattice, budget)?;
-    let (pool_cells, column, fit) = fill_region(
-        &layout,
-        read("fill_height", DEFAULT_FILL_HEIGHT),
-        initial_fill,
-    )?;
+    let fill_height = read("fill_height", DEFAULT_FILL_HEIGHT);
+    if !bounds && fill_height > 0.0 {
+        return Err("Matter: Fill Height fills the Bounds box from its floor, so with Bounds off it must be 0. Use an Initial Fill for the starting water.".into());
+    }
+    let (pool_cells, column, fit) = fill_region(&layout, fill_height, initial_fill)?;
     let points_per_cell = match params.get("points_per_cell") {
         Some(ParamValue::Enum(1)) => 27,
         _ => 8,
@@ -222,14 +245,24 @@ pub(crate) fn matter_geometry(
         _ => 0.0,
     };
     let setup = MatterSetup {
-        lattice,
-        closed_faces: closed_faces(params),
-        pool_cells,
-        column,
+        cell_size: layout.cell_size,
+        bounds,
+        fill_height,
+        initial_fill: initial_fill.map(|volume| box_about(volume.pos, volume.scale)),
         points_per_cell,
         seed: seed.round().clamp(0.0, 16_777_215.0) as u32,
     };
-    Ok(MatterGeometry { layout, setup, fit })
+    let pool_tiles = matter_pool_tiles(&lattice, (f64::from(budget) * 1e6) as u64);
+    Ok(MatterGeometry {
+        layout,
+        bounds_box,
+        setup,
+        lattice,
+        pool_cells,
+        column,
+        pool_tiles,
+        fit,
+    })
 }
 
 manifold_node_engine::primitive! {
@@ -276,12 +309,13 @@ manifold_node_engine::primitive! {
         liveliness: ScalarF32,
         density: ScalarF32,
         limited_by_substeps: ScalarF32,
-        blocks_x: ScalarF32, blocks_y: ScalarF32, blocks_z: ScalarF32,
-        block_center_x: ScalarF32, block_center_y: ScalarF32, block_center_z: ScalarF32,
-        block_size_x: ScalarF32, block_size_y: ScalarF32, block_size_z: ScalarF32,
-        block_cell_size: ScalarF32,
+        pool_tiles: ScalarF32,
+        open_faces: ScalarF32,
+        kill_height: ScalarF32,
         bounds_lo_x: ScalarF32, bounds_lo_y: ScalarF32, bounds_lo_z: ScalarF32,
         bounds_hi_x: ScalarF32, bounds_hi_y: ScalarF32, bounds_hi_z: ScalarF32,
+        wall_velocity_lo_x: ScalarF32, wall_velocity_lo_y: ScalarF32, wall_velocity_lo_z: ScalarF32,
+        wall_velocity_hi_x: ScalarF32, wall_velocity_hi_y: ScalarF32, wall_velocity_hi_z: ScalarF32,
         momentum_unit: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, first_tick: ScalarF32,
         dynamic_count: ScalarF32,
@@ -298,6 +332,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("cell_metres"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_CELL_SIZE), range: Some(CELL_SIZE_METRES), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("grid_budget_mcells"), label: "Grid Budget", ty: ParamType::Float, default: ParamValue::Float(8.0), range: Some((0.01, 512.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds"), label: "Bounds", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Left Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_pos_x"), label: "Right Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_y"), label: "Floor", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -335,6 +370,8 @@ manifold_node_engine::primitive! {
         setup_report: SetupReport = SetupReport::default(),
         // The domain box of the accepted setup.
         layout: Option<FluidDomainLayout> = None,
+        // The fill's pool height and Initial Fill range in that box's cells.
+        fill_cells: (u32, [[u32; 2]; 3]) = (0, [[0; 2]; 3]),
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
         bodies: LiquidBodies = LiquidBodies::default(),
@@ -351,6 +388,9 @@ manifold_node_engine::primitive! {
         impulses: LiquidImpulses = LiquidImpulses::default(),
         fields: LiquidFields = LiquidFields::default(),
         acceleration: Option<FieldValue> = None,
+        // The Bounds box of the last frame with Bounds on: its faces' speed.
+        last_bounds: Option<[[f32; 3]; 2]> = None,
+        source_floor: SourceFloor = SourceFloor::default(),
     },
 }
 
@@ -502,7 +542,7 @@ impl Coupling {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 61] = [
+const OUTPUTS: [&str; 60] = [
     "lattice_min_x",
     "lattice_min_y",
     "lattice_min_z",
@@ -510,7 +550,6 @@ const OUTPUTS: [&str; 61] = [
     "nodes_x",
     "nodes_y",
     "nodes_z",
-    "closed_faces",
     "gravity_x",
     "gravity",
     "gravity_z",
@@ -534,16 +573,6 @@ const OUTPUTS: [&str; 61] = [
     "liveliness",
     "density",
     "limited_by_substeps",
-    "blocks_x",
-    "blocks_y",
-    "blocks_z",
-    "block_center_x",
-    "block_center_y",
-    "block_center_z",
-    "block_size_x",
-    "block_size_y",
-    "block_size_z",
-    "block_cell_size",
     "momentum_unit",
     "body_count",
     "body_rows",
@@ -564,10 +593,20 @@ const OUTPUTS: [&str; 61] = [
     "bounds_hi_x",
     "bounds_hi_y",
     "bounds_hi_z",
+    "pool_tiles",
+    "closed_faces",
+    "open_faces",
+    "kill_height",
+    "wall_velocity_lo_x",
+    "wall_velocity_lo_y",
+    "wall_velocity_lo_z",
+    "wall_velocity_hi_x",
+    "wall_velocity_hi_y",
+    "wall_velocity_hi_z",
 ];
-const TICKS: usize = 20;
-const EPOCH: usize = 22;
-const IMPULSE_TICK: usize = 51;
+const TICKS: usize = 19;
+const EPOCH: usize = 21;
+const IMPULSE_TICK: usize = 40;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
@@ -827,24 +866,24 @@ impl PhysicsNode for MatterDomain {
     /// The pool and the initial column as the fill seeds them (whole
     /// cells), then bodies and forces.
     fn write_physics_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
-        let (Some(layout), Some(setup)) = (self.layout, self.setup) else {
+        let Some(layout) = self.layout else {
             return;
         };
+        let (pool_cells, column) = self.fill_cells;
         // The lattice's f32 cell size, as `fill_region` counts cells.
         let dx = layout.cell_size as f32;
         let max: [f32; 3] = std::array::from_fn(|i| layout.min[i] + layout.size[i]);
-        if setup.pool_cells > 0 {
-            let top = layout.min[1] + setup.pool_cells as f32 * dx;
+        if pool_cells > 0 {
+            let top = layout.min[1] + pool_cells as f32 * dx;
             out.push(PhysicsGizmo::aabb(
                 PhysicsGizmoFamily::Fill,
                 layout.min,
                 [max[0], top, max[2]],
             ));
         }
-        if setup.column.iter().all(|[lo, hi]| hi > lo) {
-            let corner = |end: usize| {
-                std::array::from_fn(|i| layout.min[i] + setup.column[i][end] as f32 * dx)
-            };
+        if column.iter().all(|[lo, hi]| hi > lo) {
+            let corner =
+                |end: usize| std::array::from_fn(|i| layout.min[i] + column[i][end] as f32 * dx);
             out.push(PhysicsGizmo::aabb(
                 PhysicsGizmoFamily::Fill,
                 corner(0),
@@ -1043,10 +1082,15 @@ impl MatterDomain {
                 return Err(reason);
             }
         };
-        let MatterGeometry { layout, setup, fit } = geometry;
+        let MatterGeometry {
+            layout,
+            setup,
+            fit,
+            lattice,
+            ..
+        } = geometry;
         self.setup_report
             .accept(fit, column.map(|column| (column.pos, column.scale)));
-        let lattice = setup.lattice;
         let speed = ctx.scalar_or_param("speed", 1.0);
         let live = [
             "gravity_x",
@@ -1075,7 +1119,8 @@ impl MatterDomain {
         } else {
             None
         };
-        self.coupled.walls = DomainWalls::of(&layout, closed_faces(ctx.params));
+        let (wall_faces, open_faces) = face_masks(setup.bounds, closed_faces(ctx.params));
+        self.coupled.walls = geometry.domain_walls(wall_faces);
         self.coupled.capacity = MAX_LIQUID_BODIES;
         if self.coupled.mode && !self.observe_rigid(ctx.played(), speed)? {
             return Ok(None);
@@ -1155,6 +1200,7 @@ impl MatterDomain {
         }
         self.setup = Some(setup);
         self.layout = Some(layout);
+        self.fill_cells = (geometry.pool_cells, geometry.column);
         let frame = self.clock.advance(
             ctx.played(),
             ctx.sim_step.interval.0,
@@ -1311,7 +1357,28 @@ impl MatterDomain {
             &self.impulses,
         )?;
 
+        let (scene, kill) = self.scene(&geometry, column, frame.epoch);
+        let simulated: f64 = (0..u64::from(frame.ticks))
+            .map(|tick| {
+                frame
+                    .interval(tick)
+                    .map_or(0.0, |interval| interval.duration().0)
+            })
+            .sum();
+        let walls = wall_velocity_outputs(
+            if restart || frame.restarted {
+                None
+            } else {
+                self.last_bounds
+            },
+            geometry.bounds_box,
+            simulated,
+        );
+        self.last_bounds = setup.bounds.then_some(geometry.bounds_box);
         let per_frame = [
+            ("closed_faces", wall_faces as f32),
+            ("open_faces", open_faces as f32),
+            ("kill_height", kill),
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),
             ("gravity", ctx.scalar_or_param("gravity", -9.81)),
             ("gravity_z", ctx.scalar_or_param("gravity_z", 0.0)),
@@ -1357,6 +1424,8 @@ impl MatterDomain {
         for (name, value) in geometry
             .outputs()
             .into_iter()
+            .chain(bounds_outputs(scene))
+            .chain(walls)
             .chain(per_frame)
             .chain(field.outputs())
         {
@@ -1373,6 +1442,40 @@ impl MatterDomain {
             "every output written once"
         );
         Ok(Some(values))
+    }
+
+    /// The Bounds box the frame publishes and the kill height: with Bounds on
+    /// the box as placed and no kill height; off, the box round every body
+    /// and the Initial Fill, and the height a point falling past the lowest
+    /// solid (or the fill's floor when the epoch began, with no body) is
+    /// removed at.
+    fn scene(
+        &mut self,
+        geometry: &MatterGeometry,
+        column: Option<Transform>,
+        epoch: u32,
+    ) -> ([[f32; 3]; 2], f32) {
+        if geometry.setup.bounds {
+            return (geometry.bounds_box, NO_KILL_HEIGHT);
+        }
+        let floor = self
+            .source_floor
+            .of_epoch(epoch, || lowest_source(column, []));
+        let v0 =
+            (geometry.setup.cell_size.powi(3) / f64::from(geometry.setup.points_per_cell)) as f32;
+        let kill = kill_height(
+            self.bodies
+                .body_boxes()
+                .map(|(fixed, placed)| (fixed, placed[0][1])),
+            floor,
+            RADIUS_SCALE * v0.cbrt(),
+        );
+        let placed = self
+            .bodies
+            .body_boxes()
+            .map(|(_, placed)| placed)
+            .chain(column.map(|fill| box_about(fill.pos, fill.scale)));
+        (union_box(placed).unwrap_or(geometry.bounds_box), kill)
     }
 
     /// Take the paired world's observation for this frame: check it shares
@@ -1831,7 +1934,7 @@ mod gizmo_tests {
             matter_geometry(read, &ParamValues::default(), None, column).expect("fits or is fitted")
         };
         let top = geometry(4.0, None);
-        assert_eq!(geometry(9.0, None).setup.pool_cells, top.setup.pool_cells);
+        assert_eq!(geometry(9.0, None).pool_cells, top.pool_cells);
 
         // The default 4 m domain spans x from -2 to 2.
         let at_wall = Transform {
@@ -1845,15 +1948,15 @@ mod gizmo_tests {
             ..Transform::default()
         };
         assert_eq!(
-            geometry(0.16, Some(past_wall)).setup.column,
-            geometry(0.16, Some(at_wall)).setup.column
+            geometry(0.16, Some(past_wall)).column,
+            geometry(0.16, Some(at_wall)).column
         );
         let away = Transform {
             pos: [9.0, 1.0, 0.0],
             scale: [1.0; 3],
             ..Transform::default()
         };
-        assert_eq!(geometry(0.16, Some(away)).setup.column, [[0; 2]; 3]);
+        assert_eq!(geometry(0.16, Some(away)).column, [[0; 2]; 3]);
     }
 
     /// The fill gizmos are the cells the fill seeds: the pool up to its cell
@@ -1870,6 +1973,7 @@ mod gizmo_tests {
             matter_geometry(read, &ParamValues::default(), None, Some(column)).expect("fills");
         let mut domain = MatterDomain::new();
         (domain.setup, domain.layout) = (Some(geometry.setup), Some(geometry.layout));
+        domain.fill_cells = (geometry.pool_cells, geometry.column);
         assert_eq!(
             domain.fluid_domain_snapshot().unwrap().accepted_layout,
             Some(geometry.layout)
@@ -1888,7 +1992,7 @@ mod gizmo_tests {
         assert_eq!(boxes.len(), 2);
         let (layout, dx) = (geometry.layout, geometry.layout.cell_size as f32);
         let pool_top = boxes[0].0[1] + boxes[0].1[1];
-        assert!((pool_top - (layout.min[1] + geometry.setup.pool_cells as f32 * dx)).abs() < 1e-6);
+        assert!((pool_top - (layout.min[1] + geometry.pool_cells as f32 * dx)).abs() < 1e-6);
         assert!((pool_top - layout.min[1] - 0.16).abs() <= 0.5 * dx);
         for axis in 0..3 {
             assert!(

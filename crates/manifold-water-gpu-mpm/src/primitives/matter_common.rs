@@ -1,5 +1,4 @@
-//! What the matter atoms share at run time: the walls shader. The lattice itself is
-//! every liquid's (`liquid::lattice::LiquidLattice::from_wires`).
+//! What the matter atoms share at run time: the Bounds walls shader.
 
-/// The lattice's closed walls, three padding nodes deep.
-pub(super) const MATTER_WALLS: &str = include_str!("shaders/matter_walls.wgsl");
+/// The Bounds box's Wall faces as placed, applied to nodes on or past each plane.
+pub(super) const MATTER_BOUNDS: &str = include_str!("shaders/matter_bounds.wgsl");

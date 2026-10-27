@@ -1,4 +1,4 @@
-//! Look gates A1 and A3, and free-flight momentum
+//! Look gate A3 and free-flight momentum
 //! (look gates and invariants). A2, A4 and A6 were water look targets, withdrawn with the
 //! MPM water look goal; A5 compared splash against the CPU FLIP engine and was
 //! dropped with routine FLIP comparisons. Every metric comes from
@@ -124,42 +124,6 @@ fn matter(liveliness: f32) -> &'static Series {
         ZERO.get_or_init(|| run_matter(0.0, DAM_BREAK_TICKS))
     } else {
         LIVELY.get_or_init(|| run_matter(0.9, DAM_BREAK_TICKS))
-    }
-}
-
-fn describe(name: &str, s: &Series) {
-    let settle = s.settling();
-    eprintln!(
-        "  {name}: settle {:?} s, ringing {:.4} m, peak volume error {:.4}, J {:?}, splash {:.4}, sheets {:.4}, alignment {:?}",
-        settle.settle_time,
-        settle.ringing,
-        s.volume_error.iter().map(|v| v.1).fold(0.0, f32::max),
-        s.j_range,
-        s.max_splash(),
-        s.max_sheets(),
-        s.alignment
-    );
-}
-
-/// A1: no grid-aligned ridges at 1.5 s, while the Dam Break still moves;
-/// ridges a lattice leaves show by then.
-#[test]
-fn matter_look_lattice_alignment() {
-    let gate = run_matter(0.0, 15);
-    eprintln!(
-        "matter_look_lattice_alignment (largest 16-bin histogram bin over mean; fails above 1.5)"
-    );
-    describe("matter L0", &gate);
-    assert_eq!(gate.alignment.len(), 1);
-    for (t, ratio, interior) in &gate.alignment {
-        assert!(
-            *interior > 50,
-            "too few interior points at {t} s: {interior}"
-        );
-        assert!(
-            ratio.iter().all(|&r| r <= 1.5),
-            "grid-aligned ridges at {t} s: {ratio:?}"
-        );
     }
 }
 

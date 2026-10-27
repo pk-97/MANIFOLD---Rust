@@ -20,7 +20,7 @@ pub(super) const FACE_DIVISOR: &str = "matter_face_length";
 pub const DIVISOR_ROW: u32 = 65 * 64 * 64;
 
 /// `WaterDamBreakMatter.json` with `node.matter_face_component` × 3 on
-/// matter_state's grid feeding matter_frame's face inputs. `consumer` puts a
+/// matter_state's grid and tiles feeding matter_frame's face inputs. `consumer` puts a
 /// GPU per-element atom sized from its input between that axis's component
 /// and the frame, so the two fold into one fused dispatch: node.divide_by_value,
 /// chosen for its shape, not its meaning, dividing by the length of the u
@@ -43,10 +43,11 @@ pub fn matter_dam_break_faces(consumer: Option<usize>) -> EffectGraphDef {
             .and_then(|n| n["id"].as_u64())
             .unwrap_or_else(|| panic!("no {name}"))
     };
-    let (domain, state, frame) = (
+    let (domain, state, frame, to_grid) = (
         id_of(inner, "matter_domain"),
         id_of(inner, "matter_state"),
         id_of(inner, "matter_frame"),
+        id_of(inner, "matter_points_to_grid"),
     );
     let next = inner["nodes"]
         .as_array()
@@ -56,7 +57,10 @@ pub fn matter_dam_break_faces(consumer: Option<usize>) -> EffectGraphDef {
         .max()
         .expect("nodes")
         + 1;
-    let mut wires = Vec::new();
+    // The table of the region's last grid leaves through the state.
+    let mut wires = vec![
+        json!({"fromNode": to_grid, "fromPort": "tiles", "toNode": state, "toPort": "tiles_in"}),
+    ];
     for (axis, name) in MATTER_FACE_NODES.into_iter().enumerate() {
         let id = next + axis as u64;
         // Decoy node counts: the domain's wired counts must win, fused or not.
@@ -66,7 +70,18 @@ pub fn matter_dam_break_faces(consumer: Option<usize>) -> EffectGraphDef {
             "params": {"axis": {"type": "Enum", "value": axis}, "nodes_x": decoy, "nodes_y": decoy, "nodes_z": decoy},
         }));
         wires.push(json!({"fromNode": state, "fromPort": "grid", "toNode": id, "toPort": "grid"}));
-        for port in ["nodes_x", "nodes_y", "nodes_z"] {
+        wires
+            .push(json!({"fromNode": state, "fromPort": "tiles", "toNode": id, "toPort": "tiles"}));
+        for port in [
+            "nodes_x",
+            "nodes_y",
+            "nodes_z",
+            "lattice_min_x",
+            "lattice_min_y",
+            "lattice_min_z",
+            "cell_size",
+            "pool_tiles",
+        ] {
             wires.push(json!({"fromNode": domain, "fromPort": port, "toNode": id, "toPort": port}));
         }
         let to_frame = format!("face_{}_in", ["u", "v", "w"][axis]);

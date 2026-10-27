@@ -2,14 +2,17 @@
 //! (invariants and enforcement).
 //! The chain runs without a substep region: each frame is one substep
 //! (clear → particle-to-grid → grid update → grid-to-particle), the point
-//! buffer updated in place across frames.
+//! buffer updated in place across frames. The GPU grid is pooled on world
+//! tiles; the CPU oracle's grid is the dense lattice, read back from the pool
+//! through the table particle-to-grid built.
 
 use std::borrow::Cow;
 
-use manifold_core::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
 use manifold_node_engine::{
     exec::backend::Backend, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
     exec::effect_node::EffectNodeType, exec::effect_node::FrameTime,
@@ -22,10 +25,12 @@ use manifold_node_engine::{
     state_store::StateStore,
 };
 use manifold_water_gpu_mpm::matter::{
-    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks,
-    mass_unit, momentum_unit, rounding_hash, water_lambda,
+    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, mass_unit, matter_pool_tiles,
+    momentum_unit, water_lambda,
 };
+use manifold_water_liquid::bounds::{ALL_FACES, NO_KILL_HEIGHT};
 use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::testkit::world_box::from_pool_under;
 use {
     manifold_water_gpu_mpm::matter::reference, manifold_water_gpu_mpm::matter::reference::Params,
     manifold_water_gpu_mpm::matter::reference::Point,
@@ -86,9 +91,12 @@ pub(crate) struct Chain {
     state: StateStore,
     points: ResourceId,
     accum: ResourceId,
+    tiles: ResourceId,
     p2g: NodeInstanceId,
-    /// The sort's order and ranges, on the block path.
-    sorted: Option<(ResourceId, ResourceId)>,
+    pool_tiles: u32,
+    /// World node of lattice node 0, and the lattice's node counts.
+    origin: [i32; 3],
+    nodes: [u32; 3],
     frame: u32,
 }
 
@@ -108,52 +116,18 @@ pub(crate) fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) 
 
 impl Chain {
     pub(crate) fn new(lat: &LiquidLattice, points: &[MatterPoint], p: &Params) -> Self {
-        Self::build(lat, points, p, None)
-    }
-
-    /// With `sort_source`, P2G takes the block path: the source points go
-    /// through node.sort_particles_into_cells
-    /// into the lattice's D6 block bins, and P2G reads `order` and `ranges`.
-    /// A source other than `points` leaves points outside their sorted block.
-    pub(crate) fn build(
-        lat: &LiquidLattice,
-        points: &[MatterPoint],
-        p: &Params,
-        sort_source: Option<&[MatterPoint]>,
-    ) -> Self {
         let registry = PrimitiveRegistry::with_builtin();
-        let nodes = lat.node_count();
+        let pool_tiles = matter_pool_tiles(lat, u64::MAX);
+        let pool = pool_len(pool_tiles) as u32;
         let mut graph = Graph::new();
         let pts = graph.add_node(Box::new(HostArray::new::<MatterPoint>(points.len() as u32)));
-        let acc = graph.add_node(Box::new(HostArray::new::<i32>(4 * nodes)));
-        let grd = graph.add_node(Box::new(HostArray::new::<MatterGridNode>(nodes)));
+        let acc = graph.add_node(Box::new(HostArray::new::<i32>(4 * pool)));
+        let grd = graph.add_node(Box::new(HostArray::new::<MatterGridNode>(pool)));
         let add = |graph: &mut Graph, id: &str| graph.add_node(registry.construct(id).expect(id));
         let zero = add(&mut graph, "node.zero_array");
         let p2g = add(&mut graph, "node.matter_to_grid");
         let update = add(&mut graph, "node.matter_grid_update");
         let g2p = add(&mut graph, "node.grid_to_matter");
-        let src_sort = sort_source.map(|source| {
-            let src = graph.add_node(Box::new(HostArray::new::<MatterPoint>(source.len() as u32)));
-            let sort = add(&mut graph, "node.sort_particles_into_cells");
-            graph.connect((src, "out"), (sort, "particles")).unwrap();
-            graph.connect((sort, "order"), (p2g, "order")).unwrap();
-            graph
-                .connect((sort, "cell_ranges"), (p2g, "ranges"))
-                .unwrap();
-            let (centre, size, bin) = block_sort_box(lat);
-            for (axis, name) in ["x", "y", "z"].iter().enumerate() {
-                set(&mut graph, sort, &format!("center_{name}"), centre[axis]);
-                set(&mut graph, sort, &format!("size_{name}"), size[axis]);
-                set(
-                    &mut graph,
-                    p2g,
-                    &format!("blocks_{name}"),
-                    lattice_blocks(lat)[axis] as f32,
-                );
-            }
-            set(&mut graph, sort, "cell_size", bin);
-            (src, sort)
-        });
         graph.connect((acc, "out"), (zero, "in")).unwrap();
         graph.connect((pts, "out"), (p2g, "points")).unwrap();
         graph.connect((zero, "out"), (p2g, "accum")).unwrap();
@@ -163,19 +137,34 @@ impl Chain {
         graph.connect((grd, "out"), (update, "grid")).unwrap();
         graph.connect((pts, "out"), (g2p, "points")).unwrap();
         graph.connect((update, "grid_out"), (g2p, "grid")).unwrap();
+        for node in [update, g2p] {
+            graph.connect((p2g, "tiles"), (node, "tiles")).unwrap();
+        }
+        graph.add_external_output(p2g, "tiles").expect("tiles");
 
         for node in [p2g, g2p] {
-            set(&mut graph, node, "lattice_min_x", lat.min()[0]);
-            set(&mut graph, node, "lattice_min_y", lat.min()[1]);
-            set(&mut graph, node, "lattice_min_z", lat.min()[2]);
             set(&mut graph, node, "active_count", points.len() as f32);
         }
         for node in [p2g, update, g2p] {
             set(&mut graph, node, "cell_size", lat.cell_size());
-            set(&mut graph, node, "nodes_x", lat.nodes()[0] as f32);
-            set(&mut graph, node, "nodes_y", lat.nodes()[1] as f32);
-            set(&mut graph, node, "nodes_z", lat.nodes()[2] as f32);
+            set(&mut graph, node, "pool_tiles", pool_tiles as f32);
             set(&mut graph, node, "step_dt", p.dt as f32);
+        }
+        for node in [update, g2p] {
+            for (axis, name) in ["x", "y", "z"].iter().enumerate() {
+                set(
+                    &mut graph,
+                    node,
+                    &format!("bounds_lo_{name}"),
+                    p.bounds[0][axis] as f32,
+                );
+                set(
+                    &mut graph,
+                    node,
+                    &format!("bounds_hi_{name}"),
+                    p.bounds[1][axis] as f32,
+                );
+            }
         }
         let unit = momentum_unit(lat.cell_size(), p.dt);
         set(&mut graph, p2g, "momentum_unit", unit);
@@ -186,12 +175,9 @@ impl Chain {
         set(&mut graph, update, "gravity_x", p.gravity[0] as f32);
         set(&mut graph, update, "gravity", p.gravity[1] as f32);
         set(&mut graph, update, "gravity_z", p.gravity[2] as f32);
-        let faces = p
-            .closed
-            .iter()
-            .enumerate()
-            .fold(0u32, |m, (i, &c)| m | (u32::from(c) << i));
-        set(&mut graph, update, "closed_faces", faces as f32);
+        set(&mut graph, update, "wall_faces", p.walls as f32);
+        set(&mut graph, g2p, "open_faces", 0.0);
+        set(&mut graph, g2p, "kill_height", NO_KILL_HEIGHT);
         set(&mut graph, g2p, "liveliness", p.liveliness as f32);
         set(&mut graph, g2p, "cohesion", p.cohesion as f32);
 
@@ -209,15 +195,7 @@ impl Chain {
             unsafe { buffer.write(0, bytemuck::cast_slice(data)) };
         };
         fill(points_res, points);
-        if let (Some((src, _)), Some(source)) = (src_sort, sort_source) {
-            fill(output_of(&plan, src, "out"), source);
-        }
-        let sorted = src_sort.map(|(_, sort)| {
-            (
-                output_of(&plan, sort, "order"),
-                output_of(&plan, sort, "cell_ranges"),
-            )
-        });
+        let tiles = output_of(&plan, p2g, "tiles");
         Self {
             graph,
             plan,
@@ -225,16 +203,13 @@ impl Chain {
             state: StateStore::new(),
             points: points_res,
             accum,
+            tiles,
             p2g,
-            sorted,
+            pool_tiles,
+            origin: std::array::from_fn(|a| (lat.min()[a] / lat.cell_size()).round() as i32),
+            nodes: lat.nodes(),
             frame: 0,
         }
-    }
-
-    /// The sort's (order, ranges as start/count pairs), on the block path.
-    fn sorted(&self) -> Option<(Vec<u32>, Vec<u32>)> {
-        self.sorted
-            .map(|(order, ranges)| (self.read(order), self.read(ranges)))
     }
 
     /// One substep; frame k rounds with tick k, substep 0 (the oracle's
@@ -279,13 +254,25 @@ impl Chain {
         self.read(self.points)
     }
 
+    /// The accumulator's four words a node over the dense lattice, x fastest,
+    /// as the oracle indexes its grid.
     fn accum(&self) -> Vec<i32> {
-        self.read(self.accum)
+        let pooled: Vec<[i32; 4]> = self.read(self.accum);
+        let table: Vec<u32> = self.read(self.tiles);
+        assert!(table.len() as u64 >= table_words(self.pool_tiles));
+        from_pool_under(&pooled, &table, self.pool_tiles, self.origin, self.nodes)
+            .into_iter()
+            .flatten()
+            .collect()
     }
 }
 
+fn layout() -> FluidDomainLayout {
+    domain_layout(None, 1.0, 1.0 / 16.0).expect("16-cell unit domain")
+}
+
 fn lattice() -> LiquidLattice {
-    LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("16-cell unit domain"))
+    LiquidLattice::from_layout(&layout())
 }
 
 /// 512 points (8 per cell over a 4×4×4-cell blob) resting on the floor,
@@ -334,7 +321,14 @@ fn params() -> Params {
         cohesion: 0.3,
         density: 1000.0,
         liveliness: 0.5,
-        closed: [true; 6],
+        walls: ALL_FACES,
+        bounds: {
+            let l = layout();
+            [
+                l.min.map(f64::from),
+                std::array::from_fn(|a| f64::from(l.min[a] + l.size[a])),
+            ]
+        },
         fixed_point: false,
         tick_index: 0,
         substep_in_tick: 0,
@@ -417,12 +411,18 @@ fn matter_grid_mass_matches_particle_mass() {
 /// The GPU rounds each accumulator word as the fixed-point oracle does (D5):
 /// small words, where the rounding offset decides the result and f32 has
 /// bits to spare, match exactly. A different hash on either side would miss
-/// about half of them.
+/// about half of them. The blob straddles world x = 0, so its scatter lands
+/// in tiles −1 and 0 of the pool.
 #[test]
 fn matter_accumulator_words_match_fixed_point_oracle() {
     let lat = lattice();
     let points = fixture(&lat);
     let p = params();
+    assert!(
+        points.iter().any(|pt| pt.position[0] < 0.0)
+            && points.iter().any(|pt| pt.position[0] > 0.0),
+        "the blob straddles tiles -1 and 0"
+    );
     let mut chain = Chain::new(&lat, &points, &p);
     chain.step();
     let gpu = chain.accum();
@@ -473,103 +473,6 @@ fn matter_accumulator_words_match_fixed_point_oracle() {
         worst_large <= 256.0,
         "large words differ by {worst_large} LSB"
     );
-}
-
-/// D6: block-local P2G adds the same integers as one thread per point, for
-/// points in their sorted block's tile and for points that left it and add
-/// globally. The sort sources shift the points by nothing, by 1.5 and 0.75
-/// cells, and by a hashed amount within ±1.2 cells per axis (a mix).
-#[test]
-fn matter_block_p2g_bit_identical() {
-    let lat = lattice();
-    let points = fixture(&lat);
-    let p = params();
-    // One step: the accumulator P2G wrote and the points G2P updated.
-    let step = |source: Option<&[MatterPoint]>| {
-        let mut chain = Chain::build(&lat, &points, &p, source);
-        chain.step();
-        let (ranked, covered) = chain.sorted().map_or((0, 0), |(order, ranges)| {
-            (
-                order.iter().filter(|&&i| i != u32::MAX).count(),
-                ranges.chunks_exact(2).map(|r| r[1]).sum::<u32>(),
-            )
-        });
-        (chain.accum(), chain.points(), ranked, covered)
-    };
-    let (plain, plain_points, _, _) = step(None);
-    let dx = lat.cell_size();
-    let base = |position: [f32; 3]| -> [i64; 3] {
-        std::array::from_fn(|axis| ((position[axis] - lat.min()[axis]) / dx - 0.5).floor() as i64)
-    };
-    // (in the sorted block's tile, global) for a source.
-    let paths = |source: &[MatterPoint]| {
-        let mut tally = [0usize; 2];
-        for (point, from) in points.iter().zip(source) {
-            let (sorted, now) = (base(from.position), base(point.position));
-            let in_tile =
-                (0..3).all(|axis| (0..=3).contains(&(now[axis] - sorted[axis].div_euclid(4) * 4)));
-            tally[usize::from(!in_tile)] += 1;
-        }
-        tally
-    };
-    let shift = |offset: &dyn Fn(u32, usize) -> f32| -> Vec<MatterPoint> {
-        points
-            .iter()
-            .map(|pt| MatterPoint {
-                position: std::array::from_fn(|axis| pt.position[axis] + offset(pt.id, axis) * dx),
-                ..*pt
-            })
-            .collect()
-    };
-    let drifted = shift(&|_, axis| [1.5, 0.75, 0.0][axis]);
-    let jittered = shift(&|id, axis| {
-        (rounding_hash(id.wrapping_mul(3).wrapping_add(axis as u32)) >> 8) as f32 / 16_777_216.0
-            * 2.4
-            - 1.2
-    });
-    let nonzero = plain.iter().filter(|&&w| w != 0).count();
-    eprintln!(
-        "matter_block_p2g_bit_identical: {nonzero} nonzero words over {} blocks",
-        lattice_blocks(&lat).iter().product::<u32>()
-    );
-    assert!(nonzero > 1000, "the fixture touches few nodes: {nonzero}");
-    for (name, source) in [
-        ("sorted", &points),
-        ("drifted", &drifted),
-        ("jittered", &jittered),
-    ] {
-        let tally = paths(source);
-        let (words, moved, ranked, covered) = step(Some(source));
-        let differ = plain.iter().zip(&words).filter(|(a, b)| a != b).count();
-        let points_differ = plain_points
-            .iter()
-            .zip(&moved)
-            .filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b))
-            .count();
-        eprintln!(
-            "  {name}: sort ranked {ranked}, ranges cover {covered}; points in tile {}, global {}; {differ} words and {points_differ} points differ",
-            tally[0], tally[1]
-        );
-        assert_eq!(
-            covered as usize,
-            points.len(),
-            "{name}: the sort covered every point"
-        );
-        assert_eq!(
-            differ, 0,
-            "{name}: block P2G differs from the per-point path"
-        );
-        assert_eq!(
-            points_differ, 0,
-            "{name}: the points after the step differ from the per-point path"
-        );
-        if name == "jittered" {
-            assert!(
-                tally.iter().all(|&n| n >= 20),
-                "{name} exercises every path: {tally:?}"
-            );
-        }
-    }
 }
 
 #[test]

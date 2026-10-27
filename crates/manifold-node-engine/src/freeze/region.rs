@@ -1246,7 +1246,11 @@ fn capacity_root_step(
             .collect(),
         _ => return None,
     };
-    if followed.is_empty() || !followed.iter().all(|port| array_inputs.iter().any(|(n, _)| n == port)) {
+    if followed.is_empty()
+        || !followed
+            .iter()
+            .all(|port| array_inputs.iter().any(|(n, _)| n == port))
+    {
         return None;
     }
     let wire_into = |port: &str| {
@@ -1278,7 +1282,16 @@ fn capacity_root_step(
     let capacities: Vec<(&str, u32)> = array_inputs
         .iter()
         .filter(|(name, _)| wire_into(name).is_some())
-        .map(|(name, _)| (*name, if followed.contains(name) { FOLLOWED } else { FOLLOWED + 1000 }))
+        .map(|(name, _)| {
+            (
+                *name,
+                if followed.contains(name) {
+                    FOLLOWED
+                } else {
+                    FOLLOWED + 1000
+                },
+            )
+        })
         .collect();
     let params = configured_params(constructed.as_ref(), node);
     (constructed.array_output_capacity(&own.1, &params, &capacities) == Some(FOLLOWED))
@@ -2408,18 +2421,17 @@ pub(crate) fn build_region(
                     if member.input_access.len() < arr_inputs.len() {
                         return Err("FromInput lacks array read-access declarations");
                     }
+                    // The anchor only sets the count: read per element, or
+                    // gathered by a body that guards its own indices.
                     for (index, access) in member
                         .input_access
                         .iter()
                         .take(arr_inputs.len())
                         .enumerate()
                     {
-                        let expected = if index == selected {
-                            InputAccess::Coincident
-                        } else {
-                            InputAccess::BufferGather
-                        };
-                        if *access != expected {
+                        let admitted = *access == InputAccess::BufferGather
+                            || (index == selected && *access == InputAccess::Coincident);
+                        if !admitted {
                             return Err(
                                 "FromInput requires one coincident anchor and bounds-checked gathers",
                             );

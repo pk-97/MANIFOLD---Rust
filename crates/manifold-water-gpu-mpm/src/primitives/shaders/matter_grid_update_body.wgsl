@@ -1,13 +1,20 @@
-// node.matter_grid_update — fusable BUFFER body. One thread per lattice node, x fastest:
+var<private> matter_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return matter_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(matter_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+
+// node.matter_grid_update — fusable BUFFER body. One thread per pooled world-tile
+// node (the canonical node, past the last slot, resolves to the zero element); node
+// p sits at world p·cell_size, found through the world-tile table (`buf_tiles`):
 //   v_before = momentum / mass                       (Liveliness reads it)
 //   v = v_before + dt · (g + forces(x))              (forces from tick_index's lattice)
 //   v += impulses(x)                                 (substep 0 of impulse_tick)
 // where forces and impulses are trilinear reads of the domain's coarse field
-// lattices (force_lattice.wgsl; origin the lattice minimum). Where the field
-// carries air, v instead relaxes toward the wind at its drag rate over dt,
-// exactly integrated (force_lattice_drag_step).
-// Then the closed walls and each collider in body order (matter_wall_stop in
-// matter_walls.wgsl and liquid_collider_project in liquid_collider.wgsl, which
+// lattices (force_lattice.wgsl; origin lattice_min, which is only the field
+// lattice's origin). Where the field carries air, v instead relaxes toward the
+// wind at its drag rate over dt, exactly integrated (force_lattice_drag_step).
+// Then the Bounds box's Wall faces and each collider in body order
+// (matter_wall_stop in matter_bounds.wgsl and liquid_collider_project in liquid_collider.wgsl, which
 // node.matter_body_reaction repeats to attribute each body's share).
 // Each component is then clamped to ±0.9·dx/dt; a clamped node sets
 // velocity_before.w.
@@ -55,15 +62,11 @@ fn body(
     idx: u32,
     count: u32,
     e_grid: Element,
-    nodes_x: i32,
-    nodes_y: i32,
-    nodes_z: i32,
     cell_size: f32,
     step_dt: f32,
     gravity_x: f32,
     gravity: f32,
     gravity_z: f32,
-    closed_faces: i32,
     momentum_unit: f32,
     lattice_min_x: f32,
     lattice_min_y: f32,
@@ -78,10 +81,28 @@ fn body(
     force_lattices: i32,
     impulse_tick: i32,
     first_tick: i32,
+    pool_tiles: i32,
+    wall_faces: i32,
+    bounds_lo_x: f32,
+    bounds_lo_y: f32,
+    bounds_lo_z: f32,
+    bounds_hi_x: f32,
+    bounds_hi_y: f32,
+    bounds_hi_z: f32,
+    wall_velocity_lo_x: f32,
+    wall_velocity_lo_y: f32,
+    wall_velocity_lo_z: f32,
+    wall_velocity_hi_x: f32,
+    wall_velocity_hi_y: f32,
+    wall_velocity_hi_z: f32,
 ) -> Element {
+    matter_pool_tiles = u32(pool_tiles);
     var out: Element;
     out.velocity_mass = vec4<f32>(0.0);
     out.velocity_before = vec4<f32>(0.0);
+    if idx >= ts_canon() {
+        return out;
+    }
     let word = idx * 4u;
     let m_raw = buf_accum[word + 3u];
     if m_raw <= 0 {
@@ -95,10 +116,10 @@ fn body(
         f32(buf_accum[word + 1u]),
         f32(buf_accum[word + 2u]),
     ) / m_norm * (momentum_unit * (65536.0 / 134217728.0));
-    let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
-    let coord = vec3<u32>(ts_node_coord(idx, vec3<i32>(n)));
+    ts_home(idx);
+    let node = ts_cell_coord(idx);
     let origin = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
-    let x = origin + vec3<f32>(coord) * cell_size;
+    let x = vec3<f32>(node) * cell_size;
     let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));
     var accel = vec3<f32>(gravity_x, gravity, gravity_z);
     var drag = 0.0;
@@ -119,7 +140,14 @@ fn body(
     if tick_index == impulse_tick && substep_in_tick == 0 {
         v = v + grid_update_impulses(x, origin, field_spacing, field_dims);
     }
-    v = matter_wall_stop(v, coord, n, u32(closed_faces));
+    v = matter_wall_stop(
+        v, x,
+        vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z),
+        vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z),
+        u32(wall_faces),
+        vec3<f32>(wall_velocity_lo_x, wall_velocity_lo_y, wall_velocity_lo_z),
+        vec3<f32>(wall_velocity_hi_x, wall_velocity_hi_y, wall_velocity_hi_z),
+    );
 
     for (var b = 0; b < body_count; b = b + 1) {
         let bd = buf_bodies[u32(b)];

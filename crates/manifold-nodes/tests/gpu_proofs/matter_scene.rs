@@ -34,9 +34,6 @@ pub(crate) struct SceneSettings {
     pub seed: u32,
     pub points_per_cell_27: bool,
     pub closed: [bool; 6],
-    /// P2G takes D6's block path: the region sorts the points into the
-    /// domain's block bins once per tick and P2G reads the order and ranges.
-    pub block_p2g: bool,
     /// Colliders: built-in unit cubes posed by these transforms (their scale
     /// is the box size), bodies of a Physics World coupled with the liquid.
     pub colliders: Vec<Transform>,
@@ -61,7 +58,6 @@ impl Default for SceneSettings {
             seed: 0,
             points_per_cell_27: false,
             closed: [true; 6],
-            block_p2g: false,
             colliders: Vec::new(),
             collider_motion: 0,
             collider_mesh: None,
@@ -88,6 +84,24 @@ pub(crate) struct MatterScene {
     /// Seconds per display frame; one fixed tick unless set.
     frame_interval: f64,
 }
+
+const BOUNDS: [&str; 6] = [
+    "bounds_lo_x",
+    "bounds_lo_y",
+    "bounds_lo_z",
+    "bounds_hi_x",
+    "bounds_hi_y",
+    "bounds_hi_z",
+];
+
+const WALL_VELOCITY: [&str; 6] = [
+    "wall_velocity_lo_x",
+    "wall_velocity_lo_y",
+    "wall_velocity_lo_z",
+    "wall_velocity_hi_x",
+    "wall_velocity_hi_y",
+    "wall_velocity_hi_z",
+];
 
 const LATTICE: [&str; 7] = [
     "lattice_min_x",
@@ -126,22 +140,40 @@ impl MatterScene {
                 .unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
         }
         for port in LATTICE {
-            for node in [fill, p2g, g2p, frame] {
+            for node in [fill, frame] {
                 wire(&mut graph, (domain, port), (node, port));
             }
-            if port != "cell_size" {
-                wire(&mut graph, (domain, port), (stats, port));
+        }
+        for port in ["lattice_min_x", "lattice_min_y", "lattice_min_z"] {
+            wire(&mut graph, (domain, port), (stats, port));
+        }
+        for node in [p2g, update, g2p] {
+            wire(&mut graph, (domain, "cell_size"), (node, "cell_size"));
+        }
+        let reaction = add(&mut graph, "node.matter_body_reaction");
+        for node in [p2g, update, reaction, g2p, stats, state] {
+            wire(&mut graph, (domain, "pool_tiles"), (node, "pool_tiles"));
+        }
+        for node in [update, reaction, g2p] {
+            wire(&mut graph, (p2g, "tiles"), (node, "tiles"));
+            for port in BOUNDS {
+                wire(&mut graph, (domain, port), (node, port));
             }
         }
-        for port in ["nodes_x", "nodes_y", "nodes_z", "cell_size"] {
-            wire(&mut graph, (domain, port), (update, port));
+        for node in [update, reaction] {
+            wire(&mut graph, (domain, "closed_faces"), (node, "wall_faces"));
+            for port in WALL_VELOCITY {
+                wire(&mut graph, (domain, port), (node, port));
+            }
         }
-        for port in ["nodes_x", "nodes_y", "nodes_z"] {
-            wire(&mut graph, (domain, port), (state, port));
+        for port in ["open_faces", "kill_height"] {
+            wire(&mut graph, (domain, port), (g2p, port));
         }
-        for node in [update, frame] {
-            wire(&mut graph, (domain, "closed_faces"), (node, "closed_faces"));
-        }
+        wire(
+            &mut graph,
+            (domain, "closed_faces"),
+            (frame, "closed_faces"),
+        );
         for port in ["gravity_x", "gravity", "gravity_z"] {
             wire(&mut graph, (domain, port), (update, port));
             wire(&mut graph, (domain, port), (stats, port));
@@ -207,7 +239,6 @@ impl MatterScene {
         wire(&mut graph, (stats, "stats_out"), (state, "stats_in"));
         // The coupling sum runs in every region; with no dynamic body it only
         // passes the domain's reaction slot through.
-        let reaction = add(&mut graph, "node.matter_body_reaction");
         wire(&mut graph, (update, "grid_out"), (reaction, "grid"));
         wire(&mut graph, (domain, "reaction"), (reaction, "reaction"));
         wire(
@@ -215,16 +246,19 @@ impl MatterScene {
             (reaction, "reaction_out"),
             (state, "reaction_in"),
         );
-        for port in LATTICE.into_iter().chain([
+        for port in [
+            "lattice_min_x",
+            "lattice_min_y",
+            "lattice_min_z",
+            "cell_size",
             "gravity_x",
             "gravity",
             "gravity_z",
-            "closed_faces",
             "momentum_unit",
             "body_count",
             "substeps_per_tick",
             "dynamic_count",
-        ]) {
+        ] {
             wire(&mut graph, (domain, port), (reaction, port));
         }
         for port in ["tick_index", "substep_in_tick", "step_dt"] {
@@ -241,31 +275,6 @@ impl MatterScene {
             (state, "substep_in_tick"),
             (p2g, "substep_in_tick"),
         );
-        let sort_node = settings
-            .block_p2g
-            .then(|| add(&mut graph, "node.sort_particles_into_cells"));
-        if let Some(sort) = sort_node {
-            wire(&mut graph, (state, "out"), (sort, "particles"));
-            wire(&mut graph, (fill, "count"), (sort, "count"));
-            // Sort once per tick; later substeps reuse its order and ranges.
-            wire(&mut graph, (state, "tick_start"), (sort, "enabled"));
-            for (from, to) in [
-                ("block_center_x", "center_x"),
-                ("block_center_y", "center_y"),
-                ("block_center_z", "center_z"),
-                ("block_size_x", "size_x"),
-                ("block_size_y", "size_y"),
-                ("block_size_z", "size_z"),
-                ("block_cell_size", "cell_size"),
-            ] {
-                wire(&mut graph, (domain, from), (sort, to));
-            }
-            for port in ["blocks_x", "blocks_y", "blocks_z"] {
-                wire(&mut graph, (domain, port), (p2g, port));
-            }
-            wire(&mut graph, (sort, "order"), (p2g, "order"));
-            wire(&mut graph, (sort, "cell_ranges"), (p2g, "ranges"));
-        }
         wire(&mut graph, (state, "out"), (frame, "points"));
         wire(&mut graph, (state, "stats"), (frame, "stats"));
         let colliders = Self::wire_colliders(

@@ -31,7 +31,9 @@ use manifold_water_gpu_flip::primitives::gpu_flip_pressure::{
 };
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::coupled_start;
-use manifold_water_liquid::world_tiles::{Allocation, LIQUID_POINTS, Reach, WorldTiles};
+use manifold_water_liquid::world_tiles::{
+    Allocation, LIQUID_POINTS, PointCount, Reach, WorldTiles,
+};
 
 const N: [usize; 3] = [17, 16, 15];
 const H: f32 = 0.25;
@@ -384,7 +386,7 @@ impl Lattice {
             &mut enc,
             &Allocation {
                 points: &records,
-                record: &record,
+                count: PointCount::Record(&record),
                 origin: lattice_origin(H),
                 inv_cell: 1.0 / H,
                 replay_count: 0,

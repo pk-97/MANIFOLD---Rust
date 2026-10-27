@@ -1,5 +1,5 @@
 //! `node.matter_stats` — once per tick, reduce a matter domain's points and
-//! grid to 16 words: non-finite and clamp counts, live count, speed, J
+//! grid to 17 words: non-finite and clamp counts, live count, speed, J
 //! range, volume, fixed-point headroom, mass, momentum and energy
 //!A fixed reduction tree keeps the
 //! sums deterministic. Exempt from the codegen mandate as a barriered
@@ -11,11 +11,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
-use crate::matter::{MatterGridNode, MatterPoint, STATS_WORDS};
+use crate::matter::{MatterGridNode, MatterPoint, STATS_WORDS, grid_accum_bytes, grid_bytes};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_node_engine::scene::world_tiles::pool_len;
 
 const SHADER: &str = include_str!("shaders/matter_stats.wgsl");
 /// Elements one workgroup folds: 256 threads × 8.
@@ -71,14 +71,14 @@ impl StatsPipelines {
 manifold_node_engine::primitive! {
     name: MatterStats,
     type_id: "node.matter_stats",
-    purpose: "Once per tick (when tick_end is 1), reduce a matter domain's points and grid to 16 statistics words: non-finite count, clamped nodes, live points, max speed, J range, volume, largest accumulator magnitude, mass, momentum, and kinetic, potential and elastic energy, plus the tick index. Sums run in a fixed order, so they are deterministic.",
+    purpose: "Once per tick (when tick_end is 1), reduce a matter domain's points and grid to 17 statistics words: non-finite count, clamped nodes, live points, max speed, J range, volume, largest accumulator magnitude, mass, momentum, and kinetic, potential and elastic energy, plus the tick index and the points removed for want of a pool tile. Sums run in a fixed order, so they are deterministic.",
     inputs: {
         points: Array(MatterPoint) required,
         grid: Array(MatterGridNode) required,
         accum: Array(i32) required,
         stats: Array(u32) required,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         lambda: ScalarF32 optional,
         cohesion: ScalarF32 optional,
@@ -94,9 +94,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_x"), label: "Nodes X", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("pool_tiles"), label: "Pool Tiles", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
@@ -108,7 +106,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick Index", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0e9)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Last atom of the Live Matter region body. stats/stats_out alias node.matter_state's stats array, whose final value escapes the region to node.matter_frame (which refuses to publish a non-finite tick) and to matter_state's readback (live count, fault). Gate it with the boundary's tick_end so it runs once per tick; a skipped substep leaves the array as it was. Words: 0 non-finite, 1 clamped nodes, 2 live, 3 max speed, 4 min J, 5 max J, 6 volume, 7 max |accumulator|, 8 mass, 9-11 momentum, 12 kinetic, 13 potential, 14 elastic, 15 tick.",
+    composition_notes: "Last atom of the Live Matter region body. stats/stats_out alias node.matter_state's stats array, whose final value escapes the region to node.matter_frame (which refuses to publish a non-finite tick) and to matter_state's readback (live count, fault). Gate it with the boundary's tick_end so it runs once per tick; a skipped substep leaves the array as it was. Words: 0 non-finite, 1 clamped nodes, 2 live, 3 max speed, 4 min J, 5 max J, 6 volume, 7 max |accumulator|, 8 mass, 9-11 momentum, 12 kinetic, 13 potential, 14 elastic, 15 tick, 16 points removed because their tile had no pool slot (id 0 with volume ratio 0). The grid and accum cover 512 * pool_tiles + 1 nodes; the canonical last node is not reduced.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Stats", category: Atom },
     summary: "Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong.",
@@ -150,9 +148,12 @@ impl Primitive for MatterStats {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter Stats") else {
-            return;
-        };
+        let lattice_min = ["lattice_min_x", "lattice_min_y", "lattice_min_z"]
+            .map(|name| ctx.scalar_or_param(name, 0.0));
+        let pool_tiles = ctx
+            .scalar_or_param("pool_tiles", 1.0)
+            .round()
+            .clamp(1.0, 16_777_216.0) as u32;
         let run_now = ctx.scalar_or_param("tick_end", 1.0) > 0.5;
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as u32;
@@ -178,15 +179,19 @@ impl Primitive for MatterStats {
             return;
         };
         if stats.size < u64::from(STATS_WORDS) * 4 {
-            ctx.error("Matter stats: the stats array holds fewer than 16 words");
+            ctx.error("Matter stats: the stats array holds fewer than 17 words");
+            return;
+        }
+        if grid.size < grid_bytes(pool_tiles) || accum.size < grid_accum_bytes(pool_tiles) {
+            ctx.error(format!(
+                "Matter stats: the grid or accumulator is shorter than a pool of {pool_tiles} tiles"
+            ));
             return;
         }
         let point_count =
             requested.min((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32);
-        let node_count = lattice
-            .node_count()
-            .min((grid.size / 32) as u32)
-            .min((accum.size / 16) as u32);
+        // The canonical node (last) is excluded.
+        let node_count = (pool_len(pool_tiles) - 1) as u32;
         let point_groups = point_count.div_ceil(BLOCK);
         let node_groups = node_count.div_ceil(BLOCK);
         let partial_bytes = u64::from((point_groups + node_groups).max(1)) * PARTIAL_BYTES;
@@ -208,9 +213,9 @@ impl Primitive for MatterStats {
             node_count,
             point_groups,
             node_groups,
-            lattice_min_x: lattice.min()[0],
-            lattice_min_y: lattice.min()[1],
-            lattice_min_z: lattice.min()[2],
+            lattice_min_x: lattice_min[0],
+            lattice_min_y: lattice_min[1],
+            lattice_min_z: lattice_min[2],
             lambda,
             gravity_x: gravity[0],
             gravity_y: gravity[1],
@@ -285,7 +290,7 @@ mod tests {
     fn matter_stats_params_match_the_shader_struct() {
         assert_eq!(std::mem::size_of::<StatsParams>(), 64);
         assert!(SHADER.contains("struct StatsParams"));
-        assert_eq!(STATS_WORDS, 16);
+        assert_eq!(STATS_WORDS, 17);
     }
 }
 

@@ -5,7 +5,7 @@
 //                 workgroup-memory tree;
 //   grid_main   — the same over lattice nodes;
 //   finish_main — one workgroup folds the partials in a fixed order and
-//                 writes the 16 stats words.
+//                 writes the 17 stats words.
 // Every sum runs in a fixed order, so stats are deterministic. Non-finite
 // values are found with an exponent-bits test: fast math may fold isfinite().
 
@@ -40,7 +40,7 @@ struct Partial {
     kinetic: f32,
     potential: f32,
     elastic: f32,
-    _pad: f32,
+    tile_removed: u32,
 }
 
 struct StatsParams {
@@ -99,7 +99,7 @@ fn empty() -> Partial {
     p.kinetic = 0.0;
     p.potential = 0.0;
     p.elastic = 0.0;
-    p._pad = 0.0;
+    p.tile_removed = 0u;
     return p;
 }
 
@@ -120,13 +120,18 @@ fn combine(a: Partial, b: Partial) -> Partial {
     p.kinetic = a.kinetic + b.kinetic;
     p.potential = a.potential + b.potential;
     p.elastic = a.elastic + b.elastic;
-    p._pad = 0.0;
+    p.tile_removed = a.tile_removed + b.tile_removed;
     return p;
 }
 
 fn point_partial(pt: MatterPoint) -> Partial {
     var p = empty();
     if pt.id == 0u {
+        // node.grid_to_matter zeroes J of a point whose tile got no slot; an
+        // Open face or the kill height keeps J.
+        if pt.volume_ratio == 0.0 {
+            p.tile_removed = 1u;
+        }
         return p;
     }
     let j = pt.volume_ratio;
@@ -260,5 +265,6 @@ fn finish_main(@builtin(local_invocation_id) lid: vec3<u32>) {
         stats[13] = bitcast<u32>(s.potential);
         stats[14] = bitcast<u32>(s.elastic);
         stats[15] = params.tick_index;
+        stats[16] = s.tile_removed;
     }
 }

@@ -86,6 +86,7 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
             "closed_pos_y",
             "closed_neg_z",
             "closed_pos_z",
+            "bounds",
             "points_per_cell",
             "stiffness",
             "cohesion",

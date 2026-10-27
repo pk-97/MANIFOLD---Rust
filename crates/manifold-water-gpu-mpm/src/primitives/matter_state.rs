@@ -18,6 +18,7 @@ use manifold_node_engine::exec::substeps::{
 };
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::world_tiles::table_words;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 
 /// `reaction_in` closes the reaction chain (node.matter_body_reaction, then
@@ -34,6 +35,13 @@ const RESULTS: &[SubstepResultPorts] = &[
         capture: "reaction_in",
         output: "reaction",
         optional: false,
+    },
+    // The world tile table node.matter_to_grid built the region's last grid
+    // under, for readers of `grid` after the region.
+    SubstepResultPorts {
+        capture: "tiles_in",
+        output: "tiles",
+        optional: true,
     },
 ];
 
@@ -73,14 +81,15 @@ pub struct ReadbackSlot {
 manifold_node_engine::primitive! {
     name: MatterState,
     type_id: "node.matter_state",
-    purpose: "Hold a matter domain's points across frames and run its substep region: seed the points when the epoch changes, provide the grid arrays for the lattice, and repeat the region over each accepted interval's subdivisions with the substep length, indices and tick flags. A tick with non-finite values halts the solver with an error until Reset.",
+    purpose: "Hold a matter domain's points across frames and run its substep region: seed the points when the epoch changes, provide the grid arrays for the tile pool (one node per world cell of each held tile), and repeat the region over each accepted interval's subdivisions with the substep length, indices and tick flags. A tick with non-finite values halts the solver with an error until Reset.",
     inputs: {
         seed: Array(MatterPoint) required,
         in: Array(MatterPoint) required,
         stats_in: Array(u32) required,
         reaction_in: Array(i32) required,
+        tiles_in: Array(u32) optional,
         count: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
         ticks: ScalarF32 optional,
     interval_duration: ScalarF32 optional,
     simulation_time: ScalarF32 optional, target_time: ScalarF32 optional,
@@ -95,6 +104,7 @@ manifold_node_engine::primitive! {
         reaction: Array(i32),
         grid_accum: Array(i32),
         grid: Array(MatterGridNode),
+        tiles: Array(u32),
         step_dt: ScalarF32,
         step_index: ScalarF32,
         substep_in_tick: ScalarF32,
@@ -106,7 +116,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; lattice size, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. Only live points (id ≠ 0) move.",
+    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; tiles_in takes node.matter_to_grid's tiles, and tiles carries the table of the last substep's grid out of the region for readers of grid (node.matter_face_component); reaction is the last substep's reaction words, which nothing needs to read. Only live points (id ≠ 0) move.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter State", category: Atom },
     summary: "Keeps the liquid's particles between frames and runs its simulation steps.",
@@ -124,6 +134,7 @@ manifold_node_engine::primitive! {
         captures: u32 = 0,
         captured_ticks: u32 = 0,
         grid_accum: Option<GpuBuffer> = None,
+        tiles: Option<GpuBuffer> = None,
         grid: Option<GpuBuffer> = None,
         zero_stats: Option<GpuBuffer> = None,
         readback: Vec<ReadbackSlot> = Vec::new(),
@@ -135,6 +146,18 @@ manifold_node_engine::primitive! {
         completed_cap: bool = false,
         last_stats: Option<MatterTickStats> = None,
     },
+}
+
+/// How many points `node`'s last read tick counts as removed because their
+/// tile got no pool slot, 0 when `node` is not a matter state or has read no
+/// tick. The water runtime puts it on the domain's setup report.
+pub fn points_removed_for_tiles(
+    node: &dyn manifold_node_engine::exec::effect_node::EffectNode,
+) -> u32 {
+    node.as_any()
+        .downcast_ref::<MatterState>()
+        .and_then(|state| state.last_stats)
+        .map_or(0, |stats| stats.tile_removed)
 }
 
 impl MatterState {
@@ -192,7 +215,7 @@ impl MatterState {
 
 impl Primitive for MatterState {
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
-        &["in", "stats_in", "reaction_in"]
+        &["in", "stats_in", "reaction_in", "tiles_in"]
     }
 
     fn persistent_output_ports(&self) -> &'static [&'static str] {
@@ -204,13 +227,14 @@ impl Primitive for MatterState {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "grid_accum" | "grid")
+        matches!(port, "grid_accum" | "grid" | "tiles")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "grid_accum" => self.grid_accum.as_ref(),
             "grid" => self.grid.as_ref(),
+            "tiles" => self.tiles.as_ref(),
             _ => None,
         }
     }
@@ -228,8 +252,8 @@ impl Primitive for MatterState {
                 .map(|&(_, n)| n),
             "stats" => Some(STATS_WORDS),
             "reaction" => Some(MAX_LIQUID_BODIES as u32 * REACTION_WORDS),
-            // Provided storage, sized to the lattice at run time.
-            "grid_accum" | "grid" => Some(1),
+            // Provided storage, sized to the tile pool at run time.
+            "grid_accum" | "grid" | "tiles" => Some(1),
             _ => None,
         }
     }
@@ -237,11 +261,7 @@ impl Primitive for MatterState {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let whole = |v: f32| v.round().max(0.0) as u32;
         let count = whole(ctx.scalar_or_param("count", 0.0));
-        let nodes = [
-            whole(ctx.scalar_or_param("nodes_x", 71.0)),
-            whole(ctx.scalar_or_param("nodes_y", 71.0)),
-            whole(ctx.scalar_or_param("nodes_z", 71.0)),
-        ];
+        let pool_tiles = whole(ctx.scalar_or_param("pool_tiles", 1.0)).max(1);
         let live_mode = !ctx.sim_step.offline();
         self.submitted_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let target = f64::from(ctx.scalar_or_param("target_time", self.submitted_time as f32));
@@ -256,17 +276,28 @@ impl Primitive for MatterState {
         let seed = ctx.inputs.array("seed");
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
+        // The table copy only when something reads it.
+        let tiles_bytes = ctx
+            .outputs
+            .array("tiles")
+            .map(|_| table_words(pool_tiles) * 4);
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
 
-        // The grid arrays follow the lattice the region's atoms dispatch over;
-        // a lattice the device cannot hold stops the solver before any tick.
+        // The grid arrays follow the tile pool the region's atoms dispatch
+        // over; a pool the device cannot hold stops the solver before any tick.
         let device = gpu.device;
         let mut refused = None;
+        if tiles_bytes.is_none() {
+            self.tiles = None;
+        }
         for (buffer, bytes) in [
-            (&mut self.grid_accum, grid_accum_bytes(nodes)),
-            (&mut self.grid, grid_bytes(nodes)),
-        ] {
+            (&mut self.grid_accum, grid_accum_bytes(pool_tiles)),
+            (&mut self.grid, grid_bytes(pool_tiles)),
+        ]
+        .into_iter()
+        .chain(tiles_bytes.map(|bytes| (&mut self.tiles, bytes)))
+        {
             if buffer.as_ref().is_some_and(|b| b.size >= bytes) {
                 continue;
             }
@@ -282,8 +313,7 @@ impl Primitive for MatterState {
                 Err(error) => {
                     *buffer = None;
                     refused = Some(format!(
-                        "Matter: a {}×{}×{} lattice needs {bytes} bytes of grid the device cannot give: {error}. Raise Cell Size.",
-                        nodes[0], nodes[1], nodes[2]
+                        "Matter: a pool of {pool_tiles} tiles needs {bytes} bytes of grid the device cannot give: {error}. Raise Cell Size."
                     ));
                     break;
                 }
@@ -416,6 +446,15 @@ impl Primitive for MatterState {
             ctx.inputs.array("reaction_in"),
             ctx.outputs.array("reaction"),
         ) && !candidate.ptr_eq(state)
+        {
+            let size = candidate.size.min(state.size);
+            ctx.gpu_encoder()
+                .native_enc
+                .copy_buffer_to_buffer(candidate, state, size);
+        }
+        // The table copy is this node's own storage, allocated in `run` only
+        // while `tiles` has a reader.
+        if let (Some(candidate), Some(state)) = (ctx.inputs.array("tiles_in"), self.tiles.as_ref())
         {
             let size = candidate.size.min(state.size);
             ctx.gpu_encoder()

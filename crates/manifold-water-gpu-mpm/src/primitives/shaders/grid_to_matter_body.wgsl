@@ -1,10 +1,25 @@
+var<private> matter_pool_tiles: u32;
+
+fn ts_pool_tiles() -> u32 { return matter_pool_tiles; }
+
+fn ts_table_entries() -> u32 {
+    let n = 4u * max(matter_pool_tiles, 1u);
+    return 1u << (32u - countLeadingZeros(n - 1u));
+}
+
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+
 // node.grid_to_matter — fusable BUFFER body. One thread per material point gathers its 27-node stencil from
 // the resolved grid (`buf_grid`, Element2 = MatterGridNode):
 //   v_pic = Σ w·v_i
 //   v_p  ← β·(v_p + Σ w·(v_i − v_before_i)) + (1 − β)·v_pic     (β = Liveliness)
 //   C_p  = (4/dx²)·Σ w·v_i ⊗ d_i,   x_p += dt·v_pic,   J ← J·(1 + dt·tr C)
 // Positions advect with v_pic (AFLIP, Fei et al. 2021, as Blatny & Gaume 2025
-// implement it). A point whose stencil leaves the lattice is removed (id 0).
+// implement it). Node p sits at world p·h, pooled by world tile (READ_SIDE).
+// A point whose own cell (the one holding it) has no stored tile is removed
+// (id 0, velocity 0, volume ratio 0, which node.matter_stats counts as a short
+// pool). After the move, a point beyond an Open face of the bounds box or below
+// kill_height is removed too (id 0, velocity 0, volume ratio kept).
 // A point whose position is not finite is left as it is, for the stats to
 // report. Element = MatterPoint.
 //
@@ -64,13 +79,7 @@ fn body(
     idx: u32,
     count: u32,
     e_points: Element,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
     cell_size: f32,
-    nodes_x: i32,
-    nodes_y: i32,
-    nodes_z: i32,
     step_dt: f32,
     liveliness: f32,
     cohesion: f32,
@@ -82,22 +91,33 @@ fn body(
     substep_in_tick: i32,
     substeps_per_tick: i32,
     dynamic_count: i32,
+    pool_tiles: i32,
+    open_faces: i32,
+    bounds_lo_x: f32,
+    bounds_lo_y: f32,
+    bounds_lo_z: f32,
+    bounds_hi_x: f32,
+    bounds_hi_y: f32,
+    bounds_hi_z: f32,
+    kill_height: f32,
 ) -> Element {
+    matter_pool_tiles = u32(pool_tiles);
     var p = e_points;
     if p.id == 0u || !g2m_finite3(p.position) {
         return p;
     }
-    let origin = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let inv_dx = 1.0 / cell_size;
-    let nodes = vec3<i32>(nodes_x, nodes_y, nodes_z);
-    let q = (p.position - origin) * inv_dx;
-    let base = floor(q - vec3<f32>(0.5));
-    let base_i = vec3<i32>(base);
-    if any(base_i < vec3<i32>(0)) || any(base_i + vec3<i32>(2) > nodes - vec3<i32>(1)) {
+    let own = ts_world_cell(p.position, vec3<f32>(-0.5 * cell_size), inv_dx);
+    ts_home(ts_cell_at(own));
+    if !ts_cell_stored(own) {
         p.id = 0u;
         p.velocity = vec3<f32>(0.0);
+        p.volume_ratio = 0.0;
         return p;
     }
+    let q = p.position * inv_dx;
+    let base = floor(q - vec3<f32>(0.5));
+    let base_i = vec3<i32>(base);
     let f = q - base;
     let w0 = 0.5 * (vec3<f32>(1.5) - f) * (vec3<f32>(1.5) - f);
     let w1 = vec3<f32>(0.75) - (f - vec3<f32>(1.0)) * (f - vec3<f32>(1.0));
@@ -120,7 +140,7 @@ fn body(
                 let weight = wx * wy * wz;
                 let d = (vec3<f32>(f32(a), f32(b), f32(c)) - f) * cell_size;
                 let node = base_i + vec3<i32>(a, b, c);
-                let g = buf_grid[ts_node_at(node, nodes)];
+                let g = buf_grid[ts_cell_at(node)];
                 let vi = g.velocity_mass.xyz;
                 v_pic = v_pic + weight * vi;
                 flip_delta = flip_delta + weight * (vi - g.velocity_before.xyz);
@@ -193,9 +213,18 @@ fn body(
     p.affine_y = vec4<f32>(c1, p.affine_y.w);
     p.affine_z = vec4<f32>(c2, 0.0);
 
-    let q_new = (p.position - origin) * inv_dx;
-    let base_new = vec3<i32>(floor(q_new - vec3<f32>(0.5)));
-    if any(base_new < vec3<i32>(0)) || any(base_new + vec3<i32>(2) > nodes - vec3<i32>(1)) {
+    let lo = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
+    let hi = vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z);
+    var removed = p.position.y < kill_height;
+    for (var a = 0; a < 3; a = a + 1) {
+        if ((open_faces >> u32(2 * a)) & 1) != 0 && p.position[a] < lo[a] {
+            removed = true;
+        }
+        if ((open_faces >> u32(2 * a + 1)) & 1) != 0 && p.position[a] > hi[a] {
+            removed = true;
+        }
+    }
+    if removed {
         p.id = 0u;
         p.velocity = vec3<f32>(0.0);
     }

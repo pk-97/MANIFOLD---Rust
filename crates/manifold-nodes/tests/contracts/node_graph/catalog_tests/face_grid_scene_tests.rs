@@ -4,11 +4,13 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
+use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_node_engine::{
     exec::effect_node::NodeInstanceId, exec::execution_plan::ResourceId,
@@ -16,10 +18,10 @@ use manifold_node_engine::{
 };
 use manifold_nodes_image::node_graph::primitives::divide_by_value::DivideByValue;
 use manifold_nodes_water::testkit::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
-use manifold_water_gpu_mpm::matter::MatterGridNode;
+use manifold_water_gpu_mpm::matter::{MatterGridNode, matter_pool_tiles};
 use manifold_water_gpu_mpm::primitives::matter_face_component::MatterFaceComponent;
 use manifold_water_liquid::grid::face_len;
-use manifold_water_liquid::lattice::PADDING_NODES;
+use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
 use manifold_water_liquid::primitives::dot_products::DotProducts;
 
 /// WaterDamBreakMatter's lattice at its default Cell Size, in its unwired
@@ -179,24 +181,38 @@ fn matter_face_component_fused_matches_unfused() {
     let len = face_len(CELLS, 1) as usize;
     let fused: Vec<f32> = run.read(res, len);
 
-    let nodes = CELLS.map(|c| c + 1 + 2 * PADDING_NODES);
+    // The default Grid Budget holds the whole pool the box and its ring want.
+    let lattice = LiquidLattice::from_layout(&domain_layout(None, 4.0, 0.0625).expect("4 m box"));
+    let nodes = lattice.nodes();
+    assert_eq!(nodes, CELLS.map(|c| c + 1 + 2 * PADDING_NODES));
+    let pool_tiles = matter_pool_tiles(&lattice, u64::MAX);
     let grid: Vec<MatterGridNode> = run.read(
         run.output_of("node.matter_state", "grid"),
-        nodes.iter().product::<u32>() as usize,
+        pool_len(pool_tiles) as usize,
+    );
+    let tiles: Vec<u32> = run.read(
+        run.output_of("node.matter_state", "tiles"),
+        table_words(pool_tiles) as usize,
     );
     let mut harness = Harness::new();
     let input = harness.array(&grid, grid.len());
+    let table = harness.array(&tiles, tiles.len());
     let component_faces = |harness: &mut Harness, axis: u32| {
         let faces = harness.array::<f32>(&[], grid.len());
         let mut component = params(&[
             ("nodes_x", nodes[0] as f32),
             ("nodes_y", nodes[1] as f32),
             ("nodes_z", nodes[2] as f32),
+            ("lattice_min_x", lattice.min()[0]),
+            ("lattice_min_y", lattice.min()[1]),
+            ("lattice_min_z", lattice.min()[2]),
+            ("cell_size", lattice.cell_size()),
+            ("pool_tiles", pool_tiles as f32),
         ]);
         component.insert("axis".into(), ParamValue::Enum(axis));
         let (_, errors) = harness.run(
             &mut MatterFaceComponent::new(),
-            &[("grid", input.0)],
+            &[("grid", input.0), ("tiles", table.0)],
             &[("out", faces.0)],
             &component,
         );

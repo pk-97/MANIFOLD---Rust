@@ -17,14 +17,3 @@ fn ts_grid_coord(idx: u32, dims: vec3<i32>) -> vec3<i32> {
         i32(idx / (u32(dims.x) * u32(dims.y))),
     );
 }
-
-// Matter's node lattice: node-centred with its padding nodes (matter_walls.wgsl),
-// `nodes` the padded counts. Dense today; the tile pool later replaces these
-// bodies, not their callers.
-fn ts_node_at(p: vec3<i32>, nodes: vec3<i32>) -> u32 {
-    return ts_grid_index(p, nodes);
-}
-
-fn ts_node_coord(idx: u32, nodes: vec3<i32>) -> vec3<i32> {
-    return ts_grid_coord(idx, nodes);
-}

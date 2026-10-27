@@ -1,31 +1,22 @@
 //! Buffer extent rule owned by this node.
+use crate::matter::MATTER_REACH;
 use crate::matter::grid_accum_bytes;
-use crate::matter::lattice_blocks;
-use crate::matter::node_extent;
+use crate::matter::pool_extent;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::liquid_lattice;
-use manifold_water_liquid::extent::whole;
-use manifold_water_liquid::fluid_particles::CellRange;
-use manifold_water_liquid::fluid_particles::bin_total;
-use std::mem::size_of;
+use manifold_node_engine::scene::world_tiles::table_words;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{block_keys, key_storage_bytes};
+use manifold_water_liquid::world_tiles::held_bytes;
 
 fn matter_to_grid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = liquid_lattice(x)?;
-    node_extent(x, &lattice)?;
-    x.covers("accum", grid_accum_bytes(lattice.nodes()))?;
-    if x.wired("order") && x.wired("ranges") {
-        let blocks = ["blocks_x", "blocks_y", "blocks_z"].map(|name| whole(x, name, 18.0).max(1));
-        if blocks != lattice_blocks(&lattice) {
-            return Err(x.uncovered(format!(
-                "blocks {blocks:?} are not the lattice's {:?}",
-                lattice_blocks(&lattice)
-            )));
-        }
-        x.covers("ranges", bin_total(blocks) * size_of::<CellRange>() as u64)?;
-        // Active points never exceed the points array; the order holds one
-        // entry per point slot.
-        x.covers("order", x.items("points").unwrap_or(0) * 4)?;
-    }
+    let pool = pool_extent(x)?;
+    x.covers("accum", grid_accum_bytes(pool))?;
+    // The node provides the world tile table, and holds the table's build
+    // scratch, the sort's ranges and scratch, and one order entry a point slot.
+    x.provide("tiles", table_words(pool) * 4);
+    let order_bytes = x.items("points").unwrap_or(0) * 4;
+    x.hold(
+        held_bytes(pool, MATTER_REACH.ring_max) + key_storage_bytes(block_keys(pool)) + order_bytes,
+    );
     Ok(())
 }
 inventory::submit! {

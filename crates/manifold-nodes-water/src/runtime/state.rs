@@ -61,7 +61,9 @@ impl RuntimeExtension for WaterRuntimeState {
                 manifold_water_gpu_flip::primitives::births_held_back(node.node.as_ref())
             });
             let removed = graph.get_node(*instance).map_or(0, |node| {
-                manifold_water_gpu_flip::primitives::particles_removed_for_tiles(node.node.as_ref())
+                let node = node.node.as_ref();
+                manifold_water_gpu_flip::primitives::particles_removed_for_tiles(node)
+                    .max(manifold_water_gpu_mpm::primitives::points_removed_for_tiles(node))
             });
             if !held_back && removed == 0 {
                 continue;

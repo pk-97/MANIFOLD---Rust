@@ -6,8 +6,10 @@
 
 use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
+use manifold_node_engine::scene::world_tiles::{TILE, TILE_CELLS, pool_len};
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::world_tiles::{Reach, run_tiles};
 
 pub mod coupling;
 #[doc = "The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary."]
@@ -119,12 +121,13 @@ pub const ACCUM_WORDS_PER_NODE: u32 = 4;
 pub const REACTION_WORDS: u32 = 16;
 
 /// Words of the per-tick stats array `node.matter_stats` writes (D14).
-pub const STATS_WORDS: u32 = 16;
+pub const STATS_WORDS: u32 = 17;
 
 /// One tick's statistics, decoded from the stats array (floats stored as
 /// bits): non-finite count, clamped nodes, live points, max speed, J range,
 /// volume Σ V0·J, max accumulator magnitude, mass, momentum, kinetic,
-/// potential and elastic energy, tick index.
+/// potential and elastic energy, tick index, and the points removed because
+/// their tile got no slot in the pool.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MatterTickStats {
     pub nonfinite: u32,
@@ -141,6 +144,9 @@ pub struct MatterTickStats {
     pub potential: f32,
     pub elastic: f32,
     pub tick: u32,
+    /// Points `node.grid_to_matter` removed because their tile had no slot
+    /// (the pool ran short), since the epoch began.
+    pub tile_removed: u32,
 }
 
 impl MatterTickStats {
@@ -161,6 +167,7 @@ impl MatterTickStats {
             potential: f(13),
             elastic: f(14),
             tick: w[15],
+            tile_removed: w[16],
         }
     }
 
@@ -215,19 +222,27 @@ pub fn rounding_point_key(id: u32, tick_index: u32, substep_in_tick: u32) -> u32
     rounding_hash(id ^ rounding_hash(tick_index.wrapping_mul(4096).wrapping_add(substep_in_tick)))
 }
 
-/// D5's encoding of a scaled contribution `x` into accumulator word `slot`
-/// (node·4 + word): floor(x + u), u the 24-bit hash offset, with the carry
-/// taken in integers so the result is unbiased at any magnitude.
+/// D5's rounding key of accumulator word `word` (0..4: momentum x, y, z,
+/// mass) of world node `node`. It names the node, not its place in the pool,
+/// so a run's sums do not depend on where its tiles sit. P2G repeats it
+/// (`node_word` in matter_to_grid.wgsl).
+pub fn node_word_key(node: [i32; 3], word: u32) -> u32 {
+    let u = node.map(|c| c as u32);
+    (u[0].wrapping_mul(73_856_093) ^ u[1].wrapping_mul(19_349_663) ^ u[2].wrapping_mul(83_492_791))
+        .wrapping_mul(4)
+        .wrapping_add(word)
+}
+
+/// D5's encoding of a scaled contribution `x` into the accumulator word
+/// keyed `slot` ([`node_word_key`]): floor(x + u), u the 24-bit hash offset,
+/// with the carry taken in integers so the result is unbiased at any
+/// magnitude.
 pub fn encode_fixed(x: f64, point_key: u32, slot: u32) -> i64 {
     let whole = x.floor();
     let fraction = ((x - whole) * 16_777_216.0) as u32;
     let carry = (fraction + (rounding_hash(point_key ^ slot) >> 8)) >> 24;
     whole as i64 + i64::from(carry)
 }
-
-/// Stencil base nodes per block axis in D6's block-local P2G; its workgroup
-/// tile spans BLOCK_NODES + 2 nodes per axis.
-pub const BLOCK_NODES: u32 = 4;
 
 /// Largest J cohesive water keeps (D3): the Cohesion tension κ·λ·J·(J − 1)
 /// pulls a stretched point back; a point stretched to twice its rest volume
@@ -288,9 +303,31 @@ pub fn substeps_for_interval(duration: f32, nominal: u32) -> u32 {
         .max(1.0) as u32
 }
 
+/// A point's drawn radius over the cube root of its rest volume: the
+/// sphere of that volume (FLIP's marker-radius rule, `node.matter_frame`).
+pub const RADIUS_SCALE: f32 = 0.620_350_5;
+
 /// Grid velocity clamp per component, in cells per substep
 /// (taichi_elements `g2p2g_allowed_cfl`).
 pub const VELOCITY_CLAMP_CFL: f32 = 0.9;
+
+/// How far Matter's world tiles reach: every tile next to a point's tile is
+/// held and gets a slot, so a point's stencil (its nearest node and the nodes
+/// one away) stays on held tiles while it moves.
+pub const MATTER_REACH: Reach = Reach {
+    ring_max: 1,
+    alloc_ring: 1,
+    cell_reach: 1,
+};
+
+/// Substeps between builds of Matter's world tiles: `node.matter_to_grid`
+/// builds on a substep whose `substep_in_tick` is a multiple of it. The grid
+/// clamps velocity to [`VELOCITY_CLAMP_CFL`] cells a substep, so between a
+/// build and the last P2G that uses it a point moves at most 0.9 · 5 cells
+/// and its stencil reaches one node further: 5.5 cells, inside the one-tile
+/// ring with 2.5 to spare for a collider's push-out.
+pub const REBUILD_SUBSTEPS: u32 = 6;
+const _: () = assert!((REBUILD_SUBSTEPS - 1) as f32 * VELOCITY_CLAMP_CFL + 1.0 + 2.0 < TILE as f32);
 /// Gravity used for the free-fall speed estimate. Live gravity is not used:
 /// changing it must not change the substep count (D4).
 const ESTIMATE_GRAVITY: f64 = 9.81;
@@ -329,61 +366,50 @@ pub fn stiffness_fitting_cap(dx: f64, unit_wave_speed: f64, v_est: f64) -> f64 {
     (max_wave / unit_wave_speed * (1.0 - 1e-5)).max(0.0)
 }
 
-/// D6 blocks per axis: 4 stencil base nodes each, covering every base a
-/// point can have (0..=nodes − 3).
-pub fn lattice_blocks(lattice: &LiquidLattice) -> [u32; 3] {
-    lattice
-        .nodes()
-        .map(|n| n.saturating_sub(2).div_ceil(BLOCK_NODES).max(1))
-}
-
-/// The cell-sort box whose bins are the D6 blocks: a point's bin is its
-/// stencil base node's block, floor((q − 1/2) / 4) with q in cells.
-/// Returns (centre, size, bin size) for `node.sort_particles_into_cells`.
-/// The size stops half a cell short of the last block's far edge, so the
-/// sort's ceil(size / bin) is exactly [`lattice_blocks`] despite f32
-/// rounding; points beyond it clamp into the last block.
-pub fn block_sort_box(lattice: &LiquidLattice) -> ([f32; 3], [f32; 3], f32) {
-    let dx = lattice.cell_size();
-    let min = lattice.min();
-    let bin = BLOCK_NODES as f32 * dx;
-    let blocks = lattice_blocks(lattice);
-    let size: [f32; 3] = std::array::from_fn(|i| blocks[i] as f32 * bin - 0.5 * dx);
-    let centre = std::array::from_fn(|i| min[i] + 0.5 * dx + 0.5 * size[i]);
-    (centre, size, bin)
-}
-
 /// Nodes of a lattice with `nodes` per axis, in u64 so no byte size wraps.
 pub fn lattice_nodes(nodes: [u32; 3]) -> u64 {
     nodes.iter().map(|&n| u64::from(n)).product()
 }
 
-/// Lattice-wide node kernels read the accumulator and grid through the node
-/// count; P2G's word index is an i32 node index times four.
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-pub fn node_extent(
-    x: &manifold_node_engine::exec::extent::AtomExtent<'_>,
-    lattice: &LiquidLattice,
-) -> Result<u64, manifold_node_engine::exec::extent::Verdict> {
-    let nodes = lattice_nodes(lattice.nodes());
-    if nodes > i32::MAX as u64 || nodes * u64::from(ACCUM_WORDS_PER_NODE) > u64::from(u32::MAX) {
-        return Err(x.uncovered(format!(
-            "{nodes} nodes overflow the accumulator's 32-bit word index"
-        )));
-    }
-    Ok(nodes)
+/// Tiles Matter's pool holds for `lattice`: every tile its nodes can touch,
+/// wherever it sits on the world lattice, and the ring round them; or the
+/// whole tiles `budget_nodes` buys, at least one.
+pub fn matter_pool_tiles(lattice: &LiquidLattice, budget_nodes: u64) -> u32 {
+    let ring = u64::from(MATTER_REACH.ring_max);
+    let wanted: u64 = lattice
+        .nodes()
+        .iter()
+        .map(|&n| run_tiles(n) + 2 * ring)
+        .product();
+    wanted.min(budget_nodes / u64::from(TILE_CELLS)).max(1) as u32
 }
 
-/// Bytes of the per-node arrays. The atom that allocates each one and every
-/// atom that dispatches over it take the size from here, from the same
-/// `nodes` wires, so storage always covers the dispatch.
-pub fn grid_accum_bytes(nodes: [u32; 3]) -> u64 {
-    lattice_nodes(nodes) * u64::from(ACCUM_WORDS_PER_NODE) * 4
+/// The `pool_tiles` an atom over Matter's pooled grid reads, at least one,
+/// checked so the accumulator's word index fits 32 bits.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+pub fn pool_extent(
+    x: &manifold_node_engine::exec::extent::AtomExtent<'_>,
+) -> Result<u32, manifold_node_engine::exec::extent::Verdict> {
+    let pool = manifold_water_liquid::extent::whole(x, "pool_tiles", 1.0).max(1);
+    if pool_len(pool) * u64::from(ACCUM_WORDS_PER_NODE) > u64::from(u32::MAX) {
+        return Err(x.uncovered(format!(
+            "a pool of {pool} tiles overflows the accumulator's 32-bit word index"
+        )));
+    }
+    Ok(pool)
+}
+
+/// Bytes of the pooled per-node arrays over a pool of `pool_tiles` slots:
+/// [`pool_len`] nodes, the canonical one last. The atom that allocates each
+/// one and every atom that dispatches over it take the size from here, from
+/// the same `pool_tiles` wire, so storage always covers the dispatch.
+pub fn grid_accum_bytes(pool_tiles: u32) -> u64 {
+    pool_len(pool_tiles) * u64::from(ACCUM_WORDS_PER_NODE) * 4
 }
 
 /// See [`grid_accum_bytes`].
-pub fn grid_bytes(nodes: [u32; 3]) -> u64 {
-    lattice_nodes(nodes) * std::mem::size_of::<MatterGridNode>() as u64
+pub fn grid_bytes(pool_tiles: u32) -> u64 {
+    pool_len(pool_tiles) * std::mem::size_of::<MatterGridNode>() as u64
 }
 
 /// See [`grid_accum_bytes`]: one f32 distance per node.
@@ -563,64 +589,31 @@ mod tests {
         }
     }
 
-    /// The sort makes exactly `blocks` bins per axis at every resolution, and
-    /// a point's bin (floor((p − box_min) · (1 / bin)), as the sort atom
-    /// computes it) is the block of its stencil base node, floor(base / 4).
+    /// The pool holds every tile a 64³ box's 71 nodes can touch and the ring
+    /// round them (10 + 2 per axis), or what a smaller budget buys.
     #[test]
-    fn matter_block_bins_are_base_node_blocks() {
-        for domain in [0.5f32, 1.0, 4.0, 20.0] {
-            for resolution in [8u32, 32, 63, 64, 100, 128, 512] {
-                let layout = manifold_core::fluid_domain::domain_layout(
-                    None,
-                    domain,
-                    f64::from(domain) / f64::from(resolution),
-                )
-                .unwrap();
-                let lattice = LiquidLattice::from_layout(&layout);
-                let (_, size, bin) = block_sort_box(&lattice);
-                assert_eq!(
-                    manifold_water_liquid::fluid_particles::bin_counts(size, bin),
-                    lattice_blocks(&lattice),
-                    "domain {domain} resolution {resolution}"
-                );
-            }
-        }
+    fn matter_pool_covers_the_box_and_its_ring_within_the_budget() {
         let layout = manifold_core::fluid_domain::domain_layout(None, 4.0, 0.0625).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
-        assert_eq!(lattice_blocks(&lattice), [18; 3]);
-        let (centre, size, bin) = block_sort_box(&lattice);
-        let dx = lattice.cell_size();
-        let mut seed = 0x1234_5678u32;
-        for _ in 0..10_000 {
-            seed = rounding_hash(seed);
-            let q = 1.5 + (seed >> 8) as f32 / 16_777_216.0 * 66.0;
-            let p = lattice.min()[0] + q * dx;
-            let base = (q - 0.5).floor() as i64;
-            let sorted = ((p - (centre[0] - 0.5 * size[0])) * (1.0 / bin)).floor() as i64;
-            // f32 may put a point within an ulp of a block edge in the
-            // neighbour; P2G then adds it globally, still correctly.
-            let near_edge = ((q - 0.5) / 4.0 - ((q - 0.5) / 4.0).round()).abs() < 1e-4;
-            assert!(
-                near_edge || sorted == base.div_euclid(4),
-                "q {q}: bin {sorted}, base {base}"
-            );
-        }
+        assert_eq!(lattice.nodes(), [71; 3]);
+        assert_eq!(matter_pool_tiles(&lattice, u64::MAX), 12 * 12 * 12);
+        assert_eq!(matter_pool_tiles(&lattice, 100 * 512 + 7), 100);
+        assert_eq!(matter_pool_tiles(&lattice, 0), 1);
     }
 }
 
 #[cfg(test)]
 mod grid_budget_tests {
-    use manifold_water_liquid::fluid_particles::bin_counts;
     use manifold_water_liquid::lattice::LiquidLattice;
 
-    use super::{block_sort_box, lattice_blocks, lattice_nodes};
+    use super::lattice_nodes;
     use manifold_core::fluid_domain::domain_layout;
 
     use crate::primitives::matter_domain::admit_lattice;
 
     /// MPM's lattice arithmetic at every resolution the domain allows: Grid
-    /// Budget admits or names the refusal, the block sort's bins are P2G's
-    /// blocks, and the default budget stops at 193 (200³ nodes).
+    /// Budget admits or names the refusal, and the default budget stops at
+    /// 193 (200³ nodes).
     #[test]
     fn matter_grid_budget_gates_every_resolution() {
         let mut largest_default = 0;
@@ -641,12 +634,6 @@ mod grid_budget_tests {
             if admit_lattice(&lattice, 8.0).is_ok() {
                 largest_default = resolution;
             }
-            let (_, size, bin) = block_sort_box(&lattice);
-            assert_eq!(
-                bin_counts(size, bin),
-                lattice_blocks(&lattice),
-                "res {resolution}"
-            );
         }
         assert_eq!(largest_default, 193);
     }

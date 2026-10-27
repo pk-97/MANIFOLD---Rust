@@ -182,7 +182,7 @@ impl Primitive for MatterFrame {
             let params = FrameParams {
                 count: count.min((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32),
                 previous_count: slot.previous_count,
-                radius_scale: (3.0 / (4.0 * std::f32::consts::PI)).cbrt(),
+                radius_scale: crate::matter::RADIUS_SCALE,
                 _pad0: 0,
             };
             if params.count > 0 {

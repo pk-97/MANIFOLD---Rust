@@ -8,6 +8,7 @@ use manifold_nodes_physics::force_lattice::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
+use manifold_water_liquid::bounds::{NO_KILL_HEIGHT, bounds_outputs, face_masks};
 use manifold_water_liquid::extent::walked_roles;
 use manifold_water_liquid::fields::FieldFrame;
 use std::mem::size_of;
@@ -24,10 +25,22 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }
+    // The walk has no bodies: the Bounds box as placed, the faces from the
+    // toggles, no kill height.
+    for (name, value) in bounds_outputs(geometry.bounds_box) {
+        x.publish(name, value);
+    }
+    let (walls, open) = face_masks(
+        geometry.setup.bounds,
+        manifold_water_liquid::lattice::closed_faces(x.params()),
+    );
+    x.publish("closed_faces", walls as f32);
+    x.publish("open_faces", open as f32);
+    x.publish("kill_height", NO_KILL_HEIGHT);
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
     let field = FieldFrame {
-        lattice: geometry.setup.lattice.force_lattice(),
+        lattice: geometry.lattice.force_lattice(),
         force_lattices: FORCE_LATTICE_RESERVE,
         impulse_tick: Some(0),
     };

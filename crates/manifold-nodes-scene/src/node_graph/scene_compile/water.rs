@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use manifold_core::scene_doc::{Item, ItemFields, ItemKind, SceneDoc, SourceShape, WaterSolver};
+use manifold_core::scene_doc::{Item, ItemFields, ItemKind, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
     WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily, role_index, template_roles,
@@ -86,10 +86,7 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
 
     let cell_size = b.add(owner, "cell_size", "node.value");
     b.wire(cell_size, "out", domain, "cell_metres");
-    // Only GPU FLIP's domain has the Bounds switch.
-    if let ItemFields::Water(water) = &item.fields
-        && water.solver == WaterSolver::Flip
-    {
+    if let ItemFields::Water(water) = &item.fields {
         b.set(
             domain,
             "bounds",

@@ -6,7 +6,7 @@ use super::*;
 use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
 use manifold_water_liquid::world_tiles::{
     Allocation, PointCount, Reach, allocated_args_offset, fresh_args_offset, held_bytes,
-    retired_args_offset,
+    retired_args_offset, run_tiles,
 };
 
 /// The cell passes' reach from a particle-holding cell, in cells: the cell
@@ -52,11 +52,6 @@ pub(crate) fn pooled_bytes_per_cell() -> u64 {
 /// most the `wanted` tiles.
 pub(crate) fn pool_capacity(wanted: u64, tile_bytes: u64, budget: u64) -> u32 {
     wanted.min(budget / tile_bytes) as u32
-}
-
-/// World tiles a run of `n` cells touches at most, wherever it starts.
-fn run_tiles(n: u32) -> u64 {
-    u64::from((n + TILE - 2) / TILE + 1)
 }
 
 manifold_core::testkit_visible! {

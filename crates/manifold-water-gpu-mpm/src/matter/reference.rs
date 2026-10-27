@@ -6,8 +6,8 @@
 // Row/column indices mirror the section 4.1 formulas term for term.
 #![allow(clippy::needless_range_loop)]
 
-use super::{MatterPoint, VELOCITY_CLAMP_CFL};
-use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
+use super::{MatterPoint, VELOCITY_CLAMP_CFL, node_word_key};
+use manifold_water_liquid::lattice::LiquidLattice;
 
 /// A point's stencil: base node, per-axis weights, per-axis fraction.
 pub type Stencil = ([i64; 3], [[f64; 3]; 3], [f64; 3]);
@@ -20,8 +20,10 @@ pub struct Params {
     pub cohesion: f64,
     pub density: f64,
     pub liveliness: f64,
-    /// Closed faces: −X, +X, −Y, +Y, −Z, +Z.
-    pub closed: [bool; 6],
+    /// Wall faces of the Bounds box, bits −X +X −Y +Y −Z +Z.
+    pub walls: u32,
+    /// The Bounds box, min then max, in metres.
+    pub bounds: [[f64; 3]; 2],
     /// Round every grid contribution to the GPU's fixed point (D5),
     /// isolating f32-versus-f64 error from quantization error.
     pub fixed_point: bool,
@@ -82,7 +84,7 @@ fn node_index(lat: &LiquidLattice, i: [i64; 3]) -> usize {
 }
 
 /// Stencil base of a point, or `None` when its 3×3×3 stencil leaves the
-/// lattice.
+/// CPU's lattice (which the GPU, on world tiles, does not have).
 pub fn base_of(lat: &LiquidLattice, x: [f64; 3]) -> Option<Stencil> {
     let mut base = [0i64; 3];
     let mut w = [[0.0; 3]; 3];
@@ -108,7 +110,9 @@ pub fn water_stress(p: &Params, j: f64) -> f64 {
 }
 
 /// Clear, P2G, grid update and G2P over `points` (section 4.1 steps 1, 3, 4
-/// and 6). Points leaving the lattice are removed (id 0), as the GPU does.
+/// and 6) on a dense CPU lattice whose nodes are world nodes (`lat`'s minimum
+/// a whole number of cells from the origin). Points leaving it are removed
+/// (id 0); the oracle's points stay inside.
 pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
     let count = lat.node_count() as usize;
     let dx = f64::from(lat.cell_size());
@@ -126,9 +130,12 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
     let to_momentum = f64::from(super::MOMENTUM_SCALE)
         / m_unit
         / f64::from(super::momentum_unit(lat.cell_size(), p.dt));
-    let quantize = |value: f64, scale: f64, key: u32, slot: usize| {
+    // The world node of lattice node i, which keys D5's rounding.
+    let origin = lat.min().map(|v| (f64::from(v) / dx).round() as i64);
+    let world = |i: [i64; 3]| -> [i32; 3] { std::array::from_fn(|d| (origin[d] + i[d]) as i32) };
+    let quantize = |value: f64, scale: f64, key: u32, node: [i64; 3], word: u32| {
         if p.fixed_point {
-            super::encode_fixed(value * scale, key, slot as u32) as f64 / scale
+            super::encode_fixed(value * scale, key, node_word_key(world(node), word)) as f64 / scale
         } else {
             value
         }
@@ -155,18 +162,17 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
                         (b as f64 - f[1]) * dx,
                         (cc as f64 - f[2]) * dx,
                     ];
-                    let idx = node_index(
-                        lat,
-                        [base[0] + a as i64, base[1] + b as i64, base[2] + cc as i64],
-                    );
-                    grid.mass[idx] += quantize(weight * mass, to_mass, key, idx * 4 + 3);
+                    let node = [base[0] + a as i64, base[1] + b as i64, base[2] + cc as i64];
+                    let idx = node_index(lat, node);
+                    grid.mass[idx] += quantize(weight * mass, to_mass, key, node, 3);
                     for r in 0..3 {
                         let ad = affine[r][0] * d[0] + affine[r][1] * d[1] + affine[r][2] * d[2];
                         grid.momentum[idx][r] += quantize(
                             weight * (mass * pt.v[r] + ad),
                             to_momentum,
                             key,
-                            idx * 4 + r,
+                            node,
+                            r as u32,
                         );
                     }
                 }
@@ -176,7 +182,6 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
 
     let limit = f64::from(VELOCITY_CLAMP_CFL) * dx / p.dt;
     let n = lat.nodes().map(|v| v as i64);
-    let pad = i64::from(PADDING_NODES);
     for k in 0..n[2] {
         for jj in 0..n[1] {
             for i in 0..n[0] {
@@ -187,13 +192,13 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
                 }
                 let vb = grid.momentum[idx].map(|mo| mo / m);
                 let mut v: [f64; 3] = std::array::from_fn(|d| vb[d] + p.dt * p.gravity[d]);
-                let coord = [i, jj, k];
-                // The face node (index `pad`) and the padding beyond it.
+                let x: [f64; 3] = std::array::from_fn(|d| (origin[d] + [i, jj, k][d]) as f64 * dx);
+                // Wall faces stop velocity into them on and past their plane.
                 for d in 0..3 {
-                    if p.closed[2 * d] && coord[d] <= pad && v[d] < 0.0 {
+                    if p.walls & (1 << (2 * d)) != 0 && x[d] <= p.bounds[0][d] && v[d] < 0.0 {
                         v[d] = 0.0;
                     }
-                    if p.closed[2 * d + 1] && coord[d] >= n[d] - pad - 1 && v[d] > 0.0 {
+                    if p.walls & (1 << (2 * d + 1)) != 0 && x[d] >= p.bounds[1][d] && v[d] > 0.0 {
                         v[d] = 0.0;
                     }
                 }
@@ -313,7 +318,8 @@ mod tests {
             cohesion: 0.0,
             density: 1000.0,
             liveliness: 0.0,
-            closed: [true; 6],
+            walls: 0,
+            bounds: [[0.0; 3]; 2],
             fixed_point: false,
             tick_index: 0,
             substep_in_tick: 0,

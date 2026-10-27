@@ -6,6 +6,7 @@ use manifold_core::fluid_domain::domain_layout;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::scene::world_tiles::pool_len;
 use manifold_node_engine::{
     exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
     exec::execution_plan::ExecutionPlan, exec::execution_plan::ResourceId,
@@ -20,11 +21,44 @@ use manifold_physics::sdf::signed_distance_lattice;
 use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
 use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::testkit::world_box::BoxTable;
 
 use manifold_node_engine::scene::transform::Transform;
 
 use crate::matter_scene::{MatterScene, SceneSettings};
 use crate::matter_transfer::{HostArray, output_of, set};
+
+/// The lattice's nodes on world tiles: node p at world p·h, one slot for
+/// each tile the lattice touches.
+fn lattice_table(lat: &LiquidLattice) -> BoxTable {
+    BoxTable::new(
+        std::array::from_fn(|a| (lat.min()[a] / lat.cell_size()).round() as i32),
+        lat.nodes(),
+    )
+}
+
+/// The table as a host array input.
+fn tiles_input(table: &BoxTable) -> (&'static str, HostArray) {
+    ("tiles", HostArray::new::<u32>(table.words.len() as u32))
+}
+
+/// Dense accumulator words, four a node, as the pooled accumulator.
+fn pooled_accum(table: &BoxTable, accum: &[i32]) -> Vec<i32> {
+    let nodes: Vec<[i32; 4]> = accum
+        .chunks_exact(4)
+        .map(|w| [w[0], w[1], w[2], w[3]])
+        .collect();
+    table
+        .to_pool(&nodes, [0; 4])
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// A pooled grid output read back over the dense lattice.
+fn dense_grid(table: &BoxTable, pooled: &[MatterGridNode]) -> Vec<MatterGridNode> {
+    table.from_pool(&pooled[..pool_len(table.pool_tiles) as usize])
+}
 
 /// One atom fed by host arrays, run for single frames.
 pub(crate) struct Bench {
@@ -355,32 +389,34 @@ fn matter_grid_update_projects_colliders() {
     let accum: Vec<i32> = (0..nodes)
         .flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw])
         .collect();
+    let table = lattice_table(&lat);
+    let pool = pool_len(table.pool_tiles) as u32;
     let mut bench = Bench::new(
         "node.matter_grid_update",
         vec![
-            ("accum", HostArray::new::<i32>(accum.len() as u32)),
-            ("grid", HostArray::new::<MatterGridNode>(nodes as u32)),
+            ("accum", HostArray::new::<i32>(4 * pool)),
+            ("grid", HostArray::new::<MatterGridNode>(pool)),
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
+            tiles_input(&table),
         ],
         &["grid_out"],
         |_, _| {},
     );
-    bench.fill(0, &accum);
+    bench.fill(0, &pooled_accum(&table, &accum));
+    bench.fill(5, &table.words);
     bench.fill(2, &[body]);
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
     for (name, value) in [
-        ("nodes_x", lat.nodes()[0] as f32),
-        ("nodes_y", lat.nodes()[1] as f32),
-        ("nodes_z", lat.nodes()[2] as f32),
+        ("pool_tiles", table.pool_tiles as f32),
         ("cell_size", dx),
         ("step_dt", dt),
         ("gravity_x", 0.0),
         ("gravity", 0.0),
         ("gravity_z", 0.0),
-        ("closed_faces", 0.0),
+        ("wall_faces", 0.0),
         ("momentum_unit", unit),
         ("lattice_min_x", lat.min()[0]),
         ("lattice_min_y", lat.min()[1]),
@@ -390,7 +426,7 @@ fn matter_grid_update_projects_colliders() {
         bench.set(name, value);
     }
     bench.run();
-    let grid: Vec<MatterGridNode> = bench.read("grid_out");
+    let grid = dense_grid(&table, &bench.read("grid_out"));
 
     let n = lat.nodes();
     let (mut projected, mut worst) = (0, 0.0f32);
@@ -575,11 +611,13 @@ fn matter_grid_update_applies_field_lattices() {
     let impulses = field_values(&lat, &field, |p| {
         [0.5 - p[2], 2.0 * p[0] * p[1], 0.8 * p[1]]
     });
+    let table = lattice_table(&lat);
+    let pool = pool_len(table.pool_tiles) as u32;
     let mut bench = Bench::new(
         "node.matter_grid_update",
         vec![
-            ("accum", HostArray::new::<i32>(accum.len() as u32)),
-            ("grid", HostArray::new::<MatterGridNode>(nodes as u32)),
+            ("accum", HostArray::new::<i32>(4 * pool)),
+            ("grid", HostArray::new::<MatterGridNode>(pool)),
             (
                 "forces",
                 HostArray::new::<f32>(16 * field.node_count() as u32),
@@ -588,24 +626,24 @@ fn matter_grid_update_applies_field_lattices() {
                 "impulses",
                 HostArray::new::<f32>(4 * field.node_count() as u32),
             ),
+            tiles_input(&table),
         ],
         &["grid_out"],
         |_, _| {},
     );
-    bench.fill(0, &accum);
+    bench.fill(0, &pooled_accum(&table, &accum));
     bench.fill(2, &forces);
+    bench.fill(4, &table.words);
     bench.fill(3, &impulses);
     let gravity = [0.0f32, -9.81, 0.0];
     for (name, value) in [
-        ("nodes_x", lat.nodes()[0] as f32),
-        ("nodes_y", lat.nodes()[1] as f32),
-        ("nodes_z", lat.nodes()[2] as f32),
+        ("pool_tiles", table.pool_tiles as f32),
         ("cell_size", dx),
         ("step_dt", dt),
         ("gravity_x", gravity[0]),
         ("gravity", gravity[1]),
         ("gravity_z", gravity[2]),
-        ("closed_faces", 0.0),
+        ("wall_faces", 0.0),
         ("momentum_unit", unit),
         ("lattice_min_x", lat.min()[0]),
         ("lattice_min_y", lat.min()[1]),
@@ -631,7 +669,7 @@ fn matter_grid_update_applies_field_lattices() {
         bench.set("tick_index", tick as f32);
         bench.set("substep_in_tick", substep as f32);
         bench.run();
-        let grid: Vec<MatterGridNode> = bench.read("grid_out");
+        let grid = dense_grid(&table, &bench.read("grid_out"));
         let mut worst = 0.0f32;
         for idx in 0..nodes {
             let coord = [
@@ -769,10 +807,12 @@ fn matter_body_reaction_counts_field_velocity() {
     .concat();
     let impulses = field_values(&lat, &field, inward(2.0));
     let substeps = 4.0f32;
+    let table = lattice_table(&lat);
+    let pool = pool_len(table.pool_tiles) as u32;
     let mut bench = Bench::new(
         "node.matter_body_reaction",
         vec![
-            ("grid", HostArray::new::<MatterGridNode>(nodes)),
+            ("grid", HostArray::new::<MatterGridNode>(pool)),
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
@@ -785,26 +825,26 @@ fn matter_body_reaction_counts_field_velocity() {
                 "impulses",
                 HostArray::new::<f32>(4 * field.node_count() as u32),
             ),
+            tiles_input(&table),
         ],
         &["reaction_out"],
         |_, _| {},
     );
-    bench.fill(0, &grid);
+    bench.fill(0, &table.to_pool(&grid, MatterGridNode::default()));
+    bench.fill(7, &table.words);
     bench.fill(1, &[body]);
     bench.fill(2, &[shape]);
     bench.fill(3, &atlas);
     bench.fill(5, &tick_forces);
     bench.fill(6, &impulses);
     for (name, value) in [
-        ("nodes_x", lat.nodes()[0] as f32),
-        ("nodes_y", lat.nodes()[1] as f32),
-        ("nodes_z", lat.nodes()[2] as f32),
+        ("pool_tiles", table.pool_tiles as f32),
         ("cell_size", dx),
         ("step_dt", dt),
         ("gravity_x", 0.0),
         ("gravity", 0.0),
         ("gravity_z", 0.0),
-        ("closed_faces", 0.0),
+        ("wall_faces", 0.0),
         ("momentum_unit", unit),
         ("lattice_min_x", lat.min()[0]),
         ("lattice_min_y", lat.min()[1]),
@@ -962,33 +1002,31 @@ fn matter_push_out_reaction_matches_removed_momentum() {
             }
         })
         .collect();
-    let nodes = lat.node_count();
     let (substep, substeps) = (3.0f32, 8.0f32);
+    let table = lattice_table(&lat);
+    let pool = pool_len(table.pool_tiles) as u32;
     let mut bench = Bench::new(
         "node.grid_to_matter",
         vec![
             ("points", HostArray::new::<MatterPoint>(points.len() as u32)),
-            ("grid", HostArray::new::<MatterGridNode>(nodes)),
+            ("grid", HostArray::new::<MatterGridNode>(pool)),
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
+            tiles_input(&table),
         ],
         &["points_out", "reaction_out"],
         |_, _| {},
     );
-    bench.fill(1, &vec![MatterGridNode::default(); nodes as usize]);
+    bench.fill(1, &vec![MatterGridNode::default(); pool as usize]);
+    bench.fill(6, &table.words);
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
     for (name, value) in [
-        ("nodes_x", lat.nodes()[0] as f32),
-        ("nodes_y", lat.nodes()[1] as f32),
-        ("nodes_z", lat.nodes()[2] as f32),
+        ("pool_tiles", table.pool_tiles as f32),
         ("cell_size", dx),
         ("step_dt", dt),
-        ("lattice_min_x", lat.min()[0]),
-        ("lattice_min_y", lat.min()[1]),
-        ("lattice_min_z", lat.min()[2]),
         ("liveliness", 1.0),
         ("active_count", points.len() as f32),
         ("body_count", 1.0),

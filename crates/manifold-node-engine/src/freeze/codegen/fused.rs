@@ -113,13 +113,16 @@ pub(crate) fn rename_ident(text: &str, from: &str, to: &str) -> String {
 }
 
 /// Whether a fragment line is a WGSL top-level declaration the fused prelude must
-/// carry (vs a comment / blank line, which it drops).
+/// carry (vs a comment / blank line, which it drops). A `var<private>` is a
+/// body's thread-local value its helpers read (a world tile pool size); every
+/// member sets it before its own reads, so identical lines share one.
 fn is_top_level_decl(line: &str) -> bool {
     let t = line.trim_start();
     t.starts_with("const ")
         || t.starts_with("struct ")
         || t.starts_with("alias ")
         || t.starts_with("override ")
+        || t.starts_with("var<private> ")
 }
 
 /// Generate one fused kernel for a region. Errors if a node isn't fusable, a

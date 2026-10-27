@@ -53,8 +53,8 @@ use manifold_physics::tick_samples::TickSamples;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::bounds::{
-    NO_KILL_HEIGHT, SourceFloor, bounds_outputs, box_about, box_cell, face_masks, kill_height,
-    lowest_source, on_world_cells, union_box, wall_velocity_outputs,
+    NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, box_cell, face_masks,
+    kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs,
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
@@ -281,11 +281,6 @@ pub fn gpu_flip_geometry(
     let lattice = LiquidLattice::from_layout(&layout);
     Ok(GpuFlipGeometry { layout, bounds_box, setup, lattice, pool_sites, box_sites, particles, solve_level, max_iterations, sheet_fill_rate, fit })
 }
-}
-
-/// The Bounds switch of `params`: on unless the toggle is off.
-pub(crate) fn bounds_enabled(params: &ParamValues) -> bool {
-    !matches!(params.get("bounds"), Some(ParamValue::Bool(false)))
 }
 
 /// `scalar` (the wire, else a Float param, else the default) as

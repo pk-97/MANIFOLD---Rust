@@ -6,28 +6,19 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::matter::{
-    MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits,
-};
+use crate::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, momentum_unit_fits};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_words};
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_water_liquid::tile_storage::TILE_GRID;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ToMatterUniforms {
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
     cell_size: f32,
-    nodes_x: i32,
-    nodes_y: i32,
-    nodes_z: i32,
     step_dt: f32,
     liveliness: f32,
     cohesion: f32,
@@ -39,14 +30,24 @@ struct ToMatterUniforms {
     substep_in_tick: i32,
     substeps_per_tick: i32,
     dynamic_count: i32,
+    pool_tiles: i32,
+    open_faces: i32,
+    bounds_lo_x: f32,
+    bounds_lo_y: f32,
+    bounds_lo_z: f32,
+    bounds_hi_x: f32,
+    bounds_hi_y: f32,
+    bounds_hi_z: f32,
+    kill_height: f32,
     dispatch_count: u32,
     _pad0: u32,
+    _pad1: u32,
 }
 
 manifold_node_engine::primitive! {
     name: GridToMatter,
     type_id: "node.grid_to_matter",
-    purpose: "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, blends toward a FLIP update by Liveliness, moves with the gathered velocity and updates its volume ratio. A point that ends inside a collider steps out onto its surface and loses the velocity pointing into it; a dynamic body gains the momentum the point lost, added to its reaction words. A point leaving the lattice is removed.",
+    purpose: "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, blends toward a FLIP update by Liveliness, moves with the gathered velocity and updates its volume ratio. A point that ends inside a collider steps out onto its surface and loses the velocity pointing into it; a dynamic body gains the momentum the point lost, added to its reaction words. A point whose cell has no tile in the pool is removed (id 0, volume ratio 0, counted by node.matter_stats); a point beyond an Open face of the bounds box, or below the kill height, is removed too (id 0, volume ratio kept).",
     inputs: {
         points: Array(MatterPoint) required,
         grid: Array(MatterGridNode) required,
@@ -54,9 +55,8 @@ manifold_node_engine::primitive! {
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         reaction: Array(i32) optional,
-        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        tiles: Array(u32) required,
         cell_size: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         step_dt: ScalarF32 optional,
         liveliness: ScalarF32 optional,
         cohesion: ScalarF32 optional,
@@ -68,19 +68,18 @@ manifold_node_engine::primitive! {
         substep_in_tick: ScalarF32 optional,
         substeps_per_tick: ScalarF32 optional,
         dynamic_count: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
+        open_faces: ScalarF32 optional,
+        bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
+        bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
+        kill_height: ScalarF32 optional,
     },
     outputs: {
         points_out: Array(MatterPoint),
         reaction_out: Array(i32),
     },
     params: [
-        ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_x"), label: "Nodes X", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("step_dt"), label: "Substep (s)", ty: ParamType::Float, default: ParamValue::Float(4.9e-4), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("liveliness"), label: "FLIP Ratio", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
@@ -92,9 +91,18 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substeps_per_tick"), label: "Substeps per Tick", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("dynamic_count"), label: "Dynamic Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("pool_tiles"), label: "Pool Tiles", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 16_777_216.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("open_faces"), label: "Open Faces", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 63.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_lo_x"), label: "Bounds Min X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_lo_y"), label: "Bounds Min Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_lo_z"), label: "Bounds Min Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_hi_x"), label: "Bounds Max X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_hi_y"), label: "Bounds Max Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_hi_z"), label: "Bounds Max Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("kill_height"), label: "Kill Height", ty: ParamType::Float, default: ParamValue::Float(f32::MIN), range: Some((f32::MIN, f32::MAX)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, after node.matter_grid_update and node.matter_body_reaction. points/points_out alias the node.matter_state point buffer (updated in place); grid is read as a gather. Liveliness 0 is APIC (calm, dissipative); toward 1 it keeps more of each point's own velocity change (livelier splashes, more noise). Positions always advect with the gathered velocity. bodies comes from node.matter_move_bodies (the substep-end pose node.matter_grid_update also reads); shapes, atlas and body_count from node.matter_domain. With bodies unwired no collider is read. reaction/reaction_out alias the domain's reaction words after node.matter_body_reaction (wire its reaction_out here, and this reaction_out into node.matter_state's reaction_in); density, momentum_unit, substeps_per_tick and dynamic_count come from node.matter_domain, tick_index and substep_in_tick from node.matter_state. Without a reaction slot covering every body, or with dynamic_count 0, no reaction is written.",
+    composition_notes: "Removal is a short pool (the point's cell has no stored tile), an Open face of the bounds box or the kill height. Wire tiles from the same step as grid. Region body of the Live Matter group, after node.matter_grid_update and node.matter_body_reaction. points/points_out alias the node.matter_state point buffer (updated in place); grid is read as a gather. Liveliness 0 is APIC (calm, dissipative); toward 1 it keeps more of each point's own velocity change (livelier splashes, more noise). Positions always advect with the gathered velocity. bodies comes from node.matter_move_bodies (the substep-end pose node.matter_grid_update also reads); shapes, atlas and body_count from node.matter_domain. With bodies unwired no collider is read. reaction/reaction_out alias the domain's reaction words after node.matter_body_reaction (wire its reaction_out here, and this reaction_out into node.matter_state's reaction_in); density, momentum_unit, substeps_per_tick and dynamic_count come from node.matter_domain, tick_index and substep_in_tick from node.matter_state. Without a reaction slot covering every body, or with dynamic_count 0, no reaction is written.",
     examples: ["WaterFloatingBoxMatter", "WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Grid to Matter", category: Atom },
     summary: "Moves each liquid particle with the grid's velocities and updates how compressed it is.",
@@ -108,8 +116,8 @@ manifold_node_engine::primitive! {
     fusion_kind: Boundary,
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/grid_to_matter_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [TILE_GRID, LIQUID_POSE, LIQUID_COLLIDER],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER],
     atomic_outputs: ["reaction_out"],
 }
 
@@ -140,9 +148,26 @@ impl Primitive for GridToMatter {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(lattice) = LiquidLattice::from_wires(ctx, "Grid to Matter") else {
+        let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
+        if cell_size <= 0.0 {
+            ctx.error(format!(
+                "Grid to Matter: cell_size is {cell_size}; it must be above 0"
+            ));
             return;
-        };
+        }
+        let pool_tiles = ctx
+            .scalar_or_param("pool_tiles", 1.0)
+            .round()
+            .clamp(1.0, 16_777_216.0) as u32;
+        let bounds_lo = ["bounds_lo_x", "bounds_lo_y", "bounds_lo_z"]
+            .map(|name| ctx.scalar_or_param(name, 0.0));
+        let bounds_hi = ["bounds_hi_x", "bounds_hi_y", "bounds_hi_z"]
+            .map(|name| ctx.scalar_or_param(name, 0.0));
+        let open_faces = ctx
+            .scalar_or_param("open_faces", 0.0)
+            .round()
+            .clamp(0.0, 63.0) as i32;
+        let kill_height = ctx.scalar_or_param("kill_height", f32::MIN);
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let liveliness = ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0);
         let cohesion = ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0);
@@ -164,30 +189,30 @@ impl Primitive for GridToMatter {
         // is consumed, so the GPU is touched on every path.
         let points = ctx.inputs.array("points");
         let grid = ctx.inputs.array("grid");
+        let tiles = ctx.inputs.array("tiles");
         let colliders = (
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
         );
         let reaction = ctx.inputs.array("reaction");
-        let unit_fits = momentum_unit_fits(momentum_unit, lattice.cell_size(), step_dt);
+        let unit_fits = momentum_unit_fits(momentum_unit, cell_size, step_dt);
         if dynamic_count > 0 && reaction.is_some() && !unit_fits {
             ctx.error(format!(
                 "Grid to Matter: momentum unit {momentum_unit} is not a power of two at or above cell size / step_dt; wire node.matter_domain's momentum_unit"
             ));
         }
         let gpu = ctx.gpu_encoder();
-        let (Some(points), Some(grid)) = (points, grid) else {
+        let (Some(points), Some(grid), Some(tiles)) = (points, grid, tiles) else {
             return;
         };
         let active = active_elements::<MatterPoint>(points.size, requested);
         if active == 0 || step_dt <= 0.0 {
             return;
         }
-        if grid.size < grid_bytes(lattice.nodes()) {
+        if grid.size < grid_bytes(pool_tiles) || tiles.size < table_words(pool_tiles) * 4 {
             ctx.error(format!(
-                "Grid to Matter: the grid holds fewer than this lattice's {} nodes; wire grid from the node.matter_state fed by the same node.matter_domain",
-                lattice_nodes(lattice.nodes())
+                "Grid to Matter: the grid or tile table is shorter than a pool of {pool_tiles} tiles; wire grid and tiles from the same step, fed by the same node.matter_domain"
             ));
             return;
         }
@@ -210,13 +235,7 @@ impl Primitive for GridToMatter {
         let reaction = reaction.filter(|_| dynamic_count > 0).unwrap_or(grid);
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = ToMatterUniforms {
-            lattice_min_x: lattice.min()[0],
-            lattice_min_y: lattice.min()[1],
-            lattice_min_z: lattice.min()[2],
-            cell_size: lattice.cell_size(),
-            nodes_x: lattice.nodes()[0] as i32,
-            nodes_y: lattice.nodes()[1] as i32,
-            nodes_z: lattice.nodes()[2] as i32,
+            cell_size,
             step_dt,
             liveliness,
             cohesion,
@@ -228,8 +247,18 @@ impl Primitive for GridToMatter {
             substep_in_tick,
             substeps_per_tick,
             dynamic_count,
+            pool_tiles: pool_tiles as i32,
+            open_faces,
+            bounds_lo_x: bounds_lo[0],
+            bounds_lo_y: bounds_lo[1],
+            bounds_lo_z: bounds_lo[2],
+            bounds_hi_x: bounds_hi[0],
+            bounds_hi_y: bounds_hi[1],
+            bounds_hi_z: bounds_hi[2],
+            kill_height,
             dispatch_count: active,
             _pad0: 0,
+            _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -270,11 +299,16 @@ impl Primitive for GridToMatter {
                 },
                 GpuBinding::Buffer {
                     binding: 7,
-                    buffer: points,
+                    buffer: tiles,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 8,
+                    buffer: points,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 9,
                     buffer: reaction,
                     offset: 0,
                 },

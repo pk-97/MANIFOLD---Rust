@@ -74,6 +74,21 @@ fn flip_params(nodes: [u32; 3], axis: u32, pool_tiles: u32) -> ParamValues {
     p
 }
 
+/// The MPM component's params: the node counts plus where lattice node 0 sits
+/// (`lattice_min`, the cell size) and the pool's tiles.
+fn matter_params(axis: u32, pool_tiles: u32) -> ParamValues {
+    let mut p = component_params(lattice_nodes(), axis);
+    for (name, v) in ["lattice_min_x", "lattice_min_y", "lattice_min_z"]
+        .into_iter()
+        .zip(lattice_min())
+    {
+        p.insert(name.into(), ParamValue::Float(v));
+    }
+    p.insert("cell_size".into(), ParamValue::Float(H));
+    p.insert("pool_tiles".into(), ParamValue::Float(pool_tiles as f32));
+    p
+}
+
 fn component_params(nodes: [u32; 3], axis: u32) -> ParamValues {
     let mut p = params(&[
         ("nodes_x", nodes[0] as f32),
@@ -153,6 +168,19 @@ fn lattice_nodes() -> [u32; 3] {
     N.map(|n| n + 1 + 2 * PADDING_NODES)
 }
 
+/// The MPM lattice's first node, m: `PADDING_NODES` nodes below the box.
+fn lattice_min() -> [f32; 3] {
+    MIN.map(|m| m - PADDING_NODES as f32 * H)
+}
+
+/// A dense MPM node lattice as the pooled grid: node q at world node
+/// round(lattice_min / h) + q, under a table holding the tiles it touches.
+fn pooled_grid(grid: &[MatterGridNode]) -> (Vec<MatterGridNode>, BoxTable) {
+    let origin = lattice_min().map(|m| (m / H).round() as i32);
+    let table = BoxTable::new(origin, lattice_nodes());
+    (table.to_pool(grid, MatterGridNode::default()), table)
+}
+
 /// The padded lattice whose native FLIP solver grid has N cells: GPU FLIP
 /// solves on nodes − 4 cells.
 fn gpu_flip_nodes() -> [u32; 3] {
@@ -218,17 +246,17 @@ fn liquid_face_grid_layout_gpu_flip() {
 #[test]
 fn liquid_face_grid_layout_matter() {
     let mut harness = Harness::new();
-    let nodes = lattice_nodes();
     for (name, field) in [("uniform", Field::uniform()), ("shear", Field::shear())] {
-        let grid = matter_grid(&field);
-        let input = harness.array(&grid, grid.len());
+        let (pool, table) = pooled_grid(&matter_grid(&field));
+        let input = harness.array(&pool, pool.len());
+        let tiles = harness.array(&table.words, table.words.len());
         for axis in 0..3 {
             let got = run_component(
                 &mut harness,
                 &mut MatterFaceComponent::new(),
-                &[("grid", input.0)],
+                &[("grid", input.0), ("tiles", tiles.0)],
                 face_len(N, axis) as usize,
-                &component_params(nodes, axis as u32),
+                &matter_params(axis as u32, table.pool_tiles),
             );
             assert_faces(
                 axis,
@@ -353,7 +381,9 @@ fn matter_face_component_skips_empty_nodes() {
             node.velocity_mass = [55.0, -55.0, 55.0, 0.0];
         }
     }
-    let input = harness.array(&grid, grid.len());
+    let (pool, table) = pooled_grid(&grid);
+    let input = harness.array(&pool, pool.len());
+    let tiles = harness.array(&table.words, table.words.len());
     let n = lattice_nodes();
     let pad = PADDING_NODES;
     let mut empty = 0;
@@ -361,9 +391,9 @@ fn matter_face_component_skips_empty_nodes() {
         let got = run_component(
             &mut harness,
             &mut MatterFaceComponent::new(),
-            &[("grid", input.0)],
+            &[("grid", input.0), ("tiles", tiles.0)],
             face_len(N, axis) as usize,
-            &component_params(n, axis as u32),
+            &matter_params(axis as u32, table.pool_tiles),
         );
         let (b, c) = ((axis + 1) % 3, (axis + 2) % 3);
         assert_faces(

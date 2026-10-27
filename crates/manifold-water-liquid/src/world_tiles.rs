@@ -83,6 +83,11 @@ pub struct Reach {
     pub cell_reach: u32,
 }
 
+/// World tiles a run of `n` cells touches at most, wherever it starts.
+pub fn run_tiles(n: u32) -> u64 {
+    u64::from((n + TILE - 2) / TILE + 1)
+}
+
 /// Word of the counts holding the held slots with rank <= `rank` (word 0
 /// is |C|), for `rank` up to `ring_max + 1`.
 pub fn rank_count_word(rank: u32) -> usize {

@@ -4,16 +4,26 @@ use crate::matter::STATS_WORDS;
 use crate::matter::grid_accum_bytes;
 use crate::matter::grid_bytes;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::scene::world_tiles::table_words;
 use manifold_water_liquid::extent::whole;
 use std::mem::size_of;
 
 fn matter_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| whole(x, name, 71.0));
+    let pool = whole(x, "pool_tiles", 1.0).max(1);
     let count = u64::from(x.count("count", 0.0)?);
-    let (accum, grid) = (grid_accum_bytes(nodes).max(32), grid_bytes(nodes).max(32));
+    let (accum, grid) = (grid_accum_bytes(pool).max(32), grid_bytes(pool).max(32));
     x.provide("grid_accum", accum);
     x.provide("grid", grid);
-    x.hold(accum + grid + 4 * u64::from(STATS_WORDS) * 4);
+    // The copy of the last grid's table, held only when something reads it.
+    let tiles = if x.feeds("tiles") {
+        table_words(pool) * 4
+    } else {
+        0
+    };
+    if tiles > 0 {
+        x.provide("tiles", tiles);
+    }
+    x.hold(accum + grid + tiles + 4 * u64::from(STATS_WORDS) * 4);
     // A tick's first and last substep: the atoms gated on them run.
     x.publish("tick_start", 1.0);
     x.publish("tick_end", 1.0);

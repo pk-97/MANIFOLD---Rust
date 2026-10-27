@@ -4,7 +4,14 @@
 //! place and open the same box.
 
 use manifold_core::fluid_domain::FluidDomainLayout;
+use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::scene::transform::Transform;
+
+/// The Bounds switch of `params`: on unless the toggle is off.
+pub fn bounds_enabled(params: &ParamValues) -> bool {
+    !matches!(params.get("bounds"), Some(ParamValue::Bool(false)))
+}
 
 /// The world cell a box minimum corner starts at: the nearest whole cell.
 pub fn box_cell(min: f32, cell_size: f64) -> i32 {

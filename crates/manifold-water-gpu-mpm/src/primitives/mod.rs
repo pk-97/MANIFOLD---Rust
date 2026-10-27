@@ -10,3 +10,5 @@ manifold_core::testkit_visible! { pub(crate) mod matter_move_bodies; }
 mod matter_state;
 mod matter_stats;
 mod matter_to_grid;
+
+pub use matter_state::points_removed_for_tiles;
