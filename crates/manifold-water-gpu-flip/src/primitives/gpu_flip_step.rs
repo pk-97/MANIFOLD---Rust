@@ -92,7 +92,7 @@ use extend::*;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(crate) use lattice::scratch_bytes;
 use lattice::*;
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) use pipelines::step_source_with;
 use pipelines::*;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]

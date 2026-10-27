@@ -1788,6 +1788,7 @@ fn prolong<S: Sink>(
             buffer(1, fine.water),
             buffer(3, src),
             buffer(5, out),
+            buffer(8, coarse.water),
             buffer(22, fine.tiles.table()),
             buffer(23, coarse.tiles.table()),
             buffer(25, links.parents),

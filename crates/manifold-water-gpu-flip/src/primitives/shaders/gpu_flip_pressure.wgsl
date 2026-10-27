@@ -54,6 +54,8 @@
 // with no parent. Restriction takes their cells as 0 taps and prolongation
 // gives them no correction: the same pairs of cells both ways, so restriction
 // stays the transpose of prolongation over 8 and the V-cycle stays symmetric.
+// Both transfers treat a solid coarse neighbour as a closed wall, with the
+// same weights.
 
 struct Params {
     // The dispatched level's pool P and table entries H (the fine side of a
@@ -600,7 +602,12 @@ fn residual_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) 
 // FLIP Fluids engine is PCG+MIC(0) and has no transfer form to port. Fine
 // cell f's parent is f >> 1 (floor, negative cells included); it takes 3/4
 // of its parent and 1/4 of the parent's neighbour on its side along each
-// axis. Each workgroup is one half tile (8×8×4 cells); it finds the slots of
+// axis. Where that neighbour is solid (or in a tile with no slot) the two
+// coarse cells share no open face, so the wall is closed and the fine cell
+// takes the whole share from its parent along that axis, as the dense box
+// clamped at its walls; a solid cell's zero would pull the correction down
+// as if the wall were air. Restriction applies the same weights read the
+// other way, so it stays the transpose of prolongation. Each workgroup is one half tile (8×8×4 cells); it finds the slots of
 // the tiles its taps lie in, stages the taps in workgroup memory once, then
 // every cell gathers from the stage in the same order with the same weights
 // as a direct gather, so the sums are bitwise those of the gather kernels.
@@ -613,18 +620,27 @@ const RESTRICT_FOOT_CELLS: u32 = 3240u;
 const RESTRICT_TILES: vec3<i32> = vec3<i32>(4, 4, 3);
 var<workgroup> fine_patch: array<f32, 3240>;
 var<workgroup> fine_slots: array<u32, 48>;
+// The coarse half tile and one cell round it: the coarse cells a tap's
+// closed-wall test reads, as their mask (−1 solid or in no tile).
+const RESTRICT_COARSE_FOOT: vec3<i32> = vec3<i32>(10, 10, 6);
+const RESTRICT_COARSE_CELLS: u32 = 600u;
+var<workgroup> restrict_mask: array<f32, 600>;
 
 // Coarse taps of a fine half tile: 8/2+2 by 8/2+2 by 4/2+2, lying in 2×2×2
 // coarse tiles.
 const PROLONG_FOOT: vec3<i32> = vec3<i32>(6, 6, 4);
 const PROLONG_FOOT_CELLS: u32 = 144u;
 var<workgroup> coarse_patch: array<f32, 144>;
+var<workgroup> coarse_mask: array<f32, 144>;
 var<workgroup> coarse_slots: array<u32, 8>;
 
-// Fine tap 2c + d's share in coarse cell c along one axis, d in −1..=2: the
-// prolongation weight read the other way.
-fn tap_weight(d: i32) -> f32 {
-    return select(0.25, 0.75, d == 0 || d == 1);
+// A coarse cell's mask as a transfer stages it: its own, or −1 (solid) in a
+// tile with no slot.
+fn staged_mask(s: u32, q: vec3<i32>) -> f32 {
+    if s == WT_NONE {
+        return -1.0;
+    }
+    return coarse_water[s * 512u + ts_local(q)];
 }
 
 // Whether fine cell `at` keeps its right-hand side at the gradient's start
@@ -679,6 +695,16 @@ fn restrict_at(gid: u32, li: u32) {
         }
         fine_slots[li] = child;
     }
+    let low = origin - vec3<i32>(1);
+    for (var k = li; k < RESTRICT_COARSE_CELLS; k = k + 256u) {
+        let q = low + ts_grid_coord(k, RESTRICT_COARSE_FOOT);
+        let d = (q >> vec3<u32>(3u)) - tile;
+        var s = slot;
+        if any(d != vec3<i32>(0)) {
+            s = coarse_neighbour_slot(slot, ts_neighbour_index(d));
+        }
+        restrict_mask[k] = staged_mask(s, q);
+    }
     workgroupBarrier();
     // The half tile's own first child (offset (1, 1, 1) from `first`) is the
     // home of open_water's face reads.
@@ -710,12 +736,24 @@ fn restrict_at(gid: u32, li: u32) {
     let at = 2 * (p - origin) + vec3<i32>(1);
     var sum = 0.0;
     for (var dz = -1; dz <= 2; dz = dz + 1) {
-        let wz = tap_weight(dz);
         for (var dy = -1; dy <= 2; dy = dy + 1) {
-            let wy = wz * tap_weight(dy);
             for (var dx = -1; dx <= 2; dx = dx + 1) {
-                let tap = fine_patch[ts_grid_index(at + vec3<i32>(dx, dy, dz), RESTRICT_FOOT)];
-                sum = sum + wy * tap_weight(dx) * tap;
+                let d = vec3<i32>(dx, dy, dz);
+                // Tap 2p + d's parent, and the parent's neighbour it leans
+                // toward on each axis (odd taps up, even down).
+                let up = p + select(vec3<i32>(0), vec3<i32>(1), d == vec3<i32>(2)) - select(vec3<i32>(0), vec3<i32>(1), d == vec3<i32>(-1));
+                let lean = select(vec3<i32>(-1), vec3<i32>(1), (d & vec3<i32>(1)) != vec3<i32>(0));
+                let closed = vec3<f32>(
+                    select(0.0, 1.0, restrict_mask[ts_grid_index(up + vec3<i32>(lean.x, 0, 0) - low, RESTRICT_COARSE_FOOT)] < -0.5),
+                    select(0.0, 1.0, restrict_mask[ts_grid_index(up + vec3<i32>(0, lean.y, 0) - low, RESTRICT_COARSE_FOOT)] < -0.5),
+                    select(0.0, 1.0, restrict_mask[ts_grid_index(up + vec3<i32>(0, 0, lean.z) - low, RESTRICT_COARSE_FOOT)] < -0.5),
+                );
+                // The tap's share in p: its parent's 3/4 (all of it across a
+                // closed wall), or the neighbour's 1/4 (none across one).
+                let own = (d == vec3<i32>(0)) | (d == vec3<i32>(1));
+                let w = select(0.25 * (vec3<f32>(1.0) - closed), vec3<f32>(0.75) + 0.25 * closed, own);
+                let tap = fine_patch[ts_grid_index(at + d, RESTRICT_FOOT)];
+                sum = sum + w.z * w.y * w.x * tap;
             }
         }
     }
@@ -785,6 +823,7 @@ fn prolong_at(gid: u32, li: u32) {
             v = src[s * 512u + ts_local(q)];
         }
         coarse_patch[k] = v;
+        coarse_mask[k] = staged_mask(s, q);
     }
     workgroupBarrier();
     let idx = ts_list_cell(slot, gid);
@@ -794,7 +833,14 @@ fn prolong_at(gid: u32, li: u32) {
     let f = tile * 8 + ts_local_coord(gid & 511u);
     let parent = f >> vec3<u32>(1u);
     let odd = (f & vec3<i32>(1)) == vec3<i32>(1);
-    let other = select(parent - vec3<i32>(1), parent + vec3<i32>(1), odd);
+    let lean = select(parent - vec3<i32>(1), parent + vec3<i32>(1), odd);
+    // Across a closed wall the neighbour is the parent itself.
+    let closed = vec3<bool>(
+        coarse_mask[ts_grid_index(vec3<i32>(lean.x, parent.y, parent.z) - base, PROLONG_FOOT)] < -0.5,
+        coarse_mask[ts_grid_index(vec3<i32>(parent.x, lean.y, parent.z) - base, PROLONG_FOOT)] < -0.5,
+        coarse_mask[ts_grid_index(vec3<i32>(parent.x, parent.y, lean.z) - base, PROLONG_FOOT)] < -0.5,
+    );
+    let other = select(lean, parent, closed);
     var sum = 0.0;
     for (var corner = 0; corner < 8; corner = corner + 1) {
         let pick = vec3<bool>((corner & 1) != 0, (corner & 2) != 0, (corner & 4) != 0);
