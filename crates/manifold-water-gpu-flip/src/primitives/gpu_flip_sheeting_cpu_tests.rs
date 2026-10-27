@@ -39,7 +39,7 @@ fn sheeting_bucket_shaders_validate_on_cpu() {
             &super::gpu_flip_sheeting::source(),
         ),
         reference_shader(),
-        super::gpu_flip_sheeting::GATE_SHADER.to_string(),
+        super::gpu_flip_sheeting::gate_shader(),
     ] {
         let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");
         naga::valid::Validator::new(

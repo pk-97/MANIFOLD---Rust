@@ -54,7 +54,9 @@ use manifold_water_liquid::world_tiles::{WorldTiles, allocated_args_offset};
 /// slots past the sort's live prefix cover the last active substep's
 /// request (`stats` word 0, 0 before the first). The reservation grants a
 /// request whole or not at all, so a closed gate refuses nothing it would
-/// have granted.
+/// have granted. A gate an active substep closes refuses that request, so
+/// it adds it to the tick's refused births (`SHEET_REFUSED_TAIL`), and a
+/// full pool keeps reporting the births it turns away.
 pub(super) const GATE_SHADER: &str = "
 struct Gate { live_range: u32, slots: u32, pad0: u32, pad1: u32 };
 @group(0) @binding(0) var<uniform> g: Gate;
@@ -62,20 +64,29 @@ struct Gate { live_range: u32, slots: u32, pad0: u32, pad1: u32 };
 @group(0) @binding(2) var<storage, read> plan: array<u32>;
 @group(0) @binding(3) var<storage, read_write> gated: array<u32>;
 @group(0) @binding(4) var<storage, read> stats: array<u32>;
+@group(0) @binding(5) var<storage, read_write> capped: array<u32>;
 
 @compute @workgroup_size(1)
 fn gate() {
     for (var i = 0u; i < 12u; i = i + 1u) {
         gated[i] = plan[i];
     }
+    // The plan's own clock_active: a live plan with no step to take.
+    let stepping = plan[11] == 0u || bitcast<f32>(plan[0]) > 0.0;
     let last = ranges[g.live_range];
     let live = last.x + last.y;
-    if live >= g.slots || g.slots - live < stats[0] {
+    if stepping && (live >= g.slots || g.slots - live < stats[0]) {
         gated[0] = 0u;
         gated[11] = 1u;
+        capped[SHEET_REFUSED_TAIL] += stats[0];
     }
 }
 ";
+
+/// The gate with the stats layout constants (`SHEET_REFUSED_TAIL`) ahead of it.
+pub(super) fn gate_shader() -> String {
+    manifold_water_liquid::primitives::liquid_stats::with_stats_layout(GATE_SHADER)
+}
 
 /// `GATE_SHADER`'s uniform.
 #[repr(C)]
@@ -325,8 +336,11 @@ impl GpuSheeting {
             }
         }
         if self.gate.is_none() {
-            self.gate =
-                Some(device.create_compute_pipeline(GATE_SHADER, "gate", "gpu_flip.sheeting.gate"));
+            self.gate = Some(device.create_compute_pipeline(
+                &gate_shader(),
+                "gate",
+                "gpu_flip.sheeting.gate",
+            ));
         }
         self.scan.prepare(device);
     }
@@ -408,14 +422,16 @@ impl GpuSheeting {
 
     /// In the step, first: the plan the stage runs on, `plan` while the
     /// particle slots of `slots` past the sort's live prefix in `ranges`
-    /// cover the last request, else inactive (`GATE_SHADER`). Water that
-    /// fills its pool spends nothing on sheeting.
+    /// cover the last request, else inactive (`GATE_SHADER`), its request
+    /// added to the refused births in `capped` from `capped_offset`. Water
+    /// that fills its pool spends nothing on sheeting.
     pub(crate) fn encode_gate(
         &self,
         enc: &mut GpuEncoder,
         plan: &GpuBuffer,
         ranges: &GpuBuffer,
         slots: u32,
+        (capped, capped_offset): (&GpuBuffer, u64),
     ) -> &GpuBuffer {
         let gated = self.gated_plan.as_ref().expect("sheeting reserved");
         let stats = &self.buffers.as_ref().expect("sheeting reserved")[10];
@@ -440,6 +456,11 @@ impl GpuSheeting {
                 buffer(2, plan),
                 buffer(3, gated),
                 buffer(4, stats),
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: capped,
+                    offset: capped_offset,
+                },
             ],
             [1, 1, 1],
             "gpu_flip.sheeting.gate",

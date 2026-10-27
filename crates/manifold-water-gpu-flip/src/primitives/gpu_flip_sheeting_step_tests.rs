@@ -202,7 +202,7 @@ impl Splash {
         let min = SOLVER_MIN + 1.5 * H;
         let max = min + n as f32 * H;
         let mut values = vec![
-            ("pool_tiles", pool_tiles([n; 3], 0) as f32),
+            ("pool_tiles", pool_tiles([n; 3], 63) as f32),
             ("cell_size", H),
             ("bounds_lo_x", min),
             ("bounds_lo_y", min),
@@ -631,7 +631,9 @@ fn gpu_flip_sheeting_rate_is_validated() {
 
 /// A full pool reports the sheet births it had no slot for: the step's capped
 /// tail word is the tick's requested minus written, restarted every tick, and
-/// the published word index it lands on is the stats' `sheet_refused`.
+/// the published word index it lands on is the stats' `sheet_refused`. Once
+/// the pool cannot cover the last request the gate rests the stage, which
+/// draws nothing and refuses that whole request every tick it stays full.
 #[test]
 fn a_full_pool_reports_refused_sheet_births() {
     let mut room = Splash::new(8000, 4001, &[]);
@@ -640,14 +642,24 @@ fn a_full_pool_reports_refused_sheet_births() {
     assert_eq!(room.refused_births(), 0, "a pool with room refuses none");
 
     let mut full = Splash::new(40, 4001, &[]);
-    for t in 0..2 {
-        let tick = full.tick(t, 1, 1.0);
-        let [requested, written, ..] = tick.stats;
-        assert!(requested > written, "tick {t}: the pool is out of room");
+    let first = full.tick(0, 1, 1.0);
+    let [requested, written, ..] = first.stats;
+    assert!(requested > written, "the pool is out of room");
+    assert_eq!(
+        full.refused_births(),
+        requested - written,
+        "the tail word is this tick's refusals"
+    );
+    for t in 1..3 {
+        let rested = full.tick(t, 1, 1.0);
+        assert_eq!(
+            rested.stats, first.stats,
+            "tick {t}: a resting stage draws nothing"
+        );
         assert_eq!(
             full.refused_births(),
-            requested - written,
-            "tick {t}: the tail word is this tick's refusals"
+            requested,
+            "tick {t}: a full pool refuses the last request"
         );
     }
     let mut words = [0u32; LIQUID_STATS_WORDS as usize];

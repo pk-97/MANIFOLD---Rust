@@ -613,7 +613,13 @@ impl StepState {
             let order = sheet_order.ok_or("sheet seeding storage was not reserved")?;
             let plan = self
                 .sheeting
-                .encode_gate(enc, step.clock_plan, ranges, base.particles);
+                .encode_gate(
+                    enc,
+                    step.clock_plan,
+                    ranges,
+                    base.particles,
+                    (step.capped, step.tally),
+                );
             enc.compute_memory_barrier_buffers();
             // The sheeter's own distance, true to SHEET_DISTANCE_CELLS deep,
             // from the liquid level set the pressure solve read.
