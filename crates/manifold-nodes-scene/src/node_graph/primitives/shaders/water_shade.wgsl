@@ -124,5 +124,8 @@ fn fs_mist(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let dir = normalize(shade_unproject(ndc, 0.5) - origin);
     let mean_pos = origin + dir * (depth.y / tau);
     let mist = look_mist(dir, mean_pos, pos.xy, tau);
-    return vec4<f32>(apply_fog(mist.rgb, mean_pos) * exp2(u.scene_params.z), mist.a);
+    // The fog tints the mist's own light, which covers only `mist.a` of the
+    // pixel: fogging the premultiplied colour would add the whole fog colour
+    // wherever any trace of mist lies.
+    return vec4<f32>(apply_fog(mist.rgb, mean_pos) * exp2(u.scene_params.z) * mist.a, mist.a);
 }

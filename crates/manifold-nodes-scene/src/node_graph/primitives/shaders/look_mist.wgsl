@@ -21,8 +21,8 @@ fn mist_phase(cos_theta: f32) -> f32 {
     return (1.0 - g * g) / (4.0 * PI * pow(denom, 1.5));
 }
 
-// The mist's colour along a ray as (premultiplied colour, coverage): the
-// in-scattered light times `1 - T` and `1 - T`, with `T = exp(-tau)`.
+// The mist along a ray as (in-scattered light, coverage): the light the
+// droplets send toward the camera, and `1 - T` with `T = exp(-tau)`.
 // `mean_pos` is the mean position of the mist along the ray, where the lights
 // and their shadows are read.
 fn look_mist(
@@ -54,6 +54,5 @@ fn look_mist(
         scattered += phase * l_col.rgb * l_dir.w * vis;
     }
     let l_in = MIST_ALBEDO * scattered;
-    let transmittance = exp(-tau);
-    return vec4<f32>(l_in * (1.0 - transmittance), 1.0 - transmittance);
+    return vec4<f32>(l_in, 1.0 - exp(-tau));
 }
