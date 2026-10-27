@@ -142,21 +142,23 @@ pub fn retired_args_offset(ring_max: u32) -> u64 {
     12 * (u64::from(ring_max) + 1)
 }
 
-/// Index of the 8-byte replay range after the triples: (0, the build's
-/// `replay_count`) on an active step, (0, 0) on an inactive one.
-pub fn replay_range_index(ring_max: u32) -> u32 {
-    (3 * (ring_max + 2)).div_ceil(2)
+/// Index of gated chain `chain`'s 8-byte replay range (0 or 1): (0, the
+/// build's `replay_counts[chain]`) on an active step, (0, 0) on an inactive
+/// one. The first sits after the triples, the second after the fresh triple.
+pub fn replay_range_index(ring_max: u32, chain: usize) -> u32 {
+    let first = (3 * (ring_max + 2)).div_ceil(2);
+    if chain == 0 { first } else { first + 3 }
 }
 
-/// Byte offset of the fresh list's triple, after the replay range.
+/// Byte offset of the fresh list's triple, after the first replay range.
 pub fn fresh_args_offset(ring_max: u32) -> u64 {
-    8 * (u64::from(replay_range_index(ring_max)) + 1)
+    8 * (u64::from(replay_range_index(ring_max, 0)) + 1)
 }
 
-/// Words of the args: the list and retired triples, the replay range, the
-/// fresh triple.
+/// Words of the args: the list and retired triples, the first replay
+/// range, the fresh triple, the second replay range.
 pub fn args_words(ring_max: u32) -> u64 {
-    2 * u64::from(replay_range_index(ring_max)) + 5
+    2 * u64::from(replay_range_index(ring_max, 1)) + 2
 }
 
 /// Words of the build's own counters: the rank histogram and the list
@@ -216,11 +218,12 @@ struct BuildParams {
     cell_reach: u32,
     point_count: u32,
     from_scratch: u32,
-    replay_count: u32,
+    replay_counts: [u32; 2],
     child_entries: u32,
     child_pool_tiles: u32,
     clip_lo: [i32; 3],
     clip_hi: [i32; 3],
+    pad: [u32; 3],
 }
 
 /// The table's slot lists, `P` words each.
@@ -277,8 +280,9 @@ pub struct Allocation<'a> {
     /// The lattice origin (`lattice_origin`) and 1 / cell size.
     pub origin: [f32; 3],
     pub inv_cell: f32,
-    /// Written into the args' replay range on an active step.
-    pub replay_count: u32,
+    /// Written into the args' two replay ranges on an active step: the
+    /// commands of the caller's two gated chains (0 for none).
+    pub replay_counts: [u32; 2],
     /// A GPU FLIP clock plan: an inactive slot builds nothing and keeps the
     /// table.
     pub gate: &'a GpuBuffer,
@@ -517,11 +521,12 @@ impl WorldTiles {
                 PointCount::Slots(n) => n,
             },
             from_scratch: 0,
-            replay_count: job.replay_count,
+            replay_counts: job.replay_counts,
             child_entries: 0,
             child_pool_tiles: 0,
             clip_lo: job.clip.unwrap_or(NO_CLIP)[0],
             clip_hi: job.clip.unwrap_or(NO_CLIP)[1],
+            pad: [0; 3],
         };
         let record = match job.count {
             PointCount::Record(record) => Some(record),
@@ -548,11 +553,12 @@ impl WorldTiles {
             cell_reach: 0,
             point_count: child.pool_tiles,
             from_scratch: 1,
-            replay_count: 0,
+            replay_counts: [0; 2],
             child_entries: child.entries,
             child_pool_tiles: child.pool_tiles,
             clip_lo: NO_CLIP[0],
             clip_hi: NO_CLIP[1],
+            pad: [0; 3],
         };
         self.encode_build(enc, &params, &child.table, None, gate, None);
     }
@@ -770,12 +776,18 @@ mod tests {
     }
 
     /// The args keep every triple 4-byte aligned before an 8-byte aligned
-    /// replay range, the fresh triple after it, for the ring reaches the
-    /// solvers use.
+    /// replay range, the fresh triple after it and the second range after
+    /// that, for the ring reaches the solvers use.
     #[test]
     fn args_layout_holds_every_triple_apart() {
         for ring_max in 0..5 {
-            let range = 8 * u64::from(replay_range_index(ring_max));
+            let range = 8 * u64::from(replay_range_index(ring_max, 0));
+            let second = 8 * u64::from(replay_range_index(ring_max, 1));
+            assert!(
+                fresh_args_offset(ring_max) + 12 <= second,
+                "ring_max {ring_max}"
+            );
+            assert_eq!(second + 8, 4 * args_words(ring_max));
             assert!(
                 retired_args_offset(ring_max) + 12 <= range,
                 "ring_max {ring_max}"
@@ -785,7 +797,6 @@ mod tests {
                 retired_args_offset(ring_max)
             );
             assert_eq!(fresh_args_offset(ring_max), range + 8);
-            assert_eq!(fresh_args_offset(ring_max) + 12, 4 * args_words(ring_max));
             assert!(free_top_word(ring_max) < count_words(ring_max) as usize);
             assert_eq!(fresh_word(ring_max) + 1, count_words(ring_max) as usize);
         }

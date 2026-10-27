@@ -264,7 +264,7 @@ impl Primitive for MatterToGrid {
                     count: PointCount::Slots(active),
                     origin: lattice_origin(cell_size),
                     inv_cell,
-                    replay_count: 0,
+                    replay_counts: [0; 2],
                     gate,
                     clip: None,
                     kept: None,

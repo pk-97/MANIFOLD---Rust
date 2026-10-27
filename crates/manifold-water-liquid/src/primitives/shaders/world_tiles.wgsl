@@ -44,8 +44,9 @@ struct WtParams {
     // 1: every slot is freed and handed out again in table order (the
     // coarse levels' parents build).
     from_scratch: u32,
-    // Written into the args' replay range on an active step.
-    replay_count: u32,
+    // Written into the args' two replay ranges on an active step.
+    replay_first: u32,
+    replay_second: u32,
     // The level below's H and P (parents build only).
     child_entries: u32,
     child_pool_tiles: u32,
@@ -56,6 +57,9 @@ struct WtParams {
     clip_hi_x: i32,
     clip_hi_y: i32,
     clip_hi_z: i32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> wt: WtParams;
@@ -66,8 +70,8 @@ struct WtParams {
 // count (world_tiles.rs `retired_word` and on).
 @group(0) @binding(2) var<storage, read_write> wt_counts: array<atomic<u32>>;
 // Indirect triples: list k (rank <= k) at word 3k for k <= ring_max, the
-// retired list at 3(ring_max + 1), the replay range at the next even word,
-// the fresh list after it.
+// retired list at 3(ring_max + 1), the first replay range at the next even
+// word, the fresh list after it, then the second replay range.
 @group(0) @binding(3) var<storage, read_write> wt_args: array<u32>;
 // Held slots by rank: rank 0 (C) first, then rank by rank.
 @group(0) @binding(4) var<storage, read_write> wt_by_rank: array<u32>;
@@ -678,7 +682,9 @@ fn wt_finish() {
         wt_args[3u * (r + 2u)] = 0u;
     }
     wt_args[range] = 0u;
-    wt_args[range + 1u] = select(0u, wt.replay_count, running);
+    wt_args[range + 1u] = select(0u, wt.replay_first, running);
+    wt_args[range + 6u] = 0u;
+    wt_args[range + 7u] = select(0u, wt.replay_second, running);
     atomicStore(&wt_build_args[0], 0u);
     if !running {
         for (var k = 0u; k <= r + 1u; k = k + 1u) {

@@ -173,6 +173,29 @@ pub(crate) fn step_band() -> u32 {
     band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS)
 }
 
+/// Layers the saved (old) faces extend. FLIP reads them only at a particle's
+/// own position (its change, new − old) and at births beside particles: the
+/// corners that interpolation reads lie at most three face steps from a face
+/// a particle weighted, one more where that face sits at the kernel's edge.
+/// The forces' copy of them past that is replaced by the projection, and
+/// extension runs layer by layer, so every face these layers reach holds what
+/// the full band would give it.
+pub(crate) const SAVED_FACE_LAYERS: u32 = 4;
+
+/// The two gated extension chains, by the tile build's replay range: the
+/// full band (the new faces, and the spread), then the saved faces.
+pub(crate) const BAND_CHAIN: usize = 0;
+pub(crate) const SAVED_CHAIN: usize = 1;
+
+/// Each chain's layers, in chain order: the replay count the tile build
+/// writes for it and the dispatches its segment records.
+pub(crate) fn replay_layers(params: &StepParams) -> [u32; 2] {
+    [
+        params.extension_layers,
+        SAVED_FACE_LAYERS.min(params.extension_layers),
+    ]
+}
+
 /// Test-only lever. With it set, the step runs the poison entry
 /// (gpu_flip_tile_tests.rs) after the retire: NaN into every cell array of
 /// the held slots outside rings 0 and 1 (design section 4 (The defined-value
@@ -486,7 +509,6 @@ struct Step<'a> {
     /// The V-cycle level both solves' gradients run on; 0 is the fine
     /// lattice.
     level: usize,
-    band: u32,
     ghost: bool,
     /// Run the density projection.
     density: bool,

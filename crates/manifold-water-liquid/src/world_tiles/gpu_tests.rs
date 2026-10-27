@@ -93,7 +93,9 @@ fn build_kept(
             count: PointCount::Record(&record),
             origin: lattice_origin(CELL),
             inv_cell: 1.0 / CELL,
-            replay_count: replay,
+            // The second chain's count differs, so the proof tells the
+            // ranges apart.
+            replay_counts: [replay, 2 * replay],
             gate,
             clip,
             kept,
@@ -220,8 +222,14 @@ fn check(tiles: &WorldTiles, want: &Built, replay: u32, step: &str) {
         [2 * fresh, 1, 1],
         "{step}: fresh triple"
     );
-    let range = 2 * replay_range_index(r) as usize;
+    let range = 2 * replay_range_index(r, 0) as usize;
     assert_eq!(args[range..range + 2], [0, replay], "{step}: replay range");
+    let second = 2 * replay_range_index(r, 1) as usize;
+    assert_eq!(
+        args[second..second + 2],
+        [0, 2 * replay],
+        "{step}: second replay range"
+    );
 }
 
 /// Three steps of a set that moves across the origin: a 2³-tile body
@@ -301,8 +309,14 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
             "inactive: triple at {offset} off"
         );
     }
-    let range = 2 * replay_range_index(2) as usize;
-    assert_eq!(args[range..range + 2], [0, 0], "inactive: no replay");
+    for chain in 0..2 {
+        let range = 2 * replay_range_index(2, chain) as usize;
+        assert_eq!(
+            args[range..range + 2],
+            [0, 0],
+            "inactive: no replay {chain}"
+        );
+    }
 
     let mut parents = WorldTiles::new_parents(&device, 256).expect("parents");
     parents.prepare(&device);

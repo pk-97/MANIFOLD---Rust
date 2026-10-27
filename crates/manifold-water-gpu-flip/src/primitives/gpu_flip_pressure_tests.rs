@@ -736,7 +736,7 @@ impl FineTiles {
                 count: PointCount::Record(&record),
                 origin: lattice_origin(h),
                 inv_cell: 1.0 / h,
-                replay_count: 0,
+                replay_counts: [0; 2],
                 gate: &gate,
                 clip: None,
                 kept: None,

@@ -424,7 +424,6 @@ impl Primitive for GpuFlipStep {
             pressure,
             level,
             tally,
-            band,
             ghost,
             density: ctx.scalar_or_param("volume_projection", 0.0) > 0.5,
             sheet_rate,

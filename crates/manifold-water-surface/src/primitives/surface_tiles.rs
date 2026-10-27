@@ -330,7 +330,7 @@ impl Held {
                 count: PointCount::Record(&self.record),
                 origin: uniforms.origin,
                 inv_cell: uniforms.inv_cell,
-                replay_count: 0,
+                replay_counts: [0; 2],
                 gate: &self.gate,
                 clip: None,
                 kept: None,

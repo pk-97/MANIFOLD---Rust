@@ -4,9 +4,14 @@ use super::*;
 use manifold_water_liquid::tile_storage::TILE_CELLS;
 use manifold_water_liquid::world_tiles::{allocated_args_offset, replay_range_index};
 
-/// `layers` extension passes from `source` into `target`, ping-ponging
-/// through `scratch` so the last pass lands in `target`. `source` may be
-/// `target`: an even count's first pass writes `scratch`, an odd one starts from a copy there.
+/// Gated chain `chain`'s extension passes ([`replay_layers`]) from `source`
+/// into `target`, ping-ponging through `scratch` so the last pass lands in
+/// `target`. `source` may be `target`: an even count's first pass writes
+/// `scratch`, an odd one starts from a copy there.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one extension chain: the clock, the step, the tiles, its three buffers and its chain"
+)]
 pub(super) fn extend(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
@@ -14,9 +19,10 @@ pub(super) fn extend(
     params: &StepParams,
     tiles: &WorldTiles,
     [source, target, scratch]: [&GpuBuffer; 3],
-    layers: u32,
+    chain: usize,
     label: &str,
 ) {
+    let layers = replay_layers(params)[chain];
     let mut from = source;
     // In place with an odd count, the first pass would write its own source:
     // start from a copy in `scratch` instead, which that pass does not write.
@@ -31,8 +37,7 @@ pub(super) fn extend(
     let allocated = allocated_args_offset(ring);
     let gate = params.step_in_tick > 0 && indirect_extend();
     if gate {
-        debug_assert_eq!(params.extension_layers, layers);
-        enc.begin_gated_segment(tiles.args(), replay_range_index(ring), layers);
+        enc.begin_gated_segment(tiles.args(), replay_range_index(ring, chain), layers);
     }
     for i in 0..layers {
         let to = if (layers - i) % 2 == 1 {

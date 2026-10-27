@@ -307,7 +307,7 @@ pub(super) fn encode_tiles(
             count: PointCount::Record(record),
             origin: params.origin,
             inv_cell: params.inv_cell,
-            replay_count: params.extension_layers,
+            replay_counts: replay_layers(params),
             gate: plan,
             clip: wall_clip(params),
             kept,

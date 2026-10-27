@@ -239,7 +239,7 @@ impl StepState {
             &base,
             tiles,
             [&l.g, &l.a, &l.b],
-            step.band,
+            SAVED_CHAIN,
             "gpu_flip.step.extend_old",
         );
         over(
@@ -514,7 +514,7 @@ impl StepState {
             &base,
             tiles,
             [&l.f, out_faces, &l.b],
-            step.band,
+            BAND_CHAIN,
             "gpu_flip.step.extend_new",
         );
         enc.compute_memory_barrier_buffers();
@@ -593,7 +593,7 @@ impl StepState {
                 &base,
                 tiles,
                 [&l.f, &l.f, &l.b],
-                step.band,
+                BAND_CHAIN,
                 "gpu_flip.step.extend_spread",
             );
             &l.f
