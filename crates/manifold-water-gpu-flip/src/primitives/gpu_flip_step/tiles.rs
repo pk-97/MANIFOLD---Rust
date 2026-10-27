@@ -7,7 +7,7 @@ use manifold_node_engine::scene::world_tiles::tile_of_cell;
 use manifold_water_liquid::tile_pool::{fitted_pool, grown_pool};
 use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
 use manifold_water_liquid::world_tiles::{
-    Allocation, PointCount, Reach, TileClip, allocated_args_offset, fresh_args_offset, held_bytes,
+    Allocation, PointCount, Reach, TileClip, allocated_args_offset, fresh_args_offset,
     retired_args_offset, run_tiles,
 };
 
@@ -108,7 +108,7 @@ pub(super) fn next_pool(
 /// lists, counts, triples and build scratch.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(crate) fn tile_scratch_bytes(pool_tiles: u32) -> u64 {
-    held_bytes(pool_tiles, step_reach().ring_max)
+    manifold_water_liquid::world_tiles::held_bytes(pool_tiles, step_reach().ring_max)
 }
 
 /// Test-only lever. With it set, the table is built from one point in every
