@@ -295,21 +295,26 @@ impl RigidSimulation {
             .map_or(&[], |state| &state.handles[..state.active])
     }
 
-    fn native_topology_matches(&self, inputs: &RigidSceneInputs) -> bool {
-        self.descriptions.len() == inputs.bodies.len()
-            && self.groups.len() == inputs.groups.len()
+    /// Whether the bodies the gate admits from `inputs` ([`super::admission`])
+    /// are the ones the world holds, as the advance that follows sees them. A
+    /// body still preparing its shape, or one the gate refused, is out of
+    /// both, so it never reads as a change of bodies.
+    fn native_topology_matches(&mut self, inputs: &RigidSceneInputs) -> bool {
+        self.follow_ports(&inputs.bodies, &inputs.groups);
+        self.admission.admit(&inputs.bodies, &inputs.groups);
+        let (bodies, groups) = self.admission.take_admitted();
+        let matches = self.descriptions.len() == bodies.len()
+            && self.groups.len() == groups.len()
             && self
                 .descriptions
                 .iter()
-                .zip(inputs.bodies.iter())
+                .zip(&bodies)
                 .all(|(left, right)| same_geometry_body(left.as_ref(), right.as_ref()))
-            && self
-                .groups
-                .iter()
-                .zip(&inputs.groups)
-                .all(|(state, right)| {
-                    same_geometry_body(state.description.as_ref(), right.as_ref())
-                })
+            && self.groups.iter().zip(&groups).all(|(state, right)| {
+                same_geometry_body(state.description.as_ref(), right.as_ref())
+            });
+        self.admission.restore_admitted(bodies, groups);
+        matches
     }
 
     #[cfg(test)]

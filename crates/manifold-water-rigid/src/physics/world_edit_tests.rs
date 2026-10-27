@@ -218,6 +218,43 @@ fn a_disabled_body_enabled_mid_play_leaves_the_others_alone() {
     }
 }
 
+/// A body whose shape is still being built (a model still parsing) is out of
+/// the world and out of the worker's body check alike: the coupled ticks run
+/// on with the slab and crate, and the body joins once its shape lands.
+#[test]
+fn a_body_still_preparing_its_shape_never_stops_a_worker_interval() {
+    use manifold_physics::stepping::StepInterval;
+    let mut inputs = RigidSceneInputs::default();
+    inputs.bodies[0] = Some(slab(0.0));
+    inputs.bodies[1] = Some(crate_at([0.0, 6.0, 0.0]));
+    inputs.bodies[2] = Some(RigidBody {
+        collider: None,
+        ..crate_at([2.0, 3.0, 0.0])
+    });
+    inputs.gravity = G;
+    let mut simulation = RigidSimulation::with_worker_epoch(1).unwrap();
+    let mut coupling = Uncoupled;
+    simulation
+        .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
+        .unwrap();
+    let tick = FIXED_TICK.0;
+    for ordinal in 0..6 {
+        let interval = StepInterval::new(
+            Seconds(ordinal as f64 * tick),
+            Seconds((ordinal + 1) as f64 * tick),
+        );
+        simulation
+            .advance_worker_interval(&inputs, interval, &[], &mut coupling)
+            .unwrap();
+    }
+    assert!(engine_pose(&simulation, 1)[1] < 6.0);
+    inputs.bodies[2] = Some(crate_at([2.0, 3.0, 0.0]));
+    assert!(
+        simulation.admit_worker_edits(&inputs).unwrap(),
+        "the landed shape joins between ticks"
+    );
+}
+
 #[test]
 fn a_fixed_pose_edit_reaches_the_engine_in_a_worker_interval() {
     use manifold_physics::stepping::StepInterval;

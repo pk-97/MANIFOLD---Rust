@@ -1175,8 +1175,14 @@ impl GpuFlipDomain {
         if let Some(error) = self.coupled.host_error.take() {
             return Err(error);
         }
+        // A warmup pump commits and waits on its own command buffer, which
+        // never signals the content frame clock, so every tick before its
+        // frame has finished: it settles them without the clock.
         let clock = if self.coupled.mode {
-            ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock())
+            ctx.gpu
+                .as_deref()
+                .filter(|gpu| !gpu.preparing)
+                .and_then(|gpu| gpu.device.frame_clock())
         } else {
             None
         };
