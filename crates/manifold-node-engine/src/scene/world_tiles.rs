@@ -1,4 +1,4 @@
-//! World tiles, the read side (WATER_INFINITE_DOMAIN_DESIGN.md section 2):
+//! World tiles, the read side:
 //! the pooled lattice keyed by world tile through a hash table, with a row of
 //! 27 neighbour slots per pool slot so hot kernels rarely hash. The sizes and
 //! the table layout live here, beside the WGSL helpers ([`READ_SIDE`]), because

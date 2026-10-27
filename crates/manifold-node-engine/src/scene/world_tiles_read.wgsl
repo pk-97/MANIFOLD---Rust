@@ -1,4 +1,4 @@
-// World tiles, the read side (WATER_INFINITE_DOMAIN_DESIGN.md section 2).
+// World tiles, the read side.
 // Every pooled lattice field is stored per 8^3 tile of world cells in a pool
 // of P tile slots, found through a hash table keyed by world tile. Cell p
 // (i32 per axis, any sign) is centred on p·h; its tile is p >> 3 (floor for

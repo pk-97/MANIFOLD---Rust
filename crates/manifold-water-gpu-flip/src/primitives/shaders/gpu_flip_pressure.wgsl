@@ -2,8 +2,7 @@
 // preconditioned conjugate gradient for L p = f on the water, every pass a
 // separate entry point.
 //
-// Every level is a world-tiled lattice (WATER_INFINITE_DOMAIN_DESIGN.md
-// sections 2 and 7), read through world_tiles_read.wgsl. Level L's cells are
+// Every level is a world-tiled lattice, read through world_tiles_read.wgsl. Level L's cells are
 // 2^L·h, coarse cell c covering cells 2c and 2c + 1 of the level below along
 // each axis (c = f >> 1, floor, negative cells included), in tiles of 8³ of
 // its own cells. The fine level (0) is the step's table and fields. Level L ≥ 1 has its own table,

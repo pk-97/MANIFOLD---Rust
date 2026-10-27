@@ -1,4 +1,4 @@
-//! World tiles, the build (WATER_INFINITE_DOMAIN_DESIGN.md section 2): the
+//! World tiles, the build: the
 //! hash table keyed by world tile that every pooled lattice field is read
 //! through, rebuilt on the GPU every active step from a set of points
 //! (`world_tiles.wgsl`). The read side, the sizes and the table layout live in

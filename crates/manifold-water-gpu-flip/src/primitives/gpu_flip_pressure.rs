@@ -8,8 +8,7 @@
 //! diagonals per cell), then [`PressureSolver::solve`] runs per right-hand
 //! side (the pressure solve and the density solve) reading rows only.
 //!
-//! Every level is a world-tiled lattice (docs/WATER_INFINITE_DOMAIN_DESIGN.md
-//! section 7). The fine level is the step's table and fields. Level L's table
+//! Every level is a world-tiled lattice. The fine level is the step's table and fields. Level L's table
 //! is built at every prepare from the parents (tile >> 1) of level L − 1's
 //! held tiles, in a pool of ⌈P_(L−1) / 2⌉ slots ([`level_pools`]), and its
 //! fields are pooled in it. The depth is fixed per pool: the levels halving a

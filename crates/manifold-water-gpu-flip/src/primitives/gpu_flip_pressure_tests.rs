@@ -2424,7 +2424,7 @@ fn chunk_solve(
     }
 }
 
-// ── World-tile levels (docs/WATER_INFINITE_DOMAIN_DESIGN.md section 7) ──────
+// ── World-tile levels ──────
 
 /// Every coarse level prepare builds equals a CPU mirror of the parent
 /// build, on a sheet of tiles and on a line, both across the origin: the

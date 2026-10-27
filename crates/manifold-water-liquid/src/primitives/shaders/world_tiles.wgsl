@@ -1,4 +1,4 @@
-// World tiles, the build (WATER_INFINITE_DOMAIN_DESIGN.md section 2): the
+// World tiles, the build: the
 // table every pooled lattice field is read through, rebuilt on the GPU every
 // active step from a set of points and never read back. Composed after the
 // read side (`manifold_node_engine::scene::world_tiles::READ_SIDE`) and a

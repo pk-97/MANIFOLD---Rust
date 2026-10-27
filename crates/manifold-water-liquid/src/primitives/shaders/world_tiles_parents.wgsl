@@ -1,4 +1,4 @@
-// The points of a parents build (WATER_INFINITE_DOMAIN_DESIGN.md section 7):
+// The points of a parents build:
 // a coarse level's tiles are the parents (tile >> 1) of the level below's
 // held tiles. Point i is the level below's slot i, read from its table at
 // binding 13 (its H and P are `child_entries` and `child_pool_tiles`); its

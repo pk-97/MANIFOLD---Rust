@@ -1,4 +1,4 @@
-//! The GPU FLIP step on world tiles (docs/WATER_INFINITE_DOMAIN_DESIGN.md):
+//! The GPU FLIP step on world tiles:
 //! the table the step builds from its particles, read back through the
 //! node's `tiles` output, and the step under the NaN poison (the
 //! defined-value rule).
