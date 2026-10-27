@@ -7,6 +7,7 @@ use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::scene::transform::Transform;
+use manifold_node_engine::scene::world_tiles::{KEY_PERIOD_TILES, TILE};
 
 /// The Bounds switch of `params`: on unless the toggle is off.
 pub fn bounds_enabled(params: &ParamValues) -> bool {
@@ -81,6 +82,38 @@ pub fn kill_height(
         Some(floor) => floor - drawn_radius,
         None => NO_KILL_HEIGHT,
     }
+}
+
+/// Tiles of the key period kept clear: the table's rings round the water
+/// and slack.
+const KEY_MARGIN_TILES: u32 = 8;
+
+/// This frame's scene box and kill height kept inside what tile keys tell
+/// apart at cell size `h`: tiles a key period apart share a key, so the
+/// water and its rings must span less. A scene longer than that is refused
+/// by name. A kill height (Bounds off) is raised to that span below the
+/// scene's top, so water falling after a body is removed before its tiles
+/// could alias the ones above.
+pub fn within_key_span(
+    (scene, kill): ([[f32; 3]; 2], f32),
+    h: f64,
+) -> Result<([[f32; 3]; 2], f32), String> {
+    let span = KEY_PERIOD_TILES.map(|t| f64::from((t - KEY_MARGIN_TILES) * TILE) * h);
+    for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+        let side = f64::from(scene[1][axis] - scene[0][axis]);
+        if side > span[axis] {
+            return Err(format!(
+                "Water: the scene is {side:.2} m along {name}; at a Cell Size of {h} m the water spans at most {:.2} m. Raise Cell Size or bring the scene in.",
+                span[axis]
+            ));
+        }
+    }
+    let kill = if kill == NO_KILL_HEIGHT {
+        kill
+    } else {
+        kill.max(scene[1][1] - span[1] as f32)
+    };
+    Ok((scene, kill))
 }
 
 /// The box round `boxes`, or None when nothing is placed or the box has no
@@ -167,5 +200,30 @@ impl SourceFloor {
             };
         }
         self.y
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// At 1 mm the water spans 504 tiles on y (4.032 m) and 2040 on x and z.
+    #[test]
+    fn the_key_span_refuses_a_long_scene_and_lifts_a_deep_kill() {
+        let h = 0.001;
+        let tall = [[0.0, 0.0, 0.0], [1.0, 4.1, 1.0]];
+        let err = within_key_span((tall, NO_KILL_HEIGHT), h).unwrap_err();
+        assert!(err.contains("along Y"), "{err}");
+        let wide = [[-9.0, 0.0, 0.0], [9.0, 1.0, 1.0]];
+        let err = within_key_span((wide, -1.0), h).unwrap_err();
+        assert!(err.contains("along X"), "{err}");
+        let scene = [[0.0, 0.0, 0.0], [1.0, 2.0, 1.0]];
+        let (_, deep) = within_key_span((scene, -100.0), h).unwrap();
+        assert!((deep - (2.0 - 4.032)).abs() < 1e-5, "{deep}");
+        assert_eq!(within_key_span((scene, -0.5), h).unwrap().1, -0.5);
+        assert_eq!(
+            within_key_span((scene, NO_KILL_HEIGHT), h).unwrap().1,
+            NO_KILL_HEIGHT
+        );
     }
 }

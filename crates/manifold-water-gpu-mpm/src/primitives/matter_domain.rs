@@ -45,7 +45,7 @@ use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, Liqu
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::bounds::{
     NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, face_masks,
-    kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs,
+    kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs, within_key_span,
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
@@ -1357,7 +1357,10 @@ impl MatterDomain {
             &self.impulses,
         )?;
 
-        let (scene, kill) = self.scene(&geometry, column, frame.epoch);
+        let (scene, kill) = within_key_span(
+            self.scene(&geometry, column, frame.epoch),
+            geometry.setup.cell_size,
+        )?;
         let simulated: f64 = (0..u64::from(frame.ticks))
             .map(|tick| {
                 frame

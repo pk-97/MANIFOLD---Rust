@@ -90,8 +90,12 @@ pub fn local_index(p: [i32; 3]) -> u32 {
     l[0] + TILE * (l[1] + TILE * l[2])
 }
 
+/// Tiles along each axis before two share a key: [`tile_key`]'s 11, 9 and
+/// 11 bits. Tiles this far apart alias; nearer ones never do.
+pub const KEY_PERIOD_TILES: [u32; 3] = [2048, 512, 2048];
+
 /// The key of tile t: x in 11 bits, y in 9, z in 11, each wrapped in two's
-/// complement, plus 1 so [`EMPTY`] is no tile. 2048 × 512 × 2048 tiles fit
+/// complement, plus 1 so [`EMPTY`] is no tile. [`KEY_PERIOD_TILES`] fit
 /// before two tiles share a key.
 pub fn tile_key(t: [i32; 3]) -> u32 {
     let [x, y, z] = t.map(|c| c as u32);
@@ -200,9 +204,11 @@ mod tests {
         assert_eq!(tile_key([0, 0, 0]), 1);
         // (-1, -1, -1) packs to all 31 bits set: the largest key.
         assert_eq!(tile_key([-1, -1, -1]), 1 << 31);
-        assert_eq!(tile_key([2048, 0, 0]), tile_key([0, 0, 0]));
-        assert_eq!(tile_key([5, 512 - 3, -7]), tile_key([5, -3, -7]));
-        assert_eq!(tile_key([5, -3, -7 - 2048]), tile_key([5, -3, -7]));
+        let [px, py, pz] = KEY_PERIOD_TILES.map(|t| t as i32);
+        assert_eq!(tile_key([px, 0, 0]), tile_key([0, 0, 0]));
+        assert_eq!(tile_key([5, py - 3, -7]), tile_key([5, -3, -7]));
+        assert_eq!(tile_key([5, -3, -7 - pz]), tile_key([5, -3, -7]));
+        assert_ne!(tile_key([px - 1, 0, 0]), tile_key([0, 0, 0]));
         let distinct: std::collections::BTreeSet<u32> =
             tiles().iter().map(|&t| tile_key(t)).collect();
         assert_eq!(distinct.len(), tiles().len());

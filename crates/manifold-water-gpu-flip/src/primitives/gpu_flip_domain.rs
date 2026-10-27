@@ -54,7 +54,7 @@ use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, Liqu
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::bounds::{
     NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, box_cell, face_masks,
-    kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs,
+    kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs, within_key_span,
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
@@ -1382,7 +1382,10 @@ impl GpuFlipDomain {
             }
         }
         self.observed.used();
-        let (scene, kill_height) = self.scene(&geometry, column, frame.epoch, drawn_radius);
+        let (scene, kill_height) = within_key_span(
+            self.scene(&geometry, column, frame.epoch, drawn_radius),
+            geometry.setup.cell_size,
+        )?;
         self.scene_box = scene;
         self.bodies.prepare_clock_vertices(
             scene[0],
