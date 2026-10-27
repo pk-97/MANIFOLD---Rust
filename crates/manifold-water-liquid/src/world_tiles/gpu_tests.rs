@@ -76,7 +76,7 @@ fn build(
         &mut enc,
         &Allocation {
             points: &records,
-            record: &record,
+            count: PointCount::Record(&record),
             origin: lattice_origin(CELL),
             inv_cell: 1.0 / CELL,
             replay_count: replay,

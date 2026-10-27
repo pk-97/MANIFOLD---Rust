@@ -1,8 +1,6 @@
 //! Buffer extent rule owned by this node.
 use crate::primitives::gpu_flip_domain::region_sites::RegionSites;
-use crate::primitives::gpu_flip_domain::{
-    NO_KILL_HEIGHT, bounds_outputs, face_masks, geometry_read, gpu_flip_geometry,
-};
+use crate::primitives::gpu_flip_domain::{geometry_read, gpu_flip_geometry};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
@@ -11,6 +9,7 @@ use manifold_physics::clock::TICK;
 use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
+use manifold_water_liquid::bounds::{NO_KILL_HEIGHT, bounds_outputs, face_masks};
 use manifold_water_liquid::coupling::REACTION_FLOATS;
 use manifold_water_liquid::extent::walked_roles;
 use manifold_water_liquid::fields::FieldFrame;

@@ -26,8 +26,9 @@ use manifold_node_engine::ports::{ArrayType, ChannelElementType, std430_channel}
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries, table_words};
 
-/// The sort's passes. Composed after a key source: [`DENSE_KEYS`] or
-/// [`POOLED_KEYS`] (with `READ_SIDE` before it), which define `sort_key_of`.
+/// The sort's passes. Composed after a key source: [`DENSE_KEYS`],
+/// [`POOLED_KEYS`] or [`BLOCK_KEYS`] (the pooled ones with `READ_SIDE` before
+/// them), which define `sort_key_of`.
 pub const SHADER: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
 
 /// A point's key is the index of its bin in the grid, the point clamped into
@@ -48,12 +49,54 @@ fn ts_table_entries() -> u32 { return params.table_entries; }\n\
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }\n\
 fn sort_key_of(p: vec3<f32>) -> u32 { return ts_cell_at(ts_world_cell(p, params.bin_min, params.inv_cell)); }\n";
 
-fn dense_source() -> String {
-    format!("{DENSE_KEYS}\n{SHADER}")
+/// A point's key is the block of 4³ world nodes holding its node
+/// `floor((x - bin_min) * inv_cell)` in its tile's slot: slot · 8 + the block
+/// (x + 2y + 4z) of the node's place in the tile, or [`block_keys`] − 1 when
+/// the table does not hold the tile. Matter's P2G sorts by the block of each
+/// point's stencil base node (bin_min +h/2).
+const BLOCK_KEYS: &str = "@group(0) @binding(9) var<storage, read> ts_table: array<u32>;\n\
+fn ts_pool_tiles() -> u32 { return params.pool_tiles; }\n\
+fn ts_table_entries() -> u32 { return params.table_entries; }\n\
+fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }\n\
+fn sort_key_of(p: vec3<f32>) -> u32 {\n\
+    let node = ts_world_cell(p, params.bin_min, params.inv_cell);\n\
+    let slot = ts_slot_of(node >> vec3<u32>(3u));\n\
+    if slot == WT_NONE { return 8u * params.pool_tiles; }\n\
+    let b = (node & vec3<i32>(7)) >> vec3<u32>(2u);\n\
+    return slot * 8u + u32(b.x + 2 * b.y + 4 * b.z);\n\
+}\n";
+
+/// Keys of a block sort over a pool of `pool_tiles` slots: 8 blocks a slot
+/// and the one for points in tiles the table does not hold.
+pub fn block_keys(pool_tiles: u32) -> u64 {
+    8 * u64::from(pool_tiles) + 1
 }
 
-fn pooled_source() -> String {
-    format!("{READ_SIDE}\n{POOLED_KEYS}\n{SHADER}")
+/// What a sorter keys points by.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum KeyRule {
+    #[default]
+    Dense,
+    PooledCells,
+    PooledBlocks,
+}
+
+impl KeyRule {
+    fn source(self) -> String {
+        match self {
+            Self::Dense => format!("{DENSE_KEYS}\n{SHADER}"),
+            Self::PooledCells => format!("{READ_SIDE}\n{POOLED_KEYS}\n{SHADER}"),
+            Self::PooledBlocks => format!("{READ_SIDE}\n{BLOCK_KEYS}\n{SHADER}"),
+        }
+    }
+
+    /// Keys of a pooled rule over a pool of `pool_tiles` slots.
+    fn pooled_keys(self, pool_tiles: u32) -> u64 {
+        match self {
+            Self::PooledBlocks => block_keys(pool_tiles),
+            _ => pool_len(pool_tiles),
+        }
+    }
 }
 const ENTRIES: [&str; 6] = [
     "clear_counts",
@@ -186,12 +229,13 @@ manifold_core::testkit_visible! {
 /// The counting sort itself, shared by `node.sort_particles_into_cells` and
 /// the stage nodes that sort inside one dispatch chain (`node.gpu_flip_step`).
 /// Owns the cell ranges and its scratch. Built for one key rule: dense bins
-/// ([`ParticleSorter::prepare`], [`ParticleSorter::encode`]) or the world
-/// tiles' pool indices ([`ParticleSorter::prepare_pooled`],
-/// [`ParticleSorter::encode_pooled`]).
+/// ([`ParticleSorter::prepare`], [`ParticleSorter::encode`]), the world
+/// tiles' pool indices ([`ParticleSorter::prepare_pooled`]) or their 4³ node
+/// blocks ([`ParticleSorter::prepare_pooled_blocks`]), both encoded by
+/// [`ParticleSorter::encode_pooled`].
 #[derive(Default)]
 pub struct ParticleSorter {
-    pooled: bool,
+    rule: KeyRule,
     pipelines: Vec<GpuComputePipeline>,
     scan: PrefixScan,
     rank: Option<GpuBuffer>,
@@ -206,22 +250,24 @@ impl ParticleSorter {
     /// Create the pipelines for dense bins. Call before any early return
     /// (compile contract).
     pub fn prepare(&mut self, device: &GpuDevice) {
-        self.create_pipelines(device, false);
+        self.create_pipelines(device, KeyRule::Dense);
     }
 
     /// Create the pipelines for keys that are world-tile pool indices.
     pub fn prepare_pooled(&mut self, device: &GpuDevice) {
-        self.create_pipelines(device, true);
+        self.create_pipelines(device, KeyRule::PooledCells);
     }
 
-    fn create_pipelines(&mut self, device: &GpuDevice, pooled: bool) {
+    /// Create the pipelines for keys that are 4³ node blocks of the world
+    /// tiles' slots ([`block_keys`] of them).
+    pub fn prepare_pooled_blocks(&mut self, device: &GpuDevice) {
+        self.create_pipelines(device, KeyRule::PooledBlocks);
+    }
+
+    fn create_pipelines(&mut self, device: &GpuDevice, rule: KeyRule) {
         if self.pipelines.is_empty() {
-            self.pooled = pooled;
-            let source = if pooled {
-                pooled_source()
-            } else {
-                dense_source()
-            };
+            self.rule = rule;
+            let source = rule.source();
             for entry in ENTRIES {
                 self.pipelines.push(device.create_compute_pipeline(
                     &source,
@@ -279,7 +325,7 @@ impl ParticleSorter {
         job: &SortJob<'_>,
         labels: &SortLabels,
     ) -> Result<(), String> {
-        if self.pooled {
+        if self.rule != KeyRule::Dense {
             return Err("a pooled sorter needs the slot table: use encode_pooled".into());
         }
         self.encode_keyed(device, encoder, job, None, labels)
@@ -290,7 +336,9 @@ impl ParticleSorter {
     /// with no clamp, through `table` (the world-tile table of a pool of
     /// `pool_tiles` slots, `table_words(pool_tiles)` words). A particle whose
     /// tile has no slot lands in the canonical bucket, which no stored cell
-    /// reads. `prepare_pooled` and `reserve_keys(pool_len(pool_tiles))` first.
+    /// reads. `prepare_pooled` and `reserve_keys(pool_len(pool_tiles))` first;
+    /// or `prepare_pooled_blocks` and `reserve_keys(block_keys(pool_tiles))`,
+    /// a point's key then its node's block.
     pub fn encode_pooled(
         &mut self,
         device: &GpuDevice,
@@ -300,7 +348,7 @@ impl ParticleSorter {
         pool_tiles: u32,
         labels: &SortLabels,
     ) -> Result<(), String> {
-        if !self.pooled {
+        if self.rule == KeyRule::Dense {
             return Err("a dense sorter has no slot table: use encode".into());
         }
         self.encode_keyed(device, encoder, job, Some((table, pool_tiles)), labels)
@@ -319,7 +367,7 @@ impl ParticleSorter {
                 if table.size < table_words(pool_tiles) * 4 {
                     return Err("the table holds fewer words than its pool's".into());
                 }
-                pool_len(pool_tiles)
+                self.rule.pooled_keys(pool_tiles)
             }
             None => bin_total(job.bins),
         };
@@ -809,3 +857,24 @@ impl Primitive for SortParticlesIntoCells {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_key_rule_composes_a_valid_sort() {
+        for rule in [KeyRule::Dense, KeyRule::PooledCells, KeyRule::PooledBlocks] {
+            let source = rule.source();
+            let module = naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+        }
+        assert_eq!(block_keys(3), 25);
+    }
+}

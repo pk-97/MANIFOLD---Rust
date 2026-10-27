@@ -9,6 +9,7 @@
 
 pub mod bodies;
 pub mod body_buffers;
+pub mod bounds;
 pub mod clock;
 pub mod coupling;
 pub mod display_cursor;

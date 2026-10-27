@@ -63,7 +63,7 @@ fn dispatches(n: usize) -> usize {
 }
 
 /// A zeroed clock plan: the gate that never switches a pass off.
-pub(crate) fn open_gate(device: &GpuDevice) -> GpuBuffer {
+pub fn open_gate(device: &GpuDevice) -> GpuBuffer {
     let gate = device.create_buffer_shared(48);
     gate.zero_fill();
     gate
@@ -316,13 +316,8 @@ impl PrefixScan {
                 match counted {
                     // A single-block scan is one group whatever `n` is.
                     Some((record, offset)) if level == 0 && count > 1 => {
-                        encoder.dispatch_compute_indirect(
-                            pipeline,
-                            &bindings,
-                            record,
-                            offset,
-                            label,
-                        );
+                        encoder
+                            .dispatch_compute_indirect(pipeline, &bindings, record, offset, label);
                     }
                     _ => encoder.dispatch_compute(pipeline, &bindings, [groups, 1, 1], label),
                 }
@@ -507,10 +502,9 @@ mod gpu_tests {
 
             let ptr = scan.buffer_ref().mapped_ptr().expect("shared buffer");
             // SAFETY: a shared buffer of at least capacity words; GPU work done.
-            let got: Vec<u32> = bytemuck::cast_slice(unsafe {
-                std::slice::from_raw_parts(ptr, capacity * 4)
-            })
-            .to_vec();
+            let got: Vec<u32> =
+                bytemuck::cast_slice(unsafe { std::slice::from_raw_parts(ptr, capacity * 4) })
+                    .to_vec();
             let mut total = 0u32;
             for (i, &value) in values[..n].iter().enumerate() {
                 total += value;

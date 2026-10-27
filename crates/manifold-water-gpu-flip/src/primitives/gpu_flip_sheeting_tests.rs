@@ -21,7 +21,7 @@ use manifold_node_engine::scene::world_tiles::{
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
 use manifold_water_liquid::world_tiles::{
-    Allocation, LIQUID_POINTS, Reach, WorldTiles, exhausted_word,
+    Allocation, LIQUID_POINTS, PointCount, Reach, WorldTiles, exhausted_word,
 };
 use std::collections::HashMap;
 
@@ -92,7 +92,7 @@ impl World {
             &mut enc,
             &Allocation {
                 points: &records,
-                record: &record,
+                count: PointCount::Record(&record),
                 origin: lattice_origin(h),
                 inv_cell: 1.0 / h,
                 replay_count: 0,

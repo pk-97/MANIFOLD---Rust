@@ -15,9 +15,9 @@
 //! slot.
 //!
 //! The particle read is a composed WGSL snippet ([`LIQUID_POINTS`] for
-//! liquid particle records), as the sort composes its key: it binds the
-//! records at [`POINTS_BINDING`] and defines `wt_point_live(i)` and
-//! `wt_point_cell(i)`.
+//! liquid particle records, [`MATTER_POINTS`] for matter points), as the sort
+//! composes its key: it binds the records at [`POINTS_BINDING`] and defines
+//! `wt_point_live(i)` and `wt_point_cell(i)`.
 //!
 //! Every slot number is the same on every run whatever order GPU threads
 //! arrive in (ordered linear probing, frees in slot order, handout in table
@@ -42,6 +42,10 @@ pub const SHADER: &str = include_str!("primitives/shaders/world_tiles.wgsl");
 
 /// Points from liquid particle records: live when the radius is positive.
 pub const LIQUID_POINTS: &str = include_str!("primitives/shaders/world_tiles_liquid.wgsl");
+
+/// Points from matter point records: live when the id is non-zero and the
+/// position finite, among the first [`PointCount::Slots`] records.
+pub const MATTER_POINTS: &str = include_str!("primitives/shaders/world_tiles_matter.wgsl");
 
 /// Points from the level below's held slots, and the children rows pass.
 pub const PARENT_POINTS: &str = include_str!("primitives/shaders/world_tiles_parents.wgsl");
@@ -235,14 +239,23 @@ struct Pipelines {
     children: Option<GpuComputePipeline>,
 }
 
+/// The records a particle build bins.
+#[derive(Clone, Copy)]
+pub enum PointCount<'a> {
+    /// The slots in use, `[groups, 1, 1, n]` (the GPU FLIP step's slot
+    /// record): the point passes dispatch from its triple and read records
+    /// [0, n) of `points`, so records past n are never binned
+    /// ([`LIQUID_POINTS`]).
+    Record(&'a GpuBuffer),
+    /// The first `n` records, a number the CPU has ([`MATTER_POINTS`]).
+    Slots(u32),
+}
+
 /// One particle build's inputs.
 pub struct Allocation<'a> {
     /// The records the points snippet reads.
     pub points: &'a GpuBuffer,
-    /// The slots in use, `[groups, 1, 1, n]` (the GPU FLIP step's slot
-    /// record): the point passes dispatch from its triple and read records
-    /// [0, n) of `points`, so records past n are never binned.
-    pub record: &'a GpuBuffer,
+    pub count: PointCount<'a>,
     /// The lattice origin (`lattice_origin`) and 1 / cell size.
     pub origin: [f32; 3],
     pub inv_cell: f32,
@@ -449,14 +462,21 @@ impl WorldTiles {
             ring_max: self.reach.ring_max,
             alloc_ring: self.reach.alloc_ring,
             cell_reach: self.reach.cell_reach,
-            point_count: 0,
+            point_count: match job.count {
+                PointCount::Record(_) => 0,
+                PointCount::Slots(n) => n,
+            },
             from_scratch: 0,
             replay_count: job.replay_count,
             child_entries: 0,
             child_pool_tiles: 0,
             _pad: [0; 2],
         };
-        self.encode_build(enc, &params, job.points, Some(job.record), job.gate);
+        let record = match job.count {
+            PointCount::Record(record) => Some(record),
+            PointCount::Slots(_) => None,
+        };
+        self.encode_build(enc, &params, job.points, record, job.gate);
     }
 
     /// Build a coarse level from `child`, the level below, encoded earlier
@@ -529,8 +549,8 @@ impl WorldTiles {
             enc.dispatch_compute(pipeline, bindings, grid, label);
             enc.compute_memory_barrier_buffers();
         };
-        // A particle build's point passes cover the record's slots in use; a
-        // parents build's every slot of the level below.
+        // A particle build's point passes cover the record's slots in use or
+        // the CPU's count; a parents build's every slot of the level below.
         let per_point = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, label| {
             match record {
                 Some(record) => enc.dispatch_compute_indirect(pipeline, bindings, record, 0, label),
@@ -652,8 +672,9 @@ mod tests {
     }
 
     #[test]
-    fn build_shader_validates_with_both_point_sources() {
+    fn build_shader_validates_with_every_point_source() {
         validate(LIQUID_POINTS);
+        validate(MATTER_POINTS);
         validate(PARENT_POINTS);
     }
 

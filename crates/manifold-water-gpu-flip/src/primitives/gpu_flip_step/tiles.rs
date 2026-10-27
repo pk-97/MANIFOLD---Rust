@@ -5,7 +5,8 @@
 use super::*;
 use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
 use manifold_water_liquid::world_tiles::{
-    Allocation, Reach, allocated_args_offset, fresh_args_offset, held_bytes, retired_args_offset,
+    Allocation, PointCount, Reach, allocated_args_offset, fresh_args_offset, held_bytes,
+    retired_args_offset,
 };
 
 /// The cell passes' reach from a particle-holding cell, in cells: the cell
@@ -247,7 +248,7 @@ pub(super) fn encode_tiles(
         enc,
         &Allocation {
             points,
-            record,
+            count: PointCount::Record(record),
             origin: params.origin,
             inv_cell: params.inv_cell,
             replay_count: params.extension_layers,

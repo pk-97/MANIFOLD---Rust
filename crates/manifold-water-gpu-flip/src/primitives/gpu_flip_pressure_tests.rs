@@ -18,8 +18,8 @@ use manifold_node_engine::scene::world_tiles::{
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_water_liquid::testkit::world_box::table_words_of;
 use manifold_water_liquid::world_tiles::{
-    Allocation, LIQUID_POINTS, POOL_SHORT, Reach, WorldTiles, count_words, exhausted_word,
-    rank_count_word,
+    Allocation, LIQUID_POINTS, POOL_SHORT, PointCount, Reach, WorldTiles, count_words,
+    exhausted_word, rank_count_word,
 };
 
 use super::gpu_flip_pressure::{
@@ -733,7 +733,7 @@ impl FineTiles {
             &mut enc,
             &Allocation {
                 points: &records,
-                record: &record,
+                count: PointCount::Record(&record),
                 origin: lattice_origin(h),
                 inv_cell: 1.0 / h,
                 replay_count: 0,
