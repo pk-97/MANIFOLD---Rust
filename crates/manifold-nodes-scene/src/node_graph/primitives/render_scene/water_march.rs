@@ -4,7 +4,9 @@
 //! drops them so a frame with no water costs nothing. A field with a mist
 //! array then integrates its optical depth per pixel up to the nearest hit.
 //! Every array is read through the field's world-tile table, and a ray's span
-//! is its extent.
+//! is its extent. Before a field's march, one workgroup per pool slot flags
+//! what each held tile holds, so the marches step over the tiles with nothing
+//! for them as they step over unheld ones.
 use std::sync::LazyLock;
 
 use manifold_gpu::*;
@@ -19,6 +21,16 @@ static MARCH_WGSL: LazyLock<String> = LazyLock::new(|| {
         include_str!("../shaders/water_field_common.wgsl"),
         include_str!("../shaders/water_march_core.wgsl"),
         include_str!("../shaders/water_march.wgsl"),
+    ]
+    .concat()
+});
+
+static FLAGS_WGSL: LazyLock<String> = LazyLock::new(|| {
+    [
+        READ_SIDE,
+        FIELD_TILES_WGSL,
+        include_str!("../shaders/water_march_core.wgsl"),
+        include_str!("../shaders/water_tile_flags.wgsl"),
     ]
     .concat()
 });
@@ -90,6 +102,10 @@ pub(super) struct FieldView {
 #[derive(Default)]
 pub(super) struct WaterMarch {
     pipeline: Option<GpuComputePipeline>,
+    flags_pipeline: Option<GpuComputePipeline>,
+    /// Per field slot, one `u32` of TILE_ bits per pool slot, written by that
+    /// field's march and read by its mist.
+    tile_flags: Vec<GpuBuffer>,
     hits: Option<GpuBuffer>,
     hits_size: (u32, u32),
     mist_pipeline: Option<GpuComputePipeline>,
@@ -184,6 +200,7 @@ impl WaterMarch {
     /// Compile the march ahead of the first water frame.
     pub(super) fn prewarm(device: &GpuDevice) {
         device.create_compute_pipeline(&MARCH_WGSL, "cs_march", "water level-set march");
+        device.create_compute_pipeline(&FLAGS_WGSL, "cs_tile_flags", "water tile flags");
         device.create_compute_pipeline(&MIST_WGSL, "cs_mist", "water mist optical depth");
     }
 
@@ -201,6 +218,11 @@ impl WaterMarch {
                 &MARCH_WGSL,
                 "cs_march",
                 "water level-set march",
+            ));
+            self.flags_pipeline = Some(device.create_compute_pipeline(
+                &FLAGS_WGSL,
+                "cs_tile_flags",
+                "water tile flags",
             ));
         }
         if self.dummy_depth_out.is_none() {
@@ -224,10 +246,12 @@ impl WaterMarch {
         self.mist_cleared = false;
     }
 
-    /// March one field into `hits`, keeping whatever nearer field an earlier
-    /// call already drew. `begin` must have run this frame with the same size.
+    /// Flag one field's tiles, then march it into `hits`, keeping whatever
+    /// nearer field an earlier call already drew. `begin` must have run this
+    /// frame with the same size.
     pub(super) fn encode(
         &mut self,
+        device: &GpuDevice,
         enc: &mut GpuEncoder,
         view: &FieldView,
         field: &FieldDraw,
@@ -249,6 +273,54 @@ impl WaterMarch {
         if self.hits_size != (view.width, view.height) {
             return Err("Water march: view size differs from begin");
         }
+        let flags_pipeline = self
+            .flags_pipeline
+            .as_ref()
+            .ok_or("Water march: begin was not called")?;
+        let slot = field.slot as usize;
+        let flag_bytes = u64::from(field.pool_tiles) * 4;
+        if self.tile_flags.len() <= slot {
+            self.tile_flags
+                .resize_with(slot + 1, || device.create_buffer(flag_bytes));
+        }
+        if self.tile_flags[slot].size < flag_bytes {
+            self.tile_flags[slot] = device.create_buffer(flag_bytes);
+        }
+        let tile_flags = &self.tile_flags[slot];
+        let mut flag_uniforms = uniforms;
+        flag_uniforms.flags[1] = u32::from(field.mist.is_some());
+        enc.dispatch_compute(
+            flags_pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&flag_uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: field.levelset,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: field.mist.unwrap_or(field.levelset),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 70,
+                    buffer: field.tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 72,
+                    buffer: tile_flags,
+                    offset: 0,
+                },
+            ],
+            [field.pool_tiles, 1, 1],
+            "water tile flags",
+        );
+        enc.compute_memory_barrier_buffers();
         let depth_out = match depth_out {
             Some(t) => t,
             None => self
@@ -305,6 +377,11 @@ impl WaterMarch {
                 buffer: field.extent,
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 72,
+                buffer: tile_flags,
+                offset: 0,
+            },
         ];
         enc.dispatch_compute(
             pipeline,
@@ -317,7 +394,7 @@ impl WaterMarch {
 
     /// Adds one field's mist optical depth to the mist buffer, up to the
     /// nearest of the opaque scene and the water already in `hits`, so every
-    /// march must have run first. `Ok(false)` and nothing done when the field
+    /// march must have run first (the field's march also flags its tiles). `Ok(false)` and nothing done when the field
     /// has no mist.
     pub(super) fn encode_mist(
         &mut self,
@@ -359,6 +436,10 @@ impl WaterMarch {
             self.mist_cleared = true;
         }
         let pipeline = self.mist_pipeline.as_ref().expect("ensured");
+        let tile_flags = self
+            .tile_flags
+            .get(field.slot as usize)
+            .ok_or("Water mist: the field was not marched")?;
         let bindings = [
             GpuBinding::Bytes {
                 binding: 0,
@@ -398,6 +479,11 @@ impl WaterMarch {
                 buffer: field.extent,
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 72,
+                buffer: tile_flags,
+                offset: 0,
+            },
         ];
         enc.dispatch_compute(
             pipeline,
@@ -414,6 +500,12 @@ impl WaterMarch {
         self.mist.as_ref()
     }
 
+    /// The tile flags field `slot`'s march wrote this frame.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(super) fn tile_flags(&self, slot: u32) -> Option<&GpuBuffer> {
+        self.tile_flags.get(slot as usize)
+    }
+
     /// The G-buffer this frame's marches wrote, if `begin` ran.
     pub(super) fn hits(&self) -> Option<&GpuBuffer> {
         self.hits.as_ref()
@@ -423,6 +515,7 @@ impl WaterMarch {
     pub(super) fn reset(&mut self) {
         self.hits = None;
         self.mist = None;
+        self.tile_flags.clear();
     }
 }
 
@@ -447,6 +540,11 @@ mod tests {
     #[test]
     fn march_wgsl_parses_and_validates() {
         validates("water march", &MARCH_WGSL, "cs_march");
+    }
+
+    #[test]
+    fn flags_wgsl_parses_and_validates() {
+        validates("water tile flags", &FLAGS_WGSL, "cs_tile_flags");
     }
 
     #[test]

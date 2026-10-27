@@ -943,6 +943,7 @@ impl RenderScene {
                         .begin(gpu.device, gpu.native_enc, width, height);
                     for field in fields {
                         if let Err(error) = self.water_march.encode(
+                            gpu.device,
                             gpu.native_enc,
                             &view,
                             &field_draw(field),

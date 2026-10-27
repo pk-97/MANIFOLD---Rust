@@ -2,7 +2,10 @@
 // compute march (`water_march.wgsl`), the mist (`water_mist.wgsl`) and the
 // cover draws (`water_cover.wgsl`). Starts after `world_tiles_read.wgsl` and
 // `field_tiles.wgsl`: the level set is a pooled field under the field's
-// world-tile table, node p at (p - 1/2) cells in the object's space.
+// world-tile table, node p at (p - 1/2) cells in the object's space. The
+// includer defines `fn field_tile_dry(slot: u32) -> bool`, true when held
+// tile `slot` has no water in its cells (its flags lack TILE_WATER), so the
+// march steps over it as over an unheld tile.
 
 struct MarchUniforms {
     inv_view_proj: mat4x4<f32>,       // clip -> world, this frame's (jittered) raster matrix
@@ -32,6 +35,12 @@ const EXIT_MIN_STEP_CELLS: f32 = 0.1;   // prototype `exit` (main.rs:479): small
 // A step over an unheld tile lands this far past its face, so the next sample
 // is in the next tile whatever the rounding.
 const TILE_EXIT_NUDGE_CELLS: f32 = 0.01;
+// The bits of a held tile's flags (`water_tile_flags.wgsl`), each set when a
+// node of the tile's cells has it: the level set at or below zero, at or
+// above zero, the mist above zero.
+const TILE_WATER: u32 = 1u;
+const TILE_AIR: u32 = 2u;
+const TILE_MIST: u32 = 4u;
 // Safety cap so a broken field cannot hang the GPU (the prototype's rays
 // averaged under 40 samples).
 const MARCH_MAX_STEPS: u32 = 1024u;
@@ -114,11 +123,12 @@ fn tile_exit(q: vec3<f32>, d: vec3<f32>) -> f32 {
     return min(along.x, min(along.y, along.z)) + TILE_EXIT_NUDGE_CELLS * cell;
 }
 
-// An unheld tile is the canonical far value everywhere, so the ray steps to its
-// exit at once instead of in field-value steps.
+// An unheld tile is the canonical far value everywhere and a dry one is above
+// zero in every cell, so the ray steps to its exit at once instead of in
+// field-value steps.
 fn field_ahead(p: vec3<f32>, d: vec3<f32>) -> FieldAhead {
     let q = field_node_coord(p, u.cell.x);
-    if !field_enter(q) {
+    if !field_enter(q) || field_tile_dry(ts_home_slot) {
         return FieldAhead(FIELD_FAR_CELLS * u.cell.x, tile_exit(q, d));
     }
     return FieldAhead(level_at(field_corners(q)), 0.0);

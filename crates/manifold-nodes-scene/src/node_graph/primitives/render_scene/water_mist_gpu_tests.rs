@@ -51,10 +51,9 @@ fn extent_inside_nodes(table: &FieldTable) -> [f32; 8] {
     ]
 }
 
-/// Runs the mist over the test table and returns every pixel's result. With
-/// `march_water` the level set is marched first, so the mist stops at its
-/// surface.
-fn run(levelset: &[f32], mist: &[f32], march_water: bool) -> Vec<Mist> {
+/// Marches the level set over the test table, then runs the mist, which stops
+/// at the surface the march found, and returns every pixel's result.
+fn run(levelset: &[f32], mist: &[f32]) -> Vec<Mist> {
     let device = manifold_gpu::testkit::test_device();
     let table = table();
     let sc = scene();
@@ -80,11 +79,9 @@ fn run(levelset: &[f32], mist: &[f32], march_water: bool) -> Vec<Mist> {
     let draw = buffers.draw(0);
     let mut march = WaterMarch::default();
     march.begin(&device, &mut enc, W, H);
-    if march_water {
-        march
-            .encode(&mut enc, &view, &draw, &opaque, None, None)
-            .expect("march encodes");
-    }
+    march
+        .encode(&device, &mut enc, &view, &draw, &opaque, None, None)
+        .expect("march encodes");
     let ran = march
         .encode_mist(&device, &mut enc, &view, &draw, &opaque)
         .expect("mist encodes");
@@ -182,7 +179,7 @@ fn assert_close(what: &str, got: f64, want: f64, relative: f64, absolute: f64) {
 #[test]
 fn constant_mist_has_the_chord_for_its_depth() {
     let far = FIELD_FAR_CELLS * CELL;
-    let result = run(&per_node(far, |_| 1.0), &per_node(0.0, |_| 0.8), false);
+    let result = run(&per_node(far, |_| 1.0), &per_node(0.0, |_| 0.8));
     for (x, y, c) in pixels(|c, _, _| c.leave - c.enter > 0.3) {
         let got = &result[(y * W + x) as usize];
         let length = c.leave - c.enter;
@@ -213,7 +210,7 @@ fn linear_mist_has_the_mean_of_its_end_values() {
     let width = f64::from(hi[0] - lo[0]);
     let sigma = |x: f64| 0.3 + 0.5 * (x - f64::from(lo[0])) / width;
     let mist = per_node(0.0, |p| sigma(f64::from(p[0])) as f32);
-    let result = run(&per_node(far, |_| 1.0), &mist, false);
+    let result = run(&per_node(far, |_| 1.0), &mist);
     for (x, y, c) in pixels(|c, _, _| c.leave - c.enter > 0.3) {
         let got = &result[(y * W + x) as usize];
         let want = (c.leave - c.enter) * (sigma(c.enter_local[0]) + sigma(c.leave_local[0])) / 2.0;
@@ -237,7 +234,7 @@ fn mist_stops_at_the_water() {
     let plane_local = -0.3f32;
     let levelset = per_node(far, |p| (p[1] - plane_local).clamp(-far, far));
     let plane_world = f64::from(mul_point(model(), [0.0, plane_local, 0.0], 1.0)[1]);
-    let result = run(&levelset, &per_node(0.0, |_| 0.8), true);
+    let result = run(&levelset, &per_node(0.0, |_| 0.8));
     let sc = scene();
     // Rays that go down, enter above the plane and reach it inside the box.
     let crossing = |c: &Chord, o: [f32; 3], d: [f32; 3]| {

@@ -3,6 +3,11 @@
 // Starts after `world_tiles_read.wgsl`, `field_tiles.wgsl` and
 // `water_march_core.wgsl`, which hold all the bindings.
 
+// The cover draws bind no tile flags, so they search every held tile.
+fn field_tile_dry(slot: u32) -> bool {
+    return false;
+}
+
 @vertex
 fn vs_cover(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
     let x = select(-1.0, 3.0, vid == 1u);

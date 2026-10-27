@@ -6,12 +6,18 @@
 // from the ray origin. The shading divides them for the mist's mean position
 // along the ray. Starts after `water_field_common.wgsl` and
 // `water_march_core.wgsl`, which hold bindings 0 and 1, the field sampling and
-// the ray set-up; the mist is a pooled field under the same world-tile table.
+// the ray set-up; the mist is a pooled field under the same world-tile table,
+// and `tile_flags` the field's per-slot flags (`water_tile_flags.wgsl`).
 
 @group(0) @binding(3) var opaque_depth: texture_depth_2d;
 @group(0) @binding(4) var<storage, read> hits: array<FieldHit>;
 @group(0) @binding(7) var<storage, read> mist: array<f32>;
 @group(0) @binding(8) var<storage, read_write> mist_out: array<vec2<f32>>;
+@group(0) @binding(72) var<storage, read> tile_flags: array<u32>;
+
+fn field_tile_dry(slot: u32) -> bool {
+    return (tile_flags[slot] & TILE_WATER) == 0u;
+}
 
 // One sample per cell: the field is trilinear between nodes, so finer steps add
 // nothing a midpoint sample misses on a smooth density.
@@ -73,11 +79,12 @@ fn cs_mist(@builtin(global_invocation_id) gid: vec3<u32>) {
     var sum_sigma = 0.0;
     var sum_moment = 0.0;
     // Midpoint samples a cell apart. A tile the table does not hold has no
-    // mist (its canonical element is 0), so the ray steps past it at once.
+    // mist (its canonical element is 0), nor has a held one without
+    // TILE_MIST in any of its cells, so the ray steps past them at once.
     var t = t0;
     for (var k = 0u; k < MIST_MAX_STEPS && t < t1; k++) {
         let q = field_node_coord(o + d * t, cell);
-        if !field_enter(q) {
+        if !field_enter(q) || (tile_flags[ts_home_slot] & TILE_MIST) == 0u {
             t += tile_exit(q, d);
             continue;
         }

@@ -365,6 +365,7 @@ fn run(fields: &[TestField], wants_velocity: bool, frame_seconds: f32) -> Run {
     for (f, buffers) in fields.iter().zip(&buffers) {
         march
             .encode(
+                &device,
                 &mut enc,
                 &view,
                 &buffers.draw(f.slot),
@@ -623,6 +624,7 @@ fn the_extent_is_the_ray_span() {
 /// (origin, direction) pairs.
 const PROBE_KERNEL: &str = "\n\
 @group(0) @binding(90) var<storage, read_write> probe_out: array<vec4<f32>>;\n\
+fn field_tile_dry(slot: u32) -> bool { return false; }\n\
 @group(0) @binding(91) var<storage, read> probe_in: array<vec4<f32>>;\n\
 @compute @workgroup_size(1)\n\
 fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
@@ -772,4 +774,91 @@ fn a_ray_steps_over_an_unheld_tile_in_one_step() {
         out[4][2] >= 0.0 && out[4][2] < 1e-4,
         "starts inside the water"
     );
+}
+
+/// The tile flags over a table holding a layer of water one node thick, a tile
+/// of air past it, and a 2 x 2 x 2 block of water: a tile's flags cover the
+/// nodes of every cell whose lower corner it holds, so its far faces' too (the
+/// canonical element where unheld), and a free slot has none.
+#[test]
+fn tile_flags_cover_the_far_faces_of_a_tiles_cells() {
+    // The TILE_ bits of water_march_core.wgsl.
+    const WATER: u32 = 1;
+    const AIR: u32 = 2;
+    const MIST: u32 = 4;
+    let device = manifold_gpu::testkit::test_device();
+    let mut held = vec![[0, 0, 0], [1, 0, 0], [2, 0, 0]];
+    held.extend(FieldTable::tiles_between([5, 5, 5], [6, 6, 6]));
+    let table = FieldTable::new(CELL, held.len() as u32 + 1, &held);
+    let far = FIELD_FAR_CELLS * CELL;
+    let in_block = |p: [i32; 3]| p.iter().all(|c| (40..56).contains(c));
+    // Water on the first node layer of tile 1 and through the block.
+    let levelset = table.pool(far, |p| if p[0] == 8 || in_block(p) { -far } else { far });
+    let mist = table.pool(0.0, |p| if p == [8, 0, 0] { 0.5 } else { 0.0 });
+    let buffers = FieldBuffers::new(
+        &device,
+        &table,
+        table.extent(),
+        &levelset,
+        None,
+        Some(&mist),
+    );
+    let sc = scene();
+    let view = FieldView {
+        view_proj: sc.view_proj,
+        prev_view_proj: sc.view_proj,
+        jitter_ndc: [0.0; 2],
+        prev_jitter_ndc: [0.0; 2],
+        frame_seconds: 1.0 / 60.0,
+        width: W,
+        height: H,
+    };
+    let mut enc = device.create_encoder("water tile flags test");
+    let opaque = depth_target(&device, &mut enc);
+    let mut march = WaterMarch::default();
+    march.begin(&device, &mut enc, W, H);
+    march
+        .encode(
+            &device,
+            &mut enc,
+            &view,
+            &buffers.draw(0),
+            &opaque,
+            None,
+            None,
+        )
+        .expect("march encodes");
+    let bytes = u64::from(table.pool_tiles) * 4;
+    let read = device.create_buffer_shared(bytes);
+    enc.copy_buffer_to_buffer(march.tile_flags(0).expect("marched"), &read, bytes);
+    enc.commit_and_wait_completed();
+    let flags: &[u32] = unsafe {
+        std::slice::from_raw_parts(
+            read.mapped_ptr().expect("shared").cast::<u32>(),
+            table.pool_tiles as usize,
+        )
+    };
+    let slot = |t: [i32; 3]| table.held.iter().position(|&h| h == t).expect("held");
+    assert_eq!(
+        flags[slot([0, 0, 0])],
+        WATER | AIR | MIST,
+        "water and mist on its +x face"
+    );
+    assert_eq!(flags[slot([1, 0, 0])], WATER | AIR | MIST);
+    assert_eq!(
+        flags[slot([2, 0, 0])],
+        AIR,
+        "only air: the march steps over it"
+    );
+    assert_eq!(
+        flags[slot([5, 5, 5])],
+        WATER,
+        "its far faces are in the block"
+    );
+    assert_eq!(
+        flags[slot([6, 6, 6])],
+        WATER | AIR,
+        "its far faces read the canonical air"
+    );
+    assert_eq!(flags[held.len()], 0, "a free slot");
 }
