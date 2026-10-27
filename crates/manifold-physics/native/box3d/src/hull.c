@@ -1231,8 +1231,10 @@ static void b3HullBuilder_ResolveVertices( b3HullBuilder* b )
 
 static void b3HullBuilder_ResolveFaces( b3HullBuilder* b )
 {
-	// Splice deleted faces out of the face list. Faces already retired by AbsorbFaces are no
-	// longer on faceList, so we guard with b3QHList_Contains before removing.
+	// Retire the faces the new vertex saw, with their half-edges. Faces already retired by
+	// AbsorbFaces are no longer on faceList, so the ones left marked are exactly those: the cone
+	// has taken over their horizon twins, so nothing live points at them. The scratch capacities
+	// assume this recycling; without it each added vertex leaks its visible faces.
 	b3QHListNode* node = b->faceList.link.next;
 	while ( node != &b->faceList.link )
 	{
@@ -1242,7 +1244,10 @@ static void b3HullBuilder_ResolveFaces( b3HullBuilder* b )
 		if ( face->mark == B3_MARK_DELETE && b3QHList_Contains( &face->link ) )
 		{
 			B3_ASSERT( B3_LIST_EMPTY( &face->conflictListHead.link ) );
-			b3QHList_Remove( &face->link );
+			b3QHHalfEdge* first = face->edge;
+			b3HullBuilder_DestroyEdges( b, first->next, first );
+			b3HullBuilder_RetireEdge( b, first );
+			b3HullBuilder_RetireFace( b, face );
 		}
 	}
 

@@ -1988,6 +1988,48 @@ mod tests {
         assert!((4..=COOKED_HULL_MAX_VERTICES as usize).contains(&cooked.len()));
     }
 
+    /// Scanned models' hulls: thousands of points on a bumpy sphere, a flat
+    /// disc and a lumpy blob. The builder recycles the faces each added point
+    /// sees, so even the widest cap stays inside its scratch space (no failed
+    /// native check), and the bodies' cap keeps every one.
+    #[test]
+    fn dense_scan_hulls_cook_within_the_builder_scratch() {
+        let mut seed = 0x9e37_79b9_u32;
+        let mut unit = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f32 / u32::MAX as f32
+        };
+        let sphere: Vec<[f32; 3]> = (0..4000)
+            .map(|_| {
+                let z = 2.0 * unit() - 1.0;
+                let azimuth = std::f32::consts::TAU * unit();
+                let ring = (1.0 - z * z).sqrt();
+                let radius = 1.0 + 0.02 * unit();
+                [
+                    radius * ring * azimuth.cos(),
+                    radius * z,
+                    radius * ring * azimuth.sin(),
+                ]
+            })
+            .collect();
+        let flat: Vec<[f32; 3]> = sphere.iter().map(|p| [p[0], 0.001 * p[1], p[2]]).collect();
+        let lumpy: Vec<[f32; 3]> = sphere
+            .iter()
+            .map(|p| {
+                let k = 1.0 + 0.3 * (7.0 * p[0]).sin() * (5.0 * p[2]).cos();
+                [k * p[0], 0.4 * k * p[1], k * p[2]]
+            })
+            .collect();
+        let before = native_assert_count();
+        for cloud in [&sphere, &flat, &lumpy] {
+            assert!(CookedSolid::hulls(&[cloud], COOKED_HULL_MAX_VERTICES).is_ok());
+            let _ = CookedSolid::hulls(&[cloud], 255);
+        }
+        assert_eq!(native_assert_count(), before);
+    }
+
     #[test]
     fn multi_hull_body_uses_one_pose_and_rejects_invalid_batches_without_leaks() {
         let mut world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();
