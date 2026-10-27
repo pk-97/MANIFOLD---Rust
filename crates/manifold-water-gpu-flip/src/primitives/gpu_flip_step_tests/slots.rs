@@ -58,11 +58,10 @@ fn stale_record(slot: usize) -> FluidParticle {
     }
 }
 
-/// The step node over the small box with a resting block of water in a pool of
-/// `pool` slots, the slots past the block holding `stale_record`s, and the
-/// birth identity as the previous tick leaves it: `[groups, 1, 1, n]` in words
-/// 4-7.
-struct RestingPool {
+/// The step node over the small box with `block`'s water in a pool of `pool`
+/// slots, the slots past the block holding `stale_record`s, and the birth
+/// identity as the previous tick leaves it: `[groups, 1, 1, n]` in words 4-7.
+pub(super) struct RestingPool {
     h: Harness,
     node: GpuFlipStep,
     inputs: [(&'static str, Slot); 2],
@@ -78,9 +77,8 @@ struct RestingPool {
 }
 
 impl RestingPool {
-    fn new(pool: impl Fn(usize) -> usize) -> Self {
+    pub(super) fn new(block: Vec<FluidParticle>, pool: impl Fn(usize) -> usize) -> Self {
         use manifold_node_engine::primitive::Primitive;
-        let block = resting_block();
         let live = block.len();
         let slots = pool(live);
         assert!(slots >= live);
@@ -130,7 +128,7 @@ impl RestingPool {
         }
     }
 
-    fn tick(&mut self, tick: i32) {
+    pub(super) fn tick(&mut self, tick: i32) {
         for name in ["tick_index", "first_tick"] {
             self.params
                 .insert(name.into(), ParamValue::Float(tick as f32));
@@ -144,7 +142,7 @@ impl RestingPool {
     /// The water after the last tick: the live records, the identity's `n`,
     /// the pooled faces and distance with their slot table, and the solver
     /// words of the step's tally.
-    fn left(&self) -> Left {
+    pub(super) fn left(&self) -> Left {
         let words = |slot: Slot| {
             let buffer = self.h.buffer(slot);
             read_staged::<u32>(&self.h.device, &buffer, (buffer.size / 4) as usize)
@@ -163,8 +161,8 @@ impl RestingPool {
     }
 }
 
-struct Left {
-    particles: Vec<FluidParticle>,
+pub(super) struct Left {
+    pub(super) particles: Vec<FluidParticle>,
     n: u32,
     per_slot: Vec<u32>,
     faces: Vec<u32>,
@@ -181,8 +179,8 @@ struct Left {
 /// distance and the same solver words.
 #[test]
 pub(super) fn gpu_flip_step_never_reads_slots_past_the_count() {
-    let mut exact = RestingPool::new(|live| live);
-    let mut roomy = RestingPool::new(|live| 4 * live);
+    let mut exact = RestingPool::new(resting_block(), |live| live);
+    let mut roomy = RestingPool::new(resting_block(), |live| 4 * live);
     assert_eq!(exact.live, 8 * N[0] * N[2] * BLOCK_HEIGHT);
     for tick in 0..3 {
         exact.tick(tick);
@@ -229,7 +227,7 @@ pub(super) fn gpu_flip_step_never_reads_slots_past_the_count() {
 /// pool and a new table, the water still all there.
 #[test]
 fn a_resize_within_the_pool_keeps_the_table() {
-    let mut rest = RestingPool::new(|live| live);
+    let mut rest = RestingPool::new(resting_block(), |live| live);
     rest.tick(0);
     let (table, words) = (rest.h.buffer(rest.tiles), rest.left().tiles);
     let grow = |rest: &mut RestingPool, name: &'static str, by: f32| {

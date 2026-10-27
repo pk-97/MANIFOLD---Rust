@@ -35,6 +35,7 @@ mod cells;
 mod density;
 mod emit;
 mod face_gravity;
+mod free_fall;
 mod motion;
 mod pockets;
 mod slots;
