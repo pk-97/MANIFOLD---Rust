@@ -344,6 +344,27 @@ pub fn plan_array_allocations(
             }
         }
     }
+    // An overlapping region ticks on the async lane while the main lane moves
+    // on, so a later main-lane step must never be handed storage the tick or
+    // its publishers still read or write. Publisher outputs only show storage
+    // the frame clock has retired, so they stay eligible.
+    for region in plan.substep_regions().iter().filter(|r| r.overlaps) {
+        for &index in &region.steps {
+            let step = &plan.steps()[index];
+            for (_, resource) in step.inputs.iter().chain(&step.outputs) {
+                if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
+                    excluded_resources.insert(*resource);
+                }
+            }
+        }
+        for &index in &region.publishers {
+            for (_, resource) in &plan.steps()[index].inputs {
+                if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
+                    excluded_resources.insert(*resource);
+                }
+            }
+        }
+    }
     // Staged resize retains prebound physical roots. Keep every array whose
     // capacity follows the canvas dedicated: after a resize it needs a new
     // size while a prebound root still names the old shared slot. Growth must
@@ -733,6 +754,11 @@ mod tests {
         root: bool,
         /// May alias any wired array input onto `out`, like the array switches.
         passthrough: bool,
+        /// A substep boundary over `capture`, like the particle state nodes.
+        region: Option<crate::exec::substeps::SubstepBoundaryPorts>,
+        capture: &'static [&'static str],
+        /// Reads a region's final state for the frame clock.
+        publisher: bool,
     }
 
     impl FixedArrayNode {
@@ -752,6 +778,9 @@ mod tests {
                 follows: None,
                 root: false,
                 passthrough: false,
+                region: None,
+                capture: &[],
+                publisher: false,
             }
         }
     }
@@ -793,6 +822,18 @@ mod tests {
 
         fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
             self.passthrough.then_some("out")
+        }
+
+        fn state_capture_input_ports(&self) -> &[&str] {
+            self.capture
+        }
+
+        fn substep_boundary(&self) -> Option<crate::exec::substeps::SubstepBoundaryPorts> {
+            self.region
+        }
+
+        fn tick_publisher(&self) -> bool {
+            self.publisher
         }
 
         fn array_output_capacity(
@@ -1063,6 +1104,116 @@ mod tests {
             2,
             "both fan-in roots should satisfy the later outputs"
         );
+    }
+
+    /// `src → boundary.seed`; `boundary.out → body → boundary.in`;
+    /// `boundary.out → reader → after → sink`. The reader is a tick publisher
+    /// or a plain node. `after` is a same-size array step behind the reader:
+    /// it takes the storage the boundary's output frees there, unless the
+    /// region overlaps and the tick may still be reading that storage.
+    #[test]
+    fn overlapping_region_arrays_keep_dedicated_storage() {
+        const PORTS: crate::exec::substeps::SubstepBoundaryPorts =
+            crate::exec::substeps::SubstepBoundaryPorts {
+                seed: "seed",
+                capture: "in",
+                state: "out",
+                iteration_scalars: &[],
+                results: &[],
+                clock: None,
+            };
+        let array = PortType::Array(ArrayType::of::<u32>());
+        let input = |name| mock_port(name, array, PortKind::Input, true);
+        let output = || vec![mock_port("out", array, PortKind::Output, false)];
+        for publisher in [false, true] {
+            let mut graph = Graph::new();
+            let src = graph.add_node(Box::new(FixedArrayNode::new(
+                "test.src",
+                vec![],
+                output(),
+                4,
+            )));
+            let mut boundary = FixedArrayNode::new(
+                "test.boundary",
+                vec![
+                    input("seed"),
+                    mock_port("in", array, PortKind::Input, false),
+                ],
+                output(),
+                4,
+            );
+            boundary.region = Some(PORTS);
+            boundary.capture = &["in"];
+            let boundary = graph.add_node(Box::new(boundary));
+            let mut stage = |name: &'static str, publisher: bool| {
+                let mut node = FixedArrayNode::new(name, vec![input("in")], output(), 4);
+                node.publisher = publisher;
+                graph.add_node(Box::new(node))
+            };
+            let body = stage("test.body", false);
+            let reader = stage("test.reader", publisher);
+            let after = stage("test.after", false);
+            let mut sink = FixedArrayNode::new("test.sink", vec![input("in")], vec![], 1);
+            sink.root = true;
+            let sink = graph.add_node(Box::new(sink));
+            graph.connect((src, "out"), (boundary, "seed")).unwrap();
+            graph.connect((boundary, "out"), (body, "in")).unwrap();
+            graph.connect((body, "out"), (boundary, "in")).unwrap();
+            graph.connect((boundary, "out"), (reader, "in")).unwrap();
+            graph.connect((reader, "out"), (after, "in")).unwrap();
+            graph.connect((after, "out"), (sink, "in")).unwrap();
+
+            let plan = compile(&graph).unwrap();
+            let region = &plan.substep_regions()[0];
+            assert_eq!(region.overlaps, publisher);
+            let planned =
+                plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+            if !publisher {
+                assert_eq!(
+                    planned.storage[&output_of(&plan, after)].root,
+                    planned.storage[&output_of(&plan, boundary)].root,
+                    "premise: a plain reader leaves the boundary's storage to the next step"
+                );
+                continue;
+            }
+            let touched: Vec<ResourceId> = region
+                .steps
+                .iter()
+                .flat_map(|&index| {
+                    let step = &plan.steps()[index];
+                    step.inputs.iter().chain(&step.outputs)
+                })
+                .chain(
+                    region
+                        .publishers
+                        .iter()
+                        .flat_map(|&index| plan.steps()[index].inputs.iter()),
+                )
+                .map(|&(_, resource)| resource)
+                .collect();
+            assert!(touched.contains(&output_of(&plan, boundary)));
+            for resource in touched {
+                assert_eq!(
+                    planned.storage[&resource].root, resource,
+                    "{resource:?} keeps its own buffer"
+                );
+                assert!(
+                    planned
+                        .storage
+                        .iter()
+                        .all(|(other, storage)| *other == resource || storage.root != resource),
+                    "{resource:?} was handed to another array"
+                );
+            }
+            assert!(
+                planned
+                    .actions
+                    .iter()
+                    .all(|action| matches!(action, ArrayAllocationAction::Allocate(_))),
+                "no array reuses another's storage: {:?}",
+                planned.actions
+            );
+        }
     }
 
     fn output_of(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {

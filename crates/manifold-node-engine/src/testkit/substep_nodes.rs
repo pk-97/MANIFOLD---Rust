@@ -1,7 +1,8 @@
 //! Test-only nodes for region proofs that go through the registry (the
 //! freeze finder and the `gpu_proofs` binary build graphs from definitions):
-//! array sources, a particle substep boundary and a texture sink that makes
-//! the region live. Compiled for unit tests and the `gpu-proofs` feature only.
+//! array sources, a particle substep boundary, a tick publisher and a texture
+//! sink that makes the region live. Compiled for unit tests and the
+//! `gpu-proofs` feature only.
 
 use std::borrow::Cow;
 
@@ -253,6 +254,83 @@ impl EffectNode for ParticleCopy {
     }
 }
 
+/// A tick publisher over particles: each frame it copies `in` into one of two
+/// buffers it owns and shows the other one, last frame's copy, as `out`. Its
+/// output is storage whose copy already finished, as the contract requires,
+/// so it may encode on a region's async lane.
+struct TickPublisher {
+    type_id: EffectNodeType,
+    inputs: Vec<NodeInput>,
+    outputs: Vec<NodeOutput>,
+    params: Vec<ParamDef>,
+    copies: [Option<manifold_gpu::GpuBuffer>; 2],
+    /// The copy the latest evaluate wrote.
+    written: usize,
+}
+
+impl EffectNode for TickPublisher {
+    node_basics!();
+    fn requires(&self) -> NodeRequires {
+        NodeRequires {
+            gpu_encoder: true,
+            state_store: false,
+        }
+    }
+    fn tick_publisher(&self) -> bool {
+        true
+    }
+    fn provides_array_output(&self, port_name: &str) -> bool {
+        port_name == "out"
+    }
+    fn provided_array_output(&self, port_name: &str) -> Option<&manifold_gpu::GpuBuffer> {
+        if port_name == "out" {
+            self.copies[self.written ^ 1].as_ref()
+        } else {
+            None
+        }
+    }
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &ParamValues,
+        input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port_name == "out")
+            .then(|| {
+                input_capacities
+                    .iter()
+                    .find(|(p, _)| *p == "in")
+                    .map(|&(_, n)| n)
+            })
+            .flatten()
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let Some(source) = ctx.inputs.array("in") else {
+            return;
+        };
+        let gpu = ctx
+            .gpu
+            .as_deref_mut()
+            .expect("tick publisher needs a GpuEncoder");
+        if self.copies[0]
+            .as_ref()
+            .is_none_or(|copy| copy.size != source.size)
+        {
+            self.copies = std::array::from_fn(|_| {
+                let copy = gpu.device.create_buffer_shared(source.size);
+                copy.zero_fill();
+                Some(copy)
+            });
+        }
+        self.written ^= 1;
+        let copy = self.copies[self.written]
+            .as_ref()
+            .expect("copies made above");
+        gpu.native_enc
+            .copy_buffer_to_buffer(source, copy, source.size);
+    }
+}
+
 /// Consumes particles and yields a texture so the region reaches a final
 /// output; draws nothing.
 struct ParticleSink {
@@ -422,6 +500,17 @@ pub fn register_substep_test_nodes(registry: &mut PrimitiveRegistry) {
             inputs: vec![port("in", particles, PortKind::Input, true)],
             outputs: vec![port("out", particles, PortKind::Output, false)],
             params: Vec::new(),
+        })
+    });
+    registry.register("test.tick_publisher", || {
+        let particles = PortType::Array(ArrayType::of_known::<Particle>());
+        Box::new(TickPublisher {
+            type_id: EffectNodeType::new("test.tick_publisher"),
+            inputs: vec![port("in", particles, PortKind::Input, true)],
+            outputs: vec![port("out", particles, PortKind::Output, false)],
+            params: Vec::new(),
+            copies: [None, None],
+            written: 0,
         })
     });
     registry.register("test.particle_sink", || {

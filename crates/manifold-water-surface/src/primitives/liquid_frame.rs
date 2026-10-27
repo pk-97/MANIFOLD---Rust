@@ -147,6 +147,12 @@ impl LiquidFrame {
 }
 
 impl Primitive for LiquidFrame {
+    // The history shows a slot only once the frame clock retires it, so the
+    // tick must be ordered before the frame that reads it.
+    fn tick_publisher(&self) -> bool {
+        true
+    }
+
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         self.publication.prepare(device);
     }

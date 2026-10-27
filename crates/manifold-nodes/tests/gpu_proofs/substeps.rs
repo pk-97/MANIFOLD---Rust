@@ -596,3 +596,161 @@ fn post_frame_readers_never_see_reused_storage() {
         "the dump shows `third` as written"
     );
 }
+
+const LANE_FRAMES: u32 = 8;
+
+/// [`def`] with a tick publisher between the boundary and the sink. The sink
+/// reads the publisher's copy of the state, which is last frame's.
+fn publisher_def() -> EffectGraphDef {
+    let mut def = serde_json::to_value(def()).expect("def serialises");
+    def["nodes"]
+        .as_array_mut()
+        .expect("nodes")
+        .push(serde_json::json!({"id": 8, "nodeId": "publisher", "typeId": "test.tick_publisher"}));
+    let wires = def["wires"].as_array_mut().expect("wires");
+    wires.retain(|w| !(w["toNode"] == 6 && w["toPort"] == "particles"));
+    wires.push(serde_json::json!({"fromNode": 2, "fromPort": "out", "toNode": 8, "toPort": "in"}));
+    wires.push(
+        serde_json::json!({"fromNode": 8, "fromPort": "out", "toNode": 6, "toPort": "particles"}),
+    );
+    serde_json::from_value(def).expect("def with a publisher")
+}
+
+struct LaneRun {
+    /// The boundary's state after each frame.
+    states: Vec<Vec<Particle>>,
+    /// What the sink read in each frame.
+    sinks: Vec<Vec<Particle>>,
+    /// Async lanes this thread finished while it ran.
+    lanes: u64,
+}
+
+/// `LANE_FRAMES` frames of the publisher graph. A profiled encoder refuses
+/// the async lane, so those frames run every command in order.
+fn run_lanes(profiled: bool) -> LaneRun {
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
+    let device = &harness.device;
+    let mut graph = publisher_def()
+        .into_graph(&registry(), &Default::default())
+        .expect("publisher def builds");
+    let plan = compile(&graph).expect("publisher def compiles");
+    assert!(
+        plan.substep_regions()[0].overlaps,
+        "premise: a tick publisher lets the region overlap"
+    );
+    let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
+    pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
+    let state_res = resource(
+        &plan,
+        node_of(&graph, "test.particle_boundary"),
+        "out",
+        true,
+    );
+    let sink_res = resource(
+        &plan,
+        node_of(&graph, "test.particle_sink"),
+        "particles",
+        false,
+    );
+    for (res, bytes) in [
+        (
+            resource(&plan, node_of(&graph, "test.particle_source"), "out", true),
+            bytemuck::cast_slice::<Particle, u8>(&seed_particles()).to_vec(),
+        ),
+        (
+            resource(&plan, node_of(&graph, "test.force_source"), "out", true),
+            bytemuck::cast_slice::<[f32; 3], u8>(&forces()).to_vec(),
+        ),
+    ] {
+        let slot = backend.slot_for(res).expect("array bound");
+        let buffer = Backend::array_buffer(&backend, slot).expect("array buffer");
+        // SAFETY: shared-storage buffer, no GPU work in flight yet.
+        unsafe { buffer.write(0, &bytes) };
+    }
+
+    let mut exec = Executor::new(Box::new(backend));
+    let mut state = StateStore::new();
+    let lanes_before = manifold_gpu::GpuEncoder::async_lanes_on_this_thread();
+    let mut run = LaneRun {
+        states: Vec::new(),
+        sinks: Vec::new(),
+        lanes: 0,
+    };
+    for frame in 0..LANE_FRAMES {
+        let time = FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(f64::from(frame) / 60.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: i64::from(frame),
+        };
+        let mut enc = device.create_encoder("async-lane-proof");
+        if profiled {
+            let sampler = device
+                .create_timestamp_sampler(4096)
+                .expect("timestamp counters");
+            enc.enable_dispatch_profiling(sampler, device);
+        }
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, device);
+            exec.execute_frame_with_state(&mut graph, &plan, time, &mut gpu, &mut state, 0);
+        }
+        if profiled {
+            let profile = enc.commit_and_wait_profiled(device);
+            assert_eq!(
+                profile.failed_command_buffers, 0,
+                "frame {frame} failed on the GPU"
+            );
+        } else {
+            enc.commit_and_wait_completed();
+        }
+        for (res, frames) in [(state_res, &mut run.states), (sink_res, &mut run.sinks)] {
+            let buffer = exec
+                .host_array_buffer(&graph, &plan, res)
+                .expect("array holds its own contents");
+            let ptr = buffer.mapped_ptr().expect("shared array buffer");
+            // SAFETY: the encoder completed; the buffer holds at least N particles.
+            frames.push(unsafe {
+                std::slice::from_raw_parts(ptr.cast::<Particle>().cast_const(), N).to_vec()
+            });
+        }
+    }
+    run.lanes = manifold_gpu::GpuEncoder::async_lanes_on_this_thread() - lanes_before;
+    run
+}
+
+/// The tick and its publication on the async lane give the bytes the same
+/// frames give in order: the boundary's state, and the sink's read of the
+/// publisher's copy of the state the frame before.
+#[test]
+fn region_on_the_async_lane_matches_in_order() {
+    let lanes = run_lanes(false);
+    let in_order = run_lanes(true);
+    assert_eq!(
+        lanes.lanes,
+        u64::from(LANE_FRAMES),
+        "every plain frame finishes one async lane"
+    );
+    assert_eq!(in_order.lanes, 0, "a profiled frame runs in order");
+    let bytes = |particles: &[Particle]| bytemuck::cast_slice::<Particle, u8>(particles).to_vec();
+    for frame in 0..LANE_FRAMES as usize {
+        assert!(
+            bytes(&lanes.states[frame]) == bytes(&in_order.states[frame]),
+            "frame {frame}: the state differs from the in-order run"
+        );
+        assert!(
+            bytes(&lanes.sinks[frame]) == bytes(&in_order.sinks[frame]),
+            "frame {frame}: the sink read differs from the in-order run"
+        );
+        if frame > 0 {
+            assert!(
+                bytes(&lanes.sinks[frame]) == bytes(&lanes.states[frame - 1]),
+                "frame {frame}: the sink should read the state of the frame before"
+            );
+        }
+    }
+    let err = max_position_error(
+        &lanes.states[LANE_FRAMES as usize - 1],
+        &expected(LANE_FRAMES),
+    );
+    assert!(err <= 1.0e-5, "GPU vs CPU max |Δposition| = {err}");
+}

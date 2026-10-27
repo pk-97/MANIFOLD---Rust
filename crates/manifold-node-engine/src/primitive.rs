@@ -556,6 +556,13 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::tick_publisher`](crate::node_graph::effect_node::EffectNode::tick_publisher).
+    /// Default: `false`.
+    fn tick_publisher(&self) -> bool {
+        false
+    }
+
+    /// Mirror of
     /// [`EffectNode::substep_iteration`](crate::node_graph::effect_node::EffectNode::substep_iteration).
     /// Default: `false`.
     fn substep_iteration(&mut self, _iteration: u32, _scalars: &mut [f32]) -> bool {
@@ -981,6 +988,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn substep_boundary(&self) -> Option<crate::exec::substeps::SubstepBoundaryPorts> {
         Primitive::substep_boundary(self)
+    }
+    fn tick_publisher(&self) -> bool {
+        Primitive::tick_publisher(self)
     }
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
         Primitive::substep_iteration(self, iteration, scalars)

@@ -199,6 +199,38 @@ fn liquid_frame_live_held_frame_matches_offline() {
     println!("live held {holds} frames over {FRAMES} until its publications retired");
 }
 
+/// The tick on the async lane matches the in-order tick frame for frame: the
+/// same particles and pixels. Only the lane run counts lanes.
+#[test]
+fn liquid_tick_lane_matches_in_order() {
+    const FRAMES: usize = 12;
+    let run = |profile: bool| {
+        let mut show = Show::new(authored_cursor_history_def(0.0), (96, 54), false, &[]);
+        show.restart();
+        let lanes_before = manifold_gpu::GpuEncoder::async_lanes_on_this_thread();
+        let mut frames = Vec::new();
+        for _ in 0..FRAMES {
+            show.frame(profile);
+            frames.push((
+                show.provided_copy("frame", "particles_a"),
+                show.provided_copy("frame", "particles_b"),
+                show.readback(),
+            ));
+        }
+        let lanes = manifold_gpu::GpuEncoder::async_lanes_on_this_thread() - lanes_before;
+        (lanes, frames)
+    };
+    let (lane_lanes, lane_frames) = run(false);
+    let (in_order_lanes, in_order_frames) = run(true);
+    assert!(lane_lanes > 0, "the async lane run used no lane");
+    assert_eq!(in_order_lanes, 0, "the in-order run used a lane");
+    for (k, (lane, in_order)) in lane_frames.iter().zip(&in_order_frames).enumerate() {
+        assert_eq!(lane.0, in_order.0, "frame {k}: particles_a differ");
+        assert_eq!(lane.1, in_order.1, "frame {k}: particles_b differ");
+        assert!(lane.2 == in_order.2, "frame {k}: pixels differ");
+    }
+}
+
 /// A publication that fails to encode still ends the frame with the frame's
 /// outputs: the selection happens before publishing, so the failing frame
 /// shows exactly what the same frame shows without the failure, arrays and

@@ -37,6 +37,8 @@ mod texture_pool;
 mod types;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
+mod async_lane_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod pipeline_cache_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod replay_tests;

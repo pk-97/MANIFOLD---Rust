@@ -72,7 +72,9 @@ pub struct GpuResidencyStats {
 /// The one mutable residency-set owner for a Metal device.
 pub struct GpuResidencyManager {
     set: Retained<ProtocolObject<dyn MTLResidencySet>>,
-    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    /// The main queue and the async lane's: the set is attached to both, so
+    /// the tick's allocations are resident the way the main queue's are.
+    queues: [Retained<ProtocolObject<dyn MTLCommandQueue>>; 2],
     rx: Receiver<ResidencyChange>,
     allocations: AHashMap<usize, RegisteredAllocation>,
     allocated_bytes: u64,
@@ -109,7 +111,7 @@ impl GpuResidencyManager {
         Ok((
             Self {
                 set,
-                queue: device.clone_queue(),
+                queues: [device.clone_queue(), device.async_queue().clone()],
                 rx,
                 allocations: AHashMap::new(),
                 allocated_bytes: 0,
@@ -166,7 +168,7 @@ impl GpuResidencyManager {
                 self.warned_over_budget = true;
             }
             if self.requested {
-                self.queue.removeResidencySet(&self.set);
+                self.detach_queues();
                 self.set.endResidency();
                 self.requested = false;
             }
@@ -175,15 +177,23 @@ impl GpuResidencyManager {
         }
 
         if self.allocations.is_empty() && self.requested {
-            self.queue.removeResidencySet(&self.set);
+            self.detach_queues();
             self.set.endResidency();
             self.requested = false;
         }
         self.set.commit();
         if !over_budget && !self.allocations.is_empty() && !self.requested {
             self.set.requestResidency();
-            self.queue.addResidencySet(&self.set);
+            for queue in &self.queues {
+                queue.addResidencySet(&self.set);
+            }
             self.requested = true;
+        }
+    }
+
+    fn detach_queues(&self) {
+        for queue in &self.queues {
+            queue.removeResidencySet(&self.set);
         }
     }
 
@@ -200,7 +210,7 @@ impl GpuResidencyManager {
 impl Drop for GpuResidencyManager {
     fn drop(&mut self) {
         if self.requested {
-            self.queue.removeResidencySet(&self.set);
+            self.detach_queues();
             self.set.endResidency();
             self.requested = false;
         }

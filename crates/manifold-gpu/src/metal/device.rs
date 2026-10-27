@@ -151,6 +151,10 @@ pub struct GpuDevice {
     resource_scope_id: u64,
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    /// The second queue of the one device, made on first use: the frame
+    /// encoder's async lane records onto it ([`GpuEncoder::use_async_lane`]).
+    /// Work on it runs beside the main queue's; only events order the two.
+    async_queue: std::sync::OnceLock<Retained<ProtocolObject<dyn MTLCommandQueue>>>,
     /// Binary archive for pipeline caching. Protected by Mutex for Sync.
     /// Only locked during pipeline creation (startup), never on the hot path.
     archive: std::sync::Mutex<Option<archive::GpuPipelineArchive>>,
@@ -243,6 +247,7 @@ impl GpuDevice {
             resource_scope_id,
             device,
             queue,
+            async_queue: std::sync::OnceLock::new(),
             archive: std::sync::Mutex::new(None),
             compute_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -408,11 +413,24 @@ impl GpuDevice {
         &self.queue
     }
 
-    /// Clone the owned Metal command queue handle.
+    /// Clone the owned Metal command queue handle: the main queue, the one
+    /// every encoder starts on. The async lane records onto a separate
+    /// second queue.
     /// Multiple threads can submit command buffers to the same queue; Metal
     /// serializes them in submission order on that queue.
     pub fn clone_queue(&self) -> Retained<ProtocolObject<dyn MTLCommandQueue>> {
         self.queue.clone()
+    }
+
+    /// The device's second command queue, created on first use. Command
+    /// buffers on it run beside the main queue's; a wait on a shared event is
+    /// the only order between the two.
+    pub(crate) fn async_queue(&self) -> &Retained<ProtocolObject<dyn MTLCommandQueue>> {
+        self.async_queue.get_or_init(|| {
+            self.device
+                .newCommandQueue()
+                .expect("Failed to create async command queue")
+        })
     }
 
     /// Deterministic retirement for GPU-referenced objects (BUG-84fv class).
@@ -423,6 +441,9 @@ impl GpuDevice {
     /// still read is freed strictly after those reads end, with no frame
     /// counting and no reliance on Metal's binding/useResource retention
     /// (proven insufficient for indirectly-reached resources, BUG-jddy).
+    /// It covers the main queue's work only. Async-lane work counts once the
+    /// main lane has waited for it ([`GpuEncoder::wait_async_lane`]) and the
+    /// buffer carrying that wait is committed.
     /// Use for objects that in-flight command buffers may reference through
     /// raw GPU addresses (RT accel structures, bindless tables); normal
     /// bound resources don't need it. A wedged/blacklisted queue never
@@ -1395,26 +1416,30 @@ impl GpuDevice {
         })
     }
 
-    /// Create a fresh command buffer from the same queue. Used by
+    /// Create a fresh command buffer on `queue`. Used by
     /// [`GpuEncoder::commit_and_continue`] to keep encoding across submits
-    /// without blocking (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
+    /// without blocking (UI_RESPONSIVENESS_UNDER_LOAD D2/D6), and by the
+    /// encoder's lane switches. The label is an `NSString` so a continuation
+    /// reuses the old buffer's label and the async lane a static one, with no
+    /// per-call string.
     pub(crate) fn new_command_buffer(
         &self,
-        label: &str,
+        queue: &ProtocolObject<dyn MTLCommandQueue>,
+        label: &NSString,
     ) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
         let descriptor = unsafe { MTLCommandBufferDescriptor::new() };
         unsafe {
             descriptor.setRetainedReferences(true);
             descriptor.setErrorOptions(MTLCommandBufferErrorOption::EncoderExecutionStatus);
         }
-        let cmd_buf = unsafe { self.queue.commandBufferWithDescriptor(&descriptor) }
+        let cmd_buf = unsafe { queue.commandBufferWithDescriptor(&descriptor) }
             .expect("Failed to acquire command buffer");
-        unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
+        unsafe { cmd_buf.setLabel(Some(label)) };
         if super::gpu_fault::diagnostics_enabled() {
             log::info!(
                 "[GPU-DIAG] device={:?} queue={:p} allocated_bytes={} buffer={label}",
                 self.raw_device().name(),
-                &*self.queue,
+                queue,
                 self.raw_device().currentAllocatedSize()
             );
             super::gpu_fault::trace_buffer(&cmd_buf);
@@ -1431,9 +1456,10 @@ impl GpuDevice {
     /// victim" discards on OTHER buffers, hiding the culprit (BUG-665r's
     /// diagnosis gap).
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
-        let cmd_buf = self.new_command_buffer(label);
+        let cmd_buf = self.new_command_buffer(&self.queue, &NSString::from_str(label));
         GpuEncoder {
             cmd_buf,
+            queue: self.queue.clone(),
             state: EncoderState::None,
             compute_cache: super::encoder::ComputeBindCache::new(),
             render_cache: RenderBindCache::new(),
@@ -1445,6 +1471,9 @@ impl GpuDevice {
             replay: None,
             gpu_time_tap: None,
             template_token: None,
+            parked: None,
+            on_async: false,
+            async_wait: None,
         }
     }
 

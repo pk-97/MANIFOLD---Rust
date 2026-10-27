@@ -1232,6 +1232,16 @@ pub trait EffectNode: Send + AsAny {
         None
     }
 
+    /// `true` for a node that reads a substep region's final state and copies
+    /// it only into storage its outputs show once the frame clock retires it.
+    /// The executor may then encode it on the region's async lane, right after
+    /// the tick, while the main lane keeps drawing. A node that shows live
+    /// state to anything else in the frame must leave this `false`.
+    /// Default: `false`.
+    fn tick_publisher(&self) -> bool {
+        false
+    }
+
     /// Substep boundary only. The executor calls this before EACH region body
     /// iteration, after the boundary's `evaluate` resolved this frame's count.
     /// `true` runs iteration `iteration` with `scalars` (one value per
@@ -1265,9 +1275,10 @@ pub trait EffectNode: Send + AsAny {
     /// Clock owner of a substep region only (the node wired into the
     /// boundary's [`SubstepBoundaryPorts::clock`](crate::node_graph::substeps::SubstepBoundaryPorts::clock)
     /// port). Asked before body iteration `iteration ≥ 1`:
-    /// `true` makes the executor commit the frame's encoder, wait for the GPU
-    /// to finish it, call [`substep_host_step`](Self::substep_host_step) and
-    /// continue encoding. Live clock owners must bound their tick count.
+    /// `true` makes the executor commit the region's lane (the async lane when
+    /// the region overlaps, else the main one), wait for the GPU to finish it,
+    /// call [`substep_host_step`](Self::substep_host_step) and continue
+    /// encoding. Live clock owners must bound their tick count.
     /// Default: `false`.
     fn substep_host_sync(&self, _iteration: u32) -> bool {
         false

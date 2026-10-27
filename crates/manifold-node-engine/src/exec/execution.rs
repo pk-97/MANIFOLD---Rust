@@ -175,6 +175,12 @@ pub struct Executor {
     substep_scalar_values: Vec<f32>,
     /// Host syncs run inside substep regions since this executor was built.
     substep_host_syncs: u64,
+    /// The event the main and async lanes hand off on, made when the first
+    /// overlapping region ticks. This executor alone signals and waits on it,
+    /// in encode order, so its value only rises.
+    tick_event: Option<manifold_gpu::GpuEvent>,
+    /// The current graph pass's use of the async lane.
+    lane: substep_region::TickLane,
     /// Per-step scratch the executor hands to [`NodeOutputs`] so control-rate
     /// nodes can queue scalar writes. Drained back into the backend after
     /// each node's `evaluate` returns.
@@ -608,6 +614,8 @@ impl Executor {
             substep_scalar_slots: Default::default(),
             substep_scalar_values: Default::default(),
             substep_host_syncs: 0,
+            tick_event: None,
+            lane: Default::default(),
             scalar_write_scratch: Vec::new(),
             camera_write_scratch: Vec::new(),
             light_write_scratch: Vec::new(),
@@ -1514,10 +1522,12 @@ impl Executor {
             .filter(|&&(_, resource)| resource == source)
             .count();
         let feeds_final_output = steps.iter().any(|step| {
-            step.inputs.iter().any(|&(_, resource)| resource == final_output)
-                && graph.get_node(step.node).is_some_and(|inst| {
-                    inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID
-                })
+            step.inputs
+                .iter()
+                .any(|&(_, resource)| resource == final_output)
+                && graph
+                    .get_node(step.node)
+                    .is_some_and(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
         });
         if readers == 1 && feeds_final_output {
             self.forward_retargets.push(ForwardRetarget {
@@ -2097,26 +2107,31 @@ impl Executor {
             layer_skin_registry,
         };
         let mut tally = FrameTally::default();
+        self.lane.begin_pass(plan.substep_regions().len());
         let mut idx = 0;
         while idx < plan.steps().len() {
             // A substep region is one contiguous block, boundary first
             // its driver runs the whole
             // block. A physics sample never advances a simulation region.
-            let flow = if let Some(region) = plan
+            let flow = if let Some((region_idx, region)) = plan
                 .substep_regions()
                 .iter()
-                .find(|region| region.steps[0] == idx)
+                .enumerate()
+                .find(|(_, region)| region.steps[0] == idx)
             {
                 idx = region.steps[region.steps.len() - 1] + 1;
                 if partial_sample {
                     StepFlow::Next
                 } else {
+                    // The boundary's own run stays on the main lane.
+                    self.leave_tick_lane(&mut gpu);
                     self.run_substep_region(
-                        graph, plan, region, env, &mut tally, &mut gpu, &mut state,
+                        graph, plan, region_idx, region, env, &mut tally, &mut gpu, &mut state,
                     )
                 }
             } else {
                 idx += 1;
+                self.route_tick_lane(plan, idx - 1, &mut gpu);
                 self.run_step(
                     graph,
                     plan,
@@ -2129,8 +2144,10 @@ impl Executor {
                 )
             };
             if flow == StepFlow::Abort {
+                self.end_tick_lane(&mut gpu);
                 return;
             }
+            self.finish_tick_lane_after(idx - 1, &mut gpu);
         }
         let FrameTally {
             preview_matched,
@@ -2205,6 +2222,9 @@ impl Executor {
             }
             self.capture_step(graph, plan, step_idx, env, &mut gpu, &mut state);
         }
+
+        // Everything the pass's caller encodes next runs after the tick.
+        self.end_tick_lane(&mut gpu);
     }
 
     /// Evaluate one plan step: the live-wire tap, the liveness, memo and
@@ -3757,18 +3777,39 @@ mod tests {
         };
         let follows = |node: &RuleProbe, extents: &[(&str, u32)]| {
             Executor::forwarding_source(node, |port| {
-                extents.iter().find(|(name, _)| *name == port).map(|&(_, extent)| extent)
+                extents
+                    .iter()
+                    .find(|(name, _)| *name == port)
+                    .map(|&(_, extent)| extent)
             })
         };
 
-        let identity = RuleProbe::new(&["a", "b"], vec![Coincident, Coincident], MinInputs, Pointwise);
+        let identity = RuleProbe::new(
+            &["a", "b"],
+            vec![Coincident, Coincident],
+            MinInputs,
+            Pointwise,
+        );
         assert_eq!(follows(&identity, &[("b", 5)]), Some(Some(5)));
         assert_eq!(follows(&identity, &[("a", 3), ("b", 5)]), Some(Some(3)));
-        assert_eq!(follows(&identity, &[]), Some(None), "no upstream extent: clear");
+        assert_eq!(
+            follows(&identity, &[]),
+            Some(None),
+            "no upstream extent: clear"
+        );
 
-        let gather = RuleProbe::new(&["g", "c"], vec![BufferGather, Coincident], MinInputs, Pointwise);
+        let gather = RuleProbe::new(
+            &["g", "c"],
+            vec![BufferGather, Coincident],
+            MinInputs,
+            Pointwise,
+        );
         assert_eq!(follows(&gather, &[("g", 1), ("c", 2)]), Some(Some(2)));
-        assert_eq!(follows(&gather, &[("g", 1)]), Some(None), "a gathered input is not followed");
+        assert_eq!(
+            follows(&gather, &[("g", 1)]),
+            Some(None),
+            "a gathered input is not followed"
+        );
 
         let selected = RuleProbe::new(
             &["a", "map"],
@@ -3779,10 +3820,18 @@ mod tests {
         assert_eq!(follows(&selected, &[("a", 1), ("map", 9)]), Some(Some(9)));
         assert_eq!(follows(&selected, &[("a", 1)]), Some(None));
         let fused = RuleProbe::new(&["a", "map"], vec![], FromInput { input: "map" }, Boundary);
-        assert_eq!(follows(&fused, &[("map", 9)]), Some(Some(9)), "FromInput needs no fusion kind");
+        assert_eq!(
+            follows(&fused, &[("map", 9)]),
+            Some(Some(9)),
+            "FromInput needs no fusion kind"
+        );
 
         let boundary = RuleProbe::new(&["a"], vec![Coincident], MinInputs, Boundary);
-        assert_eq!(follows(&boundary, &[("a", 1)]), None, "a boundary node forwards nothing");
+        assert_eq!(
+            follows(&boundary, &[("a", 1)]),
+            None,
+            "a boundary node forwards nothing"
+        );
     }
 
     /// Forwarding through a real executor and Metal backend: GPU proofs only,
@@ -3907,7 +3956,14 @@ mod tests {
             g.connect((source, "out"), (stage, "in")).unwrap();
             g.connect((stage, "out"), (sink, "in")).unwrap();
             let plan = compile(&g).expect("three-node array graph compiles");
-            let resource = |node| plan.steps().iter().find(|s| s.node == node).unwrap().outputs[0].1;
+            let resource = |node| {
+                plan.steps()
+                    .iter()
+                    .find(|s| s.node == node)
+                    .unwrap()
+                    .outputs[0]
+                    .1
+            };
             let mut backend = MetalBackend::new(
                 std::sync::Arc::clone(device),
                 4,
@@ -3916,7 +3972,8 @@ mod tests {
             );
             let bytes = 16 * u64::from(layout.item_size);
             backend.pre_bind_array(resource(source), device.create_buffer_shared(bytes));
-            let stage_slot = backend.pre_bind_array(resource(stage), device.create_buffer_shared(bytes));
+            let stage_slot =
+                backend.pre_bind_array(resource(stage), device.create_buffer_shared(bytes));
             if let Some(stale) = stale {
                 backend.set_live_extent(stage_slot, stale);
             }
@@ -3950,34 +4007,55 @@ mod tests {
         fn identity_stage_forwards_live_extent_by_its_capacity_rule() {
             let device = crate::gpu::context::test_gpu_device("execution tests");
             let key = |extent: &crate::scene::live_extent::LiveExtent| {
-                (extent.counts.identity_key(), extent.offset, extent.per_item, extent.bound)
+                (
+                    extent.counts.identity_key(),
+                    extent.offset,
+                    extent.per_item,
+                    extent.bound,
+                )
             };
 
             let source = test_extent(&device, 8, 3, 1000);
             let counts = source.counts.identity_key();
-            let seen = run_extent_stage(&device, Some(source), None, true, None).expect("inherited");
-            assert_eq!(key(&seen), (counts, 8, 3, 16), "bound clamps to the stage's capacity");
+            let seen =
+                run_extent_stage(&device, Some(source), None, true, None).expect("inherited");
+            assert_eq!(
+                key(&seen),
+                (counts, 8, 3, 16),
+                "bound clamps to the stage's capacity"
+            );
             let source = test_extent(&device, 0, 1, 7);
-            let seen = run_extent_stage(&device, Some(source), None, true, None).expect("inherited");
+            let seen =
+                run_extent_stage(&device, Some(source), None, true, None).expect("inherited");
             assert_eq!(seen.bound, 7, "a bound under the capacity stays");
 
             let own = test_extent(&device, 4, 1, 5);
             let own_counts = own.counts.identity_key();
             let source = test_extent(&device, 8, 3, 1000);
             let seen = run_extent_stage(&device, Some(source), Some(own), true, None).expect("own");
-            assert_eq!(key(&seen), (own_counts, 4, 1, 5), "the stage's own extent wins");
+            assert_eq!(
+                key(&seen),
+                (own_counts, 4, 1, 5),
+                "the stage's own extent wins"
+            );
 
             let stale = test_extent(&device, 0, 1, 9);
             let seen = run_extent_stage(&device, None, None, true, Some(stale));
-            assert!(seen.is_none(), "stale extent survived: {:?}", seen.map(|e| e.bound));
+            assert!(
+                seen.is_none(),
+                "stale extent survived: {:?}",
+                seen.map(|e| e.bound)
+            );
 
             let source = test_extent(&device, 0, 1, 7);
             let stale = test_extent(&device, 0, 1, 9);
             let seen = run_extent_stage(&device, Some(source), None, false, Some(stale))
                 .expect("the stale extent stays");
-            assert_eq!(seen.bound, 9, "a boundary node's extent is not forwarded or cleared");
+            assert_eq!(
+                seen.bound, 9,
+                "a boundary node's extent is not forwarded or cleared"
+            );
         }
-
     }
 
     /// Test EffectNode that records each evaluation's bindings into a shared log.

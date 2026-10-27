@@ -10,10 +10,11 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor,
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLBuffer, MTLCommandBuffer,
-    MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineState,
-    MTLCullMode, MTLIndexType, MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin,
-    MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage,
-    MTLScissorRect, MTLSize, MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport, MTLWinding,
+    MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder, MTLComputePassDescriptor,
+    MTLComputePipelineState, MTLCullMode, MTLIndexType, MTLLoadAction,
+    MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType, MTLRenderCommandEncoder,
+    MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize, MTLStoreAction, MTLTexture,
+    MTLTextureUsage, MTLViewport, MTLWinding,
 };
 
 use super::profiling::{self, ProfileState};
@@ -113,10 +114,31 @@ impl BatchRenderCache {
     }
 }
 
+/// One queue's half of the encoder: the buffer being encoded, its queue and
+/// the encode state tied to that buffer. The encoder holds the current lane's
+/// fields itself, so no encode call knows lanes exist; a switch swaps them
+/// with the parked lane ([`GpuEncoder::swap_lane`]).
+pub(super) struct Lane {
+    cmd_buf: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    state: EncoderState,
+    compute_cache: ComputeBindCache,
+    render_cache: RenderBindCache,
+    scopes: Vec<String>,
+    pass_samples: (u32, u32),
+}
+
 /// Per-frame GPU command encoder. Wraps a retained Metal command buffer.
+///
+/// Encodes onto one of two lanes: the main queue, or the device's second
+/// queue ([`Self::use_async_lane`]). The lane fields below belong to the
+/// current lane; `parked` holds the other one while it exists.
 pub struct GpuEncoder {
     /// Retained MTLCommandBuffer. Released on drop.
     pub(crate) cmd_buf: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    /// The queue `cmd_buf` came from; the next buffer of a continuation
+    /// comes from the same one.
+    pub(super) queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     pub(crate) state: EncoderState,
     pub(super) compute_cache: ComputeBindCache,
     pub(super) render_cache: RenderBindCache,
@@ -144,6 +166,20 @@ pub struct GpuEncoder {
     pub(crate) pass_samples: (u32, u32),
     /// Buffers committed while a [`super::GpuSpanTimer`] span is open.
     pub(crate) span_buffers: Option<Vec<Retained<ProtocolObject<dyn MTLCommandBuffer>>>>,
+    /// The other lane, while the async lane is open: the async lane when
+    /// the main lane is current, the main lane when the async one is.
+    pub(super) parked: Option<Lane>,
+    /// The async lane is current.
+    pub(super) on_async: bool,
+    /// The handoff value the async lane's last finished buffer signals, until
+    /// [`Self::wait_async_lane`] encodes the main lane's wait for it.
+    pub(super) async_wait: Option<u64>,
+}
+
+#[cfg(feature = "gpu-proofs")]
+thread_local! {
+    static ASYNC_LANES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static HANDOFFS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -545,6 +581,7 @@ impl GpuEncoder {
     /// Commit, wait for completion, and resolve the frame's profiled spans.
     /// Works on an unprofiled encoder too (empty span list, total only).
     pub fn commit_and_wait_profiled(mut self, device: &GpuDevice) -> GpuFrameProfile {
+        self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
         self.cmd_buf.commit();
@@ -3005,6 +3042,152 @@ impl GpuEncoder {
         }
     }
 
+    // ─── Async lane ──────────────────────────────────────────────────
+
+    /// Encode what follows on the device's second queue, beside the main
+    /// lane's work. Switching from the main lane always hands off: the main
+    /// lane signals `handoff`, commits (never blocking) and continues in a
+    /// fresh buffer, and the async lane waits for that value before anything
+    /// after it, so everything encoded on the main lane so far is visible to
+    /// it. The async lane's buffer stays open across [`Self::use_main_lane`]
+    /// until [`Self::finish_async_lane`]. Already on the async lane: no-op,
+    /// `true`.
+    ///
+    /// A profiled encoder refuses (`false`) and stays on the main lane, so a
+    /// profiled frame keeps one timeline. `handoff` belongs to one encoding
+    /// thread and is signalled only through the lane calls, in encode order,
+    /// so its value only rises on the GPU. No replay span may be open.
+    pub fn use_async_lane(&mut self, device: &GpuDevice, handoff: &GpuEvent) -> bool {
+        if self.on_async {
+            return true;
+        }
+        if self.profile.is_some() {
+            return false;
+        }
+        debug_assert!(
+            self.replay.is_none(),
+            "a replay span never crosses a lane switch"
+        );
+        // The main buffer carrying the signal is committed before the async
+        // buffer that waits on it can exist: no async buffer is ever queued
+        // ahead of the signal it waits for.
+        self.signal_event(handoff);
+        let value = handoff.current_value();
+        self.commit_and_continue(device);
+        if self.parked.is_none() {
+            let queue = device.async_queue();
+            let label = objc2_foundation::ns_string!("Async lane");
+            self.parked = Some(Lane {
+                cmd_buf: device.new_command_buffer(queue, label),
+                queue: queue.clone(),
+                state: EncoderState::None,
+                compute_cache: ComputeBindCache::new(),
+                render_cache: RenderBindCache::new(),
+                scopes: Vec::new(),
+                pass_samples: (0, 0),
+            });
+        }
+        self.swap_lane();
+        self.on_async = true;
+        self.wait_event(handoff, value);
+        #[cfg(feature = "gpu-proofs")]
+        HANDOFFS.set(HANDOFFS.get() + 1);
+        true
+    }
+
+    /// Encode on the main queue again. The async lane stays open and keeps
+    /// its buffer; [`Self::use_async_lane`] resumes it behind a new handoff.
+    /// No-op on the main lane.
+    pub fn use_main_lane(&mut self) {
+        if !self.on_async {
+            return;
+        }
+        debug_assert!(
+            self.replay.is_none(),
+            "a replay span never crosses a lane switch"
+        );
+        self.swap_lane();
+        self.on_async = false;
+    }
+
+    /// Signal `handoff` on the async lane and commit its buffer, never
+    /// blocking, and remember the value. The main lane is current afterwards
+    /// and does not wait yet: [`Self::wait_async_lane`] encodes that wait.
+    /// No-op when the async lane was never opened since its last finish.
+    pub fn finish_async_lane(&mut self, handoff: &GpuEvent) {
+        if self.parked.is_none() {
+            return;
+        }
+        debug_assert!(
+            self.replay.is_none(),
+            "a replay span never crosses a lane switch"
+        );
+        if !self.on_async {
+            self.swap_lane();
+        }
+        self.signal_event(handoff);
+        self.async_wait = Some(handoff.current_value());
+        self.submit_current();
+        // The committed async buffer is done with; the main lane takes over.
+        self.swap_lane();
+        self.parked = None;
+        self.on_async = false;
+        #[cfg(feature = "gpu-proofs")]
+        ASYNC_LANES.set(ASYNC_LANES.get() + 1);
+    }
+
+    /// The main lane waits, on the GPU, for the value the last
+    /// [`Self::finish_async_lane`] remembered: work encoded after this runs
+    /// after everything the async lane did. No-op if nothing was finished
+    /// since the last wait. Call it on the main lane, after the finish
+    /// committed the async buffer.
+    pub fn wait_async_lane(&mut self, handoff: &GpuEvent) {
+        debug_assert!(
+            !self.on_async,
+            "the main lane waits for the async lane; switch back first"
+        );
+        if let Some(value) = self.async_wait.take() {
+            self.wait_event(handoff, value);
+        }
+    }
+
+    /// GPU proofs: how many async lanes this thread has finished.
+    #[cfg(feature = "gpu-proofs")]
+    pub fn async_lanes_on_this_thread() -> u64 {
+        ASYNC_LANES.get()
+    }
+
+    /// GPU proofs: how many main-to-async handoffs this thread has made.
+    #[cfg(feature = "gpu-proofs")]
+    pub fn handoffs_on_this_thread() -> u64 {
+        HANDOFFS.get()
+    }
+
+    /// Swap the current lane's fields with the parked lane's.
+    fn swap_lane(&mut self) {
+        let parked = self
+            .parked
+            .as_mut()
+            .expect("a lane switch needs the other lane");
+        std::mem::swap(&mut self.cmd_buf, &mut parked.cmd_buf);
+        std::mem::swap(&mut self.queue, &mut parked.queue);
+        std::mem::swap(&mut self.state, &mut parked.state);
+        std::mem::swap(&mut self.compute_cache, &mut parked.compute_cache);
+        std::mem::swap(&mut self.render_cache, &mut parked.render_cache);
+        std::mem::swap(&mut self.scopes, &mut parked.scopes);
+        std::mem::swap(&mut self.pass_samples, &mut parked.pass_samples);
+    }
+
+    /// A final commit ends the frame: an open async lane would be dropped
+    /// with its work, and a finished one never waited for would let the
+    /// frame's later work run before it.
+    fn debug_assert_lanes_closed(&self) {
+        debug_assert!(
+            self.parked.is_none() && self.async_wait.is_none(),
+            "final commit with an async lane open or its finish not yet waited for"
+        );
+    }
+
     /// Register a callback to run when the GPU finishes executing this command buffer.
     pub fn add_completed_handler<F: Fn() + Send + 'static>(&self, callback: F) {
         use block2::RcBlock;
@@ -3173,6 +3356,7 @@ impl GpuEncoder {
 
     /// Commit the command buffer to the GPU queue.
     pub fn commit(mut self) {
+        self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
         self.register_gpu_time_tap();
@@ -3183,7 +3367,28 @@ impl GpuEncoder {
     /// encoding into a fresh command buffer from the same queue. Submission
     /// order is preserved; Metal's automatic hazard tracking covers cross-chunk
     /// resource dependencies. Never blocks (UI_RESPONSIVENESS_UNDER_LOAD D2/D6).
+    /// On the async lane the continuation stays on the async queue.
     pub fn commit_and_continue(&mut self, device: &GpuDevice) {
+        self.submit_current();
+
+        let label = unsafe { self.cmd_buf.label() };
+        self.cmd_buf = device.new_command_buffer(
+            &self.queue,
+            label
+                .as_deref()
+                .unwrap_or(objc2_foundation::ns_string!("(unlabeled)")),
+        );
+        self.state = EncoderState::None;
+        self.compute_cache.clear();
+        self.render_cache.clear();
+        self.scopes.clear();
+    }
+
+    /// End the current encoder, register the completion handlers, commit the
+    /// current buffer and record it in the profile and the open span: the
+    /// submit half of [`Self::commit_and_continue`] and
+    /// [`Self::finish_async_lane`].
+    fn submit_current(&mut self) {
         self.end_current();
         self.register_fault_handler();
         self.register_gpu_time_tap();
@@ -3195,15 +3400,6 @@ impl GpuEncoder {
         if let Some(span) = &mut self.span_buffers {
             span.push(self.cmd_buf.clone());
         }
-
-        let label = unsafe { self.cmd_buf.label() }
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| String::from("(unlabeled)"));
-        self.cmd_buf = device.new_command_buffer(&label);
-        self.state = EncoderState::None;
-        self.compute_cache.clear();
-        self.render_cache.clear();
-        self.scopes.clear();
     }
 
     /// [`Self::commit_and_continue`], then block until the GPU has completed
@@ -3220,6 +3416,7 @@ impl GpuEncoder {
 
     /// Commit and block until the GPU has scheduled (not completed) the work.
     pub fn commit_and_wait_scheduled(mut self) {
+        self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
         self.cmd_buf.commit();
@@ -3236,6 +3433,7 @@ impl GpuEncoder {
     /// as valid pixels — the root of the parity/freeze-proof test flakes
     /// (BUG-013). See [`Self::verify_completed`] for the dev-vs-release split.
     pub fn commit_and_wait_completed(mut self) {
+        self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
         self.cmd_buf.commit();
@@ -3246,6 +3444,7 @@ impl GpuEncoder {
     /// Commit, wait for completion, and return a failure instead of panicking.
     /// Completion handlers have run by the time Metal returns from the wait.
     pub fn try_commit_and_wait_completed(mut self) -> Result<(), String> {
+        self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
         self.cmd_buf.commit();
@@ -3305,6 +3504,7 @@ impl GpuEncoder {
     /// `0.0` if the driver reports no GPU timestamps for this buffer
     /// (degenerate / no-GPU-work case). Use for benches/profilers only.
     pub fn commit_and_wait_completed_timed(mut self) -> f64 {
+        self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
         self.cmd_buf.commit();
@@ -3320,6 +3520,11 @@ impl GpuEncoder {
 impl Drop for GpuEncoder {
     fn drop(&mut self) {
         self.end_current();
+        // The parked lane's open encoder must end before its buffer is released.
+        if self.parked.is_some() {
+            self.swap_lane();
+            self.end_current();
+        }
         if let Some(token) = &self.template_token {
             token.store(false, std::sync::atomic::Ordering::Release);
         }

@@ -121,12 +121,23 @@ pub struct SubstepResultPorts {
 /// iteration or, for the boundary, before the body reads it — so the executor
 /// holds them for the whole repeat and releases them when the region ends.
 /// `clock` is the clock owner of a boundary that opted into host syncs.
+///
+/// `publishers` are the steps outside the region that read one of the
+/// boundary's array outputs, in step order. `overlaps` says the region may
+/// tick on the async lane while the main lane carries on: every such reader
+/// is a [`tick_publisher`](crate::node_graph::effect_node::EffectNode::tick_publisher),
+/// no region step and no publisher touches a texture wire (textures recycle
+/// through free lists that order only within one queue), and no later step
+/// writes in place an array the region or a publisher reads. Otherwise the
+/// region runs in order on the main lane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubstepRegion {
     pub boundary: NodeInstanceId,
     pub steps: Vec<usize>,
     pub held_resources: Vec<ResourceId>,
     pub clock: Option<NodeInstanceId>,
+    pub publishers: Vec<usize>,
+    pub overlaps: bool,
 }
 
 /// Node-level result of region derivation: the boundary first, then its body
@@ -517,6 +528,7 @@ mod tests {
         boundary: Option<SubstepBoundaryPorts>,
         capture_inputs: &'static [&'static str],
         draw_call: bool,
+        publisher: bool,
     }
 
     impl TestNode {
@@ -528,6 +540,7 @@ mod tests {
                 boundary: None,
                 capture_inputs: &[],
                 draw_call: false,
+                publisher: false,
             }
         }
 
@@ -631,6 +644,9 @@ mod tests {
         }
         fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
             self.boundary
+        }
+        fn tick_publisher(&self) -> bool {
+            self.publisher
         }
         fn boundary_reason(&self) -> Option<BoundaryReason> {
             self.draw_call.then_some(BoundaryReason::DrawCall)
@@ -1241,6 +1257,123 @@ mod tests {
         assert_eq!(plan.truncated(4).substep_regions()[0].steps, vec![1, 2, 3]);
         assert!(plan.truncated(3).substep_regions().is_empty());
         assert!(plan.truncated(2).substep_regions().is_empty());
+    }
+
+    // ─── Which regions may overlap ───
+
+    fn words() -> PortType {
+        PortType::Array(crate::ports::ArrayType::of::<u32>())
+    }
+
+    /// `src → boundary.seed`; the body runs `boundary.out → body → boundary.in`,
+    /// or through a texture hop (`shade` yields a texture, `resolve` turns it
+    /// back into an array) when `texture_hop`. `boundary.out → publisher`, and
+    /// the publisher's output is the graph's only external output. `reader`
+    /// adds a plain node reading `boundary.out` and exports its output too.
+    struct OverlapGraph {
+        graph: Graph,
+        publisher: NodeInstanceId,
+    }
+
+    fn overlap_graph(texture_hop: bool, reader: bool) -> OverlapGraph {
+        let f32_ty = PortType::Scalar(ScalarType::F32);
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(TestNode::new(
+            "src",
+            vec![],
+            vec![output("out", words())],
+        )));
+        let mut boundary = TestNode::new(
+            "test.substep_boundary",
+            vec![input("seed", words(), true), input("in", words(), false)],
+            vec![
+                output("out", words()),
+                output("step_dt", f32_ty),
+                output("step_index", f32_ty),
+            ],
+        );
+        boundary.boundary = Some(PORTS);
+        boundary.capture_inputs = &["in"];
+        let boundary = graph.add_node(Box::new(boundary));
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        let array_pass = |graph: &mut Graph, name: &'static str| {
+            graph.add_node(Box::new(TestNode::new(
+                name,
+                vec![input("a", words(), true)],
+                vec![output("out", words())],
+            )))
+        };
+        let body = array_pass(&mut graph, "body");
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        if texture_hop {
+            let shade = graph.add_node(Box::new(TestNode::new(
+                "shade",
+                vec![input("a", words(), true)],
+                vec![output("out", PortType::Texture2D)],
+            )));
+            let resolve = graph.add_node(Box::new(TestNode::new(
+                "resolve",
+                vec![input("a", PortType::Texture2D, true)],
+                vec![output("out", words())],
+            )));
+            graph.connect((body, "out"), (shade, "a")).unwrap();
+            graph.connect((shade, "out"), (resolve, "a")).unwrap();
+            graph.connect((resolve, "out"), (boundary, "in")).unwrap();
+        } else {
+            graph.connect((body, "out"), (boundary, "in")).unwrap();
+        }
+        let mut publisher = TestNode::new(
+            "publisher",
+            vec![input("a", words(), true)],
+            vec![output("out", words())],
+        );
+        publisher.publisher = true;
+        let publisher = graph.add_node(Box::new(publisher));
+        graph.connect((boundary, "out"), (publisher, "a")).unwrap();
+        graph.add_external_output(publisher, "out").unwrap();
+        if reader {
+            let reader = array_pass(&mut graph, "reader");
+            graph.connect((boundary, "out"), (reader, "a")).unwrap();
+            graph.add_external_output(reader, "out").unwrap();
+        }
+        OverlapGraph { graph, publisher }
+    }
+
+    #[test]
+    fn substeps_publisher_lets_the_region_overlap() {
+        let fx = overlap_graph(false, false);
+        let plan = compile(&fx.graph).unwrap();
+        let region = &plan.substep_regions()[0];
+        let publisher = plan
+            .steps()
+            .iter()
+            .position(|step| step.node == fx.publisher)
+            .unwrap();
+        assert!(region.overlaps);
+        assert_eq!(region.publishers, vec![publisher]);
+        assert!(
+            publisher > region.steps[region.steps.len() - 1],
+            "the publisher follows the region block"
+        );
+    }
+
+    #[test]
+    fn substeps_other_live_state_reader_keeps_the_region_in_order() {
+        let fx = overlap_graph(false, true);
+        let plan = compile(&fx.graph).unwrap();
+        let region = &plan.substep_regions()[0];
+        assert!(!region.overlaps);
+        assert!(region.publishers.is_empty());
+    }
+
+    #[test]
+    fn substeps_texture_wire_keeps_the_region_in_order() {
+        let fx = overlap_graph(true, false);
+        let plan = compile(&fx.graph).unwrap();
+        let region = &plan.substep_regions()[0];
+        assert_eq!(region.steps.len(), 4, "boundary, body, shade, resolve");
+        assert!(!region.overlaps);
+        assert!(region.publishers.is_empty());
     }
 
     // ─── Executor repeat proofs ───

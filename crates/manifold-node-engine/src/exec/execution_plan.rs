@@ -370,6 +370,9 @@ impl ExecutionPlan {
         // A prefix cutting through a region body has no repeat semantics;
         // only whole regions survive, an inner region with its outer one.
         p.substep_regions.retain(|r| r.steps.iter().all(|&i| i < k));
+        for region in &mut p.substep_regions {
+            region.publishers.retain(|&i| i < k);
+        }
         p
     }
 }
@@ -1148,11 +1151,14 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         for res in &held_resources {
             last_reader.remove(res);
         }
+        let (publishers, overlaps) = region_overlap(graph, &steps, &resource_types, &step_indices);
         substep_regions.push(crate::exec::substeps::SubstepRegion {
             boundary: region.boundary,
             steps: step_indices,
             held_resources,
             clock: region.clock,
+            publishers,
+            overlaps,
         });
     }
 
@@ -1200,6 +1206,40 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     })
 }
 
+/// The resource a step binds to `name`, if wired.
+fn step_port(list: &[(&'static str, ResourceId)], name: &str) -> Option<ResourceId> {
+    list.iter()
+        .find(|(port, _)| *port == name)
+        .map(|&(_, resource)| resource)
+}
+
+/// Every declared in-place array write (`aliased_array_io`), in step order.
+/// The first map sends an in-place output to the storage root it shares with
+/// its input; the list holds each writing step with the root it writes.
+fn in_place_writes(
+    graph: &Graph,
+    steps: &[ExecutionStep],
+) -> (AHashMap<ResourceId, ResourceId>, Vec<(usize, ResourceId)>) {
+    let mut storage: AHashMap<ResourceId, ResourceId> = AHashMap::default();
+    let mut writes: Vec<(usize, ResourceId)> = Vec::new();
+    for (idx, step) in steps.iter().enumerate() {
+        let Some(inst) = graph.get_node(step.node) else {
+            continue;
+        };
+        for &(input_port, output_port) in inst.node.aliased_array_io() {
+            let Some(input) = step_port(&step.inputs, input_port) else {
+                continue;
+            };
+            let root = storage.get(&input).copied().unwrap_or(input);
+            writes.push((idx, root));
+            if let Some(output) = step_port(&step.outputs, output_port) {
+                storage.insert(output, root);
+            }
+        }
+    }
+    (storage, writes)
+}
+
 /// Which steps may alias a chosen array input onto their variadic passthrough
 /// output (the array switches) for a frame. While aliased, readers of the
 /// output read the input's storage, so no write may reach that storage
@@ -1214,34 +1254,13 @@ fn array_passthrough_steps(
     steps: &[ExecutionStep],
     resource_types: &[PortType],
 ) -> Vec<bool> {
-    let port = |list: &[(&'static str, ResourceId)], name: &str| {
-        list.iter()
-            .find(|(port, _)| *port == name)
-            .map(|&(_, resource)| resource)
-    };
     let is_array = |resource: ResourceId| {
         matches!(
             resource_types.get(resource.0 as usize),
             Some(PortType::Array(_))
         )
     };
-    let mut storage: AHashMap<ResourceId, ResourceId> = AHashMap::default();
-    let mut writes: Vec<(usize, ResourceId)> = Vec::new();
-    for (idx, step) in steps.iter().enumerate() {
-        let Some(inst) = graph.get_node(step.node) else {
-            continue;
-        };
-        for &(input_port, output_port) in inst.node.aliased_array_io() {
-            let Some(input) = port(&step.inputs, input_port) else {
-                continue;
-            };
-            let root = storage.get(&input).copied().unwrap_or(input);
-            writes.push((idx, root));
-            if let Some(output) = port(&step.outputs, output_port) {
-                storage.insert(output, root);
-            }
-        }
-    }
+    let (storage, writes) = in_place_writes(graph, steps);
     let root = |resource: ResourceId| storage.get(&resource).copied().unwrap_or(resource);
     steps
         .iter()
@@ -1250,7 +1269,7 @@ fn array_passthrough_steps(
             let Some(out) = graph
                 .get_node(step.node)
                 .and_then(|inst| inst.node.variadic_skip_passthrough_out())
-                .and_then(|out_port| port(&step.outputs, out_port))
+                .and_then(|out_port| step_port(&step.outputs, out_port))
                 .filter(|&out| is_array(out))
             else {
                 return false;
@@ -1266,6 +1285,87 @@ fn array_passthrough_steps(
             })
         })
         .collect()
+}
+
+/// The publishers of a substep region and whether it may tick on the async
+/// lane while the main lane carries on (see
+/// [`SubstepRegion`](crate::exec::substeps::SubstepRegion)). `region` holds
+/// its step indices, the boundary first.
+///
+/// The region overlaps only when every step outside it that reads one of the
+/// boundary's arrays is a tick publisher, no region step and no publisher
+/// touches a texture wire, and no later step writes in place an array the
+/// region or a publisher reads. A region that does not overlap has no
+/// publishers: it runs in order on the main lane.
+fn region_overlap(
+    graph: &Graph,
+    steps: &[ExecutionStep],
+    resource_types: &[PortType],
+    region: &[usize],
+) -> (Vec<usize>, bool) {
+    let type_of = |resource: ResourceId| resource_types.get(resource.0 as usize);
+    let is_array = |resource: ResourceId| matches!(type_of(resource), Some(PortType::Array(_)));
+    let is_texture = |resource: ResourceId| {
+        matches!(
+            type_of(resource),
+            Some(PortType::Texture2D | PortType::Texture2DTyped(_) | PortType::Texture3D)
+        )
+    };
+    let boundary_arrays: Vec<ResourceId> = steps[region[0]]
+        .outputs
+        .iter()
+        .map(|&(_, resource)| resource)
+        .filter(|&resource| is_array(resource))
+        .collect();
+    let mut publishers = Vec::new();
+    for (idx, step) in steps.iter().enumerate() {
+        if region.contains(&idx)
+            || !step
+                .inputs
+                .iter()
+                .any(|(_, resource)| boundary_arrays.contains(resource))
+        {
+            continue;
+        }
+        let publisher = graph
+            .get_node(step.node)
+            .is_some_and(|inst| inst.node.tick_publisher());
+        if !publisher {
+            return (Vec::new(), false);
+        }
+        publishers.push(idx);
+    }
+    let texture_wire = |idx: usize| {
+        steps[idx]
+            .inputs
+            .iter()
+            .chain(&steps[idx].outputs)
+            .any(|&(_, resource)| is_texture(resource))
+    };
+    if region
+        .iter()
+        .chain(&publishers)
+        .any(|&idx| texture_wire(idx))
+    {
+        return (Vec::new(), false);
+    }
+    let (storage, writes) = in_place_writes(graph, steps);
+    let root = |resource: ResourceId| storage.get(&resource).copied().unwrap_or(resource);
+    let region_end = region[region.len() - 1];
+    let read_roots: Vec<ResourceId> = region
+        .iter()
+        .chain(&publishers)
+        .flat_map(|&idx| steps[idx].inputs.iter())
+        .filter(|&&(_, resource)| is_array(resource))
+        .map(|&(_, resource)| root(resource))
+        .collect();
+    if writes
+        .iter()
+        .any(|&(at, written)| at > region_end && read_roots.contains(&written))
+    {
+        return (Vec::new(), false);
+    }
+    (publishers, true)
 }
 
 /// Compile one output port's mesh
