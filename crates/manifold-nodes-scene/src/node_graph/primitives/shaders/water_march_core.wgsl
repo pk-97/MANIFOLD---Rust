@@ -26,7 +26,8 @@ struct MarchUniforms {
 const MARCH_NEAR_CELLS: f32 = 2.0;      // within this distance of the surface the step shrinks
 const MARCH_NEAR_STEP: f32 = 0.6;       // near the surface, step = 0.6 x field value
 const MARCH_MIN_STEP_CELLS: f32 = 0.05; // smallest step, so a grazing ray still advances
-const MARCH_BISECTIONS: u32 = 8u;       // bisections on the sign change
+const MARCH_REFINES: u32 = 8u;          // most false-position steps on the sign change
+const MARCH_HIT_CELLS: f32 = 0.001;     // a refine this near zero is the hit
 const EXIT_MIN_STEP_CELLS: f32 = 0.1;   // prototype `exit` (main.rs:479): smallest step inside the water
 // A step over an unheld tile lands this far past its face, so the next sample
 // is in the next tile whatever the rounding.
@@ -142,13 +143,31 @@ fn march_surface(o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> f32 {
         if t > t1 { return -1.0; }
         let next = field_ahead(o + d * t, d);
         if next.phi <= 0.0 {
+            // False position on the bracket: the field is near linear across
+            // the last step, so a line root usually lands on the crossing at
+            // once. The end that stays has its value halved (Illinois), so a
+            // curved stretch or a skipped tile's stand-in value cannot stall
+            // the bracket.
+            let hit = MARCH_HIT_CELLS * cell;
             var a = prev_t;
+            var fa = here.phi;
             var b = t;
-            for (var k = 0u; k < MARCH_BISECTIONS; k++) {
-                let m = 0.5 * (a + b);
-                if sample_field(o + d * m) > 0.0 { a = m; } else { b = m; }
+            var fb = next.phi;
+            for (var k = 0u; k < MARCH_REFINES; k++) {
+                let m = b - fb * (b - a) / min(fb - fa, -1e-20);
+                let fm = sample_field(o + d * m);
+                if abs(fm) < hit { return m; }
+                if fm > 0.0 {
+                    a = m;
+                    fa = fm;
+                    fb = 0.5 * fb;
+                } else {
+                    b = m;
+                    fb = fm;
+                    fa = 0.5 * fa;
+                }
             }
-            return 0.5 * (a + b);
+            return b - fb * (b - a) / min(fb - fa, -1e-20);
         }
         here = next;
     }

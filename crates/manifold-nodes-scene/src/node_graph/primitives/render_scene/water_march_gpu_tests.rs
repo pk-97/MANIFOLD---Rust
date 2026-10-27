@@ -749,7 +749,7 @@ fn a_ray_steps_over_an_unheld_tile_in_one_step() {
     let near = |got: f32, want: f32, what: &str| {
         assert!((got - want).abs() < 1e-4, "{what}: {got} against {want}");
     };
-    // The march's bisection leaves up to a step over 2^8 of error.
+    // The march refines its last step by false position, well inside this.
     let march = |got: f32, want: f32, what: &str| {
         assert!((got - want).abs() < 2e-3, "{what}: {got} against {want}");
     };

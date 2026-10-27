@@ -250,7 +250,7 @@ fn mist_stops_at_the_water() {
         let (o, d) = pixel_ray(sc.inv, x, y);
         let reach = (plane_world - f64::from(o[1])) / f64::from(d[1]);
         let air = reach - c.enter;
-        // The hit is the bisected zero of the field: within a few 1e-4 m of the plane.
+        // The hit is the refined zero of the field: within a few 1e-4 m of the plane.
         assert_close(
             &format!("tau at ({x},{y})"),
             f64::from(got.tau),
