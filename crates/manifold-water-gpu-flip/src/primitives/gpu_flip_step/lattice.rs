@@ -51,7 +51,10 @@ pub(crate) const STEP_POOLED_BYTES_PER_CELL: u64 =
 /// (`pool_len` elements, the canonical element last); the pocket sums are a
 /// dense array over the pool's cells.
 pub(super) struct LatticeBuffers {
+    /// The box the step runs this tick; every array below is pooled, sized
+    /// by `pool_tiles` alone, so a new box of the same pool keeps them.
     pub(super) cells: [u32; 3],
+    pub(super) pool_tiles: u32,
     pub(super) water: GpuBuffer,
     /// The `distance` output: shared, so it starts at zero and host proofs
     /// read it as the dense outputs were read.
@@ -127,6 +130,7 @@ impl LatticeBuffers {
         let coarse = pocket_coarse_bytes(level_pools(pool_tiles)[1]) / 2;
         Ok(Self {
             cells,
+            pool_tiles,
             water: allocate(device, cell)?,
             phi: allocate_zeroed(device, cell)?,
             rhs: allocate(device, cell)?,

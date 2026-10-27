@@ -221,3 +221,40 @@ pub(super) fn gpu_flip_step_never_reads_slots_past_the_count() {
         assert_eq!(a.solver, b.solver, "tick {tick}: the solver words differ");
     }
 }
+
+/// A box resized within its pool keeps the step's table and pooled arrays,
+/// so a scale drag never rebuilds them: one more cell on z (8 solver cells
+/// still touch two tiles) leaves the `tiles` output the same buffer with the
+/// same slots, while two more on x (11 cells reach a third tile) is a new
+/// pool and a new table, the water still all there.
+#[test]
+fn a_resize_within_the_pool_keeps_the_table() {
+    let mut rest = RestingPool::new(|live| live);
+    rest.tick(0);
+    let (table, words) = (rest.h.buffer(rest.tiles), rest.left().tiles);
+    let grow = |rest: &mut RestingPool, name: &'static str, by: f32| {
+        let Some(ParamValue::Float(n)) = rest.params.get(name).cloned() else {
+            panic!("{name} is a lattice param");
+        };
+        rest.params.insert(name.into(), ParamValue::Float(n + by));
+    };
+    grow(&mut rest, "nodes_z", 1.0);
+    rest.tick(1);
+    let left = rest.left();
+    assert!(
+        rest.h.buffer(rest.tiles).ptr_eq(&table),
+        "a resize within the pool keeps the table"
+    );
+    assert_eq!(left.tiles, words, "the water's tiles keep their slots");
+    grow(&mut rest, "nodes_x", 2.0);
+    rest.tick(2);
+    let left = rest.left();
+    assert!(
+        !rest.h.buffer(rest.tiles).ptr_eq(&table),
+        "a new pool builds a new table"
+    );
+    assert_eq!(
+        left.n as usize, rest.live,
+        "the water survives the new pool"
+    );
+}

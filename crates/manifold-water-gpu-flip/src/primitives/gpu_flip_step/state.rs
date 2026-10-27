@@ -54,13 +54,18 @@ impl StepState {
         // One range per element of a pooled field: the sort is keyed on the
         // pool index of each cell.
         self.sorter.reserve_keys(device, pool_len(pool))?;
-        if self.lattice.as_ref().is_none_or(|l| l.cells != cells) {
-            // A new lattice holds no tile yet: its table starts empty too.
-            self.lattice = None;
-            self.tiles = None;
-            self.pool_canon_pending = true;
-            self.solid_velocity_is_zero = false;
-            self.lattice = Some(LatticeBuffers::new(device, cells, pool)?);
+        // A box resized within its pool (a scale drag, mostly) keeps the
+        // pooled arrays and the table; only a new pool rebuilds them.
+        match self.lattice.as_mut() {
+            Some(l) if l.pool_tiles == pool => l.cells = cells,
+            _ => {
+                // A new pool holds no tile yet: its table starts empty too.
+                self.lattice = None;
+                self.tiles = None;
+                self.pool_canon_pending = true;
+                self.solid_velocity_is_zero = false;
+                self.lattice = Some(LatticeBuffers::new(device, cells, pool)?);
+            }
         }
         if self.tiles.as_ref().is_none_or(|t| t.pool_tiles() != pool) {
             self.tiles = None;
