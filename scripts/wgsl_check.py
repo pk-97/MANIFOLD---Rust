@@ -47,20 +47,8 @@ fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 fn sort_key_of(p: vec3<f32>) -> u32 { return ts_cell_at(ts_world_cell(p, params.bin_min, params.inv_cell)); }
 """
 # What the codegen wraps around the pooled lattice atoms' bodies
-# (`redistance_lattice_body.wgsl`, `smooth_lattice_body.wgsl`,
-# `field_smooth_blend_body.wgsl`): the uniform, the gathered buffers and an
+# (`smooth_lattice_body.wgsl`, `field_smooth_blend_body.wgsl`): the uniform, the gathered buffers and an
 # entry point calling `body`.
-REDISTANCE_STUB = """struct Params { cell_size: f32, band_cells: f32, pool_tiles: f32, dispatch_count: u32 }
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> buf_levelset: array<f32>;
-@group(0) @binding(2) var<storage, read> buf_tiles: array<u32>;
-@group(0) @binding(3) var<storage, read_write> buf_out: array<f32>;
-"""
-REDISTANCE_MAIN = """@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    buf_out[gid.x] = body(gid.x, params.dispatch_count, params.cell_size, params.band_cells, params.pool_tiles);
-}
-"""
 SMOOTH_STUB = """struct Params {
     cell_size: f32, passes: f32, axis: i32, pool_tiles: f32,
     dispatch_count: u32, pad0: u32, pad1: u32, pad2: u32,
@@ -208,8 +196,8 @@ STACKS = {
     "state_records": (False, [FLIP / "liquid_state_records.wgsl"]),
     "sort_dense": (False, [SORT_DENSE_KEYS, LIQ / "sort_particles_into_cells.wgsl"]),
     "sort_pooled": (False, [WORLD_READ, SORT_POOLED_KEYS, LIQ / "sort_particles_into_cells.wgsl"]),
-    "redistance": (False, [WORLD_READ, LIQ / "marching_cubes_common.wgsl", REDISTANCE_STUB,
-                           LIQ / "redistance_lattice_body.wgsl", REDISTANCE_MAIN]),
+    "redistance": (False, [WORLD_READ, LIQ / "marching_cubes_common.wgsl",
+                           LIQ / "redistance_lattice.wgsl"]),
     "smooth": (False, [WORLD_READ, SMOOTH_STUB, LIQ / "smooth_lattice_body.wgsl", SMOOTH_MAIN]),
     "blend": (False, [WORLD_READ, BLEND_STUB, LIQ / "field_smooth_blend_body.wgsl", BLEND_MAIN]),
     "particle_volume": (False, [WORLD_READ, VOLUME_STUB, SURFACE / "particle_volume_body.wgsl", VOLUME_MAIN]),
