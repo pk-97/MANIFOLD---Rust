@@ -16,10 +16,15 @@
 // its cell, through an order-preserving key in workgroup memory, so the
 // minimum is exact whatever order the blobs land in. A node inside a solid
 // (`solid`, the solid's distance on the same tiles, negative inside) takes at
-// least its depth in the solid: never inside the liquid, water against a wall
-// reads its zero at the wall's face, and no node through the wall reads as
-// near the water. A free slot and the canonical element hold the far value,
-// FIELD_FAR_CELLS (3) cells.
+// least its depth in the solid less PV_WALL_REACH cells: water against a wall
+// reaches half a cell into it, so the water's surface meets the wall's face
+// at an angle behind the face instead of lying on it, where the two would
+// draw in patches over each other; deeper in, no node through the wall reads
+// as near the water. A free slot and the canonical element hold the far
+// value, FIELD_FAR_CELLS (3) cells.
+
+// How far, in cells, water reaches into a solid.
+const PV_WALL_REACH: f32 = 0.5;
 
 struct Params {
     cell_size: f32,
@@ -171,7 +176,7 @@ fn cs_main(
         let e = slot * 512u + l;
         var phi = pv_value(atomicLoad(&pv_best[l]));
         if solid[e] < 0.0 {
-            phi = max(phi, -solid[e]);
+            phi = max(phi, -solid[e] - PV_WALL_REACH * h);
         }
         levelset[e] = phi;
     }

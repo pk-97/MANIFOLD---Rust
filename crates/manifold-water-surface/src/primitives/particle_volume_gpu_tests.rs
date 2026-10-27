@@ -12,6 +12,8 @@ use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::testkit::world_box::{BoxTable, table_words_of};
 
 const H: f32 = 0.07;
+/// The shader's PV_WALL_REACH: how far, in cells, water reaches into a solid.
+const WALL_REACH_CELLS: f32 = 0.5;
 /// The world node of the box's first node: x from -6 is tile -1 for six
 /// nodes and tile 0 for the rest; y from 3 and z from -2 cross tile faces too.
 const ORIGIN: [i32; 3] = [-6, 3, -2];
@@ -109,7 +111,7 @@ fn dense_level(blobs: &[[f32; 4]], node: [i32; 3], band: f32, solid: f32) -> f32
         phi = phi.min((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - reach);
     }
     if solid < 0.0 {
-        phi = phi.max(-solid);
+        phi = phi.max(-solid - WALL_REACH_CELLS * H);
     }
     phi
 }
@@ -243,7 +245,7 @@ fn blobs_each_side_of_a_tile_face_match_a_dense_box() {
     assert!(want.iter().filter(|&&v| v < 0.0).count() > 10);
     let clipped = |solid: &[f32]| {
         (0..want.len())
-            .filter(|&i| solid[i] < 0.0 && want[i] == -solid[i])
+            .filter(|&i| solid[i] < 0.0 && want[i] == -solid[i] - WALL_REACH_CELLS * H)
             .count()
     };
     assert!(clipped(&solid_dense) > 4, "the solid clips nothing");
@@ -282,9 +284,10 @@ fn a_blob_cloud_matches_the_dense_box() {
     let want = dense_box(&blobs, &solid_dense, 3.0 * blob_reach);
     assert_all_close(&got, &want);
     assert!(want.iter().filter(|&&v| v < 0.0).count() > 500);
-    // Nodes in the floor a blob reaches read their depth in it.
+    // Nodes in the floor a blob reaches read their depth in it less the
+    // half cell water reaches into a solid.
     let clipped = (0..want.len())
-        .filter(|&i| solid_dense[i] < 0.0 && want[i] == -solid_dense[i])
+        .filter(|&i| solid_dense[i] < 0.0 && want[i] == -solid_dense[i] - WALL_REACH_CELLS * H)
         .count();
     assert!(clipped > 50, "{clipped}");
     assert!(want.iter().any(|&v| v > 0.0 && v < 3.0 * blob_reach));
