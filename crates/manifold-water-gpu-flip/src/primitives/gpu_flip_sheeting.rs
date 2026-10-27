@@ -48,6 +48,45 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin, pool_len};
 use manifold_water_liquid::world_tiles::{WorldTiles, allocated_args_offset};
 
+/// The stage's gate (`GpuSheeting::encode_gate`): the step's clock plan,
+/// made inactive (a live zero step, which every pass of the stage, the
+/// sheet distance and the identity reservation skip) unless the particle
+/// slots past the sort's live prefix cover the last active substep's
+/// request (`stats` word 0, 0 before the first). The reservation grants a
+/// request whole or not at all, so a closed gate refuses nothing it would
+/// have granted.
+pub(super) const GATE_SHADER: &str = "
+struct Gate { live_range: u32, slots: u32, pad0: u32, pad1: u32 };
+@group(0) @binding(0) var<uniform> g: Gate;
+@group(0) @binding(1) var<storage, read> ranges: array<vec2<u32>>;
+@group(0) @binding(2) var<storage, read> plan: array<u32>;
+@group(0) @binding(3) var<storage, read_write> gated: array<u32>;
+@group(0) @binding(4) var<storage, read> stats: array<u32>;
+
+@compute @workgroup_size(1)
+fn gate() {
+    for (var i = 0u; i < 12u; i = i + 1u) {
+        gated[i] = plan[i];
+    }
+    let last = ranges[g.live_range];
+    let live = last.x + last.y;
+    if live >= g.slots || g.slots - live < stats[0] {
+        gated[0] = 0u;
+        gated[11] = 1u;
+    }
+}
+";
+
+/// `GATE_SHADER`'s uniform.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Gate {
+    /// The canonical element's range, whose end is the live prefix's.
+    live_range: u32,
+    slots: u32,
+    _pad: [u32; 2],
+}
+
 /// The kernel with the world tile read side it indexes the lattice through.
 pub(super) fn source() -> String {
     format!(
@@ -266,6 +305,9 @@ pub(crate) struct GpuSheeting {
     /// Per pool slot: the births its cells keep, scanned in place into the
     /// births before each slot's end.
     scan: manifold_water_liquid::primitives::prefix_scan::PrefixScan,
+    gate: Option<GpuComputePipeline>,
+    /// The plan the stage last ran on ([`Self::encode_gate`]).
+    gated_plan: Option<GpuBuffer>,
     capacity: u32,
     pool_tiles: u32,
 }
@@ -281,6 +323,10 @@ impl GpuSheeting {
                     "gpu_flip.sheeting",
                 ));
             }
+        }
+        if self.gate.is_none() {
+            self.gate =
+                Some(device.create_compute_pipeline(GATE_SHADER, "gate", "gpu_flip.sheeting.gate"));
         }
         self.scan.prepare(device);
     }
@@ -352,9 +398,53 @@ impl GpuSheeting {
             stats,
         ]);
         self.scan.buffer(device, pool_tiles as usize)?;
+        if self.gated_plan.is_none() {
+            self.gated_plan = Some(device.try_create_buffer(PLAN_BYTES)?);
+        }
         self.capacity = capacity;
         self.pool_tiles = pool_tiles;
         Ok(())
+    }
+
+    /// In the step, first: the plan the stage runs on, `plan` while the
+    /// particle slots of `slots` past the sort's live prefix in `ranges`
+    /// cover the last request, else inactive (`GATE_SHADER`). Water that
+    /// fills its pool spends nothing on sheeting.
+    pub(crate) fn encode_gate(
+        &self,
+        enc: &mut GpuEncoder,
+        plan: &GpuBuffer,
+        ranges: &GpuBuffer,
+        slots: u32,
+    ) -> &GpuBuffer {
+        let gated = self.gated_plan.as_ref().expect("sheeting reserved");
+        let stats = &self.buffers.as_ref().expect("sheeting reserved")[10];
+        let gate = Gate {
+            live_range: (pool_len(self.pool_tiles) - 1) as u32,
+            slots,
+            _pad: [0; 2],
+        };
+        let buffer = |binding, buffer| GpuBinding::Buffer {
+            binding,
+            buffer,
+            offset: 0,
+        };
+        enc.dispatch_compute(
+            self.gate.as_ref().expect("sheeting prepared"),
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&gate),
+                },
+                buffer(1, ranges),
+                buffer(2, plan),
+                buffer(3, gated),
+                buffer(4, stats),
+            ],
+            [1, 1, 1],
+            "gpu_flip.sheeting.gate",
+        );
+        gated
     }
 
     /// The birth list in birth order and its count buffer: word 0 the true

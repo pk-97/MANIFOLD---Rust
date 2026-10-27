@@ -30,7 +30,8 @@ pub(super) fn reference_shader() -> String {
     manifold_water_liquid::primitives::liquid_stats::with_stats_layout(&source)
 }
 
-/// CPU-only: validate both complete WGSL modules, including the test reference.
+/// CPU-only: validate the complete WGSL modules, including the test
+/// reference, and the stage's gate.
 #[test]
 fn sheeting_bucket_shaders_validate_on_cpu() {
     for source in [
@@ -38,6 +39,7 @@ fn sheeting_bucket_shaders_validate_on_cpu() {
             &super::gpu_flip_sheeting::source(),
         ),
         reference_shader(),
+        super::gpu_flip_sheeting::GATE_SHADER.to_string(),
     ] {
         let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");
         naga::valid::Validator::new(

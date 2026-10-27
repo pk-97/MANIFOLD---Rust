@@ -592,11 +592,15 @@ impl StepState {
                 .ranges()
                 .ok_or("the cell ranges were not reserved")?;
             let order = sheet_order.ok_or("sheet seeding storage was not reserved")?;
+            let plan = self
+                .sheeting
+                .encode_gate(enc, step.clock_plan, ranges, base.particles);
+            enc.compute_memory_barrier_buffers();
             // The sheeter's own distance, true to SHEET_DISTANCE_CELLS deep,
             // from the liquid level set the pressure solve read.
-            let phi =
-                self.sheet_distance
-                    .encode_gated(enc, &l.phi, p.cell_size, step.clock_plan, tiles);
+            let phi = self
+                .sheet_distance
+                .encode_gated(enc, &l.phi, p.cell_size, plan, tiles);
             enc.compute_memory_barrier_buffers();
             let inputs = super::super::gpu_flip_sheeting::SheetInputs {
                 particles: sorted,
@@ -617,7 +621,7 @@ impl StepState {
                 substep: p.step_in_tick.max(0) as u32,
             };
             self.sheeting
-                .encode_draw(enc, &inputs, step.clock_plan, &births, tiles);
+                .encode_draw(enc, &inputs, plan, &births, tiles);
             self.identity_ops.reserve(
                 enc,
                 manifold_water_liquid::primitives::particle_identity::BirthReservation {
@@ -625,7 +629,7 @@ impl StepState {
                     identity: step.identity,
                     ranges,
                     scan: self.sheeting.winners(),
-                    plan: step.clock_plan,
+                    plan,
                     tile_counts: tiles.counts(),
                     step_record: Some(record),
                     params: [
@@ -638,7 +642,7 @@ impl StepState {
             );
             enc.compute_memory_barrier_buffers();
             self.sheeting
-                .encode_write(enc, &inputs, step.clock_plan, &births, tiles);
+                .encode_write(enc, &inputs, plan, &births, tiles);
         }
         enc.set_profile_tag("gpu_flip.stage.move");
         enc.dispatch_compute_indirect(
