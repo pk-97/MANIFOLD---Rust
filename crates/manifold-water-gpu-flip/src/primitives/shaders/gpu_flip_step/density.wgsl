@@ -88,7 +88,7 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                 var inside_solid = false;
                 if solids {
                     let distance = solid_centre(q);
-                    inside_solid = distance < 0.0;
+                    inside_solid = centre_in_solid(q);
                     // Solids are sampled per rest site, so a cell a solid only
                     // cuts weighs its solid part; liquid_fill seeds exactly
                     // the sites outside the solid, so the two make the full

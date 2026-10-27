@@ -71,10 +71,6 @@ pub fn bounds_distance(x: [f32; 3], lo: [f32; 3], hi: [f32; 3], walls: u32) -> f
     }
 }
 
-/// Native FLIP boundary shrinks the engine box by 3h + 1e-4 total.
-/// AABB::expand divides that by two on each side; epsilon is in metres.
-pub(crate) const FLIP_WALL_EPSILON: f32 = 5.0e-5;
-
 manifold_core::testkit_visible! {
 /// GPU FLIP's MAC grid, distinct from the authored-grid scalar wire contract.
 /// The native engine adds three cells and offsets its origin by 1.5h.
@@ -102,9 +98,6 @@ impl FlipSolverGrid {
     }
     pub fn bounds(self) -> Transform {
         self.surface.bounds()
-    }
-    pub fn wall_inset(self) -> f32 {
-        SURFACE_PADDING_CELLS + FLIP_WALL_EPSILON / self.surface.cell_size()
     }
 }
 

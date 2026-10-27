@@ -25,7 +25,7 @@ use super::fields::{
 };
 use super::{Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use crate::fluid_domain::{CELL_SIZE_METRES, DEFAULT_CELL_SIZE, DOMAIN_EXTENT_METRES};
+use crate::fluid_domain::{CELL_SIZE_METRES, DEFAULT_CELL_SIZE, MIN_DOMAIN_SIDE_METRES};
 use crate::scene_doc::{Item, ItemFields, SourceRole, WaterDraw, WaterFields, WaterSolver};
 
 /// The water family the scene compiler splices for each Water: the solver,
@@ -165,7 +165,7 @@ use ControlGroup::{Domain, Simulation, Surface, Whitewater};
 const AXIS_ALIGNED: &str = "the domain box is axis-aligned; the solvers take no rotation";
 
 /// Each side of the box, within what the solvers hold.
-const SIZE: HardLimit = HardLimit::Between(DOMAIN_EXTENT_METRES.0, DOMAIN_EXTENT_METRES.1);
+const SIZE: HardLimit = HardLimit::AtLeast(MIN_DOMAIN_SIDE_METRES);
 
 /// The Dam Break tank: four metres a side, standing on the floor.
 const DOMAIN_SIDE: f32 = 4.0;

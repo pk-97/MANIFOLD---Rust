@@ -35,6 +35,14 @@ mod binding_contract_tests {
         let mut out: Vec<(u32, Res)> = module
             .global_variables
             .iter()
+            // Private and workgroup variables (the world-tile read helpers'
+            // home cache) are per-thread state, not bindings.
+            .filter(|(_, gv)| {
+                !matches!(
+                    gv.space,
+                    naga::AddressSpace::Private | naga::AddressSpace::WorkGroup
+                )
+            })
             .map(|(_, gv)| {
                 let binding = gv
                     .binding

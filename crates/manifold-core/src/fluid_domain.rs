@@ -10,10 +10,10 @@ pub struct DomainBox {
     pub billboard: bool,
 }
 
-/// The smallest and largest side of a liquid domain box, in metres. The
-/// solvers refuse a layout outside it, so the domain's scale handle stops
-/// at it.
-pub const DOMAIN_EXTENT_METRES: (f32, f32) = (0.5, 20.0);
+/// The smallest side of a liquid domain box, in metres: 8 cells of the
+/// smallest Cell Size, the fewest a layout takes. The domain's scale handle
+/// stops at it; a box too small for its own Cell Size is refused by name.
+pub const MIN_DOMAIN_SIDE_METRES: f32 = 8.0 * CELL_SIZE_METRES.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FluidDomainLayout {
@@ -61,11 +61,11 @@ pub fn domain_layout(
         );
     }
     if pose.pos.iter().any(|v| !v.is_finite())
-        || pose.scale.iter().any(|v| {
-            !v.is_finite() || !(DOMAIN_EXTENT_METRES.0..=DOMAIN_EXTENT_METRES.1).contains(v)
-        })
+        || pose.scale.iter().any(|v| !v.is_finite() || *v <= 0.0)
     {
-        return Err("Fluid: domain position must be finite and each dimension must be between 0.5 and 20 metres".into());
+        return Err(
+            "Fluid: the domain's position must be finite and each side a positive length".into(),
+        );
     }
     let cells: [u32; 3] = std::array::from_fn(|i| {
         let ratio = f64::from(pose.scale[i]) / cell_size;

@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 
-use manifold_core::fluid_domain::DOMAIN_EXTENT_METRES;
+use manifold_core::fluid_domain::MIN_DOMAIN_SIDE_METRES;
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{ParamTriple, SceneShape, SceneShapeDecl};
 
@@ -46,10 +46,7 @@ pub static COPY_GROUP_SHAPES: [SceneShapeDecl; 1] = [{
 /// The liquid domain box: each side stays inside what the solvers accept.
 const DOMAIN_BOX: SceneShapeDecl = {
     let mut decl = transform_box(false);
-    decl.extent_limit = Some(HardLimit::Between(
-        DOMAIN_EXTENT_METRES.0,
-        DOMAIN_EXTENT_METRES.1,
-    ));
+    decl.extent_limit = Some(HardLimit::AtLeast(MIN_DOMAIN_SIDE_METRES));
     decl
 };
 
@@ -119,4 +116,3 @@ pub static DIRECTED_FORCE_SHAPES: [SceneShapeDecl; 1] = [SceneShapeDecl {
     extent_limit: None,
     uniform_scale: false,
 }];
-

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use manifold_core::NodeId;
-use manifold_core::fluid_domain::DOMAIN_EXTENT_METRES;
+use manifold_core::fluid_domain::MIN_DOMAIN_SIDE_METRES;
 use manifold_foundation::scene_surface::{SceneShape, SceneShapeDecl};
 
 use super::*;
@@ -472,19 +472,9 @@ fn fluid_domain_targets_derive_from_the_domain_and_column_boxes() {
         panic!("one value")
     };
     assert_eq!(
-        size, DOMAIN_EXTENT_METRES.0,
+        size, MIN_DOMAIN_SIDE_METRES,
         "a domain never scales below what the solvers accept"
     );
-    let HandleValues::One(size) = drag(
-        box_target,
-        GizmoMode::Scale,
-        GizmoAxis::X,
-        px([1.0, 2.0, -6.0]),
-        px([20.0, 2.0, -6.0]),
-    ) else {
-        panic!("one value")
-    };
-    assert_eq!(size, DOMAIN_EXTENT_METRES.1, "nor above it");
     let HandleValues::One(column) = drag(
         &targets[1],
         GizmoMode::Scale,

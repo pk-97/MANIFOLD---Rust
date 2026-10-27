@@ -527,6 +527,12 @@ impl MatterScene {
             "nodes_y",
             "nodes_z",
             "closed_faces",
+            "bounds_lo_x",
+            "bounds_lo_y",
+            "bounds_lo_z",
+            "bounds_hi_x",
+            "bounds_hi_y",
+            "bounds_hi_z",
             "body_count",
         ] {
             wire(graph, (domain, port), (solid, port));

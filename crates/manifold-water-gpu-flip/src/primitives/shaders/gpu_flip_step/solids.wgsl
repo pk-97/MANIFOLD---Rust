@@ -444,6 +444,14 @@ fn solid_centre(p: vec3<i32>) -> f32 {
     return 0.125 * sum;
 }
 
+// Whether world cell p's centre is inside a solid. A centre within a
+// thousandth of a cell of the solid's surface counts as inside: the cells one
+// in from the padding are centred on the Bounds walls' planes, and the engine
+// breaks the same tie by shrinking its box 5e-5 m.
+fn centre_in_solid(p: vec3<i32>) -> bool {
+    return solid_centre(p) < 1e-3 * u.cell_size;
+}
+
 // A cell whose centre is inside a solid and within h/2 of the particles
 // (φ under h/2) is water in the solves, its φ −h/2
 // (ParticleLevelSet::postProcessSignedDistanceField). Without it a cut face
@@ -456,7 +464,7 @@ fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = list_cell(gid.x);
     let p = ts_cell_coord(idx);
-    if cell_out[idx] < 0.5 * u.cell_size && solid_centre(p) < 0.0 {
+    if cell_out[idx] < 0.5 * u.cell_size && centre_in_solid(p) {
         cell_out[idx] = -0.5 * u.cell_size;
     }
 }
