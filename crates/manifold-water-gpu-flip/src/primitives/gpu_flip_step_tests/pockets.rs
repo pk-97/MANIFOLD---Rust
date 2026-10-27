@@ -11,7 +11,7 @@ use manifold_node_engine::scene::world_tiles::{
     table_entries, table_words, tile_key, tile_of_cell,
 };
 use manifold_node_engine::testkit::array_harness::read;
-use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
+use manifold_water_liquid::fluid_particles::FaceSample;
 
 /// The tank box: cells [LO, LO + N), unequal sides so a swapped axis shows,
 /// straddling the origin in every axis. Its tiles are -1 and 0 on each axis.
@@ -872,9 +872,8 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     rig.run("pocket_start", &params, 1);
     rig.run("pocket_check", &params, cells);
     assert_eq!(rig.gate()[10], 1, "an unfinished spread is flagged");
-    // The step's dry, sealed and air counts follow in words 7-9: the cells
-    // of every held tile, the water of the box and the dry cells its tiles
-    // hold around it.
+    // The seed classes the cells of every held tile: the water of the box
+    // and the dry cells its tiles hold around it.
     let pocket = rig.read::<u32>(23, tiles.pool_len());
     let held = 512 * tiles.tiles.len();
     let counts: Vec<u32> = (0..3)
@@ -889,64 +888,27 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
         ],
         "every box cell water, the -X layer touching air, the rest of the tiles dry"
     );
-    rig.bind(1, &vec![CellRange::default(); tiles.pool_len()])
-        .bind(7, &vec![0.0f32; tiles.pool_len()]);
-    rig.bind(
-        22,
-        &[5u32, 6, 7, 9, 0, 0, 0, 77, 77, 77, 77, 77, 77, 77, 77, 77],
-    );
+    rig.bind(22, &[5u32, 6, 7, 9]);
     rig.run(
         "pocket_tally",
         &StepParams {
             step_in_tick: 0,
             ..params
         },
-        256,
+        1,
     );
-    let first: Vec<u32> = rig.read(22, 16);
-    assert_eq!(
-        first[..4],
-        [5, 6, 7, 1],
-        "the tick's first step sets the word"
-    );
-    assert_eq!(
-        first[7..10],
-        counts[..],
-        "the step's dry, sealed and air cells"
-    );
-    let lowest = (0..cell_len())
-        .filter(|&i| cell_coords(i)[0] == 0)
-        .map(|i| tiles.pool_index(world(cell_coords(i))).expect("held"))
-        .min()
-        .expect("a -X layer");
-    // Its reason: the dry cell beyond the -X face, the face's open fraction
-    // (whole) and axis 0 on the low side.
-    let seed = (0..cell_len())
-        .map(cell_coords)
-        .find(|&c| tiles.pool_index(world(c)) == Some(lowest))
-        .expect("the seed is a box cell");
-    let mut beyond = world(seed);
-    beyond[0] -= 1;
-    assert_eq!(
-        first[10..14],
-        [
-            lowest as u32,
-            tiles.pool_index(beyond).expect("held") as u32,
-            1.0f32.to_bits(),
-            0
-        ],
-        "the lowest seed is the -X layer's lowest pool index, through the open -X border face"
-    );
+    let first: Vec<u32> = rig.read(22, 4);
+    assert_eq!(first, [5, 6, 7, 1], "the tick's first step sets the word");
     rig.run(
         "pocket_tally",
         &StepParams {
             step_in_tick: 1,
             ..params
         },
-        256,
+        1,
     );
-    let second: Vec<u32> = rig.read(22, 16);
-    assert_eq!(second[..4], [5, 6, 7, 2], "later steps add to it");
+    let second: Vec<u32> = rig.read(22, 4);
+    assert_eq!(second, [5, 6, 7, 2], "later steps add to it");
 }
 
 /// The coarse pockets at solve level 1 as the CPU coarsens them: a level

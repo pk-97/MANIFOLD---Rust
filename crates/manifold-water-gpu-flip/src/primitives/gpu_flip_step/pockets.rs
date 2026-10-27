@@ -67,7 +67,6 @@ pub(super) fn encode_pockets(
     params: &StepParams,
     l: &LatticeBuffers,
     tiles: &WorldTiles,
-    ranges: &GpuBuffer,
     capped: &GpuBuffer,
     tally: u64,
     plan: &GpuBuffer,
@@ -188,25 +187,18 @@ pub(super) fn encode_pockets(
         "gpu_flip.step.pocket_check",
     );
     // Adds the step's unfinished spread to the solver word, cleared on the
-    // tick's first step, and writes the step's dry, sealed and air counts.
+    // tick's first step.
     enc.dispatch_compute(
         &pipes.pocket_tally,
         &[
             uniform(params),
-            buffer(1, ranges),
-            buffer(6, &l.water),
-            buffer(7, &l.phi),
-            buffer(10, &l.s),
-            buffer(23, &l.pocket),
             buffer(24, &l.pocket_gate),
             GpuBinding::Buffer {
                 binding: 22,
                 buffer: capped,
                 offset: tally,
             },
-            list,
             buffer(46, plan),
-            table,
         ],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",

@@ -571,60 +571,11 @@ fn pocket_condition(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// The solver words holding the step's dry, sealed and air cell counts.
-const POCKET_COUNT_WORD: u32 = 7u;
-
-var<workgroup> pocket_counts: array<atomic<u32>, 3>;
-
-var<workgroup> pocket_first_seed: atomic<u32>;
-
-const POCKET_SEED_WORD: u32 = 10u;
-
-// One workgroup, `capped` bound at the solver words: steps this tick whose
-// spread hit its cap unfinished, and the step's dry, sealed and air cells
-// over the cells of every held slot (the cells the seed classed). The
-// lowest air seed is reported by pool index.
-@compute @workgroup_size(256)
-fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
+// One thread, `capped` bound at the solver words: steps this tick whose
+// spread hit its cap unfinished.
+@compute @workgroup_size(1)
+fn pocket_tally() {
     if !clock_active() { return; }
-    if lane < 3u {
-        atomicStore(&pocket_counts[lane], 0u);
-    }
-    if lane == 0u {
-        atomicStore(&pocket_first_seed, 0xffffffffu);
-    }
-    workgroupBarrier();
-    var counts = vec3<u32>(0u);
-    for (var i = lane; i < pocket_gate[POCKET_HELD] * 512u; i = i + 256u) {
-        let idx = pocket_list_cell(i);
-        ts_home(idx);
-        let p = ts_cell_coord(idx);
-        let state = pocket[idx];
-        counts[min(state, 2u)] += 1u;
-        if state == POCKET_AIR && pocket_seed_reason(p).z != NO_NEIGHBOUR {
-            atomicMin(&pocket_first_seed, idx);
-        }
-    }
-    for (var k = 0u; k < 3u; k = k + 1u) {
-        atomicAdd(&pocket_counts[k], counts[k]);
-    }
-    workgroupBarrier();
-    if lane != 0u {
-        return;
-    }
-    for (var k = 0u; k < 3u; k = k + 1u) {
-        capped[POCKET_COUNT_WORD + k] = atomicLoad(&pocket_counts[k]);
-    }
-    let seed = atomicLoad(&pocket_first_seed);
-    capped[POCKET_SEED_WORD] = seed;
-    if seed != 0xffffffffu {
-        let why = pocket_seed_reason(ts_cell_coord(seed));
-        capped[POCKET_SEED_WORD + 1u] = why.x;
-        capped[POCKET_SEED_WORD + 2u] = why.y;
-        capped[POCKET_SEED_WORD + 3u] = why.z;
-        capped[POCKET_SEED_WORD + 4u] = bitcast<u32>(phi[why.x]);
-        capped[POCKET_SEED_WORD + 5u] = ranges[why.x].count;
-    }
     let unresolved = pocket_gate[POCKET_UNRESOLVED];
     if u.step_in_tick == 0 {
         capped[POCKET_WORD] = unresolved;

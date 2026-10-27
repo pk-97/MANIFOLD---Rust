@@ -37,27 +37,22 @@ pub(crate) fn partial_bytes(slots: u32) -> u64 {
 /// reached its cap unfinished, 14 and 15 the volume rate (m³/s) taken off
 /// sealed pockets' pressure and density right-hand sides so their solves
 /// have a solution, 16 the share of the pool's tiles the water holds
-/// (|C| / P), 17-19 the last substep's dry, sealed and air cells as the
-/// sealed-pocket pass classed them, 20-25 its lowest water cell that touches
-/// air directly (its index, the dry neighbour's index or 0xffffffff for an
-/// open box face, the face's open fraction bits, axis * 2 + 1 on the high
-/// side, the neighbour's phi bits and its particle count), 26 its floor cells
-/// reading dry with water on every in-box side (8-26 are 0 without a `capped`
-/// input). Word 27 is the particles inflows added this tick, 28 the ones they
-/// wanted to add but the pool had no free slot for, 29 the sheet births the
-/// pool had no free slot for, and 30 the particles removed because their tile
-/// had no slot. Floats are stored as bits.
+/// (|C| / P) (8-16 are 0 without a `capped` input). Word 17 is the particles
+/// inflows added this tick, 18 the ones they wanted to add but the pool had
+/// no free slot for, 19 the sheet births the pool had no free slot for, and
+/// 20 the particles removed because their tile had no slot. Floats are
+/// stored as bits.
 /// The first solver word in the published stats array.
 pub const SOLVER_STATS_START: u32 = 10;
 /// The published stats word counting this tick's inflow births.
-pub const INFLOW_BIRTHS_WORD: u32 = 27;
+pub const INFLOW_BIRTHS_WORD: u32 = 17;
 /// The published stats word counting inflow births a full pool refused.
-pub const INFLOW_REFUSED_WORD: u32 = 28;
+pub const INFLOW_REFUSED_WORD: u32 = 18;
 /// The published stats word counting sheet births a full pool refused.
-pub const SHEET_REFUSED_WORD: u32 = 29;
+pub const SHEET_REFUSED_WORD: u32 = 19;
 /// The published stats word counting particles removed because their tile
 /// had no slot in the pool.
-pub const TILE_REMOVED_WORD: u32 = 30;
+pub const TILE_REMOVED_WORD: u32 = 20;
 /// The number of words in the stats array.
 pub const LIQUID_STATS_WORDS: u32 = TILE_REMOVED_WORD + 1;
 /// The number of solver words copied from the capped counters.
@@ -101,15 +96,6 @@ pub struct LiquidTickStats {
     /// (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 5 (Stats)), the tick's
     /// last substep.
     pub active_tiles: f32,
-    /// The last substep's cells the sealed-pocket pass classed dry, sealed
-    /// (water no air reaches) and touching air.
-    pub pocket_cells: [u32; 3],
-    /// The last substep's lowest air seed: cell, neighbour, open fraction
-    /// bits, side, the neighbour's φ bits and particle count, as words 20-25.
-    pub first_air_seed: [u32; 6],
-    /// The last substep's floor cells reading dry with water on every
-    /// in-box side: holes under the water.
-    pub dry_floor_cells: u32,
     /// Particles inflows added this tick, every substep.
     pub inflow_births: u32,
     /// Particles inflows wanted to add this tick but the pool had no free
@@ -141,9 +127,6 @@ impl LiquidTickStats {
             pressure_flux_removed: f(14),
             density_flux_removed: f(15),
             active_tiles: f(16),
-            pocket_cells: [w[17], w[18], w[19]],
-            first_air_seed: [w[20], w[21], w[22], w[23], w[24], w[25]],
-            dry_floor_cells: w[26],
             inflow_births: w[INFLOW_BIRTHS_WORD as usize],
             inflow_refused: w[INFLOW_REFUSED_WORD as usize],
             sheet_refused: w[SHEET_REFUSED_WORD as usize],
@@ -438,18 +421,6 @@ mod tests {
             0.125f32.to_bits(),
             0.3125f32.to_bits(),
         ]);
-        words[17..27].copy_from_slice(&[
-            3,
-            4,
-            5,
-            6,
-            7,
-            0.75f32.to_bits(),
-            3,
-            0.5f32.to_bits(),
-            9,
-            2,
-        ]);
         words[INFLOW_BIRTHS_WORD as usize] = 640;
         words[INFLOW_REFUSED_WORD as usize] = 64;
         words[SHEET_REFUSED_WORD as usize] = 7;
@@ -473,9 +444,6 @@ mod tests {
                 pressure_flux_removed: 0.5,
                 density_flux_removed: 0.125,
                 active_tiles: 0.3125,
-                pocket_cells: [3, 4, 5],
-                first_air_seed: [6, 7, 0.75f32.to_bits(), 3, 0.5f32.to_bits(), 9],
-                dry_floor_cells: 2,
                 inflow_births: 640,
                 inflow_refused: 64,
                 sheet_refused: 7,

@@ -314,7 +314,6 @@ impl StepState {
             &base,
             l,
             tiles,
-            ranges,
             step.capped,
             step.tally,
             step.clock_plan,
