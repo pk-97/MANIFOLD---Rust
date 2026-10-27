@@ -928,15 +928,11 @@ defaults. **Built (2026-09-30).**
 - **Audit** (DECOMPOSING_GENERATORS.md section 2.5 (the primitive audit)): no existing
   atom smooths an `Array(f32)` lattice. `node.blur_3d_separable` is `Texture3D`-only
   (D8), `node.neighbor_smooth` works on instance arrays, the rest are 2D. New.
-- **Atom.** `node.smooth_lattice`: one axis of the binomial blur, `passes` rounds of
-  [1, 2, 1] / 4 applied as one (2·passes + 1)-tap gather with edge-clamped indices,
-  fusable per element (`BufferGather`). The Liquid Surface group chains axes x, y, z
-  after the volume; one `node.value` ("Smoothing
-  Passes") feeds all three and is the group param `smoothing_passes` (default 2).
-  Because the weights are a product of per-axis rows and the clamp is per axis, the
-  chain equals the full 3D binomial blur: `fluid_smooth_lattice_matches_binomial_reference_and_passes_through`
-  checks the chain against an f64 (2p + 1)³ reference for 0–3 passes. A single 3D
-  gather cost 2.0 ms at 2 passes; the chain costs 0.45 ms.
+- **Atom.** `node.field_smooth_blend`: one smoothing step, one workgroup per tile. It
+  stages the tile and one node round it, applies [1, 2, 1] / 4 along x, y and z in
+  workgroup memory, then blends back toward the step's start by the node's weight within
+  a half-cell leash of the splat. The Liquid Surface group chains three steps after the
+  volume. A tap in a tile the table does not hold reads the far value.
 
 ### P6d — Blob and volume kernel levers
 

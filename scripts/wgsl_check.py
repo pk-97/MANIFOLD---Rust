@@ -49,42 +49,6 @@ fn ts_table_entries() -> u32 { return params.table_entries; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 fn sort_key_of(p: vec3<f32>) -> u32 { return ts_cell_at(ts_world_cell(p, params.bin_min, params.inv_cell)); }
 """
-# What the codegen wraps around the pooled lattice atoms' bodies
-# (`smooth_lattice_body.wgsl`, `field_smooth_blend_body.wgsl`): the uniform, the gathered buffers and an
-# entry point calling `body`.
-SMOOTH_STUB = """struct Params {
-    cell_size: f32, passes: f32, axis: i32, pool_tiles: f32,
-    dispatch_count: u32, pad0: u32, pad1: u32, pad2: u32,
-}
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> buf_levelset: array<f32>;
-@group(0) @binding(2) var<storage, read> buf_tiles: array<u32>;
-@group(0) @binding(3) var<storage, read_write> buf_out: array<f32>;
-"""
-SMOOTH_MAIN = """@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    buf_out[gid.x] = body(gid.x, params.dispatch_count, params.cell_size, params.passes, params.axis, params.pool_tiles);
-}
-"""
-BLEND_STUB = """struct Params {
-    cell_size: f32, smoothness: f32, band_cells: f32, pool_tiles: f32,
-    dispatch_count: u32, pad0: u32, pad1: u32, pad2: u32,
-}
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> buf_smoothed: array<f32>;
-@group(0) @binding(2) var<storage, read> buf_prior: array<f32>;
-@group(0) @binding(3) var<storage, read> buf_weights: array<f32>;
-@group(0) @binding(4) var<storage, read> buf_reference: array<f32>;
-@group(0) @binding(5) var<storage, read> buf_tiles: array<u32>;
-@group(0) @binding(6) var<storage, read_write> buf_out: array<f32>;
-"""
-BLEND_MAIN = """@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let e_smoothed = buf_smoothed[gid.x];
-    buf_out[gid.x] = body(gid.x, params.dispatch_count, e_smoothed, params.cell_size, params.smoothness,
-        params.band_cells, params.pool_tiles);
-}
-"""
 # What the codegen wraps around `push_out_of_solid_body.wgsl`: its uniform, its
 # gathered buffers and an entry point calling `body`.
 PUSH_OUT_STUB = """struct Element { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32 }
@@ -184,8 +148,7 @@ STACKS = {
     "state_records": (False, [FLIP / "liquid_state_records.wgsl"]),
     "sort_dense": (False, [SORT_DENSE_KEYS, LIQ / "sort_particles_into_cells.wgsl"]),
     "sort_pooled": (False, [WORLD_READ, SORT_POOLED_KEYS, LIQ / "sort_particles_into_cells.wgsl"]),
-    "smooth": (False, [WORLD_READ, SMOOTH_STUB, LIQ / "smooth_lattice_body.wgsl", SMOOTH_MAIN]),
-    "blend": (False, [WORLD_READ, BLEND_STUB, LIQ / "field_smooth_blend_body.wgsl", BLEND_MAIN]),
+    "blend": (False, [WORLD_READ, LIQ / "field_smooth_blend.wgsl"]),
     "particle_volume": (False, [WORLD_READ, SURFACE / "particle_volume.wgsl"]),
     "surface_weights": (False, [WORLD_READ, SURFACE / "surface_weights.wgsl"]),
     "carry_liquid": (False, [WORLD_READ, SURFACE / "carry_liquid_into_solids.wgsl"]),

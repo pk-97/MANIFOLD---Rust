@@ -1,6 +1,5 @@
 use super::FieldSmoothBlend;
 use crate::field_build::{FIELD_BAND_CELLS, FIELD_LEASH_CELLS, FIELD_SMOOTH_STEPS};
-use crate::primitives::smooth_lattice::SmoothLattice;
 use crate::testkit::world_box::{BoxTable, from_pool_under, table_words_of};
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::scene::world_tiles::{TILE_CELLS, pool_len};
@@ -178,25 +177,21 @@ fn bits(v: &[f32]) -> Vec<u32> {
     v.iter().map(|x| x.to_bits()).collect()
 }
 
-fn axis_params(placed: &Placed, axis: usize, passes: usize) -> ParamValues {
-    placed.params(&[("passes", passes as f32), ("axis", axis as f32)])
-}
-
 fn blend_params(placed: &Placed, smoothness: f32) -> ParamValues {
     placed.params(&[("smoothness", smoothness), ("band_cells", BAND_CELLS)])
 }
 
-/// The blend of the four dense fields placed in `placed`, as a pooled array.
+/// One step over the three dense fields placed in `placed`, as a pooled
+/// array.
 fn blend(
     h: &mut Harness,
     placed: &Placed,
-    [smoothed, prior, weights, reference]: [&[f32]; 4],
+    [prior, weights, reference]: [&[f32]; 3],
     smoothness: f32,
 ) -> Vec<f32> {
     let len = placed.len();
-    // Every free-slot element holds water-like junk the blend must not copy.
+    // Every free-slot element holds water-like junk the step must not copy.
     let (tiles, _) = h.array(&placed.words, placed.words.len());
-    let (smoothed, _) = h.array(&placed.pooled(smoothed, FAR, 9.0), len);
     let (prior, _) = h.array(&placed.pooled(prior, FAR, 9.0), len);
     let (weights, _) = h.array(&placed.pooled(weights, 0.0, 9.0), len);
     let (reference, _) = h.array(&placed.pooled(reference, FAR, 9.0), len);
@@ -204,7 +199,6 @@ fn blend(
     let (_, errors) = h.run(
         &mut FieldSmoothBlend::new(),
         &[
-            ("smoothed", smoothed),
             ("prior", prior),
             ("weights", weights),
             ("reference", reference),
@@ -235,29 +229,15 @@ fn three_steps_match(smoothness: f32) {
     let (weights_slot, _) = h.array(&placed.pooled(&weights, 0.0, 9.0), len);
     let (reference_slot, _) = h.array(&placed.pooled(&reference, FAR, 9.0), len);
     let (start_slot, _) = h.array(&placed.pooled(&start, FAR, 9.0), len);
-    let mut smooth = SmoothLattice::new();
     let mut blend = FieldSmoothBlend::new();
     let mut input = start_slot;
     let mut cpu = start.clone();
     let (mut bitten, mut checked) = (0, 0);
     for step in 0..FIELD_SMOOTH_STEPS {
-        let mut from = input;
-        for axis in 0..3 {
-            let (slot, _) = h.array::<f32>(&[], len);
-            let (_, errors) = h.run(
-                &mut smooth,
-                &[("levelset", from), ("tiles", tiles)],
-                &[("smoothed", slot)],
-                &axis_params(&placed, axis, 1),
-            );
-            assert!(errors.is_empty(), "{errors:?}");
-            from = slot;
-        }
         let (out_slot, out_buf) = h.array::<f32>(&[], len);
         let (_, errors) = h.run(
             &mut blend,
             &[
-                ("smoothed", from),
                 ("prior", input),
                 ("weights", weights_slot),
                 ("reference", reference_slot),
@@ -296,32 +276,22 @@ fn three_steps_match(smoothness: f32) {
     );
 }
 
-/// `passes` rounds of [1 2 1] / 4 along `axis` as the binomial row C(2p, k) /
-/// 4^p summed in the shader's order, a tap past the box the canonical level
-/// set.
-fn cpu_smooth(field: &[f32], nodes: [usize; 3], axis: usize, passes: usize) -> Vec<f32> {
-    let n = 2 * passes;
-    let mut choose = vec![1_u32; n + 1];
-    for k in 1..n {
-        choose[k] = choose[k - 1] * (n - k + 1) as u32 / k as u32;
-    }
-    let row: Vec<f32> = choose
-        .iter()
-        .map(|&c| c as f32 / 4_f32.powi(passes as i32))
-        .collect();
+/// One [1 2 1] / 4 pass along `axis` summed in the shader's order, a tap past
+/// the box the canonical level set.
+fn cpu_smooth(field: &[f32], nodes: [usize; 3], axis: usize) -> Vec<f32> {
     let stride = [1, nodes[0], nodes[0] * nodes[1]];
     (0..field.len())
         .map(|i| {
             let at = (i / stride[axis]) % nodes[axis];
             let mut sum = 0.0_f32;
-            for d in -(passes as i32)..=passes as i32 {
+            for (d, w) in [(-1_i32, 0.25_f32), (0, 0.5), (1, 0.25)] {
                 let q = at as i32 + d;
                 let tap = if q < 0 || q >= nodes[axis] as i32 {
                     FAR
                 } else {
                     field[i - at * stride[axis] + q as usize * stride[axis]]
                 };
-                sum += row[(d + passes as i32) as usize] * tap;
+                sum += w * tap;
             }
             sum
         })
@@ -330,43 +300,32 @@ fn cpu_smooth(field: &[f32], nodes: [usize; 3], axis: usize, passes: usize) -> V
 
 /// A box that fills its tiles to their faces, across tiles -1 and 0 on x: a
 /// tap past it is in a tile the table does not hold and reads the canonical
-/// level set, not the box's edge. The free slot comes out canonical too.
+/// level set, not the box's edge, and every pass leaves those nodes at it.
+/// Weight 1 and a reference equal to the prior inside the band show the
+/// plain smoothing. The free slot comes out canonical too.
 #[test]
 fn smoothing_reads_the_canonical_level_set_past_the_tiles_it_holds() {
     let nodes = [16_usize, 8, 8];
     let placed = Placed::new([-8, 0, 0], nodes);
-    let field: Vec<f32> = (0..nodes.iter().product::<usize>())
-        .map(|i| ((i * 37) % 101) as f32 * 0.01 - 0.5)
+    let n = nodes.iter().product::<usize>();
+    // Near the canonical level set, so no node moves a leash (one cell at
+    // Smoothness 2) away.
+    let field: Vec<f32> = (0..n)
+        .map(|i| 0.25 + ((i * 37) % 101) as f32 * 0.0005)
         .collect();
     let mut h = Harness::new();
-    let len = placed.len();
-    let (tiles, _) = h.array(&placed.words, placed.words.len());
-    let (input, _) = h.array(&placed.pooled(&field, FAR, -1.0), len);
-    for passes in 0..=3 {
-        for axis in 0..3 {
-            let (out, out_buf) = h.array::<f32>(&[], len);
-            let (_, errors) = h.run(
-                &mut SmoothLattice::new(),
-                &[("levelset", input), ("tiles", tiles)],
-                &[("smoothed", out)],
-                &axis_params(&placed, axis, passes),
-            );
-            assert!(errors.is_empty(), "{errors:?}");
-            let pooled = read::<f32>(&out_buf, len);
-            let want = cpu_smooth(&field, nodes, axis, passes);
-            for (i, (g, w)) in placed.dense(&pooled).iter().zip(&want).enumerate() {
-                assert!(
-                    (g - w).abs() <= 1e-6,
-                    "{passes} passes axis {axis} node {i}: gpu {g} vs cpu {w}"
-                );
-            }
-            assert_eq!(
-                placed.outside_not(&pooled, FAR),
-                0,
-                "{passes} passes axis {axis}"
-            );
-        }
+    let pooled = blend(&mut h, &placed, [&field, &vec![1.0; n], &field], 2.0);
+    let want = cpu_smooth(
+        &cpu_smooth(&cpu_smooth(&field, nodes, 0), nodes, 1),
+        nodes,
+        2,
+    );
+    for (i, (g, w)) in placed.dense(&pooled).iter().zip(&want).enumerate() {
+        assert!((g - w).abs() <= 1e-6, "node {i}: gpu {g} vs cpu {w}");
     }
+    // The faces of the box read the canonical level set.
+    assert!(want.iter().zip(&field).any(|(w, f)| (w - f).abs() > 1e-3));
+    assert_eq!(placed.outside_not(&pooled, FAR), 0);
 }
 
 #[test]
@@ -374,7 +333,7 @@ fn weight_zero_and_out_of_band_keep_the_prior_bit_for_bit() {
     let mut h = Harness::new();
     let placed = Placed::new(ORIGIN, NODES);
     let n = node_count();
-    let (smoothed, reference) = fields();
+    let (_, reference) = fields();
     let weights = weights();
     // Within the leash of the reference, so weight 0 leaves the prior untouched.
     let prior: Vec<f32> = reference
@@ -382,12 +341,7 @@ fn weight_zero_and_out_of_band_keep_the_prior_bit_for_bit() {
         .enumerate()
         .map(|(i, r)| r + 0.01 * ((i % 5) as f32 - 2.0) / 2.0)
         .collect();
-    let pooled = blend(
-        &mut h,
-        &placed,
-        [&smoothed, &prior, &weights, &reference],
-        1.0,
-    );
+    let pooled = blend(&mut h, &placed, [&prior, &weights, &reference], 1.0);
     let got = placed.dense(&pooled);
     let (leash, band) = (FIELD_LEASH_CELLS * CELL, BAND_CELLS * CELL);
     let (mut held, mut in_band) = (0, 0);
@@ -418,19 +372,14 @@ fn zero_smoothness_returns_the_reference_inside_the_band() {
     let mut h = Harness::new();
     let placed = Placed::new(ORIGIN, NODES);
     let n = node_count();
-    let (smoothed, reference) = fields();
+    let (_, reference) = fields();
     let weights = weights();
     let prior: Vec<f32> = reference
         .iter()
         .enumerate()
         .map(|(i, r)| r + 0.01 * ((i % 5) as f32 - 2.0) / 2.0)
         .collect();
-    let pooled = blend(
-        &mut h,
-        &placed,
-        [&smoothed, &prior, &weights, &reference],
-        0.0,
-    );
+    let pooled = blend(&mut h, &placed, [&prior, &weights, &reference], 0.0);
     let got = placed.dense(&pooled);
     let band = BAND_CELLS * CELL;
     let mut in_band = 0;
@@ -469,7 +418,6 @@ fn missing_or_short_inputs_are_named_errors() {
         (
             "no weights",
             vec![
-                ("smoothed", field_slot),
                 ("prior", field_slot),
                 ("reference", reference_slot),
                 ("tiles", tiles),
@@ -478,7 +426,6 @@ fn missing_or_short_inputs_are_named_errors() {
         (
             "a reference one short of the pool",
             vec![
-                ("smoothed", field_slot),
                 ("prior", field_slot),
                 ("weights", weights_slot),
                 ("reference", short_slot),
@@ -488,7 +435,6 @@ fn missing_or_short_inputs_are_named_errors() {
         (
             "no tiles",
             vec![
-                ("smoothed", field_slot),
                 ("prior", field_slot),
                 ("weights", weights_slot),
                 ("reference", reference_slot),

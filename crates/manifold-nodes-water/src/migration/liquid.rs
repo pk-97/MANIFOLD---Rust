@@ -645,6 +645,33 @@ pub(crate) fn retire_redistance(def: &mut EffectGraphDef) -> bool {
     !retired.is_empty()
 }
 
+/// Drop a saved surface's `node.smooth_lattice` passes, after flattening:
+/// each `node.field_smooth_blend` smooths its own prior along x, y and z, so
+/// the three axis passes before it and the wire into its old `smoothed` go
+/// (their first pass read that same prior). Idempotent.
+pub(crate) fn fold_smoothing_into_blend(def: &mut EffectGraphDef) -> bool {
+    const RETIRED: &str = "node.smooth_lattice";
+    let retired: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == RETIRED)
+        .map(|n| n.id)
+        .collect();
+    def.wires
+        .retain(|w| !retired.contains(&w.from_node) && !retired.contains(&w.to_node));
+    def.nodes.retain(|n| n.type_id != RETIRED);
+    !retired.is_empty()
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "fold_smoothing_into_blend",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 380,
+        apply: fold_smoothing_into_blend,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "retire_redistance",
@@ -781,7 +808,7 @@ mod tests {
             nodes: vec![
                 bare_node(1, "node.particle_volume"),
                 bare_node(2, "node.redistance_lattice"),
-                bare_node(3, "node.smooth_lattice"),
+                bare_node(3, "node.surface_weights"),
                 bare_node(4, "node.field_smooth_blend"),
                 bare_node(5, "node.surface_tiles"),
             ],
@@ -789,7 +816,7 @@ mod tests {
                 wire(1, "levelset", 2, "levelset"),
                 wire(5, "tiles", 2, "tiles"),
                 wire(5, "tiles", 3, "tiles"),
-                wire(2, "out", 3, "levelset"),
+                wire(2, "out", 3, "reference"),
                 wire(2, "out", 4, "prior"),
                 wire(2, "out", 4, "reference"),
             ],
@@ -800,13 +827,69 @@ mod tests {
             def.wires,
             [
                 wire(5, "tiles", 3, "tiles"),
-                wire(1, "levelset", 3, "levelset"),
+                wire(1, "levelset", 3, "reference"),
                 wire(1, "levelset", 4, "prior"),
                 wire(1, "levelset", 4, "reference"),
             ]
         );
         let migrated = def.clone();
         assert!(!retire_redistance(&mut def));
+        assert_eq!(def, migrated);
+    }
+
+    /// A saved smoothing step's three axis passes go with every wire they
+    /// carried; the blend keeps its prior, weights, reference and tiles. A
+    /// second run changes nothing.
+    #[test]
+    fn saved_smoothing_folds_into_the_blend() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from,
+            from_port: output.into(),
+            to_node: to,
+            to_port: input.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                bare_node(1, "node.particle_volume"),
+                bare_node(2, "node.smooth_lattice"),
+                bare_node(3, "node.smooth_lattice"),
+                bare_node(4, "node.smooth_lattice"),
+                bare_node(5, "node.field_smooth_blend"),
+                bare_node(6, "node.surface_weights"),
+                bare_node(7, "node.surface_tiles"),
+            ],
+            wires: vec![
+                wire(1, "levelset", 2, "levelset"),
+                wire(2, "smoothed", 3, "levelset"),
+                wire(3, "smoothed", 4, "levelset"),
+                wire(4, "smoothed", 5, "smoothed"),
+                wire(1, "levelset", 5, "prior"),
+                wire(6, "weights", 5, "weights"),
+                wire(1, "levelset", 5, "reference"),
+                wire(7, "tiles", 2, "tiles"),
+                wire(7, "tiles", 5, "tiles"),
+            ],
+        };
+        assert!(fold_smoothing_into_blend(&mut def));
+        let ids: Vec<u32> = def.nodes.iter().map(|n| n.id).collect();
+        assert_eq!(ids, [1, 5, 6, 7]);
+        assert_eq!(
+            def.wires,
+            [
+                wire(1, "levelset", 5, "prior"),
+                wire(6, "weights", 5, "weights"),
+                wire(1, "levelset", 5, "reference"),
+                wire(7, "tiles", 5, "tiles"),
+            ]
+        );
+        let migrated = def.clone();
+        assert!(!fold_smoothing_into_blend(&mut def));
         assert_eq!(def, migrated);
     }
 

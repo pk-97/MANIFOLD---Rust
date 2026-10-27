@@ -211,8 +211,8 @@ fn an_atom_without_a_rule_fails_by_name() {
     }
 }
 
-/// A smoothing pass told its pool is larger than the level set it reads is
-/// caught before the GPU: Dam Break Matter with the first smooth_lattice
+/// A smoothing step told its pool is larger than the level set it reads is
+/// caught before the GPU: Dam Break Matter with the first field_smooth_blend
 /// unwired from the display table's pool and set to 4096 tiles.
 #[test]
 fn a_lattice_past_its_storage_is_caught() {
@@ -225,9 +225,9 @@ fn a_lattice_past_its_storage_is_caught() {
     let counter = flat
         .nodes
         .iter()
-        .find(|node| node.type_id == "node.smooth_lattice")
+        .find(|node| node.type_id == "node.field_smooth_blend")
         .map(|node| node.id)
-        .expect("a smoothing pass");
+        .expect("a smoothing step");
     let lattice = ["pool_tiles"];
     flat.wires
         .retain(|wire| !(wire.to_node == counter && lattice.contains(&wire.to_port.as_str())));
@@ -244,7 +244,7 @@ fn a_lattice_past_its_storage_is_caught() {
         Err(ExtentError::Uncovered { node, detail }) => {
             assert!(
                 // The table is checked first: it is the first array too short.
-                node.contains("smooth_lattice") && detail.starts_with("tiles holds"),
+                node.contains("field_smooth_blend") && detail.starts_with("tiles holds"),
                 "{node}: {detail}"
             );
         }

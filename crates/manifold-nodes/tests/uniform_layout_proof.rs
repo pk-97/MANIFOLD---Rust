@@ -603,11 +603,12 @@ const NON_STANDALONE: &[&str] = &[
     // restart over one hand shader beside its fused atoms, its HandParams and
     // RestartParams reflected in uniform_layout_extended.
     "node.whitewater_step",
-    // The field build's splat (one workgroup a tile), its surface weights
-    // (counts, then weights and velocity) and its carry into drawn solids:
-    // their Uniforms, WeightUniforms and CarryUniforms are reflected in
-    // uniform_layout_extended.
+    // The field build's splat and smoothing steps (one workgroup a tile), its
+    // surface weights (counts, then weights and velocity) and its carry into
+    // drawn solids: their Uniforms, WeightUniforms and CarryUniforms are
+    // reflected in uniform_layout_extended.
     "node.particle_volume",
+    "node.field_smooth_blend",
     "node.surface_weights",
     "node.carry_liquid_into_solids",
     // The surface mesh and the Narrow Band's interior fill: their

@@ -10,7 +10,6 @@ pub mod particle_identity;
 pub mod particle_publication;
 pub mod prefix_scan;
 pub mod running_total;
-pub mod smooth_lattice;
 // Keep this declaration outside a macro: the module exports float_param!.
 pub mod sort_particles_into_cells;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
