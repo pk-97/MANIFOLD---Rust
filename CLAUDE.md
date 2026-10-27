@@ -11,13 +11,13 @@ The Rust codebase is the only reference. `/Users/peterkiemann/MANIFOLD - Render 
 - Disagree once with the reason, then defer if he holds.
 
 ## Working as lead
-1. Read the exact code briefly. Tell Peter in plain words what's wrong, what changes, who does it, and how it's tested. End with one question.
-2. On his go, give a worker an exact `file:line` spec and the tests to write. Say in one line that it's running.
-3. When the workers are done, read the diff, then build and test once yourself (clippy, then the scoped nextest). Fix a few lines directly; send bigger errors back to the worker that wrote the file. Report in a few lines what changed for him.
+1. Read the exact code briefly. Tell Peter in plain words what's wrong, what changes, and how it's tested. End with one question.
+2. Write the code directly when a step touches 1–3 files or when writing a spec would take as long as editing the code. Spawn workers (`haiku` or `sonnet`) only when a batch has 2–4 independent files to write at once; give them exact cross-file signatures up front so they never pass line numbers through you.
+3. Finish one batch completely before starting the next on the same crates: build and test once (`cargo clippy`, then scoped `nextest` under 25 unit tests), fix compiler errors or small follow-ups directly yourself (don't bounce small fixes back to a worker), and commit with explicit paths.
 
-If the scope grows, stop and tell him. Between those points stay quiet: no report per worker, speak when the job is done or a decision is needed. Investigation is lead work, workers execute specs. Edit directly only when it's tiny. These rules override the harness's "when in doubt, don't spawn."
+If the scope grows, stop and tell him. Between those points stay quiet: no report per worker, speak when the job is done or a decision is needed. Never overlap unbuilt batches in the working tree, never build in rsync scratch copies, and never spawn agents to write design docs. No side quests mid-run: never bisect old commits or chase a test that was already red; log one line for the final check and keep going.
 
-Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `sonnet` for a self-contained module or shader whose math you give it. In OpenCode, `opencode-go/beam-free`. Workers only read, write and edit code: they never run `cargo`, tests, captures or the GPU, because workers compiling turns hours of work into days. So several can write at once, each on separate files in the main checkout. Never invent process rituals (worktree slots, audit swarms, review committees).
+Workers: `haiku` (the `lane` agent) for mechanical edits, deletions, moves and wiring across separate files. `sonnet` for a self-contained module or shader whose math and exact signatures you give it. In OpenCode, `opencode-go/beam-free`. Workers only read, write and edit code (`scripts/wgsl_check.py` is fine for shaders): they never run `cargo`, tests, captures or the GPU, because workers compiling turns hours of work into days. Never invent process rituals (worktree slots, scratch-tree rsyncs, design-doc swarms, audit swarms, review committees).
 
 ## Engineering checks (before finishing any change)
 1. Test beyond defaults: never only `0`, `1`, one item, a flat hierarchy, 60 fps or 120 BPM. Use real assets and non-trivial state.
@@ -30,6 +30,7 @@ Workers: `haiku` (the `lane` agent) for edits, deletions, moves and wiring. `son
 ## Workflow
 - Work in the main checkout. No worktrees unless Peter asks.
 - Builds and tests are the lead's. Iterate with `cargo nextest run -p <crate> <filter>`. Before committing, run `cargo clippy -p <crate> --tests -- -D warnings`.
+- Slim loop per change: shader edits go through `scripts/wgsl_check.py` before any `cargo`; iterate and render stills from the debug build; one release build per landed change, only for its frame-time number. At most one test per change, and only for what a still cannot show.
 - Commit with explicit paths (`git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`.
 - Never launch the `manifold` GUI. Use the headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`. Peter runs the live app.
 - Use `rg`, `fd` and `ast-grep`. Never start `rust-analyzer`. Repo tools are listed in `scripts/TOOLS.md`.
