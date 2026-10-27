@@ -16,7 +16,7 @@ use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, SOLVER
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::particles::FluidParticle;
 #[cfg(test)]
-use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
+use manifold_node_engine::scene::world_tiles::{CANON_ELEMENTS, TILE_CELLS, pool_len, table_words};
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::{
     exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::ExecutionPlan,
@@ -26,8 +26,6 @@ use manifold_node_engine::{
 };
 use manifold_nodes_water::presets::gpu_flip::{STEP_NODE, WaterScene, water_def};
 use manifold_water_gpu_flip::primitives::gpu_flip_step::BOX_BAND_CELLS;
-#[cfg(test)]
-use manifold_water_gpu_flip::primitives::gpu_flip_step::pool_tiles;
 #[cfg(test)]
 use manifold_water_liquid::fluid_particles::FaceSample;
 #[cfg(test)]
@@ -403,11 +401,20 @@ impl Run {
     }
 
     /// The step's pool, `P` tiles, and the world cell of its window's
-    /// first cell.
+    /// first cell. The step runs on the pool its water fits, at most the
+    /// domain's: its faces hold that pool and the canonical element.
     #[cfg(test)]
     fn pool(&self) -> (u32, [i32; 3]) {
+        let faces = output_of(&self.plan, node_named(&self.graph, STEP_NODE), "faces");
+        let records = self
+            .exec
+            .host_array_buffer(&self.graph, &self.plan, faces)
+            .expect("the step's faces are a host read")
+            .size
+            / std::mem::size_of::<FaceSample>() as u64;
+        let pool_tiles = (records - u64::from(CANON_ELEMENTS)) / u64::from(TILE_CELLS);
         (
-            pool_tiles(self.scene.layout().cells),
+            pool_tiles as u32,
             solver_origin_cell(self.window().0, self.scene.cell_size() as f32),
         )
     }
@@ -955,7 +962,9 @@ fn gpu_flip_narrow_band_drops_the_deep_particles_and_keeps_the_volume() {
 /// Encode replay changes nothing the step computes: 60 Dam Break ticks
 /// with the executor's replay on match replay off bit for bit, particles,
 /// faces and the solver's words, every tick, while the solver's rounds run
-/// as replayed segments and none directly.
+/// as replayed segments and none directly. The step's pool grows as the
+/// water spreads, and a new pool is a new encode: it records again and
+/// warms up again, and at least twenty ticks run warm.
 #[test]
 fn gpu_flip_replay_changes_nothing() {
     let scene = WaterScene::dam_break(64).with_steps(1);
@@ -963,12 +972,20 @@ fn gpu_flip_replay_changes_nothing() {
     direct.set_encode_replay(false);
     let mut replay = Run::new(scene);
     // The ring's three entries each take two visits to hold the whole
-    // step; from the tenth tick every frame replays all of it.
+    // step; ten ticks past the last new pool every frame replays all of it.
     const WARM: u32 = 10;
     let mut last = replay.replay_stats();
+    let mut pool = None;
+    let mut warm_from = WARM;
+    let mut warm_ticks = 0;
     for frame in 1..=60 {
         direct.frame();
         replay.frame();
+        let now = replay.pool().0;
+        if pool.is_some_and(|before| before != now) {
+            warm_from = frame + WARM;
+        }
+        pool = Some(now);
         let (dp, rp) = (direct.particles(), replay.particles());
         assert!(
             bytemuck::cast_slice::<_, u8>(&dp) == bytemuck::cast_slice::<_, u8>(&rp),
@@ -989,7 +1006,7 @@ fn gpu_flip_replay_changes_nothing() {
         if frame <= WARM || frame % 20 == 0 || delta(|s| s.recorded) > 0 {
             let clock: Vec<u32> = replay.read(STEP_NODE, "clock_status", 8);
             println!(
-                "tick {frame}: clock {clock:?}, live {}; solver words {:?}; recorded {} replayed {} direct {} executes {} segments replayed {} direct {} allocations {}",
+                "tick {frame}: pool {now}, clock {clock:?}, live {}; solver words {:?}; recorded {} replayed {} direct {} executes {} segments replayed {} direct {} allocations {}",
                 particle_stats(&rp).live,
                 replay.solver(),
                 delta(|s| s.recorded),
@@ -1001,7 +1018,8 @@ fn gpu_flip_replay_changes_nothing() {
                 delta(|s| s.store_allocations)
             );
         }
-        if frame > WARM {
+        if frame > warm_from {
+            warm_ticks += 1;
             assert_eq!(
                 delta(|s| s.recorded),
                 0,
@@ -1024,6 +1042,7 @@ fn gpu_flip_replay_changes_nothing() {
         }
         last = stats;
     }
+    assert!(warm_ticks >= 20, "only {warm_ticks} ticks ran warm");
     assert_eq!(
         direct.replay_stats().replayed,
         0,
@@ -1607,23 +1626,16 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
     }
 }
 
-/// The Dam Break with the step's Sheet Fill Rate set, when given.
-#[cfg(test)]
-fn dam_break_sheeting(n: usize, rate: Option<f64>) -> Run {
-    let scene = WaterScene::dam_break(n);
-    if let Some(rate) = rate {
-        Run::posed(scene, &[("domain", "sheet_fill_rate", rate)])
-    } else {
-        Run::new(scene)
-    }
-}
-
 /// Sheet seeding on: replayed encodes give the particles a direct encode
-/// gives, bit for bit, frame by frame, with births among them.
+/// gives, bit for bit, frame by frame, with births among them. A closed tank
+/// holds exactly its fill's slots, so the low x side is open: the floor's
+/// water runs out there and frees slots for the sheets' births.
 #[test]
 fn gpu_flip_sheeting_replay_matches_direct() {
-    let mut direct = dam_break_sheeting(32, Some(1.0));
-    let mut replayed = dam_break_sheeting(32, Some(1.0));
+    let scene = WaterScene::dam_break(32).with_closed_faces(63 & !1);
+    let sheets = [("domain", "sheet_fill_rate", 1.0)];
+    let mut direct = Run::posed(scene, &sheets);
+    let mut replayed = Run::posed(scene, &sheets);
     replayed.set_encode_replay(true);
     let seeded = direct.particles().iter().map(|p| p.id).max().unwrap_or(0);
     let mut born = 0;

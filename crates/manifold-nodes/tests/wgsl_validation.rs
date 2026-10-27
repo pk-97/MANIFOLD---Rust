@@ -159,6 +159,10 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
         "water_cover.wgsl",
         [read_side, FIELD_TILES, WATER_MARCH_CORE].join("\n"),
     ));
+    composed.push((
+        "water_tile_flags.wgsl",
+        [read_side, FIELD_TILES, WATER_MARCH_CORE].join("\n"),
+    ));
     // The water shade (`WATER_SHADE_WGSL`): the scene shading and the five
     // look hooks, then the field helpers.
     composed.push((

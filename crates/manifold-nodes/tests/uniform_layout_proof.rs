@@ -608,6 +608,12 @@ const NON_STANDALONE: &[&str] = &[
     // reflected in uniform_layout_extended.
     "node.surface_weights",
     "node.carry_liquid_into_solids",
+    // The field build's re-distance, the surface mesh and the Narrow Band's
+    // interior fill: their Uniforms, MeshUniforms and FillUniforms are
+    // reflected in uniform_layout_extended.
+    "node.redistance_lattice",
+    "node.tile_surface_mesh",
+    "node.interior_fill",
     // The display table's hand build, surface wetness and the whitewater
     // splats (foam cover, spray mist): TileUniforms, WetnessUniforms,
     // CoverUniforms and MistUniforms are reflected in uniform_layout_extended.

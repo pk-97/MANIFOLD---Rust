@@ -530,6 +530,27 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "redistance_lattice.rs",
+        rust_struct: "Uniforms",
+        shader: "shaders/redistance_lattice.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "tile_surface_mesh.rs",
+        rust_struct: "MeshUniforms",
+        shader: "shaders/tile_surface_mesh.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "interior_fill.rs",
+        rust_struct: "FillUniforms",
+        shader: "shaders/interior_fill.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "merge_meshes.rs",
         rust_struct: "PartUniforms",
         shader: "shaders/merge_meshes.wgsl",

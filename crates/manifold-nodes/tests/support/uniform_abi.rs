@@ -34,7 +34,6 @@ pub const ABI_SOURCE_FILES: &[&str] = &[
     "../manifold-water-liquid/src/frame_history.rs",
     "../manifold-water-liquid/src/frame_ring.rs",
     "../manifold-water-liquid/src/grid.rs",
-    "../manifold-water-liquid/src/lattice.rs",
     "../manifold-water-liquid/src/substep_history.rs",
 ];
 
