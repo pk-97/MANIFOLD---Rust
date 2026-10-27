@@ -1,10 +1,16 @@
 // node.liquid_solid_distance — fusable BUFFER body, GATHER. One thread per lattice node, x fastest: the seam's solid
 // lattice, positive in free space and negative inside a solid. It is the
-// smaller of the distance to the nearest closed wall, wall_inset nodes in
-// from the lattice edge (native FLIP supplies 1.5 + 5e-5/h; MPM supplies 3), and every enabled body's signed distance, sampled from its
-// shape's lattice in the atlas through its pose at the end of this frame's
-// last tick (the row rows − body_count moved for tick_seconds, as
-// node.matter_move_bodies moves it), in metres by liquid_shape_distance.
+// smaller of the distance to the Wall faces of the Bounds box and every
+// enabled body's signed distance, sampled from its shape's lattice in the
+// atlas through its pose at the end of this frame's last tick (the row
+// rows − body_count moved for tick_seconds, as node.matter_move_bodies moves
+// it), in metres by liquid_shape_distance. The Bounds box is bounds_lo..
+// bounds_hi in metres as placed; closed_faces (bits −X +X −Y +Y −Z +Z) marks
+// its Wall faces. Per Wall face the distance is x − lo (low face) or hi − x
+// (high face), positive on the water side; the wall distance is the least of
+// them, 1e30 with no Wall face, and past a Wall it is minus the length of the
+// per-axis overshoots. Open faces are not solids. This is the formula of
+// manifold_water_liquid::lattice::bounds_distance.
 //
 // ABI: `bodies` (LiquidBody), `shapes` (LiquidShape) and `atlas` (distances
 // two halves per word) are gathered; the output is one f32 per node. Poses
@@ -47,7 +53,12 @@ fn body(
     nodes_y: i32,
     nodes_z: i32,
     closed_faces: i32,
-    wall_inset: f32,
+    bounds_lo_x: f32,
+    bounds_lo_y: f32,
+    bounds_lo_z: f32,
+    bounds_hi_x: f32,
+    bounds_hi_y: f32,
+    bounds_hi_z: f32,
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
@@ -56,25 +67,25 @@ fn body(
     let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
     let lattice_min = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let x = lattice_min + vec3<f32>(coord) * cell_size;
-    let inset = max(wall_inset, 0.0);
-    let low = lattice_min + vec3<f32>(inset * cell_size);
-    let high = low + (vec3<f32>(n) - vec3<f32>(1.0 + 2.0 * inset)) * cell_size;
-    var distance = length(vec3<f32>(n) * cell_size);
-    var outside = vec3<f32>(0.0);
+    let lo = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
+    let hi = vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z);
+    var distance = 1.0e30;
+    var overshoot = vec3<f32>(0.0);
     let faces = u32(closed_faces);
     for (var d = 0u; d < 3u; d = d + 1u) {
-        var axis_distance = length(vec3<f32>(n) * cell_size);
         if (faces & (1u << (2u * d))) != 0u {
-            axis_distance = min(axis_distance, x[d] - low[d]);
+            let wall = x[d] - lo[d];
+            distance = min(distance, wall);
+            overshoot[d] = min(overshoot[d], wall);
         }
         if (faces & (1u << (2u * d + 1u))) != 0u {
-            axis_distance = min(axis_distance, high[d] - x[d]);
+            let wall = hi[d] - x[d];
+            distance = min(distance, wall);
+            overshoot[d] = min(overshoot[d], wall);
         }
-        distance = min(distance, axis_distance);
-        outside[d] = min(axis_distance, 0.0);
     }
-    if any(outside < vec3<f32>(0.0)) {
-        distance = -length(outside);
+    if any(overshoot < vec3<f32>(0.0)) {
+        distance = -length(overshoot);
     }
     let first = max(rows - body_count, 0);
     for (var b = 0; b < body_count; b = b + 1) {

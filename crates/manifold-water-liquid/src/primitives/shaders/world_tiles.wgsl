@@ -10,7 +10,10 @@
 // Passes, a barrier between each (world_tiles.rs `encode_build`): wt_clear,
 // wt_seed, wt_seeds, wt_dilate, wt_rings, wt_near, wt_carry, wt_wants, the
 // prefix scan, wt_free, wt_allocate, wt_slots, then wt_finish. Inserts and
-// lookups never share a pass, so a lookup never meets a key in motion.
+// lookups never share a pass, so a lookup never meets a key in motion. An
+// insert can move a key to the next entry, so an entry's own words are
+// written only after the dilation's inserts: the seed pass, which runs
+// before them, keeps its tiles in words of its own.
 //
 // Determinism: ordered linear probing makes the table's layout a function of
 // its key set alone, whatever order threads insert in; slots are freed in
@@ -68,7 +71,8 @@ struct WtParams {
 // Slots handed out this build.
 @group(0) @binding(6) var<storage, read_write> wt_fresh: array<u32>;
 // Per entry: ring [0, H), near [H, 2H), tile x, y, z [2H, 5H) as bits
-// (WT_UNSET until written); the seed list [5H, 6H).
+// (WT_UNSET until written); the seed pass's tile x, y, z [5H, 8H), at the
+// entry its lookup found; the seed list [8H, 9H), each seed's entry there.
 @group(0) @binding(7) var<storage, read_write> wt_entry: array<atomic<u32>>;
 // Per slot: its state this build [0, P), its rank [P, 2P) (last build's
 // until wt_slots), the free stack [2P, 3P).
@@ -169,8 +173,12 @@ fn wt_coord_word(e: u32, axis: u32) -> u32 {
     return (2u + axis) * wt.entries + e;
 }
 
+fn wt_seed_coord_word(e: u32, axis: u32) -> u32 {
+    return (5u + axis) * wt.entries + e;
+}
+
 fn wt_seed_word(j: u32) -> u32 {
-    return 5u * wt.entries + j;
+    return 8u * wt.entries + j;
 }
 
 fn wt_state_word(s: u32) -> u32 {
@@ -258,15 +266,16 @@ fn wt_insert(key: u32) {
     }
 }
 
-// Write tile t into entry e, each axis by compare-exchange from WT_UNSET.
-// Every writer of an entry writes the same tile unless two live tiles share
-// its key (an alias): a writer finding another value sets the alias bit.
-// True for the one writer of the x axis.
-fn wt_claim(e: u32, t: vec3<i32>) -> bool {
+// Write tile t into entry e's words starting at `region` · H (2 the
+// entry's tile, 5 the seed pass's), each axis by compare-exchange from
+// WT_UNSET. Every writer of an entry writes the same tile unless two live
+// tiles share its key (an alias): a writer finding another value sets the
+// alias bit. True for the one writer of the x axis.
+fn wt_claim_in(region: u32, e: u32, t: vec3<i32>) -> bool {
     let bits = bitcast<vec3<u32>>(t);
     var first = false;
     for (var axis = 0u; axis < 3u; axis = axis + 1u) {
-        let at = wt_coord_word(e, axis);
+        let at = (region + axis) * wt.entries + e;
         var old = WT_UNSET;
         loop {
             let swap = atomicCompareExchangeWeak(&wt_entry[at], WT_UNSET, bits[axis]);
@@ -284,9 +293,18 @@ fn wt_claim(e: u32, t: vec3<i32>) -> bool {
     return first;
 }
 
+fn wt_claim(e: u32, t: vec3<i32>) -> bool {
+    return wt_claim_in(2u, e, t);
+}
+
 // The tile seed j dilates around.
 fn wt_seed_tile(j: u32) -> vec3<i32> {
-    return wt_entry_tile(atomicLoad(&wt_entry[wt_seed_word(j)]));
+    let e = atomicLoad(&wt_entry[wt_seed_word(j)]);
+    return bitcast<vec3<i32>>(vec3<u32>(
+        atomicLoad(&wt_entry[wt_seed_coord_word(e, 0u)]),
+        atomicLoad(&wt_entry[wt_seed_coord_word(e, 1u)]),
+        atomicLoad(&wt_entry[wt_seed_coord_word(e, 2u)]),
+    ));
 }
 
 // Tiles per side of the dilation cube.
@@ -337,6 +355,7 @@ fn wt_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicStore(&wt_entry[wt_near_word(e)], wt.cell_reach + 1u);
     for (var axis = 0u; axis < 3u; axis = axis + 1u) {
         atomicStore(&wt_entry[wt_coord_word(e, axis)], WT_UNSET);
+        atomicStore(&wt_entry[wt_seed_coord_word(e, axis)], WT_UNSET);
     }
 }
 
@@ -352,8 +371,11 @@ fn wt_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // One thread a point: write the point's tile into its entry; the first
 // writer appends the entry to the seed list (order free: each seed's work is
-// order-independent), gives it ring 0 and raises the dilation's triple to
-// cover the list. A tile a full table dropped is no seed.
+// order-independent) and raises the dilation's triple to cover the list. A
+// tile a full table dropped is no seed. With a dilation to follow, the tile
+// goes in the seed pass's words and wt_rings gives it ring 0 at the entry
+// it ends in; with none (ring_max 0) no key moves again, so the entry's own
+// words and ring 0 are written here.
 @compute @workgroup_size(256)
 fn wt_seeds(@builtin(global_invocation_id) gid: vec3<u32>) {
     if wt_off() || !wt_live(gid.x) {
@@ -361,10 +383,13 @@ fn wt_seeds(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let t = wt_point_tile(gid.x);
     let e = ts_entry_of(ts_tile_key(t));
-    if e == WT_NONE || !wt_claim(e, t) {
+    let final_entry = wt.ring_max == 0u;
+    if e == WT_NONE || !wt_claim_in(select(5u, 2u, final_entry), e, t) {
         return;
     }
-    atomicMin(&wt_entry[wt_ring_word(e)], 0u);
+    if final_entry {
+        atomicMin(&wt_entry[wt_ring_word(e)], 0u);
+    }
     let j = atomicAdd(&wt_build[wt_seeds_word()], 1u);
     atomicStore(&wt_entry[wt_seed_word(j)], e);
     let side = wt_side();
@@ -397,8 +422,9 @@ fn wt_dilate(@builtin(global_invocation_id) gid: vec3<u32>) {
     wt_insert(ts_tile_key(wt_seed_tile(j) + d));
 }
 
-// The same threads as wt_dilate: look each tile up, lower its ring to the
-// Chebyshev tile distance from the seed, and write its tile.
+// The same threads as wt_dilate, the seed's own tile among them: look each
+// tile up, lower its ring to the Chebyshev tile distance from the seed, and
+// write its tile.
 @compute @workgroup_size(256)
 fn wt_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
     if wt_off() {

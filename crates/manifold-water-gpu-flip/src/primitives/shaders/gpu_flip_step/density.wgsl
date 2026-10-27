@@ -2,33 +2,28 @@
 // tent kernel at the cell's centre, sum to 8.
 const REST_DENSITY: f32 = 8.0;
 
-// What a solid neighbour cell at offset d would weigh at the centre if it
-// held eight evenly placed particles, as the paper samples solids with
-// particles: Π over axes of 1.5 at offset 0 and 0.25 at ±1. A face neighbour
-// weighs 0.5625, an edge one 0.09375, a corner one 0.015625; with the cell's
-// own and its water neighbours they sum to REST_DENSITY. blub's live branch
-// keeps only the face term; without the rest a seeded cell at a wall reads
-// 5.5% light and a still pool creeps toward the walls.
-// A cell whose centre is this many cells clear of every body has no site
-// inside one; its rest sites lie within 0.44 cells of the centre.
+// A cell whose centre is this many cells clear of every solid, a wall or a
+// body, has no rest site inside one; its rest sites lie within 0.44 cells of
+// the centre. A solid cell's eight evenly placed rest sites weigh, at the
+// centre, 1.5 at offset 0 and 0.25 at ±1 on each axis (their tent weights,
+// as the paper samples solids with particles): a face neighbour 0.5625, an
+// edge one 0.09375, a corner one 0.015625, which with the cell's own and its
+// water neighbours sum to REST_DENSITY. Without the rest a seeded cell at a
+// wall reads 5.5% light and a still pool creeps toward the walls.
 const SOLID_SITE_REACH: f32 = 1.75;
-
-fn solid_neighbour_density(d: vec3<i32>) -> f32 {
-    let w = select(vec3<f32>(1.5), vec3<f32>(0.25), d != vec3<i32>(0));
-    return w.x * w.y * w.z;
-}
 
 // The source's clamp: one projection moves a particle at most about half a
 // cell.
 const MAX_DENSITY_ERROR: f32 = 0.5;
 
 // Kugelstadt et al. 2019's density source (see gpu_flip_step.rs). 512
-// threads a slot of C, the sorted particles to `cell_out`. In a water cell of
-// the box, ρ is the sum
+// threads a slot of C, the sorted particles to `cell_out`. In a water cell, ρ
+// is the sum
 // of the tent weights Π(1 − |c − q|) of the particles within a cell of its
-// centre c, plus what solid rest sites would weigh: solid_neighbour_density
-// for each neighbour outside the box, each body site's tent weight. Beside
-// a face neighbour holding no particles ρ is at least REST_DENSITY, since a part full
+// centre c, plus what solid rest sites would weigh: the tent weight of each
+// site of a neighbouring cell that lies inside a solid, a wall's or a body's.
+// Beside a face neighbour holding no particles ρ is at least REST_DENSITY,
+// since a part full
 // surface cell is not thin water. Out is −rate · clamp(ρ / ρ0 − 1, ±½),
 // so the solve's pressure gradient moves particles out of crowded cells and
 // into sparse ones; 0 outside the water.
@@ -37,22 +32,18 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = list_cell(gid.x);
     let p = ts_cell_coord(idx);
-    if !in_box(p) {
-        return;
-    }
     if !(water[idx] > 0.5) {
         cell_out[idx] = 0.0;
         return;
     }
-    let lo = box_lo();
-    let n = box_cells();
-    // Positions in world cells; `solid_at` takes box cells.
-    let to_box = vec3<f32>(lo);
+    // Positions in world cells; `solid_at` takes cells counted from its
+    // `lo`, here the world origin.
+    let solids = u.body_count > 0 || u.wall_faces != 0u;
     let centre = vec3<f32>(p) + vec3<f32>(0.5);
     let slots = u.capacity;
     var density = 0.0;
-    let first = max(p - vec3<i32>(1), lo);
-    let last = min(p + vec3<i32>(1), lo + n - vec3<i32>(1));
+    let first = p - vec3<i32>(1);
+    let last = p + vec3<i32>(1);
     for (var z = first.z; z <= last.z; z = z + 1) {
         for (var y = first.y; y <= last.y; y = y + 1) {
             for (var x = first.x; x <= last.x; x = x + 1) {
@@ -73,7 +64,7 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                     if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {
                         continue;
                     }
-                    if u.body_count > 0 && solid_at(q - to_box, n) < 0.0 {
+                    if solids && solid_at(q, vec3<i32>(0)) < 0.0 {
                         continue;
                     }
                     let w = clamp(vec3<f32>(1.0) - abs(centre - q), vec3<f32>(0.0), vec3<f32>(1.0));
@@ -94,29 +85,25 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // Air is read on the six face neighbours only, as blub's live
                 // branch does (density_projection_gather_error.comp:182-184).
                 let face = abs(d.x) + abs(d.y) + abs(d.z) == 1;
-                if !in_box(q) {
-                    density = density + solid_neighbour_density(d);
-                    continue;
-                }
-                var inside_body = false;
-                if u.body_count > 0 {
+                var inside_solid = false;
+                if solids {
                     let distance = solid_centre(q);
-                    inside_body = distance < 0.0;
-                    // Bodies are sampled per rest site, so a cell a body only
+                    inside_solid = distance < 0.0;
+                    // Solids are sampled per rest site, so a cell a solid only
                     // cuts weighs its solid part; liquid_fill seeds exactly
                     // the sites outside the solid, so the two make the full
                     // lattice at rest.
                     if distance < SOLID_SITE_REACH * u.cell_size {
                         for (var k = 0; k < 8; k = k + 1) {
                             let site = vec3<f32>(q) + vec3<f32>(0.25) + 0.5 * vec3<f32>(vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1));
-                            if solid_at(site - to_box, n) < 0.0 {
+                            if solid_at(site, vec3<i32>(0)) < 0.0 {
                                 let w = clamp(vec3<f32>(1.0) - abs(centre - site), vec3<f32>(0.0), vec3<f32>(1.0));
                                 density = density + w.x * w.y * w.z;
                             }
                         }
                     }
                 }
-                if face && !inside_body && cell_range(ts_cell_at(q)).count == 0u {
+                if face && !inside_solid && cell_range(ts_cell_at(q)).count == 0u {
                     beside_air = true;
                 }
             }

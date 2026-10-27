@@ -54,8 +54,14 @@ pub fn test_device() -> TestDevice {
     // BUG-290: GPU_TEST_LOCK is invisible across processes. The machine-wide
     // GPU queue (crate::queue) is taken by `new_queued` below, for the
     // process lifetime; waiting there IS the fix, not a hang.
+    // The disk shader caches let every test process reuse the shaders an
+    // earlier one compiled instead of running naga and spirv-opt again.
     let device = SHARED
-        .get_or_init(|| Arc::new(crate::GpuDevice::new_queued("GPU tests")))
+        .get_or_init(|| {
+            let device = crate::GpuDevice::new_queued("GPU tests");
+            load_disk_shader_caches(&device);
+            Arc::new(device)
+        })
         .clone();
     TestDevice { device, _lock }
 }

@@ -3,8 +3,8 @@
 // velocity is zeroed and the pressure solve stays consistent. Water cells
 // link through a face whose open fraction is at least POCKET_LINK. A water
 // cell touches air through a linked face to a dry cell
-// (_computeBordersAirGridThread) or on an open tank face, which drains
-// (pocket_seed_reason). Whether a region reaches air spreads from those cells
+// (_computeBordersAirGridThread; pocket_seed_reason). Whether a region
+// reaches air spreads from those cells
 // by line sweeps along each axis, repeated until a round changes nothing.
 //
 // The states and labels are pooled cell fields, indexed by pool index

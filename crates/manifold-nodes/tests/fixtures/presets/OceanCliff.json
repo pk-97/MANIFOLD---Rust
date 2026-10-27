@@ -3159,12 +3159,6 @@
       "toPort": "particle_capacity"
     },
     {
-      "fromNode": 0,
-      "fromPort": "mesh_wall_inset",
-      "toNode": 4,
-      "toPort": "wall_inset"
-    },
-    {
       "fromNode": 4,
       "fromPort": "particles",
       "toNode": 5,
@@ -3586,12 +3580,6 @@
     },
     {
       "fromNode": 0,
-      "fromPort": "mesh_wall_inset",
-      "toNode": 8,
-      "toPort": "wall_inset"
-    },
-    {
-      "fromNode": 0,
       "fromPort": "bodies",
       "toNode": 9,
       "toPort": "bodies"
@@ -3667,12 +3655,6 @@
       "fromPort": "body_rows",
       "toNode": 9,
       "toPort": "rows"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "mesh_wall_inset",
-      "toNode": 9,
-      "toPort": "wall_inset"
     },
     {
       "fromNode": 5,
@@ -5203,6 +5185,180 @@
       "fromPort": "wetness",
       "toNode": 442,
       "toPort": "field_wetness"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_x",
+      "toNode": 6,
+      "toPort": "bounds_lo_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_y",
+      "toNode": 6,
+      "toPort": "bounds_lo_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_z",
+      "toNode": 6,
+      "toPort": "bounds_lo_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_x",
+      "toNode": 6,
+      "toPort": "bounds_hi_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_y",
+      "toNode": 6,
+      "toPort": "bounds_hi_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_z",
+      "toNode": 6,
+      "toPort": "bounds_hi_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "open_faces",
+      "toNode": 6,
+      "toPort": "open_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "kill_height",
+      "toNode": 6,
+      "toPort": "kill_height"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "region_sites",
+      "toNode": 6,
+      "toPort": "region_sites"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "region_site_total",
+      "toNode": 6,
+      "toPort": "region_site_total"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_x",
+      "toNode": 8,
+      "toPort": "bounds_lo_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_y",
+      "toNode": 8,
+      "toPort": "bounds_lo_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_z",
+      "toNode": 8,
+      "toPort": "bounds_lo_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_x",
+      "toNode": 8,
+      "toPort": "bounds_hi_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_y",
+      "toNode": 8,
+      "toPort": "bounds_hi_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_z",
+      "toNode": 8,
+      "toPort": "bounds_hi_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_x",
+      "toNode": 4,
+      "toPort": "bounds_lo_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_y",
+      "toNode": 4,
+      "toPort": "bounds_lo_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_z",
+      "toNode": 4,
+      "toPort": "bounds_lo_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_x",
+      "toNode": 4,
+      "toPort": "bounds_hi_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_y",
+      "toNode": 4,
+      "toPort": "bounds_hi_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_z",
+      "toNode": 4,
+      "toPort": "bounds_hi_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "closed_faces",
+      "toNode": 4,
+      "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_x",
+      "toNode": 9,
+      "toPort": "bounds_lo_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_y",
+      "toNode": 9,
+      "toPort": "bounds_lo_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_z",
+      "toNode": 9,
+      "toPort": "bounds_lo_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_x",
+      "toNode": 9,
+      "toPort": "bounds_hi_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_y",
+      "toNode": 9,
+      "toPort": "bounds_hi_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_z",
+      "toNode": 9,
+      "toPort": "bounds_hi_z"
     }
   ],
   "presetMetadata": {

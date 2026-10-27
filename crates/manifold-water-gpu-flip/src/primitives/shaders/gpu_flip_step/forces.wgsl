@@ -74,25 +74,21 @@ fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {
     return bd.inv_inertia_x.xyz + bd.inv_inertia_x.w * rigid;
 }
 
-// 512 threads a held slot, one per record of the box, `faces_in` to
+// 512 threads a held slot, one per record, `faces_in` to
 // `faces_out`: each face gains
 // step_dt · (g + forces(x)) along its normal a, x its centre, relaxing toward
 // the wind at the air's drag rate where the field carries air (exactly
 // integrated, force_lattice_drag_step), plus the
 // impulses on step 0 of impulse_tick, read from the domain's coarse field
-// lattices (origin the box minimum). A box wall face stays 0. Weights pass
-// through.
+// lattices (origin `field_min`). Weights pass through.
 @compute @workgroup_size(256)
 fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let at = list_cell(gid.x);
     let p = ts_face_coord(at);
-    if !in_box_records(p) {
-        return;
-    }
     let here = faces_in[at];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    let origin = u.walls_lo;
+    let origin = u.field_min;
     var force_base = 0u;
     if u.force_lattices > 0 {
         force_base = force_lattice_base(u.tick_index, u.first_tick, u.force_lattices, u.field_nodes);
@@ -101,9 +97,6 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let impulse = select(u.tick_index == u.impulse_tick && u.step_in_tick == 0,
         live_event, clock_live());
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, a) {
-            continue;
-        }
         out.face_weight[a] = here.face_weight[a];
         var centre = vec3<f32>(p) + vec3<f32>(0.5);
         centre[a] = f32(p[a]);
@@ -131,7 +124,7 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         if impulse {
             v = v + gravity_impulse(x, origin, u32(a));
         }
-        out.face_velocity[a] = select(v, 0.0, on_box_wall(p, a));
+        out.face_velocity[a] = v;
     }
     faces_out[at] = out;
 }

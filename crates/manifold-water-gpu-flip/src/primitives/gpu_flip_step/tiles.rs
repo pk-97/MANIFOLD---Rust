@@ -82,7 +82,7 @@ pub(crate) fn tile_scratch_bytes(cells: [u32; 3]) -> u64 {
 }
 
 /// Test-only lever. With it set, the table is built from one point in every
-/// tile of the box instead of the particles, so every box tile is in C and
+/// tile of the lattice instead of the particles, so every such tile is in C and
 /// the passes run dense through the same kernels and lists: the proofs'
 /// oracle for the sparse lists.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -105,8 +105,8 @@ pub(crate) fn all_tiles() -> bool {
     }
 }
 
-/// One liquid record at the centre of a box cell in every world tile the box
-/// of `cells` from world cell `lo` touches, and their record
+/// One liquid record at the centre of a lattice cell in every world tile the
+/// lattice of `cells` from world cell `lo` touches, and their record
 /// `[groups, 1, 1, count]`: the [`set_all_tiles`] table's points.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub(super) fn box_points(
@@ -160,12 +160,13 @@ impl StepState {
         &mut self,
         device: &GpuDevice,
         params: &StepParams,
+        min: [f32; 3],
         cells: [u32; 3],
     ) -> Result<(), String> {
         self.box_points = if all_tiles() {
             Some(box_points(
                 device,
-                box_cell_origin(params),
+                box_cell_origin(params, min),
                 cells,
                 params.cell_size,
             )?)
@@ -176,11 +177,10 @@ impl StepState {
     }
 }
 
-/// The box's first world cell, as `box_lo()` in the shader finds it.
-pub(super) fn box_cell_origin(params: &StepParams) -> [i32; 3] {
-    std::array::from_fn(|a| {
-        ((params.walls_lo[a] - params.origin[a]) * params.inv_cell).round() as i32
-    })
+/// The first world cell of the lattice whose first node is at `min` metres.
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+fn box_cell_origin(params: &StepParams, min: [f32; 3]) -> [i32; 3] {
+    std::array::from_fn(|a| ((min[a] - params.origin[a]) * params.inv_cell).round() as i32)
 }
 
 /// `bound` plus the table and the arrays the retire and the poison write:

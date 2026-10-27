@@ -18,13 +18,25 @@ pub(crate) fn read_solve_level(value: f32, pool_tiles: u32) -> Result<usize, Str
     }
 }
 
-/// The Closed Faces mask, refused unless it is a whole number in 0..=63.
+/// The Closed Faces mask (the Bounds Wall faces), refused unless it is a whole
+/// number in 0..=63.
 pub(crate) fn read_closed_faces(value: f32) -> Result<u32, String> {
+    read_face_mask(value, "Closed Faces")
+}
+
+/// The Open Faces mask (the Bounds faces that remove water), refused unless
+/// it is a whole number in 0..=63.
+pub(crate) fn read_open_faces(value: f32) -> Result<u32, String> {
+    read_face_mask(value, "Open Faces")
+}
+
+/// A face mask: bit 2d the low face of axis d, bit 2d + 1 the high one.
+fn read_face_mask(value: f32, name: &str) -> Result<u32, String> {
     if value.fract() == 0.0 && (0.0..=63.0).contains(&value) {
         Ok(value as u32)
     } else {
         Err(format!(
-            "Closed Faces must be a whole number from 0 to 63, not {value}"
+            "{name} must be a whole number from 0 to 63, not {value}"
         ))
     }
 }

@@ -149,17 +149,24 @@ fn step_shader_validates_with_every_entry() {
 
 #[test]
 fn step_params_match_the_shader_uniform() {
-    assert_eq!(size_of::<StepParams>(), 192);
-    assert_eq!(std::mem::offset_of!(StepParams, walls_hi), 16);
+    assert_eq!(size_of::<StepParams>(), 208);
+    assert_eq!(std::mem::offset_of!(StepParams, bounds_hi), 16);
     assert_eq!(std::mem::offset_of!(StepParams, origin), 64);
     assert_eq!(std::mem::offset_of!(StepParams, inv_cell), 76);
     assert_eq!(std::mem::offset_of!(StepParams, tick_index), 80);
     assert_eq!(std::mem::offset_of!(StepParams, ghost), 116);
     assert_eq!(std::mem::offset_of!(StepParams, live_impulse_stride), 160);
-    assert_eq!(std::mem::offset_of!(StepParams, wall_inset), 164);
+    assert_eq!(std::mem::offset_of!(StepParams, open_faces), 164);
     assert_eq!(std::mem::offset_of!(StepParams, pool_tiles), 172);
-    assert_eq!(std::mem::offset_of!(StepParams, table_entries), 176);
-    assert_eq!(std::mem::offset_of!(StepParams, emit_sites), 180);
+    assert_eq!(std::mem::offset_of!(StepParams, field_min), 176);
+    assert_eq!(std::mem::offset_of!(StepParams, table_entries), 188);
+    assert_eq!(std::mem::offset_of!(StepParams, emit_sites), 192);
+    assert_eq!(std::mem::offset_of!(StepParams, kill_height), 196);
+    assert_eq!(
+        StepParams::default().kill_height,
+        f32::MIN,
+        "free space kills nothing"
+    );
 }
 
 /// The tile rings the band reaches, and the world tiles' bytes: the
@@ -187,15 +194,20 @@ fn gpu_flip_world_tile_bytes_follow_the_pool() {
     }
 }
 #[test]
-fn closed_faces_takes_the_six_bit_mask_and_refuses_the_rest() {
-    assert_eq!(read_closed_faces(0.0), Ok(0));
-    assert_eq!(read_closed_faces(63.0), Ok(63));
-    assert_eq!(read_closed_faces(61.0), Ok(61));
-    for bad in [64.0, -1.0, 2.5, f32::NAN, f32::INFINITY] {
-        assert!(
-            read_closed_faces(bad).unwrap_err().contains("Closed Faces"),
-            "{bad}"
-        );
+fn face_masks_take_the_six_bit_mask_and_refuse_the_rest() {
+    for (read, name) in [
+        (
+            read_closed_faces as fn(f32) -> Result<u32, String>,
+            "Closed Faces",
+        ),
+        (read_open_faces, "Open Faces"),
+    ] {
+        assert_eq!(read(0.0), Ok(0));
+        assert_eq!(read(63.0), Ok(63));
+        assert_eq!(read(61.0), Ok(61));
+        for bad in [64.0, -1.0, 2.5, f32::NAN, f32::INFINITY] {
+            assert!(read(bad).unwrap_err().contains(name), "{name} {bad}");
+        }
     }
 }
 

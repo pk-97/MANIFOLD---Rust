@@ -167,13 +167,30 @@ impl Primitive for GpuFlipStep {
                 }
             };
         let ghost = ctx.scalar_or_param("ghost_fluid", 1.0) > 0.5;
-        let closed_faces = match read_closed_faces(ctx.scalar_or_param("closed_faces", 63.0)) {
+        let wall_faces = match read_closed_faces(ctx.scalar_or_param("closed_faces", 0.0)) {
             Ok(mask) => mask,
             Err(error) => {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
         };
+        let open_faces = match read_open_faces(ctx.scalar_or_param("open_faces", 0.0)) {
+            Ok(mask) => mask,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        };
+        let [bounds_lo, bounds_hi] = [
+            ["bounds_lo_x", "bounds_lo_y", "bounds_lo_z"],
+            ["bounds_hi_x", "bounds_hi_y", "bounds_hi_z"],
+        ]
+        .map(|names| names.map(|name| ctx.scalar_or_param(name, 0.0)));
+        let kill_height = ctx.scalar_or_param("kill_height", f32::MIN);
+        if !bounds_lo.iter().chain(&bounds_hi).all(|v| v.is_finite()) || kill_height.is_nan() {
+            ctx.error(format!("{NAME}: Bounds and Kill Height must be numbers"));
+            return;
+        }
         let level =
             match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), pool_tiles(cells)) {
                 Ok(level) => level,
@@ -323,9 +340,9 @@ impl Primitive for GpuFlipStep {
         let step = Step {
             identity,
             params: StepParams {
-                walls_lo: box_min,
+                bounds_lo,
                 capacity,
-                walls_hi: std::array::from_fn(|a| box_min[a] + cells[a] as f32 * h),
+                bounds_hi,
                 cell_size: h,
                 gravity,
                 step_dt,
@@ -350,7 +367,7 @@ impl Primitive for GpuFlipStep {
                 // The whole density error each step: projected to rest, no
                 // per-step share.
                 rate: 1.0 / step_dt,
-                closed_faces,
+                wall_faces,
                 region_count,
                 region_rows,
                 emit_jitter: 0.25 * inflow_jitter,
@@ -364,13 +381,17 @@ impl Primitive for GpuFlipStep {
                     .product::<usize>()
                     .saturating_mul(4)
                     .min(u32::MAX as usize) as u32,
-                wall_inset: solver.wall_inset(),
+                open_faces,
                 coupled_h: manifold_physics::coupled_motion::coupled_substep(
                     manifold_physics::Seconds(interval_duration),
                 ),
                 pool_tiles: pool,
+                // The force and impulse lattices start at the domain's scene box,
+                // which bounds_lo carries.
+                field_min: bounds_lo,
                 table_entries: manifold_water_liquid::tile_storage::table_entries(pool),
                 emit_sites,
+                kill_height,
                 _pad: [0; 2],
             },
             clock_plan: &zeros,
@@ -411,7 +432,7 @@ impl Primitive for GpuFlipStep {
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         if let Err(error) =
             self.state
-                .reserve_box_points(ctx.gpu_encoder().device, &step.params, cells)
+                .reserve_box_points(ctx.gpu_encoder().device, &step.params, box_min, cells)
         {
             ctx.error(format!("{NAME}: {error}"));
             return;
@@ -491,7 +512,7 @@ impl Primitive for GpuFlipStep {
                             event_impulses: field.impulses.unwrap_or(&zeros),
                             impulse_stride: step.params.live_impulse_stride,
                             impulse_nodes: step.params.field_nodes,
-                            impulse_origin: step.params.walls_lo,
+                            impulse_origin: step.params.field_min,
                             impulse_spacing: step.params.field_spacing,
                             body_rows: bodies,
                             body_rows_offset: body_row_offset,

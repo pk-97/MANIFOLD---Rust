@@ -145,11 +145,11 @@ impl StepState {
         #[cfg(not(all(any(test, feature = "testkit"), feature = "gpu-proofs")))]
         let points = (step.particles, record);
         encode_tiles(enc, pipes, &base, l, tiles, points, step.clock_plan);
-        // The solids at every held cell's corner: the walls, which are in the
-        // solid with the bodies as the engine's inverted domain object is (a
-        // body flush with a wall then seals against it, where the body's own
-        // lattice distance alone would leave a sub-cell open channel between
-        // them), every wall closed whichever faces are open.
+        // The solids at every held cell's corner: the Bounds Wall faces, which
+        // are in the solid with the bodies as the engine's inverted domain
+        // object is (a body flush with a wall then seals against it, where
+        // the body's own lattice distance alone would leave a sub-cell open
+        // channel between them). Open faces are no solids.
         encode_solid_corners(enc, pipes, &base, l, tiles, step, posed);
         self.sorter.encode_pooled(
             device,
@@ -281,15 +281,16 @@ impl StepState {
                 );
             }
         } else if !self.solid_velocity_is_zero {
-            // Domain walls have zero velocity and friction. The extrapolation
+            // Bounds walls have zero velocity and friction. The extrapolation
             // known-mask is unused by all remaining no-body consumers. Clear
             // after allocation or body removal; no-body consumers never write
             // this scratch, so later intervals can retain its zero contents.
             enc.clear_buffer(&l.v);
             self.solid_velocity_is_zero = true;
         }
-        // The tank walls are always in the solid, so this runs with or
-        // without bodies, as the engine's postProcessSignedDistanceField does.
+        // The Bounds walls are in the solid with the bodies, so this runs
+        // with or without bodies, as the engine's postProcessSignedDistanceField
+        // does.
         over(
             enc,
             &pipes.phi_into_solids,

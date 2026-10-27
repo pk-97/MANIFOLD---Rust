@@ -584,10 +584,12 @@ pub(super) fn gpu_flip_outflow_kills_the_particles_it_holds() {
         particles: particles.len() as u32,
         ..region_params()
     };
-    let got: Vec<FluidParticle> = Pass::new()
+    let mut pass = Pass::new();
+    let solid = pass.wall_corners(MIN, box_hi(), 63);
+    let got: Vec<FluidParticle> = pass
         .bind(2, &particles, Layout::Dense)
         .bind(3, &faces, Layout::Records)
-        .bind(9, &wall_solid(N, H), Layout::Records)
+        .bind(9, &solid, Layout::Dense)
         .bind(17, &faces, Layout::Records)
         .bind(18, &faces, Layout::Records)
         .bind(22, &vec![0u32; 2 * particles.len()], Layout::Dense)

@@ -1,34 +1,25 @@
-// Open fraction of face a at record f: 0 on a box wall, which is closed in
-// the solve too, else the solid's.
+// Open fraction of face a at record f: the solid's, which is 0 across a wall.
 fn open_at(f: vec3<i32>, a: i32) -> f32 {
-    if on_box_wall(f, a) {
-        return 0.0;
-    }
     return solid_faces[ts_face(f)].face_weight[a];
 }
 
-// (c − w)·v_s on an inner face; 0 on a box wall, which no solid moves.
+// (c − w)·v_s on a face: the solid's flux through the part of it the solid
+// covers.
 fn solid_flux(f: vec3<i32>, a: i32, c: f32) -> f32 {
-    if on_box_wall(f, a) {
-        return 0.0;
-    }
     let at = ts_face(f);
     return (c - solid_faces[at].face_weight[a]) * solid_velocity[at].face_velocity[a];
 }
 
-// 512 threads a slot of C, `faces_in` to `cell_out`: in a water cell of the
-// box, the net outflow through its six faces over h, each face's velocity
+// 512 threads a slot of C, `faces_in` to `cell_out`: in a water cell, the net
+// outflow through its six faces over h, each face's velocity
 // times its open fraction (PressureSolver::_calculateNegativeDivergenceVector),
-// plus the solids' C·v_s term, (c − w)·v_s outward through each inner face
+// plus the solids' C·v_s term, (c − w)·v_s outward through each face
 // with c the cell's open volume; 0 in air.
 @compute @workgroup_size(256)
 fn divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = list_cell(gid.x);
     let p = ts_cell_coord(idx);
-    if !in_box(p) {
-        return;
-    }
     if !(water[idx] > 0.5) {
         cell_out[idx] = 0.0;
         return;

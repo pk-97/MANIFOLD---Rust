@@ -4,8 +4,8 @@ fn surface_phi(cell: u32) -> f32 {
     return select(0.0, phi[cell], u.ghost == 1u);
 }
 
-// 512 threads a held slot, one per record of the box, in place on
-// `faces_rw`. A box wall face is 0 and valid. An inner closed face is cleared (0 velocity, weight 0) before
+// 512 threads a held slot, one per record, in place on
+// `faces_rw`. A closed face (a wall's included) is cleared (0 velocity, weight 0) before
 // extension; the later solid constraint writes its velocity independently of
 // this validity flag (PressureSolver::_applyPressureToVelocityField). An open
 // inner face beside water loses (p_upper − p_lower) / h, the air side's
@@ -18,21 +18,11 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let at = list_cell(gid.x);
     let p = ts_face_coord(at);
-    if !in_box_records(p) {
-        return;
-    }
     let here = faces_rw[at];
     let open = solid_faces[at];
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let surface = -0.005 * u.cell_size;
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, a) {
-            continue;
-        }
-        if on_box_wall(p, a) {
-            out.face_weight[a] = 1.0;
-            continue;
-        }
         var below = p;
         below[a] = p[a] - 1;
         let upper = at;
@@ -54,31 +44,19 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_rw[at] = out;
 }
 
-// 512 threads a held slot, one per record of the box, in place on
-// `faces_rw` (FluidSimulation::_constrainVelocityFieldThread): on an inner face, a
+// 512 threads a held slot, one per record, in place on
+// `faces_rw` (FluidSimulation::_constrainVelocityFieldThread): a
 // closed face (open fraction 0) takes the solid's velocity v_s, a cut face
 // takes f·v_s + (1 − f)·u with f the solid's friction, an open face keeps u.
-// A box wall face is 0, the static domain's velocity
-// (FluidSimulation::_constrainVelocityFields). Weights pass through.
+// A wall's face is closed like any solid's. Weights pass through.
 @compute @workgroup_size(256)
 fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let at = list_cell(gid.x);
-    let p = ts_face_coord(at);
-    if !in_box_records(p) {
-        return;
-    }
     var out = faces_rw[at];
     let open = solid_faces[at];
     let solid_here = solid_velocity[at];
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, a) {
-            continue;
-        }
-        if on_box_wall(p, a) {
-            out.face_velocity[a] = 0.0;
-            continue;
-        }
         let w = open.face_weight[a];
         let v_s = solid_here.face_velocity[a];
         if !(w > 0.0) {

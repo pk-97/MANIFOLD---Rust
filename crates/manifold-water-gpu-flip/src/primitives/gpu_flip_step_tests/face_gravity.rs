@@ -5,7 +5,7 @@ use super::*;
 use manifold_physics::force_lattice::ForceLattice;
 
 #[test]
-fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
+fn gpu_flip_face_gravity_adds_gravity_to_every_face() {
     let faces = random_faces(0x96a7, false);
     let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
     let step = StepParams {
@@ -21,22 +21,22 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
         .run_list("face_gravity", &step, 4, face_len());
     for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
         let p = pad_coords(i);
-        for a in 0..3 {
-            let pushed = f64::from(before.velocity[a]) + f64::from(g[a]) * f64::from(dt);
-            let (velocity, weight) = if !face_exists(p, a) {
-                (0.0, 0.0)
-            } else if p[a] == 0 || p[a] == N[a] {
-                (0.0, f64::from(before.weight[a]))
-            } else {
-                (pushed, f64::from(before.weight[a]))
-            };
+        for (a, &ga) in g.iter().enumerate() {
+            // A wall's face is pushed like any other; the solid constraint
+            // sets it later.
+            let pushed = f64::from(before.velocity[a]) + f64::from(ga) * f64::from(dt);
             close(
                 face.velocity[a],
-                velocity,
+                pushed,
                 1.0,
                 &format!("velocity {p:?}/{a}"),
             );
-            close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
+            close(
+                face.weight[a],
+                f64::from(before.weight[a]),
+                1.0,
+                &format!("weight {p:?}/{a}"),
+            );
         }
     }
 }
@@ -98,11 +98,7 @@ fn face_gravity_case(air: bool) {
             .run_list("face_gravity", &params, 4, face_len());
         for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
             let p = pad_coords(i);
-            for a in 0..3 {
-                if !face_exists(p, a) {
-                    close(face.velocity[a], 0.0, 1.0, &format!("velocity {p:?}/{a}"));
-                    continue;
-                }
+            for (a, &ga) in g.iter().enumerate() {
                 let x: [f32; 3] = std::array::from_fn(|d| {
                     MIN[d]
                         + H * if d == a {
@@ -119,7 +115,7 @@ fn face_gravity_case(air: bool) {
                 };
                 let (v0, accel, k) = (
                     f64::from(before.velocity[a]),
-                    f64::from(g[a]) + f64::from(force.push[a]),
+                    f64::from(ga) + f64::from(force.push[a]),
                     f64::from(force.drag),
                 );
                 let stepped = if k > 0.0 {
@@ -128,12 +124,7 @@ fn face_gravity_case(air: bool) {
                 } else {
                     v0 + accel * f64::from(dt)
                 };
-                let pushed = stepped + f64::from(impulse);
-                let velocity = if p[a] == 0 || p[a] == N[a] {
-                    0.0
-                } else {
-                    pushed
-                };
+                let velocity = stepped + f64::from(impulse);
                 close(
                     face.velocity[a],
                     velocity,

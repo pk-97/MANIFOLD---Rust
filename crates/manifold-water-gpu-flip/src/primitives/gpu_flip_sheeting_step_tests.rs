@@ -202,6 +202,7 @@ impl Splash {
         let pad = PADDING_NODES as f32;
         let n = SOLVER[0] as f32 - 3.0;
         let min = SOLVER_MIN + 1.5 * H;
+        let max = min + n * H;
         let mut values = vec![
             ("nodes_x", n + 1.0 + 2.0 * pad),
             ("nodes_y", n + 1.0 + 2.0 * pad),
@@ -210,6 +211,13 @@ impl Splash {
             ("lattice_min_y", min - pad * H),
             ("lattice_min_z", min - pad * H),
             ("cell_size", H),
+            ("bounds_lo_x", min),
+            ("bounds_lo_y", min),
+            ("bounds_lo_z", min),
+            ("bounds_hi_x", max),
+            ("bounds_hi_y", max),
+            ("bounds_hi_z", max),
+            ("closed_faces", 63.0),
             ("gravity_y", -9.81),
             ("interval_duration", DT * steps as f32),
             ("steps", steps as f32),
@@ -393,23 +401,23 @@ fn gpu_flip_sheeting_births_move_in_their_substep_and_survive() {
     }
 }
 
-/// Births share the pool and the identity counter: a short pool drops the
-/// excess and counts it; inflow in the same substep reserves after the
+/// Births share the pool and the identity counter: a pool too short for the
+/// whole stage refuses all of it and counts it; inflow in the same substep reserves after the
 /// births; an outflow removes what ends inside it; a rollover renumbers the
 /// live markers and births follow them.
 #[test]
 fn gpu_flip_sheeting_births_share_the_pool() {
     let requested = Splash::new(8000, 4001, &[]).tick(0, 1, 1.0).stats[0];
 
-    // Forty slots of room: forty births, the rest dropped and counted.
+    // Forty slots of room for a larger stage: no births, all counted.
     let mut short = Splash::new(40, 4001, &[]);
     let tick = short.tick(0, 1, 1.0);
-    assert_eq!(tick.stats[..2], [requested, 40], "requested and written");
-    assert_eq!(tick.identity[0], 4001 + 40);
+    assert_eq!(tick.stats[..2], [requested, 0], "requested and written");
+    assert_eq!(tick.identity[0], 4001, "no ids are spent");
     assert_eq!(
         alive(&tick.particles).count(),
-        short.markers + 40,
-        "the pool is full"
+        short.markers,
+        "the refused stage writes nothing"
     );
     assert_unique_ids(&tick.particles, "short pool");
 
@@ -468,8 +476,8 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     step_passes_with_room(4000);
 }
 
-/// A pool with room for 40 births: the reservation grants 40 and the write
-/// stops at the record's count, the rest counted as refused.
+/// A pool with room for 40 births and a larger stage: the reservation grants
+/// none, so the write stops at the live slots, the whole stage refused.
 #[test]
 fn gpu_flip_sheeting_write_stops_at_the_granted_slots() {
     step_passes_with_room(40);
@@ -571,8 +579,9 @@ fn step_passes_with_room(room: usize) {
     run(&stage, &plan(0.01), &phi);
     let stats: Vec<u32> = read(stage.stats(), 4);
     assert!(stats[0] > 100, "the active slot seeds: {stats:?}");
-    let granted = stats[0].min(room as u32);
-    assert_eq!(stats[1], granted, "as many births as the pool has room for");
+    // All or nothing: the whole stage when it fits, none when it does not.
+    let granted = if stats[0] <= room as u32 { stats[0] } else { 0 };
+    assert_eq!(stats[1], granted, "the whole stage or none");
     let written = live + granted as usize;
     // The record counts the live slots and the births granted.
     let record = copy_out(&device, &identity);

@@ -12,12 +12,19 @@ pub(super) const SOLID_MIN: [f32; 3] = [-0.625, -0.125, -0.375];
 
 pub(super) const SOLID_TICK: f32 = 0.05;
 
+/// The solids' box's high corner.
+pub(super) fn solid_hi() -> [f32; 3] {
+    std::array::from_fn(|a| SOLID_MIN[a] + SOLID_N[a] as f32 * SOLID_H)
+}
+
+/// The step's params over the solids' box: every face of the Bounds a Wall.
 pub(super) fn solid_lattice() -> StepParams {
     StepParams {
         impulse_tick: -1,
         ..StepParams::default()
     }
-    .with_grid_for_test(SOLID_N.map(|n| n as u32), SOLID_MIN, SOLID_H)
+    .with_grid_for_test(SOLID_MIN, SOLID_H)
+    .with_bounds_for_test(SOLID_MIN, solid_hi(), 63, 0)
 }
 
 /// A pass over the solids' box.
@@ -41,7 +48,7 @@ pub(super) fn solid_neighbours(c: usize, n: [usize; 3]) -> Vec<(usize, isize)> {
 }
 
 /// Inner faces one in four closed, one in four whole, the rest a fraction;
-/// every face of cell `isolated` closed. Box walls closed.
+/// every face of cell `isolated` closed. The faces on the box's borders closed.
 pub(super) fn random_open_faces(n: [usize; 3], seed: u64, isolated: usize) -> Vec<f32> {
     let m = n.map(|v| v + 1);
     let mut faces = vec![0.0; face_grid_len(n)];
@@ -196,30 +203,43 @@ pub(super) fn engine_cube(c: [f64; 8]) -> f64 {
 /// FluidSimulation::_updateWeightGridThread takes MeshLevelSet's face
 /// weights: U from (i,j,k), (i,j+1,k), (i,j,k+1), (i,j+1,k+1); V from
 /// (i,j,k), (i,j,k+1), (i+1,j,k), (i+1,j,k+1); W from (i,j,k), (i,j+1,k),
-/// (i+1,j,k), (i+1,j+1,k). Box walls closed.
+/// (i+1,j,k), (i+1,j+1,k). Every record of the box has its three faces; a
+/// corner beyond the box is zero, as the pool holds it. A face on the
+/// interface at every corner is half open within the f32 rounding of a
+/// distance at the face's own distance from the world origin; the box's
+/// first cell is world cell `world_origin`.
 pub(super) fn cpu_open_fractions(
     phi: &[f32],
     n: [usize; 3],
-    tolerance: f64,
+    world_origin: [i32; 3],
 ) -> (Vec<f64>, Vec<(usize, bool)>) {
     let m = n.map(|v| v + 1);
-    let at = |i: usize, j: usize, k: usize| f64::from(phi[i + m[0] * (j + m[1] * k)]);
+    let h = f64::from(SOLID_H);
+    let at = |i: usize, j: usize, k: usize| {
+        if i < m[0] && j < m[1] && k < m[2] {
+            f64::from(phi[i + m[0] * (j + m[1] * k)])
+        } else {
+            0.0
+        }
+    };
+    let tolerance = |p: [usize; 3], a: usize| {
+        let centre = |b: usize| {
+            let cell = f64::from(world_origin[b]) + p[b] as f64;
+            -0.5 * h + (cell + if b == a { 0.0 } else { 0.5 }) * h
+        };
+        8.0 * f64::from(f32::EPSILON) * (0..3).map(|b| centre(b).abs()).fold(0.0, f64::max)
+    };
     let mut out = vec![0.0; m.iter().product::<usize>() * FACE_FLOATS];
     let mut branches = Vec::new();
     for k in 0..m[2] {
         for j in 0..m[1] {
             for i in 0..m[0] {
                 let p = [i, j, k];
-                if (0..3).all(|b| p[b] < n[b]) {
-                    let corners: [f64; 8] =
-                        std::array::from_fn(|c| at(i + (c & 1), j + ((c >> 1) & 1), k + (c >> 2)));
-                    out[(i + m[0] * (j + m[1] * k)) * FACE_FLOATS + 7] =
-                        (1.0 - engine_cube(corners)).clamp(0.0, 1.0);
-                }
+                let corners: [f64; 8] =
+                    std::array::from_fn(|c| at(i + (c & 1), j + ((c >> 1) & 1), k + (c >> 2)));
+                out[(i + m[0] * (j + m[1] * k)) * FACE_FLOATS + 7] =
+                    (1.0 - engine_cube(corners)).clamp(0.0, 1.0);
                 for a in 0..3 {
-                    if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
-                        continue;
-                    }
                     let corners = match a {
                         0 => [
                             at(i, j, k),
@@ -242,7 +262,7 @@ pub(super) fn cpu_open_fractions(
                     };
                     let (mut inside, branch) =
                         engine_square(corners[0], corners[1], corners[2], corners[3]);
-                    if corners.iter().all(|c| c.abs() <= tolerance) {
+                    if corners.iter().all(|c| c.abs() <= tolerance(p, a)) {
                         inside = 0.5;
                     }
                     branches.push(branch);
@@ -262,7 +282,6 @@ pub(super) fn cpu_open_fractions(
 pub(super) fn gpu_flip_open_fractions_match_the_engine() {
     let n = SOLID_N;
     let m = n.map(|v| v + 1);
-    let offset = SOLID_MIN.iter().fold(0.0_f32, |m, v| m.max(v.abs()));
     let mut phi: Vec<f32> = random_values(m.iter().product(), 0x50f)
         .iter()
         .map(|v| v * 0.6)
@@ -271,14 +290,13 @@ pub(super) fn gpu_flip_open_fractions_match_the_engine() {
     for (i, j, k) in [(2, 1, 1), (2, 2, 1), (2, 1, 2), (2, 2, 2)] {
         phi[i + m[0] * (j + m[1] * k)] = 1.0e-7;
     }
-    let tolerance = 8.0 * f64::from(f32::EPSILON) * (f64::from(SOLID_H) * 5.0 + f64::from(offset));
     let got: Vec<f32> = solid_pass().bind(9, &phi, Layout::Records).run_list(
         "open_fractions",
         &solid_lattice(),
         4,
         face_grid_len(n),
     );
-    let (want, branches) = cpu_open_fractions(&phi, n, tolerance);
+    let (want, branches) = cpu_open_fractions(&phi, n, box_origin(SOLID_MIN, SOLID_H));
     for case in [
         (0, false),
         (1, false),
@@ -465,10 +483,9 @@ pub(super) fn posed(solids: &Solids, reaction: &[f32], contacts: &[BodySupports]
 
 /// The closest enabled body at x posed as `poses` holds them (its row and
 /// signed distance), as liquid_shape_distance samples a lattice, past it adds
-/// the gap and scales along the trilinear slope; none when the walls (inset
-/// 0) are nearer. The margin is the gap
-/// to the runner-up, body or walls, so the fixture can show no f32 rounding
-/// decides either.
+/// the gap and scales along the trilinear slope; none when the Bounds walls
+/// are nearer. The margin is the gap to the runner-up, body or walls, so the
+/// fixture can show no f32 rounding decides either.
 pub(super) fn closest(solids: &Solids, poses: &[Posed], x: [f64; 3]) -> (Option<usize>, f64) {
     let mut best: Option<(usize, f64)> = None;
     let mut gaps = Vec::new();
@@ -529,12 +546,12 @@ pub(super) fn closest(solids: &Solids, poses: &[Posed], x: [f64; 3]) -> (Option<
             best = Some((row, d));
         }
     }
-    let walls = (0..3)
-        .map(|i| {
-            let low = f64::from(SOLID_MIN[i]);
-            (x[i] - low).min(low + SOLID_N[i] as f64 * f64::from(SOLID_H) - x[i])
-        })
-        .fold(f64::INFINITY, f64::min);
+    let walls = f64::from(bounds_distance(
+        x.map(|v| v as f32),
+        SOLID_MIN,
+        solid_hi(),
+        63,
+    ));
     gaps.push(walls);
     gaps.sort_by(f64::total_cmp);
     let gap = if gaps.len() > 1 {
@@ -564,9 +581,6 @@ pub(super) fn cpu_solid_face_velocity(
     for i in 0..m.iter().product::<usize>() {
         let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
         for a in 0..3 {
-            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
-                continue;
-            }
             // Only a face a solid covers is sampled; the extrapolation
             // carries it out.
             if open[i * FACE_FLOATS + 4 + a] >= 1.0 {
@@ -803,8 +817,8 @@ pub(super) fn gpu_flip_solid_face_velocity_matches_cpu() {
 
 /// One layer of the solid velocity's extrapolation in f64, as
 /// GridUtils::extrapolateGridWithObserver runs it on each axis's face
-/// lattice: border faces are done from the start but never seed; an unknown
-/// face beside a known one takes the mean of its done neighbours.
+/// lattice: an unknown face beside a known one takes the mean of its known
+/// neighbours. A neighbour beyond the box is unknown.
 pub(super) fn cpu_solid_extrapolate(records: &[f32], n: [usize; 3]) -> Vec<f64> {
     let m = n.map(|v| v + 1);
     let mut out: Vec<f64> = records.iter().map(|&v| f64::from(v)).collect();
@@ -813,39 +827,30 @@ pub(super) fn cpu_solid_extrapolate(records: &[f32], n: [usize; 3]) -> Vec<f64> 
         let mut known = records[i * FACE_FLOATS + 7] as u32;
         let mut code = records[i * FACE_FLOATS + 3] as u32;
         for a in 0..3 {
-            let mut top = n.map(|v| v - 1);
-            top[a] = n[a];
-            if (0..3).any(|b| p[b] > top[b]) {
-                continue;
-            }
-            let border = |q: [usize; 3]| (0..3).any(|b| q[b] == 0 || q[b] == top[b]);
             let is_known = |r: usize| (records[r * FACE_FLOATS + 7] as u32 >> a) & 1 == 1;
-            if border(p) || is_known(i) {
+            if is_known(i) {
                 continue;
             }
-            let (mut sum, mut count, mut owner, mut seeded) = (0.0, 0.0, 0u32, false);
+            let (mut sum, mut count, mut owner) = (0.0, 0.0, 0u32);
             for b in 0..3 {
                 for d in [-1i64, 1] {
                     let mut q = p;
                     let x = p[b] as i64 + d;
-                    if x < 0 || x > top[b] as i64 {
+                    if x < 0 || x >= m[b] as i64 {
                         continue;
                     }
                     q[b] = x as usize;
                     let r = q[0] + m[0] * (q[1] + m[1] * q[2]);
-                    if border(q) || is_known(r) {
+                    if is_known(r) {
                         sum += f64::from(records[r * FACE_FLOATS + a]);
                         count += 1.0;
-                    }
-                    if !border(q) && is_known(r) {
-                        seeded = true;
                         if owner == 0 {
                             owner = (records[r * FACE_FLOATS + 3] as u32 >> (8 * a)) & 255;
                         }
                     }
                 }
             }
-            if seeded {
+            if count > 0.0 {
                 out[i * FACE_FLOATS + a] = sum / count;
                 known |= 1 << a;
                 code |= owner << (8 * a);
@@ -915,17 +920,8 @@ pub(super) fn cpu_constrain(
     let m = n.map(|v| v + 1);
     let mut out: Vec<f64> = faces.iter().map(|&v| f64::from(v)).collect();
     for i in 0..m.iter().product::<usize>() {
-        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
         for a in 0..3 {
-            if !(0..3).all(|b| b == a || p[b] < n[b]) {
-                continue;
-            }
             let (v, w) = (i * FACE_FLOATS + a, i * FACE_FLOATS + 4 + a);
-            // A box wall is the static domain's closed face.
-            if p[a] == 0 || p[a] == n[a] {
-                out[v] = 0.0;
-                continue;
-            }
             let solid = moving[v];
             if open[w] <= 0.0 {
                 out[v] = solid;

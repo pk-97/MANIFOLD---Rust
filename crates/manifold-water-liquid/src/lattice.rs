@@ -38,6 +38,39 @@ pub fn closed_faces(params: &ParamValues) -> u32 {
     })
 }
 
+/// Signed distance from `x` to the Wall faces of the Bounds box `lo`..`hi`
+/// (`walls` bits −X +X −Y +Y −Z +Z): the nearest face's distance, positive on
+/// the water side, `1e30` with no Wall face. Past a Wall face it is minus the
+/// length of the per-axis overshoots, so two Walls meeting at an edge give a
+/// Euclidean distance. Open faces are not solids and contribute nothing. The
+/// step's `walls_distance` and `liquid_solid_distance_body.wgsl` compute the
+/// same formula.
+pub fn bounds_distance(x: [f32; 3], lo: [f32; 3], hi: [f32; 3], walls: u32) -> f32 {
+    let mut nearest = 1.0e30_f32;
+    let mut overshoot_squared = 0.0_f32;
+    let mut beyond = false;
+    for a in 0..3 {
+        let mut axis_overshoot = 0.0_f32;
+        if walls & (1u32 << (2 * a)) != 0 {
+            let d = x[a] - lo[a];
+            nearest = nearest.min(d);
+            axis_overshoot = axis_overshoot.min(d);
+        }
+        if walls & (1u32 << (2 * a + 1)) != 0 {
+            let d = hi[a] - x[a];
+            nearest = nearest.min(d);
+            axis_overshoot = axis_overshoot.min(d);
+        }
+        beyond |= axis_overshoot < 0.0;
+        overshoot_squared += axis_overshoot * axis_overshoot;
+    }
+    if beyond {
+        -overshoot_squared.sqrt()
+    } else {
+        nearest
+    }
+}
+
 /// Native FLIP boundary shrinks the engine box by 3h + 1e-4 total.
 /// AABB::expand divides that by two on each side; epsilon is in metres.
 pub(crate) const FLIP_WALL_EPSILON: f32 = 5.0e-5;
@@ -221,56 +254,22 @@ impl LiquidLattice {
     }
 
     /// Signed distance from each node to the nearest closed wall of the
-    /// authored box (positive inside, negative past a closed face): the
-    /// seam's solid lattice for a domain whose only solids are its walls.
-    /// Open faces contribute nothing; with none closed, every node reads the
-    /// lattice diagonal.
+    /// authored box ([`bounds_distance`] over the box, positive inside,
+    /// negative past a closed face): the seam's solid lattice for a domain
+    /// whose only solids are its walls. Open faces contribute nothing; with
+    /// none closed, every node reads `1e30`.
     pub fn wall_distance(&self, closed_faces: u32) -> Vec<f32> {
-        self.wall_distance_inset(closed_faces, 0.0)
-    }
-
-    /// Native FLIP domain object's fixed physical interior epsilon.
-    pub fn flip_wall_distance(&self, closed_faces: u32) -> Vec<f32> {
-        self.wall_distance_inset(closed_faces, FLIP_WALL_EPSILON)
-    }
-
-    fn wall_distance_inset(&self, closed_faces: u32, inset: f32) -> Vec<f32> {
-        let dx = self.cell_size;
-        let low = self.box_min().map(|v| v + inset);
-        let high: [f32; 3] =
-            std::array::from_fn(|d| low[d] + self.cells[d] as f32 * dx - 2.0 * inset);
-        let far = self
-            .nodes
-            .iter()
-            .map(|&n| (n as f32 * dx).powi(2))
-            .sum::<f32>()
-            .sqrt();
+        let lo = self.box_min();
+        let hi: [f32; 3] = std::array::from_fn(|d| lo[d] + self.cells[d] as f32 * self.cell_size);
         let [nx, ny, nz] = self.nodes;
         let mut out = Vec::with_capacity(self.node_count() as usize);
         for k in 0..nz {
             for j in 0..ny {
                 for i in 0..nx {
-                    let p = [i, j, k].map(|c| c as f32 * dx);
-                    let mut distance = far;
-                    let mut outside_squared = 0.0;
-                    for d in 0..3 {
-                        let x = self.min[d] + p[d];
-                        if closed_faces & (1 << (2 * d)) != 0 {
-                            let candidate = x - low[d];
-                            distance = distance.min(candidate);
-                            outside_squared += candidate.min(0.0).powi(2);
-                        }
-                        if closed_faces & (1 << (2 * d + 1)) != 0 {
-                            let candidate = high[d] - x;
-                            distance = distance.min(candidate);
-                            outside_squared += candidate.min(0.0).powi(2);
-                        }
-                    }
-                    out.push(if outside_squared > 0.0 {
-                        -outside_squared.sqrt()
-                    } else {
-                        distance
-                    });
+                    let node = [i, j, k];
+                    let x: [f32; 3] =
+                        std::array::from_fn(|d| self.min[d] + node[d] as f32 * self.cell_size);
+                    out.push(bounds_distance(x, lo, hi, closed_faces));
                 }
             }
         }
@@ -315,25 +314,30 @@ mod tests {
     }
 
     #[test]
-    fn flip_wall_distance_matches_native_face_edge_corner_and_absolute_epsilon() {
-        for size in [1.0, 8.0] {
-            let layout = domain_layout(None, size, 8).unwrap();
-            let surface = LiquidLattice::from_layout(&layout).surface();
-            let n = surface.nodes();
-            let distance = surface.flip_wall_distance(63);
-            let at = |i, j, k| distance[(i + n[0] * (j + n[1] * k)) as usize];
-            // Vendored _getBoundaryAABB: N+3 solver cells, shrink 3h+1e-4
-            // total. Mesh distance is Euclidean outside the inverted box.
-            let half = 0.5 * layout.cell_size + 5e-5;
-            for (coord, axes) in [([1, 5, 5], 1.0f64), ([1, 1, 5], 2.0), ([1, 1, 1], 3.0)] {
-                assert!(
-                    (f64::from(at(coord[0], coord[1], coord[2])) + half * axes.sqrt()).abs() < 1e-6
-                );
-            }
-            let one_wall = surface.flip_wall_distance(1 << 2);
-            let i = (1 + n[0] * (1 + n[1])) as usize;
-            assert!((f64::from(one_wall[i]) + half).abs() < 1e-6);
-        }
+    fn bounds_distance_is_the_nearest_wall_and_euclidean_past_walls() {
+        // A box off the cell grid, different on every axis.
+        let (lo, hi) = ([-1.0, -2.0, -3.0], [2.0, 3.0, 4.5]);
+        let all = 0b11_1111;
+        let open_top = all & !(1 << 3);
+        // Inside: the nearest face. −X is 1 m away, the rest are further.
+        assert_eq!(bounds_distance([0.0, 0.5, 0.0], lo, hi, all), 1.0);
+        // Only the floor (−Y) is a Wall: 2.5 m up from it.
+        assert_eq!(bounds_distance([0.0, 0.5, 0.0], lo, hi, 1 << 2), 2.5);
+        // No Wall face: free space everywhere.
+        assert_eq!(bounds_distance([0.0, 0.5, 0.0], lo, hi, 0), 1.0e30);
+        assert_eq!(bounds_distance([40.0, -9.0, 7.0], lo, hi, 0), 1.0e30);
+        // Past one Wall: minus the overshoot. Past −X by 3 m.
+        assert_eq!(bounds_distance([-4.0, 0.5, 0.0], lo, hi, all), -3.0);
+        // Past two Walls at an edge: minus the length of the overshoots,
+        // 3 m past −X and 4 m past +Y.
+        assert_eq!(bounds_distance([-4.0, 7.0, 0.0], lo, hi, all), -5.0);
+        // The same point with +Y Open: only −X is a solid there.
+        assert_eq!(bounds_distance([-4.0, 7.0, 0.0], lo, hi, open_top), -3.0);
+        // Past an Open face alone is free space, and the Open face's own
+        // distance never lowers the answer.
+        assert_eq!(bounds_distance([0.0, 7.0, 0.0], lo, hi, open_top), 1.0);
+        // On the plane of a Wall the distance is 0.
+        assert_eq!(bounds_distance([2.0, 0.5, 0.0], lo, hi, all), 0.0);
     }
 
     /// The native engine's padded solid lattice: 1.5 cells outside each wall,

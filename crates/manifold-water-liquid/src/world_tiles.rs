@@ -162,7 +162,7 @@ pub fn held_bytes(pool_tiles: u32, ring_max: u32) -> u64 {
         + count_words(ring_max)
         + args_words(ring_max)
         + 3 * p
-        + 6 * u64::from(entries)
+        + 9 * u64::from(entries)
         + 3 * p
         + build_words(ring_max)
         + 3
@@ -267,7 +267,8 @@ pub struct WorldTiles {
     /// [`args_words`].
     args: GpuBuffer,
     lists: TileLists,
-    /// Per entry: ring, near, tile x, y, z; then the seed list (6H words).
+    /// Per entry: ring, near, tile x, y, z, the seed pass's tile x, y, z;
+    /// then the seed list (9H words).
     entry_scratch: GpuBuffer,
     /// Per slot: state, rank, then the free stack (3P words).
     slot_scratch: GpuBuffer,
@@ -396,7 +397,7 @@ impl WorldTiles {
                 retired: zeroed(device, u64::from(pool_tiles))?,
                 fresh: zeroed(device, u64::from(pool_tiles))?,
             },
-            entry_scratch: zeroed(device, 6 * u64::from(entries))?,
+            entry_scratch: zeroed(device, 9 * u64::from(entries))?,
             slot_scratch: words_buffer(device, &slots)?,
             build_words: zeroed(device, build_words(reach.ring_max))?,
             build_args: words_buffer(device, &[0, 1, 1])?,

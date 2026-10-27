@@ -12,7 +12,7 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
+use manifold_water_liquid::lattice::LiquidLattice;
 
 /// Nearest solid-object properties at a lattice node. Kind: none 0, domain 1, obstacle 2.
 #[repr(C)]
@@ -54,20 +54,24 @@ struct ObstacleSourceUniforms {
     nodes_y: f32,
     nodes_z: f32,
     closed_faces: i32,
-    wall_inset: f32,
+    bounds_lo_x: f32,
+    bounds_lo_y: f32,
+    bounds_lo_z: f32,
+    bounds_hi_x: f32,
+    bounds_hi_y: f32,
+    bounds_hi_z: f32,
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
     influence: f32,
     dust_strength: f32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 manifold_node_engine::primitive! {
     name: WhitewaterObstacleSource,
     type_id: "node.whitewater_obstacle_source",
-    purpose: "Find the nearest closed domain wall or enabled obstacle at every liquid lattice node, using the same posed solid distances as liquid_solid_distance. Emit its whitewater influence, dust strength and kind (none 0, domain 1, obstacle 2). A zero dust strength disables that obstacle source.",
+    purpose: "Find the nearest Wall face of the Bounds box (bounds_lo/hi in metres, closed_faces the Wall faces) or enabled obstacle at every liquid lattice node, using the same posed solid distances as liquid_solid_distance. Emit its whitewater influence, dust strength and kind (none 0, domain 1, obstacle 2). A zero dust strength disables that obstacle source.",
     inputs: {
         bodies: Array(LiquidBody) required,
         shapes: Array(LiquidShape) required,
@@ -76,7 +80,8 @@ manifold_node_engine::primitive! {
         cell_size: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
-        wall_inset: ScalarF32 optional,
+        bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
+        bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
         body_count: ScalarF32 optional,
         rows: ScalarF32 optional,
         tick_seconds: ScalarF32 optional,
@@ -93,8 +98,13 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("nodes_x"), label: "Nodes X", ty: ParamType::Float, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Float, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Float, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("wall_inset"), label: "Wall Inset (nodes)", ty: ParamType::Float, default: ParamValue::Float(PADDING_NODES as f32), range: Some((0.0, 64.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 63.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_lo_x"), label: "Bounds Min X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_lo_y"), label: "Bounds Min Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_lo_z"), label: "Bounds Min Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_hi_x"), label: "Bounds Max X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_hi_y"), label: "Bounds Max Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("bounds_hi_z"), label: "Bounds Max Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_LIQUID_BODIES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("rows"), label: "Rows", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_seconds"), label: "Tick (s)", ty: ParamType::Float, default: ParamValue::Float(TICK as f32), range: Some((0.0, 1.0)), enum_values: &[] },
@@ -154,12 +164,18 @@ impl Primitive for WhitewaterObstacleSource {
             return;
         };
         let closed_faces = ctx
-            .scalar_or_param("closed_faces", 63.0)
+            .scalar_or_param("closed_faces", 0.0)
             .round()
             .clamp(0.0, 63.0) as i32;
-        let wall_inset = ctx
-            .scalar_or_param("wall_inset", PADDING_NODES as f32)
-            .clamp(0.0, 64.0);
+        let bounds = [
+            "bounds_lo_x",
+            "bounds_lo_y",
+            "bounds_lo_z",
+            "bounds_hi_x",
+            "bounds_hi_y",
+            "bounds_hi_z",
+        ]
+        .map(|name| ctx.scalar_or_param(name, 0.0));
         let body_count = ctx
             .scalar_or_param("body_count", 0.0)
             .round()
@@ -211,7 +227,8 @@ impl Primitive for WhitewaterObstacleSource {
             cell_size: lattice.cell_size(),
             nodes: lattice.nodes(),
             closed_faces,
-            wall_inset,
+            bounds_lo: [bounds[0], bounds[1], bounds[2]],
+            bounds_hi: [bounds[3], bounds[4], bounds[5]],
             body_count,
             rows,
             tick_seconds,
@@ -237,9 +254,11 @@ pub(crate) struct ObstacleSourceJob<'a> {
     pub min: [f32; 3],
     pub cell_size: f32,
     pub nodes: [u32; 3],
-    /// Box walls that count as solid (bits −X +X −Y +Y −Z +Z), `wall_inset` nodes in from the lattice edge.
+    /// Faces of the Bounds box that are solid Walls (bits −X +X −Y +Y −Z +Z).
     pub closed_faces: i32,
-    pub wall_inset: f32,
+    /// The Bounds box in metres, as placed.
+    pub bounds_lo: [f32; 3],
+    pub bounds_hi: [f32; 3],
     pub body_count: i32,
     pub rows: i32,
     pub tick_seconds: f32,
@@ -273,14 +292,18 @@ pub(crate) fn encode_obstacle_source(
         nodes_y: job.nodes[1] as f32,
         nodes_z: job.nodes[2] as f32,
         closed_faces: job.closed_faces,
-        wall_inset: job.wall_inset,
+        bounds_lo_x: job.bounds_lo[0],
+        bounds_lo_y: job.bounds_lo[1],
+        bounds_lo_z: job.bounds_lo[2],
+        bounds_hi_x: job.bounds_hi[0],
+        bounds_hi_y: job.bounds_hi[1],
+        bounds_hi_z: job.bounds_hi[2],
         body_count: job.body_count,
         rows,
         tick_seconds: job.tick_seconds,
         influence: job.influence,
         dust_strength: job.dust_strength,
         dispatch_count: nodes,
-        _pad0: 0,
     };
     encoder.dispatch_compute(
         pipeline,

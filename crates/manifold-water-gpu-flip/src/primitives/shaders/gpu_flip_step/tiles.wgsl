@@ -16,19 +16,6 @@ fn list_cell(gid: u32) -> u32 {
 // fractions' corners), since an absent tile is at least a tile from water.
 const CANON_CORNER_CELLS: f32 = 3.0;
 
-// The gather's output at a record with no particle within reach: every face
-// absent (velocity 0, weight 0) except a box wall face, closed (0, weight 1).
-// `mask` is `box_wall_mask` of the record.
-fn canonical_face(mask: u32) -> FaceSample {
-    var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    for (var a = 0u; a < 3u; a = a + 1u) {
-        if ((mask >> a) & 1u) != 0u {
-            out.face_weight[a] = 1.0;
-        }
-    }
-    return out;
-}
-
 // The canonical cell values: water 0, φ 3h (particle_distance's start, kept
 // where no particle is within its scan), rhs 0.
 fn canonical_cell(idx: u32) {
@@ -37,15 +24,19 @@ fn canonical_cell(idx: u32) {
     tile_rhs[idx] = 0.0;
 }
 
+// The gather's output at a record with no particle within reach: every face
+// absent (velocity 0, weight 0).
+const CANONICAL_FACE: FaceSample = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
+
 // The tile's face grids that are not gathered or solid, and the cell fields
 // the retire leaves alone: the values a pass would read before writing.
-fn fresh_fields(idx: u32, face: FaceSample) {
-    let none = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    faces_out[idx] = face;
-    fresh_a[idx] = face;
-    fresh_b[idx] = face;
-    fresh_f[idx] = face;
-    fresh_faces[idx] = face;
+fn fresh_fields(idx: u32) {
+    let none = CANONICAL_FACE;
+    faces_out[idx] = none;
+    fresh_a[idx] = none;
+    fresh_b[idx] = none;
+    fresh_f[idx] = none;
+    fresh_faces[idx] = none;
     fresh_s[idx] = none;
     fresh_v[idx] = none;
     fresh_pressure[idx] = 0.0;
@@ -56,27 +47,26 @@ fn fresh_fields(idx: u32, face: FaceSample) {
 }
 
 // One thread, once per pool build: the canonical element of every pooled
-// field. It stands for every cell and record of an absent tile, none of
-// which is a box wall face, so every face is absent there (mask 0); the
-// corners are clear of the solids.
+// field. It stands for every cell and record of an absent tile, so every
+// face is absent there; the corners are clear of the solids.
 @compute @workgroup_size(1)
 fn pool_canon() {
     let at = ts_canon();
     canonical_cell(at);
-    fresh_fields(at, canonical_face(0u));
+    fresh_fields(at);
     tile_corners[at] = CANON_CORNER_CELLS * u.cell_size;
 }
 
 // 512 threads a fresh slot (the triple at world_tiles.rs
 // `fresh_args_offset`): every pooled field's cells and records of the slot's
-// tile to their canonical values, a box wall face closed, as the tile was
-// never written. An inactive clock slot's triple is off.
+// tile to their canonical values, as the tile was never written. An inactive
+// clock slot's triple is off.
 @compute @workgroup_size(256)
 fn tiles_fresh(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = ts_list_cell(tiles_fresh_list[gid.x >> 9u], gid.x);
     ts_home(idx);
     canonical_cell(idx);
-    fresh_fields(idx, canonical_face(box_wall_mask(ts_cell_coord(idx))));
+    fresh_fields(idx);
 }
 
 // 512 threads a retired slot (the triple at `retired_args_offset`): its
@@ -87,13 +77,13 @@ fn tiles_retire(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = ts_list_cell(tiles_retired[gid.x >> 9u], gid.x);
     ts_home(idx);
     canonical_cell(idx);
-    faces_out[idx] = canonical_face(box_wall_mask(ts_cell_coord(idx)));
+    faces_out[idx] = CANONICAL_FACE;
 }
 
 // 512 threads a held slot (the triple over every held slot), before any
 // pass reads the solids: corner p, at origin + p·h, is the solid distance
-// there (`solid_distance`: the walls and this step's posed bodies), for
-// every cell of the tile, in or out of the box.
+// there (`solid_distance`: the Wall faces and this step's posed bodies), for
+// every cell of the tile.
 @compute @workgroup_size(256)
 fn solid_corners(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }

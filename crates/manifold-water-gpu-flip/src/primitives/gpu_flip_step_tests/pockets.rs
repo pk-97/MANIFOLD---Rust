@@ -3,7 +3,7 @@
 //! whole tiles held in a shuffled pool, so a label (the lowest pool index of
 //! its pocket) does not follow cell order, and pockets cross tile faces.
 
-use super::super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass, pocket_rounds};
+use super::super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass};
 use super::Stream;
 use manifold_gpu::GpuBuffer;
 use manifold_node_engine::scene::world_tiles::{
@@ -76,17 +76,13 @@ fn within(c: [i32; 3], extent: [usize; 3]) -> Option<[usize; 3]> {
     Some(out)
 }
 
-/// The step's params over the box: its faces are the walls, the cell size
-/// and origin place the world lattice.
+/// The step's params over the box: the cell size and origin place the world
+/// lattice.
 fn lattice(tiles: &Tiles) -> StepParams {
-    let origin = -0.5 * H;
     StepParams {
         cell_size: H,
         inv_cell: 1.0 / H,
-        origin: [origin; 3],
-        walls_lo: LO.map(|c| origin + c as f32 * H),
-        walls_hi: std::array::from_fn(|a| origin + (LO[a] + N[a] as i32) as f32 * H),
-        closed_faces: 63,
+        origin: [-0.5 * H; 3],
         ring_max: 1,
         impulse_tick: -1,
         pool_tiles: tiles.tiles.len() as u32,
@@ -314,7 +310,8 @@ impl Rig {
 
 /// The open fractions pass's output over the padded box: inner faces open
 /// (`solid` false), or one in four closed, one in four whole and the rest a
-/// fraction; box walls closed; each cell's open volume in weight w.
+/// fraction; the faces on the box's border closed; each cell's open volume
+/// in weight w.
 fn open_faces(seed: u64, solid: bool) -> Vec<FaceSample> {
     let mut rng = Stream::new(seed);
     (0..face_len())
@@ -341,12 +338,29 @@ fn open_faces(seed: u64, solid: bool) -> Vec<FaceSample> {
         .collect()
 }
 
+/// Opens the box's border faces on the sides `closed` leaves clear (bits −X
+/// +X −Y +Y −Z +Z): the cells beyond the box hold no water, so water there
+/// touches air.
+fn open_tank_faces(open: &mut [FaceSample], closed: u32) {
+    for (i, face) in open.iter_mut().enumerate() {
+        let p = pad_coords(i);
+        for a in 0..3 {
+            if face_exists(p, a)
+                && ((p[a] == 0 && closed >> (2 * a) & 1 == 0)
+                    || (p[a] == N[a] && closed >> (2 * a + 1) & 1 == 0))
+            {
+                face.weight[a] = 1.0;
+            }
+        }
+    }
+}
+
 /// The engine's sealed pockets on CPU (PressureSolver::_conditionSolidVelocityField):
 /// water cells link through a face open at least 1e-6; a region reaches air
-/// through a linked dry neighbour or an open tank face (`mask`); a cell of an
-/// unreached region of more than one cell is isolated. Returns the isolated
-/// cells, then every sealed (wet, unreached) cell.
-fn cpu_isolated(water: &[f32], open: &[FaceSample], mask: u32) -> (Vec<bool>, Vec<bool>) {
+/// through a linked dry neighbour, in the box or beyond its edge; a cell of
+/// an unreached region of more than one cell is isolated. Returns the
+/// isolated cells, then every sealed (wet, unreached) cell.
+fn cpu_isolated(water: &[f32], open: &[FaceSample]) -> (Vec<bool>, Vec<bool>) {
     let wet = |c: [usize; 3]| water[cell_index(c)] > 0.5;
     let neighbours = |c: [usize; 3]| {
         let mut out = Vec::new();
@@ -369,11 +383,13 @@ fn cpu_isolated(water: &[f32], open: &[FaceSample], mask: u32) -> (Vec<bool>, Ve
     let mut reach: Vec<bool> = (0..cell_len())
         .map(|i| {
             let c = cell_coords(i);
-            let face = (0..3).any(|a| {
-                (mask >> (2 * a) & 1 == 0 && c[a] == 0)
-                    || (mask >> (2 * a + 1) & 1 == 0 && c[a] == N[a] - 1)
+            let beyond = (0..3).any(|a| {
+                let mut high = c;
+                high[a] += 1;
+                (c[a] == 0 && open[pad_index(c)].weight[a] >= 1e-6)
+                    || (c[a] == N[a] - 1 && open[pad_index(high)].weight[a] >= 1e-6)
             });
-            wet(c) && (face || neighbours(c).iter().any(|&q| !wet(q)))
+            wet(c) && (beyond || neighbours(c).iter().any(|&q| !wet(q)))
         })
         .collect();
     let mut queue: Vec<usize> = (0..cell_len()).filter(|&i| reach[i]).collect();
@@ -486,13 +502,9 @@ fn gpu_pockets(
     water: &[f32],
     open: &[FaceSample],
     moving: &[FaceSample],
-    mask: u32,
     rhs: &[f32],
 ) -> Outcome {
-    let params = StepParams {
-        closed_faces: mask,
-        ..lattice(tiles)
-    };
+    let params = lattice(tiles);
     let cells = 512 * tiles.tiles.len();
     let mut rig = Rig::over(tiles);
     rig.bind(6, &tiles.pooled_cells(water))
@@ -540,7 +552,8 @@ pub(super) fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
     let mut zeroed = 0;
     // A random solid seals nothing off, so half its faces are closed again
     // and nearly every cell is water: walls of closed faces split the water
-    // into pockets, some reaching a dry cell or open face and some not.
+    // into pockets, some reaching a dry cell or an open face of the box's
+    // border and some not. `mask` is the border faces that stay closed.
     for (seed, mask) in [
         (0x5e1, 63),
         (0x5e2, 63),
@@ -561,26 +574,23 @@ pub(super) fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
                 }
             }
         }
+        open_tank_faces(&mut open, mask);
         let moving: Vec<FaceSample> = (0..face_len())
             .map(|i| {
                 let p = pad_coords(i);
                 let mut face = FaceSample::default();
                 for a in 0..3 {
                     if face_exists(p, a) {
-                        let draw = 0.5 + rng.unit();
-                        // A box wall's face holds no velocity.
-                        if p[a] < N[a] {
-                            face.velocity[a] = draw;
-                        }
+                        face.velocity[a] = 0.5 + rng.unit();
                     }
                 }
                 face.velocity[3] = 7.0;
                 face
             })
             .collect();
-        let (isolated, sealed) = cpu_isolated(&water, &open, mask);
+        let (isolated, sealed) = cpu_isolated(&water, &open);
         let rhs: Vec<f32> = (0..cell_len()).map(|_| 4.0 * rng.unit() - 1.0).collect();
-        let got = gpu_pockets(&tiles, &water, &open, &moving, mask, &rhs);
+        let got = gpu_pockets(&tiles, &water, &open, &moving, &rhs);
         let labels = cpu_pocket_labels(&tiles, &sealed, &open);
         for i in 0..cell_len() {
             let want = if water[i] > 0.5 {
@@ -844,15 +854,13 @@ pub(super) fn gpu_flip_pocket_round_initializes_replay_gate() {
 
 #[test]
 pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
-    // Every cell water and every link open, air only past the open -X face:
-    // with no round run, sealed cells still link to air.
+    // Every cell water and every link open, air only past the open -X
+    // border faces: with no round run, sealed cells still link to air.
     let tiles = Tiles::new(shuffled(box_tiles(), 0x5e9));
-    let params = StepParams {
-        closed_faces: 63 & !1,
-        ..lattice(&tiles)
-    };
+    let params = lattice(&tiles);
     let water = vec![1.0f32; cell_len()];
-    let open = open_faces(0x5e9, false);
+    let mut open = open_faces(0x5e9, false);
+    open_tank_faces(&mut open, 63 & !1);
     let mut rig = Rig::over(&tiles);
     rig.bind(6, &tiles.pooled_cells(&water))
         .bind(10, &tiles.pooled_records(&open))
@@ -864,24 +872,28 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     rig.run("pocket_start", &params, 1);
     rig.run("pocket_check", &params, cells);
     assert_eq!(rig.gate()[10], 1, "an unfinished spread is flagged");
-    // The step's dry, sealed and air counts follow in words 7-9: the box's
-    // cells only, though its tiles hold more.
-    let pocket = tiles.cells(&rig.read::<u32>(23, tiles.pool_len()));
+    // The step's dry, sealed and air counts follow in words 7-9: the cells
+    // of every held tile, the water of the box and the dry cells its tiles
+    // hold around it.
+    let pocket = rig.read::<u32>(23, tiles.pool_len());
+    let held = 512 * tiles.tiles.len();
     let counts: Vec<u32> = (0..3)
-        .map(|k| pocket.iter().filter(|&&s| s == k).count() as u32)
+        .map(|k| pocket[..held].iter().filter(|&&s| s == k).count() as u32)
         .collect();
     assert_eq!(
         counts,
-        [0, (cell_len() - N[1] * N[2]) as u32, (N[1] * N[2]) as u32],
-        "every cell water, the -X layer touching air"
+        [
+            (held - cell_len()) as u32,
+            (cell_len() - N[1] * N[2]) as u32,
+            (N[1] * N[2]) as u32
+        ],
+        "every box cell water, the -X layer touching air, the rest of the tiles dry"
     );
     rig.bind(1, &vec![CellRange::default(); tiles.pool_len()])
         .bind(7, &vec![0.0f32; tiles.pool_len()]);
     rig.bind(
         22,
-        &[
-            5u32, 6, 7, 9, 0, 0, 0, 77, 77, 77, 77, 77, 77, 77, 77, 77, 77,
-        ],
+        &[5u32, 6, 7, 9, 0, 0, 0, 77, 77, 77, 77, 77, 77, 77, 77, 77],
     );
     rig.run(
         "pocket_tally",
@@ -891,7 +903,7 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
         },
         256,
     );
-    let first: Vec<u32> = rig.read(22, 17);
+    let first: Vec<u32> = rig.read(22, 16);
     assert_eq!(
         first[..4],
         [5, 6, 7, 1],
@@ -907,12 +919,24 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
         .map(|i| tiles.pool_index(world(cell_coords(i))).expect("held"))
         .min()
         .expect("a -X layer");
+    // Its reason: the dry cell beyond the -X face, the face's open fraction
+    // (whole) and axis 0 on the low side.
+    let seed = (0..cell_len())
+        .map(cell_coords)
+        .find(|&c| tiles.pool_index(world(c)) == Some(lowest))
+        .expect("the seed is a box cell");
+    let mut beyond = world(seed);
+    beyond[0] -= 1;
     assert_eq!(
         first[10..14],
-        [lowest as u32, u32::MAX, 0, 0],
-        "the lowest seed is the -X layer's lowest pool index, through the open -X box face"
+        [
+            lowest as u32,
+            tiles.pool_index(beyond).expect("held") as u32,
+            1.0f32.to_bits(),
+            0
+        ],
+        "the lowest seed is the -X layer's lowest pool index, through the open -X border face"
     );
-    assert_eq!(first[16], 0, "every cell water: no dry floor hole");
     rig.run(
         "pocket_tally",
         &StepParams {
@@ -921,12 +945,8 @@ pub(super) fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
         },
         256,
     );
-    let second: Vec<u32> = rig.read(22, 17);
+    let second: Vec<u32> = rig.read(22, 16);
     assert_eq!(second[..4], [5, 6, 7, 2], "later steps add to it");
-    // The cap is the side of a cube holding the pool, in cells.
-    for (pool, rounds) in [(1, 8), (8, 16), (9, 24), (27, 24), (28, 32)] {
-        assert_eq!(pocket_rounds(pool), rounds, "{pool} tiles");
-    }
 }
 
 /// The coarse pockets at solve level 1 as the CPU coarsens them: a level
@@ -1036,7 +1056,7 @@ pub(super) fn gpu_flip_pocket_mean_at_solve_level_one_sums_to_zero() {
             }
         }
         let (state, label) = fine_pockets(&tiles, &water, &open);
-        let (_, sealed) = cpu_isolated(&water, &open, 63);
+        let (_, sealed) = cpu_isolated(&water, &open);
         assert!(
             (0..cell_len()).all(|i| sealed[i] || solid[i]),
             "{case}: every water cell is sealed"

@@ -484,6 +484,16 @@ const LATTICE_WIRES: [&str; 7] = [
     "nodes_z",
 ];
 
+/// The Bounds box in metres as placed, as the domain publishes it.
+const BOUNDS_WIRES: [&str; 6] = [
+    "bounds_lo_x",
+    "bounds_lo_y",
+    "bounds_lo_z",
+    "bounds_hi_x",
+    "bounds_hi_y",
+    "bounds_hi_z",
+];
+
 /// The fill's sites, as the domain publishes them.
 const FILL_WIRES: [&str; 7] = [
     "pool_sites",
@@ -556,7 +566,8 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, fill, &FILL_WIRES);
     b.wires(domain, fill, &LATTICE_WIRES);
     b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch", "particle_capacity"]);
-    b.wire((domain, "mesh_wall_inset"), fill, "wall_inset");
+    b.wires(domain, fill, &BOUNDS_WIRES);
+    b.wire((domain, "closed_faces"), fill, "closed_faces");
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
     b.wire((fill, "count"), state, "count");
@@ -597,7 +608,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
             b.wire((domain, from), node, to);
         }
         b.wire((domain, "body_rows"), node, "rows");
-        b.wire((domain, "mesh_wall_inset"), node, "wall_inset");
+        b.wires(domain, node, &BOUNDS_WIRES);
     }
     let frame = b.node("frame", "node.liquid_frame", json!({}));
     b.wire((state, "out"), frame, "particles");
@@ -1432,6 +1443,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((domain, "gravity"), step, "gravity_y");
     b.wire((domain, "gravity_z"), step, "gravity_z");
     b.wires(domain, step, &FIELD_WIRES);
+    b.wires(domain, step, &BOUNDS_WIRES);
     b.wire((state, "tick_index"), step, "tick_index");
     b.wires(
         domain,
@@ -1444,6 +1456,8 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
             "body_count",
             "dynamic_bodies",
             "closed_faces",
+            "open_faces",
+            "kill_height",
             "solve_level",
             "max_iterations",
             "sheet_fill_rate",

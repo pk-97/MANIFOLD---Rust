@@ -3750,12 +3750,6 @@
             "toPort": "particle_capacity"
           },
           {
-            "fromNode": 0,
-            "fromPort": "mesh_wall_inset",
-            "toNode": 2,
-            "toPort": "wall_inset"
-          },
-          {
             "fromNode": 2,
             "fromPort": "particles",
             "toNode": 3,
@@ -4183,12 +4177,6 @@
           },
           {
             "fromNode": 0,
-            "fromPort": "mesh_wall_inset",
-            "toNode": 6,
-            "toPort": "wall_inset"
-          },
-          {
-            "fromNode": 0,
             "fromPort": "bodies",
             "toNode": 7,
             "toPort": "bodies"
@@ -4264,12 +4252,6 @@
             "fromPort": "body_rows",
             "toNode": 7,
             "toPort": "rows"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "mesh_wall_inset",
-            "toNode": 7,
-            "toPort": "wall_inset"
           },
           {
             "fromNode": 3,
@@ -5482,6 +5464,180 @@
             "fromPort": "interval_duration",
             "toNode": 11,
             "toPort": "dt"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_x",
+            "toNode": 4,
+            "toPort": "bounds_lo_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_y",
+            "toNode": 4,
+            "toPort": "bounds_lo_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_z",
+            "toNode": 4,
+            "toPort": "bounds_lo_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_x",
+            "toNode": 4,
+            "toPort": "bounds_hi_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_y",
+            "toNode": 4,
+            "toPort": "bounds_hi_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_z",
+            "toNode": 4,
+            "toPort": "bounds_hi_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "open_faces",
+            "toNode": 4,
+            "toPort": "open_faces"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "kill_height",
+            "toNode": 4,
+            "toPort": "kill_height"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "region_sites",
+            "toNode": 4,
+            "toPort": "region_sites"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "region_site_total",
+            "toNode": 4,
+            "toPort": "region_site_total"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_x",
+            "toNode": 6,
+            "toPort": "bounds_lo_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_y",
+            "toNode": 6,
+            "toPort": "bounds_lo_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_z",
+            "toNode": 6,
+            "toPort": "bounds_lo_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_x",
+            "toNode": 6,
+            "toPort": "bounds_hi_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_y",
+            "toNode": 6,
+            "toPort": "bounds_hi_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_z",
+            "toNode": 6,
+            "toPort": "bounds_hi_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_x",
+            "toNode": 2,
+            "toPort": "bounds_lo_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_y",
+            "toNode": 2,
+            "toPort": "bounds_lo_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_z",
+            "toNode": 2,
+            "toPort": "bounds_lo_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_x",
+            "toNode": 2,
+            "toPort": "bounds_hi_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_y",
+            "toNode": 2,
+            "toPort": "bounds_hi_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_z",
+            "toNode": 2,
+            "toPort": "bounds_hi_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "closed_faces",
+            "toNode": 2,
+            "toPort": "closed_faces"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_x",
+            "toNode": 7,
+            "toPort": "bounds_lo_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_y",
+            "toNode": 7,
+            "toPort": "bounds_lo_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_lo_z",
+            "toNode": 7,
+            "toPort": "bounds_lo_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_x",
+            "toNode": 7,
+            "toPort": "bounds_hi_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_y",
+            "toNode": 7,
+            "toPort": "bounds_hi_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds_hi_z",
+            "toNode": 7,
+            "toPort": "bounds_hi_z"
           }
         ]
       }

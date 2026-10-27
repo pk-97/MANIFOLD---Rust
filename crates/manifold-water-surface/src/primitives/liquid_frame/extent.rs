@@ -64,7 +64,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("stats", u64::from(LIQUID_STATS_WORDS) * 4)?;
     if wired {
         if x.bytes("solid") != Some(solid) {
-            return Err(x.uncovered(format!("solid must hold exactly {solid} bytes on the native FLIP mesh grid; sample at gpu_flip_domain.mesh_min/mesh_nodes with mesh_wall_inset")));
+            return Err(x.uncovered(format!("solid must hold exactly {solid} bytes on the native FLIP mesh grid; sample at gpu_flip_domain.mesh_min/mesh_nodes")));
         }
         x.covers("solid", solid)?;
     }

@@ -16,7 +16,9 @@ use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use manifold_water_gpu_flip::primitives::gpu_flip_step::{GpuFlipStep, pool_tiles, set_poison};
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::lattice::PADDING_NODES;
-use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
+use manifold_water_liquid::primitives::liquid_stats::{
+    LIQUID_STATS_WORDS, LiquidTickStats, SOLVER_WORDS,
+};
 use manifold_water_liquid::testkit::world_box::pool_index_under;
 
 /// Every word of a buffer the step allocated (private storage).
@@ -139,10 +141,10 @@ fn gpu_flip_step_tiles_two_particles_across_the_origin() {
     );
 }
 
-/// A closed Dam Break keeps its volume on world tiles: the pool holds every
+/// A closed Dam Break keeps its water on world tiles: the pool holds every
 /// tile the water can reach, so the move never removes a particle for want
-/// of a slot, and the live count stays the seeded count, every particle
-/// live and finite, frame after frame.
+/// of a slot (stats word 30), and every particle the engine keeps is live and
+/// finite. The engine's own speed-limit removal may take a handful.
 #[test]
 fn gpu_flip_dam_break_keeps_its_volume_on_world_tiles() {
     let mut run = Run::new(WaterScene::dam_break(16));
@@ -150,8 +152,18 @@ fn gpu_flip_dam_break_keeps_its_volume_on_world_tiles() {
     assert!(seeded > 0, "the fill seeds the dam");
     for frame in 0..30 {
         run.frame();
+        let words: Vec<u32> = run.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+        let stats = LiquidTickStats::from_words(&words);
+        assert_eq!(
+            stats.tile_removed, 0,
+            "frame {frame}: a particle lost its tile"
+        );
         let particles = run.particles();
-        assert_eq!(particles.len(), seeded, "frame {frame}: the live count");
+        assert!(
+            particles.len() * 1000 >= seeded * 999,
+            "frame {frame}: {} of {seeded} particles left",
+            particles.len()
+        );
         assert!(
             particles.iter().all(|p| p.position_radius[3] > 0.0
                 && p.position_radius

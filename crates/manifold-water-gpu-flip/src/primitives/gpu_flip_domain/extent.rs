@@ -1,6 +1,8 @@
 //! Buffer extent rule owned by this node.
-use crate::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::primitives::gpu_flip_domain::region_sites::RegionSites;
+use crate::primitives::gpu_flip_domain::{
+    NO_KILL_HEIGHT, bounds_outputs, face_masks, geometry_read, gpu_flip_geometry,
+};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
@@ -17,7 +19,7 @@ use std::mem::size_of;
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (fill, kinds) = walked_roles(x, "GPU FLIP")?;
     let geometry = gpu_flip_geometry(
-        |name, default| x.scalar(name, default),
+        geometry_read(x.params(), |name, default| x.scalar(name, default)),
         x.transform("domain"),
         fill,
     )
@@ -27,6 +29,19 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }
+    // The walk has no bodies, so with Bounds off it takes the box of the most
+    // nodes; the faces follow the toggles and no height is known.
+    let scene = geometry.walk_scene();
+    for (name, value) in bounds_outputs(scene) {
+        x.publish(name, value);
+    }
+    let (walls, open) = face_masks(
+        geometry.setup.bounds,
+        manifold_water_liquid::lattice::closed_faces(x.params()),
+    );
+    x.publish("closed_faces", walls as f32);
+    x.publish("open_faces", open as f32);
+    x.publish("kill_height", NO_KILL_HEIGHT);
     // Body kernels clamp rows and body counts to the bodies array, so the
     // walk takes a scene without colliders; the reaction is sized for every
     // body a liquid holds.
@@ -42,7 +57,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
     let field = FieldFrame {
-        lattice: geometry.field_lattice(),
+        lattice: geometry.field_lattice(scene),
         force_lattices: FORCE_LATTICE_RESERVE,
         impulse_tick: Some(0),
     };

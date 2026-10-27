@@ -25,8 +25,7 @@ pub(super) fn gpu_flip_water_is_negative_phi() {
 
 #[test]
 pub(super) fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
-    // Dense covers most faces and the walls; sparse leaves faces no particle
-    // reaches.
+    // Dense covers most faces; sparse leaves faces no particle reaches.
     for (name, count) in [("dense", 400), ("sparse", 12)] {
         let particles = random_particles(0x9261, count);
         let (sorted, ranges) = cpu_sort(&particles);
@@ -34,25 +33,21 @@ pub(super) fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
             capacity: sorted.len() as u32,
             ..lattice()
         };
-        // The pass owns the cells' records; the records past the lattice
-        // are the pool's canonical ones: only the box walls closed.
+        // The pass owns every record of the held tiles, the box's far edge
+        // records among them.
         let mut pass = Pass::new();
         let threads = pass.every_tile();
-        let filled = canonical_faces();
+        let filled = vec![FaceSample::default(); face_len()];
         let got: Vec<FaceSample> = pass
             .bind_ranges(&ranges)
             .bind(2, &sorted, Layout::Dense)
             .bind(4, &filled, Layout::Records)
             .run("particles_to_faces", &step, 4, face_len(), threads);
-        let (checked, invalid, walls) = check_wyvill_faces(&particles, &got);
+        let (checked, invalid) = check_wyvill_faces(&particles, &got);
         if name == "dense" {
             assert!(
                 checked > 200,
                 "the fixture reaches most faces, got {checked}"
-            );
-            assert!(
-                walls[1] > 10,
-                "the draw reaches wall faces with moving water: {walls:?}"
             );
         } else {
             assert!(
@@ -64,13 +59,13 @@ pub(super) fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
 }
 
 /// Checks the particles to faces pass against the engine's kernel
-/// (velocityadvector.cpp, in cells: r = √3/2). Returns the faces whose
-/// velocity was checked, the faces no particle reaches, and the wall faces
-/// held and kept.
+/// (velocityadvector.cpp, in cells: r = √3/2). Every record has its three
+/// faces and a face at the box's edge is gathered like any other. Returns
+/// the faces whose velocity was checked and the faces no particle reaches.
 pub(super) fn check_wyvill_faces(
     particles: &[FluidParticle],
     got: &[FaceSample],
-) -> (usize, usize, [usize; 2]) {
+) -> (usize, usize) {
     let rsq = 0.75f64;
     let wyvill = |d2: f64| {
         if d2 < rsq {
@@ -81,19 +76,9 @@ pub(super) fn check_wyvill_faces(
         }
     };
     let (mut checked, mut invalid) = (0, 0);
-    // Wall faces the particles reach still or moving, all held at 0.
-    let mut walls = [0usize; 2];
     for (i, face) in got.iter().enumerate() {
         let p = pad_coords(i);
         for a in 0..3 {
-            if !face_exists(p, a) {
-                assert_eq!(
-                    (face.velocity[a], face.weight[a]),
-                    (0.0, 0.0),
-                    "missing face {p:?}/{a}"
-                );
-                continue;
-            }
             let centre: [f64; 3] =
                 std::array::from_fn(|b| p[b] as f64 + if b == a { 0.0 } else { 0.5 });
             let (mut weight, mut momentum) = (0.0f64, 0.0f64);
@@ -115,14 +100,6 @@ pub(super) fn check_wyvill_faces(
             }
             let valid = weight > 1e-6;
             let velocity = if valid { momentum / weight } else { 0.0 };
-            if p[a] == 0 || p[a] == N[a] {
-                // A wall is closed: velocity 0 whatever the particles carry,
-                // and always valid.
-                close(face.weight[a], 1.0, 1.0, &format!("wall weight {p:?}/{a}"));
-                walls[usize::from(velocity != 0.0)] += 1;
-                assert_eq!(face.velocity[a], 0.0, "wall velocity {p:?}/{a}");
-                continue;
-            }
             if !valid {
                 // Too little weight to trust: extension fills the face.
                 assert_eq!(
@@ -148,7 +125,7 @@ pub(super) fn check_wyvill_faces(
             }
         }
     }
-    (checked, invalid, walls)
+    (checked, invalid)
 }
 
 #[test]
@@ -169,14 +146,11 @@ pub(super) fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
         let mut pushed = 0;
         for (c, g) in got.iter().enumerate() {
             let p = cell_coords(c);
-            // A wall face is closed and carries nothing; an inner face counts
-            // by its open fraction, plus the solid's (c − w)·v_s, c the
-            // cell's open volume.
+            // A face counts by its open fraction, plus the solid's (c − w)·v_s,
+            // c the cell's open volume. A wall's face is closed by its open
+            // fraction and carries no solid velocity, like any solid's.
             let centre = f64::from(open[pad_index(p)].weight[3]);
             let flux = |q: [usize; 3], a: usize| {
-                if q[a] == 0 || q[a] == N[a] {
-                    return 0.0;
-                }
                 let w = f64::from(open[pad_index(q)].weight[a]);
                 w * f64::from(faces[pad_index(q)].velocity[a])
                     + (centre - w) * f64::from(moving[pad_index(q)].velocity[a])
@@ -268,11 +242,14 @@ pub(super) fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
         for (i, face) in got.iter().enumerate() {
             let p = pad_coords(i);
             for a in 0..3 {
-                let (velocity, weight) = if !face_exists(p, a) {
+                let (velocity, weight) = if open[i].weight[a] <= 0.0 {
+                    // Pressure subtraction clears closed faces, a wall's among
+                    // them; the later solid constraint writes their velocity
+                    // independently.
+                    closed += usize::from(face_exists(p, a) && p[a] > 0 && p[a] < N[a]);
                     (0.0, 0.0)
-                } else if p[a] == 0 || p[a] == N[a] {
-                    (0.0, 1.0)
                 } else {
+                    // Only inner faces are open: both cells are in the box.
                     let mut below = p;
                     below[a] -= 1;
                     let (up, down) = (cell_index(p), cell_index(below));
@@ -288,20 +265,13 @@ pub(super) fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                     } else {
                         ghost(down, up, &phi)
                     };
-                    if open[i].weight[a] <= 0.0 {
-                        // Pressure subtraction clears closed faces; the later
-                        // solid constraint writes their velocity independently.
-                        closed += 1;
-                        (0.0, 0.0)
+                    if wet_up != wet_down && (if wet_up { p_down } else { p_up }) != 0.0 {
+                        ghosts += 1;
+                    }
+                    if wet_up || wet_down {
+                        (u - (p_up - p_down) / f64::from(H), 1.0)
                     } else {
-                        if wet_up != wet_down && (if wet_up { p_down } else { p_up }) != 0.0 {
-                            ghosts += 1;
-                        }
-                        if wet_up || wet_down {
-                            (u - (p_up - p_down) / f64::from(H), 1.0)
-                        } else {
-                            (0.0, 0.0)
-                        }
+                        (0.0, 0.0)
                     }
                 };
                 // Ghost pressures reach 25 × 3, a step of 300 over h.
@@ -610,6 +580,46 @@ pub(super) fn gpu_flip_particle_distance_is_the_engines_level_set() {
     }
 }
 
+/// One layer of the fluid velocity's extrapolation on the padded array: a
+/// valid face is kept, an invalid one with valid neighbours takes the mean of
+/// their velocities and is valid from then on. A wall's face is no different
+/// from any other, and nothing lies past the array.
+pub(super) fn cpu_extend_layer(faces: &[FaceSample]) -> Vec<FaceSample> {
+    let m = padded();
+    (0..face_len())
+        .map(|i| {
+            let p = pad_coords(i);
+            let mut out = faces[i];
+            for a in 0..3 {
+                if faces[i].weight[a] > 0.0 {
+                    continue;
+                }
+                let (mut sum, mut hits) = (0.0f64, 0.0f64);
+                for b in 0..3 {
+                    for d in [-1i64, 1] {
+                        let at = p[b] as i64 + d;
+                        if at < 0 || at >= m[b] as i64 {
+                            continue;
+                        }
+                        let mut q = p;
+                        q[b] = at as usize;
+                        let neighbour = faces[pad_index(q)];
+                        if neighbour.weight[a] > 0.0 {
+                            sum += f64::from(neighbour.velocity[a]);
+                            hits += 1.0;
+                        }
+                    }
+                }
+                if hits > 0.0 {
+                    out.velocity[a] = (sum / hits) as f32;
+                    out.weight[a] = 1.0;
+                }
+            }
+            out
+        })
+        .collect()
+}
+
 #[test]
 pub(super) fn gpu_flip_extend_faces_fills_one_layer() {
     let faces = random_faces(0xe7e, true);
@@ -618,7 +628,7 @@ pub(super) fn gpu_flip_extend_faces_fills_one_layer() {
         .bind(4, &faces, Layout::Records);
     let threads = pass.allocated_tiles(&lattice());
     let got: Vec<FaceSample> = pass.run("extend_faces", &lattice(), 4, face_len(), threads);
-    let want = super::super::gpu_flip_extension_tests::cpu_extend(&faces, N);
+    let want = cpu_extend_layer(&faces);
     let mut filled = 0;
     for (i, (g, w)) in got.iter().zip(&want).enumerate() {
         for a in 0..3 {
@@ -633,86 +643,6 @@ pub(super) fn gpu_flip_extend_faces_fills_one_layer() {
         }
     }
     assert!(filled > 20, "the fixture fills faces, got {filled}");
-}
-
-/// A wall's held zero must not claim the gap before the fluid front arrives.
-#[test]
-pub(super) fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
-    use super::super::gpu_flip_extension_tests::{cpu_extend, wall_gap};
-    for axis in 0..3 {
-        for high in [false, true] {
-            let (mut faces, target) = wall_gap(N, axis, high);
-            for layer in 0..2 {
-                let want = cpu_extend(&faces, N);
-                let mut pass = Pass::new();
-                pass.bind(3, &faces, Layout::Records)
-                    .bind(4, &faces, Layout::Records);
-                let threads = pass.allocated_tiles(&lattice());
-                let got: Vec<FaceSample> =
-                    pass.run("extend_faces", &lattice(), 4, face_len(), threads);
-                for (i, (g, w)) in got.iter().zip(&want).enumerate() {
-                    for a in 0..3 {
-                        close(
-                            g.velocity[a],
-                            f64::from(w.velocity[a]),
-                            1.0,
-                            &format!("layer {layer} face {:?}/{a}", pad_coords(i)),
-                        );
-                        assert_eq!(g.weight[a], w.weight[a]);
-                    }
-                }
-                faces = got;
-            }
-            assert!(
-                faces[target].velocity[axis] > 0.0,
-                "axis {axis}, high {high}: fluid reaches the wall gap"
-            );
-        }
-    }
-}
-
-/// The engine holds every border sample of a component's lattice done: its
-/// value counts in a neighbour's mean, it is never extended or a seed. Beside
-/// a transverse wall row and in a two-row corner, two layers.
-#[test]
-pub(super) fn gpu_flip_extend_faces_holds_border_rows_as_native() {
-    use super::super::gpu_flip_extension_tests::{cpu_extend, transverse_wall_fixture};
-    for corner in [false, true] {
-        let mut faces = transverse_wall_fixture(N, corner);
-        let mut averaged = 0;
-        for layer in 0..2 {
-            let want = cpu_extend(&faces, N);
-            let mut pass = Pass::new();
-            pass.bind(3, &faces, Layout::Records)
-                .bind(4, &faces, Layout::Records);
-            let threads = pass.allocated_tiles(&lattice());
-            let got: Vec<FaceSample> = pass.run("extend_faces", &lattice(), 4, face_len(), threads);
-            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
-                for a in 0..3 {
-                    close(
-                        g.velocity[a],
-                        f64::from(w.velocity[a]),
-                        1.0,
-                        &format!("corner {corner} layer {layer} face {:?}/{a}", pad_coords(i)),
-                    );
-                    assert_eq!(
-                        g.weight[a],
-                        w.weight[a],
-                        "corner {corner} layer {layer} weight {:?}/{a}",
-                        pad_coords(i)
-                    );
-                    averaged += usize::from(
-                        w.weight[a] > 0.0 && w.velocity[a] > 0.0 && w.velocity[a] < 2.0,
-                    );
-                }
-            }
-            faces = got;
-        }
-        assert!(
-            averaged > 0,
-            "corner {corner}: the fixture averages a held border zero"
-        );
-    }
 }
 
 #[test]

@@ -82,7 +82,7 @@ pub(crate) struct MatterGeometry {
 
 impl MatterGeometry {
     /// The scalar outputs fixed by the setup, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 27] {
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 33] {
         let MatterSetup {
             lattice,
             closed_faces,
@@ -93,6 +93,10 @@ impl MatterGeometry {
         } = self.setup;
         let blocks = lattice_blocks(&lattice);
         let (centre, size, bin) = block_sort_box(&lattice);
+        // The walls' box: the authored box inside the lattice's padding.
+        let lo = lattice.box_min();
+        let hi: [f32; 3] =
+            std::array::from_fn(|d| lo[d] + lattice.cells()[d] as f32 * lattice.cell_size());
         [
             ("lattice_min_x", lattice.min()[0]),
             ("lattice_min_y", lattice.min()[1]),
@@ -121,6 +125,12 @@ impl MatterGeometry {
             ("block_size_y", size[1]),
             ("block_size_z", size[2]),
             ("block_cell_size", bin),
+            ("bounds_lo_x", lo[0]),
+            ("bounds_lo_y", lo[1]),
+            ("bounds_lo_z", lo[2]),
+            ("bounds_hi_x", hi[0]),
+            ("bounds_hi_y", hi[1]),
+            ("bounds_hi_z", hi[2]),
         ]
     }
 }
@@ -268,6 +278,8 @@ manifold_node_engine::primitive! {
         block_center_x: ScalarF32, block_center_y: ScalarF32, block_center_z: ScalarF32,
         block_size_x: ScalarF32, block_size_y: ScalarF32, block_size_z: ScalarF32,
         block_cell_size: ScalarF32,
+        bounds_lo_x: ScalarF32, bounds_lo_y: ScalarF32, bounds_lo_z: ScalarF32,
+        bounds_hi_x: ScalarF32, bounds_hi_y: ScalarF32, bounds_hi_z: ScalarF32,
         momentum_unit: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, first_tick: ScalarF32,
         dynamic_count: ScalarF32,
@@ -488,7 +500,7 @@ impl Coupling {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 55] = [
+const OUTPUTS: [&str; 61] = [
     "lattice_min_x",
     "lattice_min_y",
     "lattice_min_z",
@@ -544,6 +556,12 @@ const OUTPUTS: [&str; 55] = [
     "interval_duration",
     "target_time",
     "step_cap_hit",
+    "bounds_lo_x",
+    "bounds_lo_y",
+    "bounds_lo_z",
+    "bounds_hi_x",
+    "bounds_hi_y",
+    "bounds_hi_z",
 ];
 const TICKS: usize = 20;
 const EPOCH: usize = 22;

@@ -7,14 +7,15 @@ use manifold_node_engine::exec::effect_node::ParamValues;
 
 #[test]
 pub(super) fn gpu_flip_step_order_extend_constraint_value_proof() {
-    use super::super::gpu_flip_extension_tests::{cpu_extend, moving_wall_fixture};
+    use super::super::gpu_flip_extension_tests::moving_wall_fixture;
+    use super::cells::cpu_extend_layer;
     let (initial, wall) = moving_wall_fixture(N);
     assert_eq!(initial.len(), face_len());
     for cfl in [1, 3, 5, 8] {
         let mut want = initial.clone();
         let mut got = initial.clone();
         for _ in 0..super::super::gpu_flip_step::band_layers(cfl) {
-            want = cpu_extend(&want, N);
+            want = cpu_extend_layer(&want);
             let mut pass = Pass::new();
             pass.bind(3, &got, Layout::Records);
             pass.allocated_tiles(&lattice());
@@ -50,9 +51,9 @@ pub(super) fn gpu_flip_step_order_extend_constraint_value_proof() {
             &expected,
             "extend then constrain moving wall",
         );
-        // The wall face's z + 1 neighbour is this lattice's held border row:
-        // the extension averages its 0 with the seed's 2.
-        assert_eq!(constrained[wall].velocity[0], 4.0);
+        // The cut face's only valid neighbour is the seed, 2: the extension
+        // gives it that, and the constraint blends 7 with it at friction ½.
+        assert_eq!(constrained[wall].velocity[0], 4.5);
     }
 }
 

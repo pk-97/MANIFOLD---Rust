@@ -8,10 +8,11 @@
 //! at tick boundaries before reading reactions, including between ticks of a
 //! coupled live frame.
 //!
-//! The domain's closed faces are walls for the liquid, so they are walls for
-//! the bodies: the owner installs a fixed slab just outside each closed face,
-//! spanning it; open faces stay open. The slabs live only in the owner's
-//! world (not scene nodes, not serialized).
+//! The Bounds box's Wall faces are walls for the liquid, so they are walls for
+//! the bodies: the owner installs a fixed slab just outside each Wall face,
+//! spanning it; Open faces stay open, and with Bounds off there is no slab.
+//! The slabs live only in the owner's world (not scene nodes, not
+//! serialized).
 
 use std::sync::Arc;
 
@@ -119,68 +120,79 @@ pub fn decode_reaction(
     Ok(())
 }
 
-/// A coupled domain's box and which faces are closed (bit order −x, +x, −y,
-/// +y, −z, +z, as `closed_faces`).
+/// A coupled domain's Bounds box and which of its faces are Wall (bit order
+/// −x, +x, −y, +y, −z, +z, as `closed_faces`). With Bounds off there is no
+/// box and no Wall: [`DomainWalls::default`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DomainWalls {
-    pub min: [f32; 3],
-    pub size: [f32; 3],
-    pub closed: u32,
+    bounds: Option<[[f32; 3]; 2]>,
+    walls: u32,
 }
 
 impl DomainWalls {
-    /// The walls of `layout`'s grid box (the liquid's own walls).
-    pub fn of(layout: &FluidDomainLayout, closed: u32) -> Self {
-        let size = std::array::from_fn(|d| (f64::from(layout.cells[d]) * layout.cell_size) as f32);
+    /// The Bounds box `lo` to `hi`, as placed, with the Wall faces `walls`.
+    /// An Open face gets no slab.
+    pub fn new(lo: [f32; 3], hi: [f32; 3], walls: u32) -> Self {
         Self {
-            min: layout.min,
-            size,
-            closed,
+            bounds: Some([lo, hi]),
+            walls,
         }
     }
 
-    /// The domain's box, min then max.
-    pub fn bounds(&self) -> [[f32; 3]; 2] {
-        [
-            self.min,
-            std::array::from_fn(|axis| self.min[axis] + self.size[axis]),
-        ]
+    /// The walls of `layout`'s grid box (the liquid's own walls).
+    pub fn of(layout: &FluidDomainLayout, closed: u32) -> Self {
+        let size: [f32; 3] =
+            std::array::from_fn(|d| (f64::from(layout.cells[d]) * layout.cell_size) as f32);
+        Self::new(
+            layout.min,
+            std::array::from_fn(|axis| layout.min[axis] + size[axis]),
+            closed,
+        )
     }
 
-    /// One Fixed slab per closed face, in face order.
-    fn slabs(&self) -> impl Iterator<Item = RigidBody> + '_ {
-        let extent = self.size.iter().fold(0.0f32, |a, &b| a.max(b));
-        let half_thick = 0.05 * extent;
-        (0..6)
-            .filter(|face| self.closed & (1 << face) != 0)
-            .map(move |face| {
-                let (axis, positive) = (face / 2, face % 2 == 1);
-                let mut pos = std::array::from_fn(|d| self.min[d] + 0.5 * self.size[d]);
-                pos[axis] = if positive {
-                    self.min[axis] + self.size[axis] + half_thick
-                } else {
-                    self.min[axis] - half_thick
-                };
-                // Spans the face plus the neighbouring slabs' thickness, so edges close.
-                let half: [f32; 3] = std::array::from_fn(|d| {
-                    if d == axis {
-                        half_thick
+    /// The Bounds box, min then max; `None` with Bounds off.
+    pub fn bounds(&self) -> Option<[[f32; 3]; 2]> {
+        self.bounds
+    }
+
+    /// One Fixed slab per Wall face, in face order; none without Bounds.
+    pub fn slabs(&self) -> impl Iterator<Item = RigidBody> + '_ {
+        let walls = self.walls;
+        self.bounds.into_iter().flat_map(move |[lo, hi]| {
+            let size: [f32; 3] = std::array::from_fn(|d| hi[d] - lo[d]);
+            let extent = size.iter().fold(0.0f32, |a, &b| a.max(b));
+            let half_thick = 0.05 * extent;
+            (0..6)
+                .filter(move |face| walls & (1 << face) != 0)
+                .map(move |face| {
+                    let (axis, positive) = (face / 2, face % 2 == 1);
+                    let mut pos = std::array::from_fn(|d| lo[d] + 0.5 * size[d]);
+                    pos[axis] = if positive {
+                        hi[axis] + half_thick
                     } else {
-                        0.5 * self.size[d] + 2.0 * half_thick
+                        lo[axis] - half_thick
+                    };
+                    // Spans the face plus the neighbouring slabs' thickness, so edges close.
+                    let half: [f32; 3] = std::array::from_fn(|d| {
+                        if d == axis {
+                            half_thick
+                        } else {
+                            0.5 * size[d] + 2.0 * half_thick
+                        }
+                    });
+                    RigidBody {
+                        transform: Transform {
+                            pos,
+                            scale: half.map(|h| h * 3f32.sqrt()),
+                            ..Transform::default()
+                        },
+                        kind: 0,
+                        bounce: 0.0,
+                        wall: true,
+                        ..RigidBody::default()
                     }
-                });
-                RigidBody {
-                    transform: Transform {
-                        pos,
-                        scale: half.map(|h| h * 3f32.sqrt()),
-                        ..Transform::default()
-                    },
-                    kind: 0,
-                    bounce: 0.0,
-                    wall: true,
-                    ..RigidBody::default()
-                }
-            })
+                })
+        })
     }
 
     /// Write the slabs into free body slots from the last slot down, then
@@ -1083,15 +1095,13 @@ mod tests {
     use manifold_physics::PlayedTime;
 
     const OPEN: DomainWalls = DomainWalls {
-        min: [0.0; 3],
-        size: [0.0; 3],
-        closed: 0,
+        bounds: None,
+        walls: 0,
     };
 
     const CLOSED: DomainWalls = DomainWalls {
-        min: [-1.2, 0.0, -1.2],
-        size: [2.4; 3],
-        closed: 0b11_1111,
+        bounds: Some([[-1.2, 0.0, -1.2], [1.2, 2.4, 1.2]]),
+        walls: 0b11_1111,
     };
 
     /// A full world of `count` small cubes in a grid inside [`CLOSED`], and
@@ -1233,11 +1243,7 @@ mod tests {
     #[test]
     fn liquid_coupled_body_rests_on_the_domain_floor() {
         let scene = scene();
-        let walls = DomainWalls {
-            min: [-1.2, 0.0, -1.2],
-            size: [2.4; 3],
-            closed: 0b11_1111,
-        };
+        let walls = CLOSED;
         let colliders = RigidImpulseTargets::body(0).unwrap();
         let mut owner =
             LiquidRigidOwner::new(&scene, walls, &colliders, MAX_LIQUID_BODIES, 1, None)
@@ -1280,11 +1286,7 @@ mod tests {
     fn slide_distance(scene: &RigidSceneInputs, s: f32, load: f32) -> f32 {
         let mut scene = scene.clone();
         scene.gravity = [s * 9.81, -(1.0 + load) * 9.81, 0.0];
-        let walls = DomainWalls {
-            min: [-1.2, 0.0, -1.2],
-            size: [2.4; 3],
-            closed: 0b11_1111,
-        };
+        let walls = CLOSED;
         let colliders = RigidImpulseTargets::body(0).unwrap();
         let mut owner =
             LiquidRigidOwner::new(&scene, walls, &colliders, MAX_LIQUID_BODIES, 1, None)

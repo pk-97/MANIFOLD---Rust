@@ -27,6 +27,7 @@ use manifold_water_liquid::bodies::{
 };
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
+use manifold_water_liquid::lattice::bounds_distance;
 use manifold_water_liquid::primitives::liquid_stats::INFLOW_BIRTHS_TAIL;
 use manifold_water_liquid::testkit::world_box::{BoxTable, from_pool_under};
 use manifold_water_liquid::tile_storage::pool_len;
@@ -106,10 +107,11 @@ const MIN: [f32; 3] = [-0.875, -0.625, -0.625];
 const NODE_MIN: [f32; 3] = [-0.75, -0.5, -0.5];
 
 /// The lattice wires of the box of N cells from NODE_MIN, padded as the
-/// domain publishes them.
-fn node_lattice() -> [(&'static str, f32); 7] {
+/// domain publishes them, and its Bounds with every face a Wall.
+fn node_lattice() -> [(&'static str, f32); 14] {
     let pad = PADDING_NODES as f32;
     let nodes = N.map(|n| n as f32 + 1.0 + 2.0 * pad);
+    let hi: [f32; 3] = std::array::from_fn(|a| NODE_MIN[a] + N[a] as f32 * H);
     [
         ("nodes_x", nodes[0]),
         ("nodes_y", nodes[1]),
@@ -118,6 +120,13 @@ fn node_lattice() -> [(&'static str, f32); 7] {
         ("lattice_min_y", NODE_MIN[1] - pad * H),
         ("lattice_min_z", NODE_MIN[2] - pad * H),
         ("cell_size", H),
+        ("bounds_lo_x", NODE_MIN[0]),
+        ("bounds_lo_y", NODE_MIN[1]),
+        ("bounds_lo_z", NODE_MIN[2]),
+        ("bounds_hi_x", hi[0]),
+        ("bounds_hi_y", hi[1]),
+        ("bounds_hi_z", hi[2]),
+        ("closed_faces", 63.0),
     ]
 }
 
@@ -128,9 +137,6 @@ fn box_origin(min: [f32; 3], h: f32) -> [i32; 3] {
 
 /// The native solid push target in cells.
 const WALL_MARGIN_CELLS: f64 = 0.2;
-const BOUNDARY_MARGIN_CELLS: f64 = 0.1;
-/// The fixtures' walls sit on the lattice edge: their step's wall_inset is 0.
-const FIXTURE_WALL_INSET: f64 = 0.0;
 const MOVE_EPS_METRES: f64 = 1.0e-6;
 const SOLID_STEP_CELLS: f64 = 0.1;
 const SOLID_PUSH_CELLS: f64 = 5.0;
@@ -185,33 +191,27 @@ fn cell_coords(c: usize) -> [usize; 3] {
     [c % N[0], (c / N[0]) % N[1], c / (N[0] * N[1])]
 }
 
-/// Face a of padded cell p exists when its other two indices are inside.
+/// Face a of padded cell p is one of the box's own faces when its other two
+/// indices are inside the cells; the solid fixtures cut only those, and only
+/// the inner ones (not on the box's edge), as walls are closed faces.
 fn face_exists(p: [usize; 3], a: usize) -> bool {
     (0..3).all(|b| b == a || p[b] < N[b])
 }
 
-/// The step's params over this file's lattice, no impulse tick, every tank
-/// face closed.
+/// The Bounds box's high corner: N cells from MIN.
+fn box_hi() -> [f32; 3] {
+    std::array::from_fn(|a| MIN[a] + N[a] as f32 * H)
+}
+
+/// The step's params over this file's lattice, no impulse tick, the Bounds
+/// box N cells from MIN with every face a Wall.
 fn lattice() -> StepParams {
     StepParams {
         impulse_tick: -1,
-        closed_faces: 63,
         ..StepParams::default()
     }
-    .with_grid_for_test(N.map(|n| n as u32), MIN, H)
-}
-
-fn wall_solid(n: [usize; 3], h: f32) -> Vec<f32> {
-    let m = n.map(|v| v + 1);
-    (0..m.iter().product())
-        .map(|i| {
-            let q = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
-            let distance = (0..3)
-                .map(|a| (q[a] as f32).min(n[a] as f32 - q[a] as f32))
-                .fold(f32::INFINITY, f32::min);
-            distance * h
-        })
-        .collect()
+    .with_grid_for_test(MIN, H)
+    .with_bounds_for_test(MIN, box_hi(), 63, 0)
 }
 
 fn wall_phi(q: [f64; 3], n: [usize; 3]) -> f64 {
@@ -243,49 +243,28 @@ fn wall_gradient(q: [f64; 3], n: [usize; 3]) -> [f64; 3] {
     out
 }
 
-fn boundary_edge() -> f64 {
-    FIXTURE_WALL_INSET + BOUNDARY_MARGIN_CELLS
-}
-
-fn inside_boundary_cpu(q: [f64; 3], n: [usize; 3], edge: f64) -> bool {
-    (0..3).all(|a| q[a] >= edge && q[a] < n[a] as f64 - edge)
-}
-
-fn clamp_boundary_cpu(mut q: [f64; 3], n: [usize; 3], edge: f64, h: f64) -> [f64; 3] {
-    for a in 0..3 {
-        q[a] = q[a].max(edge).min(n[a] as f64 - edge - MOVE_EPS_METRES / h);
-    }
-    q
-}
-
 /// Independent f64 port of FluidSimulation::_resolveCollision for the box
-/// wall SDF. It keeps the native endpoint preclamp, march predicate, push,
-/// upper-exclusive clamp and fallback ordering visible to the proof.
+/// wall SDF: a wall is a solid like a body, so there is no boundary clamp.
 fn native_wall_move(q0: [f64; 3], q1: [f64; 3], n: [usize; 3], h: f64) -> [f64; 3] {
     native_collision_move(
         q0,
         q1,
-        n,
         h,
         |q| wall_phi(q, n),
         |q| wall_gradient(q, n).map(|v| v * h),
     )
 }
 
-// Source sequence without the GPU's conservative distance shortcut. phi is
-// in cells; gradient holds the native unscaled lattice edge differences.
+// The march and push of the native sequence, without the GPU's conservative
+// distance shortcut. phi is in cells; gradient holds the native unscaled
+// lattice edge differences.
 fn native_collision_move(
     q0: [f64; 3],
-    mut q1: [f64; 3],
-    n: [usize; 3],
+    q1: [f64; 3],
     h: f64,
     phi: impl Fn([f64; 3]) -> f64,
     gradient: impl Fn([f64; 3]) -> [f64; 3],
 ) -> [f64; 3] {
-    let edge = boundary_edge();
-    if (0..3).any(|a| q1[a] < 0.0 || q1[a] >= n[a] as f64) {
-        q1 = clamp_boundary_cpu(q1, n, edge, h);
-    }
     let travel = (0..3).map(|a| (q1[a] - q0[a]).powi(2)).sum::<f64>().sqrt();
     if travel * h < MOVE_EPS_METRES {
         return q1;
@@ -300,7 +279,7 @@ fn native_collision_move(
             std::array::from_fn(|a| q0[a] + (s + 1) as f64 * SOLID_STEP_CELLS * dir[a])
         };
         let d = phi(current);
-        if d < 0.0 || !inside_boundary_cpu(current, n, edge) {
+        if d < 0.0 {
             let g = gradient(current);
             let g_len = (0..3).map(|a| g[a] * g[a]).sum::<f64>().sqrt();
             let mut kept = last;
@@ -313,17 +292,6 @@ fn native_collision_move(
                     .sqrt();
                 if push_distance <= SOLID_PUSH_CELLS && phi(pushed) >= 0.0 {
                     kept = pushed;
-                }
-            }
-            if !inside_boundary_cpu(kept, n, edge) {
-                let original = kept;
-                kept = clamp_boundary_cpu(kept, n, edge, h);
-                let clamp_distance = (0..3)
-                    .map(|a| (kept[a] - original[a]).powi(2))
-                    .sum::<f64>()
-                    .sqrt();
-                if phi(kept) < 0.0 || clamp_distance > SOLID_PUSH_CELLS {
-                    return last;
                 }
             }
             return kept;
@@ -354,30 +322,6 @@ fn output_layout(binding: u32) -> Layout {
         5..=8 | 23 | 25 | 33..=35 | 41 => Layout::Cells,
         _ => Layout::Dense,
     }
-}
-
-/// The records of a gathered face grid with nothing gathered: every face
-/// absent but the box walls, closed (velocity 0, weight 1).
-fn canonical_faces_on(n: [usize; 3]) -> Vec<FaceSample> {
-    let m = n.map(|v| v + 1);
-    (0..m.iter().product())
-        .map(|i| {
-            let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
-            let mut face = FaceSample::default();
-            for a in 0..3 {
-                let mut other = p;
-                other[a] = 0;
-                if (0..3).all(|b| other[b] < n[b]) && (p[a] == 0 || p[a] == n[a]) {
-                    face.weight[a] = 1.0;
-                }
-            }
-            face
-        })
-        .collect()
-}
-
-fn canonical_faces() -> Vec<FaceSample> {
-    canonical_faces_on(N)
 }
 
 /// One entry of the step's shader with its buffers bound by number. Pooled
@@ -575,6 +519,43 @@ impl Pass {
         self.bound(out, len)
     }
 
+    /// A pooled field holding `value(c)` at every cell of every held tile, c
+    /// the world cell, and `canon` at the canonical element: unlike a dense
+    /// box it holds values beyond the box too.
+    fn pooled_everywhere<T: bytemuck::Pod>(
+        &self,
+        canon: T,
+        value: impl Fn([i32; 3]) -> T,
+    ) -> Vec<T> {
+        let mut pool = vec![canon; pool_len(self.pool_tiles()) as usize];
+        for (tile, slot) in self.table.held() {
+            for local in 0..512i32 {
+                let c = [
+                    tile[0] * 8 + (local & 7),
+                    tile[1] * 8 + ((local >> 3) & 7),
+                    tile[2] * 8 + (local >> 6),
+                ];
+                pool[slot as usize * 512 + local as usize] = value(c);
+            }
+        }
+        pool
+    }
+
+    /// The solid corners of the Bounds box `lo` to `hi` with the Wall faces
+    /// `walls`, at every corner of every held tile: the contract's distance,
+    /// positive inside and negative beyond a wall, and the canonical corner
+    /// clear by three cells.
+    fn wall_corners(&self, lo: [f32; 3], hi: [f32; 3], walls: u32) -> Vec<f32> {
+        self.pooled_everywhere(3.0 * H, |c| {
+            bounds_distance(
+                std::array::from_fn(|a| c[a] as f32 * H - 0.5 * H),
+                lo,
+                hi,
+                walls,
+            )
+        })
+    }
+
     /// `len` records of the buffer bound at `binding`, converted to the dense
     /// array its layout stands for.
     fn bound<T: bytemuck::Pod>(&self, binding: u32, len: usize) -> Vec<T> {
@@ -607,29 +588,21 @@ fn close(got: f32, want: f64, scale: f64, what: &str) {
     );
 }
 
-/// Random faces over the padded grid; faces that do not exist are zero.
-/// `valid` draws weights of 0 or 1 (a projected grid) instead of positive
-/// particle weights. The faces on the far box walls are closed (velocity 0,
-/// weight 1), as the gather leaves them.
+/// Random faces over the padded grid, all three of every record. `valid`
+/// draws weights of 0 or 1 (a projected grid) instead of positive particle
+/// weights.
 fn random_faces(seed: u64, valid: bool) -> Vec<FaceSample> {
     let mut rng = Stream::new(seed);
     (0..face_len())
-        .map(|i| {
-            let p = pad_coords(i);
+        .map(|_| {
             let mut face = FaceSample::default();
             for a in 0..3 {
-                if face_exists(p, a) {
-                    face.velocity[a] = rng.signed(2.0);
-                    face.weight[a] = if valid {
-                        f32::from(u8::from(rng.unit() < 0.6))
-                    } else {
-                        rng.unit()
-                    };
-                    if p[a] == N[a] {
-                        face.velocity[a] = 0.0;
-                        face.weight[a] = 1.0;
-                    }
-                }
+                face.velocity[a] = rng.signed(2.0);
+                face.weight[a] = if valid {
+                    f32::from(u8::from(rng.unit() < 0.6))
+                } else {
+                    rng.unit()
+                };
             }
             face
         })

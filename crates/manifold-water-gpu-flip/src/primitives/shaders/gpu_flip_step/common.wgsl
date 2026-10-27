@@ -14,14 +14,15 @@
 // p + ½ on the other two. The solid corner field is pooled the same way:
 // corner p, at origin + p·h, is stored with cell p.
 //
-// The tank is a box of world cells, [box_lo(), box_lo() + box_cells()), from
-// the walls_lo/walls_hi box in metres. Its walls stay where they were: the
-// box's edge faces are closed, the inset walls are in the solid, and a face
-// of record p exists when p lies in the box's record range (`face_exists`).
-// The list passes run over held slots, 512 threads a slot, and touch only
-// the box's cells and records; the rest of a held tile keeps the canonical
-// values a fresh tile starts with (`tiles_fresh`). Each list thread sets its
-// cell's tile as its home (`ts_home`), so neighbour reads cost no hash.
+// There is no domain box: every cell and record of a held tile is part of the
+// lattice, and every record has its three faces. The list passes run over
+// held slots, 512 threads a slot, and touch every cell of the slot's tile; a
+// fresh tile starts with the canonical values (`tiles_fresh`). Each list
+// thread sets its cell's tile as its home (`ts_home`), so neighbour reads
+// cost no hash. The Bounds walls are solids like the bodies: they enter only
+// through `solid_distance`, and the passes that handle solids handle them with
+// no case of their own. An Open face is no solid: the move removes water that
+// ends beyond its plane.
 //
 // The CPU sizes every buffer before it dispatches; each pass only checks its
 // thread is inside its range.
@@ -46,13 +47,12 @@
 // constrained velocity.
 
 struct Params {
-    // The tank box's low corner in metres: the solver grid's minimum, the
-    // force and impulse lattices' origin.
-    walls_lo: vec3<f32>,
+    // The Bounds box in metres as authored: the planes of the Wall and Open
+    // faces. Read only through the Wall and Open masks below.
+    bounds_lo: vec3<f32>,
     // Slots of `sorted`.
     capacity: u32,
-    // The box's high corner in metres, walls_lo + cells · h.
-    walls_hi: vec3<f32>,
+    bounds_hi: vec3<f32>,
     cell_size: f32,
     gravity: vec3<f32>,
     step_dt: f32,
@@ -82,9 +82,9 @@ struct Params {
     shapes_len: u32,
     // The density projection's source scale, 1 / step_dt.
     rate: f32,
-    // The tank's closed faces: bit 2d the low face of axis d, bit 2d + 1 the
-    // high one.
-    closed_faces: u32,
+    // The Bounds faces that are solid walls: bit 2d the low face of axis d,
+    // bit 2d + 1 the high one.
+    wall_faces: u32,
     // Inflow and outflow regions a tick, and the region rows `regions` holds
     // (tick major from first_tick).
     region_count: i32,
@@ -101,18 +101,23 @@ struct Params {
     // word ring_max counts every held slot.
     ring_max: u32,
     live_impulse_stride: u32,
-    // Cells from the grid's minimum to each wall (FlipSolverGrid::wall_inset);
-    // 0 when the walls are the grid's edges.
-    wall_inset: f32,
+    // The Bounds faces that remove water ending beyond their plane, same bits.
+    open_faces: u32,
     // Box3D's substep over this tick, dt / box3d_substep_count(dt): the h in
     // the coupled motion law (liquid_body_state).
     coupled_h: f32,
-    // Tiles the pool holds (P) and the table's entries (H).
+    // Tiles the pool holds (P).
     pool_tiles: u32,
+    // The force and impulse lattices' first node in metres.
+    field_min: vec3<f32>,
+    // The table's entries (H).
     table_entries: u32,
     // Half-cell sites the inflows of one tick enumerate at most: the
     // emission passes' thread count (`region_sites`).
     emit_sites: u32,
+    // The move removes a particle that ends below this height in metres;
+    // f32::MIN removes none.
+    kill_height: f32,
     _pad0: u32,
     _pad1: u32,
 };
@@ -278,53 +283,6 @@ fn ts_table_word(i: u32) -> u32 {
 // The world tile table (world_tiles_read.wgsl has its layout).
 @group(0) @binding(51) var<storage, read> ts_table: array<u32>;
 
-// The box's first world cell and its cells per axis.
-fn box_lo() -> vec3<i32> {
-    return vec3<i32>(round((u.walls_lo - u.origin) * u.inv_cell));
-}
-
-fn box_cells() -> vec3<i32> {
-    return vec3<i32>(round((u.walls_hi - u.walls_lo) * u.inv_cell));
-}
-
-fn in_box(p: vec3<i32>) -> bool {
-    let lo = box_lo();
-    return all(p >= lo) && all(p < lo + box_cells());
-}
-
-// Record p of the box's record range: one past the cells on every axis.
-fn in_box_records(p: vec3<i32>) -> bool {
-    let lo = box_lo();
-    return all(p >= lo) && all(p <= lo + box_cells());
-}
-
-// Face a of record p exists when p is in the box's record range and every
-// other coordinate is inside the cells.
-fn face_exists(p: vec3<i32>, a: i32) -> bool {
-    let lo = box_lo();
-    var top = lo + box_cells() - vec3<i32>(1);
-    top[a] = top[a] + 1;
-    return all(p >= lo) && all(p <= top);
-}
-
-// Face a of record p is on a box wall: the low or high edge face of axis a.
-fn on_box_wall(p: vec3<i32>, a: i32) -> bool {
-    let lo = box_lo();
-    return p[a] == lo[a] || p[a] == lo[a] + box_cells()[a];
-}
-
-// The canonical face mask of record p: bit a set when face a exists and
-// lies on a box wall.
-fn box_wall_mask(p: vec3<i32>) -> u32 {
-    var mask = 0u;
-    for (var a = 0; a < 3; a = a + 1) {
-        if face_exists(p, a) && on_box_wall(p, a) {
-            mask = mask | (1u << u32(a));
-        }
-    }
-    return mask;
-}
-
 // The sort's range of the cell at pool index idx. The canonical element's
 // range holds the particles whose tile has no slot (an exhausted pool): no
 // cell's, so it reads as empty.
@@ -340,24 +298,33 @@ fn world_cell(x: vec3<f32>) -> vec3<i32> {
     return ts_world_cell(x, u.origin, u.inv_cell);
 }
 
-// The tank walls' signed distance at x: every wall closed, wall_inset cells
-// in from the box, as node.liquid_solid_distance takes them
-// (liquid_solid_distance_body.wgsl): the nearest wall's distance inside,
-// minus the distance to the walls' box outside.
+// The Wall faces' signed distance at x (the contract of
+// `manifold_water_liquid::lattice::bounds_distance` and
+// liquid_solid_distance_body.wgsl): a Wall face's distance is x − low on the
+// low face of axis a and high − x on the high one, positive on the water
+// side. The distance is the smallest over the Wall faces, 1e30 with none; once
+// x is beyond any Wall it is minus the length of the vector holding, on each
+// axis, the smaller of 0 and that axis's Wall distances. Open faces are no
+// solids.
 fn walls_distance(x: vec3<f32>) -> f32 {
-    let inset = vec3<f32>(max(u.wall_inset, 0.0) * u.cell_size);
-    let low = u.walls_lo + inset;
-    let high = u.walls_hi - inset;
-    let far = length(u.walls_hi - u.walls_lo + vec3<f32>(u.cell_size));
-    var distance = far;
-    var outside = vec3<f32>(0.0);
-    for (var d = 0; d < 3; d = d + 1) {
-        let axis = min(far, min(x[d] - low[d], high[d] - x[d]));
-        distance = min(distance, axis);
-        outside[d] = min(axis, 0.0);
+    if u.wall_faces == 0u {
+        return 1e30;
     }
-    if any(outside < vec3<f32>(0.0)) {
-        distance = -length(outside);
+    var distance = 1e30;
+    var beyond = vec3<f32>(0.0);
+    for (var a = 0; a < 3; a = a + 1) {
+        var axis = 1e30;
+        if (u.wall_faces & (1u << u32(2 * a))) != 0u {
+            axis = min(axis, x[a] - u.bounds_lo[a]);
+        }
+        if (u.wall_faces & (1u << u32(2 * a + 1))) != 0u {
+            axis = min(axis, u.bounds_hi[a] - x[a]);
+        }
+        distance = min(distance, axis);
+        beyond[a] = min(axis, 0.0);
+    }
+    if any(beyond < vec3<f32>(0.0)) {
+        distance = -length(beyond);
     }
     return distance;
 }

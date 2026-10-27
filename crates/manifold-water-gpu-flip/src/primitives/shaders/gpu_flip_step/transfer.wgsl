@@ -1,33 +1,18 @@
 // 512 threads a slot of C, one per record. Each face sums the engine's Wyvill weight
 // 1 − (4/9)·s³/r⁶ + (17/9)·s²/r⁴ − (22/9)·s/r² for s = |q − face|² < r²,
-// r = √3/2 cells, over every live particle in the 3 × 3 × 3 cells around p
-// inside the box, and the weighted velocity along its normal. A face over weight 1e-6 gets
+// r = √3/2 cells, over every live particle in the 3 × 3 × 3 cells around p,
+// and the weighted velocity along its normal. A face over weight 1e-6 gets
 // the ratio; any other gets velocity 0 and weight 0 for the extension to
-// fill. A box wall face is closed: velocity 0, valid (weight 1), so the
-// extension never writes it (the engine's domain boundary, weight 0 in the
-// solve, its velocity the static solid's). A record outside the box's
-// record range keeps its canonical value.
+// fill. A face in a wall's solid is gathered like any other: the pressure
+// projection clears it and the solid constraint sets its velocity.
 @compute @workgroup_size(256)
 fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = list_cell(gid.x);
     let p = ts_face_coord(idx);
-    if !in_box_records(p) {
-        return;
-    }
-    let lo = box_lo();
-    let n = box_cells();
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    var exists = vec3<bool>(false);
-    for (var a = 0; a < 3; a = a + 1) {
-        exists[a] = face_exists(p, a);
-    }
-    if !any(exists) {
-        faces_out[idx] = out;
-        return;
-    }
-    let first = max(p - vec3<i32>(1), lo);
-    let last = min(p + vec3<i32>(1), lo + n - vec3<i32>(1));
+    let first = p - vec3<i32>(1);
+    let last = p + vec3<i32>(1);
     let slots = u.capacity;
     let rsq = 0.75;
     let coef1 = (4.0 / 9.0) / (rsq * rsq * rsq);
@@ -53,46 +38,34 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
                         continue;
                     }
                     let q = (particle.position_radius.xyz - u.origin) * u.inv_cell;
-                    if exists.x {
-                        let v = face_x - q;
-                        let d2 = dot(v, v);
-                        if d2 < rsq {
-                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
-                            weight.x = weight.x + w;
-                            momentum.x = momentum.x + w * particle.velocity.x;
-                        }
+                    let vx = face_x - q;
+                    let dx = dot(vx, vx);
+                    if dx < rsq {
+                        let w = 1.0 - coef1 * dx * dx * dx + coef2 * dx * dx - coef3 * dx;
+                        weight.x = weight.x + w;
+                        momentum.x = momentum.x + w * particle.velocity.x;
                     }
-                    if exists.y {
-                        let v = face_y - q;
-                        let d2 = dot(v, v);
-                        if d2 < rsq {
-                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
-                            weight.y = weight.y + w;
-                            momentum.y = momentum.y + w * particle.velocity.y;
-                        }
+                    let vy = face_y - q;
+                    let dy = dot(vy, vy);
+                    if dy < rsq {
+                        let w = 1.0 - coef1 * dy * dy * dy + coef2 * dy * dy - coef3 * dy;
+                        weight.y = weight.y + w;
+                        momentum.y = momentum.y + w * particle.velocity.y;
                     }
-                    if exists.z {
-                        let v = face_z - q;
-                        let d2 = dot(v, v);
-                        if d2 < rsq {
-                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
-                            weight.z = weight.z + w;
-                            momentum.z = momentum.z + w * particle.velocity.z;
-                        }
+                    let vz = face_z - q;
+                    let dz = dot(vz, vz);
+                    if dz < rsq {
+                        let w = 1.0 - coef1 * dz * dz * dz + coef2 * dz * dz - coef3 * dz;
+                        weight.z = weight.z + w;
+                        momentum.z = momentum.z + w * particle.velocity.z;
                     }
                 }
             }
         }
     }
     let valid = weight > vec3<f32>(1e-6);
-    var velocity = select(vec3<f32>(0.0), momentum / max(weight, vec3<f32>(1e-6)), valid);
+    let velocity = select(vec3<f32>(0.0), momentum / max(weight, vec3<f32>(1e-6)), valid);
     weight = select(vec3<f32>(0.0), weight, valid);
-    for (var a = 0; a < 3; a = a + 1) {
-        if exists[a] && on_box_wall(p, a) {
-            velocity[a] = 0.0;
-            weight[a] = 1.0;
-        }
-    }
     out.face_velocity = vec4<f32>(velocity, 0.0);
     out.face_weight = vec4<f32>(weight, 0.0);
     faces_out[idx] = out;

@@ -2392,6 +2392,42 @@
             "fromPort": "step_dt",
             "toNode": 15,
             "toPort": "step_dt"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_lo_x",
+            "toNode": 14,
+            "toPort": "bounds_lo_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_lo_y",
+            "toNode": 14,
+            "toPort": "bounds_lo_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_lo_z",
+            "toNode": 14,
+            "toPort": "bounds_lo_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_hi_x",
+            "toNode": 14,
+            "toPort": "bounds_hi_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_hi_y",
+            "toNode": 14,
+            "toPort": "bounds_hi_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_hi_z",
+            "toNode": 14,
+            "toPort": "bounds_hi_z"
           }
         ]
       }

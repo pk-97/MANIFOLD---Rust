@@ -16,9 +16,11 @@
 //! lattice's cell and face fields are pooled per world tile (`tiles.rs`):
 //! every active step builds the world tile table from the particles
 //! (`manifold_water_liquid::world_tiles`), and every lattice pass runs over
-//! its lists, 512 threads a slot. The tank stays a box of world cells: the
-//! passes touch only its cells and records, and its walls are where they
-//! were. The `faces` and `distance` outputs are the pooled internal faces and
+//! its lists, 512 threads a slot, on every cell and record of a held tile.
+//! The Bounds box is not a domain: its Wall faces are solids in the solid
+//! distance beside the bodies, and the move removes water that ends beyond
+//! an Open face's plane or below the kill height. The `faces` and `distance`
+//! outputs are the pooled internal faces and
 //! φ themselves, read through the `tiles` table and `pool_tiles`; they are
 //! reallocated when the lattice changes.
 //!
@@ -72,7 +74,7 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{
 use manifold_water_liquid::world_tiles::WorldTiles;
 use read_params::read_iterations;
 pub(crate) use read_params::{
-    read_closed_faces, read_max_iterations, read_sheet_fill_rate, read_solve_level,
+    read_closed_faces, read_max_iterations, read_open_faces, read_sheet_fill_rate, read_solve_level,
 };
 
 mod encode;
@@ -216,13 +218,13 @@ fn solid_velocity_needed(body_count: i32) -> bool {
 manifold_core::testkit_visible! {
 /// The shader's `Params`; field meanings are documented there.
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct StepParams {
-    /// The tank box's low corner in metres: the solver grid's minimum.
-    pub(crate) walls_lo: [f32; 3],
+    /// The Bounds box in metres as authored: the planes of its Wall and Open
+    /// faces.
+    pub(crate) bounds_lo: [f32; 3],
     pub(crate) capacity: u32,
-    /// The box's high corner in metres, `walls_lo` + cells · h.
-    pub(crate) walls_hi: [f32; 3],
+    pub(crate) bounds_hi: [f32; 3],
     pub(crate) cell_size: f32,
     pub(crate) gravity: [f32; 3],
     pub(crate) step_dt: f32,
@@ -245,9 +247,9 @@ pub(crate) struct StepParams {
     pub(crate) particles: u32,
     pub(crate) shapes_len: u32,
     pub(crate) rate: f32,
-    /// The tank's closed faces, bit 2d the low face of axis d and bit 2d + 1
-    /// the high one.
-    pub(crate) closed_faces: u32,
+    /// The Bounds faces that are solid walls, bit 2d the low face of axis d
+    /// and bit 2d + 1 the high one.
+    pub(crate) wall_faces: u32,
     pub(crate) region_count: i32,
     pub(crate) region_rows: i32,
     /// Half-width of an emitted particle's jitter in cells.
@@ -259,19 +261,35 @@ pub(crate) struct StepParams {
     /// [`ring_max`] of the step's band: the table's reach.
     pub(crate) ring_max: u32,
     pub(crate) live_impulse_stride: u32,
-    /// Cells from the grid's minimum to each wall (`FlipSolverGrid::wall_inset`);
-    /// 0 when the walls are the grid's edges.
-    pub(crate) wall_inset: f32,
+    /// The Bounds faces that remove water ending beyond their plane, same
+    /// bits.
+    pub(crate) open_faces: u32,
     /// Box3D's substep over this tick: the coupled motion law's h
     /// (`manifold_physics::coupled_motion::coupled_substep`).
     pub(crate) coupled_h: f32,
-    /// Tiles the pool holds ([`pool_tiles`]) and the table's entries.
+    /// Tiles the pool holds ([`pool_tiles`]).
     pub(crate) pool_tiles: u32,
+    /// The force and impulse lattices' first node in metres.
+    pub(crate) field_min: [f32; 3],
+    /// The table's entries.
     pub(crate) table_entries: u32,
     /// Sites the inflows of one tick enumerate at most (`region_site_total`).
     pub(crate) emit_sites: u32,
+    /// The move removes a particle that ends below this height in metres;
+    /// `f32::MIN` removes none.
+    pub(crate) kill_height: f32,
     pub(crate) _pad: [u32; 2],
 }
+}
+
+/// Free space: no Bounds, no walls, no open faces and no kill height.
+impl Default for StepParams {
+    fn default() -> Self {
+        Self {
+            kill_height: f32::MIN,
+            ..bytemuck::Zeroable::zeroed()
+        }
+    }
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -448,7 +466,7 @@ impl StepState {}
 manifold_node_engine::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
-    purpose: "Advance GPU FLIP water through the accepted clock interval with CFL 5 and Steps minimum substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together to reduce marker density error (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and resolves its move against the walls and solid bodies (a particle still inside a solid is removed). A face Closed Faces leaves open (bit 2d the low face of axis d, bit 2d + 1 the high one) drains: every wall stays solid, and a particle that ends a substep within 2 cells of an open face is removed. Water a moving solid seals off from air (and from any open face) does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Extrapolates projected velocity by 12 layers before constraining solids. Removes markers above 250 per cell and extreme velocities using the accepted interval, compacts survivors without changing their ids, then emits inflow for the next step. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+    purpose: "Advance GPU FLIP water through the accepted clock interval with CFL 5 and Steps minimum substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the Bounds walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together to reduce marker density error (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and resolves its move against the walls and solid bodies (a particle still inside a solid is pushed out, never removed). The Bounds box is bounds_lo to bounds_hi in metres as authored: each face Closed Faces names (bit 2d the low face of axis d, bit 2d + 1 the high one) is a wall, a solid like a body; each face Open Faces names removes the water that ends a substep beyond its plane; water that ends a substep below Kill Height is removed too. With no wall, no open face and no kill height the water falls through free space. Water a moving solid seals off from air does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Extrapolates projected velocity by 12 layers before constraining solids. Removes markers above 250 per cell and extreme velocities using the accepted interval, compacts survivors without changing their ids, then emits inflow for the next step. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
     inputs: {
         particles: Array(FluidParticle) required,
         identity: Array(u32) required,
@@ -477,7 +495,11 @@ manifold_node_engine::primitive! {
         reaction: Array(f32) optional,
         contacts: Array(f32) optional,
         dynamic_bodies: ScalarF32 optional,
+        bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
+        bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
+        open_faces: ScalarF32 optional,
+        kill_height: ScalarF32 optional,
         solve_level: ScalarF32 optional,
         max_iterations: ScalarF32 optional,
         sheet_fill_rate: ScalarF32 optional,
@@ -539,7 +561,15 @@ manifold_node_engine::primitive! {
         int_param!("max_iterations", "Max Iterations", MAX_ITERATIONS as f32, 1.0, MAX_ITERATIONS as f32),
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
         int_param!("volume_projection", "Volume Projection", 0.0, 0.0, 1.0),
-        int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
+        float_param!("bounds_lo_x", "Bounds Min X", 0.0, -1.0e6, 1.0e6),
+        float_param!("bounds_lo_y", "Bounds Min Y", 0.0, -1.0e6, 1.0e6),
+        float_param!("bounds_lo_z", "Bounds Min Z", 0.0, -1.0e6, 1.0e6),
+        float_param!("bounds_hi_x", "Bounds Max X", 0.0, -1.0e6, 1.0e6),
+        float_param!("bounds_hi_y", "Bounds Max Y", 0.0, -1.0e6, 1.0e6),
+        float_param!("bounds_hi_z", "Bounds Max Z", 0.0, -1.0e6, 1.0e6),
+        int_param!("closed_faces", "Closed Faces (bits −X +X −Y +Y −Z +Z)", 0.0, 0.0, 63.0),
+        int_param!("open_faces", "Open Faces (bits −X +X −Y +Y −Z +Z)", 0.0, 0.0, 63.0),
+        float_param!("kill_height", "Kill Height", f32::MIN, f32::MIN, f32::MAX),
         int_param!("solve_level", "Solve Level", 0.0, 0.0, 4.0),
         // Shipped presets wire the domain's Sheet Fill Rate into the input, which wins;
         // only standalone graphs and tests reach this param.
@@ -586,14 +616,29 @@ impl StepParams {
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl StepParams {
-    /// A box of `n` cells from `min` (metres) at `cell_size`, on world tiles:
-    /// the walls box, the lattice origin and the inverse cell size.
-    pub fn with_grid_for_test(mut self, n: [u32; 3], min: [f32; 3], cell_size: f32) -> Self {
-        self.walls_lo = min;
-        self.walls_hi = std::array::from_fn(|a| min[a] + n[a] as f32 * cell_size);
+    /// A lattice at `cell_size` whose force lattices start at `min` (metres):
+    /// the lattice origin, the inverse cell size and the field origin.
+    pub fn with_grid_for_test(mut self, min: [f32; 3], cell_size: f32) -> Self {
+        self.field_min = min;
         self.cell_size = cell_size;
         self.inv_cell = 1.0 / cell_size;
         self.origin = manifold_node_engine::scene::world_tiles::lattice_origin(cell_size);
+        self
+    }
+
+    /// The Bounds box from `lo` to `hi` (metres) with its Wall and Open face
+    /// masks.
+    pub fn with_bounds_for_test(
+        mut self,
+        lo: [f32; 3],
+        hi: [f32; 3],
+        wall_faces: u32,
+        open_faces: u32,
+    ) -> Self {
+        self.bounds_lo = lo;
+        self.bounds_hi = hi;
+        self.wall_faces = wall_faces;
+        self.open_faces = open_faces;
         self
     }
 

@@ -232,7 +232,7 @@ impl Primitive for LiquidFrame {
         if let Some(solid) = solid_in
             && solid.size != surface.solid_bytes()
         {
-            ctx.error(format!("Liquid Frame: solid holds {} bytes; native FLIP grid {:?} requires exactly {}. Sample the solid at gpu_flip_domain.mesh_min/mesh_nodes with mesh_wall_inset", solid.size, surface.nodes(), surface.solid_bytes()));
+            ctx.error(format!("Liquid Frame: solid holds {} bytes; native FLIP grid {:?} requires exactly {}. Sample the solid at gpu_flip_domain.mesh_min/mesh_nodes", solid.size, surface.nodes(), surface.solid_bytes()));
             return;
         }
         let whitewater_in = WHITEWATER_INPUTS.map(|port| ctx.inputs.array(port));
@@ -304,7 +304,7 @@ impl Primitive for LiquidFrame {
         self.history.core.reclaim(complete);
 
         if !self.wired[FIELD_SOLID] && self.solid_key != Some(solid_key) {
-            let distances = surface.flip_wall_distance(closed_faces);
+            let distances = surface.wall_distance(closed_faces);
             // A fresh buffer per setup: the previous one may still be read by
             // an in-flight frame; its drop is fence-retired. Grow-only, as
             // the solid slots: the solid mix's output never shrinks, so the

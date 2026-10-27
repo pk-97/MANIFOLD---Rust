@@ -284,7 +284,7 @@ impl Run {
         (gpu_ms, cpu_ms)
     }
 
-    fn read<T: bytemuck::Pod>(&self, node: &str, port: &str, len: usize) -> Vec<T> {
+    pub(super) fn read<T: bytemuck::Pod>(&self, node: &str, port: &str, len: usize) -> Vec<T> {
         self.read_at(node_named(&self.graph, node), port, len)
     }
 

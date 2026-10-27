@@ -5,17 +5,11 @@
 // the ring two out when φ is still over 1.5h − r. Even an empty first ring
 // can have a contributing particle in ring two. A
 // value within 0.005h of zero moves to ±0.005h by its sign, zero to −0.005h.
-// The scan stays inside the box; a cell outside it keeps its canonical φ.
 @compute @workgroup_size(256)
 fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = list_cell(gid.x);
     let p = ts_cell_coord(idx);
-    if !in_box(p) {
-        return;
-    }
-    let lo = box_lo();
-    let n = box_cells();
     let h = u.cell_size;
     let centre = u.origin + (vec3<f32>(p) + vec3<f32>(0.5)) * h;
     let radius = 0.8660254 * h;
@@ -26,8 +20,8 @@ fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
         if ring == 2 && distance <= 1.5 * h - radius {
             break;
         }
-        let first = max(p - vec3<i32>(ring), lo);
-        let last = min(p + vec3<i32>(ring), lo + n - vec3<i32>(1));
+        let first = p - vec3<i32>(ring);
+        let last = p + vec3<i32>(ring);
         for (var z = first.z; z <= last.z; z = z + 1) {
             for (var y = first.y; y <= last.y; y = y + 1) {
                 for (var x = first.x; x <= last.x; x = x + 1) {

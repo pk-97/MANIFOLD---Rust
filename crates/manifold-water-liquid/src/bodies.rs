@@ -700,16 +700,17 @@ impl LiquidBodies {
     /// one whose plan changed keeps its last lattice until the new one is
     /// ready; `wait` (offline) waits for the lattice the plan asks for, so no
     /// simulated time goes by while it builds. A fixed collider's lattice
-    /// covers only `domain` (world min then max) where its row places it
-    /// (SCENE_DOCUMENT_DESIGN.md section 7.18 (Fit with the water end
-    /// game)), so a large ground costs and resolves only what the water
-    /// touches.
+    /// covers only `domain` (the Bounds box, world min then max) where its
+    /// row places it (SCENE_DOCUMENT_DESIGN.md section 7.18 (Fit with the
+    /// water end game)), so a large ground costs and resolves only what the
+    /// water touches. Without a `domain` (Bounds off) the lattice covers the
+    /// whole collider, at its own longest side.
     pub fn prepare(
         &mut self,
         roles: &[Option<FluidRole>],
         coupled: &[Arc<PreparedFluidGeometry>],
         coupled_rows: &[LiquidBody],
-        domain: [[f32; 3]; 2],
+        domain: Option<[[f32; 3]; 2]>,
         cell_size: f32,
         wait: bool,
     ) -> Result<BodiesStatus, String> {
@@ -778,7 +779,8 @@ impl LiquidBodies {
             let crop = coupled_rows
                 .get(index)
                 .filter(|_| geometry.is_fixed())
-                .map(|row| local_domain(row, domain));
+                .zip(domain)
+                .map(|(row, domain)| local_domain(row, domain));
             match resolve_lattice(
                 &mut self.lattices,
                 geometry,
@@ -1126,35 +1128,94 @@ impl LiquidBodies {
                 )
             });
         for (row, family) in bodies.chain(regions) {
-            // A disabled body carries shape -1.
-            let shape = row.accel_shape[3];
-            if shape < 0.0 {
-                continue;
-            }
-            let (Some(bounds), Some(scaled)) = (
-                self.bounds.get(shape as usize),
-                self.shapes.get(shape as usize),
-            ) else {
+            let Some((center, half)) = self.oriented_box(row) else {
                 continue;
             };
-            let scale = [
-                scaled.scale_min[0],
-                scaled.scale_min[1],
-                scaled.scale_min[2],
-            ];
-            let local: [f32; 3] =
-                std::array::from_fn(|i| 0.5 * (bounds[0][i] + bounds[1][i]) * scale[i]);
-            let offset = rotate(row.rotation, local);
             out.push(PhysicsGizmo {
                 family,
                 shape: PhysicsGizmoShape::Box {
-                    center: std::array::from_fn(|i| row.position_inv_mass[i] + offset[i]),
-                    half: std::array::from_fn(|i| 0.5 * (bounds[1][i] - bounds[0][i]) * scale[i]),
+                    center,
+                    half,
                     rotation: row.rotation,
                 },
             });
         }
     }
+
+    /// The centre and half sides of `row`'s mesh bounds at its scale, posed
+    /// by the row: the box turned with the body. `None` for a disabled row
+    /// (shape -1) or one whose shape is not held.
+    fn oriented_box(&self, row: &LiquidBody) -> Option<([f32; 3], [f32; 3])> {
+        let shape = row.accel_shape[3];
+        if shape < 0.0 {
+            return None;
+        }
+        let (bounds, scaled) = (
+            self.bounds.get(shape as usize)?,
+            self.shapes.get(shape as usize)?,
+        );
+        let scale = [
+            scaled.scale_min[0],
+            scaled.scale_min[1],
+            scaled.scale_min[2],
+        ];
+        let local: [f32; 3] =
+            std::array::from_fn(|i| 0.5 * (bounds[0][i] + bounds[1][i]) * scale[i]);
+        let offset = rotate(row.rotation, local);
+        Some((
+            std::array::from_fn(|i| row.position_inv_mass[i] + offset[i]),
+            std::array::from_fn(|i| 0.5 * (bounds[1][i] - bounds[0][i]) * scale[i]),
+        ))
+    }
+
+    /// The world axis-aligned box (min then max) round `row`'s oriented box.
+    /// `None` for a disabled row or a mesh without finite bounds.
+    fn world_box(&self, row: &LiquidBody) -> Option<[[f32; 3]; 2]> {
+        let (center, half) = self.oriented_box(row)?;
+        let world = posed_box(center, half, row.rotation);
+        world
+            .iter()
+            .flatten()
+            .all(|v| v.is_finite())
+            .then_some(world)
+    }
+
+    /// Each enabled coupled body's world box at the first tick's start of the
+    /// last [`Self::rows`] call, with whether the body is Fixed.
+    pub fn body_boxes(&self) -> impl Iterator<Item = (bool, [[f32; 3]; 2])> + '_ {
+        self.rows
+            .iter()
+            .take(self.count())
+            .zip(&self.coupled)
+            .filter_map(|(row, geometry)| Some((geometry.is_fixed(), self.world_box(row)?)))
+    }
+
+    /// Each enabled Inflow and Outflow region's world box at the first tick's
+    /// start of the last [`Self::rows`] call, with its kind.
+    pub fn region_boxes(&self) -> impl Iterator<Item = (FluidRoleKind, [[f32; 3]; 2])> + '_ {
+        self.region_rows
+            .iter()
+            .take(self.region_count())
+            .zip(&self.roles)
+            .filter_map(|(row, role)| Some((role.kind, self.world_box(row)?)))
+    }
+}
+
+/// The world axis-aligned box (min then max) round the box of half sides
+/// `half` about `center` turned by the unit quaternion `rotation` (xyzw): on
+/// each world axis, the centre plus and minus the sum of the half sides
+/// projected onto it.
+pub fn posed_box(center: [f32; 3], half: [f32; 3], rotation: [f32; 4]) -> [[f32; 3]; 2] {
+    let axes = [
+        rotate(rotation, [1.0, 0.0, 0.0]),
+        rotate(rotation, [0.0, 1.0, 0.0]),
+        rotate(rotation, [0.0, 0.0, 1.0]),
+    ];
+    let reach: [f32; 3] = std::array::from_fn(|i| (0..3).map(|j| axes[j][i].abs() * half[j]).sum());
+    [
+        std::array::from_fn(|i| center[i] - reach[i]),
+        std::array::from_fn(|i| center[i] + reach[i]),
+    ]
 }
 
 fn mesh_bounds(geometry: &PreparedFluidGeometry) -> [[f32; 3]; 2] {
@@ -1395,7 +1456,7 @@ mod tests {
         // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
         let mut polls = 0u32;
         while bodies
-            .prepare(roles, coupled, &[], [[0.0; 3]; 2], 0.0625, false)
+            .prepare(roles, coupled, &[], None, 0.0625, false)
             .expect("bodies")
             == BodiesStatus::Pending
         {
@@ -1761,7 +1822,7 @@ mod tests {
         let many: Vec<_> = (0..=MAX_LIQUID_BODIES).map(|_| Arc::clone(&hull)).collect();
         assert!(
             bodies
-                .prepare(&roles, &many, &[], [[0.0; 3]; 2], 0.0625, false)
+                .prepare(&roles, &many, &[], None, 0.0625, false)
                 .unwrap_err()
                 .contains("exceed")
         );
@@ -1774,13 +1835,13 @@ mod tests {
         let roles = vec![inflow(&cube(), [0.0; 3], 0.0)];
         let mut live = LiquidBodies::with_regions();
         assert_eq!(
-            live.prepare(&roles, &[], &[], [[0.0; 3]; 2], 0.0625, false),
+            live.prepare(&roles, &[], &[], None, 0.0625, false),
             Ok(BodiesStatus::Pending)
         );
         let roles = vec![inflow(&cube(), [0.0; 3], 0.0)];
         let mut offline = LiquidBodies::with_regions();
         assert_eq!(
-            offline.prepare(&roles, &[cube()], &[], [[0.0; 3]; 2], 0.0625, true),
+            offline.prepare(&roles, &[cube()], &[], None, 0.0625, true),
             Ok(BodiesStatus::Ready)
         );
         assert_eq!((offline.count(), offline.region_count()), (1, 1));
@@ -1802,7 +1863,7 @@ mod tests {
             rotation: [0.0, 0.0, 0.0, 1.0],
             ..LiquidBody::default()
         };
-        let lattice_in = |geometry: &Arc<PreparedFluidGeometry>, domain: [[f32; 3]; 2]| {
+        let lattice_in = |geometry: &Arc<PreparedFluidGeometry>, domain: Option<[[f32; 3]; 2]>| {
             let mut bodies = LiquidBodies::default();
             let status = bodies.prepare(
                 &[],
@@ -1817,7 +1878,7 @@ mod tests {
         };
         let margin = 4.0 * CROP_MARGIN;
         let spacing = (4.0 + 2.0 * margin) / crate::fluid_role::DISTANCE_NODES_ALONG_LONGEST;
-        let (lattice, plan) = lattice_in(&fixed, [[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]);
+        let (lattice, plan) = lattice_in(&fixed, Some([[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]));
         assert_eq!(lattice.spacing, spacing);
         assert!(plan.crop.is_some());
         // The crop plus two spacings each side across; in height the slab's
@@ -1834,15 +1895,20 @@ mod tests {
             );
         }
 
-        let (other, _) = lattice_in(&fixed, [[10.0, 0.0, 10.0], [14.0, 4.0, 14.0]]);
+        let (other, _) = lattice_in(&fixed, Some([[10.0, 0.0, 10.0], [14.0, 4.0, 14.0]]));
         assert_eq!(other.origin[0], 10.0 - margin - 2.0 * spacing);
 
-        let (whole, plan) = lattice_in(&moving, [[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]);
+        let (whole, plan) = lattice_in(&moving, Some([[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]));
         assert!(plan.crop.is_none());
         assert_eq!(
             whole.spacing,
             100.0 / crate::fluid_role::DISTANCE_NODES_ALONG_LONGEST
         );
+
+        // Without a domain (Bounds off) the fixed collider is whole too.
+        let (all, plan) = lattice_in(&fixed, None);
+        assert!(plan.crop.is_none());
+        assert_eq!(all.spacing, whole.spacing);
     }
 
     /// Dragging a fixed collider less than the crop's margin keeps its
@@ -1853,7 +1919,7 @@ mod tests {
         let fixed = Arc::new(PreparedFluidGeometry::fixed(vec![box_mesh([
             50.0, 0.5, 50.0,
         ])]));
-        let domain = [[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]];
+        let domain = Some([[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]);
         let at = |x: f32| LiquidBody {
             position_inv_mass: [x, -0.5, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
@@ -1953,7 +2019,7 @@ mod tests {
         let mut no_regions = LiquidBodies::default();
         assert!(
             no_regions
-                .prepare(&roles, &[], &[], [[0.0; 3]; 2], 0.0625, false)
+                .prepare(&roles, &[], &[], None, 0.0625, false)
                 .unwrap_err()
                 .contains("no Inflow or Outflow")
         );
@@ -1963,7 +2029,7 @@ mod tests {
         });
         assert!(
             bodies
-                .prepare(&roles, &[], &[], [[0.0; 3]; 2], 0.0625, false)
+                .prepare(&roles, &[], &[], None, 0.0625, false)
                 .unwrap_err()
                 .contains("Inflow and Outflow roles only")
         );
@@ -2287,14 +2353,14 @@ mod tests {
                 .spacing
         };
         assert_eq!(
-            bodies.prepare(&roles, &[], &[], [[0.0; 3]; 2], 0.1, true),
+            bodies.prepare(&roles, &[], &[], None, 0.1, true),
             Ok(BodiesStatus::Ready)
         );
         assert_eq!(bodies.shapes()[0].origin_spacing[3], 2.0 / 32.0);
         let mut polls = 0u32;
         while bodies.shapes()[0].origin_spacing[3] != spacing(0.01) {
             assert_eq!(
-                bodies.prepare(&roles, &[], &[], [[0.0; 3]; 2], 0.01, false),
+                bodies.prepare(&roles, &[], &[], None, 0.01, false),
                 Ok(BodiesStatus::Ready),
                 "live keeps the last lattice"
             );
@@ -2303,7 +2369,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(
-            bodies.prepare(&roles, &[], &[], [[0.0; 3]; 2], 0.005, true),
+            bodies.prepare(&roles, &[], &[], None, 0.005, true),
             Ok(BodiesStatus::Ready)
         );
         assert_eq!(
@@ -2315,12 +2381,12 @@ mod tests {
         let cube = cube_of(0.5);
         let roles = [inflow(&cube, [0.0; 3], 0.0)];
         assert_eq!(
-            bodies.prepare(&roles, &[], &[], [[0.0; 3]; 2], 0.1, true),
+            bodies.prepare(&roles, &[], &[], None, 0.1, true),
             Ok(BodiesStatus::Ready)
         );
         let version = bodies.version;
         assert_eq!(
-            bodies.prepare(&roles, &[], &[], [[0.0; 3]; 2], 0.01, false),
+            bodies.prepare(&roles, &[], &[], None, 0.01, false),
             Ok(BodiesStatus::Ready)
         );
         assert_eq!(bodies.version, version);
@@ -2341,14 +2407,14 @@ mod tests {
         };
         let mut bodies = LiquidBodies::with_regions();
         assert_eq!(
-            bodies.prepare(&posed(1.0), &[], &[], [[0.0; 3]; 2], 0.05, true),
+            bodies.prepare(&posed(1.0), &[], &[], None, 0.05, true),
             Ok(BodiesStatus::Ready)
         );
         let lattice = Arc::clone(&bodies.used[0]);
         for k in 0..40 {
             let scale = 1.0 + 0.04 * (k as f32 * 0.3).sin();
             assert_eq!(
-                bodies.prepare(&posed(scale), &[], &[], [[0.0; 3]; 2], 0.05, true),
+                bodies.prepare(&posed(scale), &[], &[], None, 0.05, true),
                 Ok(BodiesStatus::Ready)
             );
             assert!(
@@ -2362,7 +2428,7 @@ mod tests {
             assert_eq!(bodies.shapes()[0].scale_min[3], scale);
         }
         assert_eq!(
-            bodies.prepare(&posed(1.2), &[], &[], [[0.0; 3]; 2], 0.05, true),
+            bodies.prepare(&posed(1.2), &[], &[], None, 0.05, true),
             Ok(BodiesStatus::Ready)
         );
         assert!(

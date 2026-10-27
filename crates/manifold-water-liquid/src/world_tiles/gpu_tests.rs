@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 
 use manifold_gpu::testkit::test_device;
 use manifold_node_engine::scene::world_tiles::{
-    NEIGHBOURS, find, lattice_origin, local_index, neighbour_index, neighbour_row_word,
-    slot_row_word, tile_key, tile_of_cell,
+    NEIGHBOURS, find, key_hash, lattice_origin, local_index, neighbour_index, neighbour_row_word,
+    slot_row_word, table_entries, tile_key, tile_of_cell,
 };
 
 use super::mirror::{Built, Mirror};
@@ -364,6 +364,51 @@ fn a_short_pool_hands_out_ring_one_first() {
                 "step 0 fills ring 1 then part of ring 2"
             );
         }
+    }
+}
+
+/// A band tile whose key outranks a water tile's at the same home entry
+/// takes that entry in the dilation, after the seed pass found the water
+/// tile there, and moves the water tile's key on. Water in tile `w` and two
+/// tiles past the band tile `b`, so `b` is in the second tile's ring 2: the
+/// build equals the mirror over two steps, one slot a tile under its own key
+/// and no alias.
+#[test]
+fn a_band_tile_taking_a_seed_entry_keeps_one_slot_a_tile() {
+    let device = test_device();
+    let reach = Reach {
+        ring_max: 2,
+        alloc_ring: 2,
+        cell_reach: 2,
+    };
+    let pool = 256;
+    let entries = table_entries(pool);
+    let home = |t: [i32; 3]| key_hash(tile_key(t), entries);
+    let box_of = |lo: i32, hi: i32| {
+        (lo..hi).flat_map(move |z| (lo..hi).flat_map(move |y| (lo..hi).map(move |x| [x, y, z])))
+    };
+    let (w, b) = box_of(-2, 2)
+        .find_map(|w| {
+            box_of(-12, 12)
+                .find(|&b| b != w && home(b) == home(w) && tile_key(b) > tile_key(w))
+                .map(|b| (w, b))
+        })
+        .expect("a water tile a band tile displaces");
+    let second = [b[0] + 2, b[1], b[2]];
+    let mut tiles = WorldTiles::new(&device, pool, reach, LIQUID_POINTS).expect("world tiles");
+    tiles.prepare(&device);
+    let mut mirror = Mirror::new(pool, reach, false);
+    let run = plan(&device, true);
+    let cells = [w, second].map(|t| t.map(|v| 8 * v + 3));
+    for step in 0..2 {
+        build(&device, &tiles, &cells, &run, 0);
+        let want = mirror.build(&cells);
+        assert_eq!(
+            want.exhausted(2),
+            0,
+            "step {step}: the pool holds both blocks"
+        );
+        check(&tiles, &want, 0, &format!("step {step}"));
     }
 }
 

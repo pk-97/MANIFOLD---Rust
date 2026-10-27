@@ -1,4 +1,9 @@
 // Nearest-object metadata, using liquid_solid_distance's posed SDF sampling.
+// The domain is the Wall faces of the Bounds box (bounds_lo..bounds_hi in
+// metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z) with
+// liquid_solid_distance's wall distance: the least of x − lo and hi − x over
+// the Wall faces, 1e30 with none, minus the length of the per-axis overshoots
+// past a Wall.
 // LiquidBody = Element; LiquidShape = Element2; WhitewaterSource = Element3.
 
 fn liquid_atlas_half(index: u32) -> f32 {
@@ -17,7 +22,12 @@ fn body(
     nodes_y: f32,
     nodes_z: f32,
     closed_faces: i32,
-    wall_inset: f32,
+    bounds_lo_x: f32,
+    bounds_lo_y: f32,
+    bounds_lo_z: f32,
+    bounds_hi_x: f32,
+    bounds_hi_y: f32,
+    bounds_hi_z: f32,
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
@@ -27,25 +37,25 @@ fn body(
     let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
     let lattice_min = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let x = lattice_min + vec3<f32>(coord) * cell_size;
-    let inset = max(wall_inset, 0.0);
-    let low = lattice_min + vec3<f32>(inset * cell_size);
-    let high = lattice_min + (vec3<f32>(n) - vec3<f32>(1.0 + inset)) * cell_size;
-    var distance = length(vec3<f32>(n) * cell_size);
-    var outside = vec3<f32>(0.0);
+    let lo = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
+    let hi = vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z);
+    var distance = 1.0e30;
+    var overshoot = vec3<f32>(0.0);
     let faces = u32(closed_faces);
     for (var d = 0u; d < 3u; d = d + 1u) {
-        var axis_distance = length(vec3<f32>(n) * cell_size);
         if (faces & (1u << (2u * d))) != 0u {
-            axis_distance = min(axis_distance, x[d] - low[d]);
+            let wall = x[d] - lo[d];
+            distance = min(distance, wall);
+            overshoot[d] = min(overshoot[d], wall);
         }
         if (faces & (1u << (2u * d + 1u))) != 0u {
-            axis_distance = min(axis_distance, high[d] - x[d]);
+            let wall = hi[d] - x[d];
+            distance = min(distance, wall);
+            overshoot[d] = min(overshoot[d], wall);
         }
-        distance = min(distance, axis_distance);
-        outside[d] = min(axis_distance, 0.0);
     }
-    if any(outside < vec3<f32>(0.0)) {
-        distance = -length(outside);
+    if any(overshoot < vec3<f32>(0.0)) {
+        distance = -length(overshoot);
     }
     var kind = select(0u, 1u, faces != 0u);
     let first = max(rows - body_count, 0);
