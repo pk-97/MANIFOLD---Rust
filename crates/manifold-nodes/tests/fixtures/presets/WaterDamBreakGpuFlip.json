@@ -5638,6 +5638,42 @@
             "fromPort": "bounds_hi_z",
             "toNode": 7,
             "toPort": "bounds_hi_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "wall_velocity_lo_x",
+            "toNode": 4,
+            "toPort": "wall_velocity_lo_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "wall_velocity_lo_y",
+            "toNode": 4,
+            "toPort": "wall_velocity_lo_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "wall_velocity_lo_z",
+            "toNode": 4,
+            "toPort": "wall_velocity_lo_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "wall_velocity_hi_x",
+            "toNode": 4,
+            "toPort": "wall_velocity_hi_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "wall_velocity_hi_y",
+            "toNode": 4,
+            "toPort": "wall_velocity_hi_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "wall_velocity_hi_z",
+            "toNode": 4,
+            "toPort": "wall_velocity_hi_z"
           }
         ]
       }

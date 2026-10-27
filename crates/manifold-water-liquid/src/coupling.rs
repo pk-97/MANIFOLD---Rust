@@ -352,9 +352,11 @@ impl LiquidRigidOwner {
     /// body or copy group that joined starts where it is authored, and every
     /// body already moving keeps its state. The poses follow at once; the
     /// liquid takes the new bodies at the next frame start
-    /// ([`Self::rebind`]). False when the change needs a fresh world (a body
-    /// left or changed its shape, the walls moved, a fragment appeared) or
-    /// no tick has run yet; the caller then builds a new owner.
+    /// ([`Self::rebind`]). A moved or resized Wall re-poses or reshapes its
+    /// Fixed slab in the running world. False when the change needs a fresh
+    /// world (a body left or changed its shape, a Wall turned Open and takes
+    /// its slab out, a fragment appeared) or no tick has run yet; the caller
+    /// then builds a new owner.
     pub fn admit(
         &mut self,
         inputs: &RigidSceneInputs,
@@ -368,7 +370,7 @@ impl LiquidRigidOwner {
         if self.completed == 0 && self.pending.is_none() {
             return Ok(false);
         }
-        if walls != self.walls || capacity != self.capacity {
+        if capacity != self.capacity {
             return Ok(false);
         }
         let mut walled = inputs.clone();
@@ -387,6 +389,7 @@ impl LiquidRigidOwner {
         self.frame.stamp = stamp;
         self.initial = inputs.clone();
         self.walled = walled;
+        self.walls = walls;
         self.colliders = colliders.clone();
         self.rebind = true;
         Ok(true)
@@ -1126,6 +1129,47 @@ mod tests {
             colliders = colliders.union(RigidImpulseTargets::body(index).unwrap());
         }
         (world, colliders)
+    }
+
+    /// A Wall that moves is a Fixed slab re-posed in the running world: the
+    /// owner admits the scene again with the walls shifted, keeps its bodies'
+    /// state bit for bit, and takes the new walls as its own.
+    #[test]
+    fn moved_walls_are_admitted_without_a_new_world() {
+        let scene = scene();
+        let colliders = RigidImpulseTargets::body(0).unwrap();
+        let after_one_tick = || {
+            let mut owner =
+                LiquidRigidOwner::new(&scene, CLOSED, &colliders, MAX_LIQUID_BODIES, 1, None)
+                    .expect("owner");
+            owner.set_pending(PendingTick {
+                tick: 0,
+                stamp: 0,
+                interval: manifold_physics::stepping::StepInterval::new(
+                    Seconds::ZERO,
+                    Seconds(TICK),
+                ),
+                offline: true,
+            });
+            owner
+                .settle_ready(Some(&scene), |_| true, no_reaction)
+                .unwrap();
+            owner
+        };
+        let mut moved = after_one_tick();
+        let still = after_one_tick();
+        let shifted = DomainWalls::new([-0.95, 0.0, -1.2], [1.45, 2.4, 1.2], 0b11_1111);
+        assert_ne!(shifted, CLOSED);
+        assert!(
+            moved
+                .admit(&scene, shifted, &colliders, MAX_LIQUID_BODIES)
+                .unwrap()
+        );
+        assert_eq!(moved.walls, shifted);
+        let (a, b) = (moved.rows()[0], still.rows()[0]);
+        let bits = |v: [f32; 4]| v.map(f32::to_bits);
+        assert_eq!(bits(a.position_inv_mass), bits(b.position_inv_mass));
+        assert_eq!(bits(a.linear_velocity), bits(b.linear_velocity));
     }
 
     /// A world with free slots keeps its walls in them, from the last slot

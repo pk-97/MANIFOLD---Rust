@@ -815,6 +815,74 @@ pub(super) fn gpu_flip_solid_face_velocity_matches_cpu() {
     assert_close(&got, &want, "solid face velocity");
 }
 
+/// A Bounds box sliding at 1 m/s along x: each Wall plane moves at 1 m/s
+/// along x, and a plane carries only its own axis's motion, so a face the
+/// Walls cover takes 1 m/s on x where the nearest Wall is an x face and 0
+/// on every other face. The bodies' rows are bound but none is counted, so
+/// every covered face is the Walls'.
+#[test]
+fn gpu_flip_solid_face_velocity_moves_with_a_sliding_box() {
+    let solids = solids();
+    let open = random_open_faces(SOLID_N, 0x5fc, 0);
+    let count = solids.bodies.len();
+    let (rows, reaction, contacts, step) = two_tick_bodies(&solids);
+    let mut pass = solid_pass();
+    pass.bind(10, &open, Layout::Records)
+        .bind(14, &rows, Layout::Dense)
+        .bind(15, &solids.shapes, Layout::Dense)
+        .bind(16, &solids.atlas, Layout::Dense)
+        .bind(21, &reaction, Layout::Dense)
+        .bind(49, &contacts, Layout::Dense);
+    pass.bind(50, &vec![[0.0f32; 4]; 6 * count], Layout::Dense);
+    let _: Vec<LiquidBody> = pass.run("pose_bodies", &step, 48, count, count);
+    let sliding = StepParams {
+        body_count: 0,
+        wall_velocity_lo: [1.0, 0.0, 0.0],
+        wall_velocity_hi: [1.0, 0.0, 0.0],
+        ..step
+    };
+    let got: Vec<f32> = pass.run_list("solid_face_velocity", &sliding, 4, face_grid_len(SOLID_N));
+    let m = SOLID_N.map(|v| v + 1);
+    let hi = solid_hi();
+    let (mut moving, mut still) = (0, 0);
+    for i in 0..m.iter().product::<usize>() {
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        for a in 0..3 {
+            let mut centre: [f32; 3] =
+                std::array::from_fn(|d| SOLID_MIN[d] + (p[d] as f32 + 0.5) * SOLID_H);
+            centre[a] = SOLID_MIN[a] + p[a] as f32 * SOLID_H;
+            let covered = open[i * FACE_FLOATS + 4 + a] < 1.0;
+            // The nearest Wall plane, ties to the first in face order.
+            let mut nearest = (f32::INFINITY, 0);
+            for b in 0..3 {
+                for plane in [SOLID_MIN[b], hi[b]] {
+                    let d = (centre[b] - plane).abs();
+                    if d < nearest.0 {
+                        nearest = (d, b);
+                    }
+                }
+            }
+            let want = if covered && a == 0 && nearest.1 == 0 {
+                1.0
+            } else {
+                0.0
+            };
+            if covered {
+                if want == 1.0 {
+                    moving += 1;
+                } else {
+                    still += 1;
+                }
+            }
+            assert_eq!(got[i * FACE_FLOATS + a], want, "record {i} {p:?} axis {a}");
+        }
+    }
+    assert!(
+        moving > 0 && still > 0,
+        "{moving} moving and {still} still covered faces"
+    );
+}
+
 /// One layer of the solid velocity's extrapolation in f64, as
 /// GridUtils::extrapolateGridWithObserver runs it on each axis's face
 /// lattice: an unknown face beside a known one takes the mean of its known

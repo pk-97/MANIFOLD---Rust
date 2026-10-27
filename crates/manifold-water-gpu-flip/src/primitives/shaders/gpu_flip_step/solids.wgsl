@@ -324,7 +324,8 @@ fn closest_body(x: vec3<f32>) -> i32 {
 // a solid cuts (open fraction under 1): velocity is the normal part of the
 // closest body's rigid velocity at the face centre, as `posed` holds it (a
 // dynamic body by the coupled motion law, the same pose the solid distance
-// takes); weight is the closest body's friction at the face's four corners,
+// takes), or where a Wall is nearer, that Wall's velocity; weight is the
+// closest body's friction at the face's four corners,
 // averaged (FluidSimulation::_getFaceFrictionU/V/W). Every other face is
 // zero. Velocity w is the record's owner code (gpu_flip_bodies.wgsl): each
 // face's body, counted from this tick's first row. Weight w is the known
@@ -355,6 +356,8 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
             let bd = posed[u32(body)];
             out.face_velocity[a] = liquid_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, bd.position_inv_mass.xyz, centre)[a];
             code = code + f32(body + 1) * f32(1u << (8u * u32(a)));
+        } else {
+            out.face_velocity[a] = walls_velocity(centre)[a];
         }
         let axes = cross_axes(a);
         var friction = 0.0;

@@ -186,9 +186,31 @@ impl Primitive for GpuFlipStep {
             ["bounds_hi_x", "bounds_hi_y", "bounds_hi_z"],
         ]
         .map(|names| names.map(|name| ctx.scalar_or_param(name, 0.0)));
+        let [wall_velocity_lo, wall_velocity_hi] = [
+            [
+                "wall_velocity_lo_x",
+                "wall_velocity_lo_y",
+                "wall_velocity_lo_z",
+            ],
+            [
+                "wall_velocity_hi_x",
+                "wall_velocity_hi_y",
+                "wall_velocity_hi_z",
+            ],
+        ]
+        .map(|names| names.map(|name| ctx.scalar_or_param(name, 0.0)));
         let kill_height = ctx.scalar_or_param("kill_height", f32::MIN);
-        if !bounds_lo.iter().chain(&bounds_hi).all(|v| v.is_finite()) || kill_height.is_nan() {
-            ctx.error(format!("{NAME}: Bounds and Kill Height must be numbers"));
+        if !bounds_lo
+            .iter()
+            .chain(&bounds_hi)
+            .chain(&wall_velocity_lo)
+            .chain(&wall_velocity_hi)
+            .all(|v| v.is_finite())
+            || kill_height.is_nan()
+        {
+            ctx.error(format!(
+                "{NAME}: Bounds, its wall velocities and Kill Height must be numbers"
+            ));
             return;
         }
         let level =
@@ -393,6 +415,10 @@ impl Primitive for GpuFlipStep {
                 emit_sites,
                 kill_height,
                 _pad: [0; 2],
+                wall_velocity_lo,
+                _pad_lo: 0,
+                wall_velocity_hi,
+                _pad_hi: 0,
             },
             clock_plan: &zeros,
             particles,

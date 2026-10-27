@@ -120,6 +120,12 @@ struct Params {
     kill_height: f32,
     _pad0: u32,
     _pad1: u32,
+    // Each Bounds face plane's velocity along its axis in m/s, the low faces
+    // then the high: what a moving Wall gives the water it touches.
+    wall_velocity_lo: vec3<f32>,
+    _pad2: u32,
+    wall_velocity_hi: vec3<f32>,
+    _pad3: u32,
 };
 
 struct CellRange {
@@ -327,4 +333,25 @@ fn walls_distance(x: vec3<f32>) -> f32 {
         distance = -length(beyond);
     }
     return distance;
+}
+
+// The velocity of the Wall face nearest x: its plane's velocity along its
+// axis, the only part a plane carries, so the water slips along a Wall. Zero
+// with no Wall.
+fn walls_velocity(x: vec3<f32>) -> vec3<f32> {
+    var nearest = 1e30;
+    var v = vec3<f32>(0.0);
+    for (var a = 0; a < 3; a = a + 1) {
+        if (u.wall_faces & (1u << u32(2 * a))) != 0u && abs(x[a] - u.bounds_lo[a]) < nearest {
+            nearest = abs(x[a] - u.bounds_lo[a]);
+            v = vec3<f32>(0.0);
+            v[a] = u.wall_velocity_lo[a];
+        }
+        if (u.wall_faces & (1u << u32(2 * a + 1))) != 0u && abs(u.bounds_hi[a] - x[a]) < nearest {
+            nearest = abs(u.bounds_hi[a] - x[a]);
+            v = vec3<f32>(0.0);
+            v[a] = u.wall_velocity_hi[a];
+        }
+    }
+    return v;
 }

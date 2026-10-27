@@ -279,6 +279,12 @@ pub(crate) struct StepParams {
     /// `f32::MIN` removes none.
     pub(crate) kill_height: f32,
     pub(crate) _pad: [u32; 2],
+    /// Each Bounds face plane's velocity along its axis in m/s, the low
+    /// faces then the high: what a moving Wall gives the water it touches.
+    pub(crate) wall_velocity_lo: [f32; 3],
+    pub(crate) _pad_lo: u32,
+    pub(crate) wall_velocity_hi: [f32; 3],
+    pub(crate) _pad_hi: u32,
 }
 }
 
@@ -497,6 +503,8 @@ manifold_node_engine::primitive! {
         dynamic_bodies: ScalarF32 optional,
         bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
         bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
+        wall_velocity_lo_x: ScalarF32 optional, wall_velocity_lo_y: ScalarF32 optional, wall_velocity_lo_z: ScalarF32 optional,
+        wall_velocity_hi_x: ScalarF32 optional, wall_velocity_hi_y: ScalarF32 optional, wall_velocity_hi_z: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
         open_faces: ScalarF32 optional,
         kill_height: ScalarF32 optional,
@@ -567,6 +575,12 @@ manifold_node_engine::primitive! {
         float_param!("bounds_hi_x", "Bounds Max X", 0.0, -1.0e6, 1.0e6),
         float_param!("bounds_hi_y", "Bounds Max Y", 0.0, -1.0e6, 1.0e6),
         float_param!("bounds_hi_z", "Bounds Max Z", 0.0, -1.0e6, 1.0e6),
+        float_param!("wall_velocity_lo_x", "Wall Velocity −X (m/s)", 0.0, -1.0e3, 1.0e3),
+        float_param!("wall_velocity_lo_y", "Wall Velocity −Y (m/s)", 0.0, -1.0e3, 1.0e3),
+        float_param!("wall_velocity_lo_z", "Wall Velocity −Z (m/s)", 0.0, -1.0e3, 1.0e3),
+        float_param!("wall_velocity_hi_x", "Wall Velocity +X (m/s)", 0.0, -1.0e3, 1.0e3),
+        float_param!("wall_velocity_hi_y", "Wall Velocity +Y (m/s)", 0.0, -1.0e3, 1.0e3),
+        float_param!("wall_velocity_hi_z", "Wall Velocity +Z (m/s)", 0.0, -1.0e3, 1.0e3),
         int_param!("closed_faces", "Closed Faces (bits −X +X −Y +Y −Z +Z)", 0.0, 0.0, 63.0),
         int_param!("open_faces", "Open Faces (bits −X +X −Y +Y −Z +Z)", 0.0, 0.0, 63.0),
         float_param!("kill_height", "Kill Height", f32::MIN, f32::MIN, f32::MAX),

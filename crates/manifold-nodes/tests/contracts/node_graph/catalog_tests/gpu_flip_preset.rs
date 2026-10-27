@@ -29,7 +29,7 @@ fn gpu_flip_mesh_grid_uses_native_solid_coordinates() {
         let geometry = scene.geometry();
         let outputs = geometry.outputs();
         let read = |name: &str| outputs.iter().find(|(port, _)| *port == name).unwrap().1;
-        let surface = geometry.setup_for_test().lattice_for_test().surface();
+        let surface = geometry.lattice_for_test().surface();
         let def = water_def(scene);
         let id = |name: &str| {
             def.nodes
@@ -60,12 +60,9 @@ fn gpu_flip_mesh_grid_uses_native_solid_coordinates() {
             && w.to_port == "solid"));
         // Frame's surface() uses the same source rule; the simulation
         // lattice continues to carry its original cells and padding.
+        assert_eq!(geometry.lattice_for_test().cells(), [resolution as u32; 3]);
         assert_eq!(
-            geometry.setup_for_test().lattice_for_test().cells(),
-            [resolution as u32; 3]
-        );
-        assert_eq!(
-            geometry.setup_for_test().lattice_for_test().nodes(),
+            geometry.lattice_for_test().nodes(),
             [resolution as u32 + 7; 3]
         );
     }

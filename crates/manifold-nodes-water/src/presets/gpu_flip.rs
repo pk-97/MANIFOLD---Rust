@@ -321,12 +321,12 @@ impl WaterScene {
 
     #[cfg(any(test, feature = "testkit"))]
     pub fn pool_sites(&self) -> u32 {
-        self.geometry().setup.pool_sites
+        self.geometry().pool_sites
     }
 
     #[cfg(any(test, feature = "testkit"))]
     pub fn box_sites(&self) -> [[u32; 2]; 3] {
-        self.geometry().setup.box_sites
+        self.geometry().box_sites
     }
 
     /// Particles the fill places; the particle arrays hold exactly this many.
@@ -492,6 +492,17 @@ const BOUNDS_WIRES: [&str; 6] = [
     "bounds_hi_z",
 ];
 
+/// Each Bounds face plane's velocity along its axis, as the domain
+/// publishes it.
+const WALL_VELOCITY_WIRES: [&str; 6] = [
+    "wall_velocity_lo_x",
+    "wall_velocity_lo_y",
+    "wall_velocity_lo_z",
+    "wall_velocity_hi_x",
+    "wall_velocity_hi_y",
+    "wall_velocity_hi_z",
+];
+
 /// The fill's sites, as the domain publishes them.
 const FILL_WIRES: [&str; 7] = [
     "pool_sites",
@@ -542,14 +553,14 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     }
     // The params hold the domain's own sites, so the planned storage is the
     // fill's; the wires carry any change.
-    let sites = geometry.setup.box_sites;
+    let sites = geometry.box_sites;
     let fill = b.node(
         "fill",
         "node.liquid_fill",
         padded_lattice(
             &scene,
             &[
-                ("pool_sites", int(geometry.setup.pool_sites as usize)),
+                ("pool_sites", int(geometry.pool_sites as usize)),
                 ("box_x0", int(sites[0][0] as usize)),
                 ("box_x1", int(sites[0][1] as usize)),
                 ("box_y0", int(sites[1][0] as usize)),
@@ -1391,7 +1402,7 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
 /// The scene's padded lattice (the domain's `LATTICE_WIRES`) as params,
 /// plus `extra`. The wires carry any change at run time.
 fn padded_lattice(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
-    let lattice = scene.geometry().setup.lattice;
+    let lattice = scene.geometry().lattice;
     let mut params = json!({"cell_size": float(f64::from(lattice.cell_size()))});
     for (axis, name) in ["lattice_min_x", "lattice_min_y", "lattice_min_z"]
         .into_iter()
@@ -1442,6 +1453,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((domain, "gravity_z"), step, "gravity_z");
     b.wires(domain, step, &FIELD_WIRES);
     b.wires(domain, step, &BOUNDS_WIRES);
+    b.wires(domain, step, &WALL_VELOCITY_WIRES);
     b.wire((state, "tick_index"), step, "tick_index");
     b.wires(
         domain,

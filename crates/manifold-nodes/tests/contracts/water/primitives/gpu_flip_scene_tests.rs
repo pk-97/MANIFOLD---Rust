@@ -711,13 +711,13 @@ mod native_reference {
             let (particles, solid, nodes) = snapshot(&mut native, offset);
             let got = seed_sites(scene, &particles);
             let geometry = scene.geometry();
-            let column = geometry.setup_for_test().box_sites_for_test();
+            let column = geometry.box_sites_for_test();
             let mut expected = Vec::new();
             for x in 0..2 * n as u32 {
                 for y in 0..2 * n as u32 {
                     for z in 0..2 * n as u32 {
                         let site = [x, y, z];
-                        if y < geometry.setup_for_test().pool_sites_for_test()
+                        if y < geometry.pool_sites_for_test()
                             || (0..3).all(|a| (column[a][0]..column[a][1]).contains(&site[a]))
                         {
                             expected.push(site);

@@ -75,14 +75,19 @@ use {
 mod region_sites;
 
 manifold_core::testkit_visible! {
-/// Everything whose change restarts the liquid.
+/// Everything whose change restarts the liquid. The Bounds box's pose and
+/// size are not in it: moving or resizing the box moves the walls under the
+/// running water.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GpuFlipSetup {
-    pub lattice: LiquidLattice,
+    /// The cell size in metres.
+    pub cell_size: f64,
     /// The Bounds switch: turning it on or off restarts the liquid.
     pub bounds: bool,
-    pub pool_sites: u32,
-    pub box_sites: [[u32; 2]; 3],
+    /// The authored Fill Height in metres.
+    pub fill_height: f32,
+    /// The Initial Fill's box as placed (min then max), None without one.
+    pub initial_fill: Option<[[f32; 3]; 2]>,
     /// Slots past the fill's count the pool holds: 0 keeps the fill's count;
     /// an Inflow gets room for the whole domain up to a memory budget
     /// ([`GpuFlipGeometry::with_inflow`]). Sources emit into the slots past
@@ -101,6 +106,13 @@ pub struct GpuFlipGeometry {
     /// whole cells: the Bounds box.
     pub(crate) bounds_box: [[f32; 3]; 2],
     pub setup: GpuFlipSetup,
+    /// The padded lattice over the grid box of this frame.
+    pub lattice: LiquidLattice,
+    /// The pool's height in half-cell sites of this frame's grid box.
+    pub pool_sites: u32,
+    /// The Initial Fill's site range per axis in this frame's grid box (empty
+    /// without one).
+    pub box_sites: [[u32; 2]; 3],
     /// What the fill changed to fit the domain, on the values this frame ran.
     pub fit: SetupFit,
     pub particles: u64,
@@ -144,7 +156,8 @@ impl GpuFlipGeometry {
     manifold_core::testkit_visible! {
         /// The scalar outputs fixed by the setup, by name.
         pub(crate) fn outputs(&self) -> [(&'static str, f32); 25] {
-            let GpuFlipSetup { lattice, pool_sites, box_sites, particle_capacity, .. } = self.setup;
+            let GpuFlipGeometry { lattice, pool_sites, box_sites, .. } = *self;
+            let particle_capacity = self.setup.particle_capacity;
             let h = self.layout.cell_size;
             let surface = lattice.surface();
             let origin = self.cell_origin();
@@ -272,8 +285,15 @@ pub fn gpu_flip_geometry(
             "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Raise Cell Size or lower Fill Height."
         ));
     }
-    let setup = GpuFlipSetup { lattice: LiquidLattice::from_layout(&layout), bounds, pool_sites, box_sites, particle_capacity: 0 };
-    Ok(GpuFlipGeometry { layout, bounds_box, setup, particles, solve_level, max_iterations, sheet_fill_rate, fit })
+    let setup = GpuFlipSetup {
+        cell_size: layout.cell_size,
+        bounds,
+        fill_height,
+        initial_fill: initial_fill.map(|volume| box_about(volume.pos, volume.scale)),
+        particle_capacity: 0,
+    };
+    let lattice = LiquidLattice::from_layout(&layout);
+    Ok(GpuFlipGeometry { layout, bounds_box, setup, lattice, pool_sites, box_sites, particles, solve_level, max_iterations, sheet_fill_rate, fit })
 }
 }
 
@@ -381,6 +401,31 @@ fn bounds_outputs(scene: [[f32; 3]; 2]) -> [(&'static str, f32); 6] {
     ]
 }
 
+/// The Bounds faces' velocities along their axes (m/s): `now` minus
+/// `previous` over `seconds` of simulated time. 0 without a previous box (the
+/// first frame, a restart, Bounds off) and when no time ran (a paused drag is
+/// a teleport).
+fn wall_velocity_outputs(
+    previous: Option<[[f32; 3]; 2]>,
+    now: [[f32; 3]; 2],
+    seconds: f64,
+) -> [(&'static str, f32); 6] {
+    let speed = |end: usize, axis: usize| match previous {
+        Some(before) if seconds > 0.0 => {
+            ((f64::from(now[end][axis]) - f64::from(before[end][axis])) / seconds) as f32
+        }
+        _ => 0.0,
+    };
+    [
+        ("wall_velocity_lo_x", speed(0, 0)),
+        ("wall_velocity_lo_y", speed(0, 1)),
+        ("wall_velocity_lo_z", speed(0, 2)),
+        ("wall_velocity_hi_x", speed(1, 0)),
+        ("wall_velocity_hi_y", speed(1, 1)),
+        ("wall_velocity_hi_z", speed(1, 2)),
+    ]
+}
+
 /// The lowest Initial Fill or Inflow when an epoch began: the fill's lower
 /// edge and each Inflow's box minimum y (`inflows`).
 fn lowest_source(fill: Option<Transform>, inflows: impl IntoIterator<Item = f32>) -> Option<f32> {
@@ -447,7 +492,7 @@ impl GpuFlipGeometry {
     /// has, so the scene's forces and impulses cost what they always did
     /// whatever the box's size.
     pub(crate) fn field_lattice(&self, scene: [[f32; 3]; 2]) -> ForceLattice {
-        let solver = FlipSolverGrid::from_lattice(self.setup.lattice);
+        let solver = FlipSolverGrid::from_lattice(self.lattice);
         let detail =
             ForceLattice::covering(solver.min(), self.layout.cell_size as f32, solver.nodes())
                 .nodes()
@@ -487,7 +532,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 67] = [
+const OUTPUTS: [&str; 73] = [
     "lattice_min_x",
     "lattice_min_y",
     "lattice_min_z",
@@ -555,6 +600,12 @@ const OUTPUTS: [&str; 67] = [
     "bounds_hi_z",
     "open_faces",
     "kill_height",
+    "wall_velocity_lo_x",
+    "wall_velocity_lo_y",
+    "wall_velocity_lo_z",
+    "wall_velocity_hi_x",
+    "wall_velocity_hi_y",
+    "wall_velocity_hi_z",
 ];
 const TICKS: usize = 19;
 const EPOCH: usize = 20;
@@ -655,6 +706,8 @@ manifold_node_engine::primitive! {
         closed_faces: ScalarF32, open_faces: ScalarF32,
         bounds_lo_x: ScalarF32, bounds_lo_y: ScalarF32, bounds_lo_z: ScalarF32,
         bounds_hi_x: ScalarF32, bounds_hi_y: ScalarF32, bounds_hi_z: ScalarF32,
+        wall_velocity_lo_x: ScalarF32, wall_velocity_lo_y: ScalarF32, wall_velocity_lo_z: ScalarF32,
+        wall_velocity_hi_x: ScalarF32, wall_velocity_hi_y: ScalarF32, wall_velocity_hi_z: ScalarF32,
         kill_height: ScalarF32,
         pool_sites: ScalarF32,
         box_x0: ScalarF32, box_x1: ScalarF32,
@@ -733,6 +786,12 @@ manifold_node_engine::primitive! {
         setup_report: SetupReport = SetupReport::default(),
         // The domain box of the accepted setup.
         layout: Option<FluidDomainLayout> = None,
+        // The pool height and the Initial Fill's site range of the grid box
+        // this frame ran (the fill gizmos).
+        fill_sites: (u32, [[u32; 2]; 3]) = (0, [[0; 2]; 3]),
+        // Last frame's Bounds box, None with Bounds off: the walls' velocity
+        // is this frame's box against it.
+        last_bounds: Option<[[f32; 3]; 2]> = None,
         // The box the force and impulse lattices cover this frame (the scene box).
         scene_box: [[f32; 3]; 2] = [[0.0; 3]; 2],
         // The lowest Initial Fill or Inflow of the current epoch, with Bounds off.
@@ -1061,22 +1120,23 @@ impl PhysicsNode for GpuFlipDomain {
     /// The pool under the fill height and the initial column as the fill
     /// seeds them (whole half-cell sites), then bodies, regions and forces.
     fn write_physics_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
-        let (Some(layout), Some(setup)) = (self.layout, self.setup) else {
+        let (Some(layout), Some(_)) = (self.layout, self.setup) else {
             return;
         };
+        let (pool_sites, box_sites) = self.fill_sites;
         let site = (layout.cell_size * 0.5) as f32;
         let max: [f32; 3] = std::array::from_fn(|i| layout.min[i] + layout.size[i]);
-        if setup.pool_sites > 0 {
-            let top = layout.min[1] + setup.pool_sites as f32 * site;
+        if pool_sites > 0 {
+            let top = layout.min[1] + pool_sites as f32 * site;
             out.push(PhysicsGizmo::aabb(
                 PhysicsGizmoFamily::Fill,
                 layout.min,
                 [max[0], top, max[2]],
             ));
         }
-        if setup.box_sites.iter().all(|[lo, hi]| hi > lo) {
+        if box_sites.iter().all(|[lo, hi]| hi > lo) {
             let corner = |end: usize| {
-                std::array::from_fn(|i| layout.min[i] + setup.box_sites[i][end] as f32 * site)
+                std::array::from_fn(|i| layout.min[i] + box_sites[i][end] as f32 * site)
             };
             out.push(PhysicsGizmo::aabb(
                 PhysicsGizmoFamily::Fill,
@@ -1306,7 +1366,7 @@ impl GpuFlipDomain {
             coupled_geometries,
             coupled_rows,
             self.coupled.walls.bounds(),
-            geometry.setup.lattice.cell_size(),
+            geometry.lattice.cell_size(),
             offline,
         )? == BodiesStatus::Pending
         {
@@ -1356,7 +1416,7 @@ impl GpuFlipDomain {
                 owner.geometries(),
                 owner.rows(),
                 self.coupled.walls.bounds(),
-                geometry.setup.lattice.cell_size(),
+                geometry.lattice.cell_size(),
                 offline,
             )? == BodiesStatus::Pending
             {
@@ -1365,6 +1425,7 @@ impl GpuFlipDomain {
         }
         self.setup = Some(geometry.setup);
         self.layout = Some(geometry.layout);
+        self.fill_sites = (geometry.pool_sites, geometry.box_sites);
         let frame = self.clock.advance(
             ctx.played(),
             ctx.sim_step.interval.0,
@@ -1437,7 +1498,7 @@ impl GpuFlipDomain {
                 self.bodies.last_region_rows(),
                 self.bodies.region_count(),
                 self.bodies.shapes(),
-                geometry.setup.lattice.cell_size(),
+                geometry.lattice.cell_size(),
                 |tick| {
                     frame
                         .interval(tick as u64)
@@ -1570,12 +1631,30 @@ impl GpuFlipDomain {
             ("handover_rotation", handover.rotation),
             ("first_tick", first_tick as f32),
         ];
+        let simulated: f64 = (0..u64::from(frame.ticks))
+            .map(|tick| {
+                frame
+                    .interval(tick)
+                    .map_or(0.0, |interval| interval.duration().0)
+            })
+            .sum();
+        let walls = wall_velocity_outputs(
+            if restart || frame.restarted {
+                None
+            } else {
+                self.last_bounds
+            },
+            geometry.bounds_box,
+            simulated,
+        );
+        self.last_bounds = geometry.setup.bounds.then_some(geometry.bounds_box);
         let mut values = [0.0; OUTPUTS.len()];
         let mut written = 0u128;
         for (name, value) in geometry
             .outputs()
             .into_iter()
             .chain(bounds_outputs(scene))
+            .chain(walls)
             .chain(per_frame)
             .chain(field.outputs())
         {
@@ -1894,9 +1973,9 @@ mod tests {
     #[test]
     fn gpu_flip_domain_fields_cover_the_scene_box() {
         let geometry = geometry(64.0, 0.16, None).unwrap();
-        let grid = FlipSolverGrid::from_lattice(geometry.setup.lattice);
+        let grid = FlipSolverGrid::from_lattice(geometry.lattice);
         let covering =
-            ForceLattice::covering(grid.min(), geometry.setup.lattice.cell_size(), grid.nodes());
+            ForceLattice::covering(grid.min(), geometry.lattice.cell_size(), grid.nodes());
         let detail = covering.nodes().into_iter().max().unwrap();
         for scene in [
             geometry.bounds_box,
@@ -1941,7 +2020,7 @@ mod tests {
                     .map_or(default, |(_, value)| *value)
             })
             .unwrap();
-            assert_eq!(lattice, setup.setup.lattice);
+            assert_eq!(lattice, setup.lattice);
             assert_eq!(lattice.nodes(), [resolution as u32 + 7; 3]);
             for (size, nodes) in lattice.bounds().scale.into_iter().zip(lattice.nodes()) {
                 let cell = size / (nodes - 1) as f32;
@@ -1960,8 +2039,8 @@ mod tests {
             let at = geometry(resolution, 0.16, None)
                 .unwrap_or_else(|reason| panic!("{resolution}: {reason}"));
             let n = resolution as u32;
-            assert_eq!(at.setup.lattice.cells(), [n; 3]);
-            assert_eq!(at.setup.lattice.nodes(), [n + 7; 3]);
+            assert_eq!(at.lattice.cells(), [n; 3]);
+            assert_eq!(at.lattice.nodes(), [n + 7; 3]);
         }
     }
 
@@ -1976,11 +2055,11 @@ mod tests {
         };
         let at64 = geometry(64.0, 0.16, Some(column)).expect("64 fills");
         assert_eq!(
-            (at64.setup.pool_sites, at64.setup.box_sites),
+            (at64.pool_sites, at64.box_sites),
             (5, [[5, 43], [5, 67], [8, 120]])
         );
         assert_eq!(at64.particles, 128 * 5 * 128 + 38 * 62 * 112);
-        assert_eq!(at64.setup.lattice.nodes(), [71; 3]);
+        assert_eq!(at64.lattice.nodes(), [71; 3]);
         let mass = at64
             .outputs()
             .iter()
@@ -2047,7 +2126,7 @@ mod tests {
         {
             assert_eq!(output(&moved, port), moved.cell_origin()[axis] as f32);
         }
-        let mesh_min = FlipSolverGrid::from_lattice(moved.setup.lattice).min();
+        let mesh_min = FlipSolverGrid::from_lattice(moved.lattice).min();
         assert_eq!(solver_origin_cell(mesh_min, h as f32), moved.cell_origin());
         assert!(
             moved
@@ -2100,7 +2179,7 @@ mod tests {
             // The box-relative position the fill kernel computes.
             let local =
                 |site: u32| f64::from(at.layout.min[axis]) + (0.25 + 0.5 * f64::from(site)) * h;
-            let [first, end] = at.setup.box_sites[axis];
+            let [first, end] = at.box_sites[axis];
             assert!(end > first);
             assert!((world(first) - local(first)).abs() < 1e-5, "axis {axis}");
             let lo = f64::from(column.pos[axis] - 0.5 * column.scale[axis]);
@@ -2140,6 +2219,7 @@ mod tests {
                 .is_none()
         );
         (domain.setup, domain.layout) = (Some(at64.setup), Some(at64.layout));
+        domain.fill_sites = (at64.pool_sites, at64.box_sites);
         let snapshot = domain.fluid_domain_snapshot().unwrap();
         assert_eq!(
             (snapshot.state, snapshot.accepted_layout),
@@ -2180,6 +2260,74 @@ mod tests {
             );
         }
         assert_eq!(boxes.len(), 2, "no bodies or forces in a bare domain");
+    }
+
+    /// Moving or resizing the Bounds box leaves the setup alone, so the water
+    /// keeps running; the cell size, the Bounds switch and Fill Height are
+    /// what restart it.
+    #[test]
+    fn gpu_flip_moving_or_resizing_the_box_keeps_the_setup() {
+        let at = |pose: Transform, cell: f32, bounds: f32, fill: f32| {
+            let read = |name: &str, default: f32| match name {
+                "cell_metres" => cell,
+                "bounds" => bounds,
+                "fill_height" => fill,
+                _ => default,
+            };
+            gpu_flip_geometry(read, Some(pose), None).expect("fits")
+        };
+        let pose = Transform {
+            pos: [0.37, 1.1, -0.8],
+            scale: [4.0; 3],
+            ..Transform::default()
+        };
+        let base = at(pose, 0.0625, 1.0, 0.16);
+        let moved = at(
+            Transform {
+                pos: [0.67, 1.1, -0.8],
+                ..pose
+            },
+            0.0625,
+            1.0,
+            0.16,
+        );
+        let grown = at(
+            Transform {
+                scale: [4.5; 3],
+                ..pose
+            },
+            0.0625,
+            1.0,
+            0.16,
+        );
+        assert_eq!(moved.setup, base.setup);
+        assert_eq!(grown.setup, base.setup);
+        assert_ne!(moved.bounds_box, base.bounds_box);
+        assert_ne!(grown.bounds_box, base.bounds_box);
+        assert_ne!(at(pose, 0.125, 1.0, 0.16).setup, base.setup);
+        assert_ne!(at(pose, 0.0625, 0.0, 0.0).setup, base.setup);
+        assert_ne!(at(pose, 0.0625, 1.0, 0.32).setup, base.setup);
+    }
+
+    /// Each face's velocity is the box edge's travel over the simulated time;
+    /// nothing before a previous box, with no time run, or on a restart.
+    #[test]
+    fn gpu_flip_wall_velocity_is_the_edge_travel_over_simulated_time() {
+        let before = [[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]];
+        let now = [[-1.7, 0.0, -2.0], [2.5, 4.0, 2.0]];
+        let value =
+            |out: [(&str, f32); 6], name: &str| out.iter().find(|(n, _)| *n == name).unwrap().1;
+        let out = wall_velocity_outputs(Some(before), now, 0.1);
+        assert!((value(out, "wall_velocity_lo_x") - 3.0).abs() < 1e-5);
+        assert!((value(out, "wall_velocity_hi_x") - 5.0).abs() < 1e-5);
+        assert_eq!(value(out, "wall_velocity_lo_y"), 0.0);
+        for out in [
+            wall_velocity_outputs(None, now, 0.1),
+            wall_velocity_outputs(Some(before), now, 0.0),
+        ] {
+            assert!(out.iter().all(|(_, v)| *v == 0.0));
+        }
+        assert!(OUTPUTS.contains(&"wall_velocity_hi_z"));
     }
 
     #[test]
@@ -2227,7 +2375,7 @@ mod tests {
     fn gpu_flip_domain_caps_the_fill_and_clips_the_column() {
         let top = geometry(64.0, 4.0, None).expect("a pool to the top fills");
         let past = geometry(64.0, 9.0, None).expect("a pool past the top is capped");
-        assert_eq!(past.setup.pool_sites, top.setup.pool_sites);
+        assert_eq!(past.pool_sites, top.pool_sites);
         assert_eq!(past.particles, top.particles);
 
         // The default 4 m domain spans x from -2 to 2.
@@ -2244,7 +2392,7 @@ mod tests {
         let inside = geometry(64.0, 0.16, Some(at_wall)).expect("fills");
         let clipped = geometry(64.0, 0.16, Some(past_wall)).expect("a clipped column fills");
         assert_eq!(
-            clipped.setup.box_sites, inside.setup.box_sites,
+            clipped.box_sites, inside.box_sites,
             "the part inside is the same fill"
         );
         assert!(clipped.particles > geometry(64.0, 0.16, None).unwrap().particles);
@@ -2255,7 +2403,7 @@ mod tests {
             ..Transform::default()
         };
         let none = geometry(64.0, 0.16, Some(away)).expect("a column outside fills nothing");
-        assert_eq!(none.setup.box_sites, [[0; 2]; 3]);
+        assert_eq!(none.box_sites, [[0; 2]; 3]);
         assert_eq!(
             none.particles,
             geometry(64.0, 0.16, None).unwrap().particles
@@ -2279,10 +2427,8 @@ mod tests {
             scale: [0.41, 1.0, 1.0],
             ..Transform::default()
         };
-        let setup = gpu_flip_geometry(read, None, Some(column))
-            .expect("fills")
-            .setup;
-        assert_eq!(setup.box_sites[0], [27, 39]);
+        let at = gpu_flip_geometry(read, None, Some(column)).expect("fills");
+        assert_eq!(at.box_sites[0], [27, 39]);
     }
 
     /// BUG-3zq4r (inflow runs out): the pool used to be the fill's count, so
@@ -2619,24 +2765,16 @@ mod tests {
 mod extent;
 
 #[cfg(any(test, feature = "testkit"))]
-impl GpuFlipSetup {
+impl GpuFlipGeometry {
     pub fn box_sites_for_test(&self) -> [[u32; 2]; 3] {
         self.box_sites
     }
     pub fn pool_sites_for_test(&self) -> u32 {
         self.pool_sites
     }
-}
-
-#[cfg(any(test, feature = "testkit"))]
-impl GpuFlipSetup {
     pub fn lattice_for_test(&self) -> LiquidLattice {
         self.lattice
     }
-}
-
-#[cfg(any(test, feature = "testkit"))]
-impl GpuFlipGeometry {
     pub fn setup_for_test(&self) -> GpuFlipSetup {
         self.setup
     }
