@@ -26,6 +26,7 @@ Render and measure:
   thumbnails              regenerate preset picker thumbnails  [scripts/gpu_queue.py -- cargo run -p manifold-app --bin generate-preset-thumbnails --]
   freeze-profile          profile the freeze compiler's fused kernels  [scripts/gpu_queue.py -- cargo run -p manifold-nodes --bin freeze-profile --]
   project-tool            .manifold files: info, json, project new|upgrade, layer add, tempo show|set|at, clip add-audio|add-bulk|list, marker add-bulk|list, scene set-model (never hand-edit the ZIP)  [cargo run -p manifold-app --bin project_tool --]
+  water-scenes            GPU FLIP scenes at other scales, domains and contacts: build OUT_DIR writes projects, time OUT_DIR [NAME...] prints frame, step, render and GPU memory  [scripts/water_scenes.py]
   rt-toggle-matrix        one rt-capture per RT toggle; the RT A/B harness  [scripts/rt_toggle_matrix.py]
   rt-quality-matrix       RT quality oracle against the committed baseline  [scripts/rt_quality_matrix.py]
   rt-region-probe         region-mean probe for the multi-bounce GI gate  [scripts/rt_region_probe.py]

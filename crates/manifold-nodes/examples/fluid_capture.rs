@@ -1186,6 +1186,8 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     }
     let frame_dt = 1.0 / f64::from(options.fps);
     let device = Arc::new(GpuDevice::new_queued("fluid_capture"));
+    // The app's compiled shaders, so a capture starts without recompiling them.
+    manifold_gpu::testkit::load_disk_shader_caches(&device);
     // The wall limit bounds the capture, not the wait for another holder of the GPU.
     let overall_started = Instant::now();
     let offline_target = RenderTarget::new(

@@ -1026,7 +1026,11 @@ fn split_profiles(
                 _ => None,
             };
             if let Some(labelled) = labelled {
-                let key = if stage {
+                // A dispatch-granularity stage span is one dispatch: keep its
+                // label under its stage. A tag span groups a stage's dispatches.
+                let key = if stage && granularity == ProfileGranularity::Dispatch {
+                    format!("{} {}", span.tag, span.label)
+                } else if stage {
                     span.tag.clone()
                 } else if type_id == RENDER {
                     format!("{:?} {}", span.kind, span.label)
@@ -1261,6 +1265,18 @@ fn probe(args: &Args) -> Result<(), String> {
     set_profiling(&mut ct, false);
     ct.content_pipeline.wait_for_render_complete();
     ct.content_pipeline.set_gpu_time_tap(None);
+    // What the run left allocated on the device: the scene's buffers at the
+    // last frame's size.
+    if let Some(memory) = ct
+        .content_pipeline
+        .native_device()
+        .and_then(|device| device.modifier_memory_snapshot())
+    {
+        println!(
+            "frame-time: GPU memory allocated after the run {:.0} MB",
+            memory.current_allocated_bytes as f64 / 1e6
+        );
+    }
     drop(state_tx);
     drain
         .join()
