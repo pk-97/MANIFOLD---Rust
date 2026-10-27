@@ -1,17 +1,17 @@
 //! Buffer extent rule owned by this node.
-use super::{Layout, REACH, display_shape};
+use super::{Layout, REACH, START_POOL_TILES, display_cell_size};
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_node_engine::scene::world_tiles::table_words;
 use manifold_water_liquid::world_tiles::held_bytes;
 
 fn surface_tiles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let shape = display_shape(
+    let cell_size = display_cell_size(
         x.scalar("sim_cell_size", 0.0625),
-        x.scalar("sim_pool_tiles", 1.0),
-        x.param("pool_scale", 2.0),
         x.param("resolution_scale", 1.0),
     )
     .map_err(Verdict::Refused)?;
+    // The start pool; it grows at run time with the water.
+    let pool = START_POOL_TILES;
     let slots = |port: &str| -> Result<u32, Verdict> {
         u32::try_from(x.items(port).unwrap_or(0))
             .map_err(|_| x.uncovered(format!("{port} holds more records than a pass indexes")))
@@ -23,13 +23,12 @@ fn surface_tiles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         particles: slots("particles")?,
         foam: slots("foam")?,
         spray: slots("spray")?,
-        pool_tiles: shape.pool_tiles,
+        pool_tiles: pool,
     };
-    let pool = shape.pool_tiles;
     x.provide("tiles", table_words(pool) * 4);
     x.provide("extent", 32);
     x.publish("pool_tiles", pool as f32);
-    x.publish("cell_size", shape.cell_size);
+    x.publish("cell_size", cell_size);
     // The table with its lists and build scratch, then the node's own records.
     x.hold(held_bytes(pool, REACH.ring_max) + layout.bytes());
     Ok(())

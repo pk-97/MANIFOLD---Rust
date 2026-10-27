@@ -1365,8 +1365,6 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     );
     b.wire((frame, "particles_b"), tiles, "particles");
     b.wire((domain, "cell_size"), tiles, "sim_cell_size");
-    // The solver's pool, which every domain publishes.
-    b.wire((domain, "pool_tiles"), tiles, "sim_pool_tiles");
     b.wire((domain, "display_time"), tiles, "time");
     b.wire((domain, "epoch"), tiles, "epoch");
     let solid = b.node(DISPLAY_SOLID, "node.liquid_solid_distance", json!({}));

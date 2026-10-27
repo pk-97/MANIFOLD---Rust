@@ -11,9 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The water's cell size; the display runs at the same one (scale 1).
 const H: f32 = 0.25;
-/// The water's pool: the display's is twice it, 80 tiles.
-const SIM_POOL: f32 = 40.0;
-const POOL: u32 = 80;
+/// The display's first pool.
+const POOL: u32 = START_POOL_TILES;
 const KEEP: f32 = 300.0;
 /// Particle records the rig's array holds, live or not.
 const CAPACITY: usize = 4;
@@ -107,8 +106,6 @@ impl Rig {
             .set_scalar(self.epoch, ParamValue::Float(epoch));
         let run_params = params(&[
             ("sim_cell_size", H),
-            ("sim_pool_tiles", SIM_POOL),
-            ("pool_scale", 2.0),
             ("resolution_scale", 1.0),
             ("keep_seconds", KEEP),
         ]);
@@ -132,9 +129,10 @@ impl Rig {
             Some((_, ParamValue::Float(value))) => *value,
             _ => panic!("the node wrote no scalar to that output"),
         };
-        let words = read::<u32>(&self.harness.buffer(self.tiles), table_words(POOL) as usize);
-        let entries = table_entries(POOL);
-        let held = (0..POOL)
+        let pool = scalar(self.pool) as u32;
+        let words = read::<u32>(&self.harness.buffer(self.tiles), table_words(pool) as usize);
+        let entries = table_entries(pool);
+        let held = (0..pool)
             .filter_map(|slot| {
                 let row = slot_row_word(entries, slot) as usize;
                 (words[row + 3] != NONE).then(|| {
@@ -272,4 +270,21 @@ fn a_new_epoch_or_time_running_back_past_the_window_drops_the_kept_tiles() {
     let mut rig = Rig::new();
     rig.run(&[here], 1000.0, 3.0);
     assert!(rig.run(&[], 600.0, 3.0).held.is_empty());
+}
+
+#[test]
+fn a_pool_short_of_slots_grows_and_holds_every_tile() {
+    // Points four tiles apart: 45 rings of 27 tiles, more than the first pool.
+    let points: Vec<[f32; 3]> = (0..45).map(|i| [i as f32 * 8.0 + 0.1, 0.1, 0.1]).collect();
+    let tiles: Vec<_> = points.iter().map(|&p| tile_of(p)).collect();
+    let wanted = ring(&tiles);
+    assert!(wanted.len() > POOL as usize);
+    let mut rig = Rig::new();
+    let first = rig.run(&points, 10.0, 0.0);
+    assert_eq!(first.pool_tiles, POOL as f32);
+    assert_eq!(first.held.len(), POOL as usize, "the first pool fills");
+    // The next frame reads the short bit: twice the pool, every tile held.
+    let grown = rig.run(&points, 10.1, 0.0);
+    assert_eq!(grown.pool_tiles, 2.0 * POOL as f32);
+    assert_eq!(grown.tiles(), wanted);
 }

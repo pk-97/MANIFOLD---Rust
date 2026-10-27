@@ -3,6 +3,8 @@
 //! node builds each frame from the displayed particles, foam and spray, at the
 //! display cell size. A tile water touched stays held, in its slot, for
 //! `keep_seconds` after the water leaves, so the wetness stored in it can dry.
+//! The pool follows the water: it starts at [`START_POOL_TILES`] and grows
+//! ahead of the tiles the table holds, read a frame or two late.
 
 use std::borrow::Cow;
 use std::sync::LazyLock;
@@ -18,7 +20,8 @@ use manifold_node_engine::scene::world_tiles::{
 };
 use manifold_water_liquid::primitives::prefix_scan::open_gate;
 use manifold_water_liquid::world_tiles::{
-    Allocation, LIQUID_POINTS, PointCount, Reach, WorldTiles,
+    Allocation, LIQUID_POINTS, POOL_SHORT, PointCount, Reach, WorldTiles, exhausted_word,
+    rank_count_word,
 };
 use manifold_water_liquid::{float_param, int_param};
 
@@ -50,7 +53,15 @@ pub(crate) const REACH: Reach = Reach {
 pub(crate) const MAX_RESOLUTION_SCALE: f32 = 4.0;
 
 /// Pools are counted on f32 wires, which hold whole numbers exactly up to 2²⁴.
-const MAX_POOL_TILES: f64 = 16_777_216.0;
+const MAX_POOL_TILES: u32 = 16_777_216;
+
+/// The first pool, and the grain it grows by, in tiles.
+pub(crate) const START_POOL_TILES: u32 = 1024;
+const POOL_GRAIN: u32 = 256;
+/// The pool grows once the held tiles fill this share of it, to
+/// `POOL_HEADROOM` times them: they are read a frame or two late.
+const GROW_AT: f64 = 2.0 / 3.0;
+const POOL_HEADROOM: u32 = 2;
 
 /// Field order identical to the shader's `Params`; three 16-byte rows.
 #[repr(C)]
@@ -66,37 +77,12 @@ struct TileUniforms {
     _pad: [u32; 3],
 }
 
-/// The display lattice a setup of the node asks for.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct DisplayShape {
-    /// h_s: the display cell size, metres.
-    pub cell_size: f32,
-    /// P: tiles in the pool, before the node's grow-only rule.
-    pub pool_tiles: u32,
-}
-
-/// The display lattice for a simulation of `sim_cell_size` metres and
-/// `sim_pool_tiles` tiles: `resolution_scale` display cells per simulation
-/// cell along an axis, and P = ceil(sim_pool_tiles · pool_scale · scale³).
-pub(crate) fn display_shape(
-    sim_cell_size: f32,
-    sim_pool_tiles: f32,
-    pool_scale: f32,
-    resolution_scale: f32,
-) -> Result<DisplayShape, String> {
+/// The display cell size for a simulation of `sim_cell_size` metres:
+/// `resolution_scale` display cells per simulation cell along an axis.
+pub(crate) fn display_cell_size(sim_cell_size: f32, resolution_scale: f32) -> Result<f32, String> {
     if !(sim_cell_size.is_finite() && sim_cell_size > 0.0) {
         return Err(format!(
             "Surface Tiles: the water's cell size {sim_cell_size} is not a length"
-        ));
-    }
-    if !(sim_pool_tiles.is_finite() && sim_pool_tiles.round() >= 1.0) {
-        return Err(format!(
-            "Surface Tiles: the water's pool of {sim_pool_tiles} tiles is not a pool"
-        ));
-    }
-    if !(pool_scale.is_finite() && pool_scale > 0.0) {
-        return Err(format!(
-            "Surface Tiles: a pool scale of {pool_scale} is not a positive number"
         ));
     }
     if !resolution_scale.is_finite() {
@@ -104,20 +90,23 @@ pub(crate) fn display_shape(
             "Surface Tiles: a resolution scale of {resolution_scale} is not a number"
         ));
     }
-    let scale = resolution_scale.round().clamp(1.0, MAX_RESOLUTION_SCALE) as u32;
-    let wanted =
-        (f64::from(sim_pool_tiles.round()) * f64::from(pool_scale) * f64::from(scale).powi(3))
-            .ceil()
-            .max(1.0);
-    if wanted > MAX_POOL_TILES {
-        return Err(format!(
-            "Surface Tiles: {wanted} display tiles are more than a pool counts ({MAX_POOL_TILES}). Lower Pool Scale or Resolution Scale."
-        ));
+    let scale = resolution_scale.round().clamp(1.0, MAX_RESOLUTION_SCALE);
+    Ok(sim_cell_size / scale)
+}
+
+/// The pool to grow to from a table of `pool` tiles that held `held` of them
+/// and found its free stack empty when `short`: `None` while it fits.
+/// Headroom over the held tiles in whole grains, never past a wire's count.
+pub(crate) fn grown_pool(pool: u32, held: u32, short: bool) -> Option<u32> {
+    let crowded = f64::from(held) > f64::from(pool) * GROW_AT;
+    if !short && !crowded {
+        return None;
     }
-    Ok(DisplayShape {
-        cell_size: sim_cell_size / scale as f32,
-        pool_tiles: wanted as u32,
-    })
+    let wanted = held
+        .max(if short { pool } else { 0 })
+        .saturating_mul(POOL_HEADROOM);
+    let wanted = wanted.div_ceil(POOL_GRAIN).saturating_mul(POOL_GRAIN);
+    Some(wanted.clamp(pool, MAX_POOL_TILES)).filter(|&grown| grown > pool)
 }
 
 /// What the node's buffers are sized by; any change builds them again.
@@ -270,6 +259,23 @@ impl Held {
         }
     }
 
+    /// The pool this table's last finished build asks for, `None` while it
+    /// fits: held tiles and the short bit, read from the shared counts.
+    fn grown(&self) -> Option<u32> {
+        let ring_max = REACH.ring_max;
+        let counts = self.tiles.counts();
+        let ptr = counts.mapped_ptr()?.cast::<u32>();
+        // SAFETY: the counts are a shared buffer of `count_words(ring_max)`
+        // u32 words; a word the GPU is writing reads as either value.
+        let (held, exhausted) = unsafe {
+            (
+                std::ptr::read_volatile(ptr.add(rank_count_word(ring_max + 1))),
+                std::ptr::read_volatile(ptr.add(exhausted_word(ring_max))),
+            )
+        };
+        grown_pool(self.layout.pool_tiles, held, exhausted & POOL_SHORT != 0)
+    }
+
     fn encode(&mut self, enc: &mut GpuEncoder, kernels: &Kernels, frame: &Frame<'_>) {
         let layout = self.layout;
         let pool = layout.pool_tiles;
@@ -383,13 +389,12 @@ impl Kernels {
 manifold_node_engine::primitive! {
     name: SurfaceTiles,
     type_id: "node.surface_tiles",
-    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed particles, foam and spray at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile the water touched stays held, in the same slot, for keep_seconds after the water leaves (a slot that changes tiles or was free forgets), so the wetness stored in it can dry; an epoch change, a new cell size, or display time running back past keep_seconds drops what was kept. The pool holds ceil(sim_pool_tiles x pool_scale x resolution_scale^3) tiles and only grows. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
+    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed particles, foam and spray at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile the water touched stays held, in the same slot, for keep_seconds after the water leaves (a slot that changes tiles or was free forgets), so the wetness stored in it can dry; an epoch change, a new cell size, or display time running back past keep_seconds drops what was kept. The pool starts at 1024 tiles and follows the water: once the held tiles fill two thirds of it, or a tile finds no free slot, it grows to twice the tiles held in grains of 256, read a frame or two late, and the table starts over at the new size. It only grows. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
     inputs: {
         particles: Array(FluidParticle) required,
         foam: Array(FluidParticle) optional,
         spray: Array(FluidParticle) optional,
         sim_cell_size: ScalarF32 optional,
-        sim_pool_tiles: ScalarF32 optional,
         time: ScalarF32 required,
         epoch: ScalarF32 optional,
     },
@@ -401,15 +406,12 @@ manifold_node_engine::primitive! {
     },
     params: [
         int_param!("resolution_scale", "Resolution Scale", 1.0, 1.0, 4.0),
-        // Times the simulation's pool, per axis-cubed of resolution scale.
-        float_param!("pool_scale", "Pool Scale", 2.0, 0.1, 64.0),
         // How long a tile the water touched stays held, so wetness can dry.
         float_param!("keep_seconds", "Keep Seconds", 1800.0, 0.0, 86400.0),
         float_param!("sim_cell_size", "Water Cell Size", 0.0625, 0.0001, 100.0),
-        float_param!("sim_pool_tiles", "Water Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire particles from the liquid frame's blended particles, foam and spray from the displayed whitewater, sim_cell_size and sim_pool_tiles from the water step, time from the domain's display_time and epoch from its epoch. Every display atom takes tiles, pool_tiles and cell_size from here; extent feeds the water object's field_extent. Keep it running while the water is shown: the tiles it keeps are the wetness's memory.",
+    composition_notes: "Wire particles from the liquid frame's blended particles, foam and spray from the displayed whitewater, sim_cell_size from the water step, time from the domain's display_time and epoch from its epoch. Every display atom takes tiles, pool_tiles and cell_size from here; extent feeds the water object's field_extent. Keep it running while the water is shown: the tiles it keeps are the wetness's memory.",
     examples: [],
     picker: { label: "Surface Tiles", category: Atom },
     summary: "Builds the tiles the drawn water lives in, following the displayed water and keeping wet ground for a while.",
@@ -479,13 +481,11 @@ impl Primitive for SurfaceTiles {
             ctx.error("Surface Tiles: keep seconds must be finite and at least 0");
             return;
         }
-        let shape = match display_shape(
+        let cell_size = match display_cell_size(
             ctx.scalar_or_param("sim_cell_size", 0.0625),
-            ctx.scalar_or_param("sim_pool_tiles", 1.0),
-            ctx.param_f32("pool_scale", 2.0),
             ctx.param_f32("resolution_scale", 1.0),
         ) {
-            Ok(shape) => shape,
+            Ok(cell_size) => cell_size,
             Err(error) => {
                 ctx.error(error);
                 return;
@@ -497,13 +497,15 @@ impl Primitive for SurfaceTiles {
         let slots = |buffer: Option<&GpuBuffer>| {
             u32::try_from(buffer.map_or(0, |buffer| buffer.size / PARTICLE)).unwrap_or(u32::MAX)
         };
-        // The pool only grows: a smaller ask keeps the table it has.
-        let kept_pool = self.held.as_ref().map_or(0, |held| held.layout.pool_tiles);
+        // The pool only grows, from what the last builds held.
+        let pool_tiles = self.held.as_ref().map_or(START_POOL_TILES, |held| {
+            held.grown().unwrap_or(held.layout.pool_tiles)
+        });
         let layout = Layout {
             particles: slots(Some(particles)),
             foam: slots(foam),
             spray: slots(spray),
-            pool_tiles: shape.pool_tiles.max(kept_pool),
+            pool_tiles,
         };
         let prepared = {
             let gpu = ctx.gpu_encoder();
@@ -522,7 +524,7 @@ impl Primitive for SurfaceTiles {
         ctx.outputs
             .set_scalar("pool_tiles", ParamValue::Float(layout.pool_tiles as f32));
         ctx.outputs
-            .set_scalar("cell_size", ParamValue::Float(shape.cell_size));
+            .set_scalar("cell_size", ParamValue::Float(cell_size));
         let frame = Frame {
             particles,
             foam,
@@ -530,7 +532,7 @@ impl Primitive for SurfaceTiles {
             time,
             epoch,
             keep_seconds,
-            cell_size: shape.cell_size,
+            cell_size,
         };
         let gpu = ctx.gpu_encoder();
         let (Some(held), Some(kernels)) = (self.held.as_mut(), self.kernels.as_ref()) else {
@@ -563,33 +565,35 @@ mod tests {
     }
 
     #[test]
-    fn the_display_pool_follows_both_scales() {
-        let shape = display_shape(0.25, 100.0, 2.0, 1.0).unwrap();
-        assert_eq!(shape.cell_size, 0.25);
-        assert_eq!(shape.pool_tiles, 200);
-        // Twice the resolution: half the cell, 8 times the tiles.
-        let fine = display_shape(0.25, 100.0, 2.0, 2.0).unwrap();
-        assert_eq!(fine.cell_size, 0.125);
-        assert_eq!(fine.pool_tiles, 1600);
-        // A fractional pool scale rounds the pool up.
-        assert_eq!(display_shape(0.25, 7.0, 1.3, 3.0).unwrap().pool_tiles, 246);
-        // The resolution scale clamps to what the node offers.
-        assert_eq!(
-            display_shape(0.25, 1.0, 1.0, 9.0).unwrap().cell_size,
-            0.0625
-        );
-        assert_eq!(display_shape(0.25, 1.0, 1.0, 0.2).unwrap().cell_size, 0.25);
+    fn the_display_cell_follows_the_resolution_scale() {
+        assert_eq!(display_cell_size(0.25, 1.0).unwrap(), 0.25);
+        assert_eq!(display_cell_size(0.25, 2.0).unwrap(), 0.125);
+        // The resolution scale rounds and clamps to what the node offers.
+        assert_eq!(display_cell_size(0.25, 2.6).unwrap(), 0.25 / 3.0);
+        assert_eq!(display_cell_size(0.25, 9.0).unwrap(), 0.0625);
+        assert_eq!(display_cell_size(0.25, 0.2).unwrap(), 0.25);
+        assert!(display_cell_size(0.0, 1.0).is_err());
+        assert!(display_cell_size(f32::NAN, 1.0).is_err());
+        assert!(display_cell_size(0.25, f32::NAN).is_err());
     }
 
     #[test]
-    fn a_bad_setup_is_an_error() {
-        assert!(display_shape(0.0, 10.0, 2.0, 1.0).is_err());
-        assert!(display_shape(f32::NAN, 10.0, 2.0, 1.0).is_err());
-        assert!(display_shape(0.25, 0.0, 2.0, 1.0).is_err());
-        assert!(display_shape(0.25, 10.0, 0.0, 1.0).is_err());
-        assert!(display_shape(0.25, 10.0, 2.0, f32::NAN).is_err());
-        // 4 x 64 = 256 times the pool of a 100000-tile simulation.
-        assert!(display_shape(0.25, 100_000.0, 64.0, 4.0).is_err());
+    fn the_pool_grows_ahead_of_the_held_tiles() {
+        // Two thirds full or less: it fits.
+        assert_eq!(grown_pool(1024, 0, false), None);
+        assert_eq!(grown_pool(1024, 682, false), None);
+        // Past two thirds: twice the held tiles in grains of 256.
+        assert_eq!(grown_pool(1024, 700, false), Some(1536));
+        assert_eq!(grown_pool(1536, 1100, false), Some(2304));
+        // Short of a slot: at least twice the whole pool.
+        assert_eq!(grown_pool(1024, 1024, true), Some(2048));
+        assert_eq!(grown_pool(1024, 10, true), Some(2048));
+        // Never past what a wire counts.
+        assert_eq!(
+            grown_pool(MAX_POOL_TILES - 1, MAX_POOL_TILES - 1, true),
+            Some(MAX_POOL_TILES)
+        );
+        assert_eq!(grown_pool(MAX_POOL_TILES, MAX_POOL_TILES, true), None);
     }
 
     #[test]

@@ -2087,12 +2087,6 @@
           },
           {
             "fromNode": 0,
-            "fromPort": "pool_tiles",
-            "toNode": 8,
-            "toPort": "sim_pool_tiles"
-          },
-          {
-            "fromNode": 0,
             "fromPort": "display_time",
             "toNode": 8,
             "toPort": "time"
