@@ -14,7 +14,7 @@
 @group(0) @binding(8) var<storage, read_write> mist_out: array<vec2<f32>>;
 
 // One sample per cell: the field is trilinear between nodes, so finer steps add
-// nothing a trapezoid misses on a smooth density.
+// nothing a midpoint sample misses on a smooth density.
 const MIST_STEP_CELLS: f32 = 1.0;
 // Safety cap so a broken field cannot hang the GPU.
 const MIST_MAX_STEPS: u32 = 512u;
@@ -69,20 +69,27 @@ fn cs_mist(@builtin(global_invocation_id) gid: vec3<u32>) {
     if t0 >= t1 { return; }
 
     let cell = u.cell.x;
-    let n = clamp(u32(ceil((t1 - t0) / (MIST_STEP_CELLS * cell))), 1u, MIST_MAX_STEPS);
-    let h = (t1 - t0) / f32(n);
+    let step = MIST_STEP_CELLS * cell;
     var sum_sigma = 0.0;
     var sum_moment = 0.0;
-    // Trapezoid over the n + 1 samples, the end samples at half weight.
-    for (var k = 0u; k <= n; k++) {
-        let w = select(1.0, 0.5, k == 0u || k == n);
-        let t = t0 + f32(k) * h;
-        let sigma = sample_mist(o + d * t);
-        sum_sigma += w * sigma;
-        sum_moment += w * sigma * t;
+    // Midpoint samples a cell apart. A tile the table does not hold has no
+    // mist (its canonical element is 0), so the ray steps past it at once.
+    var t = t0;
+    for (var k = 0u; k < MIST_MAX_STEPS && t < t1; k++) {
+        let q = field_node_coord(o + d * t, cell);
+        if !field_enter(q) {
+            t += tile_exit(q, d);
+            continue;
+        }
+        let len = min(step, t1 - t);
+        let mid = t + 0.5 * len;
+        let sigma = sample_mist(o + d * mid);
+        sum_sigma += len * sigma;
+        sum_moment += len * sigma * mid;
+        t += len;
     }
     // Local lengths are world lengths times `s`.
-    let tau = h / s * sum_sigma;
-    let moment = h / s * sum_moment / s;
+    let tau = sum_sigma / s;
+    let moment = sum_moment / s / s;
     mist_out[idx] += vec2<f32>(tau, moment);
 }
