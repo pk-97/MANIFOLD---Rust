@@ -1,34 +1,38 @@
 //! Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
 //! `node.particle_volume` — the liquid level set on the display's world
 //! tiles: one value per node, the distance to the nearest spherical kernel
-//! among the blobs sorted into the display cells around it. A per-element
-//! gather on the codegen path.
+//! among the blobs sorted into the display cells around it. One workgroup
+//! per tile slot walks the blobs round its tile once
+//! (`shaders/particle_volume.wgsl`).
 
 use std::borrow::Cow;
 
-use manifold_gpu::GpuBinding;
+use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::scene::world_tiles::READ_SIDE;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
 use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
 use manifold_water_liquid::tile_pool::tile_pool;
 use manifold_water_liquid::{PARTICLE_RADIUS_CELLS, float_param};
 
-/// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
+// The kernel after the world-tile read side.
+static BODY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{READ_SIDE}\n{}",
+        include_str!("shaders/particle_volume.wgsl")
+    )
+});
+
+/// Field order identical to the shader's `Params`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct VolumeUniforms {
+struct Uniforms {
     cell_size: f32,
-    particle_scale: f32,
-    sim_cell_size: f32,
-    particle_radius: f32,
-    pool_tiles: f32,
-    dispatch_count: u32,
-    _pad0: u32,
-    _pad1: u32,
+    blob_reach: f32,
+    pool_tiles: u32,
+    entries: u32,
 }
 
 /// Most cells of kernel support (1.5 radii) a node's search window may hold;
@@ -83,18 +87,17 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blobs from node.shape_particle_blobs and cell_ranges from the node.sort_particles_into_cells that sorted them over the display tiles (one range per pool element, or nothing runs, a named error), solid the display solid on the same tiles, tiles, pool_tiles and cell_size from node.surface_tiles. Wire particle_scale from the value the blobs read, so the reach follows Particle Scale live, and sim_cell_size from the solver's cell size; particle_radius is the largest particle radius in simulation cells (the default is every solver's). The reach is at most 16 display cells of support. Chain node.redistance_lattice and the field smoothing on the same tiles after it.",
+    composition_notes: "Wire blobs from node.shape_particle_blobs and cell_ranges from the node.sort_particles_into_cells that sorted them over the display tiles (one range per pool element, or nothing runs, a named error), solid the display solid on the same tiles, tiles, pool_tiles and cell_size from node.surface_tiles. Wire particle_scale from the value the blobs read, so the reach follows Particle Scale live, and sim_cell_size from the solver's cell size; particle_radius is the largest particle radius in simulation cells (the default is every solver's). The reach is at most 16 display cells of support. It reads the blobs round each tile, so it is a graph fusion boundary. Chain node.redistance_lattice and the field smoothing on the same tiles after it.",
     examples: [],
     picker: { label: "Particle Volume", category: Atom },
     summary: "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
     category: Particles3D,
     role: Filter,
     aliases: ["level set", "signed distance", "liquid field", "scalar field"],
-    fusion_kind: Pointwise,
-    wgsl_body: include_str!("shaders/particle_volume_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
-    output_capacity: manifold_node_engine::freeze::classify::FusedOutputCapacity::FromInput { input: "solid" },
-    wgsl_includes: [READ_SIDE],
+    boundary_reason: BarrieredReduction,
+    extra_fields: {
+        volume_pipeline: Option<GpuComputePipeline> = None,
+    },
 }
 
 impl Primitive for ParticleVolume {
@@ -130,8 +133,14 @@ impl Primitive for ParticleVolume {
             ctx.error(error);
             return;
         }
-        let gpu = ctx.gpu_encoder();
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
+        if self.volume_pipeline.is_none() {
+            let gpu = ctx.gpu_encoder();
+            self.volume_pipeline = Some(gpu.device.create_compute_pipeline(
+                BODY.as_str(),
+                "cs_main",
+                "node.particle_volume",
+            ));
+        }
         let (Some(blobs), Some(ranges), Some(solid), Some(tiles), Some(levelset)) = (
             ctx.inputs.array("blobs"),
             ctx.inputs.array("cell_ranges"),
@@ -151,19 +160,18 @@ impl Primitive for ParticleVolume {
             ));
             return;
         }
-        let uniforms = VolumeUniforms {
+        let uniforms = Uniforms {
             cell_size: pool.cell_size,
-            particle_scale,
-            sim_cell_size,
-            particle_radius,
-            pool_tiles: pool.pool_tiles as f32,
-            dispatch_count: count as u32,
-            _pad0: 0,
-            _pad1: 0,
+            blob_reach: reach,
+            pool_tiles: pool.pool_tiles,
+            entries: table_entries(pool.pool_tiles),
         };
         let gpu = ctx.gpu_encoder();
+        // One workgroup per slot, and one more for the canonical element.
         gpu.native_enc.dispatch_compute(
-            pipeline,
+            self.volume_pipeline
+                .as_ref()
+                .expect("particle volume pipeline prepared"),
             &[
                 GpuBinding::Bytes {
                     binding: 0,
@@ -195,9 +203,10 @@ impl Primitive for ParticleVolume {
                     offset: 0,
                 },
             ],
-            [(count as u32).div_ceil(256), 1, 1],
+            [pool.pool_tiles + 1, 1, 1],
             "node.particle_volume",
         );
+        gpu.native_enc.compute_memory_barrier_buffers();
     }
 }
 
@@ -206,18 +215,16 @@ mod cpu_tests {
     use super::*;
 
     #[test]
-    fn particle_volume_codegen_validates() {
-        let wgsl =
-            manifold_node_engine::freeze::codegen::standalone_for_spec::<super::ParticleVolume>()
-                .expect("particle_volume buffer codegen");
-        let module = naga::front::wgsl::parse_str(&wgsl)
-            .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&wgsl)));
+    fn composed_shader_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(&BODY)
+            .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&BODY)));
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
         .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(std::mem::size_of::<Uniforms>(), 16);
     }
 
     #[test]
