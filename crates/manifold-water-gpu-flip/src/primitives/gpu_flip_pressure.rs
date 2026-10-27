@@ -1103,7 +1103,7 @@ impl PressureSolver {
                 // r = f − L x0; on the engine's stop its |r0|∞ folds for a check
                 // that ends the solve at once when the guess already meets it.
                 let converged = stop.tolerance() >= 0.0;
-                plain.dispatch(
+                plain.dispatch_listed(
                     enc,
                     &pipes.warm,
                     &[
@@ -1448,6 +1448,12 @@ impl Sink for Round<'_, '_> {
     }
 }
 
+/// The most workgroups a listed pass launches: enough to fill the GPU, each
+/// running list workgroups in turn past them (gpu_flip_pressure.wgsl
+/// `listed`), so a recorded round costs what the active slots do, not the
+/// pool.
+const LISTED_GROUPS: u32 = 512;
+
 impl Gate<'_> {
     fn dispatch<S: Sink>(
         self,
@@ -1457,7 +1463,33 @@ impl Gate<'_> {
         triple: usize,
         label: &str,
     ) {
-        let groups = self.groups[triple];
+        self.launch(enc, pipeline, bindings, triple, self.groups[triple], label);
+    }
+
+    /// A pass over the active list of level `triple` (a `_main` that turns
+    /// over its list), launched with at most [`LISTED_GROUPS`].
+    fn dispatch_listed<S: Sink>(
+        self,
+        enc: &mut S,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        triple: usize,
+        label: &str,
+    ) {
+        let [groups, y, z] = self.groups[triple];
+        let launched = [groups.min(LISTED_GROUPS), y, z];
+        self.launch(enc, pipeline, bindings, triple, launched, label);
+    }
+
+    fn launch<S: Sink>(
+        self,
+        enc: &mut S,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        triple: usize,
+        groups: [u32; 3],
+        label: &str,
+    ) {
         let mut all: arrayvec::ArrayVec<GpuBinding, MAX_BINDINGS> = bindings
             .iter()
             .map(|b| match *b {
@@ -1521,7 +1553,7 @@ impl RoundPasses<'_> {
         let (pipes, b, g, top, grad) = (self.pipes, self.b, self.g, &self.top, self.grad);
         v_cycle(enc, pipes, b, self.water, self.fine, g, top);
         dot_finalize(enc, pipes, b, g, top, 0);
-        g.dispatch(
+        g.dispatch_listed(
             enc,
             &pipes.direction,
             &[
@@ -1540,7 +1572,7 @@ impl RoundPasses<'_> {
             ghost: top.ghost,
             ..grad
         };
-        g.dispatch(
+        g.dispatch_listed(
             enc,
             &pipes.residual,
             &[
@@ -1561,7 +1593,7 @@ impl RoundPasses<'_> {
     fn tail<S: Sink>(&self, enc: &mut S) {
         let (pipes, b, g, top, grad) = (self.pipes, self.b, self.g, &self.top, self.grad);
         if self.bodies {
-            g.dispatch(
+            g.dispatch_listed(
                 enc,
                 &pipes.dot_partial,
                 &[
@@ -1575,7 +1607,7 @@ impl RoundPasses<'_> {
             );
         }
         dot_finalize(enc, pipes, b, g, top, 1);
-        g.dispatch(
+        g.dispatch_listed(
             enc,
             &pipes.update,
             &[
@@ -1631,7 +1663,7 @@ fn v_cycle<'a, S: Sink>(
                 smooth(enc, pipes, &v, color, sweep, g);
             }
         }
-        g.dispatch(
+        g.dispatch_listed(
             enc,
             &pipes.residual,
             &[
@@ -1712,7 +1744,7 @@ fn restrict<S: Sink>(
             .coarse_side(coarse.tiles)
             .listed_on(coarse)
     };
-    g.dispatch(
+    g.dispatch_listed(
         enc,
         &pipes.restrict,
         &[
@@ -1748,7 +1780,7 @@ fn prolong<S: Sink>(
     let params = Params::at(fine.cell_size)
         .over(fine)
         .coarse_side(coarse.tiles);
-    g.dispatch(
+    g.dispatch_listed(
         enc,
         &pipes.prolong,
         &[
@@ -1909,7 +1941,7 @@ fn smooth<S: Sink>(
         ghost: v.ghost,
         ..Params::at(v.cell_size).over(v)
     };
-    g.dispatch(
+    g.dispatch_listed(
         enc,
         &pipes.smooth,
         &[
@@ -2016,10 +2048,7 @@ mod tests {
         let v_cycle = 4 * 11 + 1;
         assert_eq!(passes(512, Stop::Fixed(8)), (27, 4 + 8 * (v_cycle + 6)));
         assert_eq!(passes(512, Stop::Converged(8)).1, 5 + 8 * (v_cycle + 6));
-        assert_eq!(
-            passes(1, Stop::Fixed(3)),
-            (9, 4 + 3 * (11 + 1 + 6))
-        );
+        assert_eq!(passes(1, Stop::Fixed(3)), (9, 4 + 3 * (11 + 1 + 6)));
         assert_eq!(
             round_commands(4, BodyRound::Without),
             (v_cycle as u32 + 6, 0)

@@ -208,8 +208,12 @@ var<workgroup> sums: array<f32, 256>;
 var<workgroup> scan: array<u32, 256>;
 
 // Whether thread gid's workgroup is inside the listed level's active list.
-// A recorded dispatch runs every slot's two workgroups; the ones past the
-// list return before any barrier, whole.
+// A listed pass launches at most LISTED_GROUPS workgroups (gpu_flip_pressure.rs)
+// whatever the pool, and each runs the list's workgroups wg, wg + launched,
+// … in turn (the `_main` entries round each `_at`), so a recorded dispatch
+// covers any list without a workgroup per pool slot. A workgroup's threads
+// take the same turns, with a barrier between, so the staged passes'
+// workgroup memory and every barrier stay whole.
 fn listed(gid: u32) -> bool {
     return (gid >> 8u) < armed[3u * u.level];
 }
@@ -466,9 +470,8 @@ fn stencil(idx: u32, source: u32) -> Stencil {
 // bit 0) the other cell is written 0 and neighbours read 0. With REDUCE,
 // both products occupy their original 256-element reduction positions, so
 // the tree and partials stay bit-for-bit identical to one thread per cell.
-@compute @workgroup_size(128, 1, 1)
-fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    let pair = 2u * gid.x;
+fn smooth_at(gid: u32, li: u32) {
+    let pair = 2u * gid;
     if !listed(pair) {
         return;
     }
@@ -512,6 +515,15 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
     }
 }
 
+@compute @workgroup_size(128, 1, 1)
+fn smooth_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        smooth_at(128u * g + li, li);
+        workgroupBarrier();
+    }
+}
+
+
 // The coarsest level's whole approximate solve in one workgroup: red then
 // black from zero, `color` sweeps of each, then as many black then red, the
 // same updates smooth_main makes one sweep a dispatch. A color's cells read
@@ -553,12 +565,11 @@ fn coarsest_main(@builtin(local_invocation_index) li: u32) {
 // (0 with mode bit 0, which makes −L value), value in `aux`. With REDUCE
 // (the operator product s = −L p with no bodies) each thread also folds
 // value · result (p · s) into the workgroup's partial.
-@compute @workgroup_size(256, 1, 1)
-fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    if !listed(gid.x) {
+fn residual_at(gid: u32, li: u32) {
+    if !listed(gid) {
         return;
     }
-    let idx = listed_cell(gid.x);
+    let idx = listed_cell(gid);
     ts_home(idx);
     var result = 0.0;
     if is_water(idx) {
@@ -571,9 +582,18 @@ fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     out[idx] = result;
     let product = aux[idx] * result;
     if reduces() {
-        fold_sum(li, listed_partial(gid.x), product);
+        fold_sum(li, listed_partial(gid), product);
     }
 }
+
+@compute @workgroup_size(256, 1, 1)
+fn residual_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        residual_at(256u * g + li, li);
+        workgroupBarrier();
+    }
+}
+
 
 // The transfers are the trilinear prolongation and its transpose of McAdams,
 // Sifakis & Teran 2010 (the form `scripts/mgpcg_reference.py` mirrors); the
@@ -631,16 +651,15 @@ fn open_water(at: u32) -> bool {
 // on a coarse level restricts what the fine one would have started from; bit
 // 2 (RESTRICT_ADD) adds the sum to `out` instead of writing it and leaves
 // non-water cells alone. The unlisted return precedes the barriers, whole.
-@compute @workgroup_size(256, 1, 1)
-fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    if slot_inactive() || !listed(gid.x) {
+fn restrict_at(gid: u32, li: u32) {
+    if slot_inactive() || !listed(gid) {
         return;
     }
     let masked = (u.mode & 1u) != 0u;
     let adds = (u.mode & 4u) != 0u;
-    let slot = listed_slot(gid.x);
+    let slot = listed_slot(gid);
     let tile = coarse_slot_tile(slot);
-    let origin = tile * 8 + vec3<i32>(0, 0, 4 * i32((gid.x >> 8u) & 1u));
+    let origin = tile * 8 + vec3<i32>(0, 0, 4 * i32((gid >> 8u) & 1u));
     let base = 2 * origin - vec3<i32>(1);
     let first = base >> vec3<u32>(3u);
     if li < 48u {
@@ -680,14 +699,14 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         fine_patch[k] = v;
     }
     workgroupBarrier();
-    let idx = ts_list_cell(slot, gid.x);
+    let idx = ts_list_cell(slot, gid);
     if !(coarse_water[idx] > 0.5) {
         if !adds {
             out[idx] = 0.0;
         }
         return;
     }
-    let p = tile * 8 + ts_local_coord(gid.x & 511u);
+    let p = tile * 8 + ts_local_coord(gid & 511u);
     let at = 2 * (p - origin) + vec3<i32>(1);
     var sum = 0.0;
     for (var dz = -1; dz <= 2; dz = dz + 1) {
@@ -706,6 +725,15 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         out[idx] = sum / 8.0;
     }
 }
+
+@compute @workgroup_size(256, 1, 1)
+fn restrict_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        restrict_at(256u * g + li, li);
+        workgroupBarrier();
+    }
+}
+
 
 // One thread per cell of every slot of the dispatched level: `out` to 0 in
 // every held slot. The target of a prolongation chain, so a prolonged vector
@@ -726,17 +754,16 @@ fn zero_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // trilinearly. The coarse tiles come from the slot's parent and its
 // neighbour row; a slot with no parent gets no correction. The unlisted
 // return precedes the barriers, whole.
-@compute @workgroup_size(256, 1, 1)
-fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if slot_inactive() || !listed(gid.x) {
+fn prolong_at(gid: u32, li: u32) {
+    if slot_inactive() || !listed(gid) {
         return;
     }
-    let slot = listed_slot(gid.x);
+    let slot = listed_slot(gid);
     let tile = ts_slot_tile(slot);
-    let origin = tile * 8 + vec3<i32>(0, 0, 4 * i32((gid.x >> 8u) & 1u));
+    let origin = tile * 8 + vec3<i32>(0, 0, 4 * i32((gid >> 8u) & 1u));
     let base = (origin >> vec3<u32>(1u)) - vec3<i32>(1);
     let first = base >> vec3<u32>(3u);
-    let k = gid.x & 255u;
+    let k = gid & 255u;
     if k < 8u {
         let up = parents[slot];
         let d = first + ts_grid_coord(k, vec3<i32>(2)) - (tile >> vec3<u32>(1u));
@@ -760,11 +787,11 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         coarse_patch[k] = v;
     }
     workgroupBarrier();
-    let idx = ts_list_cell(slot, gid.x);
+    let idx = ts_list_cell(slot, gid);
     if !is_water(idx) {
         return;
     }
-    let f = tile * 8 + ts_local_coord(gid.x & 511u);
+    let f = tile * 8 + ts_local_coord(gid & 511u);
     let parent = f >> vec3<u32>(1u);
     let odd = (f & vec3<i32>(1)) == vec3<i32>(1);
     let other = select(parent - vec3<i32>(1), parent + vec3<i32>(1), odd);
@@ -777,6 +804,15 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     out[idx] = out[idx] + sum;
 }
+
+@compute @workgroup_size(256, 1, 1)
+fn prolong_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        prolong_at(256u * g + li, li);
+        workgroupBarrier();
+    }
+}
+
 
 // One thread per slot of the dispatched level (the fine side of a
 // coarsening): the slot of its tile's parent in the coarse level, WT_NONE
@@ -1143,13 +1179,12 @@ fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invoc
 // the check stopped (|f|∞ under START_FLOOR: no divergence, no pressure)
 // zeroes x instead. With REDUCE each thread folds |r| into its slot's
 // partial, for the warm start's check.
-@compute @workgroup_size(256, 1, 1)
-fn warm_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    if slot_inactive() || !listed(gid.x) {
+fn warm_at(gid: u32, li: u32) {
+    if slot_inactive() || !listed(gid) {
         return;
     }
     let no_divergence = progress[2] > 0.5;
-    let idx = listed_cell(gid.x);
+    let idx = listed_cell(gid);
     ts_home(idx);
     var r = 0.0;
     if is_water(idx) {
@@ -1164,22 +1199,39 @@ fn warm_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invoc
         }
     }
     if reduces() {
-        fold_max(li, listed_partial(gid.x), abs(r));
+        fold_max(li, listed_partial(gid), abs(r));
     }
 }
+
+@compute @workgroup_size(256, 1, 1)
+fn warm_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        warm_at(256u * g + li, li);
+        workgroupBarrier();
+    }
+}
+
 
 // One workgroup per 256 cells of the active slots: its partial sum of
 // src · aux, tree-reduced in a fixed order into its slot's partial. The
 // bodies path's p · s, whose s is finished by the body product after the
 // operator pass.
-@compute @workgroup_size(256, 1, 1)
-fn dot_partial_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    if !listed(gid.x) {
+fn dot_partial_at(gid: u32, li: u32) {
+    if !listed(gid) {
         return;
     }
-    let idx = listed_cell(gid.x);
-    fold_sum(li, listed_partial(gid.x), src[idx] * aux[idx]);
+    let idx = listed_cell(gid);
+    fold_sum(li, listed_partial(gid), src[idx] * aux[idx]);
 }
+
+@compute @workgroup_size(256, 1, 1)
+fn dot_partial_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        dot_partial_at(256u * g + li, li);
+        workgroupBarrier();
+    }
+}
+
 
 // The `color` partials in order into this round's scalar `slot` (0: rz,
 // 1: p·s); the round is the completed-round count in progress[1].
@@ -1201,12 +1253,11 @@ fn ratio(top: f32, bottom: f32) -> f32 {
 
 // p = z (`src`) + β p in `out`, β = rz_k / rz_(k−1); the first iteration
 // takes p = z and never reads p.
-@compute @workgroup_size(256, 1, 1)
-fn direction_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !listed(gid.x) {
+fn direction_at(gid: u32, li: u32) {
+    if !listed(gid) {
         return;
     }
-    let idx = listed_cell(gid.x);
+    let idx = listed_cell(gid);
     let k = u32(progress[1]);
     if k == 0u {
         out[idx] = src[idx];
@@ -1216,25 +1267,42 @@ fn direction_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out[idx] = src[idx] + beta * out[idx];
 }
 
+@compute @workgroup_size(256, 1, 1)
+fn direction_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        direction_at(256u * g + li, li);
+        workgroupBarrier();
+    }
+}
+
+
 // x −= α p into `out`, r −= α s into `out2`, α = rz_k / (p·s)_k; p in `src`,
 // s in `aux`. x starts where init left it: zero, or the warm start's guess.
 // With REDUCE each thread folds |r| of its cell into the workgroup's
 // partial, for the stop's |r|∞.
-@compute @workgroup_size(256, 1, 1)
-fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    if !listed(gid.x) {
+fn update_at(gid: u32, li: u32) {
+    if !listed(gid) {
         return;
     }
-    let idx = listed_cell(gid.x);
+    let idx = listed_cell(gid);
     let k = u32(progress[1]);
     let alpha = ratio(scalars[2u * k], scalars[2u * k + 1u]);
     out[idx] = out[idx] - alpha * src[idx];
     let r = out2[idx] - alpha * aux[idx];
     out2[idx] = r;
     if reduces() {
-        fold_max(li, listed_partial(gid.x), abs(r));
+        fold_max(li, listed_partial(gid), abs(r));
     }
 }
+
+@compute @workgroup_size(256, 1, 1)
+fn update_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        update_at(256u * g + li, li);
+        workgroupBarrier();
+    }
+}
+
 
 // The stop, ported from FLIP Fluids (pcgsolver.h solveWithAdditionalMatrix,
 // pressuresolver.cpp; MIT, see THIRD_PARTY_NOTICES.md): the residual's
