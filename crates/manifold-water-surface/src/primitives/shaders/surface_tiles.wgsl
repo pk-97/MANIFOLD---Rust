@@ -6,10 +6,12 @@
 // The build bins one buffer of liquid particle records: this frame's
 // particles, foam and spray (copied in, `head` records), then one keep record
 // per slot of the pool, then GPU FLIP Narrow Band's interior records. A keep
-// record is a point at the middle of a tile that water touched within
+// record is a point at the middle of a tile the liquid touched within
 // `keep_seconds`, so the next build still holds that tile and its slot
-// (wetness lives in slots, and a wet tile must keep its own). An interior
-// record holds the display tiles over grid water no particle marks.
+// (wetness lives in slots, and a wet tile must keep its own). Foam and spray
+// hold their tiles only while they are there: their fields are made fresh
+// each frame and leave nothing to keep. An interior record holds the display
+// tiles over grid water no particle marks.
 //
 // Passes, a barrier between each; `st_reset` runs only on a fresh start and
 // `st_interior` only with an interior:
@@ -18,8 +20,9 @@
 //   (the build)
 //   st_carry   a slot that holds another tile than last frame, or was free,
 //              forgets when water last touched it; the extent starts empty
-//   st_touch   every live point of this frame stamps the display time on the
-//              slot of its tile (all stamps equal, so order never matters)
+//   st_touch   every live liquid particle of this frame stamps the display
+//              time on the slot of its tile (all stamps equal, so order
+//              never matters)
 //   st_keep    every slot writes its keep record for the next build, and the
 //              held tiles widen the extent
 //   st_extent  the extent in metres
@@ -40,6 +43,11 @@ struct Params {
     sim_pool_tiles: u32,
     sim_cell: f32,
     interior_at: u32,
+    // The liquid particles' records, the first of the head.
+    liquid: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 struct Point {
@@ -122,7 +130,7 @@ fn st_carry(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn st_touch(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if i >= params.head {
+    if i >= params.liquid {
         return;
     }
     let p = points[i].position_radius;

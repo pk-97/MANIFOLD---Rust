@@ -96,14 +96,16 @@ impl Rig {
 
     /// One frame at display `time` and `epoch` over `points`.
     fn run(&mut self, points: &[[f32; 3]], time: f32, epoch: f32) -> Built {
-        self.run_with(points, time, epoch, H, None)
+        self.run_with(points, &[], time, epoch, H, None)
     }
 
-    /// [`Self::run`] for water of `sim_cell` metres at the display cell `H`,
-    /// with a grid `interior` (its pool values, then its table words).
+    /// [`Self::run`] with `spray`, for water of `sim_cell` metres at the
+    /// display cell `H`, with a grid `interior` (its pool values, then its
+    /// table words).
     fn run_with(
         &mut self,
         points: &[[f32; 3]],
+        spray: &[[f32; 3]],
         time: f32,
         epoch: f32,
         sim_cell: f32,
@@ -111,6 +113,8 @@ impl Rig {
     ) -> Built {
         let records: Vec<FluidParticle> = points.iter().map(|&p| particle(p)).collect();
         let (particles, _) = self.harness.array(&records, CAPACITY);
+        let spray: Vec<FluidParticle> = spray.iter().map(|&p| particle(p)).collect();
+        let (spray, _) = self.harness.array(&spray, CAPACITY);
         let interior = interior.map(|(values, words)| {
             (
                 self.harness.array(values, values.len()).0,
@@ -130,6 +134,7 @@ impl Rig {
         ]);
         let mut inputs = vec![
             ("particles", particles),
+            ("spray", spray),
             ("time", self.time),
             ("epoch", self.epoch),
         ];
@@ -236,7 +241,7 @@ fn the_grid_interior_holds_the_display_tiles_over_its_water() {
         .collect();
     let values = water.to_pool(&dense, 3.0 * sim_cell);
     let mut rig = Rig::new();
-    let built = rig.run_with(&[], 10.0, 0.0, sim_cell, Some((&values, &water.words)));
+    let built = rig.run_with(&[], &[], 10.0, 0.0, sim_cell, Some((&values, &water.words)));
     let middle = [-2.5, 1.5, 1.5].map(|c: f32| c * sim_cell);
     assert_eq!(built.tiles(), ring(&[tile_of(middle)]));
     // Water cell c spans (c ± 1/2)·h_water; every display cell centred in the
@@ -303,6 +308,19 @@ fn a_touched_tile_keeps_its_slot_for_the_keep_window_then_frees() {
             assert_eq!(gone.held[tile], *slot, "tile {tile:?}");
         }
     }
+}
+
+/// Spray holds its tiles while it is there and keeps none: only the liquid
+/// leaves wetness behind.
+#[test]
+fn spray_holds_its_tiles_only_while_it_is_there() {
+    let (water, spray) = ([0.1, 0.1, 0.1], [10.1, 0.1, 0.1]);
+    let mut rig = Rig::new();
+    let first = rig.run_with(&[water], &[spray], 10.0, 0.0, H, None);
+    assert_eq!(first.tiles(), ring(&[tile_of(water), tile_of(spray)]));
+    // Both gone: the frame at 20 builds from the keep records written at 10.
+    let later = rig.run(&[], 20.0, 0.0);
+    assert_eq!(later.tiles(), ring(&[tile_of(water)]));
 }
 
 #[test]

@@ -1,8 +1,9 @@
 //! `node.surface_tiles` — the display's world tiles. Every drawn water field
 //! (level set, velocity, foam, mist, wetness, solid) lives on the table this
 //! node builds each frame from the displayed particles, foam and spray, at the
-//! display cell size. A tile water touched stays held, in its slot, for
-//! `keep_seconds` after the water leaves, so the wetness stored in it can dry.
+//! display cell size. A tile the liquid touched stays held, in its slot, for
+//! `keep_seconds` after the water leaves, so the wetness stored in it can dry;
+//! foam and spray hold their tiles only while they are there.
 //! The pool follows the water: it starts at [`START_POOL_TILES`] and grows
 //! ahead of the tiles the table holds, read a frame or two late. With GPU
 //! FLIP Narrow Band on, the deep water has no particles: the step's grid
@@ -62,7 +63,7 @@ pub(crate) const MAX_RESOLUTION_SCALE: f32 = 4.0;
 /// The first pool, in tiles; it grows by [`grown_pool`].
 pub(crate) const START_POOL_TILES: u32 = 1024;
 
-/// Field order identical to the shader's `Params`; three 16-byte rows.
+/// Field order identical to the shader's `Params`; four 16-byte rows.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct TileUniforms {
@@ -76,6 +77,10 @@ struct TileUniforms {
     sim_pool_tiles: u32,
     sim_cell: f32,
     interior_at: u32,
+    liquid: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 /// The display cell size for a simulation of `sim_cell_size` metres:
@@ -277,6 +282,10 @@ impl Held {
             sim_pool_tiles: layout.interior / 8,
             sim_cell: frame.sim_cell,
             interior_at: head + pool,
+            liquid: layout.particles,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let bindings = [
             GpuBinding::Bytes {
@@ -337,11 +346,11 @@ impl Held {
             },
         );
         pass(enc, &kernels.carry, per_slot, "node.surface_tiles.carry");
-        if head > 0 {
+        if layout.particles > 0 {
             pass(
                 enc,
                 &kernels.touch,
-                [head.div_ceil(THREADS), 1, 1],
+                [layout.particles.div_ceil(THREADS), 1, 1],
                 "node.surface_tiles.touch",
             );
         }
@@ -392,7 +401,7 @@ impl Kernels {
 manifold_node_engine::primitive! {
     name: SurfaceTiles,
     type_id: "node.surface_tiles",
-    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed particles, foam and spray at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile the water touched stays held, in the same slot, for keep_seconds after the water leaves (a slot that changes tiles or was free forgets), so the wetness stored in it can dry; an epoch change, a new cell size, or display time running back past keep_seconds drops what was kept. The pool starts at 1024 tiles and follows the water: once the held tiles fill two thirds of it, or a tile finds no free slot, it grows to twice the tiles held in grains of 256, read a frame or two late, and the table starts over at the new size. It only grows. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
+    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed particles, foam and spray at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile the liquid particles touched stays held, in the same slot, for keep_seconds after the water leaves (a slot that changes tiles or was free forgets), so the wetness stored in it can dry; foam and spray hold their tiles only while they are there; an epoch change, a new cell size, or display time running back past keep_seconds drops what was kept. The pool starts at 1024 tiles and follows the water: once the held tiles fill two thirds of it, or a tile finds no free slot, it grows to twice the tiles held in grains of 256, read a frame or two late, and the table starts over at the new size. It only grows. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
     inputs: {
         particles: Array(FluidParticle) required,
         foam: Array(FluidParticle) optional,
@@ -411,7 +420,7 @@ manifold_node_engine::primitive! {
     },
     params: [
         int_param!("resolution_scale", "Resolution Scale", 1.0, 1.0, 4.0),
-        // How long a tile the water touched stays held, so wetness can dry.
+        // How long a tile the liquid touched stays held, so wetness can dry.
         float_param!("keep_seconds", "Keep Seconds", 1800.0, 0.0, 86400.0),
         float_param!("sim_cell_size", "Water Cell Size", 0.0625, 0.0001, 100.0),
     ],
@@ -581,7 +590,7 @@ mod tests {
                 "missing {entry}"
             );
         }
-        assert_eq!(std::mem::size_of::<TileUniforms>(), 48);
+        assert_eq!(std::mem::size_of::<TileUniforms>(), 64);
     }
 
     #[test]
