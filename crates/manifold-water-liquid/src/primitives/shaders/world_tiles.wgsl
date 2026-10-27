@@ -17,7 +17,7 @@
 //
 // Determinism: ordered linear probing makes the table's layout a function of
 // its key set alone, whatever order threads insert in; slots are freed in
-// slot order and handed out in table order (ring <= 1 first) by a prefix
+// slot order and handed out in table order (the cell set C first) by a prefix
 // scan, so slot numbers are the same on every run. The lists are filled by
 // atomic append and their order is free: readers index partials by slot.
 //
@@ -83,7 +83,8 @@ struct WtParams {
 // The dilation's indirect triple, raised by wt_seeds.
 @group(0) @binding(10) var<storage, read_write> wt_build_args: array<atomic<u32>>;
 // Level 0 of the prefix scan: freed flags per slot [0, P), then the wants of
-// ring <= 1 per entry [P, P + H), then of rings 2..=alloc_ring [P + H, P + 2H).
+// the cell set C (rank 0) per entry [P, P + H), then of the rest up to
+// alloc_ring [P + H, P + 2H).
 @group(0) @binding(11) var<storage, read_write> wt_scan: array<u32>;
 // A GPU FLIP clock plan (gpu_flip_clock.wgsl Plan; word 0 step_dt, word 11
 // live_mode). Zeros run.
@@ -508,9 +509,11 @@ fn wt_carry(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicStore(&wt_table[row + 3u], WT_NONE);
 }
 
-// What entry e asks of the pool: 0 a slot among ring <= 1, 1 a slot among
-// rings 2..=alloc_ring, 2 nothing (empty, already holding a slot, or past
-// alloc_ring).
+// What entry e asks of the pool: 0 a slot for a tile of the cell set C
+// (rank 0: a point's tile or one its stencil reaches), 1 a slot for the rest
+// up to alloc_ring, 2 nothing (empty, already holding a slot, or past
+// alloc_ring). A short pool so fills C first, and no empty band tile takes
+// the slot a tile holding points needs.
 fn wt_want(e: u32) -> u32 {
     if atomicLoad(&wt_table[e]) == WT_EMPTY || atomicLoad(&wt_table[wt.entries + e]) != WT_NONE {
         return 2u;
@@ -519,7 +522,7 @@ fn wt_want(e: u32) -> u32 {
     if ring > wt.alloc_ring {
         return 2u;
     }
-    return select(1u, 0u, ring <= 1u);
+    return select(1u, 0u, wt_entry_rank(e) == 0u);
 }
 
 // H threads: each entry's wants into the scan's two want sections.
@@ -567,7 +570,7 @@ fn wt_free(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // H threads, after wt_free: every entry wanting a slot pops one, in table
-// order with ring <= 1 first (its place among the wants from the scan). An
+// order with the cell set C first (its place among the wants from the scan). An
 // entry finding the stack empty stays absent and sets the pool-short bit. A
 // popped slot takes the entry's tile and becomes fresh.
 @compute @workgroup_size(256)

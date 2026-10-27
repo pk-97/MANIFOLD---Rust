@@ -71,7 +71,10 @@ impl Built {
 }
 
 fn chebyshev(d: [i32; 3]) -> u32 {
-    d.iter().map(|c| c.unsigned_abs()).max().expect("three axes")
+    d.iter()
+        .map(|c| c.unsigned_abs())
+        .max()
+        .expect("three axes")
 }
 
 fn add(a: [i32; 3], b: [i32; 3]) -> [i32; 3] {
@@ -201,7 +204,7 @@ impl Mirror {
             keys[e] != EMPTY
                 && entry_slot[e] == NONE
                 && ring[e] <= self.reach.alloc_ring
-                && u32::from(ring[e] > 1) == class
+                && u32::from(self.rank_of(ring[e], near[e]) != 0) == class
         };
         let wants: Vec<usize> = (0..h)
             .filter(|&e| wants_class(e, 0))

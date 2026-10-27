@@ -8,7 +8,7 @@
 //! [`WorldTiles::encode_allocation`]): each particle's tile and every tile
 //! within `ring_max` of one join the table, held slots whose tile stays
 //! within `alloc_ring` keep their slot, and the rest of the wanted tiles get
-//! slots from the free stack, ring <= 1 first. Or from the level below
+//! slots from the free stack, the cell set C (rank 0) first. Or from the level below
 //! ([`WorldTiles::new_parents`], [`WorldTiles::encode_parents`]): a coarse
 //! level's tiles are the parents of the level below's held tiles, handed
 //! out in table order from scratch every build, with a row of 8 children per

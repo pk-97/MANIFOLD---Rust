@@ -319,11 +319,33 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
     }
 }
 
-/// A pool of 64 slots for a lone water tile's 125: ring <= 1 is handed out
-/// before ring 2 and the pool-short bit is set, as the mirror says, and again
-/// when the water moves one tile over.
+/// The tiles within `reach` cells of a cell of `cells`: the cell set C.
+fn cell_set(cells: &[[i32; 3]], reach: i32) -> BTreeSet<[i32; 3]> {
+    let mut set = BTreeSet::new();
+    for &c in cells {
+        let (lo, hi) = (
+            tile_of_cell(c.map(|v| v - reach)),
+            tile_of_cell(c.map(|v| v + reach)),
+        );
+        for z in lo[2]..=hi[2] {
+            for y in lo[1]..=hi[1] {
+                for x in lo[0]..=hi[0] {
+                    set.insert([x, y, z]);
+                }
+            }
+        }
+    }
+    set
+}
+
+/// A pool of 64 slots for a lone water tile's 125: the cell set C (every tile
+/// within cell_reach of a point, 8 here, as the water sits in a corner of its
+/// tile) is handed out before the rest of rings 1 and 2, and the pool-short
+/// bit is set, as the mirror says, and again when the water moves one tile
+/// over. A short pool so never spends the slot a tile holding points needs
+/// on an empty band tile.
 #[test]
-fn a_short_pool_hands_out_ring_one_first() {
+fn a_short_pool_hands_out_the_cell_set_first() {
     let device = test_device();
     let reach = Reach {
         ring_max: 2,
@@ -334,10 +356,7 @@ fn a_short_pool_hands_out_ring_one_first() {
     tiles.prepare(&device);
     let mut mirror = Mirror::new(64, reach, false);
     let run = plan(&device, true);
-    for (step, (water, min)) in [([-1, 0, 2], [-7, 1, 17]), ([0, 0, 2], [1, 1, 17])]
-        .into_iter()
-        .enumerate()
-    {
+    for (step, min) in [[-7, 1, 17], [1, 1, 17]].into_iter().enumerate() {
         let cells = cells_of(min, [3, 3, 3]);
         build(&device, &tiles, &cells, &run, 0);
         let want = mirror.build(&cells);
@@ -347,22 +366,18 @@ fn a_short_pool_hands_out_ring_one_first() {
             "step {step}: pool short, table whole"
         );
         check(&tiles, &want, 0, &format!("step {step}"));
-        let ring_one_held = block_tiles(water).iter().all(|&t| want.slot_of(t) != NONE);
-        let ring_two_fresh = want.fresh.iter().any(|&s| {
-            let t = want.slot_tile[s as usize].expect("a fresh slot is held");
-            (0..3).any(|a| t[a].abs_diff(water[a]) > 1)
-        });
-        if ring_two_fresh {
-            assert!(
-                ring_one_held,
-                "step {step}: ring 2 got a slot before ring 1"
-            );
-        }
+        let set = cell_set(&cells, reach.cell_reach as i32);
+        assert_eq!(set.len(), 8, "step {step}: the water's cell set");
+        assert!(
+            set.iter().all(|&t| want.slot_of(t) != NONE),
+            "step {step}: a tile of the cell set has no slot"
+        );
         if step == 0 {
-            assert!(
-                ring_one_held && ring_two_fresh,
-                "step 0 fills ring 1 then part of ring 2"
-            );
+            let beyond = want.fresh.iter().any(|&s| {
+                let t = want.slot_tile[s as usize].expect("a fresh slot is held");
+                !set.contains(&t)
+            });
+            assert!(beyond, "step 0 fills the cell set, then part of the rest");
         }
     }
 }
