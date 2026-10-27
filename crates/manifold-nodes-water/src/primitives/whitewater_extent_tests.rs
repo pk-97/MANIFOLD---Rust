@@ -1,55 +1,11 @@
 //! The whitewater atoms on world tiles as the planner sees them: where the
-//! emitter chain fuses over a pool of tiles, and what the CPU lifecycle's
-//! snapshot holds at 64. No GPU.
+//! emitter chain fuses over a pool of tiles. No GPU.
 
 use serde_json::{Value, json};
 
-use manifold_core::fluid_domain::domain_layout;
-use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::ports::ArrayType;
-use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_water_liquid::whitewater::{face_offset, grid_box, grid_cells};
-
-/// The solid lattice both hosts publish at 64: the matter layout's.
-fn lattice_at_64() -> LiquidLattice {
-    LiquidLattice::from_layout(&domain_layout(None, 4.0, 0.0625).expect("layout"))
-}
-
-/// One snapshot slot at 64 holds the spawns at FLIP's default capacity, the
-/// emitted count, the seam's three face arrays, the distance and the solid:
-/// 9.2 MB (D6), and the lifecycle's outputs plan at that capacity.
-#[test]
-fn whitewater_snapshot_holds_one_frame_at_64() {
-    use manifold_water_whitewater::whitewater_handoff::SnapshotShape;
-    let lattice = lattice_at_64();
-    let (origin, cell_size) = grid_box(lattice.bounds(), lattice.nodes()).expect("grid box");
-    let shape = SnapshotShape {
-        grid: manifold_fluids::WhitewaterGrid {
-            cells: grid_cells(lattice.nodes()).expect("cells"),
-            cell_size,
-            origin,
-        },
-        face_cells: [64; 3],
-        face_offset: face_offset(lattice.nodes(), [64; 3]).expect("offset"),
-        capacity: manifold_water_whitewater::primitives::whitewater_lifecycle::DEFAULT_CAPACITY,
-    };
-    assert_eq!([0, 1, 2].map(|a| shape.face_bytes(a)), [266_240 * 4; 3]);
-    assert_eq!(shape.level_bytes(), 343_000 * 4);
-    assert_eq!(shape.solid_bytes(), 357_911 * 4);
-    assert_eq!(shape.spawn_bytes(), 3_200_000);
-    assert_eq!(shape.slot_bytes(), 9_198_528);
-    let capacity =
-        manifold_water_whitewater::primitives::whitewater_lifecycle::WhitewaterLifecycle::new()
-            .array_output_capacity("foam_particles", &ParamValues::default(), &[])
-            .expect("planned");
-    assert_eq!(
-        capacity, 100_000,
-        "copies downstream hold FLIP's whole budget"
-    );
-}
 
 /// Particle slots of the chain: more than any res-64 solver holds (8 per
 /// cell over the whole 64³ tank).

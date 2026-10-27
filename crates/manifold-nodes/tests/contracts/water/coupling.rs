@@ -223,7 +223,7 @@ mod tests {
         let level_set = builder.node("level_set", "node.carry_liquid_into_solids");
         let water = builder.node("water", "node.scene_object");
         builder.wire(domain, "ticks", state, "ticks");
-        builder.wire(state, "out", level_set, "nodes_x");
+        builder.wire(state, "out", level_set, "levelset");
         builder.wire(level_set, "out", water, "field");
         builder.wire(water, "object", scene, "object_1");
         assert_eq!(

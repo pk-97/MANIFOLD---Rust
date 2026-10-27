@@ -603,9 +603,6 @@ const NON_STANDALONE: &[&str] = &[
     // restart over one hand shader beside its fused atoms, its HandParams and
     // RestartParams reflected in uniform_layout_extended.
     "node.whitewater_step",
-    // The whitewater lifecycle runs FLIP's C++ on the CPU and writes its
-    // outputs from there: no GPU kernel of its own, only buffer copies.
-    "node.whitewater_lifecycle",
     // The field build's surface weights (counts, then weights and velocity)
     // and its carry into drawn solids: WeightUniforms and CarryUniforms are
     // reflected in uniform_layout_extended.

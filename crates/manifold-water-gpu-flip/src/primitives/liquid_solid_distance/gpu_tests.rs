@@ -7,7 +7,7 @@ use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::scene::world_tiles::{TILE_CELLS, pool_len};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, pack_distance_atlas};
-use manifold_water_liquid::lattice::bounds_distance;
+use manifold_water_liquid::bounds::bounds_distance;
 use manifold_water_liquid::testkit::world_box::table_words_of;
 
 use super::LiquidSolidDistance;

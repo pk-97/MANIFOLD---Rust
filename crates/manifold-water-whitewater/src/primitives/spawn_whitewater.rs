@@ -10,7 +10,6 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 
-use super::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -18,11 +17,12 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
+
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::LIQUID_FACES;
 use manifold_water_liquid::tile_pool::tile_pool;
-use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
+use manifold_water_liquid::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY, WHITEWATER_COMMON};
 
 /// FLIP's lifetime rule (`_minDiffuseParticleLifetime`,
 /// `_maxDiffuseParticleLifetime`, `_lifetimeVariance`), seconds.
@@ -88,7 +88,7 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16777216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "offsets from node.running_total over node.emission_count's counts, emitters the same count the running total ran over (the particle frame's count). particles from node.sample_faces_at_particles and energy from node.energy_potential, so each emitter is read as it was scored. faces, solid, tiles, pool_tiles and cell_size as the rest of the whitewater chain reads them (the liquid step's pooled faces and node arrays, and the domain's cell size); seed and epoch as node.jitter_particles takes them. Capacity is the lifecycle's. Feed node.whitewater_type, then node.whitewater_lifecycle's spawns.",
+    composition_notes: "offsets from node.running_total over node.emission_count's counts, emitters the same count the running total ran over (the particle frame's count). particles from node.sample_faces_at_particles and energy from node.energy_potential, so each emitter is read as it was scored. faces, solid, tiles, pool_tiles and cell_size as the rest of the whitewater chain reads them (the liquid step's pooled faces and node arrays, and the domain's cell size); seed and epoch as node.jitter_particles takes them. Capacity is FLIP's whole budget. Feed node.whitewater_type, then node.whitewater_step's spawns.",
     examples: [],
     summary: "Places the new foam, spray and bubble particles around the breaking water that throws them off.",
     category: Particles3D,

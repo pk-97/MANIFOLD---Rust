@@ -58,7 +58,7 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16777216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "After node.spawn_whitewater, before node.whitewater_lifecycle's spawns. distance from node.crossing_distance and cells from node.liquid_cells, on the world tiles node.spawn_whitewater reads (tiles, pool_tiles and cell_size the same). The lifecycle retypes every particle by the same rule each tick, so FLIP's foam depth is fixed here, not a param.",
+    composition_notes: "After node.spawn_whitewater, before node.whitewater_step. distance from node.crossing_distance and cells from node.liquid_cells, on the world tiles node.spawn_whitewater reads (tiles, pool_tiles and cell_size the same). The step retypes every particle by the same rule each tick, so FLIP's foam depth is fixed here, not a param.",
     examples: [],
     summary: "Decides whether each new whitewater particle is spray, foam or a bubble, from where it sits against the water surface.",
     category: Particles3D,

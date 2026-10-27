@@ -1,7 +1,7 @@
 // Ported from FLIP Fluids fluidsimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 // node.liquid_fill — BUFFER source body. One thread per particle slot
 // (FluidParticle → Element3). Particles sit on the half-cell site lattice,
-// site j at (1/4 + j/2) cells along each axis (2·nodes sites per axis), the
+// site j at (1/4 + j/2) cells along each axis (2·fill_cells sites per axis), the
 // FLIP Fluids engine's seeding lattice. The domain puts the box on whole world
 // cells (cell p centred on p·h), so site j is world half cell 2p + 1 + j, at
 // a fixed world position whatever the box's corner. Sites are enumerated in
@@ -10,10 +10,8 @@
 // jittered by up to jitter / 4 cells each way by a hash of (seed, slot) and
 // starts at rest; the radius is that of a sphere of an eighth of a cell;
 // id = slot + 1. Slots past the fill, up to particle_capacity, start dead
-// (all zero) for sources to emit into. The lattice
-// params are the padded lattice (liquid::lattice, 3 nodes of padding a side):
-// the authored box starts 3 cells in and has nodes − 7 cells per axis. A
-// site the engine's solid holds when the epoch starts keeps its slot and id
+// (all zero) for sources to emit into. The box starts at fill_min (metres)
+// and has fill_cells cells per axis. A site the engine's solid holds when the epoch starts keeps its slot and id
 // with radius 0, dead: the engine seeds a site only where the solid distance
 // is positive (_addNewFluidCellsAABB). That distance is the Bounds box's Wall
 // faces (bounds_lo..bounds_hi in metres as placed, closed_faces the Wall bits
@@ -41,7 +39,7 @@ fn liquid_atlas_half(index: u32) -> f32 {
 
 // The Wall faces' distance at node `y`: the least of x − lo (low face) and
 // hi − x (high face) over the Wall faces, 1e30 with none, and past a Wall
-// minus the length of the per-axis overshoots (lattice::bounds_distance).
+// minus the length of the per-axis overshoots (bounds::bounds_distance).
 fn liquid_fill_wall_node(y: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>, faces: u32) -> f32 {
     var nearest = 1.0e30;
     var overshoot = vec3<f32>(0.0);
@@ -96,13 +94,13 @@ fn liquid_fill_in_native_solid(x: vec3<f32>, box_lo: vec3<f32>, h: f32, lo: vec3
 fn body(
     idx: u32,
     count: u32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    fill_min_x: f32,
+    fill_min_y: f32,
+    fill_min_z: f32,
     cell_size: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
+    fill_cells_x: i32,
+    fill_cells_y: i32,
+    fill_cells_z: i32,
     pool_sites: i32,
     box_x0: i32,
     box_x1: i32,
@@ -124,7 +122,7 @@ fn body(
     bounds_hi_z: f32,
 ) -> Element3 {
     var out = Element3(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
-    let n = 2u * vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z) - vec3<f32>(7.0), vec3<f32>(0.0)));
+    let n = 2u * vec3<u32>(max(vec3<i32>(fill_cells_x, fill_cells_y, fill_cells_z), vec3<i32>(0)));
     let pool = min(u32(max(pool_sites, 0)), n.y);
     let x0 = min(u32(max(box_x0, 0)), n.x);
     let x1 = min(u32(max(box_x1, 0)), n.x);
@@ -149,7 +147,7 @@ fn body(
     let key = idx * 3u + u32(seed) * 2654435761u;
     let unit = vec3<f32>(liquid_fill_unit(key), liquid_fill_unit(key + 1u), liquid_fill_unit(key + 2u));
     let local = vec3<f32>(0.25) + 0.5 * vec3<f32>(s) + 0.5 * jitter * (unit - vec3<f32>(0.5));
-    let lo = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z) + vec3<f32>(3.0 * cell_size);
+    let lo = vec3<f32>(fill_min_x, fill_min_y, fill_min_z);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell.
     let x = lo + local * cell_size;
     let solid = liquid_fill_in_native_solid(

@@ -54,14 +54,22 @@ pub(crate) fn pool_capacity(wanted: u64, tile_bytes: u64, budget: u64) -> u32 {
     wanted.min(budget / tile_bytes) as u32
 }
 
+/// Cells past the Bounds box water reaches along an axis, both sides
+/// together: the walls' 1.5-cell solid band on each side. The pool and the
+/// force lattices are sized over the box and this band.
+pub const BOX_BAND_CELLS: u32 = 3;
+
 manifold_core::testkit_visible! {
-/// Tiles the pool holds for a box of `cells` (`P`): every tile the box can
-/// touch, wherever it sits on the world lattice, and the table's rings round
-/// them, so water anywhere in the box never runs the pool short; or what
-/// the budget buys.
+/// Tiles the pool holds for a Bounds box of `cells` (`P`): every tile the
+/// box and its walls' band can touch, wherever it sits on the world
+/// lattice, and the table's rings round them, so water anywhere in the box
+/// never runs the pool short; or what the budget buys.
 pub(crate) fn pool_tiles(cells: [u32; 3]) -> u32 {
     let ring = u64::from(step_reach().ring_max);
-    let wanted = cells.iter().map(|&n| run_tiles(n) + 2 * ring).product();
+    let wanted = cells
+        .iter()
+        .map(|&n| run_tiles(n + BOX_BAND_CELLS) + 2 * ring)
+        .product();
     pool_capacity(
         wanted,
         u64::from(TILE_CELLS) * pooled_bytes_per_cell(),
@@ -70,15 +78,16 @@ pub(crate) fn pool_tiles(cells: [u32; 3]) -> u32 {
 }
 }
 
-/// Bytes of the world tiles at `cells`: the table, its lists, counts,
-/// triples and build scratch for the pool [`pool_tiles`] sizes.
+/// Bytes of the world tiles of a pool of `pool_tiles`: the table, its
+/// lists, counts, triples and build scratch.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-pub(crate) fn tile_scratch_bytes(cells: [u32; 3]) -> u64 {
-    held_bytes(pool_tiles(cells), step_reach().ring_max)
+pub(crate) fn tile_scratch_bytes(pool_tiles: u32) -> u64 {
+    held_bytes(pool_tiles, step_reach().ring_max)
 }
 
 /// Test-only lever. With it set, the table is built from one point in every
-/// tile of the lattice instead of the particles, so every such tile is in C and
+/// tile the Bounds box and its walls' band touch instead of the particles,
+/// so every such tile is in C and
 /// the passes run dense through the same kernels and lists: the proofs'
 /// oracle for the sparse lists.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -101,8 +110,8 @@ pub(crate) fn all_tiles() -> bool {
     }
 }
 
-/// One liquid record at the centre of a lattice cell in every world tile the
-/// lattice of `cells` from world cell `lo` touches, and their record
+/// One liquid record at the centre of a cell in every world tile the box of
+/// `cells` from world cell `lo` touches, and their record
 /// `[groups, 1, 1, count]`: the [`set_all_tiles`] table's points.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub(super) fn box_points(
@@ -150,22 +159,16 @@ pub(super) fn box_points(
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl StepState {
-    /// Under [`set_all_tiles`], the box's points for the table `params`
-    /// places; none otherwise.
+    /// Under [`set_all_tiles`], the points of the Bounds box `params` holds,
+    /// widened by its walls' band; none otherwise.
     pub(super) fn reserve_box_points(
         &mut self,
         device: &GpuDevice,
         params: &StepParams,
-        min: [f32; 3],
-        cells: [u32; 3],
     ) -> Result<(), String> {
         self.box_points = if all_tiles() {
-            Some(box_points(
-                device,
-                box_cell_origin(params, min),
-                cells,
-                params.cell_size,
-            )?)
+            let (lo, cells) = band_box(params);
+            Some(box_points(device, lo, cells, params.cell_size)?)
         } else {
             None
         };
@@ -173,10 +176,17 @@ impl StepState {
     }
 }
 
-/// The first world cell of the lattice whose first node is at `min` metres.
+/// The world cells of the Bounds box and its walls' band: the first cell
+/// and the count per axis.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-fn box_cell_origin(params: &StepParams, min: [f32; 3]) -> [i32; 3] {
-    std::array::from_fn(|a| ((min[a] - params.origin[a]) * params.inv_cell).round() as i32)
+fn band_box(params: &StepParams) -> ([i32; 3], [u32; 3]) {
+    let cell = |x: f32| x * params.inv_cell;
+    let band = BOX_BAND_CELLS.div_ceil(2) as i32;
+    let lo: [i32; 3] = std::array::from_fn(|a| cell(params.bounds_lo[a]).floor() as i32 - band);
+    let cells = std::array::from_fn(|a| {
+        (cell(params.bounds_hi[a]).ceil() as i32 + band - lo[a]).max(1) as u32
+    });
+    (lo, cells)
 }
 
 /// `bound` plus the table and the arrays the retire and the poison write:

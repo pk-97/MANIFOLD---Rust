@@ -234,11 +234,12 @@ fn a_resize_within_the_pool_keeps_the_table() {
     let (table, words) = (rest.h.buffer(rest.tiles), rest.left().tiles);
     let grow = |rest: &mut RestingPool, name: &'static str, by: f32| {
         let Some(ParamValue::Float(n)) = rest.params.get(name).cloned() else {
-            panic!("{name} is a lattice param");
+            panic!("{name} is a step param");
         };
         rest.params.insert(name.into(), ParamValue::Float(n + by));
     };
-    grow(&mut rest, "nodes_z", 1.0);
+    // The Bounds box grows a cell: the domain keeps its pool.
+    grow(&mut rest, "bounds_hi_z", H);
     rest.tick(1);
     let left = rest.left();
     assert!(
@@ -246,7 +247,7 @@ fn a_resize_within_the_pool_keeps_the_table() {
         "a resize within the pool keeps the table"
     );
     assert_eq!(left.tiles, words, "the water's tiles keep their slots");
-    grow(&mut rest, "nodes_x", 2.0);
+    grow(&mut rest, "pool_tiles", 8.0);
     rest.tick(2);
     let left = rest.left();
     assert!(

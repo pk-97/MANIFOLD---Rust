@@ -6,7 +6,7 @@
 
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs, StepBirths};
 use super::gpu_flip_sheeting_tests::{World, padded_cells, padded_markers, sort, to_world};
-use super::gpu_flip_step::GpuFlipStep;
+use super::gpu_flip_step::{BOX_BAND_CELLS, GpuFlipStep, pool_tiles};
 use super::gpu_flip_step_tests::{cpu_sample_on, step_faces};
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
@@ -16,8 +16,6 @@ use manifold_node_engine::scene::world_tiles::{lattice_origin, pool_len};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, pack_distance_atlas};
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::lattice::PADDING_NODES;
-use manifold_water_liquid::primitives::face_sample_component::solver_origin_cell;
 use manifold_water_liquid::primitives::liquid_stats::{
     LIQUID_STATS_WORDS, LiquidTickStats, SHEET_REFUSED_TAIL, SHEET_REFUSED_WORD,
     SOLVER_STATS_START, SOLVER_WORDS,
@@ -26,6 +24,7 @@ use manifold_water_liquid::primitives::particle_identity::{
     BirthReservation, COUNT_OFFSET, ParticleIdentity,
 };
 use manifold_water_liquid::testkit::marker_phi::marker_phi;
+use manifold_water_liquid::tile_pool::solver_origin_cell;
 use manifold_water_liquid::world_tiles::exhausted_word;
 
 const H: f32 = 0.25;
@@ -199,17 +198,11 @@ impl Splash {
     }
 
     fn tick(&mut self, tick: u32, steps: u32, rate: f32) -> Tick {
-        let pad = PADDING_NODES as f32;
-        let n = SOLVER[0] as f32 - 3.0;
+        let n = SOLVER[0] as u32 - BOX_BAND_CELLS;
         let min = SOLVER_MIN + 1.5 * H;
-        let max = min + n * H;
+        let max = min + n as f32 * H;
         let mut values = vec![
-            ("nodes_x", n + 1.0 + 2.0 * pad),
-            ("nodes_y", n + 1.0 + 2.0 * pad),
-            ("nodes_z", n + 1.0 + 2.0 * pad),
-            ("lattice_min_x", min - pad * H),
-            ("lattice_min_y", min - pad * H),
-            ("lattice_min_z", min - pad * H),
+            ("pool_tiles", pool_tiles([n; 3]) as f32),
             ("cell_size", H),
             ("bounds_lo_x", min),
             ("bounds_lo_y", min),

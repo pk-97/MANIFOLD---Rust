@@ -1,14 +1,14 @@
-// node.matter_fill — BUFFER source body. One thread per seeded point. Points are enumerated in lattice order:
+// node.matter_fill — BUFFER source body. One thread per seeded point. Points are enumerated in cell order:
 // first the pool (every authored cell below `pool_cells`), then the column box
 // clipped above the pool; each cell holds 2³ or 3³ points, one per sub-cell,
 // jittered inside it by a hash of (seed, cell, sub-cell). id = birth ordinal.
 // V0 = dx³ / points_per_cell, J = 1, C = 0, at rest. Cell coordinates are in
-// the authored box, which starts PADDING = 3 nodes inside the lattice. A
-// seed inside an enabled collider at its pose when the epoch starts (rows
-// 0..body_count of `bodies`, sampled from its shape's lattice in the atlas)
-// is left an unused slot, id 0, so ids stay sorted. `bodies` (LiquidBody →
-// Element), `shapes` (LiquidShape → Element2) and `atlas` are gathered; the
-// output is MatterPoint (Element3).
+// the authored box, which starts at (fill_min_x, fill_min_y, fill_min_z) and
+// holds fill_cells_x/y/z cells. A seed inside an enabled collider at its pose
+// when the epoch starts (rows 0..body_count of `bodies`, sampled from its
+// shape's lattice in the atlas) is left an unused slot, id 0, so ids stay
+// sorted. `bodies` (LiquidBody → Element), `shapes` (LiquidShape → Element2)
+// and `atlas` are gathered; the output is MatterPoint (Element3).
 fn matter_fill_hash(x: u32) -> u32 {
     let s = x * 747796405u + 2891336453u;
     let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
@@ -45,13 +45,13 @@ fn mf_inside_collider(x: vec3<f32>, body_count: i32) -> bool {
 fn body(
     idx: u32,
     count: u32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    fill_min_x: f32,
+    fill_min_y: f32,
+    fill_min_z: f32,
     cell_size: f32,
-    nodes_x: i32,
-    nodes_y: i32,
-    nodes_z: i32,
+    fill_cells_x: i32,
+    fill_cells_y: i32,
+    fill_cells_z: i32,
     pool_cells: i32,
     column_x0: i32,
     column_x1: i32,
@@ -69,7 +69,7 @@ fn body(
     if ppc == 27u {
         per_axis = 3u;
     }
-    let cells = vec3<u32>(u32(nodes_x) - 7u, u32(nodes_y) - 7u, u32(nodes_z) - 7u);
+    let cells = vec3<u32>(u32(fill_cells_x), u32(fill_cells_y), u32(fill_cells_z));
     let pool = u32(pool_cells);
     let cell_index = idx / ppc;
     let sub = idx % ppc;
@@ -92,9 +92,9 @@ fn body(
         matter_fill_unit(h0 ^ 0x9e3779b9u),
         matter_fill_unit(h0 ^ 0x85ebca6bu),
     );
-    let local = (vec3<f32>(cell) + vec3<f32>(3.0) + (vec3<f32>(s) + jitter) / f32(per_axis));
+    let local = vec3<f32>(cell) + (vec3<f32>(s) + jitter) / f32(per_axis);
     var p: Element3;
-    p.position = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z) + local * cell_size;
+    p.position = vec3<f32>(fill_min_x, fill_min_y, fill_min_z) + local * cell_size;
     p.id = select(idx + 1u, 0u, mf_inside_collider(p.position, body_count));
     p.velocity = vec3<f32>(0.0);
     p.volume_ratio = 1.0;

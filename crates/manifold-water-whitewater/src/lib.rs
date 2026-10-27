@@ -4,4 +4,3 @@
 //! rigid crate or manifold-nodes-water.
 
 pub mod primitives;
-pub mod whitewater_handoff;

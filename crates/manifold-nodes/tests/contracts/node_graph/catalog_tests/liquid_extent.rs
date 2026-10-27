@@ -1,33 +1,9 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::exec::extent::*;
 use manifold_nodes_water::testkit::preset_extents::{LiquidPreset, check_preset_extents};
-use manifold_water_liquid::lattice::LiquidLattice;
 
 #[test]
-fn liquid_lattice_native_dispatch_extents_are_covered() {
-    for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
-        let layout = domain_layout(None, size, size as f64 / resolution as f64).unwrap();
-        let mesh = LiquidLattice::from_layout(&layout).surface();
-        let solid_nodes = mesh.nodes().map(u64::from);
-        let solid_count = solid_nodes.into_iter().product::<u64>();
-        assert_eq!(mesh.solid_bytes(), solid_count * 4);
-        for scale in [1u64, 2, 3, 4] {
-            let nodes = solid_nodes.map(|n| (n - 1) * scale + 1);
-            let count = nodes.into_iter().product::<u64>();
-            let cells = nodes.map(|n| n - 1);
-            let cell_count = cells.into_iter().product::<u64>();
-            // Node dispatches (splat, smoothing, offsets, redistance,
-            // carry) use count; cell dispatches use cell_count. The last
-            // cell's +1 corner is exactly the last allocated node.
-            let last_corner = cells[0] + nodes[0] * (cells[1] + nodes[1] * cells[2]);
-            assert_eq!(last_corner, count - 1);
-            assert!(count * 4 <= u64::from(u32::MAX));
-            assert!(cell_count * 15 <= u64::from(u32::MAX));
-            assert!(count <= count.div_ceil(256) * 256);
-            assert!(count.div_ceil(256) * 256 - count < 256);
-        }
-    }
+fn gpu_flip_preset_extents_are_covered() {
     // Walk actual producers and consumers with extent.rs, including
     // provided solids, frame rings, sparse schedules and mesh outputs.
     let (_, def) = liquid_presets()

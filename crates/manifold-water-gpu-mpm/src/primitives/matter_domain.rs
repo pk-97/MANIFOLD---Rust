@@ -1,6 +1,6 @@
 //! `node.matter_domain` — the scene-facing CPU bridge of a matter domain
 //!It speaks the shared liquid
-//! scene contract (names, types, meanings) and turns it into the lattice,
+//! scene contract (names, types, meanings) and turns it into the grid box,
 //! fill boxes, the fixed-tick clock (D8) and the per-tick substep count and
 //! material dials (D3, D4) the matter atoms read as wires. P1 carries the
 //! domain, walls, box fill, clock, gravity, speed, reset, seed and the water
@@ -17,12 +17,13 @@ use std::borrow::Cow;
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_nodes_physics::force_lattice::felt_field;
 use manifold_physics::FieldValue;
+use manifold_physics::force_lattice::ForceLattice;
 
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{
-    MAX_SUBSTEPS, RADIUS_SCALE, REACTION_WORDS, WATER_DENSITY, free_fall_speed, lattice_nodes,
-    matter_pool_tiles, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda,
-    wave_speed,
+    MAX_SUBSTEPS, RADIUS_SCALE, REACTION_WORDS, WATER_DENSITY, field_min, free_fall_speed,
+    lattice_nodes, matter_nodes, matter_pool_tiles, momentum_unit, substeps_for_interval,
+    substeps_per_tick, water_lambda, wave_speed,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
@@ -44,8 +45,9 @@ use manifold_physics::tick_samples::TickSamples;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::bounds::{
-    NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, face_masks,
-    kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs, within_key_span,
+    NO_KILL_HEIGHT, SourceFloor, bounds_enabled, bounds_outputs, box_about, closed_faces,
+    face_masks, kill_height, lowest_source, on_world_cells, union_box, wall_velocity_outputs,
+    within_key_span,
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
@@ -53,8 +55,6 @@ use manifold_water_liquid::coupling::{
 };
 use manifold_water_liquid::fluid_role::{FluidRole, take_initial_fill};
 use manifold_water_liquid::gizmos::SetupReport;
-use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_water_liquid::lattice::closed_faces;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
@@ -88,9 +88,6 @@ pub(crate) struct MatterGeometry {
     /// The Water item's box exactly as placed (min then max): the Bounds box.
     pub(crate) bounds_box: [[f32; 3]; 2],
     pub(crate) setup: MatterSetup,
-    /// The padded lattice over this frame's grid box: the seam's dense
-    /// arrays, the fill and the force field lattice.
-    pub(crate) lattice: LiquidLattice,
     /// The pool's height in cells and the Initial Fill's cell range per axis
     /// in this frame's grid box (empty without one).
     pub(crate) pool_cells: u32,
@@ -103,28 +100,32 @@ pub(crate) struct MatterGeometry {
 
 impl MatterGeometry {
     /// The scalar outputs fixed by this frame's geometry, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 17] {
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 20] {
         let MatterGeometry {
-            lattice,
+            layout,
             pool_cells,
             column,
             pool_tiles,
             setup,
             ..
         } = *self;
+        let field = field_min(&layout);
         let MatterSetup {
             points_per_cell,
             seed,
             ..
         } = setup;
         [
-            ("lattice_min_x", lattice.min()[0]),
-            ("lattice_min_y", lattice.min()[1]),
-            ("lattice_min_z", lattice.min()[2]),
-            ("cell_size", lattice.cell_size()),
-            ("nodes_x", lattice.nodes()[0] as f32),
-            ("nodes_y", lattice.nodes()[1] as f32),
-            ("nodes_z", lattice.nodes()[2] as f32),
+            ("fill_min_x", layout.min[0]),
+            ("fill_min_y", layout.min[1]),
+            ("fill_min_z", layout.min[2]),
+            ("cell_size", self.cell_size()),
+            ("fill_cells_x", layout.cells[0] as f32),
+            ("fill_cells_y", layout.cells[1] as f32),
+            ("fill_cells_z", layout.cells[2] as f32),
+            ("field_min_x", field[0]),
+            ("field_min_y", field[1]),
+            ("field_min_z", field[2]),
             ("pool_tiles", pool_tiles as f32),
             ("pool_cells", pool_cells as f32),
             ("column_x0", column[0][0] as f32),
@@ -136,6 +137,20 @@ impl MatterGeometry {
             ("points_per_cell", points_per_cell as f32),
             ("fill_seed", seed as f32),
         ]
+    }
+
+    /// The cell size as every Matter atom reads it.
+    pub(crate) fn cell_size(&self) -> f32 {
+        self.layout.cell_size as f32
+    }
+
+    /// The force lattice over the box and its 3-cell margin.
+    pub(crate) fn force_lattice(&self) -> ForceLattice {
+        ForceLattice::covering(
+            field_min(&self.layout),
+            self.cell_size(),
+            matter_nodes(self.layout.cells),
+        )
     }
 
     /// The rigid world's walls for the Wall faces `walls`: slabs round the
@@ -159,7 +174,7 @@ pub(crate) fn fill_region(
     fill_height: f32,
     initial_fill: Option<Transform>,
 ) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
-    // The lattice's f32 cell size, as every matter atom reads it.
+    // The f32 cell size, as every matter atom reads it.
     let dx = f64::from(layout.cell_size as f32);
     let filled =
         fit_fill_height(layout, fill_height).map_err(|reason| format!("Matter: {reason}"))?;
@@ -186,7 +201,7 @@ pub(crate) fn fill_region(
         fit.column = outcome;
         if let Some((lo, hi)) = edges {
             for (d, range) in column.iter_mut().enumerate() {
-                // The lattice's f32 edges, as every matter atom reads them.
+                // The f32 edges, as every matter atom reads them.
                 let cell = |x: f64| {
                     (((f64::from(x as f32) - f64::from(layout.min[d])) / dx)
                         .round()
@@ -200,10 +215,10 @@ pub(crate) fn fill_region(
     Ok((pool_cells, column, fit))
 }
 
-/// The domain box, lattice, pool and fill from the domain's params and
+/// The domain box, pool and fill from the domain's params and
 /// wires (`read` is `scalar_or_param`; the Bounds switch and the enums come
 /// from `params`), the grid box moved onto whole world cells and the Bounds
-/// box as placed. Refused by name when the lattice is over Grid Budget, a
+/// box as placed. Refused by name when the box's nodes are over Grid Budget, a
 /// Fill Height above 0 has Bounds off, or the fill is not a usable shape.
 pub(crate) fn matter_geometry(
     read: impl Fn(&str, f32) -> f32,
@@ -225,12 +240,12 @@ pub(crate) fn matter_geometry(
         // its floor at Y = 0.
         None => box_about([0.0, 0.5 * domain_size, 0.0], [domain_size; 3]),
     };
-    let lattice = LiquidLattice::from_layout(&layout);
+    let nodes = matter_nodes(layout.cells);
     let budget = match params.get("grid_budget_mcells") {
         Some(ParamValue::Float(budget)) => *budget,
         _ => 8.0,
     };
-    admit_lattice(&lattice, budget)?;
+    admit_lattice(nodes, budget)?;
     let fill_height = read("fill_height", DEFAULT_FILL_HEIGHT);
     if !bounds && fill_height > 0.0 {
         return Err("Matter: Fill Height fills the Bounds box from its floor, so with Bounds off it must be 0. Use an Initial Fill for the starting water.".into());
@@ -252,12 +267,11 @@ pub(crate) fn matter_geometry(
         points_per_cell,
         seed: seed.round().clamp(0.0, 16_777_215.0) as u32,
     };
-    let pool_tiles = matter_pool_tiles(&lattice, (f64::from(budget) * 1e6) as u64);
+    let pool_tiles = matter_pool_tiles(nodes, (f64::from(budget) * 1e6) as u64);
     Ok(MatterGeometry {
         layout,
         bounds_box,
         setup,
-        lattice,
         pool_cells,
         column,
         pool_tiles,
@@ -268,7 +282,7 @@ pub(crate) fn matter_geometry(
 manifold_node_engine::primitive! {
     name: MatterDomain,
     type_id: "node.matter_domain",
-    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, cell size, six closed faces, initial fill height and the box an Initial Fill role places, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness; its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
+    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, cell size, six closed faces, initial fill height and the box an Initial Fill role places, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness; its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Outputs the grid box's first corner and cell counts, the first node of its margin, the fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
     inputs: {
         domain: Transform optional,
         cell_metres: ScalarF32 optional,
@@ -285,9 +299,10 @@ manifold_node_engine::primitive! {
         acceleration_field: VectorField optional,
     },
     outputs: {
-        lattice_min_x: ScalarF32, lattice_min_y: ScalarF32, lattice_min_z: ScalarF32,
+        fill_min_x: ScalarF32, fill_min_y: ScalarF32, fill_min_z: ScalarF32,
         cell_size: ScalarF32,
-        nodes_x: ScalarF32, nodes_y: ScalarF32, nodes_z: ScalarF32,
+        fill_cells_x: ScalarF32, fill_cells_y: ScalarF32, fill_cells_z: ScalarF32,
+        field_min_x: ScalarF32, field_min_y: ScalarF32, field_min_z: ScalarF32,
         closed_faces: ScalarF32,
         gravity_x: ScalarF32, gravity: ScalarF32, gravity_z: ScalarF32,
         pool_cells: ScalarF32,
@@ -353,7 +368,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("roles"), label: "Sources", ty: ParamType::Int, default: ParamValue::Float(manifold_water_liquid::DEFAULT_ROLE_PORTS as f32), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, cell size, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most two ticks per display frame and reports dropped time; export runs every tick. Bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every body's distance lattice is built the liquid holds. An Initial Fill seeds the water; Inflow and Outflow roles are refused. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most two ticks per display frame; live and export wait for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the cells per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
+    composition_notes: "The Live Matter group's source of truth: wire its fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, cell size, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most two ticks per display frame and reports dropped time; export runs every tick. Bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every body's distance lattice is built the liquid holds. An Initial Fill seeds the water; Inflow and Outflow roles are refused. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most two ticks per display frame; live and export wait for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the cells per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, cell size, walls, starting fill, gravity and how the water behaves.",
@@ -516,10 +531,11 @@ fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
     Some(unsafe { std::slice::from_raw_parts(words, (buffer.size / 4) as usize) })
 }
 
-/// The Grid Budget gate: a lattice over `budget_mcells` million nodes is
-/// refused by name before anything downstream sizes or dispatches over it.
-pub(crate) fn admit_lattice(lattice: &LiquidLattice, budget_mcells: f32) -> Result<(), String> {
-    let nodes = lattice_nodes(lattice.nodes()) as f64;
+/// The Grid Budget gate: a box of `nodes` per axis ([`matter_nodes`]) with
+/// more than `budget_mcells` million nodes in all is refused by name before
+/// anything downstream sizes or dispatches over it.
+pub(crate) fn admit_lattice(nodes: [u32; 3], budget_mcells: f32) -> Result<(), String> {
+    let nodes = lattice_nodes(nodes) as f64;
     if !budget_mcells.is_finite() || budget_mcells <= 0.0 || nodes > f64::from(budget_mcells) * 1e6
     {
         return Err(format!(
@@ -542,14 +558,17 @@ impl Coupling {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 60] = [
-    "lattice_min_x",
-    "lattice_min_y",
-    "lattice_min_z",
+const OUTPUTS: [&str; 63] = [
+    "fill_min_x",
+    "fill_min_y",
+    "fill_min_z",
     "cell_size",
-    "nodes_x",
-    "nodes_y",
-    "nodes_z",
+    "fill_cells_x",
+    "fill_cells_y",
+    "fill_cells_z",
+    "field_min_x",
+    "field_min_y",
+    "field_min_z",
     "gravity_x",
     "gravity",
     "gravity_z",
@@ -604,9 +623,9 @@ const OUTPUTS: [&str; 60] = [
     "wall_velocity_hi_y",
     "wall_velocity_hi_z",
 ];
-const TICKS: usize = 19;
-const EPOCH: usize = 21;
-const IMPULSE_TICK: usize = 40;
+const TICKS: usize = 22;
+const EPOCH: usize = 24;
+const IMPULSE_TICK: usize = 43;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
@@ -870,7 +889,7 @@ impl PhysicsNode for MatterDomain {
             return;
         };
         let (pool_cells, column) = self.fill_cells;
-        // The lattice's f32 cell size, as `fill_region` counts cells.
+        // The f32 cell size, as `fill_region` counts cells.
         let dx = layout.cell_size as f32;
         let max: [f32; 3] = std::array::from_fn(|i| layout.min[i] + layout.size[i]);
         if pool_cells > 0 {
@@ -1083,12 +1102,9 @@ impl MatterDomain {
             }
         };
         let MatterGeometry {
-            layout,
-            setup,
-            fit,
-            lattice,
-            ..
+            layout, setup, fit, ..
         } = geometry;
+        let cell_size = geometry.cell_size();
         self.setup_report
             .accept(fit, column.map(|column| (column.pos, column.scale)));
         let speed = ctx.scalar_or_param("speed", 1.0);
@@ -1140,7 +1156,7 @@ impl MatterDomain {
             coupled_geometries,
             coupled_rows,
             self.coupled.walls.bounds(),
-            lattice.cell_size(),
+            cell_size,
             offline,
         )? == BodiesStatus::Pending
         {
@@ -1191,7 +1207,7 @@ impl MatterDomain {
                 owner.geometries(),
                 owner.rows(),
                 self.coupled.walls.bounds(),
-                lattice.cell_size(),
+                cell_size,
                 offline,
             )? == BodiesStatus::Pending
             {
@@ -1289,11 +1305,10 @@ impl MatterDomain {
         }
         let wave = (unit_wave * fitted) as f32;
         let body_limit = match &self.coupled.owner {
-            Some(owner) => live_body_limit(owner, lattice.cell_size(), wave),
+            Some(owner) => live_body_limit(owner, cell_size, wave),
             None => None,
         };
-        let nominal_substeps =
-            substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
+        let nominal_substeps = substeps_per_tick(cell_size, wave, v_est as f32, body_limit, None);
         // A frame without ticks reports what one Sim Rate interval runs, so
         // the substep count and unit hold steady between ticks.
         let duration = if frame.ticks == 0 {
@@ -1305,15 +1320,11 @@ impl MatterDomain {
         };
         let requested = substeps_for_interval(duration as f32, nominal_substeps);
         let substeps = requested.min(MAX_SUBSTEPS);
-        let schedule_capped = schedule_intervals(
-            &mut self.schedule,
-            &frame,
-            nominal_substeps,
-            lattice.cell_size(),
-        );
+        let schedule_capped =
+            schedule_intervals(&mut self.schedule, &frame, nominal_substeps, cell_size);
         let lambda = water_lambda(longest, fitted);
         let unit = self.schedule.first().map_or_else(
-            || momentum_unit(lattice.cell_size(), duration / f64::from(substeps)),
+            || momentum_unit(cell_size, duration / f64::from(substeps)),
             |record| record.scalars[1].1,
         );
         let mut display_time = frame.display_time;
@@ -1334,7 +1345,7 @@ impl MatterDomain {
                 };
                 let scale = ReactionScale {
                     unit,
-                    cell_size: lattice.cell_size(),
+                    cell_size,
                     offset: self.bodies.count() - owner.rows().len(),
                 };
                 owner.set_pending(pending);
@@ -1350,7 +1361,7 @@ impl MatterDomain {
         }
         self.coupled.transport = Some(ctx.played());
         let field = self.fields.prepare(
-            lattice.force_lattice(),
+            geometry.force_lattice(),
             self.acceleration.as_ref(),
             &self.clock,
             &frame,

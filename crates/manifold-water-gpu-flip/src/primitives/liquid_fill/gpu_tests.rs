@@ -4,12 +4,11 @@
 
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use manifold_water_liquid::lattice::PADDING_NODES;
 
 use super::LiquidFill;
 
 /// The box's sites in the kernel's order: the pool's layers over the whole
-/// floor, then the box clipped above the pool and to the lattice.
+/// floor, then the box clipped above the pool and to the fill's box.
 fn enumerated(cells: [u32; 3], pool: u32, sites: [[u32; 2]; 3]) -> Vec<[u32; 3]> {
     let n = cells.map(|c| 2 * c);
     let mut out = Vec::new();
@@ -42,16 +41,15 @@ fn assert_world_sites(
     let mut harness = Harness::new();
     let out = harness.array::<FluidParticle>(&[], 1);
     let count = harness.scalar();
-    let pad = PADDING_NODES;
-    let lattice_min: [f32; 3] = std::array::from_fn(|a| (box_cell[a] - pad as i32) as f32 * h);
+    let fill_min: [f32; 3] = std::array::from_fn(|a| box_cell[a] as f32 * h);
     let step = params(&[
-        ("nodes_x", (cells[0] + 1 + 2 * pad) as f32),
-        ("nodes_y", (cells[1] + 1 + 2 * pad) as f32),
-        ("nodes_z", (cells[2] + 1 + 2 * pad) as f32),
+        ("fill_cells_x", cells[0] as f32),
+        ("fill_cells_y", cells[1] as f32),
+        ("fill_cells_z", cells[2] as f32),
         ("cell_size", h),
-        ("lattice_min_x", lattice_min[0]),
-        ("lattice_min_y", lattice_min[1]),
-        ("lattice_min_z", lattice_min[2]),
+        ("fill_min_x", fill_min[0]),
+        ("fill_min_y", fill_min[1]),
+        ("fill_min_z", fill_min[2]),
         ("pool_sites", pool as f32),
         ("box_x0", sites[0][0] as f32),
         ("box_x1", sites[0][1] as f32),

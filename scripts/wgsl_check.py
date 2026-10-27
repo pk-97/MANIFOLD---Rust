@@ -46,24 +46,6 @@ fn ts_table_entries() -> u32 { return params.table_entries; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 fn sort_key_of(p: vec3<f32>) -> u32 { return ts_cell_at(ts_world_cell(p, params.bin_min, params.inv_cell)); }
 """
-# What the codegen wraps around `face_sample_component_body.wgsl`: its uniform,
-# its gathered buffers and an entry point calling `body`.
-FACE_COMPONENT_STUB = """struct Params {
-    axis: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, pool_tiles: f32,
-    cell_origin_x: i32, cell_origin_y: i32, cell_origin_z: i32, dispatch_count: u32,
-}
-struct FaceSample { face_velocity: vec4<f32>, face_weight: vec4<f32> }
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> buf_faces: array<FaceSample>;
-@group(0) @binding(2) var<storage, read> buf_tiles: array<u32>;
-@group(0) @binding(3) var<storage, read_write> buf_out: array<f32>;
-"""
-FACE_COMPONENT_MAIN = """@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    buf_out[gid.x] = body(gid.x, params.dispatch_count, params.axis, params.nodes_x, params.nodes_y,
-        params.nodes_z, params.pool_tiles, params.cell_origin_x, params.cell_origin_y, params.cell_origin_z);
-}
-"""
 # What the codegen wraps around the pooled lattice atoms' bodies
 # (`redistance_lattice_body.wgsl`, `smooth_lattice_body.wgsl`,
 # `field_smooth_blend_body.wgsl`): the uniform, the gathered buffers and an
@@ -226,8 +208,6 @@ STACKS = {
     "state_records": (False, [FLIP / "liquid_state_records.wgsl"]),
     "sort_dense": (False, [SORT_DENSE_KEYS, LIQ / "sort_particles_into_cells.wgsl"]),
     "sort_pooled": (False, [WORLD_READ, SORT_POOLED_KEYS, LIQ / "sort_particles_into_cells.wgsl"]),
-    "face_component": (False, [WORLD_READ, FACE_COMPONENT_STUB, LIQ / "face_sample_component_body.wgsl",
-                               FACE_COMPONENT_MAIN]),
     "redistance": (False, [WORLD_READ, LIQ / "marching_cubes_common.wgsl", REDISTANCE_STUB,
                            LIQ / "redistance_lattice_body.wgsl", REDISTANCE_MAIN]),
     "smooth": (False, [WORLD_READ, SMOOTH_STUB, LIQ / "smooth_lattice_body.wgsl", SMOOTH_MAIN]),

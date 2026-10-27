@@ -36,10 +36,7 @@ mod whitewater_engine_gpu_tests;
 mod whitewater_field_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_grid_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_handoff_tests;
 mod whitewater_influence;
-manifold_core::testkit_visible! { pub(crate) mod whitewater_lifecycle; }
 mod whitewater_obstacle_source;
 #[cfg(any(test, feature = "testkit"))]
 pub mod whitewater_particle_cpu;

@@ -23,15 +23,58 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_water_liquid::primitives::sort_particles_into_cells::int_param;
 
 /// Sites per cell: two along each axis.
 pub(super) const SITES_PER_CELL: u32 = 8;
 
-/// Sites per axis of a lattice with `nodes` cells: two per cell.
-fn site_lattice(nodes: [u32; 3]) -> [u32; 3] {
-    nodes.map(|n| 2 * n)
+/// Sites per axis of a box of `cells`: two per cell.
+fn site_lattice(cells: [u32; 3]) -> [u32; 3] {
+    cells.map(|n| 2 * n)
+}
+
+/// The box the fill's sites count from, from `read` (`scalar_or_param`):
+/// its first corner in metres (`fill_min_x/y/z`), its cells per axis
+/// (`fill_cells_x/y/z`) and the cell size. Defaults are the 4 m Dam Break
+/// box at 0.0625 m. A count that is not whole and at least 1, a corner that
+/// is not finite or a cell size that is not positive is refused by name.
+pub(crate) fn fill_frame(
+    read: impl Fn(&str, f32) -> f32,
+) -> Result<([f32; 3], [u32; 3], f32), String> {
+    let cells = |name: &str| {
+        let value = read(name, 64.0);
+        if value.fract() == 0.0 && (1.0..=EXACT_F32_COUNT as f32).contains(&value) {
+            Ok(value as u32)
+        } else {
+            Err(format!(
+                "{name} is {value}; it must be a whole cell count from 1 to {EXACT_F32_COUNT}"
+            ))
+        }
+    };
+    let corner = |name: &str, default: f32| {
+        let value = read(name, default);
+        value
+            .is_finite()
+            .then_some(value)
+            .ok_or_else(|| format!("{name} is {value}; it must be finite"))
+    };
+    let cell_size = read("cell_size", 0.0625);
+    if !(cell_size.is_finite() && cell_size > 0.0) {
+        return Err(format!("cell_size is {cell_size}; it must be positive"));
+    }
+    Ok((
+        [
+            corner("fill_min_x", -2.0)?,
+            corner("fill_min_y", 0.0)?,
+            corner("fill_min_z", -2.0)?,
+        ],
+        [
+            cells("fill_cells_x")?,
+            cells("fill_cells_y")?,
+            cells("fill_cells_z")?,
+        ],
+        cell_size,
+    ))
 }
 
 /// The half-open site range [j0, j1) along one axis whose points
@@ -49,8 +92,8 @@ pub(super) fn site_range(lo: f64, hi: f64, min: f64, cell_size: f64, cells: u32)
 
 /// The sites a pool plus a box clipped above it fill, in the kernel's
 /// enumeration: `pool` site layers of the whole floor, then the box.
-pub(crate) fn filled_sites(nodes: [u32; 3], pool: u32, sites: [[u32; 2]; 3]) -> u64 {
-    let n = site_lattice(nodes);
+pub(crate) fn filled_sites(cells: [u32; 3], pool: u32, sites: [[u32; 2]; 3]) -> u64 {
+    let n = site_lattice(cells);
     let pool = pool.min(n[1]);
     let clip = |d: usize, lo: u32| {
         let a = lo.min(n[d]);
@@ -80,12 +123,12 @@ fn planned_particles(params: &ParamValues) -> u32 {
         Some(ParamValue::Float(v)) => *v,
         _ => default,
     };
-    let Ok(lattice) = LiquidLattice::from_scalars(read) else {
+    let Ok((_, cells, _)) = fill_frame(read) else {
         return 1;
     };
     let (pool, sites) = fill_of(read);
     pool_slots(
-        filled_sites(lattice.cells(), pool, sites),
+        filled_sites(cells, pool, sites),
         read("particle_capacity", 0.0),
     )
     .clamp(1, u64::from(EXACT_F32_COUNT)) as u32
@@ -102,13 +145,13 @@ pub(crate) fn pool_slots(placed: u64, capacity: f32) -> u64 {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FillUniforms {
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    fill_min_x: f32,
+    fill_min_y: f32,
+    fill_min_z: f32,
     cell_size: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
+    fill_cells_x: i32,
+    fill_cells_y: i32,
+    fill_cells_z: i32,
     pool_sites: i32,
     box_x0: i32,
     box_x1: i32,
@@ -135,11 +178,11 @@ struct FillUniforms {
 manifold_node_engine::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in, on a whole world cell, and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two, and count is the filled sites, the slots a liquid starts with. Every slot past them starts dead and is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two, and count is the filled sites, the slots a liquid starts with. Every slot past them starts dead and is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
-        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        fill_min_x: ScalarF32 optional, fill_min_y: ScalarF32 optional, fill_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        fill_cells_x: ScalarF32 optional, fill_cells_y: ScalarF32 optional, fill_cells_z: ScalarF32 optional,
         pool_sites: ScalarF32 optional,
         box_x0: ScalarF32 optional, box_x1: ScalarF32 optional,
         box_y0: ScalarF32 optional, box_y1: ScalarF32 optional,
@@ -159,13 +202,13 @@ manifold_node_engine::primitive! {
         count: ScalarF32,
     },
     params: [
-        float_param!("lattice_min_x", "Lattice Min X", -2.1875, -1.0e4, 1.0e4),
-        float_param!("lattice_min_y", "Lattice Min Y", -0.1875, -1.0e4, 1.0e4),
-        float_param!("lattice_min_z", "Lattice Min Z", -2.1875, -1.0e4, 1.0e4),
+        float_param!("fill_min_x", "Fill Min X", -2.0, -1.0e4, 1.0e4),
+        float_param!("fill_min_y", "Fill Min Y", 0.0, -1.0e4, 1.0e4),
+        float_param!("fill_min_z", "Fill Min Z", -2.0, -1.0e4, 1.0e4),
         float_param!("cell_size", "Cell Size", 0.0625, 1.0e-4, 100.0),
-        float_param!("nodes_x", "Nodes X", 71.0, 8.0, 1024.0),
-        float_param!("nodes_y", "Nodes Y", 71.0, 8.0, 1024.0),
-        float_param!("nodes_z", "Nodes Z", 71.0, 8.0, 1024.0),
+        int_param!("fill_cells_x", "Fill Cells X", 64.0, 1.0, 16_777_216.0),
+        int_param!("fill_cells_y", "Fill Cells Y", 64.0, 1.0, 16_777_216.0),
+        int_param!("fill_cells_z", "Fill Cells Z", 64.0, 1.0, 16_777_216.0),
         int_param!("pool_sites", "Pool Height (half cells)", 5.0, 0.0, 2048.0),
         int_param!("box_x0", "Box Min X (half cell)", 0.0, 0.0, 2048.0),
         int_param!("box_x1", "Box Max X (half cell)", 0.0, 0.0, 2048.0),
@@ -187,7 +230,7 @@ manifold_node_engine::primitive! {
         float_param!("bounds_hi_z", "Bounds Max Z", 0.0, -1.0e4, 1.0e4),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.liquid_state's seed; count is the filled sites that state starts its live slots from. The pool and box sites, the padded lattice, the Bounds box and Wall faces, bodies, shapes, atlas, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
+    composition_notes: "Feeds node.liquid_state's seed; count is the filled sites that state starts its live slots from. The pool and box sites, the fill's box (fill_min, fill_cells, cell_size), the Bounds box and Wall faces, bodies, shapes, atlas, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
     examples: [],
     picker: { label: "Liquid Fill", category: Atom },
     summary: "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -225,11 +268,14 @@ impl Primitive for LiquidFill {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(lattice) = LiquidLattice::from_wires(ctx, "Liquid Fill") else {
-            return;
-        };
-        let nodes = lattice.cells();
-        let (min, cell_size) = (lattice.min(), lattice.cell_size());
+        let (min, cells, cell_size) =
+            match fill_frame(|name, default| ctx.scalar_or_param(name, default)) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    ctx.error(format!("Liquid Fill: {error}"));
+                    return;
+                }
+            };
         let int =
             |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let jitter = ctx.scalar_or_param("jitter", 0.0);
@@ -260,7 +306,7 @@ impl Primitive for LiquidFill {
             ctx.error("Liquid Fill: particle_capacity must be 0 or a positive count".to_string());
             return;
         }
-        let filled = filled_sites(nodes, pool, sites);
+        let filled = filled_sites(cells, pool, sites);
         let slots = pool_slots(filled, requested);
         if slots > u64::from(EXACT_F32_COUNT) {
             ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
@@ -309,9 +355,9 @@ impl Primitive for LiquidFill {
             min[1].to_bits(),
             min[2].to_bits(),
             cell_size.to_bits(),
-            nodes[0],
-            nodes[1],
-            nodes[2],
+            cells[0],
+            cells[1],
+            cells[2],
             pool,
             sites[0][0],
             sites[0][1],
@@ -338,13 +384,13 @@ impl Primitive for LiquidFill {
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let clamp = |v: u32| v.min(i32::MAX as u32) as i32;
         let uniforms = FillUniforms {
-            lattice_min_x: min[0],
-            lattice_min_y: min[1],
-            lattice_min_z: min[2],
+            fill_min_x: min[0],
+            fill_min_y: min[1],
+            fill_min_z: min[2],
             cell_size,
-            nodes_x: lattice.nodes()[0] as f32,
-            nodes_y: lattice.nodes()[1] as f32,
-            nodes_z: lattice.nodes()[2] as f32,
+            fill_cells_x: clamp(cells[0]),
+            fill_cells_y: clamp(cells[1]),
+            fill_cells_z: clamp(cells[2]),
             pool_sites: clamp(pool),
             box_x0: clamp(sites[0][0]),
             box_x1: clamp(sites[0][1]),

@@ -25,9 +25,9 @@ struct BodyReactionUniforms {
     gravity: f32,
     gravity_z: f32,
     momentum_unit: f32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    field_min_x: f32,
+    field_min_y: f32,
+    field_min_z: f32,
     body_count: i32,
     tick_index: i32,
     substep_in_tick: i32,
@@ -74,7 +74,7 @@ manifold_node_engine::primitive! {
         step_dt: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         momentum_unit: ScalarF32 optional,
-        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        field_min_x: ScalarF32 optional, field_min_y: ScalarF32 optional, field_min_z: ScalarF32 optional,
         body_count: ScalarF32 optional,
         tick_index: ScalarF32 optional,
         substep_in_tick: ScalarF32 optional,
@@ -102,9 +102,9 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_x"), label: "Field Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_y"), label: "Field Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_z"), label: "Field Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
@@ -133,7 +133,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("wall_velocity_hi_z"), label: "Wall Velocity Hi Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e3, 1.0e3)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, after node.matter_grid_update (its grid_out is this grid) and before node.grid_to_matter. reaction/reaction_out alias node.matter_domain's reaction array (16 words per body, the slot the domain cleared for this tick and reads back fenced); reaction_out feeds node.grid_to_matter's reaction, whose reaction_out closes into node.matter_state's reaction_in so the region runs this node every substep; bodies from node.matter_move_bodies; shapes, atlas, tiles and pool_tiles (the world-tile pool the grid is stored in; node p sits at world p·cell_size, no padding nodes), the Bounds box (bounds_lo/hi, wall_faces, wall_velocity_lo/hi), the force field lattice's origin (lattice_min_x/y/z, only that), gravity, momentum_unit, body_count, dynamic_count and substeps_per_tick from node.matter_domain; tick_index, substep_in_tick and step_dt from node.matter_state; forces, impulses and the field scalars from node.matter_domain, wired exactly as node.matter_grid_update's so both start from the same velocity. Skips its dispatch when dynamic_count is 0 or reaction is unwired.",
+    composition_notes: "Region body of the Live Matter group, after node.matter_grid_update (its grid_out is this grid) and before node.grid_to_matter. reaction/reaction_out alias node.matter_domain's reaction array (16 words per body, the slot the domain cleared for this tick and reads back fenced); reaction_out feeds node.grid_to_matter's reaction, whose reaction_out closes into node.matter_state's reaction_in so the region runs this node every substep; bodies from node.matter_move_bodies; shapes, atlas, tiles and pool_tiles (the world-tile pool the grid is stored in; node p sits at world p·cell_size, no padding nodes), the Bounds box (bounds_lo/hi, wall_faces, wall_velocity_lo/hi), the force field lattice's origin (field_min_x/y/z, only that), gravity, momentum_unit, body_count, dynamic_count and substeps_per_tick from node.matter_domain; tick_index, substep_in_tick and step_dt from node.matter_state; forces, impulses and the field scalars from node.matter_domain, wired exactly as node.matter_grid_update's so both start from the same velocity. Skips its dispatch when dynamic_count is 0 or reaction is unwired.",
     examples: ["WaterFloatingBoxMatter", "WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Body Reaction", category: Atom },
     summary: "Measures how hard the liquid pushes on each floating object so the physics world can move it.",
@@ -186,10 +186,10 @@ impl Primitive for MatterBodyReaction {
         let bounds_hi = vec3(ctx, "bounds_hi");
         let wall_velocity_lo = vec3(ctx, "wall_velocity_lo");
         let wall_velocity_hi = vec3(ctx, "wall_velocity_hi");
-        let lattice_min = [
-            ctx.scalar_or_param("lattice_min_x", -2.1875),
-            ctx.scalar_or_param("lattice_min_y", -0.1875),
-            ctx.scalar_or_param("lattice_min_z", -2.1875),
+        let field_min = [
+            ctx.scalar_or_param("field_min_x", -2.1875),
+            ctx.scalar_or_param("field_min_y", -0.1875),
+            ctx.scalar_or_param("field_min_z", -2.1875),
         ];
         let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| {
             ctx.scalar_or_param(name, default).round().max(0.0) as i32
@@ -277,9 +277,9 @@ impl Primitive for MatterBodyReaction {
             gravity: gravity[1],
             gravity_z: gravity[2],
             momentum_unit,
-            lattice_min_x: lattice_min[0],
-            lattice_min_y: lattice_min[1],
-            lattice_min_z: lattice_min[2],
+            field_min_x: field_min[0],
+            field_min_y: field_min[1],
+            field_min_z: field_min[2],
             body_count,
             tick_index,
             substep_in_tick,

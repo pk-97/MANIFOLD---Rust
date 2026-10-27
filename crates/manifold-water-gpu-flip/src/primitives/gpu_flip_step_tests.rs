@@ -11,7 +11,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice};
 
-use super::gpu_flip_step::{StepParams, dispatch_pass};
+use super::gpu_flip_step::{StepParams, dispatch_pass, pool_tiles};
 use super::liquid_fill::LiquidFill;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
@@ -25,9 +25,9 @@ use manifold_water_liquid::bodies::{
     BodySupports, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas,
     pack_supports, unpack_supports,
 };
+use manifold_water_liquid::bounds::bounds_distance;
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
-use manifold_water_liquid::lattice::bounds_distance;
 use manifold_water_liquid::primitives::liquid_stats::INFLOW_BIRTHS_TAIL;
 use manifold_water_liquid::testkit::world_box::{BoxTable, from_pool_under};
 use manifold_water_liquid::tile_storage::pool_len;
@@ -43,7 +43,6 @@ mod step_order;
 
 use emit::*;
 use manifold_node_engine::parameters::ParamValue;
-use manifold_water_liquid::lattice::PADDING_NODES;
 pub(super) use motion::*;
 use solids::*;
 
@@ -106,20 +105,14 @@ const MIN: [f32; 3] = [-0.875, -0.625, -0.625];
 /// world cell's low face, as the domain places it.
 const NODE_MIN: [f32; 3] = [-0.75, -0.5, -0.5];
 
-/// The lattice wires of the box of N cells from NODE_MIN, padded as the
-/// domain publishes them, and its Bounds with every face a Wall.
-fn node_lattice() -> [(&'static str, f32); 14] {
-    let pad = PADDING_NODES as f32;
-    let nodes = N.map(|n| n as f32 + 1.0 + 2.0 * pad);
+/// The step's wires for the box of N cells from NODE_MIN, as the domain
+/// publishes them: the cell size, the box's pool, and its Bounds with every
+/// face a Wall.
+fn node_lattice() -> [(&'static str, f32); 9] {
     let hi: [f32; 3] = std::array::from_fn(|a| NODE_MIN[a] + N[a] as f32 * H);
     [
-        ("nodes_x", nodes[0]),
-        ("nodes_y", nodes[1]),
-        ("nodes_z", nodes[2]),
-        ("lattice_min_x", NODE_MIN[0] - pad * H),
-        ("lattice_min_y", NODE_MIN[1] - pad * H),
-        ("lattice_min_z", NODE_MIN[2] - pad * H),
         ("cell_size", H),
+        ("pool_tiles", pool_tiles(N.map(|n| n as u32)) as f32),
         ("bounds_lo_x", NODE_MIN[0]),
         ("bounds_lo_y", NODE_MIN[1]),
         ("bounds_lo_z", NODE_MIN[2]),
@@ -132,7 +125,7 @@ fn node_lattice() -> [(&'static str, f32); 14] {
 
 /// The world cell of box cell 0 for a box from `min` at cell size `h`.
 fn box_origin(min: [f32; 3], h: f32) -> [i32; 3] {
-    manifold_water_liquid::primitives::face_sample_component::solver_origin_cell(min, h)
+    manifold_water_liquid::tile_pool::solver_origin_cell(min, h)
 }
 
 /// The native solid push target in cells.

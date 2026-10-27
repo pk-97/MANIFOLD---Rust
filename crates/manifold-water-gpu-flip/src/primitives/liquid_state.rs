@@ -177,9 +177,6 @@ manifold_node_engine::primitive! {
         target_time: ScalarF32 optional,
         dropped_seconds: ScalarF32 optional,
         epoch: ScalarF32 optional,
-        nodes_x: ScalarF32 optional,
-        nodes_y: ScalarF32 optional,
-        nodes_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),

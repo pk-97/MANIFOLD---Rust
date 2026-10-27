@@ -6,7 +6,8 @@
 //! is a barriered reduction; the hand kernels live in
 //! `shaders/gpu_flip_step/*.wgsl`, the solver in [`super::gpu_flip_pressure`].
 //!
-//! Every scratch array is sized from the lattice and the particle slots
+//! Every scratch array is sized from the pool (`pool_tiles`, the domain's
+//! wire) and the particle slots
 //! before any pass is encoded, so no kernel reads `arrayLength`. The step
 //! always encodes [`history_slots`] substeps; each slot opens a record
 //! `[groups, 1, 1, n]` of the slots in use (`shaders/gpu_flip_step/count.wgsl`,
@@ -22,7 +23,7 @@
 //! an Open face's plane or below the kill height. The `faces` and `distance`
 //! outputs are the pooled internal faces and
 //! φ themselves, read through the `tiles` table and `pool_tiles`; they are
-//! reallocated when the lattice changes.
+//! reallocated when the pool changes.
 //!
 //! Extrapolation order/count, marker removal, inflow emission/placement,
 //! inflow constrained velocity and outflow removal port
@@ -49,9 +50,7 @@ use super::gpu_flip_bodies::{Bodies, BodyPasses, REACTION_FLOATS, body_refusal};
 use super::gpu_flip_clock::{
     GpuFlipClock, GpuFlipClockInputs, GpuFlipClockParams, flags as clock_flags,
 };
-use super::gpu_flip_pressure::{
-    MAX_ITERATIONS, PressureSolver, Solve, Stop, Water, lattice_refusal,
-};
+use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Solve, Stop, Water};
 mod read_params;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -65,7 +64,6 @@ use manifold_water_liquid::bodies::{
 };
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_water_liquid::primitives::liquid_stats::{SOLVER_WORDS, with_stats_layout};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
@@ -476,9 +474,8 @@ manifold_node_engine::primitive! {
     inputs: {
         particles: Array(FluidParticle) required,
         identity: Array(u32) required,
-        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional,
         forces: Array(f32) optional,
         impulses: Array(f32) optional,
@@ -533,22 +530,13 @@ manifold_node_engine::primitive! {
         // The substeps' pooled faces: slots · pool_len(pool_tiles) · 4 floats, all on `tiles`.
         substep_faces: Array(f32),
         substep_count: ScalarF32,
-        grid_bounds: Transform,
-        grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
-        face_cells_x: ScalarF32, face_cells_y: ScalarF32, face_cells_z: ScalarF32,
-        face_valid_layers: ScalarF32,
         reaction_out: Array(f32),
         capped: Array(u32),
         clock_status: Array(u32),
     },
     params: [
-        float_param!("lattice_min_x", "Lattice Min X", -2.1875, -1.0e4, 1.0e4),
-        float_param!("lattice_min_y", "Lattice Min Y", -0.1875, -1.0e4, 1.0e4),
-        float_param!("lattice_min_z", "Lattice Min Z", -2.1875, -1.0e4, 1.0e4),
         float_param!("cell_size", "Cell Size", 0.0625, 1.0e-4, 100.0),
-        int_param!("nodes_x", "Nodes X", 71.0, 8.0, 1024.0),
-        int_param!("nodes_y", "Nodes Y", 71.0, 8.0, 1024.0),
-        int_param!("nodes_z", "Nodes Z", 71.0, 8.0, 1024.0),
+        int_param!("pool_tiles", "Pool Tiles", 1728.0, 1.0, 16_777_216.0),
         float_param!("gravity_x", "Gravity X", 0.0, -100.0, 100.0),
         float_param!("gravity_y", "Gravity Y", -9.81, -100.0, 100.0),
         float_param!("gravity_z", "Gravity Z", 0.0, -100.0, 100.0),
@@ -591,7 +579,7 @@ manifold_node_engine::primitive! {
         float_param!("sheet_fill_rate", "Sheet Fill Rate", 0.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
+    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The cell size and pool_tiles, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. faces, distance, tiles and pool_tiles feed the whitewater stage; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A pool the device cannot hold is a named error.",
     examples: ["WaterDamBreakGpuFlip"],
     picker: { label: "GPU FLIP Step", category: Atom },
     summary: "Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion.",

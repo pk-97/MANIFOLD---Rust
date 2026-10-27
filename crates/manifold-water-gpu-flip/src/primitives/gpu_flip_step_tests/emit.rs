@@ -18,17 +18,15 @@ pub(super) fn gpu_flip_liquid_fill_places_pool_then_box() {
     let placed = 96 + 90;
     let out = harness.array::<FluidParticle>(&[], 1);
     let count = harness.scalar();
-    // The fill reads the padded lattice the domain publishes: the box N at
-    // MIN, grown by the padding on every side.
-    let pad = PADDING_NODES as f32;
+    // The fill reads the box the domain publishes: N cells from MIN.
     let step = params(&[
-        ("nodes_x", N[0] as f32 + 1.0 + 2.0 * pad),
-        ("nodes_y", N[1] as f32 + 1.0 + 2.0 * pad),
-        ("nodes_z", N[2] as f32 + 1.0 + 2.0 * pad),
+        ("fill_cells_x", N[0] as f32),
+        ("fill_cells_y", N[1] as f32),
+        ("fill_cells_z", N[2] as f32),
         ("cell_size", H),
-        ("lattice_min_x", MIN[0] - pad * H),
-        ("lattice_min_y", MIN[1] - pad * H),
-        ("lattice_min_z", MIN[2] - pad * H),
+        ("fill_min_x", MIN[0]),
+        ("fill_min_y", MIN[1]),
+        ("fill_min_z", MIN[2]),
         ("pool_sites", pool as f32),
         ("box_x0", sites[0][0] as f32),
         ("box_x1", sites[0][1] as f32),

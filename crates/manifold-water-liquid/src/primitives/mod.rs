@@ -1,7 +1,6 @@
 //! Seam atoms: every liquid solver dispatches these, so their node types and
 //! helpers are the liquid contract.
 pub mod dot_products;
-pub mod face_sample_component;
 pub mod field_smooth_blend;
 pub mod fluid_role_source;
 pub mod liquid_cells;

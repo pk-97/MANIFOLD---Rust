@@ -1,8 +1,8 @@
 //! Buffer extent rule owned by this node.
-use crate::primitives::whitewater_lifecycle::DEFAULT_CAPACITY;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::extent::{PARTICLE, tile_pool, whole};
 use manifold_water_liquid::fluid_particles::{FaceSample, WhitewaterSpawn};
+use manifold_water_liquid::whitewater::DEFAULT_CAPACITY;
 use std::mem::size_of;
 
 fn spawn_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

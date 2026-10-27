@@ -34,10 +34,10 @@ pub(super) const POCKET_ROUND_OFFSET: u64 = 14 * 4;
 const LINES_PER_TILE: u64 = (TILE * TILE) as u64;
 
 /// Rounds of the sealed-pocket spread: one round of line sweeps crosses
-/// every run of held tiles along each axis, so the cap is the longest side,
-/// in cells, of the box the pool is sized for.
-pub(crate) fn pocket_rounds(cells: [u32; 3]) -> u32 {
-    cells.into_iter().max().unwrap_or(1)
+/// every run of held tiles along each axis, so the cap is the side, in
+/// cells, of a cube of the pool's tiles (the cube the coarse levels halve).
+pub(crate) fn pocket_rounds(pool_tiles: u32) -> u32 {
+    crate::primitives::gpu_flip_pressure::cube_side(pool_tiles) * TILE
 }
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -115,7 +115,7 @@ pub(super) fn encode_pockets(
             "gpu_flip.step.pocket_round",
         );
     }
-    for _ in 0..pocket_rounds(l.cells) {
+    for _ in 0..pocket_rounds(l.pool_tiles) {
         if segmented {
             // The last command prepares the next round. Once no cell changes,
             // subsequent segments skip their sweeps and their setup together.

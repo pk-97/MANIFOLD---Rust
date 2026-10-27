@@ -39,9 +39,9 @@ fn wind(t: f64, speed: f32, gusts: f32, enabled: f32) -> FieldValue {
         .unwrap()
 }
 
-/// The liquid force lattice for a cubic domain of `resolution` cells: the
-/// solver lattice is cells + 1 + 2 · 3 padding nodes (manifold-water-liquid
-/// `PADDING_NODES`), the force lattice every `FORCE_LATTICE_STRIDE` of them.
+/// A force lattice over a cubic domain of `resolution` cells and a 3-cell
+/// margin each side (Matter's `matter_nodes`), every `FORCE_LATTICE_STRIDE`
+/// nodes.
 fn water(resolution: u32) -> ForceLattice {
     let dx = 4.0 / resolution as f32;
     ForceLattice::covering([-2.0; 3], dx, [resolution + 7; 3])

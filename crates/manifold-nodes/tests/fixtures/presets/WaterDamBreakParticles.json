@@ -1079,30 +1079,6 @@
                 "type": "Float",
                 "value": 0.0
               },
-              "lattice_min_x": {
-                "type": "Float",
-                "value": -2.1875
-              },
-              "lattice_min_y": {
-                "type": "Float",
-                "value": -0.1875
-              },
-              "lattice_min_z": {
-                "type": "Float",
-                "value": -2.1875
-              },
-              "nodes_x": {
-                "type": "Int",
-                "value": 71
-              },
-              "nodes_y": {
-                "type": "Int",
-                "value": 71
-              },
-              "nodes_z": {
-                "type": "Int",
-                "value": 71
-              },
               "pool_sites": {
                 "type": "Int",
                 "value": 5
@@ -1110,6 +1086,30 @@
               "seed": {
                 "type": "Int",
                 "value": 0
+              },
+              "fill_min_x": {
+                "type": "Float",
+                "value": -2.0
+              },
+              "fill_cells_x": {
+                "type": "Int",
+                "value": 64
+              },
+              "fill_min_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "fill_cells_y": {
+                "type": "Int",
+                "value": 64
+              },
+              "fill_min_z": {
+                "type": "Float",
+                "value": -2.0
+              },
+              "fill_cells_z": {
+                "type": "Int",
+                "value": 64
               }
             }
           },
@@ -1139,30 +1139,6 @@
                 "type": "Int",
                 "value": 0
               },
-              "lattice_min_x": {
-                "type": "Float",
-                "value": -2.1875
-              },
-              "lattice_min_y": {
-                "type": "Float",
-                "value": -0.1875
-              },
-              "lattice_min_z": {
-                "type": "Float",
-                "value": -2.1875
-              },
-              "nodes_x": {
-                "type": "Int",
-                "value": 71
-              },
-              "nodes_y": {
-                "type": "Int",
-                "value": 71
-              },
-              "nodes_z": {
-                "type": "Int",
-                "value": 71
-              },
               "steps": {
                 "type": "Int",
                 "value": 1
@@ -1170,6 +1146,10 @@
               "volume_projection": {
                 "type": "Int",
                 "value": 0
+              },
+              "pool_tiles": {
+                "type": "Int",
+                "value": 2744
               }
             }
           },
@@ -1555,21 +1535,21 @@
           },
           {
             "fromNode": 0,
-            "fromPort": "lattice_min_x",
+            "fromPort": "fill_min_x",
             "toNode": 2,
-            "toPort": "lattice_min_x"
+            "toPort": "fill_min_x"
           },
           {
             "fromNode": 0,
-            "fromPort": "lattice_min_y",
+            "fromPort": "fill_min_y",
             "toNode": 2,
-            "toPort": "lattice_min_y"
+            "toPort": "fill_min_y"
           },
           {
             "fromNode": 0,
-            "fromPort": "lattice_min_z",
+            "fromPort": "fill_min_z",
             "toNode": 2,
-            "toPort": "lattice_min_z"
+            "toPort": "fill_min_z"
           },
           {
             "fromNode": 0,
@@ -1579,21 +1559,21 @@
           },
           {
             "fromNode": 0,
-            "fromPort": "nodes_x",
+            "fromPort": "fill_cells_x",
             "toNode": 2,
-            "toPort": "nodes_x"
+            "toPort": "fill_cells_x"
           },
           {
             "fromNode": 0,
-            "fromPort": "nodes_y",
+            "fromPort": "fill_cells_y",
             "toNode": 2,
-            "toPort": "nodes_y"
+            "toPort": "fill_cells_y"
           },
           {
             "fromNode": 0,
-            "fromPort": "nodes_z",
+            "fromPort": "fill_cells_z",
             "toNode": 2,
-            "toPort": "nodes_z"
+            "toPort": "fill_cells_z"
           },
           {
             "fromNode": 0,
@@ -1717,45 +1697,9 @@
           },
           {
             "fromNode": 0,
-            "fromPort": "lattice_min_x",
-            "toNode": 4,
-            "toPort": "lattice_min_x"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "lattice_min_y",
-            "toNode": 4,
-            "toPort": "lattice_min_y"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "lattice_min_z",
-            "toNode": 4,
-            "toPort": "lattice_min_z"
-          },
-          {
-            "fromNode": 0,
             "fromPort": "cell_size",
             "toNode": 4,
             "toPort": "cell_size"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_x",
-            "toNode": 4,
-            "toPort": "nodes_x"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_y",
-            "toNode": 4,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_z",
-            "toNode": 4,
-            "toPort": "nodes_z"
           },
           {
             "fromNode": 0,
@@ -2080,24 +2024,6 @@
             "fromPort": "stats_out",
             "toNode": 3,
             "toPort": "stats_in"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_x",
-            "toNode": 3,
-            "toPort": "nodes_x"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_y",
-            "toNode": 3,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_z",
-            "toNode": 3,
-            "toPort": "nodes_z"
           },
           {
             "fromNode": 3,
@@ -2896,6 +2822,12 @@
             "fromPort": "count_b",
             "toNode": 17,
             "toPort": "instance_count"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
+            "toNode": 4,
+            "toPort": "pool_tiles"
           }
         ]
       }

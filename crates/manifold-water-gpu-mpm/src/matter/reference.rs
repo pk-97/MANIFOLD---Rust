@@ -6,8 +6,10 @@
 // Row/column indices mirror the section 4.1 formulas term for term.
 #![allow(clippy::needless_range_loop)]
 
-use super::{MatterPoint, VELOCITY_CLAMP_CFL, node_word_key};
-use manifold_water_liquid::lattice::LiquidLattice;
+use super::{
+    MatterPoint, VELOCITY_CLAMP_CFL, field_min, lattice_nodes, matter_nodes, node_word_key,
+};
+use manifold_core::fluid_domain::FluidDomainLayout;
 
 /// A point's stencil: base node, per-axis weights, per-axis fraction.
 pub type Stencil = ([i64; 3], [[f64; 3]; 3], [f64; 3]);
@@ -78,21 +80,39 @@ pub fn stencil(q: f64) -> (i64, [f64; 3], f64) {
     (base as i64, w, f)
 }
 
-fn node_index(lat: &LiquidLattice, i: [i64; 3]) -> usize {
-    let n = lat.nodes().map(|v| v as i64);
+/// The dense CPU lattice of a layout: Matter's box with its margin, node
+/// (i, j, k) at `min + (i, j, k)·cell_size`.
+struct Dense {
+    min: [f32; 3],
+    nodes: [u32; 3],
+    cell_size: f32,
+}
+
+impl Dense {
+    fn of(layout: &FluidDomainLayout) -> Self {
+        Self {
+            min: field_min(layout),
+            nodes: matter_nodes(layout.cells),
+            cell_size: layout.cell_size as f32,
+        }
+    }
+}
+
+fn node_index(lat: &Dense, i: [i64; 3]) -> usize {
+    let n = lat.nodes.map(|v| v as i64);
     ((i[2] * n[1] + i[1]) * n[0] + i[0]) as usize
 }
 
 /// Stencil base of a point, or `None` when its 3×3×3 stencil leaves the
 /// CPU's lattice (which the GPU, on world tiles, does not have).
-pub fn base_of(lat: &LiquidLattice, x: [f64; 3]) -> Option<Stencil> {
+fn base_of(lat: &Dense, x: [f64; 3]) -> Option<Stencil> {
     let mut base = [0i64; 3];
     let mut w = [[0.0; 3]; 3];
     let mut f = [0.0; 3];
     for d in 0..3 {
-        let q = (x[d] - f64::from(lat.min()[d])) / f64::from(lat.cell_size());
+        let q = (x[d] - f64::from(lat.min[d])) / f64::from(lat.cell_size);
         let (b, wd, fd) = stencil(q);
-        if b < 0 || b + 2 > i64::from(lat.nodes()[d]) - 1 {
+        if b < 0 || b + 2 > i64::from(lat.nodes[d]) - 1 {
             return None;
         }
         base[d] = b;
@@ -110,12 +130,14 @@ pub fn water_stress(p: &Params, j: f64) -> f64 {
 }
 
 /// Clear, P2G, grid update and G2P over `points` (section 4.1 steps 1, 3, 4
-/// and 6) on a dense CPU lattice whose nodes are world nodes (`lat`'s minimum
-/// a whole number of cells from the origin). Points leaving it are removed
-/// (id 0); the oracle's points stay inside.
-pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
-    let count = lat.node_count() as usize;
-    let dx = f64::from(lat.cell_size());
+/// and 6) on the dense CPU lattice of `layout` ([`matter_nodes`] nodes from
+/// [`field_min`]), whose nodes are world nodes (the minimum a whole number of
+/// cells from the origin). Points leaving it are removed (id 0); the oracle's
+/// points stay inside.
+pub fn substep(points: &mut [Point], layout: &FluidDomainLayout, p: &Params) -> Grid {
+    let lat = &Dense::of(layout);
+    let count = lattice_nodes(lat.nodes) as usize;
+    let dx = f64::from(lat.cell_size);
     let inv_dx = 1.0 / dx;
     let mut grid = Grid {
         mass: vec![0.0; count],
@@ -125,13 +147,13 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
         clamped: vec![false; count],
     };
 
-    let m_unit = f64::from(super::mass_unit(lat.cell_size()));
+    let m_unit = f64::from(super::mass_unit(lat.cell_size));
     let to_mass = f64::from(super::MASS_SCALE) / m_unit;
     let to_momentum = f64::from(super::MOMENTUM_SCALE)
         / m_unit
-        / f64::from(super::momentum_unit(lat.cell_size(), p.dt));
+        / f64::from(super::momentum_unit(lat.cell_size, p.dt));
     // The world node of lattice node i, which keys D5's rounding.
-    let origin = lat.min().map(|v| (f64::from(v) / dx).round() as i64);
+    let origin = lat.min.map(|v| (f64::from(v) / dx).round() as i64);
     let world = |i: [i64; 3]| -> [i32; 3] { std::array::from_fn(|d| (origin[d] + i[d]) as i32) };
     let quantize = |value: f64, scale: f64, key: u32, node: [i64; 3], word: u32| {
         if p.fixed_point {
@@ -181,7 +203,7 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
     }
 
     let limit = f64::from(VELOCITY_CLAMP_CFL) * dx / p.dt;
-    let n = lat.nodes().map(|v| v as i64);
+    let n = lat.nodes.map(|v| v as i64);
     for k in 0..n[2] {
         for jj in 0..n[1] {
             for i in 0..n[0] {
@@ -272,20 +294,19 @@ pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
 mod tests {
     use super::*;
 
-    fn lattice() -> LiquidLattice {
-        let layout = manifold_core::fluid_domain::domain_layout(None, 1.0, 0.0625).unwrap();
-        LiquidLattice::from_layout(&layout)
+    fn layout() -> FluidDomainLayout {
+        manifold_core::fluid_domain::domain_layout(None, 1.0, 0.0625).unwrap()
     }
 
     /// A 4×4×4-cell blob of 8 points per cell at the domain centre, moving
     /// with a uniform velocity plus a shear, at rest volume.
-    fn blob(lat: &LiquidLattice) -> Vec<Point> {
-        let dx = f64::from(lat.cell_size());
+    fn blob(layout: &FluidDomainLayout) -> Vec<Point> {
+        let lat = Dense::of(layout);
+        let dx = f64::from(lat.cell_size);
         let v0 = dx * dx * dx / 8.0;
         let mut points = Vec::new();
-        let centre: [f64; 3] = std::array::from_fn(|d| {
-            f64::from(lat.min()[d]) + 0.5 * f64::from(lat.nodes()[d] - 1) * dx
-        });
+        let centre: [f64; 3] =
+            std::array::from_fn(|d| f64::from(lat.min[d]) + 0.5 * f64::from(lat.nodes[d] - 1) * dx);
         let mut id = 1;
         for i in 0..8 {
             for j in 0..8 {
@@ -342,11 +363,11 @@ mod tests {
 
     #[test]
     fn matter_reference_grid_mass_is_particle_mass() {
-        let lat = lattice();
-        let mut points = blob(&lat);
+        let layout = layout();
+        let mut points = blob(&layout);
         let p = params();
         let total: f64 = points.iter().map(|pt| pt.v0 * p.density).sum();
-        let grid = substep(&mut points, &lat, &p);
+        let grid = substep(&mut points, &layout, &p);
         let grid_mass: f64 = grid.mass.iter().sum();
         assert!(
             (grid_mass - total).abs() <= 1e-12 * total,
@@ -356,12 +377,12 @@ mod tests {
 
     #[test]
     fn matter_reference_conserves_momentum_in_free_flight() {
-        let lat = lattice();
-        let mut points = blob(&lat);
+        let layout = layout();
+        let mut points = blob(&layout);
         let p = params();
         let before = momentum(&points, p.density);
         for _ in 0..20 {
-            substep(&mut points, &lat, &p);
+            substep(&mut points, &layout, &p);
         }
         let after = momentum(&points, p.density);
         for d in 0..3 {
@@ -379,10 +400,10 @@ mod tests {
     /// 1e-4 over 300 substeps, as it does without rounding.
     #[test]
     fn matter_reference_fixed_point_free_flight_momentum() {
-        let lat = lattice();
+        let layout = layout();
         let velocity = [1.0, 0.5, -0.25];
         let run = |fixed_point: bool| {
-            let mut points = blob(&lat);
+            let mut points = blob(&layout);
             for pt in &mut points {
                 pt.v = velocity;
             }
@@ -395,7 +416,7 @@ mod tests {
             for step in 0..300u32 {
                 substep(
                     &mut points,
-                    &lat,
+                    &layout,
                     &Params {
                         tick_index: step / 34,
                         substep_in_tick: step % 34,
@@ -421,8 +442,8 @@ mod tests {
 
     #[test]
     fn matter_reference_free_fall_gains_gravity() {
-        let lat = lattice();
-        let mut points = blob(&lat);
+        let layout = layout();
+        let mut points = blob(&layout);
         for pt in &mut points {
             pt.v = [0.0; 3];
         }
@@ -430,7 +451,7 @@ mod tests {
             gravity: [0.0, -9.81, 0.0],
             ..params()
         };
-        substep(&mut points, &lat, &p);
+        substep(&mut points, &layout, &p);
         for pt in &points {
             assert!((pt.v[1] + 9.81 * p.dt).abs() < 1e-12, "{:?}", pt.v);
             assert!(pt.v[0].abs() < 1e-12 && pt.v[2].abs() < 1e-12);

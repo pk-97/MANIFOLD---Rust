@@ -172,24 +172,21 @@ fn step_params_match_the_shader_uniform() {
 }
 
 /// The tile rings the band reaches, and the world tiles' bytes: the
-/// table's own figure for the pool the lattice sizes, which the step's
-/// scratch holds once.
+/// table's own figure for the pool, which the step's scratch holds once.
 #[test]
 fn gpu_flip_world_tile_bytes_follow_the_pool() {
     assert_eq!(ring_max(14), 2, "64³: 14 layers reach the second ring");
     assert_eq!(ring_max(23), 3, "128³: 23 layers reach the third");
     assert_eq!(ring_max(FACE_VALID_LAYERS), 1);
-    for cells in [[67, 67, 67], [63, 100, 8], [1, 9, 17]] {
+    for cells in [[64, 64, 64], [60, 97, 5], [1, 9, 17]] {
+        let pool = pool_tiles(cells);
         assert_eq!(
-            tile_scratch_bytes(cells),
-            manifold_water_liquid::world_tiles::held_bytes(
-                pool_tiles(cells),
-                step_reach().ring_max
-            ),
+            tile_scratch_bytes(pool),
+            manifold_water_liquid::world_tiles::held_bytes(pool, step_reach().ring_max),
             "{cells:?}"
         );
         assert_eq!(
-            scratch_bytes(cells, 1000) - scratch_bytes(cells, 1),
+            scratch_bytes(pool, 1000) - scratch_bytes(pool, 1),
             999 * size_of::<FluidParticle>() as u64,
             "{cells:?}: the slots add only the sorted particles"
         );
@@ -225,10 +222,11 @@ fn band_layers_match_configured_engine_cfl() {
     assert_eq!(band_layers(ENGINE_CFL), 12);
 }
 
-/// The pool holds every tile a box can touch, wherever it sits on the world
-/// lattice, and the table's rings round them: for small boxes, the most
-/// tiles any placement touches (counted cell by cell), widened by the rings
-/// on both sides; and what the budget buys when it is short.
+/// The pool holds every tile a box and its walls' band can touch, wherever
+/// it sits on the world lattice, and the table's rings round them: for small
+/// boxes, the most tiles any placement of the banded box touches (counted
+/// cell by cell), widened by the rings on both sides; and what the budget
+/// buys when it is short.
 #[test]
 fn pool_size_follows_the_box_and_the_budget() {
     let ring = step_reach().ring_max as usize;
@@ -239,7 +237,8 @@ fn pool_size_follows_the_box_and_the_budget() {
                 (-9i32..9)
                     .map(|start| {
                         let first = tile_of_cell([start, 0, 0])[0];
-                        let last = tile_of_cell([start + n as i32 - 1, 0, 0])[0];
+                        let banded = (n + BOX_BAND_CELLS) as i32;
+                        let last = tile_of_cell([start + banded - 1, 0, 0])[0];
                         (last - first + 1) as usize
                     })
                     .max()

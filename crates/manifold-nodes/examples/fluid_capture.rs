@@ -123,13 +123,7 @@ enum Solver {
 /// The particle-frame contract every liquid publishes
 /// The particle-frame contract. A node
 /// whose outputs carry all of these is a frame publisher, whatever its type.
-const FRAME_PORTS: [&str; 5] = [
-    "particles_a",
-    "particles_b",
-    "count_a",
-    "count_b",
-    "grid_bounds",
-];
+const FRAME_PORTS: [&str; 4] = ["particles_a", "particles_b", "count_a", "count_b"];
 
 #[derive(Clone, Debug)]
 struct PresetSettings {

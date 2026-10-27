@@ -15,7 +15,6 @@ use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use manifold_water_gpu_flip::primitives::gpu_flip_step::{GpuFlipStep, pool_tiles, set_poison};
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_water_liquid::primitives::liquid_stats::{
     LIQUID_STATS_WORDS, LiquidTickStats, SOLVER_WORDS,
 };
@@ -39,19 +38,11 @@ fn words_of(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
 #[test]
 fn gpu_flip_step_tiles_two_particles_across_the_origin() {
     const H: f32 = 0.25;
-    // An authored box of 8 cells from world cell -4's centre: the solver
-    // grid, 1.5 cells outside it, holds world cells -5..=5.
+    // The pool the domain gives a box of 8 cells.
     const CELLS: u32 = 8;
-    const MIN: f32 = -4.0 * H;
-    let pad = PADDING_NODES as f32;
-    let nodes = CELLS as f32 + 1.0 + 2.0 * pad;
+    let pool = pool_tiles([CELLS; 3]);
     let lattice = [
-        ("nodes_x", nodes),
-        ("nodes_y", nodes),
-        ("nodes_z", nodes),
-        ("lattice_min_x", MIN - pad * H),
-        ("lattice_min_y", MIN - pad * H),
-        ("lattice_min_z", MIN - pad * H),
+        ("pool_tiles", pool as f32),
         ("cell_size", H),
         ("interval_duration", 1.0 / 60.0),
         ("volume_projection", 0.0),
@@ -90,7 +81,6 @@ fn gpu_flip_step_tiles_two_particles_across_the_origin() {
     );
     assert!(errors.is_empty(), "{errors:?}");
 
-    let pool = pool_tiles([CELLS + 3; 3]);
     let entries = table_entries(pool);
     let table = words_of(&h.device, &h.buffer(tiles.0));
     let slot_of = |tile: [i32; 3]| -> u32 {

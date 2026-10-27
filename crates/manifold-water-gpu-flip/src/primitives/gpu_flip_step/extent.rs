@@ -1,34 +1,25 @@
 //! Buffer extent rule owned by this node.
 use crate::primitives::gpu_flip_bodies::held_bytes as body_pass_bytes;
-use crate::primitives::gpu_flip_pressure::lattice_refusal;
 use crate::primitives::gpu_flip_pressure::scratch_bytes as pressure_scratch_bytes;
-use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use crate::primitives::gpu_flip_step::history_slots;
-use crate::primitives::gpu_flip_step::pool_tiles;
 use crate::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::REACTION_FLOATS;
-use manifold_water_liquid::extent::liquid_lattice;
 use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, whole};
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::lattice::FlipSolverGrid;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::primitives::sort_particles_into_cells::key_storage_bytes;
+use manifold_water_liquid::tile_pool::pool_tiles_wire;
 use manifold_water_liquid::tile_storage::{pool_len, table_words};
 use std::mem::size_of;
 
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("identity", IDENTITY_BYTES)?;
     x.covers_if_bound("identity_out", IDENTITY_BYTES)?;
-    let cells = FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells();
-    if let Some(reason) = lattice_refusal(cells) {
-        return Err(Verdict::Refused(format!(
-            "GPU FLIP Step: {reason}. Raise Cell Size."
-        )));
-    }
-    let pool = pool_tiles(cells);
+    let pool = pool_tiles_wire(|name, default| x.scalar(name, default))
+        .map_err(|reason| Verdict::Refused(format!("GPU FLIP Step: {reason}")))?;
     x.provide("faces", pool_len(pool) * size_of::<FaceSample>() as u64);
     x.provide("distance", pool_len(pool) * 4);
     x.provide("tiles", table_words(pool) * 4);
@@ -40,20 +31,6 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.hold(manifold_water_liquid::substep_history::history_bytes(
         pool, history,
     ));
-    let lattice = FlipSolverGrid::from_lattice(liquid_lattice(x)?);
-    x.publish_transform("grid_bounds", lattice.bounds());
-    for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]
-        .into_iter()
-        .zip(lattice.nodes())
-        .chain(
-            ["face_cells_x", "face_cells_y", "face_cells_z"]
-                .into_iter()
-                .zip(cells),
-        )
-        .chain([("face_valid_layers", FACE_VALID_LAYERS)])
-    {
-        x.publish(port, value as f32);
-    }
     let slots = x.items("particles").unwrap_or(0);
     x.hold(crate::primitives::gpu_flip_clock::GpuFlipClock::held_bytes(
         slots as u32,
@@ -69,7 +46,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The pooled fields (the published faces and distance among them): the
     // step's cell and face arrays, the world tiles and the solver's fine
     // vectors.
-    x.hold(pressure_scratch_bytes(pool) + step_scratch_bytes(cells, slots));
+    x.hold(pressure_scratch_bytes(pool) + step_scratch_bytes(pool, slots));
     field_reads(x)?;
     x.covers_if_bound("clock_status", 32)?;
     for (buffer, count) in [

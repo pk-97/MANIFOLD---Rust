@@ -42,7 +42,6 @@ impl StepState {
         ) else {
             return Err("the step's storage was not reserved".into());
         };
-        let cells = l.cells;
         // The step's own faces, pooled: the `faces` output.
         let out_faces = &l.faces;
         let table = tiles.table();
@@ -62,7 +61,7 @@ impl StepState {
             },
             bin_min: p.origin,
             inv_cell: p.inv_cell,
-            bins: cells,
+            bins: [0; 3],
             sorted: Some(sorted),
             order: None,
             gate: Some(step.clock_plan),

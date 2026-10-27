@@ -32,13 +32,13 @@ impl StepState {
         self.sheeting.prepare(device);
     }
 
-    /// Size every array for `cells` and `slots` before anything is encoded;
+    /// Size every array for a pool of `pool` tiles and `slots` before anything is encoded;
     /// removal reuses the sorted array. The emission scan is sized by the
     /// encode from the tick's sites.
     pub(super) fn reserve(
         &mut self,
         device: &GpuDevice,
-        cells: [u32; 3],
+        pool: u32,
         slots: u64,
         sheeting: bool,
     ) -> Result<(), String> {
@@ -50,21 +50,20 @@ impl StepState {
         if self.slot_record.is_none() {
             self.slot_record = Some(allocate_zeroed(device, SLOT_RECORD_BYTES)?);
         }
-        let pool = pool_tiles(cells);
         // One range per element of a pooled field: the sort is keyed on the
         // pool index of each cell.
         self.sorter.reserve_keys(device, pool_len(pool))?;
         // A box resized within its pool (a scale drag, mostly) keeps the
         // pooled arrays and the table; only a new pool rebuilds them.
-        match self.lattice.as_mut() {
-            Some(l) if l.pool_tiles == pool => l.cells = cells,
+        match self.lattice.as_ref() {
+            Some(l) if l.pool_tiles == pool => {}
             _ => {
                 // A new pool holds no tile yet: its table starts empty too.
                 self.lattice = None;
                 self.tiles = None;
                 self.pool_canon_pending = true;
                 self.solid_velocity_is_zero = false;
-                self.lattice = Some(LatticeBuffers::new(device, cells, pool)?);
+                self.lattice = Some(LatticeBuffers::new(device, pool)?);
             }
         }
         if self.tiles.as_ref().is_none_or(|t| t.pool_tiles() != pool) {

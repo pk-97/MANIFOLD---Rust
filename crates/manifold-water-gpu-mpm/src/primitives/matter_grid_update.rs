@@ -26,9 +26,9 @@ struct GridUpdateUniforms {
     gravity: f32,
     gravity_z: f32,
     momentum_unit: f32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    field_min_x: f32,
+    field_min_y: f32,
+    field_min_z: f32,
     body_count: i32,
     tick_index: i32,
     substep_in_tick: i32,
@@ -75,7 +75,7 @@ manifold_node_engine::primitive! {
         step_dt: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         momentum_unit: ScalarF32 optional,
-        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        field_min_x: ScalarF32 optional, field_min_y: ScalarF32 optional, field_min_z: ScalarF32 optional,
         body_count: ScalarF32 optional,
         tick_index: ScalarF32 optional,
         substep_in_tick: ScalarF32 optional,
@@ -101,9 +101,9 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_x"), label: "Field Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_y"), label: "Field Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_z"), label: "Field Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
@@ -130,7 +130,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("wall_velocity_hi_z"), label: "Wall Velocity Hi Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e3, 1.0e3)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per world-tile node, pooled: 512 per tile slot and a canonical node last; node p sits at world p·cell_size); accum is read as a gather (4 words per node) and tiles is the world-tile table the pool is found through, with pool_tiles slots. There are no padding nodes. Gravity, the Bounds box (bounds_lo/hi, wall_faces, wall_velocity_lo/hi), the lattice minimum, body_count, shapes, atlas and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, bodies from node.matter_move_bodies, step_dt, tick_index and substep_in_tick from the substep boundary. forces, impulses and the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick) come from node.matter_domain; lattice_min_x/y/z are now only the force field lattice's origin, the field lattices start there. Every substep adds the force lattice of its tick: one lattice per tick from first_tick, or one for all ticks when force_lattices is 1 (0: no forces); impulses apply once, on substep 0 of tick impulse_tick (−1: none). With bodies unwired no collider is read; with forces or impulses unwired neither is read.",
+    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per world-tile node, pooled: 512 per tile slot and a canonical node last; node p sits at world p·cell_size); accum is read as a gather (4 words per node) and tiles is the world-tile table the pool is found through, with pool_tiles slots. There are no padding nodes. Gravity, the Bounds box (bounds_lo/hi, wall_faces, wall_velocity_lo/hi), the lattice minimum, body_count, shapes, atlas and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, bodies from node.matter_move_bodies, step_dt, tick_index and substep_in_tick from the substep boundary. forces, impulses and the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick) come from node.matter_domain; field_min_x/y/z are now only the force field lattice's origin, the field lattices start there. Every substep adds the force lattice of its tick: one lattice per tick from first_tick, or one for all ticks when force_lattices is 1 (0: no forces); impulses apply once, on substep 0 of tick impulse_tick (−1: none). With bodies unwired no collider is read; with forces or impulses unwired neither is read.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Grid Update", category: Atom },
     summary: "Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls.",
@@ -185,10 +185,10 @@ impl Primitive for MatterGridUpdate {
         let bounds_hi = vec3(ctx, "bounds_hi");
         let wall_velocity_lo = vec3(ctx, "wall_velocity_lo");
         let wall_velocity_hi = vec3(ctx, "wall_velocity_hi");
-        let lattice_min = [
-            ctx.scalar_or_param("lattice_min_x", -2.1875),
-            ctx.scalar_or_param("lattice_min_y", -0.1875),
-            ctx.scalar_or_param("lattice_min_z", -2.1875),
+        let field_min = [
+            ctx.scalar_or_param("field_min_x", -2.1875),
+            ctx.scalar_or_param("field_min_y", -0.1875),
+            ctx.scalar_or_param("field_min_z", -2.1875),
         ];
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let gravity = [
@@ -286,9 +286,9 @@ impl Primitive for MatterGridUpdate {
             gravity: gravity[1],
             gravity_z: gravity[2],
             momentum_unit,
-            lattice_min_x: lattice_min[0],
-            lattice_min_y: lattice_min[1],
-            lattice_min_z: lattice_min[2],
+            field_min_x: field_min[0],
+            field_min_y: field_min[1],
+            field_min_z: field_min[2],
             body_count,
             tick_index,
             substep_in_tick,

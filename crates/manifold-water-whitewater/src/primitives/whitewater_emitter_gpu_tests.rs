@@ -338,7 +338,7 @@ fn fields(s: &WhitewaterSource) -> (f32, f32, u32, u32) {
 #[test]
 fn whitewater_obstacle_source_closed_and_open_domain() {
     use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
-    use manifold_water_liquid::lattice::bounds_distance;
+    use manifold_water_liquid::bounds::bounds_distance;
     use manifold_water_liquid::testkit::world_box::table_words_of;
     let rig = rig();
     // A pool one slot longer than the box's tiles: the table leaves that slot

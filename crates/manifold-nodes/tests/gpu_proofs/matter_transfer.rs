@@ -25,11 +25,10 @@ use manifold_node_engine::{
     state_store::StateStore,
 };
 use manifold_water_gpu_mpm::matter::{
-    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, mass_unit, matter_pool_tiles,
-    momentum_unit, water_lambda,
+    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, field_min, mass_unit, matter_nodes,
+    matter_pool_tiles, momentum_unit, water_lambda,
 };
 use manifold_water_liquid::bounds::{ALL_FACES, NO_KILL_HEIGHT};
-use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_water_liquid::testkit::world_box::from_pool_under;
 use {
     manifold_water_gpu_mpm::matter::reference, manifold_water_gpu_mpm::matter::reference::Params,
@@ -94,7 +93,7 @@ pub(crate) struct Chain {
     tiles: ResourceId,
     p2g: NodeInstanceId,
     pool_tiles: u32,
-    /// World node of lattice node 0, and the lattice's node counts.
+    /// World node of dense node 0, and the dense grid's node counts.
     origin: [i32; 3],
     nodes: [u32; 3],
     frame: u32,
@@ -115,9 +114,14 @@ pub(crate) fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) 
 }
 
 impl Chain {
-    pub(crate) fn new(lat: &LiquidLattice, points: &[MatterPoint], p: &Params) -> Self {
+    pub(crate) fn new(layout: &FluidDomainLayout, points: &[MatterPoint], p: &Params) -> Self {
         let registry = PrimitiveRegistry::with_builtin();
-        let pool_tiles = matter_pool_tiles(lat, u64::MAX);
+        let (dx, min, nodes) = (
+            layout.cell_size as f32,
+            field_min(layout),
+            matter_nodes(layout.cells),
+        );
+        let pool_tiles = matter_pool_tiles(nodes, u64::MAX);
         let pool = pool_len(pool_tiles) as u32;
         let mut graph = Graph::new();
         let pts = graph.add_node(Box::new(HostArray::new::<MatterPoint>(points.len() as u32)));
@@ -146,7 +150,7 @@ impl Chain {
             set(&mut graph, node, "active_count", points.len() as f32);
         }
         for node in [p2g, update, g2p] {
-            set(&mut graph, node, "cell_size", lat.cell_size());
+            set(&mut graph, node, "cell_size", dx);
             set(&mut graph, node, "pool_tiles", pool_tiles as f32);
             set(&mut graph, node, "step_dt", p.dt as f32);
         }
@@ -166,7 +170,7 @@ impl Chain {
                 );
             }
         }
-        let unit = momentum_unit(lat.cell_size(), p.dt);
+        let unit = momentum_unit(dx, p.dt);
         set(&mut graph, p2g, "momentum_unit", unit);
         set(&mut graph, update, "momentum_unit", unit);
         set(&mut graph, p2g, "lambda", p.lambda as f32);
@@ -206,8 +210,8 @@ impl Chain {
             tiles,
             p2g,
             pool_tiles,
-            origin: std::array::from_fn(|a| (lat.min()[a] / lat.cell_size()).round() as i32),
-            nodes: lat.nodes(),
+            origin: std::array::from_fn(|a| (min[a] / dx).round() as i32),
+            nodes,
             frame: 0,
         }
     }
@@ -271,20 +275,17 @@ fn layout() -> FluidDomainLayout {
     domain_layout(None, 1.0, 1.0 / 16.0).expect("16-cell unit domain")
 }
 
-fn lattice() -> LiquidLattice {
-    LiquidLattice::from_layout(&layout())
-}
-
 /// 512 points (8 per cell over a 4×4×4-cell blob) resting on the floor,
 /// with an affine velocity field, a non-zero C and volume ratios either side
 /// of 1, so every term of the transfer (stress, cohesion, walls, Liveliness)
 /// is exercised.
-fn fixture(lat: &LiquidLattice) -> Vec<MatterPoint> {
-    let dx = lat.cell_size();
+fn fixture(layout: &FluidDomainLayout) -> Vec<MatterPoint> {
+    let dx = layout.cell_size as f32;
+    let (min, nodes) = (field_min(layout), matter_nodes(layout.cells));
     let v0 = dx * dx * dx / 8.0;
-    let floor = lat.min()[1] + 3.0 * dx;
-    let centre_x = lat.min()[0] + 0.5 * (lat.nodes()[0] - 1) as f32 * dx;
-    let centre_z = lat.min()[2] + 0.5 * (lat.nodes()[2] - 1) as f32 * dx;
+    let floor = min[1] + 3.0 * dx;
+    let centre_x = min[0] + 0.5 * (nodes[0] - 1) as f32 * dx;
+    let centre_z = min[2] + 0.5 * (nodes[2] - 1) as f32 * dx;
     let mut out = Vec::with_capacity(512);
     for n in 0..512u32 {
         let (i, j, k) = (n % 8, (n / 8) % 8, n / 64);
@@ -350,20 +351,20 @@ fn max_errors(gpu: &[MatterPoint], cpu: &[Point]) -> (f64, f64) {
 
 #[test]
 fn matter_transfer_matches_reference() {
-    let lat = lattice();
-    let points = fixture(&lat);
+    let layout = layout();
+    let points = fixture(&layout);
     let p = params();
-    let mut chain = Chain::new(&lat, &points, &p);
+    let mut chain = Chain::new(&layout, &points, &p);
     chain.step();
     let gpu = chain.points();
     let mut cpu: Vec<Point> = points.iter().map(Point::from).collect();
-    reference::substep(&mut cpu, &lat, &p);
+    reference::substep(&mut cpu, &layout, &p);
     let (dx, dv) = max_errors(&gpu, &cpu);
     eprintln!("matter_transfer_matches_reference: max |Δx| = {dx:.3e} m, max |Δv| = {dv:.3e} m/s");
     let mut fixed: Vec<Point> = points.iter().map(Point::from).collect();
     reference::substep(
         &mut fixed,
-        &lat,
+        &layout,
         &Params {
             fixed_point: true,
             ..p
@@ -391,13 +392,13 @@ fn matter_transfer_matches_reference() {
 
 #[test]
 fn matter_grid_mass_matches_particle_mass() {
-    let lat = lattice();
-    let points = fixture(&lat);
+    let layout = layout();
+    let points = fixture(&layout);
     let p = params();
-    let mut chain = Chain::new(&lat, &points, &p);
+    let mut chain = Chain::new(&layout, &points, &p);
     chain.step();
     let accum = chain.accum();
-    let unit = f64::from(mass_unit(lat.cell_size())) / f64::from(MASS_SCALE);
+    let unit = f64::from(mass_unit(layout.cell_size as f32)) / f64::from(MASS_SCALE);
     let grid: f64 = accum.chunks_exact(4).map(|w| f64::from(w[3]) * unit).sum();
     let particles: f64 = points
         .iter()
@@ -415,30 +416,31 @@ fn matter_grid_mass_matches_particle_mass() {
 /// in tiles −1 and 0 of the pool.
 #[test]
 fn matter_accumulator_words_match_fixed_point_oracle() {
-    let lat = lattice();
-    let points = fixture(&lat);
+    let layout = layout();
+    let points = fixture(&layout);
     let p = params();
     assert!(
         points.iter().any(|pt| pt.position[0] < 0.0)
             && points.iter().any(|pt| pt.position[0] > 0.0),
         "the blob straddles tiles -1 and 0"
     );
-    let mut chain = Chain::new(&lat, &points, &p);
+    let mut chain = Chain::new(&layout, &points, &p);
     chain.step();
     let gpu = chain.accum();
     let mut fixed: Vec<Point> = points.iter().map(Point::from).collect();
     let grid = reference::substep(
         &mut fixed,
-        &lat,
+        &layout,
         &Params {
             fixed_point: true,
             ..p
         },
     );
-    let m_unit = f64::from(mass_unit(lat.cell_size()));
+    let m_unit = f64::from(mass_unit(layout.cell_size as f32));
     let to_mass = f64::from(MASS_SCALE) / m_unit;
-    let to_momentum =
-        f64::from(MOMENTUM_SCALE) / m_unit / f64::from(momentum_unit(lat.cell_size(), p.dt));
+    let to_momentum = f64::from(MOMENTUM_SCALE)
+        / m_unit
+        / f64::from(momentum_unit(layout.cell_size as f32, p.dt));
     // Large words sum f32 contributions of up to 1e8 that partly cancel, so
     // they differ from the f64 oracle by f32 precision: tens of LSB, about
     // 1e-10·dx/dt of velocity at a full node.
@@ -477,18 +479,18 @@ fn matter_accumulator_words_match_fixed_point_oracle() {
 
 #[test]
 fn matter_hundred_substeps_match_reference() {
-    let lat = lattice();
-    let points = fixture(&lat);
+    let layout = layout();
+    let points = fixture(&layout);
     let p = params();
-    let mut chain = Chain::new(&lat, &points, &p);
+    let mut chain = Chain::new(&layout, &points, &p);
     let mut cpu: Vec<Point> = points.iter().map(Point::from).collect();
     let mut fixed = cpu.clone();
     for step in 0..100 {
         chain.step();
-        reference::substep(&mut cpu, &lat, &p);
+        reference::substep(&mut cpu, &layout, &p);
         reference::substep(
             &mut fixed,
-            &lat,
+            &layout,
             &Params {
                 fixed_point: true,
                 tick_index: step,

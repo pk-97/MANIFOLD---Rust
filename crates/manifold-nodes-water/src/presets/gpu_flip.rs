@@ -9,9 +9,9 @@
 //! surface. `render_def` puts it in the render of the shipped
 //! `WaterDamBreakGpuFlip.json`, which is its own Dam Break at 64, and
 //! `particle_view_def` draws that render's particles for the shipped
-//! `WaterDamBreakParticles.json`. Every node reads the domain's lattice off
-//! its wires, so a Resolution change reaches the running graph; the params
-//! only seed the planned sizes.
+//! `WaterDamBreakParticles.json`. Every node reads the domain's cell size,
+//! pool and fill box off its wires, so a Cell Size change reaches the
+//! running graph; the params only seed the planned sizes.
 use manifold_core::effect_graph_def::find_node_mut;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::initial_fill::{FillBox, add_initial_fill};
@@ -307,8 +307,8 @@ impl WaterScene {
         })
     }
 
-    /// The domain's own reading of the scene: the fill's sites, the padded
-    /// lattice and the particle count, from node.gpu_flip_domain's function.
+    /// The domain's own reading of the scene: the fill's sites, its box, the
+    /// pool and the particle count, from node.gpu_flip_domain's function.
     pub fn geometry(&self) -> GpuFlipGeometry {
         let read = |name: &str, default: f32| match name {
             "cell_metres" => self.cell_size() as f32,
@@ -471,16 +471,20 @@ fn feed_intervals(nodes: &[EffectGraphNode], wires: &mut Vec<EffectGraphWire>, d
     }
 }
 
-/// The padded lattice's scalars, as the domain publishes them.
-const LATTICE_WIRES: [&str; 7] = [
-    "lattice_min_x",
-    "lattice_min_y",
-    "lattice_min_z",
+/// The fill's box, as the domain publishes it: its first corner and cell
+/// size in metres, then its cells per axis.
+const FILL_BOX_WIRES: [&str; 7] = [
+    "fill_min_x",
+    "fill_min_y",
+    "fill_min_z",
     "cell_size",
-    "nodes_x",
-    "nodes_y",
-    "nodes_z",
+    "fill_cells_x",
+    "fill_cells_y",
+    "fill_cells_z",
 ];
+
+/// The step's cell size and tile pool, as the domain publishes them.
+const POOL_WIRES: [&str; 2] = ["cell_size", "pool_tiles"];
 
 /// The Bounds box in metres as placed, as the domain publishes it.
 const BOUNDS_WIRES: [&str; 6] = [
@@ -574,8 +578,9 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let fill = b.node(
         "fill",
         "node.liquid_fill",
-        padded_lattice(
+        seeded(
             &scene,
+            &FILL_BOX_WIRES,
             &[
                 ("pool_sites", int(geometry.pool_sites as usize)),
                 ("box_x0", int(sites[0][0] as usize)),
@@ -590,7 +595,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         ),
     );
     b.wires(domain, fill, &FILL_WIRES);
-    b.wires(domain, fill, &LATTICE_WIRES);
+    b.wires(domain, fill, &FILL_BOX_WIRES);
     b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch", "particle_capacity"]);
     b.wires(domain, fill, &BOUNDS_WIRES);
     b.wire((domain, "closed_faces"), fill, "closed_faces");
@@ -618,7 +623,6 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((step, "capped"), stats, "capped");
     b.wire(particles, state, "in");
     b.wire((stats, "stats_out"), state, "stats_in");
-    b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
     let frame = b.node("frame", "node.liquid_frame", json!({}));
     b.wire((state, "out"), frame, "particles");
@@ -1385,19 +1389,23 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     (id, "level_set")
 }
 
-/// The scene's padded lattice (the domain's `LATTICE_WIRES`) as params,
-/// plus `extra`. The wires carry any change at run time.
-fn padded_lattice(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
-    let lattice = scene.geometry().lattice;
-    let mut params = json!({"cell_size": float(f64::from(lattice.cell_size()))});
-    for (axis, name) in ["lattice_min_x", "lattice_min_y", "lattice_min_z"]
-        .into_iter()
-        .enumerate()
-    {
-        params[name] = float(f64::from(lattice.min()[axis]));
-    }
-    for (axis, name) in ["nodes_x", "nodes_y", "nodes_z"].into_iter().enumerate() {
-        params[name] = int(lattice.nodes()[axis] as usize);
+/// The domain's own values of `wires` for the scene as params, plus
+/// `extra`: they seed the planned sizes, and the wires carry any change at
+/// run time. Cell counts and the pool are Int params, the rest Float.
+fn seeded(scene: &WaterScene, wires: &[&str], extra: &[(&str, Value)]) -> Value {
+    let outputs = scene.geometry().outputs();
+    let mut params = json!({});
+    for &name in wires {
+        let value = outputs
+            .iter()
+            .find(|(port, _)| *port == name)
+            .map(|&(_, value)| value)
+            .expect("the domain publishes every seeded wire");
+        params[name] = if name.starts_with("fill_cells_") || name == "pool_tiles" {
+            int(value as usize)
+        } else {
+            float(f64::from(value))
+        };
     }
     for (name, value) in extra {
         params[*name] = value.clone();
@@ -1415,8 +1423,9 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     let step = b.node(
         STEP_NODE,
         "node.gpu_flip_step",
-        padded_lattice(
+        seeded(
             &scene,
+            &POOL_WIRES,
             &[
                 ("steps", int(scene.steps)),
                 ("flip", float(scene.flip)),
@@ -1432,7 +1441,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
             ],
         ),
     );
-    b.wires(domain, step, &LATTICE_WIRES);
+    b.wires(domain, step, &POOL_WIRES);
     b.wire((domain, "interval_duration"), step, "interval_duration");
     b.wire((domain, "gravity_x"), step, "gravity_x");
     b.wire((domain, "gravity"), step, "gravity_y");

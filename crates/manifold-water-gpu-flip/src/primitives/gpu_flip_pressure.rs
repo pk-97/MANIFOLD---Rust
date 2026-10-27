@@ -57,8 +57,6 @@ const COARSEST_SIDE: u32 = 4;
 /// zero red then black, then as many black then red, so the level's
 /// approximate solve stays symmetric.
 const COARSEST_SWEEPS: usize = 8;
-/// The longest lattice side the solver takes.
-pub(crate) const MAX_SIDE: u32 = 1024;
 manifold_core::testkit_visible! {
 /// Iterations one solve may run, FLIP Fluids' cap: the scalars buffer holds
 /// two per iteration. Rounds past the stop cost nothing: the template executes
@@ -86,7 +84,7 @@ const RESTRICT_ADD: u32 = 4;
 const WARM: u32 = 4;
 
 /// The smallest side s with s³ ≥ `tiles`.
-fn cube_side(tiles: u32) -> u32 {
+pub(crate) fn cube_side(tiles: u32) -> u32 {
     let mut side = 1u32;
     while u64::from(side).pow(3) < u64::from(tiles) {
         side += 1;
@@ -234,14 +232,6 @@ fn round_commands(coarse: usize, bodies: BodyRound) -> (u32, u32) {
         // apply folds p·s | finalize
         BodyRound::Without => (v_cycle + 6, 0),
     }
-}
-
-/// Why a lattice is refused, or None.
-pub(crate) fn lattice_refusal(lattice: [u32; 3]) -> Option<String> {
-    lattice
-        .iter()
-        .any(|&side| side == 0 || side > MAX_SIDE)
-        .then(|| format!("every lattice side must be 1 to {MAX_SIDE}, not {lattice:?}"))
 }
 
 manifold_core::testkit_visible! {
@@ -1998,13 +1988,6 @@ mod tests {
             assert!(pools.len() >= 2, "{p}");
             assert!(pools.windows(2).all(|w| w[1] == w[0].div_ceil(2)), "{p}");
         }
-    }
-
-    #[test]
-    fn refusals_name_the_lattice_and_count() {
-        assert!(lattice_refusal([64; 3]).is_none());
-        assert!(lattice_refusal([0, 64, 64]).unwrap().contains("1 to 1024"));
-        assert!(lattice_refusal([2048, 64, 64]).is_some());
     }
 
     /// The solve's prelude is the arm, init, the start's check and the warm

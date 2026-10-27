@@ -203,9 +203,88 @@ impl SourceFloor {
     }
 }
 
+/// The six-bit closed-wall mask (bits −X +X −Y +Y −Z +Z) from a domain's
+/// `closed_*` toggles; a missing toggle is closed.
+pub fn closed_faces(params: &ParamValues) -> u32 {
+    [
+        "closed_neg_x",
+        "closed_pos_x",
+        "closed_neg_y",
+        "closed_pos_y",
+        "closed_neg_z",
+        "closed_pos_z",
+    ]
+    .iter()
+    .enumerate()
+    .fold(0, |mask, (bit, name)| {
+        let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
+        mask | (u32::from(closed) << bit)
+    })
+}
+
+/// Signed distance from `x` to the Wall faces of the Bounds box `lo`..`hi`
+/// (`walls` bits −X +X −Y +Y −Z +Z): the nearest face's distance, positive on
+/// the water side, `1e30` with no Wall face. Past a Wall face it is minus the
+/// length of the per-axis overshoots, so two Walls meeting at an edge give a
+/// Euclidean distance. Open faces are not solids and contribute nothing. The
+/// step's `walls_distance` and `liquid_solid_distance_body.wgsl` compute the
+/// same formula.
+pub fn bounds_distance(x: [f32; 3], lo: [f32; 3], hi: [f32; 3], walls: u32) -> f32 {
+    let mut nearest = 1.0e30_f32;
+    let mut overshoot_squared = 0.0_f32;
+    let mut beyond = false;
+    for a in 0..3 {
+        let mut axis_overshoot = 0.0_f32;
+        if walls & (1u32 << (2 * a)) != 0 {
+            let d = x[a] - lo[a];
+            nearest = nearest.min(d);
+            axis_overshoot = axis_overshoot.min(d);
+        }
+        if walls & (1u32 << (2 * a + 1)) != 0 {
+            let d = hi[a] - x[a];
+            nearest = nearest.min(d);
+            axis_overshoot = axis_overshoot.min(d);
+        }
+        beyond |= axis_overshoot < 0.0;
+        overshoot_squared += axis_overshoot * axis_overshoot;
+    }
+    if beyond {
+        -overshoot_squared.sqrt()
+    } else {
+        nearest
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_distance_is_the_nearest_wall_and_euclidean_past_walls() {
+        // A box off the cell grid, different on every axis.
+        let (lo, hi) = ([-1.0, -2.0, -3.0], [2.0, 3.0, 4.5]);
+        let all = 0b11_1111;
+        let open_top = all & !(1 << 3);
+        // Inside: the nearest face. −X is 1 m away, the rest are further.
+        assert_eq!(bounds_distance([0.0, 0.5, 0.0], lo, hi, all), 1.0);
+        // Only the floor (−Y) is a Wall: 2.5 m up from it.
+        assert_eq!(bounds_distance([0.0, 0.5, 0.0], lo, hi, 1 << 2), 2.5);
+        // No Wall face: free space everywhere.
+        assert_eq!(bounds_distance([0.0, 0.5, 0.0], lo, hi, 0), 1.0e30);
+        assert_eq!(bounds_distance([40.0, -9.0, 7.0], lo, hi, 0), 1.0e30);
+        // Past one Wall: minus the overshoot. Past −X by 3 m.
+        assert_eq!(bounds_distance([-4.0, 0.5, 0.0], lo, hi, all), -3.0);
+        // Past two Walls at an edge: minus the length of the overshoots,
+        // 3 m past −X and 4 m past +Y.
+        assert_eq!(bounds_distance([-4.0, 7.0, 0.0], lo, hi, all), -5.0);
+        // The same point with +Y Open: only −X is a solid there.
+        assert_eq!(bounds_distance([-4.0, 7.0, 0.0], lo, hi, open_top), -3.0);
+        // Past an Open face alone is free space, and the Open face's own
+        // distance never lowers the answer.
+        assert_eq!(bounds_distance([0.0, 7.0, 0.0], lo, hi, open_top), 1.0);
+        // On the plane of a Wall the distance is 0.
+        assert_eq!(bounds_distance([2.0, 0.5, 0.0], lo, hi, all), 0.0);
+    }
 
     /// At 1 mm the water spans 504 tiles on y (4.032 m) and 2040 on x and z.
     #[test]

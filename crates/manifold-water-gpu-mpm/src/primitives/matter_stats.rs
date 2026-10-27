@@ -30,9 +30,9 @@ struct StatsParams {
     node_count: u32,
     point_groups: u32,
     node_groups: u32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    field_min_x: f32,
+    field_min_y: f32,
+    field_min_z: f32,
     lambda: f32,
     gravity_x: f32,
     gravity_y: f32,
@@ -77,7 +77,7 @@ manifold_node_engine::primitive! {
         grid: Array(MatterGridNode) required,
         accum: Array(i32) required,
         stats: Array(u32) required,
-        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        field_min_x: ScalarF32 optional, field_min_y: ScalarF32 optional, field_min_z: ScalarF32 optional,
         pool_tiles: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         lambda: ScalarF32 optional,
@@ -91,9 +91,9 @@ manifold_node_engine::primitive! {
         stats_out: Array(u32),
     },
     params: [
-        ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_x"), label: "Field Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_y"), label: "Field Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_min_z"), label: "Field Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("pool_tiles"), label: "Pool Tiles", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
@@ -148,7 +148,8 @@ impl Primitive for MatterStats {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice_min = ["lattice_min_x", "lattice_min_y", "lattice_min_z"]
+        // The potential's datum: potential energy is measured from field_min.
+        let field_min = ["field_min_x", "field_min_y", "field_min_z"]
             .map(|name| ctx.scalar_or_param(name, 0.0));
         let pool_tiles = ctx
             .scalar_or_param("pool_tiles", 1.0)
@@ -213,9 +214,9 @@ impl Primitive for MatterStats {
             node_count,
             point_groups,
             node_groups,
-            lattice_min_x: lattice_min[0],
-            lattice_min_y: lattice_min[1],
-            lattice_min_z: lattice_min[2],
+            field_min_x: field_min[0],
+            field_min_y: field_min[1],
+            field_min_z: field_min[2],
             lambda,
             gravity_x: gravity[0],
             gravity_y: gravity[1],

@@ -25,14 +25,15 @@ use manifold_node_engine::{
     persistence::PrimitiveRegistry, state_store::StateStore,
 };
 use manifold_nodes_water::presets::gpu_flip::{STEP_NODE, WaterScene, water_def};
+use manifold_water_gpu_flip::primitives::gpu_flip_step::BOX_BAND_CELLS;
 #[cfg(test)]
 use manifold_water_gpu_flip::primitives::gpu_flip_step::pool_tiles;
 #[cfg(test)]
 use manifold_water_liquid::fluid_particles::FaceSample;
 #[cfg(test)]
-use manifold_water_liquid::primitives::face_sample_component::solver_origin_cell;
-#[cfg(test)]
 use manifold_water_liquid::testkit::world_box::from_pool_under;
+#[cfg(test)]
+use manifold_water_liquid::tile_pool::solver_origin_cell;
 
 #[cfg(test)]
 const G: f64 = 9.81;
@@ -183,7 +184,9 @@ impl Run {
     }
 
     /// The water's volume and free-surface area, read from the surface's level
-    /// set (negative inside the water, a distance near the surface). Each node
+    /// set (negative inside the water, a distance near the surface), every
+    /// element of its pool: a free slot and the canonical element hold air
+    /// three cells out, which adds nothing. Each node
     /// holds the share of its cell the water fills: a linear ramp over one node
     /// spacing across the zero level, so a rising surface moves the volume
     /// smoothly instead of a whole node layer at a time. The area is the same
@@ -194,17 +197,16 @@ impl Run {
             self.scene.surface_scale, 1,
             "the lattice read assumes the default surface scale"
         );
-        let geometry = self.scene.geometry();
-        let outputs = geometry.outputs();
-        let nodes: usize = ["mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z"]
-            .iter()
-            .map(|name| outputs.iter().find(|(port, _)| port == name).unwrap().1 as usize)
-            .product();
-        let level_set: Vec<f32> = self.read_at(
-            node_ending(&self.graph, "liquid_carry_into_solids"),
-            "out",
-            nodes,
-        );
+        let carry = node_ending(&self.graph, "liquid_carry_into_solids");
+        let resource = output_of(&self.plan, carry, "out");
+        let elements = self
+            .exec
+            .host_array_buffer(&self.graph, &self.plan, resource)
+            .expect("the surface's level set is a host read")
+            .size as usize
+            / 4;
+        assert_eq!(elements % 512, 1, "the level set holds a whole pool");
+        let level_set: Vec<f32> = self.read_at(carry, "out", elements);
         let dx = self.scene.cell_size();
         let (mut filled, mut skin) = (0.0, 0.0);
         for &phi in &level_set {
@@ -311,12 +313,18 @@ impl Run {
     }
 
     pub fn n(&self) -> usize {
-        self.solver_grid().cells()[0] as usize
+        self.window().1[0] as usize
     }
 
-    fn solver_grid(&self) -> manifold_water_liquid::lattice::FlipSolverGrid {
-        manifold_water_liquid::lattice::FlipSolverGrid::from_lattice(
-            manifold_water_liquid::lattice::LiquidLattice::from_layout(&self.scene.layout()),
+    /// The dense window the proofs read the step's pooled fields over: the
+    /// box and its walls' band, from half the band below the box's first
+    /// corner (min in metres, then cells per axis).
+    fn window(&self) -> ([f32; 3], [u32; 3]) {
+        let layout = self.scene.layout();
+        let half_band = 0.5 * BOX_BAND_CELLS as f32 * layout.cell_size as f32;
+        (
+            layout.min.map(|v| v - half_band),
+            layout.cells.map(|n| n + BOX_BAND_CELLS),
         )
     }
 
@@ -357,7 +365,7 @@ impl Run {
         let (n, h, min) = (
             self.n(),
             self.scene.cell_size(),
-            self.solver_grid().min().map(f64::from),
+            self.window().0.map(f64::from),
         );
         let radius = 0.866_025_4 * h;
         let mut water = vec![0.0; n.pow(3)];
@@ -394,14 +402,13 @@ impl Run {
         [words[n], words[n + 1], words[n + 2]]
     }
 
-    /// The step's pool, `P` tiles, and the world cell of its solver grid's
+    /// The step's pool, `P` tiles, and the world cell of its window's
     /// first cell.
     #[cfg(test)]
     fn pool(&self) -> (u32, [i32; 3]) {
-        let grid = self.solver_grid();
         (
-            pool_tiles(grid.cells()),
-            solver_origin_cell(grid.min(), self.scene.cell_size() as f32),
+            pool_tiles(self.scene.layout().cells),
+            solver_origin_cell(self.window().0, self.scene.cell_size() as f32),
         )
     }
 
@@ -410,7 +417,7 @@ impl Run {
     /// into the dense `(n + 1)^3` records.
     #[cfg(test)]
     pub(super) fn faces(&self) -> Vec<FaceSample> {
-        let cells = self.solver_grid().cells();
+        let cells = self.window().1;
         let (pool_tiles, origin) = self.pool();
         let (pool, _, table) = self.pooled_outputs();
         from_pool_under(&pool, &table, pool_tiles, origin, cells.map(|n| n + 1))

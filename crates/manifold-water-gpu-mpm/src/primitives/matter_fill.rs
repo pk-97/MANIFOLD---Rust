@@ -1,5 +1,5 @@
 //! `node.matter_fill` — seed a matter domain's points: a pool of the lowest authored cells plus one
-//! box, in lattice order. Mesh fills join in P3b.
+//! box, in cell order. Mesh fills join in P3b.
 
 use std::borrow::Cow;
 
@@ -13,18 +13,78 @@ use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::lattice::LiquidLattice;
+
+/// Most cells per axis the `fill_cells_*` wires may carry.
+const MAX_FILL_CELLS: u32 = 4096;
+
+/// The grid box a fill seeds, from the domain's `fill_min_*`, `cell_size` and
+/// `fill_cells_*` scalars.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FillGrid {
+    /// The box's first corner.
+    pub(crate) min: [f32; 3],
+    pub(crate) cell_size: f32,
+    pub(crate) cells: [u32; 3],
+}
+
+impl FillGrid {
+    /// The grid box on the wires `read` finds (`scalar_or_param`; the
+    /// defaults are the 4 m Dam Break box at cell size 0.0625 m). A wire no
+    /// domain could have produced is refused by name: cell counts must be
+    /// whole and from 1 to [`MAX_FILL_CELLS`], the cell size positive, the
+    /// corner finite.
+    pub(crate) fn read(read: impl Fn(&str, f32) -> f32) -> Result<Self, String> {
+        let cells = |name: &str| {
+            let value = read(name, 64.0);
+            if value.fract() == 0.0 && (1.0..=MAX_FILL_CELLS as f32).contains(&value) {
+                Ok(value as u32)
+            } else {
+                Err(format!(
+                    "fill wire {name} is {value}; it must be a whole cell count from 1 to {MAX_FILL_CELLS}"
+                ))
+            }
+        };
+        let cells = [
+            cells("fill_cells_x")?,
+            cells("fill_cells_y")?,
+            cells("fill_cells_z")?,
+        ];
+        let cell_size = read("cell_size", 0.0625);
+        if !(cell_size.is_finite() && cell_size > 0.0) {
+            return Err(format!(
+                "fill wire cell_size is {cell_size}; it must be positive"
+            ));
+        }
+        let corner = |name: &str, default: f32| {
+            let value = read(name, default);
+            value
+                .is_finite()
+                .then_some(value)
+                .ok_or_else(|| format!("fill wire {name} is {value}; it must be finite"))
+        };
+        let min = [
+            corner("fill_min_x", -2.0)?,
+            corner("fill_min_y", 0.0)?,
+            corner("fill_min_z", -2.0)?,
+        ];
+        Ok(Self {
+            min,
+            cell_size,
+            cells,
+        })
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FillUniforms {
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    fill_min_x: f32,
+    fill_min_y: f32,
+    fill_min_z: f32,
     cell_size: f32,
-    nodes_x: i32,
-    nodes_y: i32,
-    nodes_z: i32,
+    fill_cells_x: i32,
+    fill_cells_y: i32,
+    fill_cells_z: i32,
     pool_cells: i32,
     column_x0: i32,
     column_x1: i32,
@@ -43,11 +103,11 @@ struct FillUniforms {
 manifold_node_engine::primitive! {
     name: MatterFill,
     type_id: "node.matter_fill",
-    purpose: "Seed material points at rest in lattice order: every authored cell below the pool height, then one box of cells above it. Each cell holds 2³ or 3³ points, one per sub-cell, jittered by a seeded hash; ids count births from 1. Outputs the points and their count.",
+    purpose: "Seed material points at rest in cell order: every authored cell below the pool height, then one box of cells above it. Each cell holds 2³ or 3³ points, one per sub-cell, jittered by a seeded hash; ids count births from 1. Outputs the points and their count.",
     inputs: {
-        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        fill_min_x: ScalarF32 optional, fill_min_y: ScalarF32 optional, fill_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        fill_cells_x: ScalarF32 optional, fill_cells_y: ScalarF32 optional, fill_cells_z: ScalarF32 optional,
         pool_cells: ScalarF32 optional,
         column_x0: ScalarF32 optional, column_x1: ScalarF32 optional,
         column_y0: ScalarF32 optional, column_y1: ScalarF32 optional,
@@ -65,13 +125,13 @@ manifold_node_engine::primitive! {
         count: ScalarF32,
     },
     params: [
-        ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fill_min_x"), label: "Fill Min X", ty: ParamType::Float, default: ParamValue::Float(-2.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fill_min_y"), label: "Fill Min Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fill_min_z"), label: "Fill Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_x"), label: "Nodes X", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((8.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((8.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((8.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fill_cells_x"), label: "Fill Cells X", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((1.0, MAX_FILL_CELLS as f32)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fill_cells_y"), label: "Fill Cells Y", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((1.0, MAX_FILL_CELLS as f32)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fill_cells_z"), label: "Fill Cells Z", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((1.0, MAX_FILL_CELLS as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("pool_cells"), label: "Pool Height (cells)", ty: ParamType::Int, default: ParamValue::Float(3.0), range: Some((0.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("column_x0"), label: "Box Min X (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("column_x1"), label: "Box Max X (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
@@ -85,7 +145,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("epoch"), label: "Epoch", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.matter_state's seed (copied in when the domain's epoch changes) and its count. Cell boxes are in the authored domain's cells (lattice minus 3 padding nodes per side), from node.matter_domain's fill outputs; the box is clipped above the pool so no cell seeds twice. Points per Cell is 8 or 27.",
+    composition_notes: "Feeds node.matter_state's seed (copied in when the domain's epoch changes) and its count. Cell boxes are in the authored domain's cells, from node.matter_domain's fill outputs (fill_min, fill_cells); the box is clipped above the pool so no cell seeds twice. Points per Cell is 8 or 27.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Fill", category: Atom },
     summary: "Places the liquid's starting particles in the domain: a pool on the floor plus one box.",
@@ -151,8 +211,12 @@ impl Primitive for MatterFill {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter Fill") else {
-            return;
+        let grid = match FillGrid::read(|name, default| ctx.scalar_or_param(name, default)) {
+            Ok(grid) => grid,
+            Err(refusal) => {
+                ctx.error(format!("Matter Fill: {refusal}"));
+                return;
+            }
         };
         let int =
             |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
@@ -176,7 +240,7 @@ impl Primitive for MatterFill {
         let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
         // With colliders the seeds depend on their pose at the epoch's start.
         let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
-        let cells = lattice.cells();
+        let cells = grid.cells;
         let column =
             std::array::from_fn(|d| [column[d][0].min(cells[d]), column[d][1].min(cells[d])]);
         let pool = pool.min(cells[1]);
@@ -231,13 +295,13 @@ impl Primitive for MatterFill {
             _ => (buffer, buffer, buffer, 0),
         };
         let key = [
-            lattice.min()[0].to_bits(),
-            lattice.min()[1].to_bits(),
-            lattice.min()[2].to_bits(),
-            lattice.cell_size().to_bits(),
-            lattice.nodes()[0],
-            lattice.nodes()[1],
-            lattice.nodes()[2],
+            grid.min[0].to_bits(),
+            grid.min[1].to_bits(),
+            grid.min[2].to_bits(),
+            grid.cell_size.to_bits(),
+            cells[0],
+            cells[1],
+            cells[2],
             pool,
             column[0][0],
             column[0][1],
@@ -256,13 +320,13 @@ impl Primitive for MatterFill {
         }
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = FillUniforms {
-            lattice_min_x: lattice.min()[0],
-            lattice_min_y: lattice.min()[1],
-            lattice_min_z: lattice.min()[2],
-            cell_size: lattice.cell_size(),
-            nodes_x: lattice.nodes()[0] as i32,
-            nodes_y: lattice.nodes()[1] as i32,
-            nodes_z: lattice.nodes()[2] as i32,
+            fill_min_x: grid.min[0],
+            fill_min_y: grid.min[1],
+            fill_min_z: grid.min[2],
+            cell_size: grid.cell_size,
+            fill_cells_x: cells[0] as i32,
+            fill_cells_y: cells[1] as i32,
+            fill_cells_z: cells[2] as i32,
             pool_cells: pool as i32,
             column_x0: column[0][0] as i32,
             column_x1: column[0][1] as i32,
@@ -345,6 +409,41 @@ mod tests {
                 .unwrap_err()
                 .contains("exact f32 range")
         );
+    }
+
+    /// Wires no domain could have produced are refused by their name instead
+    /// of clamping to a one-cell box.
+    #[test]
+    fn matter_fill_wires_refuse_by_name() {
+        let wires = |name: &str, default: f32| match name {
+            "fill_cells_x" => 13.0,
+            "fill_cells_y" => 5.0,
+            "fill_cells_z" => 40.0,
+            "cell_size" => 0.125,
+            "fill_min_y" => 0.5,
+            _ => default,
+        };
+        let grid = FillGrid::read(wires).unwrap();
+        assert_eq!(grid.cells, [13, 5, 40]);
+        assert_eq!(grid.cell_size, 0.125);
+        assert_eq!(grid.min, [-2.0, 0.5, -2.0]);
+        for (wire, value) in [
+            ("fill_cells_y", 0.0),
+            ("fill_cells_x", 71.5),
+            ("fill_cells_z", f32::NAN),
+            ("fill_cells_z", MAX_FILL_CELLS as f32 + 1.0),
+            ("cell_size", 0.0),
+            ("fill_min_y", f32::INFINITY),
+        ] {
+            let refused = FillGrid::read(|name, default| {
+                if name == wire {
+                    value
+                } else {
+                    wires(name, default)
+                }
+            });
+            assert!(refused.unwrap_err().contains(wire), "{wire} = {value}");
+        }
     }
 
     #[test]

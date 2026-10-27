@@ -96,9 +96,9 @@ fn body(
     gravity: f32,
     gravity_z: f32,
     momentum_unit: f32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    field_min_x: f32,
+    field_min_y: f32,
+    field_min_z: f32,
     body_count: i32,
     tick_index: i32,
     substep_in_tick: i32,
@@ -137,7 +137,7 @@ fn body(
     }
     ts_home(idx);
     let node = ts_cell_coord(idx);
-    let origin = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
+    let origin = vec3<f32>(field_min_x, field_min_y, field_min_z);
     let x = vec3<f32>(node) * cell_size;
     let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));
     var accel = vec3<f32>(gravity_x, gravity, gravity_z);

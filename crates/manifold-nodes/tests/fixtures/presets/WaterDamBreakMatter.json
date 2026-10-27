@@ -1069,39 +1069,39 @@
         "wires": [
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_x",
+            "fromPort": "fill_min_x",
             "toNode": 2,
-            "toPort": "lattice_min_x"
+            "toPort": "fill_min_x"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_x",
+            "fromPort": "field_min_x",
             "toNode": 8,
-            "toPort": "lattice_min_x"
+            "toPort": "field_min_x"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_y",
+            "fromPort": "fill_min_y",
             "toNode": 2,
-            "toPort": "lattice_min_y"
+            "toPort": "fill_min_y"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_y",
+            "fromPort": "field_min_y",
             "toNode": 8,
-            "toPort": "lattice_min_y"
+            "toPort": "field_min_y"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_z",
+            "fromPort": "fill_min_z",
             "toNode": 2,
-            "toPort": "lattice_min_z"
+            "toPort": "fill_min_z"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_z",
+            "fromPort": "field_min_z",
             "toNode": 8,
-            "toPort": "lattice_min_z"
+            "toPort": "field_min_z"
           },
           {
             "fromNode": 1,
@@ -1123,21 +1123,21 @@
           },
           {
             "fromNode": 1,
-            "fromPort": "nodes_x",
+            "fromPort": "fill_cells_x",
             "toNode": 2,
-            "toPort": "nodes_x"
+            "toPort": "fill_cells_x"
           },
           {
             "fromNode": 1,
-            "fromPort": "nodes_y",
+            "fromPort": "fill_cells_y",
             "toNode": 2,
-            "toPort": "nodes_y"
+            "toPort": "fill_cells_y"
           },
           {
             "fromNode": 1,
-            "fromPort": "nodes_z",
+            "fromPort": "fill_cells_z",
             "toNode": 2,
-            "toPort": "nodes_z"
+            "toPort": "fill_cells_z"
           },
           {
             "fromNode": 1,
@@ -1651,21 +1651,21 @@
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_x",
+            "fromPort": "field_min_x",
             "toNode": 6,
-            "toPort": "lattice_min_x"
+            "toPort": "field_min_x"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_y",
+            "fromPort": "field_min_y",
             "toNode": 6,
-            "toPort": "lattice_min_y"
+            "toPort": "field_min_y"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_z",
+            "fromPort": "field_min_z",
             "toNode": 6,
-            "toPort": "lattice_min_z"
+            "toPort": "field_min_z"
           },
           {
             "fromNode": 1,
@@ -1783,21 +1783,21 @@
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_x",
+            "fromPort": "field_min_x",
             "toNode": 15,
-            "toPort": "lattice_min_x"
+            "toPort": "field_min_x"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_y",
+            "fromPort": "field_min_y",
             "toNode": 15,
-            "toPort": "lattice_min_y"
+            "toPort": "field_min_y"
           },
           {
             "fromNode": 1,
-            "fromPort": "lattice_min_z",
+            "fromPort": "field_min_z",
             "toNode": 15,
-            "toPort": "lattice_min_z"
+            "toPort": "field_min_z"
           },
           {
             "fromNode": 1,
@@ -2471,7 +2471,6 @@
             "handle": "Particle Blobs",
             "id": 6,
             "nodeId": "liquid_blobs",
-            "params": {},
             "typeId": "node.shape_particle_blobs"
           },
           {

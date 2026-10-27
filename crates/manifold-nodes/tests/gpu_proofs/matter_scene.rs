@@ -18,7 +18,6 @@ use manifold_node_engine::{
 };
 use manifold_physics::clock::TICK;
 use manifold_water_gpu_mpm::matter::{MatterPoint, MatterTickStats, STATS_WORDS};
-use manifold_water_liquid::lattice::LiquidLattice;
 
 /// Scene settings, in the domain node's own terms.
 #[derive(Clone, Debug)]
@@ -78,7 +77,8 @@ pub(crate) struct MatterScene {
     points: ResourceId,
     stats: ResourceId,
     frame_b: ResourceId,
-    lattice: LiquidLattice,
+    /// The cell size every Matter atom reads, in metres.
+    cell_size: f32,
     frame_count: u32,
     /// Seconds per display frame; one fixed tick unless set.
     frame_interval: f64,
@@ -102,14 +102,14 @@ const WALL_VELOCITY: [&str; 6] = [
     "wall_velocity_hi_z",
 ];
 
-const LATTICE: [&str; 7] = [
-    "lattice_min_x",
-    "lattice_min_y",
-    "lattice_min_z",
+const FILL_BOX: [&str; 7] = [
+    "fill_min_x",
+    "fill_min_y",
+    "fill_min_z",
     "cell_size",
-    "nodes_x",
-    "nodes_y",
-    "nodes_z",
+    "fill_cells_x",
+    "fill_cells_y",
+    "fill_cells_z",
 ];
 
 impl MatterScene {
@@ -138,10 +138,10 @@ impl MatterScene {
                 .connect(from, to)
                 .unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
         }
-        for port in LATTICE {
+        for port in FILL_BOX {
             wire(&mut graph, (domain, port), (fill, port));
         }
-        for port in ["lattice_min_x", "lattice_min_y", "lattice_min_z"] {
+        for port in ["field_min_x", "field_min_y", "field_min_z"] {
             wire(&mut graph, (domain, port), (stats, port));
         }
         for node in [p2g, update, g2p] {
@@ -239,9 +239,9 @@ impl MatterScene {
             (state, "reaction_in"),
         );
         for port in [
-            "lattice_min_x",
-            "lattice_min_y",
-            "lattice_min_z",
+            "field_min_x",
+            "field_min_y",
+            "field_min_z",
             "cell_size",
             "gravity_x",
             "gravity",
@@ -384,9 +384,9 @@ impl MatterScene {
         let points = output(state, "out");
         let stats_res = output(state, "stats");
         let frame_b = output(frame, "particles_b");
-        let lattice = LiquidLattice::from_layout(
-            &domain_layout(None, settings.domain_size, cell_size).expect("scene layout"),
-        );
+        let cell_size = domain_layout(None, settings.domain_size, cell_size)
+            .expect("scene layout")
+            .cell_size as f32;
         let mut scene = Self {
             graph,
             plan,
@@ -398,7 +398,7 @@ impl MatterScene {
             points,
             stats: stats_res,
             frame_b,
-            lattice,
+            cell_size,
             frame_count: 0,
             frame_interval: TICK,
             colliders,
@@ -503,9 +503,9 @@ impl MatterScene {
             "shapes",
             "atlas",
             "body_count",
-            "lattice_min_x",
-            "lattice_min_y",
-            "lattice_min_z",
+            "field_min_x",
+            "field_min_y",
+            "field_min_z",
         ] {
             wire(graph, (domain, port), (update, port));
         }
@@ -516,8 +516,8 @@ impl MatterScene {
         transforms
     }
 
-    pub(crate) fn lattice(&self) -> LiquidLattice {
-        self.lattice
+    pub(crate) fn cell_size(&self) -> f32 {
+        self.cell_size
     }
 
     /// Simulated seconds at the end of the last frame's ticks; 0 before any frame.

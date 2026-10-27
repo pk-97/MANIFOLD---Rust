@@ -4,6 +4,7 @@ use super::*;
 use manifold_node_engine::scene::world_tiles::lattice_origin;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::substep_history::PooledFaces;
+use manifold_water_liquid::tile_pool::pool_tiles_wire;
 
 impl Primitive for GpuFlipStep {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
@@ -61,29 +62,18 @@ impl Primitive for GpuFlipStep {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(lattice) = LiquidLattice::from_wires(ctx, NAME) else {
+        let h = ctx.scalar_or_param("cell_size", 0.0625);
+        if !(h.is_finite() && h > 0.0) {
+            ctx.error(format!("{NAME}: cell_size is {h}; it must be positive"));
             return;
+        }
+        let pool = match pool_tiles_wire(|name, default| ctx.scalar_or_param(name, default)) {
+            Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
         };
-        let solver = FlipSolverGrid::from_lattice(lattice);
-        let cells = solver.cells();
-        ctx.outputs.set_transform("grid_bounds", solver.bounds());
-        for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]
-            .into_iter()
-            .zip(solver.nodes())
-            .chain(
-                ["face_cells_x", "face_cells_y", "face_cells_z"]
-                    .into_iter()
-                    .zip(cells),
-            )
-            .chain([("face_valid_layers", FACE_VALID_LAYERS)])
-        {
-            ctx.outputs
-                .set_scalar(port, ParamValue::Float(value as f32));
-        }
-        if let Some(reason) = lattice_refusal(cells) {
-            ctx.error(format!("{NAME}: {reason}. Raise Cell Size."));
-            return;
-        }
         let field = match ForceLatticeBinding::read(
             ctx,
             ctx.inputs.array("forces"),
@@ -133,7 +123,6 @@ impl Primitive for GpuFlipStep {
             .filter(|limit| limit.is_finite() && *limit > 0.0)
             .unwrap_or(0.0);
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
-        let h = lattice.cell_size();
         let gravity = [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0)]
             .map(|(name, default)| ctx.scalar_or_param(name, default));
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
@@ -199,16 +188,13 @@ impl Primitive for GpuFlipStep {
             ));
             return;
         }
-        let level =
-            match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), pool_tiles(cells)) {
-                Ok(level) => level,
-                Err(error) => {
-                    ctx.error(format!("{NAME}: {error}"));
-                    return;
-                }
-            };
-        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-        let box_min = solver.min();
+        let level = match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), pool) {
+            Ok(level) => level,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        };
         let regions_in = ctx.inputs.array("regions");
         let region_sites_in = ctx.inputs.array("region_sites");
         let region_count = match regions_in {
@@ -231,13 +217,12 @@ impl Primitive for GpuFlipStep {
         let band = step_band();
         if let Err(error) = self.state.reserve(
             ctx.gpu_encoder().device,
-            cells,
+            pool,
             u64::from(capacity),
             sheet_rate > 0.0,
         ) {
             ctx.error(format!(
-                "{NAME}: a {}×{}×{} lattice with {capacity} particle slots needs storage the device cannot give: {error}. Raise Cell Size.",
-                cells[0], cells[1], cells[2]
+                "{NAME}: a pool of {pool} tiles with {capacity} particle slots needs storage the device cannot give: {error}. Raise Cell Size."
             ));
             return;
         }
@@ -443,9 +428,9 @@ impl Primitive for GpuFlipStep {
         ctx.outputs
             .set_scalar("pool_tiles", ParamValue::Float(pool as f32));
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-        if let Err(error) =
-            self.state
-                .reserve_box_points(ctx.gpu_encoder().device, &step.params, box_min, cells)
+        if let Err(error) = self
+            .state
+            .reserve_box_points(ctx.gpu_encoder().device, &step.params)
         {
             ctx.error(format!("{NAME}: {error}"));
             return;

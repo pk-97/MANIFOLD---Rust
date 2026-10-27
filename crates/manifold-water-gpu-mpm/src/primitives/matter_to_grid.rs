@@ -18,11 +18,11 @@ use manifold_node_engine::ports::ArrayType;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::active_elements;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin, table_entries};
-use manifold_water_liquid::primitives::face_sample_component::pool_tiles_wire;
 use manifold_water_liquid::primitives::prefix_scan::{ScanLabels, open_gate};
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortCount, SortJob, SortLabels, block_keys, record_read,
 };
+use manifold_water_liquid::tile_pool::pool_tiles_wire;
 use manifold_water_liquid::world_tiles::{Allocation, MATTER_POINTS, PointCount, WorldTiles};
 
 // The kernel after the table's read side it indexes its nodes through.

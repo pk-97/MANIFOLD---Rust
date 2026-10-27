@@ -4,11 +4,12 @@
 //! substep rule (D4). The clock, lattice, bodies and rigid owner are every
 //! GPU liquid's: `liquid`.
 
+use manifold_core::fluid_domain::FluidDomainLayout;
+use manifold_core::liquid_setup::LATTICE_PADDING_CELLS;
 use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use manifold_node_engine::scene::world_tiles::{TILE, TILE_CELLS, pool_len};
 use manifold_physics::clock::TICK;
-use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_water_liquid::world_tiles::{Reach, run_tiles};
 
 pub mod coupling;
@@ -371,16 +372,26 @@ pub fn lattice_nodes(nodes: [u32; 3]) -> u64 {
     nodes.iter().map(|&n| u64::from(n)).product()
 }
 
-/// Tiles Matter's pool holds for `lattice`: every tile its nodes can touch,
-/// wherever it sits on the world lattice, and the ring round them; or the
-/// whole tiles `budget_nodes` buys, at least one.
-pub fn matter_pool_tiles(lattice: &LiquidLattice, budget_nodes: u64) -> u32 {
+/// The nodes of Matter's box with its 3-cell margin, which the force lattices
+/// and the pool cover.
+pub fn matter_nodes(cells: [u32; 3]) -> [u32; 3] {
+    cells.map(|n| n + 1 + 2 * LATTICE_PADDING_CELLS)
+}
+
+/// The first node of Matter's margin: the box's first corner less the margin's
+/// cells. The force lattices and the potential's datum start here.
+pub fn field_min(layout: &FluidDomainLayout) -> [f32; 3] {
+    let pad = LATTICE_PADDING_CELLS as f32 * layout.cell_size as f32;
+    layout.min.map(|v| v - pad)
+}
+
+/// Tiles Matter's pool holds for a box with `nodes` per axis
+/// ([`matter_nodes`]): every tile its nodes can touch, wherever it sits on the
+/// world lattice, and the ring round them; or the whole tiles `budget_nodes`
+/// buys, at least one.
+pub fn matter_pool_tiles(nodes: [u32; 3], budget_nodes: u64) -> u32 {
     let ring = u64::from(MATTER_REACH.ring_max);
-    let wanted: u64 = lattice
-        .nodes()
-        .iter()
-        .map(|&n| run_tiles(n) + 2 * ring)
-        .product();
+    let wanted: u64 = nodes.iter().map(|&n| run_tiles(n) + 2 * ring).product();
     wanted.min(budget_nodes / u64::from(TILE_CELLS)).max(1) as u32
 }
 
@@ -589,19 +600,17 @@ mod tests {
     #[test]
     fn matter_pool_covers_the_box_and_its_ring_within_the_budget() {
         let layout = manifold_core::fluid_domain::domain_layout(None, 4.0, 0.0625).unwrap();
-        let lattice = LiquidLattice::from_layout(&layout);
-        assert_eq!(lattice.nodes(), [71; 3]);
-        assert_eq!(matter_pool_tiles(&lattice, u64::MAX), 12 * 12 * 12);
-        assert_eq!(matter_pool_tiles(&lattice, 100 * 512 + 7), 100);
-        assert_eq!(matter_pool_tiles(&lattice, 0), 1);
+        let nodes = matter_nodes(layout.cells);
+        assert_eq!(nodes, [71; 3]);
+        assert_eq!(matter_pool_tiles(nodes, u64::MAX), 12 * 12 * 12);
+        assert_eq!(matter_pool_tiles(nodes, 100 * 512 + 7), 100);
+        assert_eq!(matter_pool_tiles(nodes, 0), 1);
     }
 }
 
 #[cfg(test)]
 mod grid_budget_tests {
-    use manifold_water_liquid::lattice::LiquidLattice;
-
-    use super::lattice_nodes;
+    use super::{lattice_nodes, matter_nodes};
     use manifold_core::fluid_domain::domain_layout;
 
     use crate::primitives::matter_domain::admit_lattice;
@@ -614,11 +623,11 @@ mod grid_budget_tests {
         let mut largest_default = 0;
         for resolution in 8..=512 {
             let layout = domain_layout(None, 4.0, 4.0 / f64::from(resolution)).expect("layout");
-            let lattice = LiquidLattice::from_layout(&layout);
-            let nodes = lattice_nodes(lattice.nodes());
+            let per_axis = matter_nodes(layout.cells);
+            let nodes = lattice_nodes(per_axis);
             for budget in [8.0f32, 512.0] {
                 let fits = nodes as f64 <= f64::from(budget) * 1e6;
-                match admit_lattice(&lattice, budget) {
+                match admit_lattice(per_axis, budget) {
                     Ok(()) => assert!(fits, "res {resolution}"),
                     Err(error) => assert!(
                         !fits && error.contains("Grid Budget"),
@@ -626,7 +635,7 @@ mod grid_budget_tests {
                     ),
                 }
             }
-            if admit_lattice(&lattice, 8.0).is_ok() {
+            if admit_lattice(per_axis, 8.0).is_ok() {
                 largest_default = resolution;
             }
         }

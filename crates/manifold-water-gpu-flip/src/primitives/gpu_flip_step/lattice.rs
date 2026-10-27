@@ -14,22 +14,21 @@ pub(super) fn pool_face_bytes(pool_tiles: u32) -> u64 {
     pool_len(pool_tiles) * size_of::<FaceSample>() as u64
 }
 
-/// Bytes the step holds for itself at `cells` with `slots` particle slots,
+/// Bytes the step holds for itself on a pool of `pool` tiles with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
 /// [`LATTICE_CELL_ARRAYS`] pooled cell arrays, [`LATTICE_FACE_GRIDS`] pooled
 /// face grids, the pocket gate, the pocket sums, the coarse pockets and the
 /// world tiles. The pooled faces and φ are among them and are the node's
 /// `faces` and `distance` outputs.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64) -> u64 {
-    let pool = pool_tiles(cells);
+pub(crate) fn scratch_bytes(pool: u32, slots: u64) -> u64 {
     slots.max(1) * size_of::<FluidParticle>() as u64
         + LATTICE_CELL_ARRAYS * pool_cell_bytes(pool)
         + LATTICE_FACE_GRIDS * pool_face_bytes(pool)
         + POCKET_GATE_WORDS * 4
         + pocket_sum_bytes(pool)
         + pocket_coarse_bytes(level_pools(pool)[1])
-        + tile_scratch_bytes(cells)
+        + tile_scratch_bytes(pool)
 }
 
 /// The lattice's pooled cell arrays (`LatticeBuffers`): water, φ, the
@@ -51,9 +50,8 @@ pub(crate) const STEP_POOLED_BYTES_PER_CELL: u64 =
 /// (`pool_len` elements, the canonical element last); the pocket sums are a
 /// dense array over the pool's cells.
 pub(super) struct LatticeBuffers {
-    /// The box the step runs this tick; every array below is pooled, sized
-    /// by `pool_tiles` alone, so a new box of the same pool keeps them.
-    pub(super) cells: [u32; 3],
+    /// Every array below is pooled, sized by `pool_tiles` alone, so a new
+    /// box of the same pool keeps them.
     pub(super) pool_tiles: u32,
     pub(super) water: GpuBuffer,
     /// The `distance` output: shared, so it starts at zero and host proofs
@@ -120,16 +118,11 @@ pub(super) fn allocate_zeroed(device: &GpuDevice, bytes: u64) -> Result<GpuBuffe
 }
 
 impl LatticeBuffers {
-    pub(super) fn new(
-        device: &GpuDevice,
-        cells: [u32; 3],
-        pool_tiles: u32,
-    ) -> Result<Self, String> {
+    pub(super) fn new(device: &GpuDevice, pool_tiles: u32) -> Result<Self, String> {
         let cell = pool_cell_bytes(pool_tiles);
         let face = pool_face_bytes(pool_tiles);
         let coarse = pocket_coarse_bytes(level_pools(pool_tiles)[1]) / 2;
         Ok(Self {
-            cells,
             pool_tiles,
             water: allocate(device, cell)?,
             phi: allocate_zeroed(device, cell)?,

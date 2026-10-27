@@ -3,7 +3,7 @@
 // uniform (same size at binding 0 across entry points):
 //   points_main — each workgroup folds a fixed block of points, then a fixed
 //                 workgroup-memory tree;
-//   grid_main   — the same over lattice nodes;
+//   grid_main   — the same over grid nodes;
 //   finish_main — one workgroup folds the partials in a fixed order and
 //                 writes the 17 stats words.
 // Every sum runs in a fixed order, so stats are deterministic. Non-finite
@@ -48,9 +48,9 @@ struct StatsParams {
     node_count: u32,
     point_groups: u32,
     node_groups: u32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
+    field_min_x: f32,
+    field_min_y: f32,
+    field_min_z: f32,
     lambda: f32,
     gravity_x: f32,
     gravity_y: f32,
@@ -149,7 +149,8 @@ fn point_partial(pt: MatterPoint) -> Partial {
     }
     let m = v0 * params.density;
     let v = pt.velocity;
-    let rel = pt.position - vec3<f32>(params.lattice_min_x, params.lattice_min_y, params.lattice_min_z);
+    // field_min is the potential's datum: potential energy is -m g·(x - field_min).
+    let rel = pt.position - vec3<f32>(params.field_min_x, params.field_min_y, params.field_min_z);
     let g = vec3<f32>(params.gravity_x, params.gravity_y, params.gravity_z);
     var e = 0.5 * params.lambda * (j - 1.0) * (j - 1.0);
     if j >= 1.0 {

@@ -109,69 +109,6 @@ pub const CELL_AIR: u32 = 0;
 pub const CELL_LIQUID: u32 = 1;
 pub const CELL_SOLID: u32 = 2;
 
-/// Largest solid lattice side the atoms take.
-pub const MAX_GRID_NODES: u32 = 4096;
-
-/// Cells per axis of a whitewater grid over a solid lattice of `nodes`.
-pub fn grid_cells(nodes: [u32; 3]) -> Option<[u32; 3]> {
-    nodes
-        .iter()
-        .all(|&n| (3..=MAX_GRID_NODES).contains(&n))
-        .then(|| nodes.map(|n| n - 1))
-}
-
-/// Whitewater cells from the grid's first cell to the face grid's, on each
-/// axis: the face grid sits centred by a whole number of cells, the same on
-/// every axis (section 3.1), or the placement is a named refusal.
-pub fn face_offset(nodes: [u32; 3], face_cells: [u32; 3]) -> Result<[u32; 3], String> {
-    let cells = grid_cells(nodes)
-        .ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
-    let pad: [Option<u32>; 3] = std::array::from_fn(|a| {
-        let spare = cells[a].checked_sub(face_cells[a])?;
-        (face_cells[a] > 0 && spare % 2 == 0).then_some(spare / 2)
-    });
-    match pad {
-        [Some(x), Some(y), Some(z)] if x == y && y == z => Ok([x; 3]),
-        _ => Err(format!(
-            "a {face_cells:?}-cell face grid does not sit centred on the {cells:?}-cell whitewater grid by one whole number of cells on every axis"
-        )),
-    }
-}
-
-/// The whitewater reads face velocity at least one layer past the liquid.
-pub fn require_extended_faces(layers: f32) -> Result<(), String> {
-    if layers >= 1.0 {
-        Ok(())
-    } else {
-        Err(format!(
-            "the face grid carries velocity {layers} layers past the liquid; whitewater needs at least 1"
-        ))
-    }
-}
-
-/// The grid's first node and cell size, from the frame's `grid_bounds` (the
-/// scene box of the solid lattice's nodes) and its node counts. Cells that
-/// aren't cubes are a named refusal.
-pub fn grid_box(
-    bounds: manifold_node_engine::scene::transform::Transform,
-    nodes: [u32; 3],
-) -> Result<([f32; 3], f32), String> {
-    let cells = grid_cells(nodes)
-        .ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
-    let sizes: [f32; 3] = std::array::from_fn(|a| bounds.scale[a] / cells[a] as f32);
-    let size = sizes[0];
-    if !(size.is_finite() && size > 0.0) || sizes.iter().any(|s| (s - size).abs() > 1e-4 * size) {
-        return Err(format!(
-            "a {:?} m grid box over {nodes:?} nodes does not make cube cells",
-            bounds.scale
-        ));
-    }
-    Ok((
-        std::array::from_fn(|a| bounds.pos[a] - 0.5 * bounds.scale[a]),
-        size,
-    ))
-}
-
 /// Cell `index` of a grid of `cells`.
 pub fn cell_coords(cells: [u32; 3], index: usize) -> [u32; 3] {
     let [nx, ny, _] = cells.map(|n| n as usize);

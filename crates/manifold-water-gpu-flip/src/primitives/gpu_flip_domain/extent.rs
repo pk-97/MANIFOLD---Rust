@@ -36,7 +36,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     let (walls, open) = face_masks(
         geometry.setup.bounds,
-        manifold_water_liquid::lattice::closed_faces(x.params()),
+        manifold_water_liquid::bounds::closed_faces(x.params()),
     );
     x.publish("closed_faces", walls as f32);
     x.publish("open_faces", open as f32);

@@ -1,14 +1,14 @@
 //! Buffer extent rule owned by this node.
 use crate::matter::MatterPoint;
-use crate::primitives::matter_fill::fill_count;
+use crate::primitives::matter_fill::{FillGrid, fill_count};
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::liquid_lattice;
 use manifold_water_liquid::extent::whole;
 use std::mem::size_of;
 
 fn matter_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = liquid_lattice(x)?;
-    let cells = lattice.cells();
+    let cells = FillGrid::read(|name, default| x.scalar(name, default))
+        .map_err(Verdict::Refused)?
+        .cells;
     let pool = whole(x, "pool_cells", 3.0).min(cells[1]);
     let column = [
         ["column_x0", "column_x1"],

@@ -2,7 +2,7 @@
 //! prescribed pose each substep, the collider projection in the grid update,
 //! and the solid lattice, each against CPU-computed values.
 
-use manifold_core::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
@@ -18,9 +18,11 @@ use manifold_physics::ForceSample;
 use manifold_physics::clock::TICK;
 use manifold_physics::force_lattice::ForceLattice;
 use manifold_physics::sdf::signed_distance_lattice;
-use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
+use manifold_water_gpu_mpm::matter::{
+    MatterGridNode, MatterPoint, REACTION_WORDS, field_min, lattice_nodes, matter_nodes,
+    momentum_unit,
+};
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
-use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_water_liquid::testkit::world_box::BoxTable;
 
 use manifold_node_engine::scene::transform::Transform;
@@ -28,12 +30,12 @@ use manifold_node_engine::scene::transform::Transform;
 use crate::matter_scene::{MatterScene, SceneSettings};
 use crate::matter_transfer::{HostArray, output_of, set};
 
-/// The lattice's nodes on world tiles: node p at world p·h, one slot for
-/// each tile the lattice touches.
-fn lattice_table(lat: &LiquidLattice) -> BoxTable {
+/// Matter's nodes on world tiles ([`matter_nodes`] from [`field_min`]): node
+/// p at world p·h, one slot for each tile they touch.
+fn lattice_table(layout: &FluidDomainLayout) -> BoxTable {
     BoxTable::new(
-        std::array::from_fn(|a| (lat.min()[a] / lat.cell_size()).round() as i32),
-        lat.nodes(),
+        std::array::from_fn(|a| (field_min(layout)[a] / layout.cell_size as f32).round() as i32),
+        matter_nodes(layout.cells),
     )
 }
 
@@ -351,9 +353,12 @@ fn lattice_at(atlas: &[u32], shape: &LiquidShape, g: [f32; 3]) -> f32 {
 /// moving into it leave with no velocity into it.
 #[test]
 fn matter_grid_update_projects_colliders() {
-    let lat =
-        LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain"));
-    let dx = lat.cell_size();
+    let layout = domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain");
+    let (min, n, dx) = (
+        field_min(&layout),
+        matter_nodes(layout.cells),
+        layout.cell_size as f32,
+    );
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
     let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0)
@@ -385,11 +390,11 @@ fn matter_grid_update_projects_colliders() {
     let v0 = [-1.0f32, 0.3, 0.2];
     let m_raw = 8 * 65_536i32;
     let to_raw = |v: f32| (v * m_raw as f32 / (unit * (65_536.0 / 134_217_728.0))).round() as i32;
-    let nodes = lat.node_count() as usize;
+    let nodes = lattice_nodes(n) as usize;
     let accum: Vec<i32> = (0..nodes)
         .flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw])
         .collect();
-    let table = lattice_table(&lat);
+    let table = lattice_table(&layout);
     let pool = pool_len(table.pool_tiles) as u32;
     let mut bench = Bench::new(
         "node.matter_grid_update",
@@ -418,9 +423,9 @@ fn matter_grid_update_projects_colliders() {
         ("gravity_z", 0.0),
         ("wall_faces", 0.0),
         ("momentum_unit", unit),
-        ("lattice_min_x", lat.min()[0]),
-        ("lattice_min_y", lat.min()[1]),
-        ("lattice_min_z", lat.min()[2]),
+        ("field_min_x", min[0]),
+        ("field_min_y", min[1]),
+        ("field_min_z", min[2]),
         ("body_count", 1.0),
     ] {
         bench.set(name, value);
@@ -428,7 +433,6 @@ fn matter_grid_update_projects_colliders() {
     bench.run();
     let grid = dense_grid(&table, &bench.read("grid_out"));
 
-    let n = lat.nodes();
     let (mut projected, mut worst) = (0, 0.0f32);
     for idx in 0..nodes {
         let coord = [
@@ -436,7 +440,7 @@ fn matter_grid_update_projects_colliders() {
             (idx as u32 / n[0]) % n[1],
             idx as u32 / (n[0] * n[1]),
         ];
-        let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
+        let x: [f32; 3] = std::array::from_fn(|a| min[a] + coord[a] as f32 * dx);
         let v_before: [f32; 3] = std::array::from_fn(|a| {
             accum[idx * 4 + a] as f32 / m_raw as f32 * (unit * (65_536.0 / 134_217_728.0))
         });
@@ -515,9 +519,9 @@ fn matter_grid_update_projects_colliders() {
     );
 }
 
-/// A force or impulse lattice over `lat` holding `f` at each field node.
+/// A force or impulse lattice from `min` holding `f` at each field node.
 fn field_values(
-    lat: &LiquidLattice,
+    min: [f32; 3],
     field: &ForceLattice,
     f: impl Fn([f32; 3]) -> [f32; 3],
 ) -> Vec<[f32; 4]> {
@@ -526,7 +530,7 @@ fn field_values(
         .map(|i| {
             let coord = [i % nx, (i / nx) % ny, i / (nx * ny)];
             let v = f(std::array::from_fn(|a| {
-                lat.min()[a] + coord[a] as f32 * field.spacing()
+                min[a] + coord[a] as f32 * field.spacing()
             }));
             [v[0], v[1], v[2], 0.0]
         })
@@ -572,31 +576,34 @@ fn set_field(bench: &mut Bench, field: &ForceLattice) {
 /// `ForceSample::step_velocity`.
 #[test]
 fn matter_grid_update_applies_field_lattices() {
-    let lat =
-        LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain"));
-    let dx = lat.cell_size();
+    let layout = domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain");
+    let (min, n, dx) = (
+        field_min(&layout),
+        matter_nodes(layout.cells),
+        layout.cell_size as f32,
+    );
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
     let scale = unit * (65_536.0 / 134_217_728.0);
     let v0 = [0.4f32, -0.2, 0.1];
     let m_raw = 8 * 65_536i32;
     let to_raw = |v: f32| (v * m_raw as f32 / scale).round() as i32;
-    let nodes = lat.node_count() as usize;
+    let nodes = lattice_nodes(n) as usize;
     let accum: Vec<i32> = (0..nodes)
         .flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw])
         .collect();
-    let field = lat.force_lattice();
+    let field = ForceLattice::covering(min, dx, n);
     // Not linear, so the trilinear weights matter. Two lattices, one per tick
     // from tick 7, so each tick must read its own; the second carries air.
     let tick_forces = [
         force_records(
-            &field_values(&lat, &field, |p| {
+            &field_values(min, &field, |p| {
                 [30.0 * p[1], -20.0 + 40.0 * p[0] * p[2], 15.0 * p[0]]
             }),
             still_air,
         ),
         force_records(
-            &field_values(&lat, &field, |p| {
+            &field_values(min, &field, |p| {
                 [-12.0 * p[2], 25.0 * p[0] * p[1], 8.0 - 18.0 * p[1]]
             }),
             |i| {
@@ -608,10 +615,8 @@ fn matter_grid_update_applies_field_lattices() {
         ),
     ];
     let forces: Vec<[f32; 4]> = tick_forces.concat();
-    let impulses = field_values(&lat, &field, |p| {
-        [0.5 - p[2], 2.0 * p[0] * p[1], 0.8 * p[1]]
-    });
-    let table = lattice_table(&lat);
+    let impulses = field_values(min, &field, |p| [0.5 - p[2], 2.0 * p[0] * p[1], 0.8 * p[1]]);
+    let table = lattice_table(&layout);
     let pool = pool_len(table.pool_tiles) as u32;
     let mut bench = Bench::new(
         "node.matter_grid_update",
@@ -645,16 +650,15 @@ fn matter_grid_update_applies_field_lattices() {
         ("gravity_z", gravity[2]),
         ("wall_faces", 0.0),
         ("momentum_unit", unit),
-        ("lattice_min_x", lat.min()[0]),
-        ("lattice_min_y", lat.min()[1]),
-        ("lattice_min_z", lat.min()[2]),
+        ("field_min_x", min[0]),
+        ("field_min_y", min[1]),
+        ("field_min_z", min[2]),
         ("impulse_tick", 7.0),
         ("first_tick", 7.0),
     ] {
         bench.set(name, value);
     }
     set_field(&mut bench, &field);
-    let n = lat.nodes();
     // (force lattices, tick, substep, impulse applied): with one lattice every
     // tick reads it; with one per tick, tick 8 reads the second.
     for (lattices, tick, substep, impulse) in [
@@ -677,7 +681,7 @@ fn matter_grid_update_applies_field_lattices() {
                 (idx as u32 / n[0]) % n[1],
                 idx as u32 / (n[0] * n[1]),
             ];
-            let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
+            let x: [f32; 3] = std::array::from_fn(|a| min[a] + coord[a] as f32 * dx);
             let v_before: [f32; 3] =
                 std::array::from_fn(|a| accum[idx * 4 + a] as f32 / m_raw as f32 * scale);
             let force = match lattices {
@@ -754,9 +758,12 @@ fn collider_normal(
 /// words match Σ inv_mass·m·(v − v_projected) computed on the CPU.
 #[test]
 fn matter_body_reaction_counts_field_velocity() {
-    let lat =
-        LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain"));
-    let dx = lat.cell_size();
+    let layout = domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain");
+    let (min, n, dx) = (
+        field_min(&layout),
+        matter_nodes(layout.cells),
+        layout.cell_size as f32,
+    );
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
     let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0)
@@ -784,7 +791,7 @@ fn matter_body_reaction_counts_field_velocity() {
         ..LiquidBody::default()
     };
     let mass = 0.01f32;
-    let nodes = lat.node_count();
+    let nodes = lattice_nodes(n) as u32;
     let grid = vec![
         MatterGridNode {
             velocity_mass: [0.0, 0.0, 0.0, mass],
@@ -792,22 +799,22 @@ fn matter_body_reaction_counts_field_velocity() {
         };
         nodes as usize
     ];
-    let field = lat.force_lattice();
+    let field = ForceLattice::covering(min, dx, n);
     let inward = |k: f32| {
         move |p: [f32; 3]| -> [f32; 3] {
             std::array::from_fn(|a| k * (centre[a] - p[a]) + 0.1 * k * p[(a + 1) % 3])
         }
     };
-    let forces = field_values(&lat, &field, inward(1000.0));
+    let forces = field_values(min, &field, inward(1000.0));
     // Tick 3 of a frame from tick 2 reads the second lattice; the first is a decoy.
     let tick_forces: Vec<[f32; 4]> = [
-        force_records(&field_values(&lat, &field, inward(-700.0)), still_air),
+        force_records(&field_values(min, &field, inward(-700.0)), still_air),
         force_records(&forces, still_air),
     ]
     .concat();
-    let impulses = field_values(&lat, &field, inward(2.0));
+    let impulses = field_values(min, &field, inward(2.0));
     let substeps = 4.0f32;
-    let table = lattice_table(&lat);
+    let table = lattice_table(&layout);
     let pool = pool_len(table.pool_tiles) as u32;
     let mut bench = Bench::new(
         "node.matter_body_reaction",
@@ -846,9 +853,9 @@ fn matter_body_reaction_counts_field_velocity() {
         ("gravity_z", 0.0),
         ("wall_faces", 0.0),
         ("momentum_unit", unit),
-        ("lattice_min_x", lat.min()[0]),
-        ("lattice_min_y", lat.min()[1]),
-        ("lattice_min_z", lat.min()[2]),
+        ("field_min_x", min[0]),
+        ("field_min_y", min[1]),
+        ("field_min_z", min[2]),
         ("body_count", 1.0),
         ("dynamic_count", 1.0),
         ("substeps_per_tick", substeps),
@@ -861,7 +868,6 @@ fn matter_body_reaction_counts_field_velocity() {
     set_field(&mut bench, &field);
     let counts = 16_777_216.0 / f64::from(unit);
     let inv_mass = f64::from(body.position_inv_mass[3]);
-    let n = lat.nodes();
     // (case, forces on, substep): the impulse lands on substep 0 only.
     for (case, forces_on, substep) in [
         ("still", false, 1.0f32),
@@ -876,7 +882,7 @@ fn matter_body_reaction_counts_field_velocity() {
         let (mut dv, mut dl, mut pushed) = ([0.0f64; 3], [0.0f64; 3], 0u32);
         for idx in 0..nodes {
             let coord = [idx % n[0], (idx / n[0]) % n[1], idx / (n[0] * n[1])];
-            let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
+            let x: [f32; 3] = std::array::from_fn(|a| min[a] + coord[a] as f32 * dx);
             let v: [f32; 3] = match case {
                 "impulse" => field.sample(&impulses, x),
                 "force" => field.sample(&forces, x).map(|f| dt * f),
@@ -950,9 +956,8 @@ fn matter_body_reaction_counts_field_velocity() {
 /// dynamic_count 0 each write nothing.
 #[test]
 fn matter_push_out_reaction_matches_removed_momentum() {
-    let lat =
-        LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain"));
-    let dx = lat.cell_size();
+    let layout = domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain");
+    let dx = layout.cell_size as f32;
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
     let density = 1000.0f32;
@@ -1003,7 +1008,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         })
         .collect();
     let (substep, substeps) = (3.0f32, 8.0f32);
-    let table = lattice_table(&lat);
+    let table = lattice_table(&layout);
     let pool = pool_len(table.pool_tiles) as u32;
     let mut bench = Bench::new(
         "node.grid_to_matter",
@@ -1168,7 +1173,7 @@ fn matter_collider_penetration_bounded() {
         collider_motion: 2,
         ..SceneSettings::default()
     });
-    let dx = scene.lattice().cell_size();
+    let dx = scene.cell_size();
     until_ticking(&mut scene, |scene, t| scene.set_collider(0, transform(t)));
     let (mut worst, mut touching) = (f32::INFINITY, 0usize);
     for _ in 0..10 {
@@ -1235,7 +1240,7 @@ fn matter_open_mesh_collider_holds_liquid() {
         collider_mesh: Some(quad.clone()),
         ..SceneSettings::default()
     });
-    let dx = scene.lattice().cell_size();
+    let dx = scene.cell_size();
     // The default 0.05 m thickness is under two of the liquid's cells, so
     // the shell is two cells thick (PreparedFluidGeometry::lattice_plan).
     let half_shell = dx.max(0.025);
@@ -1284,7 +1289,7 @@ fn matter_fill_skips_colliders() {
         ..SceneSettings::default()
     });
     until_ticking(&mut scene, |scene, _| scene.set_collider(0, transform));
-    let dx = scene.lattice().cell_size();
+    let dx = scene.cell_size();
     let points = scene.points();
     let unused = points.iter().filter(|p| p.id == 0).count();
     let deepest = points

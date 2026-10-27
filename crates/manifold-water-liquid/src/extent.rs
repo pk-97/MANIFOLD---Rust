@@ -1,31 +1,17 @@
 //! Native liquid extent rules.
 //!
 //! The generic checker and its shared rules live in the exec extent module;
-//! this module supplies liquid-specific storage, lattice, and whitewater rules.
+//! this module supplies liquid-specific storage, pool and whitewater rules.
 
-use crate::lattice::LiquidLattice;
-use crate::whitewater::{KnownValue, grid_cells};
+use crate::whitewater::KnownValue;
 use manifold_node_engine::exec::extent::{AtomExtent, Verdict};
 use manifold_node_engine::particles::FluidParticle;
 use std::mem::size_of;
 
 // ── Rules ──────────────────────────────────────────────────────────────────
 
-pub fn nodes_total(nodes: [f32; 3]) -> u64 {
-    nodes.iter().map(|&n| n.max(0.0) as u64).product()
-}
-
-pub fn lattice_total(nodes: [u32; 3]) -> u64 {
-    nodes.iter().map(|&n| u64::from(n)).product()
-}
-
 pub fn whole(x: &AtomExtent<'_>, name: &str, default: f32) -> u32 {
     x.scalar(name, default).round().max(0.0) as u32
-}
-
-/// The liquid lattice a node reads from its scalar wires.
-pub fn liquid_lattice(x: &AtomExtent<'_>) -> Result<LiquidLattice, Verdict> {
-    LiquidLattice::from_scalars(|name, default| x.scalar(name, default)).map_err(Verdict::Refused)
 }
 
 /// Field reads clamp to the field lattices the scalars name, so the wired
@@ -66,21 +52,6 @@ pub fn body_rows(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
 // The grid atoms dispatch over the elements of the step's tile pool; the
 // particle atoms over the smallest of their arrays, so each rule asks that no
 // output is the smaller one.
-
-/// The lifecycle's dense grid: the solid lattice's nodes on its `names` wires
-/// (else params) and the cells between them.
-pub fn whitewater_lattice(
-    x: &AtomExtent<'_>,
-    names: [&str; 3],
-) -> Result<([u32; 3], [u32; 3]), Verdict> {
-    let nodes = names.map(|name| whole(x, name, 71.0));
-    let cells = grid_cells(nodes).ok_or_else(|| {
-        Verdict::Refused(format!(
-            "a {nodes:?} solid lattice has too few or too many nodes"
-        ))
-    })?;
-    Ok((nodes, cells))
-}
 
 /// A pooled atom's lattice: the `tiles` covering the table of its
 /// `pool_tiles` pool, and the elements every array on it holds.
