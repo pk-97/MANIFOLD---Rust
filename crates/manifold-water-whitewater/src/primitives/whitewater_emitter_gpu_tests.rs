@@ -660,7 +660,7 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
 
 #[test]
 fn whitewater_dust_step_publishes_a_distinct_population() {
-    use super::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
+    use super::whitewater_step::{Removal, Step, StepFrame, StepInputs, StepShape};
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_water_liquid::fluid_particles::FaceSample;
     use manifold_water_liquid::whitewater::WhitewaterParticle;
@@ -723,6 +723,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             seed: 0.0,
             gravity: [0.0, -9.81, 0.0],
             bounds_lo: rig.first_node(),
+            removal: Removal::NONE,
             wavecrest_emission: 175.0,
             turbulence_emission: 175.0,
             min_turbulence: 100.0,

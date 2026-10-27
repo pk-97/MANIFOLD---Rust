@@ -510,6 +510,88 @@ fn whitewater_engine_outflow_values_and_fusion() {
     assert_eq!(combined, got);
 }
 
+/// Whitewater leaves where the liquid's move removes water: beyond the plane
+/// of an Open face, on the side it opens to, and below the kill height. With
+/// neither, every live slot stays; the fused kernel agrees.
+#[test]
+fn whitewater_leaves_past_open_faces_and_below_the_kill_height() {
+    use super::keep_whitewater::KeepWhitewater;
+    use manifold_water_liquid::fluid_particles::CellRange;
+    let mut h = Harness::new();
+    let table = BoxTable::new([0; 3], [9; 3]);
+    let pool_tiles = table.pool_tiles;
+    let len = pool_len(pool_tiles) as usize;
+    // Rows y 3.5 and 4.5, columns x 3.5, 4.0 and 4.5; foam, bubble and spray.
+    let pool: Vec<_> = [3.5, 4.5]
+        .into_iter()
+        .flat_map(|y| {
+            [(3.5, 0), (4.0, 1), (4.5, 2)].map(|(x, kind)| WhitewaterParticle {
+                position_lifetime: [x, y, 4.0, 1.0],
+                kind,
+                ..Default::default()
+            })
+        })
+        .collect();
+    let p = h.array(&pool, 6);
+    let range = h.array(&vec![CellRange { start: 0, count: 0 }; len], len);
+    let order = h.array(&[0u32], 1);
+    let solid = h.array(&table.to_pool(&[10.0f32; 729], CANONICAL_SOLID), len);
+    let tiles = h.array(&table.words, table.words.len());
+    let base = [("cell_size", 1.0), ("pool_tiles", pool_tiles as f32)];
+    // The +x face opens at 4.2 and the -x face at 3.8: the outer columns go.
+    let open = [
+        base[0],
+        base[1],
+        ("open_faces", 0b11 as f32),
+        ("bounds_lo_x", 3.8),
+        ("bounds_hi_x", 4.2),
+        ("bounds_hi_y", 8.0),
+        ("bounds_hi_z", 8.0),
+    ];
+    // A Wall face (bit clear) keeps what is past its plane.
+    let mut wall = open;
+    wall[2] = ("open_faces", 0b10 as f32);
+    // The kill height at 4.0 takes the lower row.
+    let killed = [base[0], base[1], ("kill_height", 4.0)];
+    type Case<'a> = (&'a [(&'static str, f32)], [u32; 6]);
+    let cases: [Case; 4] = [
+        (&base, [1; 6]),
+        (&open, [0, 1, 0, 0, 1, 0]),
+        (&wall, [1, 1, 0, 1, 1, 0]),
+        (&killed, [0, 0, 0, 1, 1, 1]),
+    ];
+    for (values, want) in cases {
+        let got: Vec<u32> = run(
+            &mut h,
+            &mut KeepWhitewater::new(),
+            &[
+                ("pool", p.0),
+                ("binned", p.0),
+                ("cell_ranges", range.0),
+                ("order", order.0),
+                ("solid", solid.0),
+                ("tiles", tiles.0),
+            ],
+            6,
+            &params(values),
+        );
+        assert_eq!(got, want, "{values:?}");
+        let combined: Vec<u32> = fused(
+            &mut h,
+            vec![member::<KeepWhitewater>(
+                0,
+                (0..9).map(InputSource::External).collect(),
+            )],
+            &[
+                &p.1, &p.1, &range.1, &order.1, &solid.1, &solid.1, &solid.1, &solid.1, &tiles.1,
+            ],
+            6,
+            values,
+        );
+        assert_eq!(combined, got, "{values:?}");
+    }
+}
+
 /// The pooled field of `dense` (x fastest, its first cell at world cell
 /// `origin`, `dims` cells a side) under `words`: the box's cells in the slots
 /// the table gives them, `canon` elsewhere. A cell of a tile the table lacks

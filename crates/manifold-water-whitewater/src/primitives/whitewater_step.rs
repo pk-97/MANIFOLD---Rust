@@ -31,7 +31,6 @@ use manifold_node_engine::scene::world_tiles::{
 use manifold_nodes_physics::force_lattice::ForceLatticeBinding;
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
-use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use manifold_water_liquid::primitives::particle_identity::{COUNT_OFFSET, IDENTITY_BYTES};
@@ -44,6 +43,7 @@ use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 use manifold_water_liquid::whitewater::{
     DEFAULT_CAPACITY, KnownValue, MAX_CAPACITY, WhitewaterParticle,
 };
+use manifold_water_liquid::{float_param, int_param};
 
 const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
 const FUSED_ENTRIES: [(&str, &str); 5] = [
@@ -372,6 +372,9 @@ manifold_node_engine::primitive! {
         pool_tiles: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
+        bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
+        open_faces: ScalarF32 optional,
+        kill_height: ScalarF32 optional,
         substep_schedule: Array(f32) optional,
         substep_faces: Array(f32) optional,
         substep_count: ScalarF32 optional,
@@ -477,9 +480,14 @@ manifold_node_engine::primitive! {
         float_param!("bounds_lo_x", "Bounds Min X", 0.0, -1.0e4, 1.0e4),
         float_param!("bounds_lo_y", "Bounds Min Y", 0.0, -1.0e4, 1.0e4),
         float_param!("bounds_lo_z", "Bounds Min Z", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_hi_x", "Bounds Max X", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_hi_y", "Bounds Max Y", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_hi_z", "Bounds Max Z", 0.0, -1.0e4, 1.0e4),
+        int_param!("open_faces", "Open Faces (bits −X +X −Y +Y −Z +Z)", 0.0, 0.0, 63.0),
+        float_param!("kill_height", "Kill Height", f32::MIN, f32::MIN, f32::MAX),
     ],
     depth_rule: Terminal,
-    composition_notes: "For per-tick GPU FLIP, wire the solver's faces, distance, tiles, pool_tiles and cell_size from node.gpu_flip_step, particles and identity (its identity_out, whose record counts the particles in use), solid and obstacle_source from node.whitewater_obstacle_source, and substep_schedule, substep_faces and substep_count from its history; bounds_lo_x/y/z are the Bounds' low corner, where the force fields start. Wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
+    composition_notes: "For per-tick GPU FLIP, wire the solver's faces, distance, tiles, pool_tiles and cell_size from node.gpu_flip_step, particles and identity (its identity_out, whose record counts the particles in use), solid and obstacle_source from node.whitewater_obstacle_source, and substep_schedule, substep_faces and substep_count from its history; bounds_lo_x/y/z are the Bounds' low corner, where the force fields start. Wire bounds_hi_x/y/z, open_faces and kill_height from the domain as the liquid step takes them: whitewater leaves where the step removes water, beyond the plane of an Open face or below the kill height. Wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
     examples: [],
     picker: { label: "Whitewater Step", category: Atom },
     summary: "Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU.",
@@ -573,6 +581,30 @@ impl StepShape {
 }
 
 manifold_core::testkit_visible! {
+/// Where whitewater leaves the scene, as the liquid step's move removes
+/// water: beyond the plane of an Open face of the Bounds, or below the kill
+/// height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Removal {
+    /// The Open faces, bit 2d the low face of axis d and bit 2d + 1 the high.
+    pub open_faces: u32,
+    /// The Bounds' high corner, metres.
+    pub bounds_hi: [f32; 3],
+    /// Metres; f32::MIN with no floor to fall past.
+    pub kill_height: f32,
+}}
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+impl Removal {
+    /// Nothing leaves: no Open face and no kill height.
+    pub(crate) const NONE: Self = Self {
+        open_faces: 0,
+        bounds_hi: [0.0; 3],
+        kill_height: f32::MIN,
+    };
+}
+
+manifold_core::testkit_visible! {
 /// One frame's scalar inputs and knobs.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StepFrame {
@@ -587,6 +619,8 @@ pub(crate) struct StepFrame {
     pub gravity: [f32; 3],
     /// The Bounds' low corner, metres: where the force fields start.
     pub bounds_lo: [f32; 3],
+    /// Where whitewater leaves the scene.
+    pub removal: Removal,
     pub wavecrest_emission: f32,
     pub turbulence_emission: f32,
     pub min_turbulence: f32,
@@ -1915,6 +1949,14 @@ impl Step {
             ("tick_seconds", frame.dt),
             pooled[0],
             pooled[1],
+            ("open_faces", frame.removal.open_faces as f32),
+            ("bounds_lo_x", frame.bounds_lo[0]),
+            ("bounds_lo_y", frame.bounds_lo[1]),
+            ("bounds_lo_z", frame.bounds_lo[2]),
+            ("bounds_hi_x", frame.removal.bounds_hi[0]),
+            ("bounds_hi_y", frame.removal.bounds_hi[1]),
+            ("bounds_hi_z", frame.removal.bounds_hi[2]),
+            ("kill_height", frame.removal.kill_height),
         ];
         atom::<KeepWhitewater>(
             enc,
@@ -2027,6 +2069,21 @@ impl WhitewaterStep {
         if bounds_lo.iter().any(|v| !v.is_finite()) {
             return Err("the Bounds' low corner must be finite".to_owned());
         }
+        let bounds_hi = ["bounds_hi_x", "bounds_hi_y", "bounds_hi_z"]
+            .map(|name| ctx.scalar_or_param(name, 0.0));
+        if bounds_hi.iter().any(|v| !v.is_finite()) {
+            return Err("the Bounds' high corner must be finite".to_owned());
+        }
+        let open_faces = ctx.scalar_or_param("open_faces", 0.0);
+        if !(open_faces.fract() == 0.0 && (0.0..=63.0).contains(&open_faces)) {
+            return Err(format!(
+                "Open Faces must be a whole number from 0 to 63, not {open_faces}"
+            ));
+        }
+        let kill_height = ctx.scalar_or_param("kill_height", f32::MIN);
+        if kill_height.is_nan() {
+            return Err("the kill height must be a number".to_owned());
+        }
         let (min_t, max_t) = (
             ctx.param_f32("min_turbulence", 100.0),
             ctx.param_f32("max_turbulence", 200.0),
@@ -2049,6 +2106,11 @@ impl WhitewaterStep {
                 ctx.scalar_or_param("gravity_z", 0.0),
             ],
             bounds_lo,
+            removal: Removal {
+                open_faces: open_faces as u32,
+                bounds_hi,
+                kill_height,
+            },
             wavecrest_emission: ctx.param_f32("wavecrest_emission", WAVECREST_RATE) * amount,
             dust_emission: matches!(
                 ctx.params.get("dust_emission"),

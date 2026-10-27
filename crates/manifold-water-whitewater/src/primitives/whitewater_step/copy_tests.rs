@@ -185,6 +185,7 @@ impl Fixture {
             seed: 0.375,
             gravity: [0.0; 3],
             bounds_lo: self.bounds_lo,
+            removal: Removal::NONE,
             wavecrest_emission: 80.0,
             turbulence_emission: 80.0,
             min_turbulence: 0.0,

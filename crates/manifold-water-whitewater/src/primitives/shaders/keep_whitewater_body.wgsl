@@ -10,8 +10,10 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // goes when it is empty (kind 3), its lifetime is at or below 0, its position
 // is not finite, it lies inside the solid (the node array read trilinearly is
 // below 0; a tile the table does not hold reads the canonical element) or an
-// enabled outflow mesh, or its cell already holds `cap` kept particles
-// earlier in the pool. There is no boundary box: a wall is a solid.
+// enabled outflow mesh, it has left the scene where the liquid's move removes
+// water (beyond the plane of an Open face of the Bounds, or below the kill
+// height), or its cell already holds `cap` kept particles earlier in the
+// pool. A wall is a solid.
 //
 // FLIP counts kept particles per cell in pool order, so slot i is kept by
 // the cap exactly when fewer than `cap` slots before it share its cell and
@@ -27,6 +29,27 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // `cell_ranges` is CellRange (Element2), `order` u32, `solid` f32.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
+
+// The Open faces (bit 2d the low face of axis d), the Bounds corners and the
+// kill height of this dispatch, set by `body`.
+var<private> kw_open: u32;
+var<private> kw_lo: vec3<f32>;
+var<private> kw_hi: vec3<f32>;
+var<private> kw_kill: f32;
+
+// Beyond the plane of an Open face, on the side it opens to, or below the
+// kill height: the liquid move's removal rule.
+fn kw_left(p: vec3<f32>) -> bool {
+    for (var a = 0u; a < 3u; a = a + 1u) {
+        if (kw_open & (1u << (2u * a))) != 0u && p[a] < kw_lo[a] {
+            return true;
+        }
+        if (kw_open & (1u << (2u * a + 1u))) != 0u && p[a] > kw_hi[a] {
+            return true;
+        }
+    }
+    return p.y < kw_kill;
+}
 
 fn kw_node(n: vec3<i32>) -> f32 {
     return buf_solid[ts_cell_at(n)];
@@ -78,7 +101,7 @@ fn kw_check(e: Element, h: f32, region_count: f32, region_offset: f32, tick_seco
     if kw_solid(ww_cell_position(p, h)) < 0.0 {
         return vec4<i32>(0);
     }
-    if kw_drained(p, region_count, region_offset, tick_seconds) { return vec4<i32>(0); }
+    if kw_drained(p, region_count, region_offset, tick_seconds) || kw_left(p) { return vec4<i32>(0); }
     return vec4<i32>(ts_world_cell(p, vec3<f32>(-0.5 * h), 1.0 / h), 1);
 }
 
@@ -90,8 +113,16 @@ fn body(
     region_count: f32, region_offset: f32, tick_seconds: f32,
     cell_size: f32,
     pool_tiles: f32,
+    open_faces: i32,
+    bounds_lo_x: f32, bounds_lo_y: f32, bounds_lo_z: f32,
+    bounds_hi_x: f32, bounds_hi_y: f32, bounds_hi_z: f32,
+    kill_height: f32,
 ) -> u32 {
     ww_pool_tiles = u32(pool_tiles);
+    kw_open = u32(open_faces);
+    kw_lo = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
+    kw_hi = vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z);
+    kw_kill = kill_height;
     let h = cell_size;
     let mine = kw_check(e_pool, h, region_count, region_offset, tick_seconds);
     if mine.w == 0 {

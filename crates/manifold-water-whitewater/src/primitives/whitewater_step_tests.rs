@@ -249,7 +249,7 @@ mod gpu {
 
     use manifold_gpu::GpuBuffer;
 
-    use super::super::whitewater_step::{Step, StepFrame, StepInputs};
+    use super::super::whitewater_step::{Removal, Step, StepFrame, StepInputs};
     use super::*;
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_node_engine::testkit::array_harness::{Harness, read};
@@ -349,6 +349,7 @@ mod gpu {
                         seed: tick as f32 * TICK as f32,
                         gravity: GRAVITY,
                         bounds_lo: low_corner(&table, h),
+                        removal: Removal::NONE,
                         wavecrest_emission: WAVECREST_RATE,
                         turbulence_emission: 175.0,
                         min_turbulence: 100.0,

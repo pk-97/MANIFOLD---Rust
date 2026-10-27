@@ -267,6 +267,7 @@ pub mod gpu {
                 seed: 0.375,
                 gravity: [0.0; 3],
                 bounds_lo: low_corner(&self.table, self.shape.pool.cell_size),
+                removal: Removal::NONE,
                 wavecrest_emission: 0.0,
                 turbulence_emission: 32.0,
                 min_turbulence: -1.0,

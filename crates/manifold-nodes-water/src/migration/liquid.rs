@@ -552,6 +552,75 @@ pub(crate) fn pool_whitewater_on_step_tiles(def: &mut EffectGraphDef) -> bool {
     def.wires != before
 }
 
+/// The domain ports a whitewater step reads to remove whitewater where the
+/// liquid step removes water: past an Open face, or below the kill height.
+const WHITEWATER_REMOVAL: [&str; 5] = [
+    "bounds_hi_x",
+    "bounds_hi_y",
+    "bounds_hi_z",
+    "open_faces",
+    "kill_height",
+];
+
+/// Wire a saved GPU FLIP whitewater step to the domain's Open faces, Bounds
+/// high corner and kill height, after flattening, from the domain that feeds
+/// its `bounds_lo_x`. A port already wired is kept. Idempotent.
+pub(crate) fn wire_whitewater_removal(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let kind = |id: u32| {
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.type_id.as_str())
+    };
+    let mut added = Vec::new();
+    for ww in def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.whitewater_step")
+        .map(|n| n.id)
+    {
+        let Some(domain) = def
+            .wires
+            .iter()
+            .find(|w| {
+                w.to_node == ww
+                    && w.to_port == "bounds_lo_x"
+                    && kind(w.from_node) == Some(GPU_FLIP_DOMAIN_TYPE_ID)
+            })
+            .map(|w| w.from_node)
+        else {
+            continue;
+        };
+        for port in WHITEWATER_REMOVAL {
+            if !def
+                .wires
+                .iter()
+                .any(|w| w.to_node == ww && w.to_port == port)
+            {
+                added.push(EffectGraphWire {
+                    from_node: domain,
+                    from_port: port.into(),
+                    to_node: ww,
+                    to_port: port.into(),
+                });
+            }
+        }
+    }
+    let changed = !added.is_empty();
+    def.wires.extend(added);
+    changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "wire_whitewater_removal",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 360,
+        apply: wire_whitewater_removal,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "pool_whitewater_on_step_tiles",
@@ -601,6 +670,54 @@ inventory::submit! {
 mod tests {
     use super::*;
     use manifold_core::effect_graph_def::EffectGraphNode;
+
+    /// A saved whitewater step fed `bounds_lo_x` by a GPU FLIP domain gains
+    /// the removal wires from that domain, once; a step with no domain feed,
+    /// and a port already wired, are left alone.
+    #[test]
+    fn saved_whitewater_reads_the_domain_removal() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, port: &str, to| EffectGraphWire {
+            from_node: from,
+            from_port: port.into(),
+            to_node: to,
+            to_port: port.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID),
+                bare_node(2, "node.whitewater_step"),
+                bare_node(3, "node.whitewater_step"),
+                bare_node(4, "node.value"),
+            ],
+            wires: vec![
+                wire(1, "bounds_lo_x", 2),
+                wire(4, "kill_height", 2),
+                wire(4, "bounds_lo_x", 3),
+            ],
+        };
+        assert!(wire_whitewater_removal(&mut def));
+        let into = |to: u32, port: &str| {
+            def.wires
+                .iter()
+                .filter(|w| w.to_node == to && w.to_port == port)
+                .map(|w| w.from_node)
+                .collect::<Vec<_>>()
+        };
+        for port in ["bounds_hi_x", "bounds_hi_y", "bounds_hi_z", "open_faces"] {
+            assert_eq!(into(2, port), [1], "{port}");
+            assert!(into(3, port).is_empty(), "{port}");
+        }
+        assert_eq!(into(2, "kill_height"), [4]);
+        let migrated = def.wires.clone();
+        assert!(!wire_whitewater_removal(&mut def));
+        assert_eq!(def.wires, migrated);
+    }
 
     fn bare_node(id: u32, type_id: &str) -> EffectGraphNode {
         EffectGraphNode {

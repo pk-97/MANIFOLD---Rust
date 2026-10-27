@@ -17,10 +17,10 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_water_liquid::tile_pool::tile_pool;
 use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle};
+use manifold_water_liquid::{float_param, int_param};
 
 /// FLIP's `_maxDiffuseParticlesPerCell`.
 pub(crate) const MAX_PER_CELL: f32 = 5000.0;
@@ -35,16 +35,20 @@ struct KeepUniforms {
     tick_seconds: f32,
     cell_size: f32,
     pool_tiles: f32,
+    open_faces: i32,
+    bounds_lo: [f32; 3],
+    bounds_hi: [f32; 3],
+    kill_height: f32,
     dispatch_count: u32,
     _pad0: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<KeepUniforms>() == 32);
+const _: () = assert!(std::mem::size_of::<KeepUniforms>() == 64);
 
 manifold_node_engine::primitive! {
     name: KeepWhitewater,
     type_id: "node.keep_whitewater",
-    purpose: "Which whitewater pool slots survive the tick, FLIP's removal with every side colliding: 1 to keep, 0 to remove. A slot goes when it is empty (kind 3), its lifetime is at or below 0, its position is not finite, it lies inside the solid or an enabled outflow mesh (strictly negative posed SDF, the liquid removal rule), or its cell already holds Max Per Cell kept particles earlier in the pool. One u32 per slot.",
+    purpose: "Which whitewater pool slots survive the tick, FLIP's removal with every side colliding: 1 to keep, 0 to remove. A slot goes when it is empty (kind 3), its lifetime is at or below 0, its position is not finite, it lies inside the solid or an enabled outflow mesh (strictly negative posed SDF, the liquid removal rule), it has left the scene where the liquid's move removes water (beyond the plane of an Open face of the Bounds box bounds_lo..bounds_hi, or below Kill Height), or its cell already holds Max Per Cell kept particles earlier in the pool. One u32 per slot.",
     inputs: {
         pool: Array(WhitewaterParticle) required,
         binned: Array(WhitewaterParticle) required,
@@ -56,6 +60,10 @@ manifold_node_engine::primitive! {
         region_count: ScalarF32 optional, region_offset: ScalarF32 optional, tick_seconds: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         pool_tiles: ScalarF32 optional,
+        open_faces: ScalarF32 optional,
+        bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
+        bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
+        kill_height: ScalarF32 optional,
     },
     outputs: {
         out: Array(u32),
@@ -67,6 +75,14 @@ manifold_node_engine::primitive! {
         float_param!("tick_seconds", "Pose Time", 0.0, 0.0, 1000.0),
         float_param!("cell_size", "Cell Size", 0.0625, 1.0e-4, 100.0),
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
+        int_param!("open_faces", "Open Faces (bits −X +X −Y +Y −Z +Z)", 0.0, 0.0, 63.0),
+        float_param!("bounds_lo_x", "Bounds Min X", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_lo_y", "Bounds Min Y", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_lo_z", "Bounds Min Z", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_hi_x", "Bounds Max X", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_hi_y", "Bounds Max Y", 0.0, -1.0e4, 1.0e4),
+        float_param!("bounds_hi_z", "Bounds Max Z", 0.0, -1.0e4, 1.0e4),
+        float_param!("kill_height", "Kill Height", f32::MIN, f32::MIN, f32::MAX),
     ],
     depth_rule: Terminal,
     composition_notes: "The removal step at the end of the GPU whitewater tick, after node.preserve_foam. Wire pool and binned from the same pool, and that pool into a pooled sort over the liquid step's world tiles with the step's cell size; cell_ranges (one per pooled element) and order come from that sort. tiles, pool_tiles and cell_size from the liquid step, solid the node array on the same tiles as node.advect_whitewater takes it.",
@@ -149,6 +165,12 @@ impl Primitive for KeepWhitewater {
             tick_seconds: ctx.scalar_or_param("tick_seconds", 0.0),
             cell_size: grid.cell_size,
             pool_tiles: grid.pool_tiles as f32,
+            open_faces: ctx.scalar_or_param("open_faces", 0.0).round() as i32,
+            bounds_lo: ["bounds_lo_x", "bounds_lo_y", "bounds_lo_z"]
+                .map(|name| ctx.scalar_or_param(name, 0.0)),
+            bounds_hi: ["bounds_hi_x", "bounds_hi_y", "bounds_hi_z"]
+                .map(|name| ctx.scalar_or_param(name, 0.0)),
+            kill_height: ctx.scalar_or_param("kill_height", f32::MIN),
             dispatch_count: count,
             _pad0: 0,
         };

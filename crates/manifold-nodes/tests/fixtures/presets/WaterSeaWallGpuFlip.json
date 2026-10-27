@@ -4256,6 +4256,36 @@
       "toPort": "bounds_lo_z"
     },
     {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_x",
+      "toNode": 475,
+      "toPort": "bounds_hi_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_y",
+      "toNode": 475,
+      "toPort": "bounds_hi_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_z",
+      "toNode": 475,
+      "toPort": "bounds_hi_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "open_faces",
+      "toNode": 475,
+      "toPort": "open_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "kill_height",
+      "toNode": 475,
+      "toPort": "kill_height"
+    },
+    {
       "fromNode": 10,
       "fromPort": "particles_b",
       "toNode": 529,
