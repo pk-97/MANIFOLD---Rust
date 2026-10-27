@@ -14,15 +14,18 @@
 // Foam damps the small capillary ripples, so the strength is also scaled by
 // one minus the foam cover (`foam_field.wgsl`, included right after this file).
 //
+// The flow is the water's velocity, a pooled field under the water's
+// world-tile table (`field_tiles.wgsl`); a position over a tile the table does
+// not hold flows at 0 and keeps no ripples.
+//
 // Binds 62-65 itself; the mesh shader includes this file but never calls the
 // hook, so meshes bind none of them.
 
 struct RippleUniforms {
     world_to_local: mat4x4<f32>,
     local_to_world: mat4x4<f32>,
-    lattice_min: vec4<f32>,  // xyz object-space min corner, w tile side in metres (0: no ripples)
-    spacing: vec4<f32>,      // xyz node spacing, w strength override
-    nodes: vec4<u32>,        // xyz node counts, w = 1 if a foam field is bound
+    tiles: vec4<u32>,        // x pool tiles, y table entries, z = 1 if a foam field is bound
+    field: vec4<f32>,        // x display cell size in metres, y tile side in metres (0: no ripples), z strength override
     time: vec4<f32>,         // x seconds, y flow period, z metres per pixel per metre of distance, w metres per pixel flat
 };
 
@@ -39,34 +42,23 @@ const MIN_RIPPLE_SPEED: f32 = 0.2313;
 // The triplanar blend raised to this power (GPU Gems 3 ch. 1, Geiss 2007).
 const TRIPLANAR_SHARPNESS: f32 = 4.0;
 
-fn ripple_lattice_coord(p: vec3<f32>) -> vec3<f32> {
-    return clamp(p / ripple.spacing.xyz, vec3<f32>(0.0), vec3<f32>(ripple.nodes.xyz) - vec3<f32>(1.0));
+fn ripple_node_velocity(i: u32) -> vec3<f32> {
+    return vec3<f32>(ripple_velocity[3u * i], ripple_velocity[3u * i + 1u], ripple_velocity[3u * i + 2u]);
 }
 
-fn ripple_node_velocity(i: vec3<i32>) -> vec3<f32> {
-    let hi = vec3<i32>(ripple.nodes.xyz) - vec3<i32>(1);
-    let c = clamp(i, vec3<i32>(0), hi);
-    let n = u32(c.x) + ripple.nodes.x * (u32(c.y) + ripple.nodes.y * u32(c.z));
-    return vec3<f32>(ripple_velocity[3u * n], ripple_velocity[3u * n + 1u], ripple_velocity[3u * n + 2u]);
-}
-
+// The water's velocity at an object-space point: the trilinear of the node velocities.
 fn ripple_velocity_at(p: vec3<f32>) -> vec3<f32> {
-    let g = ripple_lattice_coord(p);
-    let b = min(vec3<i32>(floor(g)), vec3<i32>(ripple.nodes.xyz) - vec3<i32>(2));
-    let f = g - vec3<f32>(b);
-    let c000 = ripple_node_velocity(b);
-    let c100 = ripple_node_velocity(b + vec3<i32>(1, 0, 0));
-    let c010 = ripple_node_velocity(b + vec3<i32>(0, 1, 0));
-    let c110 = ripple_node_velocity(b + vec3<i32>(1, 1, 0));
-    let c001 = ripple_node_velocity(b + vec3<i32>(0, 0, 1));
-    let c101 = ripple_node_velocity(b + vec3<i32>(1, 0, 1));
-    let c011 = ripple_node_velocity(b + vec3<i32>(0, 1, 1));
-    let c111 = ripple_node_velocity(b + vec3<i32>(1, 1, 1));
-    let x00 = mix(c000, c100, f.x);
-    let x10 = mix(c010, c110, f.x);
-    let x01 = mix(c001, c101, f.x);
-    let x11 = mix(c011, c111, f.x);
-    return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
+    field_pool = ripple.tiles.xy;
+    let q = field_node_coord(p, ripple.field.x);
+    field_enter(q);
+    let c = field_corners(q);
+    return field_mix3(
+        ripple_node_velocity(c.c000), ripple_node_velocity(c.c100),
+        ripple_node_velocity(c.c010), ripple_node_velocity(c.c110),
+        ripple_node_velocity(c.c001), ripple_node_velocity(c.c101),
+        ripple_node_velocity(c.c011), ripple_node_velocity(c.c111),
+        c.f,
+    );
 }
 
 // 0 at or below the minimum ripple speed, rising toward 1 as the flow speeds up.
@@ -95,14 +87,14 @@ fn ripple_plane_slope(q: vec2<f32>, f: vec2<f32>, lod: f32) -> vec2<f32> {
 }
 
 fn look_ripple_detail(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
-    let tile = ripple.lattice_min.w;
+    let tile = ripple.field.y;
     if tile <= 0.0 {
         return normal;
     }
 
-    let local = (ripple.world_to_local * vec4<f32>(world_pos, 1.0)).xyz - ripple.lattice_min.xyz;
+    let local = (ripple.world_to_local * vec4<f32>(world_pos, 1.0)).xyz;
     let v = (ripple.local_to_world * vec4<f32>(ripple_velocity_at(local), 0.0)).xyz;
-    let strength = ripple.spacing.w * ripple_flow_strength(length(v)) * (1.0 - foam_coverage_at(world_pos));
+    let strength = ripple.field.z * ripple_flow_strength(length(v)) * (1.0 - foam_coverage_at(world_pos));
     if strength <= 0.0 {
         return normal;
     }

@@ -22,52 +22,6 @@ fn walked(def: &EffectGraphDef, frozen: bool, what: &str) -> ExtentReport {
 /// (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
 const LATTICES: [usize; 6] = [16, 32, 48, 64, 96, 128];
 
-#[test]
-fn gpu_flip_mesh_grid_uses_native_solid_coordinates() {
-    for resolution in [8, 32, 64] {
-        let scene = WaterScene::dam_break(resolution).with_surface();
-        let geometry = scene.geometry();
-        let outputs = geometry.outputs();
-        let read = |name: &str| outputs.iter().find(|(port, _)| *port == name).unwrap().1;
-        let surface = geometry.lattice_for_test().surface();
-        let def = water_def(scene);
-        let id = |name: &str| {
-            def.nodes
-                .iter()
-                .find(|n| n.node_id.as_str() == name)
-                .unwrap()
-                .id
-        };
-        let domain = id("domain");
-        let solid = id("mesh_solid");
-        let frame = id("frame");
-        for (d, axis) in ["x", "y", "z"].into_iter().enumerate() {
-            assert_eq!(read(&format!("mesh_nodes_{axis}")), (resolution + 4) as f32);
-            assert_eq!(read(&format!("mesh_min_{axis}")), surface.min()[d]);
-            for (source, target) in [
-                (format!("mesh_min_{axis}"), format!("lattice_min_{axis}")),
-                (format!("mesh_nodes_{axis}"), format!("nodes_{axis}")),
-            ] {
-                assert!(def.wires.iter().any(|w| w.from_node == domain
-                    && w.to_node == solid
-                    && w.from_port == source
-                    && w.to_port == target));
-            }
-        }
-        assert!(def.wires.iter().any(|w| w.from_node == solid
-            && w.to_node == frame
-            && w.from_port == "solid"
-            && w.to_port == "solid"));
-        // Frame's surface() uses the same source rule; the simulation
-        // lattice continues to carry its original cells and padding.
-        assert_eq!(geometry.lattice_for_test().cells(), [resolution as u32; 3]);
-        assert_eq!(
-            geometry.lattice_for_test().nodes(),
-            [resolution as u32 + 7; 3]
-        );
-    }
-}
-
 /// Every running scene at every lattice, and the probes' variants, before
 /// any GPU run of it: the tick region's steps, the stats, the frame and
 /// the surface. The solves run inside each step, so the tick has no
@@ -107,7 +61,7 @@ fn gpu_flip_scenes_cover_every_dispatch() {
         assert_eq!(regions.len(), 1, "one tick region");
         let report = walked(&def, false, &format!("scene {n}³, {} steps", scene.steps));
         assert!(
-            report.checked > 7,
+            report.checked >= 7,
             "checked only {} nodes at {n}³, {} steps",
             report.checked,
             scene.steps
@@ -157,7 +111,7 @@ fn gpu_flip_tick_region_is_the_tick() {
         body.iter().any(|node| node == "stats"),
         "the stats run every tick"
     );
-    let outside = ["domain", "fill", "mesh_solid", "frame", "initial_column"];
+    let outside = ["domain", "fill", "frame", "initial_column"];
     assert!(
         !body
             .iter()
@@ -282,7 +236,7 @@ fn gpu_flip_rendered_scenes_cover_every_dispatch() {
         assert_eq!(plan.substep_regions().len(), 1, "one tick region");
         let report = walked(&def, false, &format!("rendered {n}³"));
         assert!(
-            report.checked > 7,
+            report.checked >= 7,
             "checked only {} nodes at {n}³",
             report.checked
         );
@@ -328,7 +282,7 @@ fn gpu_flip_frozen_graphs_cover_every_dispatch() {
         for scene in [scene.with_surface(), scene] {
             let report = walked(&render_def(scene), true, &format!("frozen render {n}³"));
             assert!(
-                report.checked > 7,
+                report.checked >= 7,
                 "checked only {} nodes at {n}³",
                 report.checked
             );

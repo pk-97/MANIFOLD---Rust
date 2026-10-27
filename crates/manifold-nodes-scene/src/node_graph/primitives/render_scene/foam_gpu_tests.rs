@@ -1,14 +1,18 @@
 //! GPU proofs for the foam field: its sampling against the closed form of a
-//! linear field, and its damping of the ripple detail.
+//! linear field on world tiles, and its damping of the ripple detail.
+use super::super::FIELD_TILES_WGSL;
+use super::super::water_march_gpu_tests::shared_buffer;
 use super::super::water_shade::ripple_uniforms;
 use super::gpu_tests::{
     PROBE_STUB, PROBES, angle, field, lattices, made_tile, probe_normals, read_f32,
 };
 use super::*;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 
-/// 64 points in a 9 x 5 x 9 lattice on a 1 m cube centred on the origin.
-const POINTS: usize = 64;
-const FOAM_NODES: [u32; 3] = [9, 5, 9];
+/// 64 points in the node box of the test tiles, then two over tiles the table
+/// does not hold.
+const INSIDE: usize = 64;
+const POINTS: usize = INSIDE + 2;
 
 /// Reads the foam field at the points in `probe_in`.
 const FOAM_KERNEL: &str = "\n\
@@ -21,38 +25,34 @@ fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
     probe_out[i] = foam_coverage_at(probe_in[i].xyz);\n\
 }\n";
 
-fn shared_f32(device: &GpuDevice, values: &[f32]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared((values.len() * 4) as u64);
-    unsafe {
-        buffer.write(0, bytemuck::cast_slice(values));
-    }
-    buffer
-}
-
-/// Distance from the lattice's min corner along each axis, in metres, of the
-/// probe point `i`: inside the cube, and not on a node.
-fn local_point(i: usize) -> [f64; 3] {
+/// Probe point `i` inside the test tiles' node box (node p at (p - 1/2)
+/// cells, so y from -0.025 to 0.325 m: a point above the last node row
+/// interpolates with the tile above, which the table does not hold), not on
+/// a node.
+fn inside_point(i: usize) -> [f64; 3] {
     let (ix, iz) = ((i % 8) as f64, (i / 8) as f64);
-    let y = 0.05 + 0.9 * ((i % 8 * 3 + i / 8 * 5) % 7) as f64 / 6.0;
-    [0.03 + 0.134 * ix, y, 0.02 + 0.137 * iz]
+    let y = 0.03 + 0.29 * ((i % 8 * 3 + i / 8 * 5) % 7) as f64 / 6.0;
+    [0.03 + 0.13 * ix, y, 0.02 + 0.137 * iz]
 }
 
-/// The foam cover `0.25 x + 0.5 z - 0.1` at a distance from the min corner, in metres.
-fn cover(local: [f64; 3]) -> f64 {
-    0.25 * local[0] + 0.5 * local[2] - 0.1
+/// The foam cover `0.25 x + 0.5 z - 0.1` at an object-space position.
+fn cover(p: [f64; 3]) -> f64 {
+    0.25 * p[0] + 0.5 * p[2] - 0.1
 }
 
-/// The look's `foam_coverage_at` at the probe points, with the foam field bound or not.
-fn coverage(device: &GpuDevice, foam: &GpuBuffer, points: &GpuBuffer, has_foam: bool) -> Vec<f32> {
-    let levelset = device.create_buffer_shared(16);
-    let velocity = device.create_buffer_shared(16);
-    let mut object = field(&levelset, &velocity);
-    object.nodes = FOAM_NODES;
-    object.size = [1.0; 3];
+/// The look's `foam_coverage_at` at the probe points, with the foam field
+/// bound or not.
+fn coverage(
+    device: &GpuDevice,
+    object: &FieldObject,
+    foam: &GpuBuffer,
+    points: &GpuBuffer,
+    has_foam: bool,
+) -> Vec<f32> {
     let uniforms =
-        ripple_uniforms(&object, None, has_foam, 0.0, [0.0, 0.0]).expect("a real model inverts");
+        ripple_uniforms(object, None, has_foam, 0.0, [0.0, 0.0]).expect("a real model inverts");
     let wgsl = format!(
-        "{PROBE_STUB}{}{}{FOAM_KERNEL}",
+        "{READ_SIDE}{FIELD_TILES_WGSL}{PROBE_STUB}{}{}{FOAM_KERNEL}",
         include_str!("../shaders/look_ripple_detail.wgsl"),
         include_str!("../shaders/foam_field.wgsl"),
     );
@@ -76,6 +76,11 @@ fn coverage(device: &GpuDevice, foam: &GpuBuffer, points: &GpuBuffer, has_foam: 
                 offset: 0,
             },
             GpuBinding::Buffer {
+                binding: 70,
+                buffer: object.tiles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
                 binding: 90,
                 buffer: &out,
                 offset: 0,
@@ -86,7 +91,7 @@ fn coverage(device: &GpuDevice, foam: &GpuBuffer, points: &GpuBuffer, has_foam: 
                 offset: 0,
             },
         ],
-        [(POINTS / 64) as u32, 1, 1],
+        [POINTS.div_ceil(64) as u32, 1, 1],
         "foam probe",
     );
     enc.commit_and_wait_completed();
@@ -94,43 +99,36 @@ fn coverage(device: &GpuDevice, foam: &GpuBuffer, points: &GpuBuffer, has_foam: 
 }
 
 /// A linear foam field is read back exactly (trilinear interpolation is exact
-/// on it) up to the clamp to 0..1, and reads zero when no field is bound.
+/// on it) up to the clamp to 0..1, reads zero over a tile the table does not
+/// hold, and reads zero when no field is bound.
 #[test]
 fn foam_cover_is_the_clamped_linear_field() {
     let device = manifold_gpu::testkit::test_device();
-    let mut values = Vec::new();
-    for iz in 0..FOAM_NODES[2] {
-        for _iy in 0..FOAM_NODES[1] {
-            for ix in 0..FOAM_NODES[0] {
-                let local = [
-                    f64::from(ix) / f64::from(FOAM_NODES[0] - 1),
-                    0.0,
-                    f64::from(iz) / f64::from(FOAM_NODES[2] - 1),
-                ];
-                values.push(cover(local) as f32);
-            }
-        }
-    }
-    let foam = shared_f32(&device, &values);
+    let lattices = lattices(&device, [0.0; 3]);
+    let object = field(&lattices);
+    let foam_pool = lattices.table.pool(0.0f32, |p| {
+        cover(lattices.table.position(p).map(f64::from)) as f32
+    });
+    let foam = shared_buffer(&device, &foam_pool);
 
-    // The lattice's min corner is (-0.5, -0.5, -0.5).
     let mut world = Vec::new();
     let mut expected = Vec::new();
-    for i in 0..POINTS {
-        let local = local_point(i);
-        let p = local.map(|c| (c - 0.5) as f32);
+    for i in 0..INSIDE {
+        let p = inside_point(i).map(|c| c as f32);
         world.extend([p[0], p[1], p[2], 0.0]);
         // Rebuilt from the f32 point the GPU is given.
-        let exact = [
-            f64::from(p[0]) + 0.5,
-            f64::from(p[1]) + 0.5,
-            f64::from(p[2]) + 0.5,
-        ];
-        expected.push(cover(exact).clamp(0.0, 1.0));
+        expected.push(cover(p.map(f64::from)).clamp(0.0, 1.0));
     }
-    let points = shared_f32(&device, &world);
+    // Over tiles the table does not hold: x = 1.5 is in tile 3, z = -0.6 in
+    // tile -2. The field there is canonical, however large the cover is
+    // nearby.
+    for p in [[1.5f32, 0.2, 0.5, 0.0], [0.5, 0.2, -0.6, 0.0]] {
+        world.extend(p);
+        expected.push(0.0);
+    }
+    let points = shared_buffer(&device, &world);
 
-    let bound = coverage(&device, &foam, &points, true);
+    let bound = coverage(&device, &object, &foam, &points, true);
     for (i, (&got, &want)) in bound.iter().zip(&expected).enumerate() {
         assert!(
             (f64::from(got) - want).abs() < 1e-5,
@@ -138,7 +136,7 @@ fn foam_cover_is_the_clamped_linear_field() {
         );
     }
     assert!(
-        expected.contains(&0.0),
+        expected[..INSIDE].contains(&0.0),
         "no probe point reaches the clamp at 0"
     );
     assert!(
@@ -146,7 +144,7 @@ fn foam_cover_is_the_clamped_linear_field() {
         "the probe points never see a real cover"
     );
 
-    let unbound = coverage(&device, &foam, &points, false);
+    let unbound = coverage(&device, &object, &foam, &points, false);
     assert!(
         unbound.iter().all(|&c| c == 0.0),
         "an unbound foam field reads {unbound:?}"
@@ -157,24 +155,16 @@ fn foam_cover_is_the_clamped_linear_field() {
 #[test]
 fn foam_damps_the_ripple_detail() {
     let device = manifold_gpu::testkit::test_device();
-    let (levelset, velocity) = lattices(&device, [0.6, 0.0, 0.0]);
-    let object = field(&levelset, &velocity);
+    let lattices = lattices(&device, [0.6, 0.0, 0.0]);
+    let object = field(&lattices);
     let ripples = made_tile(&device, &object);
-    let count = (super::gpu_tests::NODES.iter().product::<u32>()) as usize;
-    let covered = shared_f32(&device, &vec![1.0; count]);
-    let bare = shared_f32(&device, &vec![0.0; count]);
+    let covered = shared_buffer(&device, &lattices.table.pool(0.0f32, |_| 1.0));
+    let bare = shared_buffer(&device, &lattices.table.pool(0.0f32, |_| 0.0));
 
     let times = [2.0f32];
-    let plain = &probe_normals(&device, &ripples, &object, &velocity, None, &times)[0];
-    let flat = &probe_normals(
-        &device,
-        &ripples,
-        &object,
-        &velocity,
-        Some(&covered),
-        &times,
-    )[0];
-    let zero = &probe_normals(&device, &ripples, &object, &velocity, Some(&bare), &times)[0];
+    let plain = &probe_normals(&device, &ripples, &object, None, &times)[0];
+    let flat = &probe_normals(&device, &ripples, &object, Some(&covered), &times)[0];
+    let zero = &probe_normals(&device, &ripples, &object, Some(&bare), &times)[0];
 
     assert_eq!(plain.len(), PROBES);
     let tilt = plain

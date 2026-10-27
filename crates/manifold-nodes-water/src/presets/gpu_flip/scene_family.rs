@@ -20,8 +20,8 @@ use manifold_core::scene_schema::{PHYSICS_VIEW_SWITCHES, WaterFamily, WaterTempl
 use serde_json::json;
 
 use super::{
-    Builder, DOTS_OUTPUT, FAMILY_OUTPUTS, LIQUID_BODY_OUTPUT, WaterScene, display_dots,
-    display_head, feed_intervals, float, surface,
+    Builder, DISPLAY_TILES, DOTS_OUTPUT, FAMILY_OUTPUTS, LIQUID_BODY_OUTPUT, WaterScene,
+    display_dots, display_head, feed_intervals, float, surface,
 };
 
 /// The Platonic shape a drawn particle is, scaled by the particle's radius.
@@ -44,9 +44,13 @@ pub(super) fn particles_draw(b: &mut Builder) {
         "water_wetness",
     ]);
     b.remove(&PHYSICS_VIEW_SWITCHES);
-    let water = b.id("water_object") as u32;
-    b.wires
-        .retain(|wire| wire.to_node != water || !wire.to_port.starts_with("field_"));
+    // The display table keeps only the liquid's tiles, which push-out reads:
+    // no spray mist reads the spray's.
+    let [water, tiles] = ["water_object", DISPLAY_TILES].map(|name| b.id(name) as u32);
+    b.wires.retain(|wire| {
+        (wire.to_node != water || !wire.to_port.starts_with("field_"))
+            && (wire.to_node != tiles || wire.to_port != "spray")
+    });
     let copies = b.node(
         "liquid_particle_copies",
         "node.particles_to_copies",

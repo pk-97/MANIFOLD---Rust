@@ -1,0 +1,609 @@
+//! `node.surface_tiles` — the display's world tiles. Every drawn water field
+//! (level set, velocity, foam, mist, wetness, solid) lives on the table this
+//! node builds each frame from the displayed particles, foam and spray, at the
+//! display cell size. A tile water touched stays held, in its slot, for
+//! `keep_seconds` after the water leaves, so the wetness stored in it can dry.
+
+use std::borrow::Cow;
+use std::sync::LazyLock;
+
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
+
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::world_tiles::{
+    READ_SIDE, TILE, lattice_origin, slot_row_word, table_entries,
+};
+use manifold_water_liquid::primitives::prefix_scan::open_gate;
+use manifold_water_liquid::world_tiles::{
+    Allocation, LIQUID_POINTS, PointCount, Reach, WorldTiles,
+};
+use manifold_water_liquid::{float_param, int_param};
+
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+mod extent;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests;
+
+// The read side, then the passes around the build.
+static SOURCE: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{READ_SIDE}\n{}",
+        include_str!("shaders/surface_tiles.wgsl")
+    )
+});
+const THREADS: u32 = 256;
+const PARTICLE: u64 = std::mem::size_of::<FluidParticle>() as u64;
+
+/// A particle's tile and the ring of tiles round it join the table; every
+/// ring tile gets a slot, so a field read one cell past a tile never leaves
+/// the table.
+pub(crate) const REACH: Reach = Reach {
+    ring_max: 1,
+    alloc_ring: 1,
+    cell_reach: TILE,
+};
+
+/// The most the display subdivides a simulation cell per axis.
+pub(crate) const MAX_RESOLUTION_SCALE: f32 = 4.0;
+
+/// Pools are counted on f32 wires, which hold whole numbers exactly up to 2²⁴.
+const MAX_POOL_TILES: f64 = 16_777_216.0;
+
+/// Field order identical to the shader's `Params`; three 16-byte rows.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct TileUniforms {
+    origin: [f32; 3],
+    inv_cell: f32,
+    pool_tiles: u32,
+    head: u32,
+    time: f32,
+    keep_seconds: f32,
+    cell: f32,
+    _pad: [u32; 3],
+}
+
+/// The display lattice a setup of the node asks for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DisplayShape {
+    /// h_s: the display cell size, metres.
+    pub cell_size: f32,
+    /// P: tiles in the pool, before the node's grow-only rule.
+    pub pool_tiles: u32,
+}
+
+/// The display lattice for a simulation of `sim_cell_size` metres and
+/// `sim_pool_tiles` tiles: `resolution_scale` display cells per simulation
+/// cell along an axis, and P = ceil(sim_pool_tiles · pool_scale · scale³).
+pub(crate) fn display_shape(
+    sim_cell_size: f32,
+    sim_pool_tiles: f32,
+    pool_scale: f32,
+    resolution_scale: f32,
+) -> Result<DisplayShape, String> {
+    if !(sim_cell_size.is_finite() && sim_cell_size > 0.0) {
+        return Err(format!(
+            "Surface Tiles: the water's cell size {sim_cell_size} is not a length"
+        ));
+    }
+    if !(sim_pool_tiles.is_finite() && sim_pool_tiles.round() >= 1.0) {
+        return Err(format!(
+            "Surface Tiles: the water's pool of {sim_pool_tiles} tiles is not a pool"
+        ));
+    }
+    if !(pool_scale.is_finite() && pool_scale > 0.0) {
+        return Err(format!(
+            "Surface Tiles: a pool scale of {pool_scale} is not a positive number"
+        ));
+    }
+    if !resolution_scale.is_finite() {
+        return Err(format!(
+            "Surface Tiles: a resolution scale of {resolution_scale} is not a number"
+        ));
+    }
+    let scale = resolution_scale.round().clamp(1.0, MAX_RESOLUTION_SCALE) as u32;
+    let wanted =
+        (f64::from(sim_pool_tiles.round()) * f64::from(pool_scale) * f64::from(scale).powi(3))
+            .ceil()
+            .max(1.0);
+    if wanted > MAX_POOL_TILES {
+        return Err(format!(
+            "Surface Tiles: {wanted} display tiles are more than a pool counts ({MAX_POOL_TILES}). Lower Pool Scale or Resolution Scale."
+        ));
+    }
+    Ok(DisplayShape {
+        cell_size: sim_cell_size / scale as f32,
+        pool_tiles: wanted as u32,
+    })
+}
+
+/// What the node's buffers are sized by; any change builds them again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Layout {
+    pub particles: u32,
+    pub foam: u32,
+    pub spray: u32,
+    pub pool_tiles: u32,
+}
+
+impl Layout {
+    /// The records the build bins: the frame's points, then a keep record a slot.
+    fn records(self) -> u64 {
+        u64::from(self.particles)
+            + u64::from(self.foam)
+            + u64::from(self.spray)
+            + u64::from(self.pool_tiles)
+    }
+
+    /// Records before the keep records.
+    fn head(self) -> u32 {
+        self.particles + self.foam + self.spray
+    }
+
+    /// Bytes of the node's own buffers (the world tiles hold theirs).
+    pub(crate) fn bytes(self) -> u64 {
+        let pool = u64::from(self.pool_tiles);
+        let padded = |bytes: u64| bytes.max(16);
+        padded(self.records() * PARTICLE) // points
+            + padded(16) // record
+            + padded(4 * pool) // touched
+            + padded(16 * pool) // last rows
+            + padded(24) // bounds
+            + padded(32) // extent
+            + padded(48) // gate
+    }
+
+    /// Records past what a u32 indexes are refused by name.
+    fn checked(self) -> Result<Self, String> {
+        if self.records() > u64::from(u32::MAX) {
+            return Err(format!(
+                "{} display points are more than a pass indexes",
+                self.records()
+            ));
+        }
+        Ok(self)
+    }
+}
+
+/// The table, the buffers round the build and the last frame it saw.
+pub(crate) struct Held {
+    layout: Layout,
+    tiles: WorldTiles,
+    /// The records the build bins: particles, foam and spray copied end to
+    /// end, then one keep record a slot.
+    points: GpuBuffer,
+    /// `[groups, 1, 1, n]` over `points`: the build's point passes.
+    record: GpuBuffer,
+    /// Per slot, the display time water last touched its tile (f32 bits).
+    touched: GpuBuffer,
+    /// Last frame's slot rows of the table.
+    last_rows: GpuBuffer,
+    /// The held tiles' lowest and highest tile coordinates, six i32.
+    bounds: GpuBuffer,
+    /// min xyz, 0, max xyz, 0, metres.
+    extent: GpuBuffer,
+    /// A clock plan that is always active.
+    gate: GpuBuffer,
+    last: Option<LastRun>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LastRun {
+    time: f32,
+    epoch: Option<f32>,
+    cell_size: f32,
+}
+
+/// One frame's inputs.
+struct Frame<'a> {
+    particles: &'a GpuBuffer,
+    foam: Option<&'a GpuBuffer>,
+    spray: Option<&'a GpuBuffer>,
+    time: f32,
+    epoch: Option<f32>,
+    keep_seconds: f32,
+    cell_size: f32,
+}
+
+fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
+    GpuBinding::Buffer {
+        binding,
+        buffer,
+        offset: 0,
+    }
+}
+
+fn shared(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
+    let buffer = device.try_create_buffer_shared(bytes.max(16))?;
+    buffer.zero_fill();
+    Ok(buffer)
+}
+
+impl Held {
+    fn new(device: &GpuDevice, layout: Layout) -> Result<Self, String> {
+        let layout = layout.checked()?;
+        manifold_node_engine::load::expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(),
+            layout.bytes(),
+        )
+        .map_err(|error| error.to_string())?;
+        let pool = layout.pool_tiles;
+        let mut tiles = WorldTiles::new(device, pool, REACH, LIQUID_POINTS)?;
+        tiles.prepare(device);
+        let records = layout.records() as u32;
+        let record = shared(device, 16)?;
+        // SAFETY: a new shared buffer of 16 bytes; no GPU work has touched it.
+        unsafe {
+            record.write(
+                0,
+                bytemuck::cast_slice(&[records.div_ceil(THREADS), 1, 1, records]),
+            );
+        }
+        let pool_bytes = u64::from(pool);
+        Ok(Self {
+            layout,
+            tiles,
+            points: shared(device, layout.records() * PARTICLE)?,
+            record,
+            touched: shared(device, 4 * pool_bytes)?,
+            last_rows: shared(device, 16 * pool_bytes)?,
+            bounds: shared(device, 24)?,
+            extent: shared(device, 32)?,
+            gate: open_gate(device),
+            last: None,
+        })
+    }
+
+    /// Water starts over on a new epoch, a new cell size, and time running back
+    /// past the keep window: nothing touched before carries.
+    fn restarts(&self, frame: &Frame<'_>) -> bool {
+        match self.last {
+            None => true,
+            Some(last) => {
+                last.epoch != frame.epoch
+                    || last.cell_size != frame.cell_size
+                    || frame.time < last.time - frame.keep_seconds
+            }
+        }
+    }
+
+    fn encode(&mut self, enc: &mut GpuEncoder, kernels: &Kernels, frame: &Frame<'_>) {
+        let layout = self.layout;
+        let pool = layout.pool_tiles;
+        let head = layout.head();
+        let reset = self.restarts(frame);
+        let uniforms = TileUniforms {
+            origin: lattice_origin(frame.cell_size),
+            inv_cell: 1.0 / frame.cell_size,
+            pool_tiles: pool,
+            head,
+            time: frame.time,
+            keep_seconds: frame.keep_seconds,
+            cell: frame.cell_size,
+            _pad: [0; 3],
+        };
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            buffer(1, self.tiles.table()),
+            buffer(2, &self.points),
+            buffer(3, &self.touched),
+            buffer(4, &self.last_rows),
+            buffer(5, &self.bounds),
+            buffer(6, &self.extent),
+        ];
+        let pass = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, groups, label| {
+            enc.dispatch_compute(pipeline, &bindings, groups, label);
+            enc.compute_memory_barrier_buffers();
+        };
+        let per_slot = [pool.div_ceil(THREADS), 1, 1];
+        if reset {
+            pass(enc, &kernels.reset, per_slot, "node.surface_tiles.reset");
+        }
+        let mut at = 0;
+        for (source, slots) in [
+            (Some(frame.particles), layout.particles),
+            (frame.foam, layout.foam),
+            (frame.spray, layout.spray),
+        ] {
+            let bytes = u64::from(slots) * PARTICLE;
+            if let Some(source) = source.filter(|_| slots > 0) {
+                enc.copy_buffer_range(source, 0, &self.points, at, bytes);
+            }
+            at += bytes;
+        }
+        self.tiles.encode_allocation(
+            enc,
+            &Allocation {
+                points: &self.points,
+                count: PointCount::Record(&self.record),
+                origin: uniforms.origin,
+                inv_cell: uniforms.inv_cell,
+                replay_count: 0,
+                gate: &self.gate,
+            },
+        );
+        pass(enc, &kernels.carry, per_slot, "node.surface_tiles.carry");
+        if head > 0 {
+            pass(
+                enc,
+                &kernels.touch,
+                [head.div_ceil(THREADS), 1, 1],
+                "node.surface_tiles.touch",
+            );
+        }
+        pass(enc, &kernels.keep, per_slot, "node.surface_tiles.keep");
+        pass(enc, &kernels.extent, [1, 1, 1], "node.surface_tiles.extent");
+        // The next frame's carry compares its slots' tiles with these.
+        enc.copy_buffer_range(
+            self.tiles.table(),
+            slot_row_word(table_entries(pool), 0) * 4,
+            &self.last_rows,
+            0,
+            16 * u64::from(pool),
+        );
+        self.last = Some(LastRun {
+            time: frame.time,
+            epoch: frame.epoch,
+            cell_size: frame.cell_size,
+        });
+    }
+}
+
+/// The passes round the build, one pipeline each.
+pub(crate) struct Kernels {
+    reset: GpuComputePipeline,
+    carry: GpuComputePipeline,
+    touch: GpuComputePipeline,
+    keep: GpuComputePipeline,
+    extent: GpuComputePipeline,
+}
+
+impl Kernels {
+    fn new(device: &GpuDevice) -> Self {
+        let make = |entry: &str| {
+            device.create_compute_pipeline(SOURCE.as_str(), entry, "node.surface_tiles")
+        };
+        Self {
+            reset: make("st_reset"),
+            carry: make("st_carry"),
+            touch: make("st_touch"),
+            keep: make("st_keep"),
+            extent: make("st_extent"),
+        }
+    }
+}
+
+manifold_node_engine::primitive! {
+    name: SurfaceTiles,
+    type_id: "node.surface_tiles",
+    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed particles, foam and spray at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile the water touched stays held, in the same slot, for keep_seconds after the water leaves (a slot that changes tiles or was free forgets), so the wetness stored in it can dry; an epoch change, a new cell size, or display time running back past keep_seconds drops what was kept. The pool holds ceil(sim_pool_tiles x pool_scale x resolution_scale^3) tiles and only grows. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
+    inputs: {
+        particles: Array(FluidParticle) required,
+        foam: Array(FluidParticle) optional,
+        spray: Array(FluidParticle) optional,
+        sim_cell_size: ScalarF32 optional,
+        sim_pool_tiles: ScalarF32 optional,
+        time: ScalarF32 required,
+        epoch: ScalarF32 optional,
+    },
+    outputs: {
+        tiles: Array(u32),
+        pool_tiles: ScalarF32,
+        cell_size: ScalarF32,
+        extent: Array(f32),
+    },
+    params: [
+        int_param!("resolution_scale", "Resolution Scale", 1.0, 1.0, 4.0),
+        // Times the simulation's pool, per axis-cubed of resolution scale.
+        float_param!("pool_scale", "Pool Scale", 2.0, 0.1, 64.0),
+        // How long a tile the water touched stays held, so wetness can dry.
+        float_param!("keep_seconds", "Keep Seconds", 1800.0, 0.0, 86400.0),
+        float_param!("sim_cell_size", "Water Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("sim_pool_tiles", "Water Pool Tiles", 1.0, 1.0, 16_777_216.0),
+    ],
+    depth_rule: Terminal,
+    composition_notes: "Wire particles from the liquid frame's blended particles, foam and spray from the displayed whitewater, sim_cell_size and sim_pool_tiles from the water step, time from the domain's display_time and epoch from its epoch. Every display atom takes tiles, pool_tiles and cell_size from here; extent feeds the water object's field_extent. Keep it running while the water is shown: the tiles it keeps are the wetness's memory.",
+    examples: [],
+    picker: { label: "Surface Tiles", category: Atom },
+    summary: "Builds the tiles the drawn water lives in, following the displayed water and keeping wet ground for a while.",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["surface tiles", "display tiles", "world tiles"],
+    boundary_reason: CrossFrameState,
+    extra_fields: {
+        held: Option<Held> = None,
+        kernels: Option<Kernels> = None,
+    },
+}
+
+impl Primitive for SurfaceTiles {
+    fn prepare_pipelines(&mut self, device: &GpuDevice) {
+        self.kernels.get_or_insert_with(|| Kernels::new(device));
+        // A one-slot table: the build's pipelines are cached by source, so every
+        // pool compiles here, not on the first frame.
+        match WorldTiles::new(device, 1, REACH, LIQUID_POINTS) {
+            Ok(mut tiles) => tiles.prepare(device),
+            Err(error) => log::warn!("Surface Tiles: world tiles at install: {error}"),
+        }
+    }
+
+    fn provides_array_output(&self, port: &str) -> bool {
+        matches!(port, "tiles" | "extent")
+    }
+
+    fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        let held = self.held.as_ref()?;
+        match port {
+            "tiles" => Some(held.tiles.table()),
+            "extent" => Some(&held.extent),
+            _ => None,
+        }
+    }
+
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        _inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        // Provided storage: a one-record hint, sized to the pool at run time.
+        matches!(port, "tiles" | "extent").then_some(1)
+    }
+
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let Some(particles) = ctx.inputs.array("particles") else {
+            ctx.error("Surface Tiles: particles must be wired");
+            return;
+        };
+        let Some(ParamValue::Float(time)) = ctx.inputs.scalar("time") else {
+            ctx.error("Surface Tiles: time must be wired");
+            return;
+        };
+        if !time.is_finite() {
+            ctx.error("Surface Tiles: time must be finite");
+            return;
+        }
+        let epoch = match ctx.inputs.scalar("epoch") {
+            Some(ParamValue::Float(epoch)) => Some(epoch),
+            _ => None,
+        };
+        let keep_seconds = ctx.param_f32("keep_seconds", 1800.0);
+        if !(keep_seconds.is_finite() && keep_seconds >= 0.0) {
+            ctx.error("Surface Tiles: keep seconds must be finite and at least 0");
+            return;
+        }
+        let shape = match display_shape(
+            ctx.scalar_or_param("sim_cell_size", 0.0625),
+            ctx.scalar_or_param("sim_pool_tiles", 1.0),
+            ctx.param_f32("pool_scale", 2.0),
+            ctx.param_f32("resolution_scale", 1.0),
+        ) {
+            Ok(shape) => shape,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
+        let foam = ctx.inputs.array("foam");
+        let spray = ctx.inputs.array("spray");
+        // A count past a u32 saturates, and the layout refuses it by name.
+        let slots = |buffer: Option<&GpuBuffer>| {
+            u32::try_from(buffer.map_or(0, |buffer| buffer.size / PARTICLE)).unwrap_or(u32::MAX)
+        };
+        // The pool only grows: a smaller ask keeps the table it has.
+        let kept_pool = self.held.as_ref().map_or(0, |held| held.layout.pool_tiles);
+        let layout = Layout {
+            particles: slots(Some(particles)),
+            foam: slots(foam),
+            spray: slots(spray),
+            pool_tiles: shape.pool_tiles.max(kept_pool),
+        };
+        let prepared = {
+            let gpu = ctx.gpu_encoder();
+            self.kernels.get_or_insert_with(|| Kernels::new(gpu.device));
+            if self.held.as_ref().is_none_or(|held| held.layout != layout) {
+                self.held = None;
+                Held::new(gpu.device, layout).map(|held| self.held = Some(held))
+            } else {
+                Ok(())
+            }
+        };
+        if let Err(error) = prepared {
+            ctx.error(format!("Surface Tiles: {error}"));
+            return;
+        }
+        ctx.outputs
+            .set_scalar("pool_tiles", ParamValue::Float(layout.pool_tiles as f32));
+        ctx.outputs
+            .set_scalar("cell_size", ParamValue::Float(shape.cell_size));
+        let frame = Frame {
+            particles,
+            foam,
+            spray,
+            time,
+            epoch,
+            keep_seconds,
+            cell_size: shape.cell_size,
+        };
+        let gpu = ctx.gpu_encoder();
+        let (Some(held), Some(kernels)) = (self.held.as_mut(), self.kernels.as_ref()) else {
+            return;
+        };
+        held.encode(gpu.native_enc, kernels, &frame);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shader_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(&SOURCE).expect("surface tiles shader parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("surface tiles shader validates");
+        for entry in ["st_reset", "st_carry", "st_touch", "st_keep", "st_extent"] {
+            assert!(
+                module.entry_points.iter().any(|point| point.name == entry),
+                "missing {entry}"
+            );
+        }
+        assert_eq!(std::mem::size_of::<TileUniforms>(), 48);
+    }
+
+    #[test]
+    fn the_display_pool_follows_both_scales() {
+        let shape = display_shape(0.25, 100.0, 2.0, 1.0).unwrap();
+        assert_eq!(shape.cell_size, 0.25);
+        assert_eq!(shape.pool_tiles, 200);
+        // Twice the resolution: half the cell, 8 times the tiles.
+        let fine = display_shape(0.25, 100.0, 2.0, 2.0).unwrap();
+        assert_eq!(fine.cell_size, 0.125);
+        assert_eq!(fine.pool_tiles, 1600);
+        // A fractional pool scale rounds the pool up.
+        assert_eq!(display_shape(0.25, 7.0, 1.3, 3.0).unwrap().pool_tiles, 246);
+        // The resolution scale clamps to what the node offers.
+        assert_eq!(
+            display_shape(0.25, 1.0, 1.0, 9.0).unwrap().cell_size,
+            0.0625
+        );
+        assert_eq!(display_shape(0.25, 1.0, 1.0, 0.2).unwrap().cell_size, 0.25);
+    }
+
+    #[test]
+    fn a_bad_setup_is_an_error() {
+        assert!(display_shape(0.0, 10.0, 2.0, 1.0).is_err());
+        assert!(display_shape(f32::NAN, 10.0, 2.0, 1.0).is_err());
+        assert!(display_shape(0.25, 0.0, 2.0, 1.0).is_err());
+        assert!(display_shape(0.25, 10.0, 0.0, 1.0).is_err());
+        assert!(display_shape(0.25, 10.0, 2.0, f32::NAN).is_err());
+        // 4 x 64 = 256 times the pool of a 100000-tile simulation.
+        assert!(display_shape(0.25, 100_000.0, 64.0, 4.0).is_err());
+    }
+
+    #[test]
+    fn the_layout_counts_every_buffer() {
+        let layout = Layout {
+            particles: 1000,
+            foam: 200,
+            spray: 0,
+            pool_tiles: 40,
+        };
+        assert_eq!(layout.head(), 1200);
+        assert_eq!(layout.records(), 1240);
+        assert_eq!(
+            layout.bytes(),
+            1240 * 32 + 16 + 4 * 40 + 16 * 40 + 24 + 32 + 48
+        );
+    }
+}

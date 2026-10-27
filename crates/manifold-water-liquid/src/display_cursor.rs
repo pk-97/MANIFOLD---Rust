@@ -188,12 +188,9 @@ mod tests {
     use crate::frame_history::{FIELDS, Layout};
     use manifold_physics::clock::{ClockFrame, SimulationClock};
 
-    const LATTICE: [u32; 7] = [0, 0, 0, 1, 8, 8, 8];
-
     fn layout(epoch: u32) -> Layout {
         Layout {
             epoch,
-            lattice: LATTICE,
             fields: [0; FIELDS],
         }
     }

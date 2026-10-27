@@ -1,12 +1,13 @@
 //! Buffer extent rule owned by this node.
-use manifold_water_liquid::extent::liquid_lattice;
+use super::CLOCK_PLAN_BYTES;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_water_liquid::extent::tile_pool;
 
 fn liquid_solid_distance(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    // One thread per lattice node over storage sized from the same lattice.
-    let solid = liquid_lattice(x)?.solid_bytes();
+    // One thread per pool element over storage sized from the same pool.
+    let solid = tile_pool(x)? * 4;
     x.provide("solid", solid);
-    x.hold(solid);
+    x.hold(solid + CLOCK_PLAN_BYTES);
     Ok(())
 }
 inventory::submit! {

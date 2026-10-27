@@ -97,21 +97,31 @@ pub(crate) use matrix::{mat4_inverse, model_matrix};
 mod pipelines;
 mod resources;
 
-/// The scene shader as every pipeline compiles it: the instance transform
-/// helpers it shares with `cull_instances.wgsl`, the scene shading a
-/// full-screen pass shares (`scene_shading.wgsl`), the five look hooks, then
-/// the mesh shader itself.
-const RENDER_SCENE_WGSL: &str = concat!(
-    include_str!("shaders/instance_transform.wgsl"),
-    include_str!("shaders/scene_shading.wgsl"),
-    include_str!("shaders/look_ripple_detail.wgsl"),
-    include_str!("shaders/foam_field.wgsl"),
-    include_str!("shaders/look_foam.wgsl"),
-    include_str!("shaders/look_mist.wgsl"),
-    include_str!("shaders/look_thin_water_light.wgsl"),
-    include_str!("shaders/look_wet_surface.wgsl"),
-    include_str!("shaders/render_scene.wgsl"),
-);
+/// The shader text a water field's table is read through: the three table
+/// functions over the field's `tiles` binding, the extent and the sampling
+/// helpers. Follows `world_tiles::READ_SIDE` in every shader that reads a field.
+const FIELD_TILES_WGSL: &str = include_str!("shaders/field_tiles.wgsl");
+
+/// The scene shader as every pipeline compiles it: the world-tile read side
+/// and the field's table, the instance transform helpers it shares with
+/// `cull_instances.wgsl`, the scene shading a full-screen pass shares
+/// (`scene_shading.wgsl`), the five look hooks, then the mesh shader itself.
+static RENDER_SCENE_WGSL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    [
+        manifold_node_engine::scene::world_tiles::READ_SIDE,
+        FIELD_TILES_WGSL,
+        include_str!("shaders/instance_transform.wgsl"),
+        include_str!("shaders/scene_shading.wgsl"),
+        include_str!("shaders/look_ripple_detail.wgsl"),
+        include_str!("shaders/foam_field.wgsl"),
+        include_str!("shaders/look_foam.wgsl"),
+        include_str!("shaders/look_mist.wgsl"),
+        include_str!("shaders/look_thin_water_light.wgsl"),
+        include_str!("shaders/look_wet_surface.wgsl"),
+        include_str!("shaders/render_scene.wgsl"),
+    ]
+    .concat()
+});
 #[cfg(feature = "gpu-proofs")]
 pub mod rt_proof;
 

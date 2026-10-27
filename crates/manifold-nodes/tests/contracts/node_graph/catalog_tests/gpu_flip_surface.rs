@@ -38,10 +38,8 @@ fn gpu_flip_surface_fresh_defaults_and_live_bindings_reach_nested_nodes() {
             "{node}.{name}"
         );
     };
-    for node in ["liquid_volume", "liquid_bricks"] {
-        assert_param(&runtime, node, "resolution_scale", 1.0);
-    }
-    assert_param(&runtime, "liquid_blobs", "particle_scale", 3.0);
+    assert_param(&runtime, "surface_tiles", "resolution_scale", 1.0);
+    assert_param(&runtime, "liquid_particle_scale", "value", 3.0);
     assert_param(&runtime, "liquid_smoothness", "value", 1.0);
     assert_param(&runtime, "water_ripple_detail", "value", 1.0);
     assert!(runtime.shadowed_def_params().next().is_none());
@@ -56,10 +54,8 @@ fn gpu_flip_surface_fresh_defaults_and_live_bindings_reach_nested_nodes() {
         param.base = value;
     }
     runtime.apply_param_values(&params);
-    for node in ["liquid_volume", "liquid_bricks"] {
-        assert_param(&runtime, node, "resolution_scale", 2.0);
-    }
-    assert_param(&runtime, "liquid_blobs", "particle_scale", 2.2);
+    assert_param(&runtime, "surface_tiles", "resolution_scale", 2.0);
+    assert_param(&runtime, "liquid_particle_scale", "value", 2.2);
     assert_param(&runtime, "liquid_smoothness", "value", 1.5);
     assert_param(&runtime, "water_ripple_detail", "value", 0.5);
 }

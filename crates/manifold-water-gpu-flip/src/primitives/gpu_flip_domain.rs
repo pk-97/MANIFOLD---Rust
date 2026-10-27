@@ -65,7 +65,7 @@ use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, take_initial_f
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_liquid::lattice::closed_faces;
 use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
-use manifold_water_liquid::{RolePorts, WATER_DENSITY};
+use manifold_water_liquid::{PARTICLE_RADIUS_CELLS, RolePorts, WATER_DENSITY};
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
@@ -141,7 +141,7 @@ impl GpuFlipGeometry {
 
     manifold_core::testkit_visible! {
         /// The scalar outputs fixed by the setup, by name.
-        pub(crate) fn outputs(&self) -> [(&'static str, f32); 25] {
+        pub(crate) fn outputs(&self) -> [(&'static str, f32); 26] {
             let GpuFlipGeometry { lattice, pool_sites, box_sites, .. } = *self;
             let particle_capacity = self.setup.particle_capacity;
             let h = self.layout.cell_size;
@@ -173,6 +173,8 @@ impl GpuFlipGeometry {
                 ("cell_origin_x", origin[0] as f32),
                 ("cell_origin_y", origin[1] as f32),
                 ("cell_origin_z", origin[2] as f32),
+                // The step's pool: the display sizes its own tiles from it.
+                ("pool_tiles", pool_tiles(FlipSolverGrid::from_lattice(lattice).cells()) as f32),
             ]
         }
     }
@@ -299,10 +301,6 @@ pub(crate) fn geometry_read<'a>(
     }
 }
 
-/// The radius of a sphere of an eighth of a cell, in cells: what a particle
-/// of the fill and of every source is drawn and kept with.
-const PARTICLE_RADIUS_CELLS: f32 = 0.31017524;
-
 /// The most slots the pool gives an inflow: about 1 GB of device memory,
 /// since a slot costs the rendered water about 1 kB across its particle
 /// buffers (the extent walk's count at 64³). It holds half a 64³ domain.
@@ -391,7 +389,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 73] = [
+const OUTPUTS: [&str; 74] = [
     "lattice_min_x",
     "lattice_min_y",
     "lattice_min_z",
@@ -465,6 +463,7 @@ const OUTPUTS: [&str; 73] = [
     "wall_velocity_hi_x",
     "wall_velocity_hi_y",
     "wall_velocity_hi_z",
+    "pool_tiles",
 ];
 const TICKS: usize = 19;
 const EPOCH: usize = 20;
@@ -600,6 +599,7 @@ manifold_node_engine::primitive! {
         sheet_fill_rate: ScalarF32,
         cell_origin_x: ScalarF32, cell_origin_y: ScalarF32, cell_origin_z: ScalarF32,
         region_site_total: ScalarF32,
+        pool_tiles: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), region_sites: Array(u32), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(f32),
         contacts: Array(f32),

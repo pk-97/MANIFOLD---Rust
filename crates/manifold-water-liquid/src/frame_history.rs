@@ -15,13 +15,10 @@ use crate::clock::display_blend;
 /// Slots a history may hold, each admitted against device memory.
 pub const H_MAX: usize = 16;
 
-/// Per-slot field arrays beside the particles, by index.
-pub const FIELD_SOLID: usize = 0;
-/// Face axes x, y, z at `FIELD_FACES + axis`.
-pub const FIELD_FACES: usize = 1;
-/// Whitewater classes foam, bubble, spray, dust at `FIELD_WHITEWATER + k`.
-pub const FIELD_WHITEWATER: usize = 4;
-pub const FIELDS: usize = 8;
+/// Per-slot field arrays beside the particles: the whitewater classes foam,
+/// bubble, spray, dust at `FIELD_WHITEWATER + k`.
+pub const FIELD_WHITEWATER: usize = 0;
+pub const FIELDS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlotState {
@@ -37,7 +34,6 @@ pub enum SlotState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub epoch: u32,
-    pub lattice: [u32; 7],
     pub fields: [u64; FIELDS],
 }
 
@@ -110,8 +106,6 @@ pub enum LayoutChange {
     None,
     /// New generation; the pin holds until the new one's first retirement.
     Generation,
-    /// New lattice; nothing old is comparable, outputs wait for a retirement.
-    Lattice,
 }
 
 /// The slot lifecycle, generations, runs and exact selection, free of GPU
@@ -207,7 +201,6 @@ impl HistoryCore {
         if self.layout == Some(layout) {
             return LayoutChange::None;
         }
-        let lattice_changed = self.layout.is_some_and(|old| old.lattice != layout.lattice);
         self.layout = Some(layout);
         self.generation += 1;
         for slot in &mut self.slots {
@@ -215,12 +208,7 @@ impl HistoryCore {
                 slot.state = SlotState::Obsolete;
             }
         }
-        if lattice_changed {
-            self.pinned = None;
-            LayoutChange::Lattice
-        } else {
-            LayoutChange::Generation
-        }
+        LayoutChange::Generation
     }
 
     /// Whether `time` is an endpoint not yet submitted in this generation.
@@ -485,10 +473,6 @@ impl<B: SlotStorage> SlotBuffers<B> {
 pub struct FrameHistory<B = GpuBuffer> {
     pub core: HistoryCore,
     buffers: Vec<SlotBuffers<B>>,
-    /// Grow-only storage size per field, applied to the solid lattice only:
-    /// its mix downstream is planned once and never follows a shrink, as
-    /// FrameRing kept it. Every other field consumer needs its exact size.
-    field_capacity: [u64; FIELDS],
 }
 
 impl<B> Default for FrameHistory<B> {
@@ -496,7 +480,6 @@ impl<B> Default for FrameHistory<B> {
         Self {
             core: HistoryCore::default(),
             buffers: Vec::new(),
-            field_capacity: [0; FIELDS],
         }
     }
 }
@@ -504,11 +487,6 @@ impl<B> Default for FrameHistory<B> {
 impl<B: SlotStorage> FrameHistory<B> {
     pub fn slot(&self, index: usize) -> &SlotBuffers<B> {
         &self.buffers[index]
-    }
-
-    /// The storage size a slot gives `field`: its largest need so far.
-    pub fn field_capacity(&self, field: usize) -> u64 {
-        self.field_capacity[field]
     }
 
     /// A Free slot for the endpoint at `time` holding `particle_bytes` of
@@ -527,17 +505,6 @@ impl<B: SlotStorage> FrameHistory<B> {
         admit: impl FnOnce(u64) -> Result<(), String>,
         mut create: impl FnMut(u64, &[u32]) -> Result<B, String>,
     ) -> Result<Option<usize>, String> {
-        for (capacity, &bytes) in self.field_capacity.iter_mut().zip(fields) {
-            *capacity = (*capacity).max(bytes);
-        }
-        let capacity = self.field_capacity;
-        let fields = &std::array::from_fn(|i| {
-            if i == FIELD_SOLID && fields[i] > 0 {
-                capacity[i]
-            } else {
-                fields[i]
-            }
-        });
         let found = self
             .core
             .free_slot(|i| self.buffers[i].fits(particle_bytes, fields));
@@ -647,12 +614,9 @@ mod tests {
     use super::*;
     use manifold_physics::clock::SimulationClock;
 
-    const LATTICE: [u32; 7] = [0, 0, 0, 1, 8, 8, 8];
-
     fn layout(epoch: u32) -> Layout {
         Layout {
             epoch,
-            lattice: LATTICE,
             fields: [0; FIELDS],
         }
     }
@@ -825,20 +789,12 @@ mod tests {
         publish_retire(&mut core, 1.0);
         assert!(!core.wants_publication(1.0));
         let mut wider = layout(1);
-        wider.fields[FIELD_FACES] = 64;
+        wider.fields[FIELD_WHITEWATER] = 64;
         assert_eq!(core.set_layout(wider), LayoutChange::Generation);
         assert!(
             core.wants_publication(1.0),
             "a field change republishes at unchanged time"
         );
-        let mut moved = wider;
-        moved.lattice[4] = 9;
-        assert_eq!(core.set_layout(moved), LayoutChange::Lattice);
-        assert!(
-            core.pinned().is_none(),
-            "a lattice change leaves nothing comparable"
-        );
-        assert!(core.wants_publication(1.0));
     }
 
     #[test]
@@ -846,7 +802,7 @@ mod tests {
         let mut core = HistoryCore::default();
         let a = layout(1);
         let mut b = a;
-        b.fields[FIELD_SOLID] = 4;
+        b.fields[FIELD_WHITEWATER + 1] = 4;
         core.set_layout(a);
         let slot = core.push_free();
         core.begin(slot, 1.0, 7);
@@ -917,7 +873,7 @@ mod tests {
     /// An independent ledger of what the GPU may still do to each slot:
     /// the last frame that wrote it and the last frame that showed it. Every
     /// reuse and every slot found Free must have both complete and be
-    /// unpinned. Sequences mix resets, field and lattice changes, encode
+    /// unpinned. Sequences mix resets, field changes, encode
     /// failures and frames that exit before selecting (only stamping).
     #[test]
     fn frame_history_every_free_transition_checks_both_stamps() {
@@ -932,7 +888,7 @@ mod tests {
             let mut core = HistoryCore::default();
             let mut writer = [0u64; H_MAX];
             let mut reader = [0u64; H_MAX];
-            let (mut epoch, mut lattice, mut fields) = (1, LATTICE, [0; FIELDS]);
+            let (mut epoch, mut fields) = (1, [0; FIELDS]);
             let mut t = 0.0;
             let delay = 1 + next(4);
             for frame in 1..400u64 {
@@ -947,9 +903,8 @@ mod tests {
                 };
                 match next(25) {
                     0 => epoch += 1,
-                    1 => fields[FIELD_FACES] = 4 * next(3),
+                    1 => fields[FIELD_WHITEWATER + 1] = 4 * next(3),
                     2 => fields[FIELD_WHITEWATER] = 4 * next(2),
-                    3 => lattice[4] = 8 + next(2) as u32,
                     _ => {}
                 }
                 // The frame's bound outputs are read whatever it does next.
@@ -961,11 +916,7 @@ mod tests {
                 if next(8) == 0 {
                     continue; // an early exit: nothing else this frame
                 }
-                core.set_layout(Layout {
-                    epoch,
-                    lattice,
-                    fields,
-                });
+                core.set_layout(Layout { epoch, fields });
                 core.retire(complete, |_| Some([5, 1, u32::from(next(5) != 0), 0]));
                 if let Some(p) = core.select(t - 0.05) {
                     reader[p.a] = frame;

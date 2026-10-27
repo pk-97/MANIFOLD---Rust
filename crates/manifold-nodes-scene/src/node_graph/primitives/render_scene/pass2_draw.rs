@@ -7,7 +7,7 @@ use manifold_node_engine::scene::camera::CameraMode;
 
 impl RenderScene {
     /// BUG-trh7 stage 2, pass 8: the draw — target/resolve-target selection,
-    /// the 56-binding sets, opaque/blend split, aux attachments, Pass A,
+    /// the 58-binding sets, opaque/blend split, aux attachments, Pass A,
     /// the depth resolve copy, and the E2a seam (snapshot blit + Pass B).
     /// Returns the targets the shafts/firefly/tails pass through
     /// (resolve_target is where everything above landed; target is the
@@ -309,7 +309,7 @@ impl RenderScene {
             ]
         };
         // One wetness field per scene: the first water that has one wets every
-        // mesh inside its lattice. A scene without it binds the one-record
+        // mesh inside its extent. A scene without it binds the one-record
         // stand-in, which the shader never reads while the uniforms are off.
         let wet_field = fields.iter().find(|f| f.wetness.is_some());
         let wet = match wet_uniforms(wet_field) {
@@ -319,13 +319,14 @@ impl RenderScene {
                 return None;
             }
         };
-        let wet_buffer = match wet_field.and_then(|f| f.wetness) {
-            Some(buffer) => buffer,
-            None => prev_positions_dummy,
-        };
+        let wet_buffer = wet_field
+            .and_then(|f| f.wetness)
+            .unwrap_or(prev_positions_dummy);
+        let wet_tiles = wet_field.map_or(prev_positions_dummy, |f| f.tiles);
+        let wet_extent = wet_field.map_or(prev_positions_dummy, |f| f.extent);
         // Indexed by draw, so a draw wholly outside the camera's clip volume
         // keeps its place with no binding set built for it.
-        let binding_sets: Vec<Option<[GpuBinding; 56]>> = draws
+        let binding_sets: Vec<Option<[GpuBinding; 58]>> = draws
             .iter()
             .enumerate()
             .map(|(draw_index, draw)| {
@@ -598,6 +599,16 @@ impl RenderScene {
                     GpuBinding::Buffer {
                         binding: 69,
                         buffer: wet_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 70,
+                        buffer: wet_tiles,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 71,
+                        buffer: wet_extent,
                         offset: 0,
                     },
                 ])
@@ -1035,6 +1046,7 @@ impl RenderScene {
                                 Some(foam) => foam,
                                 None => self.ripple_detail.dummy_velocity(),
                             },
+                            tiles: field.tiles,
                         };
                         #[cfg(feature = "fluid-perf-proofs")]
                         gpu.native_enc
@@ -1066,6 +1078,7 @@ impl RenderScene {
                                     sampler: self.ripple_detail.sampler(),
                                     velocity: self.ripple_detail.dummy_velocity(),
                                     foam: self.ripple_detail.dummy_velocity(),
+                                    tiles: field.tiles,
                                 };
                                 #[cfg(feature = "fluid-perf-proofs")]
                                 gpu.native_enc
@@ -1238,9 +1251,10 @@ fn field_draw<'a>(field: &'a FieldObject<'_>) -> FieldDraw<'a> {
         levelset: field.levelset,
         velocity: field.velocity,
         mist: field.mist,
-        center: field.center,
-        size: field.size,
-        nodes: field.nodes,
+        tiles: field.tiles,
+        extent: field.extent,
+        pool_tiles: field.pool_tiles,
+        cell_size: field.cell_size,
         model: field.model,
         prev_model: field.prev_model,
         slot: field.slot,

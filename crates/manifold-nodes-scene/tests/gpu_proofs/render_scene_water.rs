@@ -4,9 +4,10 @@
 //!
 //! Scene shape: a top-down `node.orbit_camera` over an unlit floor of one
 //! constant colour, a black environment and no lights, so the water shows
-//! only the floor seen through it. The water is a box level set whose top
-//! steps from 0.5 m to 2.5 m deep at x = 0, resting on the floor, with
-//! Pope & Fry 1997 absorption (sigma = 0.34, 0.057, 0.009 per metre).
+//! only the floor seen through it. The water is a level set on 108 world
+//! tiles whose top steps from 0.5 m to 2.5 m deep at x = 0, resting on the
+//! floor, with Pope & Fry 1997 absorption (sigma = 0.34, 0.057, 0.009 per
+//! metre).
 
 use half::f16;
 use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
@@ -17,12 +18,14 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::scene::camera::Camera;
 use manifold_node_engine::scene::depth_rule::DepthRule;
 use manifold_node_engine::scene::pick::{PickHit, PickRequest};
+use manifold_node_engine::scene::scene_object::FIELD_FAR_CELLS;
 use manifold_node_engine::{
     exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext,
     exec::effect_node::EffectNodeType, exec::effect_node::ParamValues, parameters::ParamDef,
     persistence::PrimitiveRegistry, ports::ArrayType, ports::NodeInput, ports::NodeOutput,
     ports::NodePort, ports::PortKind, ports::PortType,
 };
+use manifold_nodes_scene::testkit::field_tiles::FieldTable;
 
 /// Water's absorption per metre for red, green, blue.
 const SIGMA: [f32; 3] = [0.34, 0.057, 0.009];
@@ -30,10 +33,8 @@ const FLOOR_COLOR: [f32; 3] = [0.8, 0.7, 0.6];
 const FLOOR_Y: f32 = -2.5;
 const SHALLOW_TOP: f32 = -2.0;
 const DEEP_TOP: f32 = 0.0;
-/// Lattice centre and size; the bottom face sits on the floor.
-const LATTICE_CENTER: [f32; 3] = [0.0, -1.0, 0.0];
-const LATTICE_SIZE: [f32; 3] = [10.0, 3.0, 10.0];
-const LATTICE_NODES: [usize; 3] = [40, 13, 40];
+/// The display cell in metres: a tile is 2 m.
+const CELL: f32 = 0.25;
 const CAMERA: (f32, f32, f32, f32) = (0.0, 1.5, 8.0, 0.6);
 /// Half the width of the pool the water fills in `pool_levelset`, along z.
 const POOL_HALF_WIDTH: f32 = 1.2;
@@ -43,26 +44,40 @@ const FAR: f32 = 200.0;
 const LEVELSET_TYPE: &str = "test.water_levelset";
 const SINK_TYPE: &str = "test.texture_sink";
 
-/// Test-only source of a hand-built level set `Array(f32)`.
+/// The arrays of a hand-built water field: the level set, the world-tile table
+/// it is laid out under and the extent of its tiles.
+#[derive(Clone)]
+struct WaterArrays {
+    levelset: Vec<f32>,
+    tiles: Vec<u32>,
+    extent: [f32; 8],
+}
+
+/// Test-only source of the field's three arrays.
 struct LevelsetSource {
     type_id: EffectNodeType,
     outputs: Vec<NodeOutput>,
-    values: Vec<f32>,
-    staging: Option<GpuBuffer>,
+    arrays: WaterArrays,
+    staging: [Option<GpuBuffer>; 3],
 }
 
 impl LevelsetSource {
-    fn new(values: Vec<f32>) -> Self {
+    fn new(arrays: WaterArrays) -> Self {
+        let port = |name: &'static str, ty: PortType| NodePort {
+            name: std::borrow::Cow::Borrowed(name),
+            ty,
+            kind: PortKind::Output,
+            required: false,
+        };
         Self {
             type_id: EffectNodeType::new(LEVELSET_TYPE),
-            outputs: vec![NodePort {
-                name: std::borrow::Cow::Borrowed("field"),
-                ty: PortType::Array(ArrayType::of_known::<f32>()),
-                kind: PortKind::Output,
-                required: false,
-            }],
-            values,
-            staging: None,
+            outputs: vec![
+                port("field", PortType::Array(ArrayType::of_known::<f32>())),
+                port("tiles", PortType::Array(ArrayType::of_known::<u32>())),
+                port("extent", PortType::Array(ArrayType::of_known::<f32>())),
+            ],
+            arrays,
+            staging: [None, None, None],
         }
     }
 }
@@ -89,28 +104,45 @@ impl EffectNode for LevelsetSource {
     }
 
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(dst) = ctx.outputs.array("field") else {
-            return;
-        };
-        let bytes = bytemuck::cast_slice(self.values.as_slice());
-        let staging = self.staging.get_or_insert_with(|| {
+        let arrays = [
+            (
+                "field",
+                bytemuck::cast_slice::<f32, u8>(&self.arrays.levelset),
+            ),
+            ("tiles", bytemuck::cast_slice::<u32, u8>(&self.arrays.tiles)),
+            (
+                "extent",
+                bytemuck::cast_slice::<f32, u8>(&self.arrays.extent),
+            ),
+        ];
+        for ((port, bytes), staging) in arrays.into_iter().zip(&mut self.staging) {
+            let Some(dst) = ctx.outputs.array(port) else {
+                continue;
+            };
+            let staging = staging.get_or_insert_with(|| {
+                ctx.gpu_encoder()
+                    .device
+                    .create_buffer_shared(bytes.len() as u64)
+            });
+            unsafe { staging.write(0, bytes) };
             ctx.gpu_encoder()
-                .device
-                .create_buffer_shared(bytes.len() as u64)
-        });
-        unsafe { staging.write(0, bytes) };
-        ctx.gpu_encoder()
-            .native_enc
-            .copy_buffer_to_buffer(staging, dst, bytes.len() as u64);
+                .native_enc
+                .copy_buffer_to_buffer(staging, dst, bytes.len() as u64);
+        }
     }
 
     fn array_output_capacity(
         &self,
-        _port_name: &str,
+        port_name: &str,
         _params: &ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        Some(self.values.len() as u32)
+        match port_name {
+            "field" => Some(self.arrays.levelset.len() as u32),
+            "tiles" => Some(self.arrays.tiles.len() as u32),
+            "extent" => Some(8),
+            _ => None,
+        }
     }
 }
 
@@ -159,51 +191,42 @@ impl EffectNode for TextureSink {
     fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
 }
 
-/// Lattice spacing per axis.
-fn spacing() -> [f32; 3] {
-    std::array::from_fn(|a| LATTICE_SIZE[a] / (LATTICE_NODES[a] - 1) as f32)
+/// The water's tiles: 6 x 3 x 6 from x and z = -3 and y = -2, covering the
+/// floor and the water above it out to a few metres beyond the view.
+fn water_table() -> FieldTable {
+    FieldTable::new(
+        CELL,
+        108,
+        &FieldTable::tiles_between([-3, -2, -3], [2, 0, 2]),
+    )
 }
 
-/// Signed height above the water top at every node, negative inside, x
-/// fastest. The top is `SHALLOW_TOP` for x < 0 and `DEEP_TOP` for x > 0, and
-/// the water fills the lattice down to its bottom face.
-fn step_levelset() -> Vec<f32> {
-    let spacing = spacing();
-    let min: [f32; 3] = std::array::from_fn(|a| LATTICE_CENTER[a] - LATTICE_SIZE[a] * 0.5);
-    let [nx, ny, nz] = LATTICE_NODES;
-    let mut values = Vec::with_capacity(nx * ny * nz);
-    for _k in 0..nz {
-        for j in 0..ny {
-            for i in 0..nx {
-                let x = min[0] + i as f32 * spacing[0];
-                let y = min[1] + j as f32 * spacing[1];
-                let top = if x < 0.0 { SHALLOW_TOP } else { DEEP_TOP };
-                values.push(y - top);
-            }
-        }
+/// `levelset` of the water over `water_table()`, with the extent and table
+/// the scene object reads them through.
+fn water_arrays(levelset: impl Fn([f32; 3]) -> f32) -> WaterArrays {
+    let table = water_table();
+    let far = FIELD_FAR_CELLS * CELL;
+    WaterArrays {
+        levelset: table.pool(far, |p| levelset(table.position(p)).clamp(-far, far)),
+        tiles: table.words.clone(),
+        extent: table.extent(),
     }
-    values
+}
+
+/// Signed height above the water top at every node, negative inside. The top
+/// is `SHALLOW_TOP` for x < 0 and `DEEP_TOP` for x > 0, and the water fills
+/// the tiles down below the floor.
+fn step_levelset() -> WaterArrays {
+    water_arrays(|[x, y, _]| y - if x < 0.0 { SHALLOW_TOP } else { DEEP_TOP })
 }
 
 /// `step_levelset` limited to a band |z| < `POOL_HALF_WIDTH`, so the floor
 /// shows on both sides of the water across the frame.
-fn pool_levelset() -> Vec<f32> {
-    let spacing = spacing();
-    let min: [f32; 3] = std::array::from_fn(|a| LATTICE_CENTER[a] - LATTICE_SIZE[a] * 0.5);
-    let [nx, ny, nz] = LATTICE_NODES;
-    let mut values = Vec::with_capacity(nx * ny * nz);
-    for k in 0..nz {
-        let z = min[2] + k as f32 * spacing[2];
-        for j in 0..ny {
-            for i in 0..nx {
-                let x = min[0] + i as f32 * spacing[0];
-                let y = min[1] + j as f32 * spacing[1];
-                let top = if x < 0.0 { SHALLOW_TOP } else { DEEP_TOP };
-                values.push((y - top).max(z.abs() - POOL_HALF_WIDTH));
-            }
-        }
-    }
-    values
+fn pool_levelset() -> WaterArrays {
+    water_arrays(|[x, y, z]| {
+        let top = if x < 0.0 { SHALLOW_TOP } else { DEEP_TOP };
+        (y - top).max(z.abs() - POOL_HALF_WIDTH)
+    })
 }
 
 fn value_node(id: u32, name: &str, value: f32) -> String {
@@ -288,18 +311,11 @@ fn scene_json(water: Option<f32>, depth_sink: bool) -> String {
             ag = attenuation[1],
             ab = attenuation[2],
         ));
-        let lattice = [
-            ("field_center_x", LATTICE_CENTER[0]),
-            ("field_center_y", LATTICE_CENTER[1]),
-            ("field_center_z", LATTICE_CENTER[2]),
-            ("field_size_x", LATTICE_SIZE[0]),
-            ("field_size_y", LATTICE_SIZE[1]),
-            ("field_size_z", LATTICE_SIZE[2]),
-            ("field_nodes_x", LATTICE_NODES[0] as f32),
-            ("field_nodes_y", LATTICE_NODES[1] as f32),
-            ("field_nodes_z", LATTICE_NODES[2] as f32),
+        let table = [
+            ("field_pool_tiles", water_table().pool_tiles as f32),
+            ("field_cell_size", CELL),
         ];
-        for (index, (port, value)) in lattice.into_iter().enumerate() {
+        for (index, (port, value)) in table.into_iter().enumerate() {
             let id = 220 + index as u32;
             nodes.push_str(&value_node(id, port, value));
             wires.push_str(&format!(
@@ -308,6 +324,8 @@ fn scene_json(water: Option<f32>, depth_sink: bool) -> String {
         }
         wires.push_str(
             "{\"fromNode\":200,\"fromPort\":\"field\",\"toNode\":211,\"toPort\":\"field\"},\
+            {\"fromNode\":200,\"fromPort\":\"tiles\",\"toNode\":211,\"toPort\":\"field_tiles\"},\
+            {\"fromNode\":200,\"fromPort\":\"extent\",\"toNode\":211,\"toPort\":\"field_extent\"},\
             {\"fromNode\":210,\"fromPort\":\"out\",\"toNode\":211,\"toPort\":\"material\"},\
             {\"fromNode\":211,\"fromPort\":\"object\",\"toNode\":20,\"toPort\":\"object_1\"},",
         );
@@ -373,11 +391,11 @@ struct WaterScene {
 
 impl WaterScene {
     /// `dump_all` keeps every node output so `depth` can read the scene's.
-    fn new(json: &str, levelset: Vec<f32>, dump_all: bool) -> Self {
+    fn new(json: &str, arrays: WaterArrays, dump_all: bool) -> Self {
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let mut registry = PrimitiveRegistry::with_builtin();
         registry.register(LEVELSET_TYPE, move || {
-            Box::new(LevelsetSource::new(levelset.clone()))
+            Box::new(LevelsetSource::new(arrays.clone()))
         });
         registry.register(SINK_TYPE, || Box::new(TextureSink::new()));
         let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -610,7 +628,7 @@ fn water_writes_depth() {
     let size = (scene.width, scene.height);
     let cam = camera();
     // One lattice cell is a tenth of the 2.5 m deep side, in reversed-Z terms.
-    let cell_fraction = spacing()[1] / (DEEP_TOP - FLOOR_Y);
+    let cell_fraction = CELL / (DEEP_TOP - FLOOR_Y);
     for world in [
         [1.2, DEEP_TOP, 0.0],
         [2.0, DEEP_TOP, 0.6],

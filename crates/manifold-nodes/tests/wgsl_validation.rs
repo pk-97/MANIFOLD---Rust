@@ -47,14 +47,6 @@ const PARTIAL_SHADERS: &[&str] = &[
     // and the kernel's own `liquid_atlas_half`. Their generated kernels are
     // validated by each atom's codegen test and the matter GPU proofs.
     "liquid_collider.wgsl",
-    // Liquid-brick `wgsl_includes` and dense reference kernels: they read the
-    // generated kernel's bindings (`buf_levelset`, `buf_solid`, `buf_bricks`,
-    // the marching-cubes tables). Their composed forms are validated by
-    // `liquid_bricks_tests::fluid_bricks_generated_consumers_validate_on_cpu`.
-    "liquid_bricks_common.wgsl",
-    "smooth_lattice_element.wgsl",
-    "smooth_lattice_dense_reference.wgsl",
-    "particle_volume_dense_reference.wgsl",
     // Preludes of `render_scene`'s composed shader and the water passes; each
     // user validates composed below.
     "instance_transform.wgsl",
@@ -67,6 +59,7 @@ const PARTIAL_SHADERS: &[&str] = &[
     "look_wet_surface.wgsl",
     "water_field_common.wgsl",
     "water_march_core.wgsl",
+    "field_tiles.wgsl",
 ];
 
 const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
@@ -105,6 +98,8 @@ const WATER_FIELD_COMMON: &str = include_str!(
 const WATER_MARCH_CORE: &str = include_str!(
     "../../manifold-nodes-scene/src/node_graph/primitives/shaders/water_march_core.wgsl"
 );
+const FIELD_TILES: &str =
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/field_tiles.wgsl");
 const SAMPLE_FACE_COMMON: &str = include_str!(
     "../../manifold-nodes-scene/src/node_graph/primitives/shaders/sample_face_common.wgsl"
 );
@@ -130,12 +125,16 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
         "temporal_accumulate.wgsl",
         [DEPTH_COMMON, VIEW_NORMAL_COMMON].join("\n"),
     ));
-    // `render_scene`'s composed shader (`RENDER_SCENE_WGSL`): the instance
-    // transforms, the scene shading and the five look hooks, then the mesh
-    // shader. The per-copy cull and the water march have their own preludes.
+    // `render_scene`'s composed shader (`RENDER_SCENE_WGSL`): the field's
+    // world-tile reads, the instance transforms, the scene shading and the
+    // five look hooks, then the mesh shader. The per-copy cull and the water
+    // march have their own preludes.
+    let read_side = manifold_node_engine::scene::world_tiles::READ_SIDE;
     composed.push((
         "render_scene.wgsl",
         [
+            read_side,
+            FIELD_TILES,
             INSTANCE_TRANSFORM,
             SCENE_SHADING,
             LOOK_RIPPLE_DETAIL,
@@ -150,18 +149,23 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
     composed.push(("cull_instances.wgsl", INSTANCE_TRANSFORM.to_owned()));
     composed.push((
         "water_march.wgsl",
-        [WATER_FIELD_COMMON, WATER_MARCH_CORE].join("\n"),
+        [read_side, FIELD_TILES, WATER_FIELD_COMMON, WATER_MARCH_CORE].join("\n"),
     ));
     composed.push((
         "water_mist.wgsl",
-        [WATER_FIELD_COMMON, WATER_MARCH_CORE].join("\n"),
+        [read_side, FIELD_TILES, WATER_FIELD_COMMON, WATER_MARCH_CORE].join("\n"),
     ));
-    composed.push(("water_cover.wgsl", WATER_MARCH_CORE.to_owned()));
+    composed.push((
+        "water_cover.wgsl",
+        [read_side, FIELD_TILES, WATER_MARCH_CORE].join("\n"),
+    ));
     // The water shade (`WATER_SHADE_WGSL`): the scene shading and the five
     // look hooks, then the field helpers.
     composed.push((
         "water_shade.wgsl",
         [
+            read_side,
+            FIELD_TILES,
             SCENE_SHADING,
             LOOK_RIPPLE_DETAIL,
             FOAM_FIELD,
@@ -256,12 +260,9 @@ fn all_wgsl_shaders_validate() {
             None => source,
         };
         let source = if path.file_name().is_some_and(|name| {
-            [
-                "liquid_stats.wgsl",
-                "particle_publication.wgsl",
-            ]
-            .iter()
-            .any(|shader| name == *shader)
+            ["liquid_stats.wgsl", "particle_publication.wgsl"]
+                .iter()
+                .any(|shader| name == *shader)
         }) {
             manifold_water_liquid::primitives::liquid_stats::with_stats_layout(&source)
         } else {

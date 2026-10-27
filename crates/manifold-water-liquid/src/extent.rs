@@ -3,7 +3,6 @@
 //! The generic checker and its shared rules live in the exec extent module;
 //! this module supplies liquid-specific storage, lattice, and whitewater rules.
 
-use crate::fluid_particles::{CellRange, bin_counts, searched_bins};
 use crate::lattice::LiquidLattice;
 use crate::whitewater::{KnownValue, grid_cells};
 use manifold_node_engine::exec::extent::{AtomExtent, Verdict};
@@ -41,75 +40,6 @@ pub fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
         u64::from(whole(x, "force_lattices", 0.0)) * force_bytes,
     )?;
     x.covers_if_bound("impulses", node_count * 16)
-}
-
-/// The sort's bin grid is searched with exactly the ranges it allocates, and
-/// its last bin index stays inside them in i32.
-pub fn search_fits(x: &AtomExtent<'_>, bins: [u32; 3], range_bytes: u64) -> Result<(), Verdict> {
-    let searched = searched_bins(bins.map(|n| n as f32), range_bytes, "search")
-        .map_err(|error| x.uncovered(error))?;
-    let [bx, by, bz] = bins.map(u64::from);
-    let last = (bx - 1) + bx * ((by - 1) + by * (bz - 1));
-    if searched != bins
-        || last >= range_bytes / size_of::<CellRange>() as u64
-        || last > i32::MAX as u64
-    {
-        return Err(x.uncovered(format!("bin {last} of {bins:?} lies past the ranges")));
-    }
-    Ok(())
-}
-
-/// The bins a searching atom reads, as `read_searched_bins`, checked against
-/// the ranges it indexes.
-pub fn searched(x: &AtomExtent<'_>) -> Result<[u32; 3], Verdict> {
-    let ports = ["bins_x", "bins_y", "bins_z"];
-    let bins = ports.map(|port| x.scalar(port, 0.0));
-    let ranges = x
-        .bytes("cell_ranges")
-        .ok_or_else(|| x.uncovered("cell_ranges is unbound".into()))?;
-    let bins = if bins == [0.0; 3] && ports.iter().all(|port| !x.wired(port)) {
-        let size = ["size_x", "size_y", "size_z"].map(|name| x.scalar(name, 4.0));
-        bin_counts(size, x.scalar("cell_size", 0.0625)).map(|n| n as f32)
-    } else {
-        bins
-    };
-    searched_bins(bins, ranges, "search").map_err(|error| x.uncovered(error))
-}
-
-pub fn required_blob_bounds(x: &AtomExtent<'_>) -> Result<(), Verdict> {
-    if x.bytes("bounds") != Some(8) {
-        return Err(
-            x.uncovered("bounds must contain exactly two f32 words from Blob Bounds".into())
-        );
-    }
-    Ok(())
-}
-
-pub fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), Verdict> {
-    if !x.wired("bricks") {
-        return Ok(());
-    }
-    let words = crate::primitives::liquid_bricks::schedule_words(nodes)
-        .ok_or_else(|| x.uncovered("brick schedule size overflow".into()))?;
-    x.covers("bricks", words * 4)
-}
-
-pub fn surface_mesh_pass(x: &mut AtomExtent<'_>, output: &str) -> Result<(), Verdict> {
-    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
-    if nodes.iter().any(|&n| n < 2.0) {
-        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
-    }
-    brick_schedule(x, nodes.map(|n| n as u32))?;
-    x.covers("levelset", nodes_total(nodes) * 4)?;
-    x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
-    if x.wired("edge_scan") {
-        x.covers("edge_scan", nodes_total(nodes) * 4)?;
-    }
-    // Cell-owned intervals and neighbour reads lie below the checked live total.
-    let vertices = x
-        .bytes("vertices")
-        .ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
-    x.covers(output, vertices)
 }
 
 // ── GPU FLIP ─────────────────────────────────────────────────────────────────

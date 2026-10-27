@@ -1,31 +1,28 @@
-//! `node.liquid_solid_distance` — a liquid domain's solid lattice for the
-//! particle-frame seam: walls and bodies as one signed distance per lattice
-//! node.
+//! `node.liquid_solid_distance` — the display's solid for the particle-frame
+//! seam: walls and bodies as one signed distance per node of the display's
+//! world tiles.
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
-
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_pool::tile_pool;
 
+/// Codegen uniform layout: the params in `PARAMS` order, then the injected
+/// element count and padding to a 16-byte multiple.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SolidDistanceUniforms {
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
     cell_size: f32,
-    nodes_x: i32,
-    nodes_y: i32,
-    nodes_z: i32,
     closed_faces: i32,
     bounds_lo_x: f32,
     bounds_lo_y: f32,
@@ -36,40 +33,42 @@ struct SolidDistanceUniforms {
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
+    pool_tiles: f32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
+
+const _: () = assert!(std::mem::size_of::<SolidDistanceUniforms>() == 64);
+
+/// Bytes of the clock plan the body reads (`gpu_flip_clock.wgsl`'s Plan): zeros,
+/// so poses use the tick wired in.
+pub(crate) const CLOCK_PLAN_BYTES: u64 = 48;
 
 manifold_node_engine::primitive! {
     name: LiquidSolidDistance,
     type_id: "node.liquid_solid_distance",
-    purpose: "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest Wall face of the Bounds box (bounds_lo/hi in metres, closed_faces the Wall faces; 1e30 with none) and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, in metres along each shape's stretch at the surface.",
+    purpose: "Write the display's solid: per node of the display's world tiles (node p at (p - 1/2) cells, element ts_cell_at(p)), the smaller of the distance to the nearest Wall face of the Bounds box (bounds_lo/hi in metres, closed_faces the Wall faces; 1e30 with none) and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, in metres along each shape's stretch at the surface. A free slot and the canonical element read 1e30, the solid of a tile the table does not hold.",
     inputs: {
         bodies: Array(LiquidBody) required,
         shapes: Array(LiquidShape) required,
         atlas: Array(u32) required,
-        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
-        cell_size: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        tiles: Array(u32) required,
         closed_faces: ScalarF32 optional,
         bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
         bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
         body_count: ScalarF32 optional,
         rows: ScalarF32 optional,
         tick_seconds: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         solid: Array(f32),
     },
     params: [
-        ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_x"), label: "Nodes X", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
         ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 63.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("bounds_lo_x"), label: "Bounds Min X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("bounds_lo_y"), label: "Bounds Min Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
@@ -80,9 +79,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_LIQUID_BODIES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("rows"), label: "Rows", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_seconds"), label: "Tick (s)", ty: ParamType::Float, default: ParamValue::Float(TICK as f32), range: Some((0.0, 1.0)), enum_values: &[] },
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Once per frame, after the liquid's tick region. bodies, shapes, atlas, body_count, rows and the lattice come from the liquid's domain (node.matter_domain, node.gpu_flip_domain); the Bounds box and the Wall faces come from node.gpu_flip_domain; solid feeds its particle frame's (node.matter_frame, node.liquid_frame) solid input, which publishes it as the seam's solid_a/solid_b. solid holds exactly one value per lattice node, sized every frame from the same node count the dispatch covers; a lattice the device cannot hold is a named error.",
+    composition_notes: "Once per frame, after the liquid's tick region. bodies, shapes, atlas, body_count and rows come from the liquid's domain (node.matter_domain, node.gpu_flip_domain); the Bounds box and the Wall faces from node.gpu_flip_domain (unwired: no walls); tiles, pool_tiles and cell_size from node.surface_tiles. solid holds exactly one value per pool element, sized every frame from the same pool the dispatch covers; a pool the device cannot hold is a named error. Feed solid to the display atoms that stop at solids (node.push_out_of_solid) and to the water object's solid.",
     examples: ["WaterDamBreakMatter"],
     picker: { label: "Liquid Solid Distance", category: Atom },
     summary: "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",
@@ -91,8 +91,8 @@ manifold_node_engine::primitive! {
     aliases: ["solid lattice", "collider distance", "solid field"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/liquid_solid_distance_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER],
     extra_fields: {
         solid: Option<GpuBuffer> = None,
         clock_plan: Option<GpuBuffer> = None,
@@ -114,13 +114,17 @@ impl Primitive for LiquidSolidDistance {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        // Provided storage: a one-value hint, sized to the lattice at run time.
+        // Provided storage: a one-value hint, sized to the pool at run time.
         (port_name == "solid").then_some(1)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(lattice) = LiquidLattice::from_wires(ctx, "Liquid Solid Distance") else {
-            return;
+        let pool = match tile_pool(ctx, "Liquid Solid Distance") {
+            Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
         };
         let closed_faces = ctx
             .scalar_or_param("closed_faces", 0.0)
@@ -144,11 +148,19 @@ impl Primitive for LiquidSolidDistance {
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
+            ctx.inputs.array("tiles"),
         );
-        let nodes = lattice.node_count();
-        // The storage follows the node count the dispatch covers, before it
-        // is encoded.
-        let bytes = lattice.solid_bytes();
+        let elements = pool.elements();
+        let Ok(count) = u32::try_from(elements) else {
+            ctx.error(format!(
+                "Liquid Solid Distance: a pool of {} tiles has more elements than an index can address",
+                pool.pool_tiles
+            ));
+            return;
+        };
+        // The storage follows the element count the dispatch covers, before
+        // it is encoded.
+        let bytes = elements * 4;
         if self.solid.as_ref().is_none_or(|solid| solid.size != bytes) {
             let device = ctx.gpu_encoder().device;
             let created = manifold_node_engine::load::expand::admit_candidate_bytes(
@@ -164,14 +176,18 @@ impl Primitive for LiquidSolidDistance {
                 }
                 Err(error) => {
                     ctx.error(format!(
-                        "Liquid Solid Distance: the lattice's {nodes} nodes need {bytes} bytes the device cannot give: {error}. Raise Cell Size."
+                        "Liquid Solid Distance: a pool of {} tiles needs {bytes} bytes the device cannot give: {error}. Lower Pool Scale.",
+                        pool.pool_tiles
                     ));
                     return;
                 }
             }
         }
         if self.clock_plan.is_none() {
-            let plan = ctx.gpu_encoder().device.try_create_buffer_shared(48);
+            let plan = ctx
+                .gpu_encoder()
+                .device
+                .try_create_buffer_shared(CLOCK_PLAN_BYTES);
             match plan {
                 Ok(plan) => {
                     plan.zero_fill();
@@ -186,130 +202,75 @@ impl Primitive for LiquidSolidDistance {
             }
         }
         let gpu = ctx.gpu_encoder();
-        let ((Some(bodies), Some(shapes), Some(atlas)), Some(solid)) =
-            (inputs, self.solid.as_ref())
+        let ((Some(bodies), Some(shapes), Some(atlas), Some(tiles)), Some(solid), Some(plan)) =
+            (inputs, self.solid.as_ref(), self.clock_plan.as_ref())
         else {
             return;
         };
-        let job = SolidDistanceJob {
-            min: lattice.min(),
-            cell_size: lattice.cell_size(),
-            nodes: lattice.nodes(),
+        let rows = rows.min(
+            (bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32,
+        );
+        let uniforms = SolidDistanceUniforms {
+            cell_size: pool.cell_size,
             closed_faces,
-            bounds_lo: [bounds[0], bounds[1], bounds[2]],
-            bounds_hi: [bounds[3], bounds[4], bounds[5]],
+            bounds_lo_x: bounds[0],
+            bounds_lo_y: bounds[1],
+            bounds_lo_z: bounds[2],
+            bounds_hi_x: bounds[3],
+            bounds_hi_y: bounds[4],
+            bounds_hi_z: bounds[5],
             body_count,
             rows,
             tick_seconds,
-            bodies,
-            shapes,
-            atlas,
-            out: solid,
-            clock_plan: self.clock_plan.as_ref().expect("clock plan prepared"),
+            pool_tiles: pool.pool_tiles as f32,
+            dispatch_count: count,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
-        encode_solid_distance(
-            &mut self.pipeline,
-            gpu.device,
-            gpu.native_enc,
-            &job,
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: bodies,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: shapes,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: atlas,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: solid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: plan,
+                    offset: 0,
+                },
+            ],
+            [count.div_ceil(256), 1, 1],
             "node.liquid_solid_distance",
         );
     }
-}
-
-/// One solid distance lattice: `nodes` lattice nodes from `min`, `cell_size` apart.
-pub(crate) struct SolidDistanceJob<'a> {
-    pub min: [f32; 3],
-    pub cell_size: f32,
-    pub nodes: [u32; 3],
-    /// Faces of the Bounds box that are solid Walls (bits −X +X −Y +Y −Z +Z).
-    pub closed_faces: i32,
-    /// The Bounds box in metres, as placed.
-    pub bounds_lo: [f32; 3],
-    pub bounds_hi: [f32; 3],
-    pub body_count: i32,
-    pub rows: i32,
-    pub tick_seconds: f32,
-    pub bodies: &'a GpuBuffer,
-    pub shapes: &'a GpuBuffer,
-    pub atlas: &'a GpuBuffer,
-    /// At least one f32 per node.
-    pub out: &'a GpuBuffer,
-    pub clock_plan: &'a GpuBuffer,
-}
-
-/// The node's kernel, for a stage that writes a solid lattice inside its own
-/// dispatch chain (`node.gpu_flip_step`). `slot` holds the codegen pipeline.
-pub(crate) fn encode_solid_distance(
-    slot: &mut Option<GpuComputePipeline>,
-    device: &GpuDevice,
-    encoder: &mut GpuEncoder,
-    job: &SolidDistanceJob<'_>,
-    label: &str,
-) {
-    let nodes = job.nodes.iter().map(|&n| u64::from(n)).product::<u64>() as u32;
-    let rows = job.rows.min(
-        (job.bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32,
-    );
-    let pipeline = standalone_pipeline::<LiquidSolidDistance>(slot, device);
-    let uniforms = SolidDistanceUniforms {
-        lattice_min_x: job.min[0],
-        lattice_min_y: job.min[1],
-        lattice_min_z: job.min[2],
-        cell_size: job.cell_size,
-        nodes_x: job.nodes[0] as i32,
-        nodes_y: job.nodes[1] as i32,
-        nodes_z: job.nodes[2] as i32,
-        closed_faces: job.closed_faces,
-        bounds_lo_x: job.bounds_lo[0],
-        bounds_lo_y: job.bounds_lo[1],
-        bounds_lo_z: job.bounds_lo[2],
-        bounds_hi_x: job.bounds_hi[0],
-        bounds_hi_y: job.bounds_hi[1],
-        bounds_hi_z: job.bounds_hi[2],
-        body_count: job.body_count,
-        rows,
-        tick_seconds: job.tick_seconds,
-        dispatch_count: nodes,
-        _pad0: 0,
-        _pad1: 0,
-    };
-    encoder.dispatch_compute(
-        pipeline,
-        &[
-            GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::bytes_of(&uniforms),
-            },
-            GpuBinding::Buffer {
-                binding: 1,
-                buffer: job.bodies,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 2,
-                buffer: job.shapes,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 3,
-                buffer: job.atlas,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 4,
-                buffer: job.out,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 5,
-                buffer: job.clock_plan,
-                offset: 0,
-            },
-        ],
-        [nodes.div_ceil(256), 1, 1],
-        label,
-    );
 }
 
 #[cfg(test)]

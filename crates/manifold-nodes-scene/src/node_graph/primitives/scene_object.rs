@@ -45,19 +45,13 @@ manifold_node_engine::primitive! {
         topology: Array(Vec4Vertex) optional,
         field: Array(f32) optional,
         field_velocity: Array(f32) optional,
-        field_bricks: Array(u32) optional,
         field_foam: Array(f32) optional,
         field_mist: Array(f32) optional,
         field_wetness: Array(f32) optional,
-        field_center_x: ScalarF32 optional,
-        field_center_y: ScalarF32 optional,
-        field_center_z: ScalarF32 optional,
-        field_size_x: ScalarF32 optional,
-        field_size_y: ScalarF32 optional,
-        field_size_z: ScalarF32 optional,
-        field_nodes_x: ScalarF32 optional,
-        field_nodes_y: ScalarF32 optional,
-        field_nodes_z: ScalarF32 optional,
+        field_tiles: Array(u32) optional,
+        field_extent: Array(f32) optional,
+        field_pool_tiles: ScalarF32 optional,
+        field_cell_size: ScalarF32 optional,
         field_ripple_detail: ScalarF32 optional,
         transform: Transform optional,
         parent_transform: Transform optional,
@@ -159,7 +153,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per lattice node, negative inside) with its lattice in `field_center_*`, `field_size_*` and `field_nodes_*`, plus optional `field_velocity` (three f32 per node) and `field_bricks` (node.lattice_bricks' list): the object then draws the field instead of a mesh. With `field` wired every lattice scalar is required; a missing one, a size at or below zero or fewer than two nodes on an axis is a node error and the object carries no field.",
+    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per node, negative inside) on the water's display world tiles: `field_tiles` is the world-tile table every field array is laid out under, `field_extent` its eight-float extent (min xyz, 0, max xyz, 0, object space), `field_pool_tiles` the tile slots in the pool and `field_cell_size` the lattice cell in metres, with node p at (p - 1/2) cells; plus optional `field_velocity` (three f32 per node), `field_foam`, `field_mist` and `field_wetness` (one f32 per node), all pooled the same way: the object then draws the field instead of a mesh. A field has no box of its own, only its extent. With `field` wired the tiles, extent, pool and cell size are required; a missing one, a pool under one tile or a cell size at or below zero is a node error and the object carries no field.",
     examples: [],
     picker: { label: "Scene Object", category: Driver },
     summary: "Binds one object's mesh, transform, material, maps, instances, and optional live count into a single wire. Wire it into a render_scene object slot.",
@@ -198,7 +192,7 @@ impl Primitive for SceneObjectNode {
         let weights = ctx.inputs.slot_of("weights");
         let topology = ctx.inputs.slot_of("topology");
         // A hidden object reads no field, so Physics View can switch the
-        // hidden water's lattice off without a node error.
+        // hidden water's field off without a node error.
         let field = (visible && parent_visible)
             .then(|| ctx.inputs.slot_of("field"))
             .flatten()
@@ -284,40 +278,34 @@ impl Primitive for SceneObjectNode {
     }
 }
 
-const FIELD_CENTER: [&str; 3] = ["field_center_x", "field_center_y", "field_center_z"];
-const FIELD_SIZE: [&str; 3] = ["field_size_x", "field_size_y", "field_size_z"];
-const FIELD_NODES: [&str; 3] = ["field_nodes_x", "field_nodes_y", "field_nodes_z"];
+fn scalar_input(ctx: &EffectNodeContext<'_, '_>, name: &str) -> Option<f32> {
+    ctx.inputs.scalar(name).and_then(|value| value.as_scalar())
+}
 
-/// The wired field and its lattice. Every lattice scalar is required with a
-/// field: a missing one, a size at or below zero or fewer than two nodes on
-/// an axis is a node error, and the object draws no field.
+/// The wired field and its display tiles. The table, the extent, the pool size
+/// and the cell size are required with a field: a missing one, a pool under one
+/// tile or a cell size at or below zero is a node error, and the object draws
+/// no field.
 fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<FieldSurface> {
-    let read = |names: [&str; 3]| -> Option<[f32; 3]> {
-        let [x, y, z] =
-            names.map(|name| ctx.inputs.scalar(name).and_then(|value| value.as_scalar()));
-        Some([x?, y?, z?])
-    };
-    let (Some(center), Some(size), Some(nodes)) =
-        (read(FIELD_CENTER), read(FIELD_SIZE), read(FIELD_NODES))
-    else {
+    let (Some(tiles), Some(extent), Some(pool_tiles), Some(cell_size)) = (
+        ctx.inputs.slot_of("field_tiles"),
+        ctx.inputs.slot_of("field_extent"),
+        scalar_input(ctx, "field_pool_tiles"),
+        scalar_input(ctx, "field_cell_size"),
+    ) else {
         ctx.error(
-            "scene_object: `field` is wired but its lattice centre, size or node count is not",
+            "scene_object: `field` is wired but its world-tile table, extent, pool size or cell size is not",
         );
         return None;
     };
-    if size.iter().any(|s| s.is_nan() || *s <= 0.0) || nodes.iter().any(|n| n.is_nan() || *n < 2.0)
-    {
+    if !(pool_tiles >= 1.0 && pool_tiles.is_finite() && cell_size > 0.0 && cell_size.is_finite()) {
         ctx.error(format!(
-            "scene_object: a field lattice needs a size above zero and at least 2 nodes per axis (size {size:?}, nodes {nodes:?})"
+            "scene_object: a field needs a pool of at least 1 tile and a cell size above zero (pool {pool_tiles}, cell {cell_size})"
         ));
         return None;
     }
     // Unwired reads 1.0, the automatic strength.
-    let ripple_detail = ctx
-        .inputs
-        .scalar("field_ripple_detail")
-        .and_then(|value| value.as_scalar())
-        .unwrap_or(1.0);
+    let ripple_detail = scalar_input(ctx, "field_ripple_detail").unwrap_or(1.0);
     if ripple_detail.is_nan() || ripple_detail < 0.0 {
         ctx.error(format!(
             "scene_object: a field's ripple detail must be zero or above (got {ripple_detail})"
@@ -327,13 +315,13 @@ fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<
     Some(FieldSurface {
         levelset,
         velocity: ctx.inputs.slot_of("field_velocity"),
-        bricks: ctx.inputs.slot_of("field_bricks"),
         foam: ctx.inputs.slot_of("field_foam"),
         mist: ctx.inputs.slot_of("field_mist"),
         wetness: ctx.inputs.slot_of("field_wetness"),
-        center,
-        size,
-        nodes: nodes.map(|n| n.round() as u32),
+        tiles,
+        extent,
+        pool_tiles: pool_tiles.round() as u32,
+        cell_size,
         ripple_detail,
     })
 }
@@ -574,29 +562,54 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn wired_field_forwards_its_slots_and_lattice() {
-        let mut backend = MockBackend::new();
-        let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
-        let levelset = backend.acquire(
-            ResourceId(1),
-            PortType::Array(ArrayType::of_known::<f32>()),
-            None,
-            (0, 0),
-        );
-        let velocity = backend.acquire(
-            ResourceId(2),
-            PortType::Array(ArrayType::of_known::<f32>()),
-            None,
-            (0, 0),
-        );
-        let bricks = backend.acquire(
-            ResourceId(3),
+    /// The table, extent, pool size and cell size of a field, wired from
+    /// resources `first_resource` on. Returns the bindings and the slots of
+    /// the table and the extent.
+    fn wire_table(
+        backend: &mut MockBackend,
+        first_resource: u32,
+        pool_tiles: f32,
+        cell_size: f32,
+    ) -> (Vec<(&'static str, Slot)>, Slot, Slot) {
+        let tiles = backend.acquire(
+            ResourceId(first_resource),
             PortType::Array(ArrayType::of_known::<u32>()),
             None,
             (0, 0),
         );
-        let [foam, mist, wetness] = [4, 5, 6].map(|id| {
+        let extent = backend.acquire(
+            ResourceId(first_resource + 1),
+            PortType::Array(ArrayType::of_known::<f32>()),
+            None,
+            (0, 0),
+        );
+        let mut bindings = vec![("field_tiles", tiles), ("field_extent", extent)];
+        bindings.extend(wire_scalars(
+            backend,
+            first_resource + 2,
+            &[
+                ("field_pool_tiles", pool_tiles),
+                ("field_cell_size", cell_size),
+            ],
+        ));
+        (bindings, tiles, extent)
+    }
+
+    fn levelset_slot(backend: &mut MockBackend) -> Slot {
+        backend.acquire(
+            ResourceId(1),
+            PortType::Array(ArrayType::of_known::<f32>()),
+            None,
+            (0, 0),
+        )
+    }
+
+    #[test]
+    fn wired_field_forwards_its_slots_table_and_cell() {
+        let mut backend = MockBackend::new();
+        let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
+        let levelset = levelset_slot(&mut backend);
+        let [velocity, foam, mist, wetness] = [2, 3, 4, 5].map(|id| {
             backend.acquire(
                 ResourceId(id),
                 PortType::Array(ArrayType::of_known::<f32>()),
@@ -607,26 +620,16 @@ mod tests {
         let mut bindings = vec![
             ("field", levelset),
             ("field_velocity", velocity),
-            ("field_bricks", bricks),
             ("field_foam", foam),
             ("field_mist", mist),
             ("field_wetness", wetness),
         ];
+        let (table, tiles, extent) = wire_table(&mut backend, 6, 37.0, 0.045);
+        bindings.extend(table);
         bindings.extend(wire_scalars(
             &mut backend,
-            7,
-            &[
-                ("field_center_x", 1.5),
-                ("field_center_y", -2.0),
-                ("field_center_z", 0.25),
-                ("field_size_x", 3.0),
-                ("field_size_y", 1.5),
-                ("field_size_z", 2.25),
-                ("field_nodes_x", 49.0),
-                ("field_nodes_y", 25.0),
-                ("field_nodes_z", 37.0),
-                ("field_ripple_detail", 0.4),
-            ],
+            10,
+            &[("field_ripple_detail", 0.4)],
         ));
 
         let mut errors = Vec::new();
@@ -638,13 +641,13 @@ mod tests {
             Some(FieldSurface {
                 levelset,
                 velocity: Some(velocity),
-                bricks: Some(bricks),
                 foam: Some(foam),
                 mist: Some(mist),
                 wetness: Some(wetness),
-                center: [1.5, -2.0, 0.25],
-                size: [3.0, 1.5, 2.25],
-                nodes: [49, 25, 37],
+                tiles,
+                extent,
+                pool_tiles: 37,
+                cell_size: 0.045,
                 ripple_detail: 0.4,
             })
         );
@@ -653,17 +656,6 @@ mod tests {
 
     #[test]
     fn unwired_ripple_detail_reads_automatic_and_a_bad_one_is_a_node_error() {
-        let lattice = [
-            ("field_center_x", 0.0),
-            ("field_center_y", 0.0),
-            ("field_center_z", 0.0),
-            ("field_size_x", 3.0),
-            ("field_size_y", 1.5),
-            ("field_size_z", 2.25),
-            ("field_nodes_x", 49.0),
-            ("field_nodes_y", 25.0),
-            ("field_nodes_z", 37.0),
-        ];
         for (ripple, want) in [
             (None, Some(1.0)),
             (Some(0.0), Some(0.0)),
@@ -672,16 +664,17 @@ mod tests {
         ] {
             let mut backend = MockBackend::new();
             let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
-            let levelset = backend.acquire(
-                ResourceId(1),
-                PortType::Array(ArrayType::of_known::<f32>()),
-                None,
-                (0, 0),
-            );
-            let mut scalars = lattice.to_vec();
-            scalars.extend(ripple.map(|value| ("field_ripple_detail", value)));
+            let levelset = levelset_slot(&mut backend);
             let mut bindings = vec![("field", levelset)];
-            bindings.extend(wire_scalars(&mut backend, 2, &scalars));
+            let (table, _, _) = wire_table(&mut backend, 2, 3.0, 0.05);
+            bindings.extend(table);
+            if let Some(value) = ripple {
+                bindings.extend(wire_scalars(
+                    &mut backend,
+                    6,
+                    &[("field_ripple_detail", value)],
+                ));
+            }
 
             let mut errors = Vec::new();
             let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
@@ -700,34 +693,27 @@ mod tests {
     }
 
     #[test]
-    fn field_without_its_lattice_is_a_node_error() {
-        let mut backend = MockBackend::new();
-        let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
-        let levelset = backend.acquire(
-            ResourceId(1),
-            PortType::Array(ArrayType::of_known::<f32>()),
-            None,
-            (0, 0),
-        );
-        let mut bindings = vec![("field", levelset)];
-        bindings.extend(wire_scalars(
-            &mut backend,
-            2,
-            &[
-                ("field_center_x", 1.5),
-                ("field_center_y", -2.0),
-                ("field_center_z", 0.25),
-                ("field_size_x", 3.0),
-                ("field_size_y", 1.5),
-                ("field_size_z", 2.25),
-            ],
-        ));
+    fn field_without_its_table_is_a_node_error() {
+        // Each of the four required inputs missing in turn.
+        for missing in [
+            "field_tiles",
+            "field_extent",
+            "field_pool_tiles",
+            "field_cell_size",
+        ] {
+            let mut backend = MockBackend::new();
+            let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
+            let levelset = levelset_slot(&mut backend);
+            let mut bindings = vec![("field", levelset)];
+            let (table, _, _) = wire_table(&mut backend, 2, 3.0, 0.05);
+            bindings.extend(table.into_iter().filter(|(port, _)| *port != missing));
 
-        let mut errors = Vec::new();
-        let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
+            let mut errors = Vec::new();
+            let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
 
-        assert!(object.field.is_none());
-        assert_eq!(errors.len(), 1);
+            assert!(object.field.is_none(), "{missing} missing");
+            assert_eq!(errors.len(), 1, "{missing} missing");
+        }
     }
 
     #[test]
@@ -741,7 +727,7 @@ mod tests {
             (0, 0),
         );
         let mut bindings = vec![("field", levelset)];
-        // No lattice at all: a visible object would report it.
+        // No table at all: a visible object would report it.
         bindings.extend(wire_scalars(&mut backend, 2, &[("visible", 0.0)]));
 
         let mut errors = Vec::new();
@@ -753,37 +739,32 @@ mod tests {
     }
 
     #[test]
-    fn field_lattice_with_one_node_is_a_node_error() {
-        let mut backend = MockBackend::new();
-        let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
-        let levelset = backend.acquire(
-            ResourceId(1),
-            PortType::Array(ArrayType::of_known::<f32>()),
-            None,
-            (0, 0),
-        );
-        let mut bindings = vec![("field", levelset)];
-        bindings.extend(wire_scalars(
-            &mut backend,
-            2,
-            &[
-                ("field_center_x", 1.5),
-                ("field_center_y", -2.0),
-                ("field_center_z", 0.25),
-                ("field_size_x", 3.0),
-                ("field_size_y", 1.5),
-                ("field_size_z", 2.25),
-                ("field_nodes_x", 49.0),
-                ("field_nodes_y", 1.0),
-                ("field_nodes_z", 37.0),
-            ],
-        ));
+    fn a_pool_under_one_tile_or_a_cell_without_size_is_a_node_error() {
+        for (pool_tiles, cell_size) in [
+            (0.0, 0.05),
+            (0.4, 0.05),
+            (f32::NAN, 0.05),
+            (3.0, 0.0),
+            (3.0, -0.05),
+            (3.0, f32::NAN),
+            (3.0, f32::INFINITY),
+        ] {
+            let mut backend = MockBackend::new();
+            let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
+            let levelset = levelset_slot(&mut backend);
+            let mut bindings = vec![("field", levelset)];
+            let (table, _, _) = wire_table(&mut backend, 2, pool_tiles, cell_size);
+            bindings.extend(table);
 
-        let mut errors = Vec::new();
-        let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
+            let mut errors = Vec::new();
+            let object = run_object(&mut backend, out_slot, &bindings, &mut errors);
 
-        assert!(object.field.is_none());
-        assert_eq!(errors.len(), 1);
+            assert!(
+                object.field.is_none(),
+                "pool {pool_tiles}, cell {cell_size}"
+            );
+            assert_eq!(errors.len(), 1, "pool {pool_tiles}, cell {cell_size}");
+        }
     }
 }
 

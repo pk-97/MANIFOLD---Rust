@@ -124,19 +124,25 @@ pub struct SceneObject {
     pub gain: f32,
 }
 
+/// The level set's canonical value, in cells: how far from any water a node in
+/// a tile the world-tile table does not hold is taken to be. A display level
+/// set carries `FIELD_FAR_CELLS * cell_size` as its last, canonical element.
+pub const FIELD_FAR_CELLS: f32 = 3.0;
+
 /// A level-set surface the renderer marches to its zero crossing instead
-/// of rasterising triangles.
+/// of rasterising triangles. Every array is a pooled field of
+/// `world_tiles::pool_len(pool_tiles)` elements laid out under the world-tile
+/// table in `tiles`: node p of the display lattice sits at `(p - 1/2) *
+/// cell_size` in the object's space, and a node in a tile the table does not
+/// hold reads the array's last, canonical element.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FieldSurface {
-    /// `Array<f32>`: signed distance in metres at each lattice node,
-    /// negative inside, x fastest, then y, then z.
+    /// `Array<f32>`: signed distance in metres at each node, negative inside.
     pub levelset: Slot,
     /// Optional `Array<f32>`: three velocity components (m/s) per node, for
-    /// motion vectors. `None` draws the field as still.
+    /// motion vectors and the ripple detail's flow. `None` draws the field
+    /// as still.
     pub velocity: Option<Slot>,
-    /// Optional `Array<u32>`: `node.lattice_bricks`' brick list, for
-    /// skipping empty space. `None` marches the whole lattice.
-    pub bricks: Option<Slot>,
     /// Optional `Array<f32>`: foam coverage per node, the fraction of the
     /// surface foam covers, 0 to 1. `None` draws no foam.
     pub foam: Option<Slot>,
@@ -145,14 +151,17 @@ pub struct FieldSurface {
     /// `None` draws no mist.
     pub mist: Option<Slot>,
     /// Optional `Array<f32>`: wetness per node, 0 dry to 1 soaked, which every
-    /// mesh inside the lattice reads by world position. `None` wets nothing.
+    /// mesh in the scene reads by world position. `None` wets nothing.
     pub wetness: Option<Slot>,
-    /// Lattice centre in object space.
-    pub center: [f32; 3],
-    /// Lattice extent per axis, metres.
-    pub size: [f32; 3],
-    /// Lattice nodes per axis, at least 2.
-    pub nodes: [u32; 3],
+    /// `Array<u32>`: the world-tile table the arrays above are laid out under.
+    pub tiles: Slot,
+    /// `Array<f32>`: eight floats, the held tiles' node bounds in object
+    /// space (min xyz, 0, max xyz, 0); min above max when no tile is held.
+    pub extent: Slot,
+    /// Tile slots in the pool, at least 1.
+    pub pool_tiles: u32,
+    /// Lattice cell size in metres, above zero.
+    pub cell_size: f32,
     /// Ripple detail strength over the automatic one: 1 is the automatic strength, 0 turns it off.
     pub ripple_detail: f32,
 }

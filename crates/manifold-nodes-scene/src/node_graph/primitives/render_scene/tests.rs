@@ -194,7 +194,7 @@ fn rt_svt_slot_finds_a_sun_after_many_casters() {
 fn wgsl_caster_struct_matches_the_rust_record() {
     let generated = manifold_gpu::ShadowCaster::WGSL;
     for (name, src) in [
-        ("render_scene.wgsl", RENDER_SCENE_WGSL),
+        ("render_scene.wgsl", RENDER_SCENE_WGSL.as_str()),
         (
             "shaft_march.wgsl",
             include_str!("../shaders/shaft_march.wgsl"),
@@ -453,7 +453,7 @@ fn world_space_places_instance_outside_parent_local() {
 //  exports it, and no stray 48-byte assumption survives in the source.
 #[test]
 fn render_scene_wgsl_parses_and_carries_tangent() {
-    let src = RENDER_SCENE_WGSL;
+    let src = RENDER_SCENE_WGSL.as_str();
     let module = naga::front::wgsl::parse_str(src).expect("render_scene.wgsl must naga-parse");
     let mut validator = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
@@ -476,7 +476,9 @@ fn render_scene_wgsl_parses_and_carries_tangent() {
 /// `render_scene.wgsl`, and carry the light loop and IBL it exists for.
 #[test]
 fn scene_shading_validates_without_the_mesh_shader() {
-    let shading = concat!(
+    let shading = [
+        manifold_node_engine::scene::world_tiles::READ_SIDE,
+        FIELD_TILES_WGSL,
         include_str!("../shaders/scene_shading.wgsl"),
         include_str!("../shaders/look_ripple_detail.wgsl"),
         include_str!("../shaders/foam_field.wgsl"),
@@ -484,7 +486,9 @@ fn scene_shading_validates_without_the_mesh_shader() {
         include_str!("../shaders/look_mist.wgsl"),
         include_str!("../shaders/look_thin_water_light.wgsl"),
         include_str!("../shaders/look_wet_surface.wgsl"),
-    );
+    ]
+    .concat();
+    let shading = shading.as_str();
     let module =
         naga::front::wgsl::parse_str(shading).expect("scene shading must naga-parse alone");
     let mut validator = naga::valid::Validator::new(
@@ -548,7 +552,7 @@ fn cull_instances_wgsl_validates_with_the_instance_transform_prelude() {
 /// naga-validate.
 #[test]
 fn opaque_fast_variants_have_no_discard_and_validate() {
-    let base = RENDER_SCENE_WGSL;
+    let base = RENDER_SCENE_WGSL.as_str();
     for (emit_velocity, emit_ao_mask, emit_denoise_feed) in [
         (false, false, false),
         (true, false, false),
@@ -610,7 +614,7 @@ fn velocity_variants_read_prev_positions_and_the_pack_kernel_validates() {
         (module, info)
     };
 
-    let base = RENDER_SCENE_WGSL;
+    let base = RENDER_SCENE_WGSL.as_str();
     for (emit_ao_mask, emit_denoise_feed) in
         [(false, false), (true, false), (false, true), (true, true)]
     {

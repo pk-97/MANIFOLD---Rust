@@ -61,15 +61,6 @@ mod wind_gust_replay;
 mod expand_shatter;
 
 #[cfg(feature = "gpu-proofs")]
-pub(crate) mod liquid_surface;
-
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod particle_volume;
-
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod liquid_bricks_gpu;
-
-#[cfg(feature = "gpu-proofs")]
 pub(crate) mod whitewater_scene;
 
 #[cfg(feature = "gpu-proofs")]

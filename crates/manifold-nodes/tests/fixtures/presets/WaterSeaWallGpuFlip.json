@@ -197,11 +197,6 @@
       "typeId": "node.liquid_stats"
     },
     {
-      "id": 8,
-      "nodeId": "mesh_solid",
-      "typeId": "node.liquid_solid_distance"
-    },
-    {
       "id": 9,
       "nodeId": "whitewater_obstacle_source",
       "typeId": "node.whitewater_obstacle_source"
@@ -228,19 +223,19 @@
               "portType": "Array(f32)"
             },
             {
-              "name": "bounds",
-              "portType": "Transform"
+              "name": "tiles",
+              "portType": "Array(u32)"
             },
             {
-              "name": "nodes_x",
+              "name": "pool_tiles",
               "portType": "Scalar(F32)"
             },
             {
-              "name": "nodes_y",
+              "name": "cell_size",
               "portType": "Scalar(F32)"
             },
             {
-              "name": "nodes_z",
+              "name": "sim_cell_size",
               "portType": "Scalar(F32)"
             }
           ],
@@ -250,22 +245,6 @@
               "portType": "Array(f32)"
             },
             {
-              "name": "level_set_bounds",
-              "portType": "Transform"
-            },
-            {
-              "name": "level_set_nodes_x",
-              "portType": "Scalar(F32)"
-            },
-            {
-              "name": "level_set_nodes_y",
-              "portType": "Scalar(F32)"
-            },
-            {
-              "name": "level_set_nodes_z",
-              "portType": "Scalar(F32)"
-            },
-            {
               "name": "velocity",
               "portType": "Array(f32)"
             }
@@ -273,13 +252,8 @@
           "params": [
             {
               "name": "particle_scale",
-              "targetHandle": "Particle Blobs",
-              "targetParam": "particle_scale"
-            },
-            {
-              "name": "bin_cells",
-              "targetHandle": "Bin Size",
-              "targetParam": "b"
+              "targetHandle": "Particle Scale",
+              "targetParam": "value"
             },
             {
               "name": "smoothness",
@@ -294,56 +268,6 @@
             "typeId": "system.group_input"
           },
           {
-            "handle": "Lattice Box",
-            "id": 1,
-            "nodeId": "liquid_lattice_box",
-            "typeId": "node.transform_components"
-          },
-          {
-            "handle": "Lattice Cells",
-            "id": 2,
-            "nodeId": "liquid_lattice_cells",
-            "params": {
-              "b": {
-                "type": "Float",
-                "value": 1.0
-              },
-              "op": {
-                "type": "Enum",
-                "value": 1
-              }
-            },
-            "typeId": "node.math"
-          },
-          {
-            "handle": "Simulation Cell",
-            "id": 3,
-            "nodeId": "liquid_simulation_cell",
-            "params": {
-              "op": {
-                "type": "Enum",
-                "value": 3
-              }
-            },
-            "typeId": "node.math"
-          },
-          {
-            "handle": "Bin Size",
-            "id": 4,
-            "nodeId": "liquid_bin_size",
-            "params": {
-              "b": {
-                "type": "Float",
-                "value": 1.0
-              },
-              "op": {
-                "type": "Enum",
-                "value": 2
-              }
-            },
-            "typeId": "node.math"
-          },
-          {
             "handle": "Sort Into Cells",
             "id": 5,
             "nodeId": "liquid_sort",
@@ -353,24 +277,13 @@
             "handle": "Particle Blobs",
             "id": 6,
             "nodeId": "liquid_blobs",
-            "params": {
-              "particle_scale": {
-                "type": "Float",
-                "value": 3.0
-              }
-            },
+            "params": {},
             "typeId": "node.shape_particle_blobs"
           },
           {
             "handle": "Liquid Volume",
             "id": 7,
             "nodeId": "liquid_volume",
-            "params": {
-              "resolution_scale": {
-                "type": "Int",
-                "value": 1
-              }
-            },
             "typeId": "node.particle_volume"
           },
           {
@@ -378,33 +291,16 @@
             "typeId": "system.group_output"
           },
           {
-            "handle": "Carry Into Solids",
             "id": 16,
             "nodeId": "liquid_carry_into_solids",
-            "typeId": "node.carry_liquid_into_solids"
-          },
-          {
-            "handle": "Occupied Bricks",
-            "id": 20,
-            "nodeId": "liquid_bricks",
-            "params": {
-              "resolution_scale": {
-                "type": "Int",
-                "value": 1
-              }
-            },
-            "typeId": "node.lattice_bricks"
+            "typeId": "node.carry_liquid_into_solids",
+            "handle": "Carry Into Solids"
           },
           {
             "handle": "Rebuild Surface Distance",
             "id": 29,
             "nodeId": "liquid_redistance",
             "typeId": "node.redistance_lattice"
-          },
-          {
-            "id": 32,
-            "nodeId": "liquid_blob_bounds",
-            "typeId": "node.blob_bounds"
           },
           {
             "handle": "Surface Weights",
@@ -416,18 +312,31 @@
             "handle": "Smoothness",
             "id": 35,
             "nodeId": "liquid_smoothness",
+            "typeId": "node.value",
             "params": {
               "value": {
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.value"
+            }
+          },
+          {
+            "handle": "Particle Scale",
+            "id": 52,
+            "nodeId": "liquid_particle_scale",
+            "typeId": "node.value",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 3.0
+              }
+            }
           },
           {
             "handle": "Smooth X 1",
             "id": 40,
             "nodeId": "liquid_smooth_x_1",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -437,13 +346,13 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Y 1",
             "id": 41,
             "nodeId": "liquid_smooth_y_1",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -453,13 +362,13 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Z 1",
             "id": 42,
             "nodeId": "liquid_smooth_z_1",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -469,8 +378,7 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Blend 1",
@@ -482,6 +390,7 @@
             "handle": "Smooth X 2",
             "id": 44,
             "nodeId": "liquid_smooth_x_2",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -491,13 +400,13 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Y 2",
             "id": 45,
             "nodeId": "liquid_smooth_y_2",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -507,13 +416,13 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Z 2",
             "id": 46,
             "nodeId": "liquid_smooth_z_2",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -523,8 +432,7 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Blend 2",
@@ -536,6 +444,7 @@
             "handle": "Smooth X 3",
             "id": 48,
             "nodeId": "liquid_smooth_x_3",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -545,13 +454,13 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Y 3",
             "id": 49,
             "nodeId": "liquid_smooth_y_3",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -561,13 +470,13 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Z 3",
             "id": 50,
             "nodeId": "liquid_smooth_z_3",
+            "typeId": "node.smooth_lattice",
             "params": {
               "axis": {
                 "type": "Int",
@@ -577,8 +486,7 @@
                 "type": "Float",
                 "value": 1.0
               }
-            },
-            "typeId": "node.smooth_lattice"
+            }
           },
           {
             "handle": "Smooth Blend 3",
@@ -590,48 +498,6 @@
         "wires": [
           {
             "fromNode": 0,
-            "fromPort": "bounds",
-            "toNode": 1,
-            "toPort": "transform"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_x",
-            "toNode": 2,
-            "toPort": "a"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 3,
-            "toPort": "a"
-          },
-          {
-            "fromNode": 2,
-            "fromPort": "out",
-            "toNode": 3,
-            "toPort": "b"
-          },
-          {
-            "fromNode": 3,
-            "fromPort": "out",
-            "toNode": 4,
-            "toPort": "a"
-          },
-          {
-            "fromNode": 4,
-            "fromPort": "out",
-            "toNode": 5,
-            "toPort": "cell_size"
-          },
-          {
-            "fromNode": 4,
-            "fromPort": "out",
-            "toNode": 7,
-            "toPort": "cell_size"
-          },
-          {
-            "fromNode": 0,
             "fromPort": "particles",
             "toNode": 5,
             "toPort": "particles"
@@ -641,6 +507,24 @@
             "fromPort": "count",
             "toNode": 5,
             "toPort": "count"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "tiles",
+            "toNode": 5,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
+            "toNode": 5,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "cell_size",
+            "toNode": 5,
+            "toPort": "cell_size"
           },
           {
             "fromNode": 5,
@@ -655,24 +539,6 @@
             "toPort": "cell_ranges"
           },
           {
-            "fromNode": 5,
-            "fromPort": "bins_x",
-            "toNode": 7,
-            "toPort": "bins_x"
-          },
-          {
-            "fromNode": 5,
-            "fromPort": "bins_y",
-            "toNode": 7,
-            "toPort": "bins_y"
-          },
-          {
-            "fromNode": 5,
-            "fromPort": "bins_z",
-            "toNode": 7,
-            "toPort": "bins_z"
-          },
-          {
             "fromNode": 6,
             "fromPort": "blobs",
             "toNode": 7,
@@ -686,219 +552,39 @@
           },
           {
             "fromNode": 0,
-            "fromPort": "nodes_x",
+            "fromPort": "tiles",
             "toNode": 7,
-            "toPort": "nodes_x"
+            "toPort": "tiles"
           },
           {
             "fromNode": 0,
-            "fromPort": "nodes_y",
+            "fromPort": "pool_tiles",
             "toNode": 7,
-            "toPort": "nodes_y"
+            "toPort": "pool_tiles"
           },
           {
             "fromNode": 0,
-            "fromPort": "nodes_z",
+            "fromPort": "cell_size",
             "toNode": 7,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_x",
-            "toNode": 5,
-            "toPort": "center_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 5,
-            "toPort": "size_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_y",
-            "toNode": 5,
-            "toPort": "center_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 5,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_z",
-            "toNode": 5,
-            "toPort": "center_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 5,
-            "toPort": "size_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_x",
-            "toNode": 7,
-            "toPort": "center_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 7,
-            "toPort": "size_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_y",
-            "toNode": 7,
-            "toPort": "center_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 7,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_z",
-            "toNode": 7,
-            "toPort": "center_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 7,
-            "toPort": "size_z"
-          },
-          {
-            "fromNode": 4,
-            "fromPort": "out",
-            "toNode": 20,
             "toPort": "cell_size"
           },
           {
-            "fromNode": 5,
-            "fromPort": "cell_ranges",
-            "toNode": 20,
-            "toPort": "cell_ranges"
-          },
-          {
-            "fromNode": 5,
-            "fromPort": "bins_x",
-            "toNode": 20,
-            "toPort": "bins_x"
-          },
-          {
-            "fromNode": 5,
-            "fromPort": "bins_y",
-            "toNode": 20,
-            "toPort": "bins_y"
-          },
-          {
-            "fromNode": 5,
-            "fromPort": "bins_z",
-            "toNode": 20,
-            "toPort": "bins_z"
-          },
-          {
-            "fromNode": 6,
-            "fromPort": "blobs",
-            "toNode": 20,
-            "toPort": "blobs"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "solid",
-            "toNode": 20,
-            "toPort": "solid"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_x",
-            "toNode": 20,
-            "toPort": "nodes_x"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_y",
-            "toNode": 20,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_z",
-            "toNode": 20,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_x",
-            "toNode": 20,
-            "toPort": "center_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 20,
-            "toPort": "size_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_y",
-            "toNode": 20,
-            "toPort": "center_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 20,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_z",
-            "toNode": 20,
-            "toPort": "center_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 20,
-            "toPort": "size_z"
-          },
-          {
-            "fromNode": 20,
-            "fromPort": "bricks",
-            "toNode": 7,
-            "toPort": "bricks"
-          },
-          {
-            "fromNode": 32,
-            "fromPort": "bounds",
-            "toNode": 7,
-            "toPort": "bounds"
-          },
-          {
-            "fromNode": 32,
-            "fromPort": "bounds",
-            "toNode": 20,
-            "toPort": "bounds"
-          },
-          {
-            "fromNode": 6,
-            "fromPort": "blobs",
-            "toNode": 32,
-            "toPort": "blobs"
-          },
-          {
-            "fromNode": 4,
+            "fromNode": 52,
             "fromPort": "out",
-            "toNode": 20,
-            "toPort": "band_extra"
+            "toNode": 6,
+            "toPort": "particle_scale"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "particle_scale"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "sim_cell_size",
+            "toNode": 7,
+            "toPort": "sim_cell_size"
           },
           {
             "fromNode": 7,
@@ -907,40 +593,22 @@
             "toPort": "levelset"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 29,
-            "toPort": "nodes_x"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 1,
-            "fromPort": "scale_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 29,
-            "toPort": "size_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 29,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 29,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 29,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 29,
-            "toPort": "size_z"
+            "toPort": "cell_size"
           },
           {
             "fromNode": 5,
@@ -961,88 +629,28 @@
             "toPort": "reference"
           },
           {
-            "fromNode": 1,
-            "fromPort": "pos_x",
-            "toNode": 33,
-            "toPort": "center_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 33,
-            "toPort": "size_x"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
-            "toNode": 33,
-            "toPort": "nodes_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_y",
-            "toNode": 33,
-            "toPort": "center_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 33,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
-            "toNode": 33,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_z",
-            "toNode": 33,
-            "toPort": "center_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 33,
-            "toPort": "size_z"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 33,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 4,
-            "fromPort": "out",
-            "toNode": 33,
-            "toPort": "cell_size"
-          },
-          {
-            "fromNode": 5,
-            "fromPort": "bins_x",
-            "toNode": 33,
-            "toPort": "bins_x"
-          },
-          {
-            "fromNode": 5,
-            "fromPort": "bins_y",
-            "toNode": 33,
-            "toPort": "bins_y"
-          },
-          {
-            "fromNode": 5,
-            "fromPort": "bins_z",
-            "toNode": 33,
-            "toPort": "bins_z"
-          },
-          {
-            "fromNode": 3,
-            "fromPort": "out",
+            "fromNode": 0,
+            "fromPort": "sim_cell_size",
             "toNode": 33,
             "toPort": "sim_cell_size"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "tiles",
+            "toNode": 33,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
+            "toNode": 33,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "cell_size",
+            "toNode": 33,
+            "toPort": "cell_size"
           },
           {
             "fromNode": 29,
@@ -1063,76 +671,58 @@
             "toPort": "levelset"
           },
           {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 40,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 40,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 40,
-            "toPort": "nodes_y"
+            "toPort": "cell_size"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 40,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 41,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 41,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 41,
-            "toPort": "nodes_y"
+            "toPort": "cell_size"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 41,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 42,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 42,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 42,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 42,
-            "toPort": "nodes_z"
+            "toPort": "cell_size"
           },
           {
             "fromNode": 42,
@@ -1159,46 +749,28 @@
             "toPort": "reference"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
-            "toNode": 43,
-            "toPort": "nodes_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 43,
-            "toPort": "size_x"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
-            "toNode": 43,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 43,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 43,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 43,
-            "toPort": "size_z"
-          },
-          {
             "fromNode": 35,
             "fromPort": "out",
             "toNode": 43,
             "toPort": "smoothness"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "tiles",
+            "toNode": 43,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
+            "toNode": 43,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "cell_size",
+            "toNode": 43,
+            "toPort": "cell_size"
           },
           {
             "fromNode": 43,
@@ -1219,76 +791,58 @@
             "toPort": "levelset"
           },
           {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 44,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 44,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 44,
-            "toPort": "nodes_y"
+            "toPort": "cell_size"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 44,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 45,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 45,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 45,
-            "toPort": "nodes_y"
+            "toPort": "cell_size"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 45,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 46,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 46,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 46,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 46,
-            "toPort": "nodes_z"
+            "toPort": "cell_size"
           },
           {
             "fromNode": 46,
@@ -1315,46 +869,28 @@
             "toPort": "reference"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
-            "toNode": 47,
-            "toPort": "nodes_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 47,
-            "toPort": "size_x"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
-            "toNode": 47,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 47,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 47,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 47,
-            "toPort": "size_z"
-          },
-          {
             "fromNode": 35,
             "fromPort": "out",
             "toNode": 47,
             "toPort": "smoothness"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "tiles",
+            "toNode": 47,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
+            "toNode": 47,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "cell_size",
+            "toNode": 47,
+            "toPort": "cell_size"
           },
           {
             "fromNode": 47,
@@ -1375,76 +911,58 @@
             "toPort": "levelset"
           },
           {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 48,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 48,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 48,
-            "toPort": "nodes_y"
+            "toPort": "cell_size"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 48,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 49,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 49,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 49,
-            "toPort": "nodes_y"
+            "toPort": "cell_size"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 49,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 20,
-            "fromPort": "bricks",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 50,
-            "toPort": "bricks"
+            "toPort": "tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
             "toNode": 50,
-            "toPort": "nodes_x"
+            "toPort": "pool_tiles"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
+            "fromNode": 0,
+            "fromPort": "cell_size",
             "toNode": 50,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 50,
-            "toPort": "nodes_z"
+            "toPort": "cell_size"
           },
           {
             "fromNode": 50,
@@ -1471,46 +989,28 @@
             "toPort": "reference"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
-            "toNode": 51,
-            "toPort": "nodes_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 51,
-            "toPort": "size_x"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
-            "toNode": 51,
-            "toPort": "nodes_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 51,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 51,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 51,
-            "toPort": "size_z"
-          },
-          {
             "fromNode": 35,
             "fromPort": "out",
             "toNode": 51,
             "toPort": "smoothness"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "tiles",
+            "toNode": 51,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "pool_tiles",
+            "toNode": 51,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "cell_size",
+            "toNode": 51,
+            "toPort": "cell_size"
           },
           {
             "fromNode": 51,
@@ -1525,106 +1025,28 @@
             "toPort": "solid"
           },
           {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
+            "fromNode": 0,
+            "fromPort": "tiles",
             "toNode": 16,
-            "toPort": "nodes_x"
+            "toPort": "tiles"
           },
           {
             "fromNode": 0,
-            "fromPort": "nodes_x",
+            "fromPort": "pool_tiles",
             "toNode": 16,
-            "toPort": "solid_nodes_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_x",
-            "toNode": 16,
-            "toPort": "center_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_x",
-            "toNode": 16,
-            "toPort": "size_x"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
-            "toNode": 16,
-            "toPort": "nodes_y"
+            "toPort": "pool_tiles"
           },
           {
             "fromNode": 0,
-            "fromPort": "nodes_y",
+            "fromPort": "cell_size",
             "toNode": 16,
-            "toPort": "solid_nodes_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_y",
-            "toNode": 16,
-            "toPort": "center_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_y",
-            "toNode": 16,
-            "toPort": "size_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 16,
-            "toPort": "nodes_z"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "nodes_z",
-            "toNode": 16,
-            "toPort": "solid_nodes_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "pos_z",
-            "toNode": 16,
-            "toPort": "center_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "scale_z",
-            "toNode": 16,
-            "toPort": "size_z"
+            "toPort": "cell_size"
           },
           {
             "fromNode": 16,
             "fromPort": "out",
             "toNode": 11,
             "toPort": "level_set"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "bounds",
-            "toNode": 11,
-            "toPort": "level_set_bounds"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_x",
-            "toNode": 11,
-            "toPort": "level_set_nodes_x"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_y",
-            "toNode": 11,
-            "toPort": "level_set_nodes_y"
-          },
-          {
-            "fromNode": 7,
-            "fromPort": "volume_nodes_z",
-            "toNode": 11,
-            "toPort": "level_set_nodes_z"
           },
           {
             "fromNode": 33,
@@ -1638,10 +1060,6 @@
       "id": 12,
       "nodeId": "surface",
       "params": {
-        "bin_cells": {
-          "type": "Float",
-          "value": 1.0
-        },
         "particle_scale": {
           "type": "Float",
           "value": 3.0
@@ -2430,19 +1848,9 @@
       "typeId": "node.interpolate_particle_frames"
     },
     {
-      "id": 507,
-      "nodeId": "solid_blend",
-      "typeId": "node.mix_arrays"
-    },
-    {
       "id": 508,
       "nodeId": "particle_push_out",
       "typeId": "node.push_out_of_solid"
-    },
-    {
-      "id": 509,
-      "nodeId": "display_lattice_box",
-      "typeId": "node.transform_components"
     },
     {
       "id": 510,
@@ -2762,6 +2170,22 @@
         }
       },
       "typeId": "node.surface_wetness"
+    },
+    {
+      "id": 529,
+      "nodeId": "surface_tiles",
+      "typeId": "node.surface_tiles",
+      "params": {
+        "resolution_scale": {
+          "type": "Int",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 530,
+      "nodeId": "display_solid",
+      "typeId": "node.liquid_solid_distance"
     }
   ],
   "presetMetadata": {
@@ -2889,7 +2313,7 @@
         "offset": 1.0,
         "target": {
           "kind": "node",
-          "nodeId": "liquid_volume",
+          "nodeId": "surface_tiles",
           "param": "resolution_scale"
         }
       },
@@ -2902,8 +2326,8 @@
         "label": "Surface Particle Scale",
         "target": {
           "kind": "node",
-          "nodeId": "liquid_blobs",
-          "param": "particle_scale"
+          "nodeId": "liquid_particle_scale",
+          "param": "value"
         }
       },
       {
@@ -3012,20 +2436,6 @@
           "kind": "node",
           "nodeId": "whitewater_budget",
           "param": "value"
-        }
-      },
-      {
-        "convert": {
-          "type": "IntRound"
-        },
-        "defaultValue": 0.0,
-        "id": "surface_detail",
-        "label": "Surface Detail",
-        "offset": 1.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "liquid_bricks",
-          "param": "resolution_scale"
         }
       }
     ],
@@ -3803,84 +3213,6 @@
     {
       "fromNode": 0,
       "fromPort": "bodies",
-      "toNode": 8,
-      "toPort": "bodies"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "shapes",
-      "toNode": 8,
-      "toPort": "shapes"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "atlas",
-      "toNode": 8,
-      "toPort": "atlas"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "closed_faces",
-      "toNode": 8,
-      "toPort": "closed_faces"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "body_count",
-      "toNode": 8,
-      "toPort": "body_count"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "cell_size",
-      "toNode": 8,
-      "toPort": "cell_size"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "mesh_min_x",
-      "toNode": 8,
-      "toPort": "lattice_min_x"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "mesh_min_y",
-      "toNode": 8,
-      "toPort": "lattice_min_y"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "mesh_min_z",
-      "toNode": 8,
-      "toPort": "lattice_min_z"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "mesh_nodes_x",
-      "toNode": 8,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "mesh_nodes_y",
-      "toNode": 8,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "mesh_nodes_z",
-      "toNode": 8,
-      "toPort": "nodes_z"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "body_rows",
-      "toNode": 8,
-      "toPort": "rows"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "bodies",
       "toNode": 9,
       "toPort": "bodies"
     },
@@ -3939,66 +3271,6 @@
       "toPort": "identity"
     },
     {
-      "fromNode": 8,
-      "fromPort": "solid",
-      "toNode": 10,
-      "toPort": "solid"
-    },
-    {
-      "fromNode": 4,
-      "fromPort": "count",
-      "toNode": 10,
-      "toPort": "count"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "lattice_min_x",
-      "toNode": 10,
-      "toPort": "lattice_min_x"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "lattice_min_y",
-      "toNode": 10,
-      "toPort": "lattice_min_y"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "lattice_min_z",
-      "toNode": 10,
-      "toPort": "lattice_min_z"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "cell_size",
-      "toNode": 10,
-      "toPort": "cell_size"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "nodes_x",
-      "toNode": 10,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "nodes_y",
-      "toNode": 10,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "nodes_z",
-      "toNode": 10,
-      "toPort": "nodes_z"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "closed_faces",
-      "toNode": 10,
-      "toPort": "closed_faces"
-    },
-    {
       "fromNode": 0,
       "fromPort": "simulation_time",
       "toNode": 10,
@@ -4031,44 +3303,8 @@
     {
       "fromNode": 0,
       "fromPort": "interval_duration",
-      "toNode": 8,
-      "toPort": "tick_seconds"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "interval_duration",
       "toNode": 9,
       "toPort": "tick_seconds"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "count_b",
-      "toNode": 12,
-      "toPort": "count"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "grid_bounds",
-      "toNode": 12,
-      "toPort": "bounds"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "grid_nodes_x",
-      "toNode": 12,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "grid_nodes_y",
-      "toNode": 12,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "grid_nodes_z",
-      "toNode": 12,
-      "toPort": "nodes_z"
     },
     {
       "fromNode": 436,
@@ -4437,94 +3673,10 @@
       "toPort": "span"
     },
     {
-      "fromNode": 10,
-      "fromPort": "solid_a",
-      "toNode": 507,
-      "toPort": "a"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "solid_b",
-      "toNode": 507,
-      "toPort": "b"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "blend",
-      "toNode": 507,
-      "toPort": "amount"
-    },
-    {
       "fromNode": 506,
       "fromPort": "out",
       "toNode": 508,
       "toPort": "particles"
-    },
-    {
-      "fromNode": 507,
-      "fromPort": "out",
-      "toNode": 508,
-      "toPort": "solid"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "grid_bounds",
-      "toNode": 509,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_x",
-      "toNode": 508,
-      "toPort": "center_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_x",
-      "toNode": 508,
-      "toPort": "size_x"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "grid_nodes_x",
-      "toNode": 508,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_y",
-      "toNode": 508,
-      "toPort": "center_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_y",
-      "toNode": 508,
-      "toPort": "size_y"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "grid_nodes_y",
-      "toNode": 508,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_z",
-      "toNode": 508,
-      "toPort": "center_z"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_z",
-      "toNode": 508,
-      "toPort": "size_z"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "grid_nodes_z",
-      "toNode": 508,
-      "toPort": "nodes_z"
     },
     {
       "fromNode": 5,
@@ -4657,18 +3809,6 @@
       "fromPort": "gravity_z",
       "toNode": 512,
       "toPort": "acceleration_z"
-    },
-    {
-      "fromNode": 508,
-      "fromPort": "out",
-      "toNode": 12,
-      "toPort": "particles"
-    },
-    {
-      "fromNode": 507,
-      "fromPort": "out",
-      "toNode": 12,
-      "toPort": "solid"
     },
     {
       "fromNode": 514,
@@ -4899,60 +4039,6 @@
       "toPort": "field_velocity"
     },
     {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_x",
-      "toNode": 442,
-      "toPort": "field_nodes_x"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_y",
-      "toNode": 442,
-      "toPort": "field_nodes_y"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_z",
-      "toNode": 442,
-      "toPort": "field_nodes_z"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_x",
-      "toNode": 442,
-      "toPort": "field_center_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_x",
-      "toNode": 442,
-      "toPort": "field_size_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_y",
-      "toNode": 442,
-      "toPort": "field_center_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_y",
-      "toNode": 442,
-      "toPort": "field_size_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_z",
-      "toNode": 442,
-      "toPort": "field_center_z"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_z",
-      "toNode": 442,
-      "toPort": "field_size_z"
-    },
-    {
       "fromNode": 525,
       "fromPort": "out",
       "toNode": 442,
@@ -4963,60 +4049,6 @@
       "fromPort": "out",
       "toNode": 526,
       "toPort": "particles"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_x",
-      "toNode": 526,
-      "toPort": "center_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_x",
-      "toNode": 526,
-      "toPort": "size_x"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_x",
-      "toNode": 526,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_y",
-      "toNode": 526,
-      "toPort": "center_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_y",
-      "toNode": 526,
-      "toPort": "size_y"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_y",
-      "toNode": 526,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_z",
-      "toNode": 526,
-      "toPort": "center_z"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_z",
-      "toNode": 526,
-      "toPort": "size_z"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_z",
-      "toNode": 526,
-      "toPort": "nodes_z"
     },
     {
       "fromNode": 526,
@@ -5047,114 +4079,6 @@
       "fromPort": "epoch",
       "toNode": 528,
       "toPort": "epoch"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_x",
-      "toNode": 527,
-      "toPort": "center_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_x",
-      "toNode": 527,
-      "toPort": "size_x"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_x",
-      "toNode": 527,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_y",
-      "toNode": 527,
-      "toPort": "center_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_y",
-      "toNode": 527,
-      "toPort": "size_y"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_y",
-      "toNode": 527,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_z",
-      "toNode": 527,
-      "toPort": "center_z"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_z",
-      "toNode": 527,
-      "toPort": "size_z"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_z",
-      "toNode": 527,
-      "toPort": "nodes_z"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_x",
-      "toNode": 528,
-      "toPort": "center_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_x",
-      "toNode": 528,
-      "toPort": "size_x"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_x",
-      "toNode": 528,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_y",
-      "toNode": 528,
-      "toPort": "center_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_y",
-      "toNode": 528,
-      "toPort": "size_y"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_y",
-      "toNode": 528,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "pos_z",
-      "toNode": 528,
-      "toPort": "center_z"
-    },
-    {
-      "fromNode": 509,
-      "fromPort": "scale_z",
-      "toNode": 528,
-      "toPort": "size_z"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "level_set_nodes_z",
-      "toNode": 528,
-      "toPort": "nodes_z"
     },
     {
       "fromNode": 527,
@@ -5227,42 +4151,6 @@
       "fromPort": "region_site_total",
       "toNode": 6,
       "toPort": "region_site_total"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "bounds_lo_x",
-      "toNode": 8,
-      "toPort": "bounds_lo_x"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "bounds_lo_y",
-      "toNode": 8,
-      "toPort": "bounds_lo_y"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "bounds_lo_z",
-      "toNode": 8,
-      "toPort": "bounds_lo_z"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "bounds_hi_x",
-      "toNode": 8,
-      "toPort": "bounds_hi_x"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "bounds_hi_y",
-      "toNode": 8,
-      "toPort": "bounds_hi_y"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "bounds_hi_z",
-      "toNode": 8,
-      "toPort": "bounds_hi_z"
     },
     {
       "fromNode": 0,
@@ -5431,6 +4319,288 @@
       "fromPort": "bounds_lo_z",
       "toNode": 475,
       "toPort": "bounds_lo_z"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "particles_b",
+      "toNode": 529,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 529,
+      "toPort": "sim_cell_size"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "pool_tiles",
+      "toNode": 529,
+      "toPort": "sim_pool_tiles"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "display_time",
+      "toNode": 529,
+      "toPort": "time"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 529,
+      "toPort": "epoch"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bodies",
+      "toNode": 530,
+      "toPort": "bodies"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 530,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 530,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "closed_faces",
+      "toNode": 530,
+      "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_count",
+      "toNode": 530,
+      "toPort": "body_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_x",
+      "toNode": 530,
+      "toPort": "bounds_lo_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_y",
+      "toNode": 530,
+      "toPort": "bounds_lo_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_lo_z",
+      "toNode": 530,
+      "toPort": "bounds_lo_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_x",
+      "toNode": 530,
+      "toPort": "bounds_hi_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_y",
+      "toNode": 530,
+      "toPort": "bounds_hi_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bounds_hi_z",
+      "toNode": 530,
+      "toPort": "bounds_hi_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_rows",
+      "toNode": 530,
+      "toPort": "rows"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "interval_duration",
+      "toNode": 530,
+      "toPort": "tick_seconds"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "tiles",
+      "toNode": 530,
+      "toPort": "tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "pool_tiles",
+      "toNode": 530,
+      "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "cell_size",
+      "toNode": 530,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 508,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "count_b",
+      "toNode": 12,
+      "toPort": "count"
+    },
+    {
+      "fromNode": 530,
+      "fromPort": "solid",
+      "toNode": 12,
+      "toPort": "solid"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "tiles",
+      "toNode": 12,
+      "toPort": "tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "pool_tiles",
+      "toNode": 12,
+      "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "cell_size",
+      "toNode": 12,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 12,
+      "toPort": "sim_cell_size"
+    },
+    {
+      "fromNode": 530,
+      "fromPort": "solid",
+      "toNode": 508,
+      "toPort": "solid"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "tiles",
+      "toNode": 508,
+      "toPort": "tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "pool_tiles",
+      "toNode": 508,
+      "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "cell_size",
+      "toNode": 508,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "tiles",
+      "toNode": 526,
+      "toPort": "tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "pool_tiles",
+      "toNode": 526,
+      "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "cell_size",
+      "toNode": 526,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 510,
+      "fromPort": "out",
+      "toNode": 529,
+      "toPort": "foam"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "tiles",
+      "toNode": 527,
+      "toPort": "tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "pool_tiles",
+      "toNode": 527,
+      "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "cell_size",
+      "toNode": 527,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "out",
+      "toNode": 529,
+      "toPort": "spray"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "tiles",
+      "toNode": 528,
+      "toPort": "tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "pool_tiles",
+      "toNode": 528,
+      "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "cell_size",
+      "toNode": 528,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "tiles",
+      "toNode": 442,
+      "toPort": "field_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "extent",
+      "toNode": 442,
+      "toPort": "field_extent"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "pool_tiles",
+      "toNode": 442,
+      "toPort": "field_pool_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "cell_size",
+      "toNode": 442,
+      "toPort": "field_cell_size"
     }
   ]
 }

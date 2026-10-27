@@ -105,7 +105,7 @@ impl RenderScene {
                 .field_pipeline
                 .get_or_insert_with(|| {
                     gpu.device.create_render_pipeline(
-                        water_cover::COVER_WGSL,
+                        &water_cover::COVER_WGSL,
                         "vs_cover",
                         "fs_cover_mask",
                         manifold_gpu::GpuTextureFormat::R8Unorm,

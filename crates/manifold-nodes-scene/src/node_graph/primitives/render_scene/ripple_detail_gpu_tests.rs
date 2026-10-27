@@ -1,14 +1,17 @@
 //! GPU proofs for the ripple detail: the slopes kernel against a sine's
 //! derivative, a real tile from the ocean spectrum, and the crossfade of the
 //! look being invisible at its swap.
-use super::super::model_matrix;
+use super::super::water_march_gpu_tests::shared_buffer;
 use super::super::water_shade::ripple_uniforms;
+use super::super::{FIELD_TILES_WGSL, model_matrix};
 use super::*;
+use crate::testkit::field_tiles::FieldTable;
 use half::f16;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 
 const N: usize = RIPPLE_TEXELS as usize;
-pub(super) const NODES: [u32; 3] = [33, 33, 33];
-pub(super) const SIZE: [f32; 3] = [1.6, 1.6, 1.6];
+/// The display cell in metres: the ripple tile is 32 of them, 1.6 m.
+pub(super) const CELL: f32 = 0.05;
 
 pub(super) fn read_f32(buffer: &GpuBuffer, count: usize) -> Vec<f32> {
     let ptr = buffer.mapped_ptr().expect("shared buffer");
@@ -81,29 +84,46 @@ pub(super) fn identity() -> [[f32; 4]; 4] {
     model_matrix([0.0; 3], [0.0; 3], [1.0; 3])
 }
 
-/// Level-set and velocity lattices for the test field; the velocity is `flow` everywhere.
-pub(super) fn lattices(device: &GpuDevice, flow: [f32; 3]) -> (GpuBuffer, GpuBuffer) {
-    let count = (NODES[0] * NODES[1] * NODES[2]) as usize;
-    let levelset = device.create_buffer_shared((count * 4) as u64);
-    let velocity = device.create_buffer_shared((count * 12) as u64);
-    let values: Vec<f32> = (0..count).flat_map(|_| flow).collect();
-    unsafe {
-        velocity.write(0, bytemuck::cast_slice(&values));
-    }
-    (levelset, velocity)
+/// The tiles of the test field: 3 x 1 x 3 from the origin, covering the probe
+/// points.
+pub(super) fn table() -> FieldTable {
+    FieldTable::new(CELL, 9, &FieldTable::tiles_between([0, 0, 0], [2, 0, 2]))
 }
 
-pub(super) fn field<'a>(levelset: &'a GpuBuffer, velocity: &'a GpuBuffer) -> FieldObject<'a> {
+/// The buffers of the test field: a level set the ripples never read, the
+/// velocity (`flow` at every held node) and the table with its extent.
+pub(super) struct Lattices {
+    pub(super) table: FieldTable,
+    pub(super) levelset: GpuBuffer,
+    pub(super) velocity: GpuBuffer,
+    pub(super) tiles: GpuBuffer,
+    pub(super) extent: GpuBuffer,
+}
+
+pub(super) fn lattices(device: &GpuDevice, flow: [f32; 3]) -> Lattices {
+    let table = table();
+    let velocity = table.pool([0.0; 3], |_| flow);
+    Lattices {
+        levelset: device.create_buffer_shared(16),
+        velocity: shared_buffer(device, &velocity),
+        tiles: shared_buffer(device, &table.words),
+        extent: shared_buffer(device, &table.extent()),
+        table,
+    }
+}
+
+pub(super) fn field(lattices: &Lattices) -> FieldObject<'_> {
     FieldObject {
         slot: 0,
-        levelset,
-        velocity: Some(velocity),
+        levelset: &lattices.levelset,
+        velocity: Some(&lattices.velocity),
         foam: None,
         mist: None,
         wetness: None,
-        center: [0.0; 3],
-        size: SIZE,
-        nodes: NODES,
+        tiles: &lattices.tiles,
+        extent: &lattices.extent,
+        pool_tiles: lattices.table.pool_tiles,
+        cell_size: CELL,
         model: identity(),
         prev_model: identity(),
         ripple_detail: 1.0,
@@ -124,8 +144,8 @@ pub(super) fn made_tile(device: &GpuDevice, field: &FieldObject) -> RippleDetail
 #[test]
 fn a_tile_has_ripples_and_repeats() {
     let device = manifold_gpu::testkit::test_device();
-    let (levelset, velocity) = lattices(&device, [0.8, 0.0, 0.3]);
-    let field = field(&levelset, &velocity);
+    let lattices = lattices(&device, [0.8, 0.0, 0.3]);
+    let field = field(&lattices);
     let ripples = made_tile(&device, &field);
     let tile = ripples.tile(0).expect("the field wants ripples");
     assert!((tile.tile_metres - 1.6).abs() < 1e-5);
@@ -171,14 +191,15 @@ fn a_tile_has_ripples_and_repeats() {
 pub(super) const PROBE_STUB: &str = "struct SceneStub { camera_pos: vec4<f32> };\n\
 @group(0) @binding(0) var<uniform> u: SceneStub;\n";
 
-/// Evaluates the look at 64 x 64 points on y = 0 with the normal up.
+/// Evaluates the look at 64 x 64 points on y = 0 with the normal up, over the
+/// held tiles.
 const PROBE_KERNEL: &str = "\n\
 @group(0) @binding(90) var<storage, read_write> probe_out: array<vec4<f32>>;\n\
 @compute @workgroup_size(64)\n\
 fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
     let i = id.x;\n\
     if i >= arrayLength(&probe_out) { return; }\n\
-    let p = vec3<f32>(f32(i % 64u) * 0.0311 + 0.37, 0.0, f32(i / 64u) * 0.0287 + 0.11);\n\
+    let p = vec3<f32>(f32(i % 64u) * 0.0155 + 0.05, 0.0, f32(i / 64u) * 0.0145 + 0.03);\n\
     probe_out[i] = vec4<f32>(look_ripple_detail(p, vec3<f32>(0.0, 1.0, 0.0)), 0.0);\n\
 }\n";
 
@@ -190,12 +211,12 @@ pub(super) fn probe_normals(
     device: &GpuDevice,
     ripples: &RippleDetail,
     field: &FieldObject,
-    velocity: &GpuBuffer,
     foam: Option<&GpuBuffer>,
     times: &[f32],
 ) -> Vec<Vec<[f32; 3]>> {
+    let velocity = field.velocity.expect("the field has a velocity array");
     let wgsl = format!(
-        "{PROBE_STUB}{}{}{PROBE_KERNEL}",
+        "{READ_SIDE}{FIELD_TILES_WGSL}{PROBE_STUB}{}{}{PROBE_KERNEL}",
         include_str!("../shaders/look_ripple_detail.wgsl"),
         include_str!("../shaders/foam_field.wgsl"),
     );
@@ -251,6 +272,11 @@ pub(super) fn probe_normals(
                     offset: 0,
                 },
                 GpuBinding::Buffer {
+                    binding: 70,
+                    buffer: field.tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
                     binding: 90,
                     buffer: out,
                     offset: 0,
@@ -297,8 +323,8 @@ fn mean_change(before: &[[f32; 3]], after: &[[f32; 3]]) -> f64 {
 #[test]
 fn the_crossfade_swap_is_not_seen() {
     let device = manifold_gpu::testkit::test_device();
-    let (levelset, velocity) = lattices(&device, [0.8, 0.0, 0.3]);
-    let field = field(&levelset, &velocity);
+    let lattices = lattices(&device, [0.8, 0.0, 0.3]);
+    let field = field(&lattices);
     let ripples = made_tile(&device, &field);
 
     let dt = 1.0f32 / 60.0;
@@ -308,7 +334,7 @@ fn the_crossfade_swap_is_not_seen() {
         .iter()
         .flat_map(|t| [t - dt / 2.0, t + dt / 2.0])
         .collect();
-    let normals = probe_normals(&device, &ripples, &field, &velocity, None, &times);
+    let normals = probe_normals(&device, &ripples, &field, None, &times);
 
     let change = |i: usize| mean_change(&normals[2 * i], &normals[2 * i + 1]);
     let swap = (change(0) + change(1)) / 2.0;

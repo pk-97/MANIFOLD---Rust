@@ -290,17 +290,3 @@ const MC_TRIANGLES: array<u32, 512> = array<u32, 512>(
 fn mc_edge(case_index: u32, entry: u32) -> u32 {
     return (MC_TRIANGLES[2u * case_index + entry / 8u] >> (4u * (entry % 8u))) & 15u;
 }
-
-fn mc_node(p: vec3<u32>, nodes: vec3<u32>) -> u32 {
-    return p.x + nodes.x * (p.y + nodes.y * p.z);
-}
-
-fn mc_case(cell: vec3<u32>, nodes: vec3<u32>) -> u32 {
-    var case_index = 0u;
-    for (var c = 0u; c < 8u; c = c + 1u) {
-        if buf_levelset[mc_node(cell + MC_CORNERS[c], nodes)] < 0.0 {
-            case_index = case_index | (1u << c);
-        }
-    }
-    return case_index;
-}

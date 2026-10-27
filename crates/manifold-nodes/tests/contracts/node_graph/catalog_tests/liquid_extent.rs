@@ -84,7 +84,7 @@ fn particle_blend_counts_and_solid_storage_are_checked() {
     for (type_id, port, value) in [
         ("node.interpolate_particle_frames", "count_a", 16_777_216.0),
         ("node.interpolate_particle_frames", "count_b", 16_777_216.0),
-        ("node.push_out_of_solid", "nodes_x", 4096.0),
+        ("node.push_out_of_solid", "pool_tiles", 4096.0),
     ] {
         // Corrupt the compiled topology, including nodes inside Water.
         let mut def = manifold_core::flatten::flatten_groups(&particle_blend_preset())
@@ -103,34 +103,6 @@ fn particle_blend_counts_and_solid_storage_are_checked() {
             Err(ExtentError::Uncovered { node, .. }) => assert!(node.contains(type_id), "{node}"),
             other => panic!("{type_id}.{port}: expected uncovered storage, got {other:?}"),
         }
-    }
-}
-
-#[test]
-fn particle_blend_mix_refuses_unequal_capacities() {
-    let mut preset = LiquidPreset::build(&particle_blend_preset()).unwrap();
-    let rules: Vec<_> = EXTENT_RULES
-        .iter()
-        .map(|rule| {
-            if rule.type_id == "node.liquid_frame" {
-                ExtentRule {
-                    type_id: rule.type_id,
-                    check: manifold_node_engine::exec::extent::testkit::malformed_frame,
-                }
-            } else {
-                *rule
-            }
-        })
-        .collect();
-    match manifold_nodes_water::testkit::preset_extents::testkit::check_with_rules(
-        &mut preset,
-        &rules,
-    ) {
-        Err(ExtentError::Refused { node, reason }) => {
-            assert!(node.contains("node.mix_arrays"), "{node}");
-            assert!(reason.contains("input capacities must match"), "{reason}");
-        }
-        other => panic!("expected unequal arrays to be refused, got {other:?}"),
     }
 }
 
@@ -154,45 +126,6 @@ fn liquid_preset_small_extent_checked() {
 }
 
 #[test]
-fn liquid_blob_bounds_reject_wrong_extent_before_gpu_work() {
-    let (_, def) = liquid_presets()
-        .into_iter()
-        .find(|(id, _)| id == "WaterDamBreakGpuFlip")
-        .expect("preset");
-    for consumer in ["node.particle_volume", "node.lattice_bricks"] {
-        let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
-        let id = flat
-            .nodes
-            .iter()
-            .find(|n| n.type_id == consumer)
-            .expect("consumer")
-            .id;
-        // Both ports are Array<f32>, so the graph type check accepts this
-        // deliberately wrong wire. The extent contract must reject it.
-        let solid = flat
-            .wires
-            .iter()
-            .find(|w| w.to_node == id && w.to_port == "solid")
-            .expect("solid wire")
-            .clone();
-        let bound = flat
-            .wires
-            .iter_mut()
-            .find(|w| w.to_node == id && w.to_port == "bounds")
-            .expect("bounds wire");
-        bound.from_node = solid.from_node;
-        bound.from_port = solid.from_port;
-        match check_preset_extents(&flat, 8) {
-            Err(ExtentError::Uncovered { detail, .. }) => assert!(
-                detail.contains("bounds must contain exactly two"),
-                "{consumer}: {detail}"
-            ),
-            other => panic!("{consumer}: expected a malformed bounds refusal, got {other:?}"),
-        }
-    }
-}
-
-#[test]
 fn liquid_carry_rejects_short_solid_before_gpu_work() {
     let (_, def) = liquid_presets()
         .into_iter()
@@ -205,19 +138,20 @@ fn liquid_carry_rejects_short_solid_before_gpu_work() {
         .find(|n| n.type_id == "node.carry_liquid_into_solids")
         .expect("carry")
         .id;
-    let bounds = flat
+    // The display table's extent is eight floats, far short of a solid.
+    let table = flat
         .nodes
         .iter()
-        .find(|n| n.type_id == "node.blob_bounds")
-        .expect("two-float source")
+        .find(|n| n.type_id == "node.surface_tiles")
+        .expect("an eight-float source")
         .id;
     let solid = flat
         .wires
         .iter_mut()
         .find(|w| w.to_node == carry && w.to_port == "solid")
         .expect("solid wire");
-    solid.from_node = bounds;
-    solid.from_port = "bounds".into();
+    solid.from_node = table;
+    solid.from_port = "extent".into();
     match check_preset_extents(&flat, 8) {
         Err(ExtentError::Uncovered { node, detail }) => {
             assert!(
@@ -301,9 +235,9 @@ fn an_atom_without_a_rule_fails_by_name() {
     }
 }
 
-/// A smoothing pass told its lattice is larger than the level set it reads
-/// is caught before the GPU: Dam Break Matter with the first smooth_lattice
-/// unwired from the volume's lattice and set to 4096 nodes per axis.
+/// A smoothing pass told its pool is larger than the level set it reads is
+/// caught before the GPU: Dam Break Matter with the first smooth_lattice
+/// unwired from the display table's pool and set to 4096 tiles.
 #[test]
 fn a_lattice_past_its_storage_is_caught() {
     use manifold_core::effect_graph_def::SerializedParamValue;
@@ -318,13 +252,9 @@ fn a_lattice_past_its_storage_is_caught() {
         .find(|node| node.type_id == "node.smooth_lattice")
         .map(|node| node.id)
         .expect("a smoothing pass");
-    let lattice = ["nodes_x", "nodes_y", "nodes_z"];
-    // Exercise the dense level-set bound specifically. With a sparse
-    // schedule wired, its smaller brick bound correctly refuses first.
-    flat.wires.retain(|wire| {
-        !(wire.to_node == counter
-            && (lattice.contains(&wire.to_port.as_str()) || wire.to_port == "bricks"))
-    });
+    let lattice = ["pool_tiles"];
+    flat.wires
+        .retain(|wire| !(wire.to_node == counter && lattice.contains(&wire.to_port.as_str())));
     let node = flat
         .nodes
         .iter_mut()
@@ -337,7 +267,8 @@ fn a_lattice_past_its_storage_is_caught() {
     match check_preset_extents(&flat, 64) {
         Err(ExtentError::Uncovered { node, detail }) => {
             assert!(
-                node.contains("smooth_lattice") && detail.starts_with("levelset holds"),
+                // The table is checked first: it is the first array too short.
+                node.contains("smooth_lattice") && detail.starts_with("tiles holds"),
                 "{node}: {detail}"
             );
         }

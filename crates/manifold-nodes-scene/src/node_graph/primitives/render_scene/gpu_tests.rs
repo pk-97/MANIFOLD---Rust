@@ -1086,11 +1086,7 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
     return resolve_albedo(input.uv, input.vertex_color);
 }
 "#;
-    let shader = format!(
-        "{}\n{}",
-        RENDER_SCENE_WGSL,
-        PROBE
-    );
+    let shader = format!("{}\n{}", RENDER_SCENE_WGSL.as_str(), PROBE);
     let pipeline = device.create_render_pipeline(
         &shader,
         "vs_main",
@@ -1301,11 +1297,7 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
     return sample_extension_map(sheen_color_map, probe_uv, index);
 }
 "#;
-    let shader = format!(
-        "{}\n{}",
-        RENDER_SCENE_WGSL,
-        PROBE
-    );
+    let shader = format!("{}\n{}", RENDER_SCENE_WGSL.as_str(), PROBE);
     let pipeline = device.create_render_pipeline(
         &shader,
         "vs_main",
@@ -1530,7 +1522,7 @@ fn extension_map_mip_filters_follow_authored_choice() {
     // no mip = 0, nearest mip = 0.5, linear mip = 0.3.
     let shader = format!(
         "{}\n{}",
-        RENDER_SCENE_WGSL,
+        RENDER_SCENE_WGSL.as_str(),
         r#"
 @vertex fn vs_mip_probe(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let x = f32((i << 1u) & 2u);
@@ -2909,4 +2901,3 @@ fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
         )
     );
 }
-

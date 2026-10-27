@@ -44,14 +44,6 @@ impl FrameRing {
         self.epoch != Some(epoch) || simulation_time > self.t_b
     }
 
-    /// Force the next publication to collapse A onto its newly-latticed B.
-    /// A lattice change makes an older particle frame incomparable even when
-    /// the simulation clock did not advance.
-    pub fn invalidate(&mut self) {
-        self.epoch = None;
-        self.counts = [0; RING];
-    }
-
     /// Start writing one tick of `bytes` per slot. Slots too small for it are
     /// replaced with fresh shared storage (capture and look metrics read
     /// frames back), and the previous frame then counts as empty. A ring the

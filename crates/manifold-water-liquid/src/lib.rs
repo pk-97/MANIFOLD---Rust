@@ -122,4 +122,9 @@ impl RolePorts {
 /// Rest density of water, kg/m³: every liquid solver's water weighs this.
 pub const WATER_DENSITY: f32 = 1000.0;
 
+/// The radius of a sphere of an eighth of a cell, in cells: what a GPU FLIP
+/// particle is drawn and kept with, and the largest a Matter point is drawn
+/// (8 per cell). The surface's blobs are this times Particle Scale at most.
+pub const PARTICLE_RADIUS_CELLS: f32 = 0.31017524;
+
 pub mod substep_history;

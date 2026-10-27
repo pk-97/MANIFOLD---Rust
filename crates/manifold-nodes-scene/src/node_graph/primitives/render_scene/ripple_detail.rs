@@ -49,17 +49,16 @@ struct SlopeUniforms {
     _pad: [u32; 2],
 }
 
-/// The world size of the field's smallest cell: the lattice spacing on each
-/// axis times the model's scale on that axis.
-fn cell_metres(size: [f32; 3], nodes: [u32; 3], model: [[f32; 4]; 4]) -> f32 {
-    (0..3)
+/// The world size of the field's cell: the lattice's cell size times the
+/// smallest scale of the model's axes.
+fn cell_metres(cell_size: f32, model: [[f32; 4]; 4]) -> f32 {
+    let smallest_scale = (0..3)
         .map(|axis| {
             let column = model[axis];
-            let scale =
-                (column[0] * column[0] + column[1] * column[1] + column[2] * column[2]).sqrt();
-            size[axis] / (nodes[axis] - 1) as f32 * scale
+            (column[0] * column[0] + column[1] * column[1] + column[2] * column[2]).sqrt()
         })
-        .fold(f32::MAX, f32::min)
+        .fold(f32::MAX, f32::min);
+    cell_size * smallest_scale
 }
 
 /// The shortest wave the field itself draws, in metres.
@@ -84,7 +83,7 @@ fn wants_ripples(has_velocity: bool, ripple_detail: f32) -> bool {
 }
 
 fn field_cell(field: &FieldObject) -> f32 {
-    cell_metres(field.size, field.nodes, field.model)
+    cell_metres(field.cell_size, field.model)
 }
 
 /// The tile's side in metres when the field wants ripples.
@@ -344,23 +343,18 @@ mod tests {
     #[test]
     fn tile_and_band_follow_the_cell() {
         let model = model_matrix([0.0; 3], [0.0; 3], [1.0; 3]);
-        let cell = cell_metres([1.6; 3], [33; 3], model);
+        let cell = cell_metres(0.05, model);
         assert!((cell - 0.05).abs() < 1e-6, "cell {cell}");
         assert!((tile_metres(cell) - 1.6).abs() < 1e-5);
         assert!((band_low(cell) - std::f32::consts::TAU / 0.2).abs() < 1e-3);
 
         let doubled = model_matrix([0.0; 3], [0.0; 3], [2.0; 3]);
-        let cell = cell_metres([1.6; 3], [33; 3], doubled);
+        let cell = cell_metres(0.05, doubled);
         assert!((tile_metres(cell) - 3.2).abs() < 1e-5);
 
-        // The smallest cell on any axis sets the tile.
-        let cell = cell_metres([1.6, 3.2, 1.6], [33, 33, 33], model);
-        assert!((cell - 0.05).abs() < 1e-6, "cell {cell}");
-        let cell = cell_metres(
-            [1.6, 3.2, 1.6],
-            [33, 33, 33],
-            model_matrix([0.0; 3], [0.0; 3], [1.0, 0.25, 1.0]),
-        );
+        // The smallest axis scale sets the tile.
+        let squashed = model_matrix([0.0; 3], [0.0; 3], [1.0, 0.25, 1.0]);
+        let cell = cell_metres(0.1, squashed);
         assert!((cell - 0.025).abs() < 1e-6, "cell {cell}");
 
         assert!(wants_ripples(true, 1.0));

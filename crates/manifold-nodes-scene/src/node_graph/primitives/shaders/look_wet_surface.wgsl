@@ -9,17 +9,18 @@
 //   A_wet = (1 - r_e) (1 - r_i) A / (1 - r_i A),   per channel.
 // A film is also optically smooth, so its roughness is water's: 0.
 //
-// The wetness is one value per node of the water's own lattice, 0 dry to 1
-// soaked, read by world position: a mesh outside the lattice's box is dry.
+// The wetness is one value per node of the water's display lattice, 0 dry to 1
+// soaked, a pooled field under the water's world-tile table (`field_tiles.wgsl`),
+// read by world position: a mesh outside the field's extent, or over a tile the
+// table does not hold, is dry.
 //
 // Binds 68-69 itself; the water shade includes this file but never calls the
 // hook, so the water binds neither of them.
 
 struct WetUniforms {
     world_to_local: mat4x4<f32>,
-    lattice_min: vec4<f32>,  // xyz object-space min corner, w = 1 if a wetness field is bound
-    spacing: vec4<f32>,      // xyz node spacing
-    nodes: vec4<u32>,        // xyz node counts
+    tiles: vec4<u32>,  // x pool tiles, y table entries, z = 1 if a wetness field is bound
+    cell: vec4<f32>,   // x display cell size in metres
 };
 
 @group(0) @binding(68) var<uniform> wet: WetUniforms;
@@ -41,40 +42,26 @@ const WATER_INNER_REFLECTANCE: f32 = 1.0 - (1.0 - WATER_DIFFUSE_REFLECTANCE) / (
 // The smallest roughness `resolve_mr` hands the GGX terms, which divide by it.
 const WET_MIN_ROUGHNESS: f32 = 0.01;
 
-fn wet_node(i: vec3<i32>) -> f32 {
-    let hi = vec3<i32>(wet.nodes.xyz) - vec3<i32>(1);
-    let c = clamp(i, vec3<i32>(0), hi);
-    let n = u32(c.x) + wet.nodes.x * (u32(c.y) + wet.nodes.y * u32(c.z));
-    return wet_field[n];
-}
-
 // The wetness at a world position, 0 to 1; 0 with no field bound or outside the
-// lattice's box.
+// field's extent.
 fn wetness_at(world_pos: vec3<f32>) -> f32 {
-    if wet.lattice_min.w == 0.0 {
+    if wet.tiles.z == 0u {
         return 0.0;
     }
-    let local = (wet.world_to_local * vec4<f32>(world_pos, 1.0)).xyz - wet.lattice_min.xyz;
-    let box_max = wet.spacing.xyz * (vec3<f32>(wet.nodes.xyz) - vec3<f32>(1.0));
-    if any(local < vec3<f32>(0.0)) || any(local > box_max) {
+    let local = (wet.world_to_local * vec4<f32>(world_pos, 1.0)).xyz;
+    if !field_box_holds(local, wet.cell.x) {
         return 0.0;
     }
-    let g = clamp(local / wet.spacing.xyz, vec3<f32>(0.0), vec3<f32>(wet.nodes.xyz) - vec3<f32>(1.0));
-    let b = min(vec3<i32>(floor(g)), vec3<i32>(wet.nodes.xyz) - vec3<i32>(2));
-    let f = g - vec3<f32>(b);
-    let c000 = wet_node(b);
-    let c100 = wet_node(b + vec3<i32>(1, 0, 0));
-    let c010 = wet_node(b + vec3<i32>(0, 1, 0));
-    let c110 = wet_node(b + vec3<i32>(1, 1, 0));
-    let c001 = wet_node(b + vec3<i32>(0, 0, 1));
-    let c101 = wet_node(b + vec3<i32>(1, 0, 1));
-    let c011 = wet_node(b + vec3<i32>(0, 1, 1));
-    let c111 = wet_node(b + vec3<i32>(1, 1, 1));
-    let x00 = mix(c000, c100, f.x);
-    let x10 = mix(c010, c110, f.x);
-    let x01 = mix(c001, c101, f.x);
-    let x11 = mix(c011, c111, f.x);
-    return clamp(mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z), 0.0, 1.0);
+    field_pool = wet.tiles.xy;
+    let q = field_node_coord(local, wet.cell.x);
+    field_enter(q);
+    let c = field_corners(q);
+    let w = field_mix(
+        wet_field[c.c000], wet_field[c.c100], wet_field[c.c010], wet_field[c.c110],
+        wet_field[c.c001], wet_field[c.c101], wet_field[c.c011], wet_field[c.c111],
+        c.f,
+    );
+    return clamp(w, 0.0, 1.0);
 }
 
 fn look_wet_surface(world_pos: vec3<f32>, albedo: vec3<f32>, roughness: f32) -> WetSurface {

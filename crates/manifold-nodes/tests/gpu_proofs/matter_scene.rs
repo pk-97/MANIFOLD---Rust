@@ -75,7 +75,6 @@ pub(crate) struct MatterScene {
     pub state_node: NodeInstanceId,
     /// Each collider's node.transform_3d.
     colliders: Vec<NodeInstanceId>,
-    solid_b: Option<ResourceId>,
     points: ResourceId,
     stats: ResourceId,
     frame_b: ResourceId,
@@ -140,9 +139,7 @@ impl MatterScene {
                 .unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
         }
         for port in LATTICE {
-            for node in [fill, frame] {
-                wire(&mut graph, (domain, port), (node, port));
-            }
+            wire(&mut graph, (domain, port), (fill, port));
         }
         for port in ["lattice_min_x", "lattice_min_y", "lattice_min_z"] {
             wire(&mut graph, (domain, port), (stats, port));
@@ -169,11 +166,6 @@ impl MatterScene {
         for port in ["open_faces", "kill_height"] {
             wire(&mut graph, (domain, port), (g2p, port));
         }
-        wire(
-            &mut graph,
-            (domain, "closed_faces"),
-            (frame, "closed_faces"),
-        );
         for port in ["gravity_x", "gravity", "gravity_z"] {
             wire(&mut graph, (domain, port), (update, port));
             wire(&mut graph, (domain, port), (stats, port));
@@ -281,7 +273,7 @@ impl MatterScene {
             &mut graph,
             &registry,
             settings,
-            [domain, fill, state, update, reaction, g2p, frame],
+            [domain, fill, state, update, reaction, g2p],
         );
         graph
             .add_external_output(frame, "particles_b")
@@ -395,7 +387,6 @@ impl MatterScene {
         let lattice = LiquidLattice::from_layout(
             &domain_layout(None, settings.domain_size, cell_size).expect("scene layout"),
         );
-        let solid_b = (!settings.colliders.is_empty()).then(|| output(frame, "solid_b"));
         let mut scene = Self {
             graph,
             plan,
@@ -411,7 +402,6 @@ impl MatterScene {
             frame_count: 0,
             frame_interval: TICK,
             colliders,
-            solid_b,
         };
         for (index, transform) in settings.colliders.iter().enumerate() {
             scene.set_collider(index, *transform);
@@ -422,12 +412,12 @@ impl MatterScene {
     /// Colliders as a scene wires them: a transform and a unit cube into a
     /// body of a Physics World coupled with the domain, which the fill seeds
     /// around; node.matter_move_bodies in the region feeding the grid update;
-    /// node.liquid_solid_distance feeding the frame's solid lattice. Returns each collider's transform node.
+    /// Returns each collider's transform node.
     fn wire_colliders(
         graph: &mut Graph,
         registry: &PrimitiveRegistry,
         settings: &SceneSettings,
-        [domain, fill, state, update, reaction, g2p, frame]: [NodeInstanceId; 7],
+        [domain, fill, state, update, reaction, g2p]: [NodeInstanceId; 6],
     ) -> Vec<NodeInstanceId> {
         if settings.colliders.is_empty() {
             return Vec::new();
@@ -523,40 +513,7 @@ impl MatterScene {
         for port in ["shapes", "atlas", "body_count"] {
             wire(graph, (domain, port), (g2p, port));
         }
-        let solid = add(graph, "node.liquid_solid_distance");
-        for port in [
-            "bodies",
-            "shapes",
-            "atlas",
-            "lattice_min_x",
-            "lattice_min_y",
-            "lattice_min_z",
-            "cell_size",
-            "nodes_x",
-            "nodes_y",
-            "nodes_z",
-            "closed_faces",
-            "bounds_lo_x",
-            "bounds_lo_y",
-            "bounds_lo_z",
-            "bounds_hi_x",
-            "bounds_hi_y",
-            "bounds_hi_z",
-            "body_count",
-        ] {
-            wire(graph, (domain, port), (solid, port));
-        }
-        wire(graph, (domain, "body_rows"), (solid, "rows"));
-        wire(graph, (solid, "solid"), (frame, "solid"));
-        graph
-            .add_external_output(frame, "solid_b")
-            .expect("solid output");
         transforms
-    }
-
-    /// The frame's solid lattice B (walls and colliders), with colliders.
-    pub(crate) fn solid_b(&self) -> Vec<f32> {
-        self.read(self.solid_b.expect("a scene with colliders"))
     }
 
     pub(crate) fn lattice(&self) -> LiquidLattice {

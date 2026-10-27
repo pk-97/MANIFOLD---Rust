@@ -606,19 +606,15 @@ const NON_STANDALONE: &[&str] = &[
     // The whitewater lifecycle runs FLIP's C++ on the CPU and writes its
     // outputs from there: no GPU kernel of its own, only buffer copies.
     "node.whitewater_lifecycle",
-    // The water surface's barriered brick mark/scan/compact and its blob
-    // bounds reduction: BrickUniforms and BoundsParams are reflected in
-    // uniform_layout_extended.
-    "node.lattice_bricks",
-    "node.blob_bounds",
     // The field build's surface weights (counts, then weights and velocity)
     // and its carry into drawn solids: WeightUniforms and CarryUniforms are
     // reflected in uniform_layout_extended.
     "node.surface_weights",
     "node.carry_liquid_into_solids",
-    // Surface wetness and the whitewater splats (foam cover, spray mist):
-    // WetnessUniforms, CoverUniforms and MistUniforms are reflected in
-    // uniform_layout_extended.
+    // The display table's hand build, surface wetness and the whitewater
+    // splats (foam cover, spray mist): TileUniforms, WetnessUniforms,
+    // CoverUniforms and MistUniforms are reflected in uniform_layout_extended.
+    "node.surface_tiles",
     "node.surface_wetness",
     "node.foam_cover",
     "node.spray_mist",

@@ -45,11 +45,12 @@ fn region() -> FusionRegion<'static> {
                 vec![
                     InputSource::Node(NodeInstanceId(0)),
                     InputSource::External(2),
+                    InputSource::External(3),
                 ],
             ),
             member::<ParticlesToCopies>(2, vec![InputSource::Node(NodeInstanceId(1))]),
         ],
-        num_external_inputs: 3,
+        num_external_inputs: 4,
         outputs: vec![(NodeInstanceId(2), "copies".to_owned())],
         in_place_alias: None,
         sampler_address_mode: "clamp",
@@ -285,8 +286,8 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
                     && wire.to_port == "particles"
             }));
             assert!(group.wires.iter().any(|wire| {
-                wire.from_node == id("solid_blend")
-                    && wire.from_port == "out"
+                wire.from_node == id("display_solid")
+                    && wire.from_port == "solid"
                     && wire.to_node == surface
                     && wire.to_port == "solid"
             }));
@@ -313,8 +314,8 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
             assert!(has(frame, "span", id(display), "span"));
         }
         assert!(has(
-            id("solid_blend"),
-            "out",
+            id("display_solid"),
+            "solid",
             id("particle_push_out"),
             "solid"
         ));
@@ -357,6 +358,7 @@ mod gpu_tests {
     use manifold_node_engine::mesh::InstanceTransform;
     use manifold_node_engine::particles::FluidParticle;
     use manifold_node_engine::testkit::array_harness::{Harness, params, read};
+    use manifold_water_liquid::testkit::world_box::BoxTable;
 
     #[test]
     fn fluid_particle_blend_fused_matches_unfused() {
@@ -376,10 +378,23 @@ mod gpu_tests {
             particle(1.0, 0.25, 0),
             particle(8.0, 8.0, 9),
         ];
-        let solid: Vec<f32> = (0..125).map(|i| ((i / 5) % 5) as f32 - 2.0).collect();
+        // The solid is the plane y = 0 on world tiles round the particles
+        // (node p at (p - 1/2) cells), its distance the node's height.
+        const H: f32 = 0.25;
+        let table = BoxTable::new([-4, -4, -2], [22, 8, 5]);
+        let mut dense = Vec::new();
+        for _z in 0..5 {
+            for y in 0..8 {
+                for _x in 0..22 {
+                    dense.push((y as f32 - 4.0 - 0.5) * H);
+                }
+            }
+        }
+        let solid = table.to_pool(&dense, 1.0e30);
         let (sa, ba) = h.array(&a, a.len());
         let (sb, bb) = h.array(&b, b.len());
         let (ss, bs) = h.array(&solid, solid.len());
+        let (st, bt) = h.array(&table.words, table.words.len());
         let (si, _) = h.array::<FluidParticle>(&[], b.len());
         let (sp, _) = h.array::<FluidParticle>(&[], b.len());
         let (sc, bc) = h.array::<InstanceTransform>(&[], b.len());
@@ -389,9 +404,7 @@ mod gpu_tests {
             ("blend", 0.5),
             ("span", 0.5),
         ]);
-        // Halfway counts exposed a standalone/fused rounding mismatch: Rust
-        // round used 5, WGSL round used 4. Both paths must sample the 5³ grid.
-        let pp = params(&[("nodes_x", 4.5), ("nodes_y", 4.5), ("nodes_z", 4.5)]);
+        let pp = params(&[("cell_size", H), ("pool_tiles", table.pool_tiles as f32)]);
         for errors in [
             h.run(
                 &mut InterpolateParticleFrames::new(),
@@ -402,7 +415,7 @@ mod gpu_tests {
             .1,
             h.run(
                 &mut PushOutOfSolid::new(),
-                &[("particles", si), ("solid", ss)],
+                &[("particles", si), ("solid", ss), ("tiles", st)],
                 &[("out", sp)],
                 &pp,
             )
@@ -473,6 +486,11 @@ mod gpu_tests {
                 },
                 GpuBinding::Buffer {
                     binding: 4,
+                    buffer: &bt,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
                     buffer: &output,
                     offset: 0,
                 },

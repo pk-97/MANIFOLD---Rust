@@ -54,14 +54,12 @@ fn type_of(flat: &manifold_core::effect_graph_def::EffectGraphDef, id: u32) -> O
         .map(|n| n.type_id.as_str())
 }
 
-/// Every bundled Liquid Surface meshes on the lattice a solver's frame
-/// node published: its solid, node counts and box are wired straight from
-/// one node.matter_frame or node.liquid_frame, never
-/// a hand-made transform or value that could drop the padding. A
-/// display-time solid is a node.mix_arrays of that frame's two solids.
+/// Every bundled Liquid Surface builds on one display table: its level set
+/// reads the tiles, pool and cell size of a node.surface_tiles, and its solid
+/// is a node.liquid_solid_distance on that same table. Group interfaces may
+/// pass them along; flattening makes every wire direct.
 #[test]
-fn liquid_surface_lattice_comes_from_the_frame() {
-    const FRAMES: [&str; 2] = ["node.matter_frame", "node.liquid_frame"];
+fn liquid_surface_reads_one_display_table() {
     let mut checked = Vec::new();
     for (type_id, flat) in flat_bundled_hosts() {
         let source = |id: u32, port: &str| source(&type_id, &flat, id, port);
@@ -70,50 +68,27 @@ fn liquid_surface_lattice_comes_from_the_frame() {
             .iter()
             .filter(|n| n.type_id == "node.particle_volume")
         {
-            let (mut frame, mut port) = source(volume.id, "solid");
-            if type_of(&flat, frame) == Some("node.mix_arrays") {
-                let (a, b) = (source(frame, "a"), source(frame, "b"));
-                assert_eq!(
-                    (a.1, b),
-                    ("solid_a", (a.0, "solid_b")),
-                    "{type_id}: display solid"
-                );
-                (frame, port) = a;
+            let (table, _) = source(volume.id, "tiles");
+            assert_eq!(
+                type_of(&flat, table),
+                Some("node.surface_tiles"),
+                "{type_id}: display table"
+            );
+            for port in ["pool_tiles", "cell_size"] {
+                assert_eq!(source(volume.id, port), (table, port), "{type_id}: {port}");
             }
-            assert!(
-                FRAMES.contains(&type_of(&flat, frame).unwrap_or("")),
-                "{type_id}: solid from {port}"
-            );
-            assert!(
-                matches!(port, "solid_a" | "solid_b"),
-                "{type_id}: solid from {port}"
-            );
-            let (box_node, _) = source(volume.id, "center_x");
+            let (solid, port) = source(volume.id, "solid");
             assert_eq!(
-                type_of(&flat, box_node),
-                Some("node.transform_components"),
-                "{type_id}: lattice box"
+                (type_of(&flat, solid), port),
+                (Some("node.liquid_solid_distance"), "solid"),
+                "{type_id}: display solid"
             );
-            assert_eq!(
-                source(box_node, "transform"),
-                (frame, "grid_bounds"),
-                "{type_id}: lattice box"
-            );
-            for axis in ["x", "y", "z"] {
-                let grid_nodes = format!("grid_nodes_{axis}");
+            for port in ["tiles", "pool_tiles", "cell_size"] {
                 assert_eq!(
-                    source(volume.id, &format!("nodes_{axis}")),
-                    (frame, grid_nodes.as_str()),
-                    "{type_id}"
+                    source(solid, port),
+                    (table, port),
+                    "{type_id}: solid {port}"
                 );
-                for (to, from) in [("center", "pos"), ("size", "scale")] {
-                    let port = format!("{from}_{axis}");
-                    assert_eq!(
-                        source(volume.id, &format!("{to}_{axis}")),
-                        (box_node, port.as_str()),
-                        "{type_id}"
-                    );
-                }
             }
             checked.push(type_id.clone());
         }

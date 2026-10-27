@@ -2,24 +2,32 @@
 //! own lighting and glass-style light through the water. One pipeline per
 //! colour format, compiled with the scene's other pipelines so the first water
 //! frame is a cache hit.
+use std::sync::LazyLock;
+
 use manifold_gpu::*;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
 
 use super::ripple_detail::FLOW_PERIOD_SECONDS;
-use super::{FieldObject, mat4_inverse};
+use super::{FIELD_TILES_WGSL, FieldObject, mat4_inverse};
 
-/// The scene shading, the five look hooks and the field helpers, then the
-/// water pass itself.
-pub(super) const WATER_SHADE_WGSL: &str = concat!(
-    include_str!("../shaders/scene_shading.wgsl"),
-    include_str!("../shaders/look_ripple_detail.wgsl"),
-    include_str!("../shaders/foam_field.wgsl"),
-    include_str!("../shaders/look_foam.wgsl"),
-    include_str!("../shaders/look_mist.wgsl"),
-    include_str!("../shaders/look_thin_water_light.wgsl"),
-    include_str!("../shaders/look_wet_surface.wgsl"),
-    include_str!("../shaders/water_field_common.wgsl"),
-    include_str!("../shaders/water_shade.wgsl"),
-);
+/// The world-tile read side and the field's table, the scene shading, the five
+/// look hooks and the field helpers, then the water pass itself.
+pub(super) static WATER_SHADE_WGSL: LazyLock<String> = LazyLock::new(|| {
+    [
+        READ_SIDE,
+        FIELD_TILES_WGSL,
+        include_str!("../shaders/scene_shading.wgsl"),
+        include_str!("../shaders/look_ripple_detail.wgsl"),
+        include_str!("../shaders/foam_field.wgsl"),
+        include_str!("../shaders/look_foam.wgsl"),
+        include_str!("../shaders/look_mist.wgsl"),
+        include_str!("../shaders/look_thin_water_light.wgsl"),
+        include_str!("../shaders/look_wet_surface.wgsl"),
+        include_str!("../shaders/water_field_common.wgsl"),
+        include_str!("../shaders/water_shade.wgsl"),
+    ]
+    .concat()
+});
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -51,36 +59,19 @@ pub(super) fn shade_uniforms(
 pub(super) struct RippleUniforms {
     world_to_local: [[f32; 4]; 4],
     local_to_world: [[f32; 4]; 4],
-    lattice_min: [f32; 4],
-    spacing: [f32; 4],
-    nodes: [u32; 4],
+    /// x pool tiles, y table entries, z 1 when a foam field is bound.
+    tiles: [u32; 4],
+    /// x display cell size in metres, y tile side in metres (0: no ripples),
+    /// z strength override.
+    field: [f32; 4],
     time: [f32; 4],
-}
-
-/// A water lattice's object-space min corner and node spacing (xyz, w 0), the
-/// frame every look that reads a per-node field of the water shares.
-pub(super) fn lattice_frame(
-    center: [f32; 3],
-    size: [f32; 3],
-    nodes: [u32; 3],
-) -> Result<([f32; 4], [f32; 4]), &'static str> {
-    let mut lattice_min = [0.0f32; 4];
-    let mut spacing = [0.0f32; 4];
-    for axis in 0..3 {
-        if nodes[axis] < 2 {
-            return Err("Water shade: lattice needs at least 2 nodes per axis");
-        }
-        lattice_min[axis] = center[axis] - size[axis] * 0.5;
-        spacing[axis] = size[axis] / (nodes[axis] - 1) as f32;
-    }
-    Ok((lattice_min, spacing))
 }
 
 /// Uniforms for the ripple detail on one field. `tile` is the slope tile's
 /// side in metres, `None` for a field without ripples. `footprint` is the
 /// size of a pixel on the water: metres per pixel per metre of distance, then
 /// metres per pixel flat (perspective and orthographic cameras). `has_foam` is
-/// whether a foam field is bound, which the foam sampling reads from `nodes.w`.
+/// whether a foam field is bound, which the foam sampling reads from `tiles.z`.
 pub(super) fn ripple_uniforms(
     field: &FieldObject,
     tile: Option<f32>,
@@ -90,32 +81,38 @@ pub(super) fn ripple_uniforms(
 ) -> Result<RippleUniforms, &'static str> {
     let world_to_local =
         mat4_inverse(field.model).ok_or("Water shade: singular water model matrix")?;
-    let (mut lattice_min, mut spacing) = lattice_frame(field.center, field.size, field.nodes)?;
-    // 0 is the shader's off value for the tile side.
-    lattice_min[3] = tile.unwrap_or(0.0);
-    spacing[3] = field.ripple_detail;
+    if !(field.cell_size > 0.0 && field.cell_size.is_finite()) || field.pool_tiles == 0 {
+        return Err("Water shade: the field needs a cell size above zero and a pool of tiles");
+    }
     Ok(RippleUniforms {
         world_to_local,
         local_to_world: field.model,
-        lattice_min,
-        spacing,
-        nodes: [
-            field.nodes[0],
-            field.nodes[1],
-            field.nodes[2],
+        tiles: [
+            field.pool_tiles,
+            table_entries(field.pool_tiles),
             u32::from(has_foam),
+            0,
+        ],
+        // 0 is the shader's off value for the tile side.
+        field: [
+            field.cell_size,
+            tile.unwrap_or(0.0),
+            field.ripple_detail,
+            0.0,
         ],
         time: [seconds, FLOW_PERIOD_SECONDS, footprint[0], footprint[1]],
     })
 }
 
-/// The look inputs one water draw binds at 62-66.
+/// The look inputs one water draw binds at 62-66 and 70.
 pub(super) struct LookBindings<'a> {
     pub uniforms: &'a RippleUniforms,
     pub slopes: &'a GpuTexture,
     pub sampler: &'a GpuSampler,
     pub velocity: &'a GpuBuffer,
     pub foam: &'a GpuBuffer,
+    /// The field's world-tile table.
+    pub tiles: &'a GpuBuffer,
 }
 
 /// The mist composites over the colour with `dst * (1 - a) + colour`, the
@@ -143,7 +140,7 @@ impl WaterShade {
     /// shared render-pipeline cache.
     fn build_pipeline(device: &GpuDevice, color_format: GpuTextureFormat) -> GpuRenderPipeline {
         device.create_render_pipeline_depth(
-            WATER_SHADE_WGSL,
+            &WATER_SHADE_WGSL,
             "vs_water",
             "fs_water",
             color_format,
@@ -160,7 +157,7 @@ impl WaterShade {
         color_format: GpuTextureFormat,
     ) -> GpuRenderPipeline {
         device.create_render_pipeline_depth(
-            WATER_SHADE_WGSL,
+            &WATER_SHADE_WGSL,
             "vs_water",
             "fs_mist",
             color_format,
@@ -206,7 +203,7 @@ impl WaterShade {
         look: &LookBindings,
     ) {
         let pipeline = self.pipeline(device, target.format);
-        let mut bindings = [scene[0]; 24];
+        let mut bindings = [scene[0]; 25];
         bindings[..16].copy_from_slice(scene);
         bindings[16] = GpuBinding::Bytes {
             binding: 0,
@@ -243,6 +240,11 @@ impl WaterShade {
             buffer: look.foam,
             offset: 0,
         };
+        bindings[24] = GpuBinding::Buffer {
+            binding: 70,
+            buffer: look.tiles,
+            offset: 0,
+        };
         let draw = GpuEncoder::depth_msaa_draw(pipeline, &bindings, 3, 1);
         enc.draw_instanced_depth_batch(
             target,
@@ -258,8 +260,8 @@ impl WaterShade {
     /// Draws the mist the march integrated into `mist` over `target`: one
     /// full-screen blend that attenuates what is there and adds the in-scattered
     /// light. `object_uniforms` is the first mist-bearing water object's, which
-    /// carries the scene's fog and exposure. The look inputs at 62-66 are bound
-    /// as the shade draw binds them, because the module declares them.
+    /// carries the scene's fog and exposure. The look inputs at 62-66 and 70 are
+    /// bound as the shade draw binds them, because the module declares them.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn encode_mist(
         &mut self,
@@ -286,7 +288,7 @@ impl WaterShade {
                 write_enabled: false,
             })
         });
-        let mut bindings = [scene[0]; 24];
+        let mut bindings = [scene[0]; 25];
         bindings[..16].copy_from_slice(scene);
         bindings[16] = GpuBinding::Bytes {
             binding: 0,
@@ -323,6 +325,11 @@ impl WaterShade {
             buffer: mist,
             offset: 0,
         };
+        bindings[24] = GpuBinding::Buffer {
+            binding: 70,
+            buffer: look.tiles,
+            offset: 0,
+        };
         let draw = GpuEncoder::depth_msaa_draw(pipeline, &bindings, 3, 1);
         enc.draw_instanced_depth_batch(
             target,
@@ -344,7 +351,7 @@ mod tests {
 
     #[test]
     fn water_shade_shader_validates() {
-        let module = naga::front::wgsl::parse_str(WATER_SHADE_WGSL)
+        let module = naga::front::wgsl::parse_str(&WATER_SHADE_WGSL)
             .expect("water shade shader must naga-parse");
         let mut validator = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
@@ -353,14 +360,14 @@ mod tests {
         if let Err(e) = validator.validate(&module) {
             panic!(
                 "water shade validation failed:\n{}",
-                e.emit_to_string(WATER_SHADE_WGSL)
+                e.emit_to_string(&WATER_SHADE_WGSL)
             );
         }
     }
 
     #[test]
-    fn ripple_uniforms_are_192_bytes() {
-        assert_eq!(std::mem::size_of::<RippleUniforms>(), 192);
+    fn ripple_uniforms_are_176_bytes() {
+        assert_eq!(std::mem::size_of::<RippleUniforms>(), 176);
     }
 
     #[test]

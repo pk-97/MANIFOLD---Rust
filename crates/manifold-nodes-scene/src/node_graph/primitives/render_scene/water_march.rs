@@ -2,22 +2,37 @@
 //! One dispatch per field, nearest hit wins through the shared `hits`
 //! G-buffer. Buffers grow only when the target size changes, and `reset`
 //! drops them so a frame with no water costs nothing. A field with a mist
-//! lattice then integrates its optical depth per pixel up to the nearest hit.
+//! array then integrates its optical depth per pixel up to the nearest hit.
+//! Every array is read through the field's world-tile table, and a ray's span
+//! is its extent.
+use std::sync::LazyLock;
+
 use manifold_gpu::*;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
 
-use super::mat4_inverse;
+use super::{FIELD_TILES_WGSL, mat4_inverse};
 
-const MARCH_WGSL: &str = concat!(
-    include_str!("../shaders/water_field_common.wgsl"),
-    include_str!("../shaders/water_march_core.wgsl"),
-    include_str!("../shaders/water_march.wgsl")
-);
+static MARCH_WGSL: LazyLock<String> = LazyLock::new(|| {
+    [
+        READ_SIDE,
+        FIELD_TILES_WGSL,
+        include_str!("../shaders/water_field_common.wgsl"),
+        include_str!("../shaders/water_march_core.wgsl"),
+        include_str!("../shaders/water_march.wgsl"),
+    ]
+    .concat()
+});
 
-const MIST_WGSL: &str = concat!(
-    include_str!("../shaders/water_field_common.wgsl"),
-    include_str!("../shaders/water_march_core.wgsl"),
-    include_str!("../shaders/water_mist.wgsl")
-);
+static MIST_WGSL: LazyLock<String> = LazyLock::new(|| {
+    [
+        READ_SIDE,
+        FIELD_TILES_WGSL,
+        include_str!("../shaders/water_field_common.wgsl"),
+        include_str!("../shaders/water_march_core.wgsl"),
+        include_str!("../shaders/water_mist.wgsl"),
+    ]
+    .concat()
+});
 
 /// Bytes of one `FieldHit` in the G-buffer.
 pub(super) const FIELD_HIT_BYTES: u64 = 12;
@@ -34,9 +49,11 @@ pub(super) struct MarchUniforms {
     world_to_local: [[f32; 4]; 4],
     local_to_world: [[f32; 4]; 4],
     prev_local_to_world: [[f32; 4]; 4],
-    lattice_min: [f32; 4],
-    spacing: [f32; 4],
-    nodes: [u32; 4],
+    /// x display cell size in metres, y frame delta in seconds.
+    cell: [f32; 4],
+    /// x pool tiles, y table entries, z slot + 1.
+    tiles: [u32; 4],
+    /// x width, y height, z 1 when a velocity array is bound.
     target_size: [f32; 4],
     jitter: [f32; 4],
     flags: [u32; 4],
@@ -48,9 +65,12 @@ pub(super) struct FieldDraw<'a> {
     pub velocity: Option<&'a GpuBuffer>,
     /// Mist extinction per node, per metre.
     pub mist: Option<&'a GpuBuffer>,
-    pub center: [f32; 3],
-    pub size: [f32; 3],
-    pub nodes: [u32; 3],
+    /// The world-tile table every array is read through.
+    pub tiles: &'a GpuBuffer,
+    /// Eight floats: the held tiles' node bounds in object space.
+    pub extent: &'a GpuBuffer,
+    pub pool_tiles: u32,
+    pub cell_size: f32,
     pub model: [[f32; 4]; 4],
     pub prev_model: [[f32; 4]; 4],
     pub slot: u32,
@@ -97,9 +117,8 @@ fn dummy_texture(device: &GpuDevice, format: GpuTextureFormat, label: &'static s
 
 /// The part of a `FieldDraw` the uniforms depend on, so they build without a buffer.
 pub(super) struct FieldGeometry {
-    pub center: [f32; 3],
-    pub size: [f32; 3],
-    pub nodes: [u32; 3],
+    pub pool_tiles: u32,
+    pub cell_size: f32,
     pub model: [[f32; 4]; 4],
     pub prev_model: [[f32; 4]; 4],
     pub slot: u32,
@@ -109,9 +128,8 @@ pub(super) struct FieldGeometry {
 impl FieldGeometry {
     fn of(field: &FieldDraw) -> Self {
         Self {
-            center: field.center,
-            size: field.size,
-            nodes: field.nodes,
+            pool_tiles: field.pool_tiles,
+            cell_size: field.cell_size,
             model: field.model,
             prev_model: field.prev_model,
             slot: field.slot,
@@ -129,19 +147,9 @@ pub(super) fn march_uniforms(
         mat4_inverse(view.view_proj).ok_or("Water march: singular camera matrix")?;
     let world_to_local =
         mat4_inverse(field.model).ok_or("Water march: singular water model matrix")?;
-    let mut lattice_min = [0.0f32; 4];
-    let mut spacing = [0.0f32; 4];
-    let mut cell = f32::MAX;
-    for axis in 0..3 {
-        if field.nodes[axis] < 2 {
-            return Err("Water march: lattice needs at least 2 nodes per axis");
-        }
-        lattice_min[axis] = field.center[axis] - field.size[axis] * 0.5;
-        spacing[axis] = field.size[axis] / (field.nodes[axis] - 1) as f32;
-        cell = cell.min(spacing[axis]);
+    if !(field.cell_size > 0.0 && field.cell_size.is_finite()) || field.pool_tiles == 0 {
+        return Err("Water march: the field needs a cell size above zero and a pool of tiles");
     }
-    lattice_min[3] = cell;
-    spacing[3] = view.frame_seconds;
     Ok(MarchUniforms {
         inv_view_proj,
         view_proj: view.view_proj,
@@ -149,13 +157,12 @@ pub(super) fn march_uniforms(
         world_to_local,
         local_to_world: field.model,
         prev_local_to_world: field.prev_model,
-        lattice_min,
-        spacing,
-        nodes: [
-            field.nodes[0],
-            field.nodes[1],
-            field.nodes[2],
+        cell: [field.cell_size, view.frame_seconds, 0.0, 0.0],
+        tiles: [
+            field.pool_tiles,
+            table_entries(field.pool_tiles),
             field.slot + 1,
+            0,
         ],
         target_size: [
             view.width as f32,
@@ -176,8 +183,8 @@ pub(super) fn march_uniforms(
 impl WaterMarch {
     /// Compile the march ahead of the first water frame.
     pub(super) fn prewarm(device: &GpuDevice) {
-        device.create_compute_pipeline(MARCH_WGSL, "cs_march", "water level-set march");
-        device.create_compute_pipeline(MIST_WGSL, "cs_mist", "water mist optical depth");
+        device.create_compute_pipeline(&MARCH_WGSL, "cs_march", "water level-set march");
+        device.create_compute_pipeline(&MIST_WGSL, "cs_mist", "water mist optical depth");
     }
 
     /// Start a frame: make sure the pipeline, the dummies and a zeroed
@@ -191,7 +198,7 @@ impl WaterMarch {
     ) {
         if self.pipeline.is_none() {
             self.pipeline = Some(device.create_compute_pipeline(
-                MARCH_WGSL,
+                &MARCH_WGSL,
                 "cs_march",
                 "water level-set march",
             ));
@@ -288,6 +295,16 @@ impl WaterMarch {
                 binding: 6,
                 texture: velocity_out,
             },
+            GpuBinding::Buffer {
+                binding: 70,
+                buffer: field.tiles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 71,
+                buffer: field.extent,
+                offset: 0,
+            },
         ];
         enc.dispatch_compute(
             pipeline,
@@ -323,7 +340,7 @@ impl WaterMarch {
         }
         if self.mist_pipeline.is_none() {
             self.mist_pipeline = Some(device.create_compute_pipeline(
-                MIST_WGSL,
+                &MIST_WGSL,
                 "cs_mist",
                 "water mist optical depth",
             ));
@@ -371,6 +388,16 @@ impl WaterMarch {
                 buffer: mist,
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 70,
+                buffer: field.tiles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 71,
+                buffer: field.extent,
+                offset: 0,
+            },
         ];
         enc.dispatch_compute(
             pipeline,
@@ -404,38 +431,53 @@ mod tests {
     use super::super::model_matrix;
     use super::*;
 
-    #[test]
-    fn march_wgsl_parses_and_validates() {
-        let src = MARCH_WGSL;
-        let module = naga::front::wgsl::parse_str(src).expect("water march must naga-parse");
+    fn validates(name: &str, src: &str, entry: &str) {
+        let module = naga::front::wgsl::parse_str(src)
+            .unwrap_or_else(|e| panic!("{name} must naga-parse: {}", e.emit_to_string(src)));
         let mut validator = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         );
         if let Err(e) = validator.validate(&module) {
-            panic!("water march validation failed:\n{}", e.emit_to_string(src));
+            panic!("{name} validation failed:\n{}", e.emit_to_string(src));
         }
-        assert!(module.entry_points.iter().any(|ep| ep.name == "cs_march"));
+        assert!(module.entry_points.iter().any(|ep| ep.name == entry));
+    }
+
+    #[test]
+    fn march_wgsl_parses_and_validates() {
+        validates("water march", &MARCH_WGSL, "cs_march");
     }
 
     #[test]
     fn mist_wgsl_parses_and_validates() {
-        let src = MIST_WGSL;
-        let module = naga::front::wgsl::parse_str(src).expect("water mist must naga-parse");
-        let mut validator = naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        );
-        if let Err(e) = validator.validate(&module) {
-            panic!("water mist validation failed:\n{}", e.emit_to_string(src));
-        }
-        assert!(module.entry_points.iter().any(|ep| ep.name == "cs_mist"));
+        validates("water mist", &MIST_WGSL, "cs_mist");
     }
 
     #[test]
-    fn uniforms_are_six_matrices_and_six_vectors() {
-        // Matches `MarchUniforms` in water_march.wgsl field for field.
-        assert_eq!(std::mem::size_of::<MarchUniforms>(), 6 * 64 + 6 * 16);
+    fn the_shader_far_value_is_the_rust_constant() {
+        let line = FIELD_TILES_WGSL
+            .lines()
+            .find(|line| line.starts_with("const FIELD_FAR_CELLS"))
+            .expect("field_tiles.wgsl declares FIELD_FAR_CELLS");
+        let value: f32 = line
+            .split('=')
+            .nth(1)
+            .and_then(|rest| rest.trim().strip_suffix(';'))
+            .expect("const value")
+            .trim()
+            .parse()
+            .expect("a float literal");
+        assert_eq!(
+            value,
+            manifold_node_engine::scene::scene_object::FIELD_FAR_CELLS
+        );
+    }
+
+    #[test]
+    fn uniforms_are_six_matrices_and_five_vectors() {
+        // Matches `MarchUniforms` in water_march_core.wgsl field for field.
+        assert_eq!(std::mem::size_of::<MarchUniforms>(), 6 * 64 + 5 * 16);
     }
 
     fn view() -> FieldView {
@@ -451,17 +493,10 @@ mod tests {
         }
     }
 
-    fn geometry(
-        center: [f32; 3],
-        size: [f32; 3],
-        nodes: [u32; 3],
-        model: [[f32; 4]; 4],
-        slot: u32,
-    ) -> FieldGeometry {
+    fn geometry(pool_tiles: u32, cell_size: f32, model: [[f32; 4]; 4], slot: u32) -> FieldGeometry {
         FieldGeometry {
-            center,
-            size,
-            nodes,
+            pool_tiles,
+            cell_size,
             model,
             prev_model: model_matrix([0.0; 3], [0.0; 3], [1.0; 3]),
             slot,
@@ -470,38 +505,33 @@ mod tests {
     }
 
     #[test]
-    fn non_cubic_lattice_derives_min_corner_spacing_and_cell() {
+    fn uniforms_carry_the_cell_the_table_size_and_the_slot() {
+        // 37 tiles: not a power of two, so the table is the next one up from 4P.
         let field = geometry(
-            [0.1, -0.05, 0.2],
-            [1.8, 1.6, 2.0],
-            [37, 33, 41],
+            37,
+            0.045,
             model_matrix([0.3, 0.2, -0.4], [0.0, 0.35, 0.0], [1.25; 3]),
             4,
         );
         let u = march_uniforms(&view(), &field).expect("valid field");
-        assert_eq!(u.lattice_min[0], 0.1 - 1.8 * 0.5);
-        assert_eq!(u.lattice_min[1], -0.05 - 1.6 * 0.5);
-        assert_eq!(u.lattice_min[2], 0.2 - 2.0 * 0.5);
-        assert_eq!(u.spacing[0], 1.8 / 36.0);
-        assert_eq!(u.spacing[1], 1.6 / 32.0);
-        assert_eq!(u.spacing[2], 2.0 / 40.0);
-        let cell = (1.8f32 / 36.0).min(1.6 / 32.0).min(2.0 / 40.0);
-        assert_eq!(u.lattice_min[3], cell);
-        assert_eq!(u.spacing[3], 1.0 / 30.0);
-        assert_eq!(u.nodes, [37, 33, 41, 5]);
-        assert_eq!(u.target_size[2], 0.0);
+        assert_eq!(u.cell, [0.045, 1.0 / 30.0, 0.0, 0.0]);
+        assert_eq!(u.tiles, [37, 256, 5, 0]);
+        assert_eq!(u.target_size, [96.0, 72.0, 0.0, 0.0]);
         assert_eq!(u.jitter, [0.001, -0.002, 0.003, 0.004]);
     }
 
     #[test]
-    fn singular_model_is_an_error() {
-        let field = geometry(
-            [0.0; 3],
-            [1.0; 3],
-            [8, 8, 8],
-            model_matrix([0.0; 3], [0.0; 3], [1.0, 0.0, 1.0]),
-            0,
-        );
-        assert!(march_uniforms(&view(), &field).is_err());
+    fn singular_model_or_empty_field_is_an_error() {
+        let flat = model_matrix([0.0; 3], [0.0; 3], [1.0, 0.0, 1.0]);
+        assert!(march_uniforms(&view(), &geometry(3, 0.05, flat, 0)).is_err());
+        let identity = model_matrix([0.0; 3], [0.0; 3], [1.0; 3]);
+        assert!(march_uniforms(&view(), &geometry(3, 0.05, identity, 0)).is_ok());
+        for cell in [0.0, -0.05, f32::NAN, f32::INFINITY] {
+            assert!(
+                march_uniforms(&view(), &geometry(3, cell, identity, 0)).is_err(),
+                "cell size {cell}"
+            );
+        }
+        assert!(march_uniforms(&view(), &geometry(0, 0.05, identity, 0)).is_err());
     }
 }

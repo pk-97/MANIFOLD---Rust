@@ -412,11 +412,6 @@ pub fn grid_bytes(pool_tiles: u32) -> u64 {
     pool_len(pool_tiles) * std::mem::size_of::<MatterGridNode>() as u64
 }
 
-/// See [`grid_accum_bytes`]: one f32 distance per node.
-pub fn solid_bytes(nodes: [u32; 3]) -> u64 {
-    lattice_nodes(nodes) * 4
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

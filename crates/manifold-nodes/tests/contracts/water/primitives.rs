@@ -1,5 +1,4 @@
 mod fluid_role_source;
-mod liquid_bricks;
 mod whitewater_step;
 
 #[cfg(feature = "gpu-proofs")]

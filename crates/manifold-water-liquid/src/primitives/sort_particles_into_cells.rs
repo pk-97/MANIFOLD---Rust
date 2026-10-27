@@ -1,9 +1,9 @@
-//! `node.sort_particles_into_cells` — counting sort of liquid particles into
-//! spatial bins (GPU_FLUID_SURFACE_DESIGN.md D17): count per bin, prefix-sum
-//! the counts, scatter. One atom because none of its passes is barrier-free
-//! and none has another consumer; the scan is shared with `node.running_total`
-//! (`prefix_scan.rs`). Hand kernels under exclusion 1 of ADDING_PRIMITIVES.md,
-//! as `node.spawn_from_mesh`.
+//! `node.sort_particles_into_cells` — counting sort of particles into the
+//! cells of a world-tile pool (GPU_FLUID_SURFACE_DESIGN.md D17): count per
+//! cell, prefix-sum the counts, scatter. One atom because none of its passes
+//! is barrier-free and none has another consumer; the scan is shared with
+//! `node.running_total` (`prefix_scan.rs`). Hand kernels under exclusion 1 of
+//! ADDING_PRIMITIVES.md, as `node.spawn_from_mesh`.
 //!
 //! The particles port accepts any record that names where a point is and
 //! whether it is live: a liquid particle's
@@ -16,7 +16,8 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::prefix_scan::{PrefixScan, ScanLabels};
-use crate::fluid_particles::{CellRange, MAX_BINS, bin_counts, bin_total, searched_bins};
+use crate::fluid_particles::{CellRange, bin_total};
+use crate::tile_pool::tile_pool;
 use crate::whitewater::WHITEWATER_EMPTY;
 use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -24,7 +25,9 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::{FLUID_PARTICLE_SPECS, FluidParticle};
 use manifold_node_engine::ports::{ArrayType, ChannelElementType, std430_channel};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries, table_words};
+use manifold_node_engine::scene::world_tiles::{
+    READ_SIDE, lattice_origin, pool_len, table_entries, table_words,
+};
 
 /// The sort's passes. Composed after a key source: [`DENSE_KEYS`],
 /// [`POOLED_KEYS`] or [`BLOCK_KEYS`] (the pooled ones with `READ_SIDE` before
@@ -78,6 +81,9 @@ enum KeyRule {
     #[default]
     Dense,
     PooledCells,
+    /// The pooled cells' keys, with points in tiles the table does not hold
+    /// left out of the sort.
+    PooledCellsHeld,
     PooledBlocks,
 }
 
@@ -85,7 +91,9 @@ impl KeyRule {
     fn source(self) -> String {
         match self {
             Self::Dense => format!("{DENSE_KEYS}\n{SHADER}"),
-            Self::PooledCells => format!("{READ_SIDE}\n{POOLED_KEYS}\n{SHADER}"),
+            Self::PooledCells | Self::PooledCellsHeld => {
+                format!("{READ_SIDE}\n{POOLED_KEYS}\n{SHADER}")
+            }
             Self::PooledBlocks => format!("{READ_SIDE}\n{BLOCK_KEYS}\n{SHADER}"),
         }
     }
@@ -139,7 +147,8 @@ struct SortParams {
     count_word: u32,
     /// H of a pooled sort's table; 0 when dense.
     table_entries: u32,
-    _pad: u32,
+    /// 1 when a point whose tile the table does not hold is not counted.
+    drop_absent: u32,
 }
 
 /// `SortParams::count_word` for a sort over a CPU slot count.
@@ -230,8 +239,10 @@ manifold_core::testkit_visible! {
 /// the stage nodes that sort inside one dispatch chain (`node.gpu_flip_step`).
 /// Owns the cell ranges and its scratch. Built for one key rule: dense bins
 /// ([`ParticleSorter::prepare`], [`ParticleSorter::encode`]), the world
-/// tiles' pool indices ([`ParticleSorter::prepare_pooled`]) or their 4³ node
-/// blocks ([`ParticleSorter::prepare_pooled_blocks`]), both encoded by
+/// tiles' pool indices ([`ParticleSorter::prepare_pooled`], or
+/// [`ParticleSorter::prepare_pooled_held`] to leave out points in tiles the
+/// table does not hold) or their 4³ node blocks
+/// ([`ParticleSorter::prepare_pooled_blocks`]), the pooled ones encoded by
 /// [`ParticleSorter::encode_pooled`].
 #[derive(Default)]
 pub struct ParticleSorter {
@@ -256,6 +267,13 @@ impl ParticleSorter {
     /// Create the pipelines for keys that are world-tile pool indices.
     pub fn prepare_pooled(&mut self, device: &GpuDevice) {
         self.create_pipelines(device, KeyRule::PooledCells);
+    }
+
+    /// Create the pipelines for keys that are world-tile pool indices, the
+    /// canonical element's range always empty: a point in a tile the table
+    /// does not hold is in no range and not in `sorted` or `order`.
+    pub fn prepare_pooled_held(&mut self, device: &GpuDevice) {
+        self.create_pipelines(device, KeyRule::PooledCellsHeld);
     }
 
     /// Create the pipelines for keys that are 4³ node blocks of the world
@@ -336,9 +354,11 @@ impl ParticleSorter {
     /// with no clamp, through `table` (the world-tile table of a pool of
     /// `pool_tiles` slots, `table_words(pool_tiles)` words). A particle whose
     /// tile has no slot lands in the canonical bucket, which no stored cell
-    /// reads. `prepare_pooled` and `reserve_keys(pool_len(pool_tiles))` first;
-    /// or `prepare_pooled_blocks` and `reserve_keys(block_keys(pool_tiles))`,
-    /// a point's key then its node's block.
+    /// reads (or, after `prepare_pooled_held`, in no bucket).
+    /// `prepare_pooled` or `prepare_pooled_held` and
+    /// `reserve_keys(pool_len(pool_tiles))` first; or `prepare_pooled_blocks`
+    /// and `reserve_keys(block_keys(pool_tiles))`, a point's key then its
+    /// node's block.
     pub fn encode_pooled(
         &mut self,
         device: &GpuDevice,
@@ -433,7 +453,7 @@ impl ParticleSorter {
             pool_tiles: pool.map_or(0, |(_, pool_tiles)| pool_tiles),
             count_word,
             table_entries: pool.map_or(0, |(_, pool_tiles)| table_entries(pool_tiles)),
-            _pad: 0,
+            drop_absent: u32::from(self.rule == KeyRule::PooledCellsHeld),
         };
         let mut bindings = vec![
             GpuBinding::Bytes {
@@ -618,88 +638,30 @@ macro_rules! int_param {
 }
 pub use crate::int_param;
 
-/// A searching atom's `bins_x/y/z` param, shadowed by the sort's output of the
-/// same name. 0 until wired.
-#[macro_export]
-macro_rules! bin_param {
-    ($name:literal, $label:literal) => {
-        ParamDef {
-            name: Cow::Borrowed($name),
-            label: $label,
-            ty: ParamType::Int,
-            default: ParamValue::Float(0.0),
-            range: Some((0.0, 16_777_216.0)),
-            enum_values: &[],
-        }
-    };
-}
-pub use crate::bin_param;
-
-/// The bin grid a searching atom indexes `cell_ranges` with, from its
-/// `bins_x/y/z` inputs, checked against the ranges' storage before any
-/// dispatch. `None` while the sort has no lattice yet (wired zeros). A graph
-/// saved before the bins wires leaves all three unset: the sort's own CPU rule
-/// on the box this atom shares with it gives the same grid, still checked.
-pub fn read_searched_bins(
-    ctx: &EffectNodeContext<'_, '_>,
-    range_bytes: u64,
-    atom: &str,
-) -> Result<Option<[u32; 3]>, String> {
-    let ports = ["bins_x", "bins_y", "bins_z"];
-    let bins = ports.map(|port| ctx.scalar_or_param(port, 0.0));
-    if bins == [0.0; 3] {
-        if ports.iter().all(|port| ctx.inputs.scalar(port).is_some()) {
-            return Ok(None);
-        }
-        if ports.iter().all(|port| ctx.inputs.scalar(port).is_none()) {
-            let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
-            let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
-            if !(cell_size.is_finite() && cell_size > 0.0)
-                || size.iter().any(|v| !(v.is_finite() && *v > 0.0))
-            {
-                return Ok(None);
-            }
-            return searched_bins(
-                bin_counts(size, cell_size).map(|n| n as f32),
-                range_bytes,
-                atom,
-            )
-            .map(Some);
-        }
-    }
-    searched_bins(bins, range_bytes, atom).map(Some)
-}
-
 manifold_node_engine::primitive! {
     name: SortParticlesIntoCells,
     type_id: "node.sort_particles_into_cells",
-    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total), each bin's start and count, and the bin grid's size per axis. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis. cell_ranges holds exactly one range per bin, sized every frame from the same bin count. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points.",
+    purpose: "Sort particles into the cells of a world-tile pool, so neighbour searches read only nearby cells. Outputs the particles in cell order (inactive records past the live total), each cell's start and count, and each sorted slot's input index. Cells are cell_size metres, cell c centred on c·cell_size, so a point's cell is floor(x / cell_size + 0.5) per axis; cell_ranges holds one range per pool element (pool_len of pool_tiles), the range at the pool index of cell c being the particles in c. Within a cell, particles keep their input order, so every output is the same on every run. A particle in a tile the table does not hold is dropped: it is in no range and not in sorted or order, so the canonical element and free slots are empty ranges. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points.",
     inputs: {
         particles: Channels[permissive] required,
         count: ScalarF32 optional,
         enabled: ScalarF32 optional,
-        center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
-        size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
+        tiles: Array(u32) required,
         cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         sorted: Array(FluidParticle),
         cell_ranges: Array(CellRange),
         order: Array(u32),
-        bins_x: ScalarF32, bins_y: ScalarF32, bins_z: ScalarF32,
     },
     params: [
         float_param!("enabled", "Enabled", 1.0, 0.0, 1.0),
-        float_param!("center_x", "Center X", 0.0, -1000.0, 1000.0),
-        float_param!("center_y", "Center Y", 0.0, -1000.0, 1000.0),
-        float_param!("center_z", "Center Z", 0.0, -1000.0, 1000.0),
-        float_param!("size_x", "Size X", 4.0, 0.001, 1000.0),
-        float_param!("size_y", "Size Y", 4.0, 0.001, 1000.0),
-        float_param!("size_z", "Size Z", 4.0, 0.001, 1000.0),
         float_param!("cell_size", "Cell Size", 0.0625, 0.001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire count from the producer's live count (a fluid frame's count_b) so stale records past it are never sorted; records with radius 0 are skipped. Matter points wire straight in from node.matter_state's out; `sorted` holds liquid particle records, so leave it unwired and use `order` when sorting anything else. Wire the box from a lattice's bounds through node.transform_components (position = centre, scale = size). Every atom that searches these bins must use the same box and cell_size, and must take bins_x/y/z from here rather than work the grid out itself: GPU division of the same floats can land one bin higher. bins_x/y/z are 0 while the producer has no lattice yet. A grid the device cannot hold is a named error. Inside a substep region, gate it with the boundary's tick_end so it sorts once per tick.",
+    composition_notes: "Wire count from the producer's live count so stale records past it are never sorted; records with radius 0 are skipped. tiles, pool_tiles and cell_size come from the world tiles the cells live on (node.surface_tiles for the display), and every atom that searches these cells indexes cell_ranges with ts_cell_at on the same tiles. Matter points wire straight in from node.matter_state's out; `sorted` holds liquid particle records, so leave it unwired and use `order` when sorting anything else. A pool the device cannot hold ranges for is a named error. Inside a substep region, gate it with the boundary's tick_end so it sorts once per tick.",
     examples: [],
     picker: { label: "Sort Particles Into Cells", category: Atom },
     summary: "Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly.",
@@ -710,12 +672,6 @@ manifold_node_engine::primitive! {
     extra_fields: {
         sorter: ParticleSorter = ParticleSorter::default(),
     },
-}
-
-/// Bytes of `cell_ranges` storage for a grid of `bins`: one range per bin,
-/// and at least one so an empty grid still binds.
-pub fn range_storage_bytes(bins: [u32; 3]) -> u64 {
-    key_storage_bytes(bin_total(bins))
 }
 
 /// Bytes of range storage for `keys` keys, at least one range so it binds.
@@ -745,7 +701,7 @@ impl Primitive for SortParticlesIntoCells {
                 .iter()
                 .find(|(name, _)| *name == "particles")
                 .map(|&(_, n)| n),
-            // Provided storage: a one-record hint, sized to the bin grid at run time.
+            // Provided storage: a one-record hint, sized to the pool at run time.
             "cell_ranges" => Some(1),
             _ => None,
         }
@@ -758,73 +714,49 @@ impl Primitive for SortParticlesIntoCells {
             Some(ParamValue::Float(count)) => Some(count),
             _ => None,
         };
-        let center =
-            ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
-        let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
-        self.sorter.prepare(ctx.gpu_encoder().device);
+        self.sorter.prepare_pooled_held(ctx.gpu_encoder().device);
         if ctx.scalar_or_param("enabled", 1.0) <= 0.5 {
             return;
         }
-        let publish = |ctx: &mut EffectNodeContext<'_, '_>, bins: [u32; 3]| {
-            for (port, n) in ["bins_x", "bins_y", "bins_z"].into_iter().zip(bins) {
-                ctx.outputs.set_scalar(port, ParamValue::Float(n as f32));
+        if requested.is_some_and(|count| !count.is_finite()) {
+            ctx.error("Sort Particles Into Cells: count must be finite");
+            return;
+        }
+        let pool = match tile_pool(ctx, "Sort Particles Into Cells") {
+            Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(error);
+                return;
             }
         };
-        let invalid_box = !(cell_size.is_finite() && cell_size > 0.0)
-            || center.iter().chain(&size).any(|v| !v.is_finite())
-            || size.iter().any(|v| *v <= 0.0);
-        if invalid_box || requested.is_some_and(|count| !count.is_finite()) {
-            publish(ctx, [0; 3]);
-            ctx.error("Sort Particles Into Cells: box and cell size must be finite and positive");
-            return;
-        }
-        let bins = bin_counts(size, cell_size);
-        let bin_total = bin_total(bins);
-        if bin_total > MAX_BINS {
-            publish(ctx, [0; 3]);
+        // The ranges are sized from the same pool every pass dispatches over,
+        // before any of them is encoded.
+        if let Err(error) = self
+            .sorter
+            .reserve_keys(ctx.gpu_encoder().device, pool.elements())
+        {
             ctx.error(format!(
-                "Sort Particles Into Cells: a {}×{}×{} bin grid is more than the {MAX_BINS} bins a search can index. Raise the cell size.",
-                bins[0], bins[1], bins[2]
+                "Sort Particles Into Cells: a pool of {} tiles needs {} bytes of cell ranges the device cannot give: {error}",
+                pool.pool_tiles,
+                key_storage_bytes(pool.elements())
             ));
             return;
         }
-        // The ranges are sized from the same bin count every pass dispatches
-        // over, before any of them is encoded.
-        if let Err(error) = self.sorter.reserve_ranges(ctx.gpu_encoder().device, bins) {
-            publish(ctx, [0; 3]);
-            ctx.error(format!(
-                "Sort Particles Into Cells: a {}×{}×{} bin grid needs {} bytes of cell ranges the device cannot give: {error}. Raise the cell size.",
-                bins[0],
-                bins[1],
-                bins[2],
-                range_storage_bytes(bins)
-            ));
+        let (Some(particles), Some(tiles)) =
+            (ctx.inputs.array("particles"), ctx.inputs.array("tiles"))
+        else {
             return;
-        }
-        // The bins go out only once every pass below will run, so a searcher
-        // never reads ranges this frame left unwritten.
-        let Some(particles) = ctx.inputs.array("particles") else {
-            publish(ctx, [0; 3]);
-            return;
-        };
-        let refuse = |ctx: &mut EffectNodeContext<'_, '_>, error: String| {
-            publish(ctx, [0; 3]);
-            ctx.error(error);
         };
         let Some(layout) = ctx.inputs.array_layout("particles") else {
-            refuse(
-                ctx,
-                "Sort Particles Into Cells: the particles wire carries no record layout".into(),
-            );
+            ctx.error("Sort Particles Into Cells: the particles wire carries no record layout");
             return;
         };
         let Some(read) = record_read(&layout) else {
-            refuse(ctx, "Sort Particles Into Cells: particles need a position_radius channel, or position and id channels".into());
+            ctx.error("Sort Particles Into Cells: particles need a position_radius channel, or position and id channels");
             return;
         };
         if ctx.outputs.array("sorted").is_some() && layout.specs != FLUID_PARTICLE_SPECS {
-            refuse(ctx, "Sort Particles Into Cells: sorted holds liquid particle records; leave it unwired and use order for these points".into());
+            ctx.error("Sort Particles Into Cells: sorted holds liquid particle records; leave it unwired and use order for these points");
             return;
         }
         // Either per-slot output may be unwired; the sorter writes the slots every wired one holds.
@@ -837,20 +769,24 @@ impl Primitive for SortParticlesIntoCells {
             read,
             capacity,
             count: SortCount::Slots(count),
-            bin_min: std::array::from_fn(|axis| center[axis] - 0.5 * size[axis]),
-            inv_cell: 1.0 / cell_size,
-            bins,
+            bin_min: lattice_origin(pool.cell_size),
+            inv_cell: 1.0 / pool.cell_size,
+            bins: [0; 3],
             sorted,
             order,
             gate: None,
         };
         let gpu = ctx.gpu_encoder();
-        let encoded = self
-            .sorter
-            .encode(gpu.device, gpu.native_enc, &job, &NODE_LABELS);
-        match encoded {
-            Ok(()) => publish(ctx, bins),
-            Err(error) => refuse(ctx, format!("Sort Particles Into Cells: {error}")),
+        let encoded = self.sorter.encode_pooled(
+            gpu.device,
+            gpu.native_enc,
+            &job,
+            tiles,
+            pool.pool_tiles,
+            &NODE_LABELS,
+        );
+        if let Err(error) = encoded {
+            ctx.error(format!("Sort Particles Into Cells: {error}"));
         }
     }
 }
@@ -858,13 +794,21 @@ impl Primitive for SortParticlesIntoCells {
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
 
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn every_key_rule_composes_a_valid_sort() {
-        for rule in [KeyRule::Dense, KeyRule::PooledCells, KeyRule::PooledBlocks] {
+        for rule in [
+            KeyRule::Dense,
+            KeyRule::PooledCells,
+            KeyRule::PooledCellsHeld,
+            KeyRule::PooledBlocks,
+        ] {
             let source = rule.source();
             let module = naga::front::wgsl::parse_str(&source)
                 .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));

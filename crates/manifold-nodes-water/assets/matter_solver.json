@@ -96,12 +96,6 @@
       "nodeId": "matter_move_bodies"
     },
     {
-      "id": 14,
-      "typeId": "node.liquid_solid_distance",
-      "handle": "Solid Distance",
-      "nodeId": "liquid_solid_distance"
-    },
-    {
       "id": 15,
       "typeId": "node.matter_body_reaction",
       "handle": "Body Reaction",
@@ -118,12 +112,6 @@
     {
       "fromNode": 1,
       "fromPort": "lattice_min_x",
-      "toNode": 9,
-      "toPort": "lattice_min_x"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "lattice_min_x",
       "toNode": 8,
       "toPort": "lattice_min_x"
     },
@@ -136,12 +124,6 @@
     {
       "fromNode": 1,
       "fromPort": "lattice_min_y",
-      "toNode": 9,
-      "toPort": "lattice_min_y"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "lattice_min_y",
       "toNode": 8,
       "toPort": "lattice_min_y"
     },
@@ -149,12 +131,6 @@
       "fromNode": 1,
       "fromPort": "lattice_min_z",
       "toNode": 2,
-      "toPort": "lattice_min_z"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "lattice_min_z",
-      "toNode": 9,
       "toPort": "lattice_min_z"
     },
     {
@@ -183,20 +159,8 @@
     },
     {
       "fromNode": 1,
-      "fromPort": "cell_size",
-      "toNode": 9,
-      "toPort": "cell_size"
-    },
-    {
-      "fromNode": 1,
       "fromPort": "nodes_x",
       "toNode": 2,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "nodes_x",
-      "toNode": 9,
       "toPort": "nodes_x"
     },
     {
@@ -207,20 +171,8 @@
     },
     {
       "fromNode": 1,
-      "fromPort": "nodes_y",
-      "toNode": 9,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 1,
       "fromPort": "nodes_z",
       "toNode": 2,
-      "toPort": "nodes_z"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "nodes_z",
-      "toNode": 9,
       "toPort": "nodes_z"
     },
     {
@@ -228,12 +180,6 @@
       "fromPort": "cell_size",
       "toNode": 6,
       "toPort": "cell_size"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "closed_faces",
-      "toNode": 9,
-      "toPort": "closed_faces"
     },
     {
       "fromNode": 1,
@@ -735,90 +681,6 @@
     },
     {
       "fromNode": 1,
-      "fromPort": "bodies",
-      "toNode": 14,
-      "toPort": "bodies"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "shapes",
-      "toNode": 14,
-      "toPort": "shapes"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "atlas",
-      "toNode": 14,
-      "toPort": "atlas"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "lattice_min_x",
-      "toNode": 14,
-      "toPort": "lattice_min_x"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "lattice_min_y",
-      "toNode": 14,
-      "toPort": "lattice_min_y"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "lattice_min_z",
-      "toNode": 14,
-      "toPort": "lattice_min_z"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "cell_size",
-      "toNode": 14,
-      "toPort": "cell_size"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "nodes_x",
-      "toNode": 14,
-      "toPort": "nodes_x"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "nodes_y",
-      "toNode": 14,
-      "toPort": "nodes_y"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "nodes_z",
-      "toNode": 14,
-      "toPort": "nodes_z"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "closed_faces",
-      "toNode": 14,
-      "toPort": "closed_faces"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "body_count",
-      "toNode": 14,
-      "toPort": "body_count"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "body_rows",
-      "toNode": 14,
-      "toPort": "rows"
-    },
-    {
-      "fromNode": 14,
-      "fromPort": "solid",
-      "toNode": 9,
-      "toPort": "solid"
-    },
-    {
-      "fromNode": 1,
       "fromPort": "reaction",
       "toNode": 13,
       "toPort": "reaction"
@@ -1128,42 +990,6 @@
       "fromPort": "step_dt",
       "toNode": 15,
       "toPort": "step_dt"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "bounds_lo_x",
-      "toNode": 14,
-      "toPort": "bounds_lo_x"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "bounds_lo_y",
-      "toNode": 14,
-      "toPort": "bounds_lo_y"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "bounds_lo_z",
-      "toNode": 14,
-      "toPort": "bounds_lo_z"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "bounds_hi_x",
-      "toNode": 14,
-      "toPort": "bounds_hi_x"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "bounds_hi_y",
-      "toNode": 14,
-      "toPort": "bounds_hi_y"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "bounds_hi_z",
-      "toNode": 14,
-      "toPort": "bounds_hi_z"
     },
     {
       "fromNode": 1,

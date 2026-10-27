@@ -1,28 +1,16 @@
 //! Buffer extent rule owned by this node.
-use crate::primitives::particle_volume::refined_nodes;
-use crate::primitives::particle_volume::volume_scale;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::{
-    brick_schedule, lattice_total, nodes_total, required_blob_bounds, searched,
-};
+use manifold_water_liquid::extent::tile_pool;
+use manifold_water_liquid::fluid_particles::CellRange;
 
 fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
-    if nodes.iter().any(|&n| n < 2.0) {
-        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
-    }
-    let refined = refined_nodes(nodes, volume_scale(x.params()));
-    for (port, n) in ["volume_nodes_x", "volume_nodes_y", "volume_nodes_z"]
-        .into_iter()
-        .zip(refined)
-    {
-        x.publish(port, n as f32);
-    }
-    required_blob_bounds(x)?;
-    searched(x)?;
-    brick_schedule(x, refined)?;
-    x.covers("solid", nodes_total(nodes) * 4)?;
-    x.covers("levelset", lattice_total(refined) * 4)
+    let elements = tile_pool(x)?;
+    x.covers(
+        "cell_ranges",
+        elements * std::mem::size_of::<CellRange>() as u64,
+    )?;
+    x.covers("solid", elements * 4)?;
+    x.covers("levelset", elements * 4)
 }
 inventory::submit! {
     ExtentRule { type_id: "node.particle_volume", check: particle_volume }

@@ -1,18 +1,15 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_water_liquid::extent::nodes_total;
+use manifold_water_liquid::extent::{tile_pool, whole};
 
 fn surface_wetness(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
-    if nodes.iter().any(|&n| n < 2.0) {
-        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
-    }
-    let node_count = nodes_total(nodes);
-    x.covers("field", node_count * 4)?;
-    // `run` owns the wetness, one f32 per node, at least 16 bytes.
-    let wetness = (node_count * 4).max(16);
+    let elements = tile_pool(x)?;
+    x.covers("field", elements * 4)?;
+    // `run` owns the wetness, one f32 per element, and last frame's slot rows,
+    // four words a slot.
+    let wetness = elements * 4;
     x.provide("wetness", wetness);
-    x.hold(wetness);
+    x.hold(wetness + 16 * u64::from(whole(x, "pool_tiles", 1.0).max(1)));
     Ok(())
 }
 inventory::submit! {

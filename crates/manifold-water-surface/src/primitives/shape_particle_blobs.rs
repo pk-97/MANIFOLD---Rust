@@ -39,7 +39,7 @@ manifold_node_engine::primitive! {
         float_param!("particle_scale", "Particle Scale", 3.0, 0.25, 8.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feed it the sorted particles from node.sort_particles_into_cells. Wire its blobs to node.blob_bounds, node.particle_volume and node.lattice_bricks. Particle Scale is live: changing it reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
+    composition_notes: "Feed it the sorted particles from node.sort_particles_into_cells. Wire its blobs to node.particle_volume, and the same Particle Scale value into both. Particle Scale is live: changing it reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
     examples: [],
     picker: { label: "Shape Particle Blobs", category: Atom },
     summary: "Turns each liquid particle into a round blob sized by its radius, which the liquid surface is built from.",
@@ -138,18 +138,12 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::testkit::liquid_surface::{Lattice, sort_and_shape};
     use bytemuck::Zeroable;
-    use manifold_node_engine::testkit::array_harness::Harness;
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
     #[test]
     fn blobs_are_particle_centres_with_scaled_radii() {
         let mut harness = Harness::new();
-        let lattice = Lattice {
-            center: [0.0; 3],
-            size: [4.0; 3],
-            cell: 0.25,
-        };
         let mut particles = Vec::new();
         // Mixed radii, every seventh slot inactive, plus zeroed capacity.
         for i in 0..300u32 {
@@ -170,13 +164,19 @@ mod gpu_tests {
             });
         }
         particles.extend_from_slice(&[FluidParticle::zeroed(); 3]);
+        let (input, _) = harness.array(&particles, particles.len());
         for scale in [0.25, 2.2, 3.0, 8.0] {
-            let shape = [("particle_scale", scale)];
-            let (sorted, _, blobs, _) =
-                sort_and_shape(&mut harness, &lattice, &particles, 300, &shape);
-            assert_eq!(blobs.len(), sorted.len());
+            let (blobs_slot, blobs_buf) = harness.array::<FluidBlob>(&[], particles.len());
+            let (_, errors) = harness.run(
+                &mut ShapeParticleBlobs::new(),
+                &[("sorted", input)],
+                &[("blobs", blobs_slot)],
+                &params(&[("particle_scale", scale)]),
+            );
+            assert!(errors.is_empty(), "{errors:?}");
+            let blobs: Vec<FluidBlob> = read(&blobs_buf, particles.len());
             let mut active = 0;
-            for (blob, particle) in blobs.iter().zip(&sorted) {
+            for (blob, particle) in blobs.iter().zip(&particles) {
                 let [x, y, z, r] = particle.position_radius;
                 let expected = if r > 0.0 {
                     active += 1;
@@ -186,7 +186,7 @@ mod gpu_tests {
                 };
                 assert_eq!(blob.center_radius, expected, "scale {scale}");
             }
-            assert!(active > 200 && active < sorted.len());
+            assert!(active > 200 && active < particles.len());
         }
     }
 }

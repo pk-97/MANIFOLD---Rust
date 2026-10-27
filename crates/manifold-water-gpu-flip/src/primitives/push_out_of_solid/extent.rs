@@ -1,11 +1,13 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_water_liquid::extent::tile_pool;
 
 fn push_out_of_solid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (_, bytes) = crate::primitives::push_out_of_solid::solid_shape(|name, default| x.scalar(name, default))
-        .map_err(Verdict::Refused)?;
-    x.covers("solid", bytes)?;
-    let particles = x.bytes("particles").ok_or_else(|| x.uncovered("particles is unbound".into()))?;
+    let elements = tile_pool(x)?;
+    x.covers("solid", elements * 4)?;
+    let particles = x
+        .bytes("particles")
+        .ok_or_else(|| x.uncovered("particles is unbound".into()))?;
     x.covers("out", particles)
 }
 inventory::submit! {

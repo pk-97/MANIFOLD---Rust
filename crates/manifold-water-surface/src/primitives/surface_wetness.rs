@@ -1,18 +1,28 @@
-//! `node.surface_wetness` — per field-lattice node, how wet the surface is,
-//! 0 to 1. Everything the water touches is wet, and dries at the rate a thin
-//! film evaporates. The node's buffer is the state: it persists between
-//! frames and starts over when the display time runs backwards.
+//! `node.surface_wetness` — per display node, how wet the surface is, 0 to 1.
+//! Everything the water touches is wet, and dries at the rate a thin film
+//! evaporates. The node's buffer is the state, stored per slot of the
+//! display's world tiles: it persists between frames, and starts over when
+//! the display time runs backwards or a slot takes another tile.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, slot_row_word, table_entries};
 use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 
-const SHADER: &str = include_str!("shaders/surface_wetness.wgsl");
+// The read side, then the kernel.
+static SHADER: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{READ_SIDE}\n{}",
+        include_str!("shaders/surface_wetness.wgsl")
+    )
+});
 const THREADS: u32 = 64;
 
 /// The film a drained smooth surface holds, about 0.1 mm, in metres.
@@ -26,100 +36,56 @@ const DRY_SECONDS: f32 = WET_FILM_METRES / EVAPORATION_METRES_PER_SECOND;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct WetnessUniforms {
+    pool_tiles: u32,
+    elements: u32,
     h: f32,
     decay: f32,
-    node_count: u32,
-    pad: u32,
 }
 
-/// The shader's constants from the node's inputs. `nodes` are the field
-/// lattice's node counts as wired (whole numbers, at least 2 per axis); a node
-/// is wet within one smallest node spacing of the water. `elapsed` is the
-/// seconds since the last run, or `None` when the node starts over (nothing
-/// carries, so only the current contact is wet).
-fn wetness_uniforms(
-    center: [f32; 3],
-    size: [f32; 3],
-    nodes: [f32; 3],
-    time: f32,
-    drying: f32,
-    elapsed: Option<f32>,
-) -> Result<(WetnessUniforms, [u32; 3]), String> {
-    if nodes.iter().any(|n| !(n.is_finite() && n.round() >= 2.0)) {
-        return Err(format!(
-            "Surface Wetness: a {}×{}×{} field lattice has fewer than 2 nodes on an axis. Wire nodes_x/y/z from the water field's lattice.",
-            nodes[0], nodes[1], nodes[2]
-        ));
+fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
+    GpuBinding::Buffer {
+        binding,
+        buffer,
+        offset: 0,
     }
-    let nodes = nodes.map(|n| n.round() as u32);
-    if center.iter().any(|v| !v.is_finite()) || size.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
-        return Err("Surface Wetness: the lattice box must be finite with a positive size".into());
-    }
-    if !time.is_finite() {
-        return Err("Surface Wetness: time must be finite".into());
-    }
-    if !(drying.is_finite() && drying >= 0.0) {
-        return Err("Surface Wetness: drying must be finite and at least 0".into());
-    }
-    let node_count = nodes
-        .iter()
-        .try_fold(1u32, |total, &n| total.checked_mul(n))
-        .ok_or_else(|| {
-            format!(
-                "Surface Wetness: a {}×{}×{} field lattice has more nodes than an index can address",
-                nodes[0], nodes[1], nodes[2]
-            )
-        })?;
-    let spacing: [f32; 3] = std::array::from_fn(|a| size[a] / (nodes[a] - 1) as f32);
-    let h = spacing.into_iter().fold(f32::INFINITY, f32::min);
-    let decay = elapsed.map_or(0.0, |dt| {
+}
+
+/// The fraction of the film still on after `elapsed` seconds at `drying` times
+/// still-air evaporation; 0 when the node starts over (`None`), so nothing
+/// carries and only the current contact is wet.
+fn film_left(elapsed: Option<f32>, drying: f32) -> f32 {
+    elapsed.map_or(0.0, |dt| {
         (-f64::from(dt) * f64::from(drying) / f64::from(DRY_SECONDS)).exp() as f32
-    });
-    Ok((
-        WetnessUniforms {
-            h,
-            decay,
-            node_count,
-            pad: 0,
-        },
-        nodes,
-    ))
+    })
 }
 
 manifold_node_engine::primitive! {
     name: SurfaceWetness,
     type_id: "node.surface_wetness",
-    purpose: "Per node of the water's field lattice, how wet the surface is, 0 to 1, kept between frames. Where the water's level set at the node is below one smallest node spacing (water at the node or within a cell of it) the node is wet, 1. Elsewhere it dries as a thin film evaporates: wetness times exp(-dt * drying / 1724 s) each run, 1724 s being a 0.1 mm film over 5 mm a day of evaporation (FAO-56). The node starts over (only the current contact is wet) on its first run, when epoch changes, when the lattice's node counts change, and when time goes backwards.",
+    purpose: "Per node of the display's world tiles, how wet the surface is, 0 to 1, kept between frames. Where the water's level set at the node is below one display cell (water at the node or within a cell of it) the node is wet, 1. Elsewhere it dries as a thin film evaporates: wetness times exp(-dt * drying / 1724 s) each run, 1724 s being a 0.1 mm film over 5 mm a day of evaporation (FAO-56). It is stored per slot of the tiles, so a slot that holds another tile than last frame, or was free, starts dry. The node starts over (only the current contact is wet) on its first run, when epoch changes, when the pool or cell size changes, and when time goes backwards.",
     inputs: {
         field: Array(f32) required,
-        center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
-        size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        tiles: Array(u32) required,
         time: ScalarF32 required,
         epoch: ScalarF32 optional,
         drying: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         wetness: Array(f32),
     },
     params: [
-        float_param!("center_x", "Center X", 0.0, -1000.0, 1000.0),
-        float_param!("center_y", "Center Y", 0.0, -1000.0, 1000.0),
-        float_param!("center_z", "Center Z", 0.0, -1000.0, 1000.0),
-        float_param!("size_x", "Size X", 4.0, 0.001, 1000.0),
-        float_param!("size_y", "Size Y", 4.0, 0.001, 1000.0),
-        float_param!("size_z", "Size Z", 4.0, 0.001, 1000.0),
-        float_param!("nodes_x", "Field Nodes X", 2.0, 2.0, 16384.0),
-        float_param!("nodes_y", "Field Nodes Y", 2.0, 2.0, 16384.0),
-        float_param!("nodes_z", "Field Nodes Z", 2.0, 2.0, 16384.0),
         // Times still-air evaporation: 1 dries a soaked floor in about half an hour, 100 in about 17 s, 0 never.
         float_param!("drying", "Drying", 1.0, 0.0, 1000.0),
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire field from the water's level set, nodes_x/y/z and the box from the same lattice, time from the domain's display_time and epoch from its epoch; its wetness feeds the water object's field_wetness. The wetness persists between frames, so keep the node running while the water is shown.",
+    composition_notes: "Wire field from the display's level set, tiles, pool_tiles and cell_size from node.surface_tiles, time from the domain's display_time and epoch from its epoch; its wetness feeds the water object's field_wetness. The wetness persists between frames, so keep the node running while the water is shown. Wet tiles stay in the table for node.surface_tiles' Keep Seconds, which should cover how long the film takes to dry.",
     examples: [],
     picker: { label: "Surface Wetness", category: Atom },
-    summary: "Remembers how wet the surface is on the water's lattice: soaked where the water touches, drying over time.",
+    summary: "Remembers how wet the surface is on the display's tiles: soaked where the water touches, drying over time.",
     category: Particles3D,
     role: Filter,
     aliases: ["surface wetness", "wet surfaces", "wetness"],
@@ -127,10 +93,42 @@ manifold_node_engine::primitive! {
     extra_fields: {
         wet_pipeline: Option<GpuComputePipeline> = None,
         wetness: Option<GpuBuffer> = None,
+        slot_rows: Option<GpuBuffer> = None,
         last_time: Option<f32> = None,
         last_epoch: Option<f32> = None,
-        last_nodes: Option<[u32; 3]> = None,
+        last_pool: Option<TilePool> = None,
     },
+}
+
+impl SurfaceWetness {
+    /// The wetness and last frame's slot rows for `pool`: new zeroed storage
+    /// when the pool's size changes, never otherwise. A zeroed wetness holds
+    /// nothing to carry, whatever its slot rows say.
+    fn ensure_state(&mut self, device: &GpuDevice, pool: TilePool) -> Result<(), String> {
+        let wetness_bytes = pool.elements() * 4;
+        if self
+            .wetness
+            .as_ref()
+            .is_some_and(|buffer| buffer.size == wetness_bytes)
+        {
+            return Ok(());
+        }
+        let rows_bytes = 16 * u64::from(pool.pool_tiles);
+        self.wetness = None;
+        self.slot_rows = None;
+        manifold_node_engine::load::expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(),
+            wetness_bytes + rows_bytes,
+        )
+        .map_err(|error| error.to_string())?;
+        let wetness = device.try_create_buffer_shared(wetness_bytes)?;
+        wetness.zero_fill();
+        let rows = device.try_create_buffer_shared(rows_bytes)?;
+        rows.zero_fill();
+        self.wetness = Some(wetness);
+        self.slot_rows = Some(rows);
+        Ok(())
+    }
 }
 
 impl Primitive for SurfaceWetness {
@@ -161,119 +159,118 @@ impl Primitive for SurfaceWetness {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if self.wet_pipeline.is_none() {
-            let gpu = ctx.gpu_encoder();
-            self.wet_pipeline = Some(gpu.device.create_compute_pipeline(
-                SHADER,
-                "cs_wetness",
-                "node.surface_wetness",
-            ));
-        }
-        let Some(field) = ctx.inputs.array("field") else {
-            ctx.error("Surface Wetness: field must be wired");
+        let pool = match tile_pool(ctx, "Surface Wetness") {
+            Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
+        let (Some(field), Some(tiles)) = (ctx.inputs.array("field"), ctx.inputs.array("tiles"))
+        else {
+            ctx.error("Surface Wetness: field and tiles must be wired");
             return;
         };
         let Some(ParamValue::Float(time)) = ctx.inputs.scalar("time") else {
             ctx.error("Surface Wetness: time must be wired");
             return;
         };
+        if !time.is_finite() {
+            ctx.error("Surface Wetness: time must be finite");
+            return;
+        }
+        let drying = ctx.scalar_or_param("drying", 1.0);
+        if !(drying.is_finite() && drying >= 0.0) {
+            ctx.error("Surface Wetness: drying must be finite and at least 0");
+            return;
+        }
         let epoch = match ctx.inputs.scalar("epoch") {
             Some(ParamValue::Float(epoch)) => Some(epoch),
             _ => None,
         };
-        let center =
-            ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0));
-        // The wetness carries on only from a run of the same lattice, epoch and
-        // an earlier or equal time; anything else starts over.
-        let same_lattice = self
-            .last_nodes
-            .is_some_and(|last| last == nodes.map(|n| n.round() as u32));
-        let elapsed = self
-            .last_time
-            .filter(|&last| same_lattice && epoch == self.last_epoch && time >= last)
-            .map(|last| time - last);
-        let (uniforms, node_counts) = match wetness_uniforms(
-            center,
-            size,
-            nodes,
-            time,
-            ctx.scalar_or_param("drying", 1.0),
-            elapsed,
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                ctx.error(error);
-                return;
-            }
-        };
-        let node_count = u64::from(uniforms.node_count);
-        if field.size / 4 < node_count {
+        let elements = pool.elements();
+        let Ok(count) = u32::try_from(elements) else {
             ctx.error(format!(
-                "Surface Wetness: field holds {} values; a {}×{}×{} field lattice needs {node_count}",
+                "Surface Wetness: a pool of {} tiles has more elements than an index can address",
+                pool.pool_tiles
+            ));
+            return;
+        };
+        if field.size < elements * 4 {
+            ctx.error(format!(
+                "Surface Wetness: field holds {} values; a pool of {} tiles needs {elements}",
                 field.size / 4,
-                node_counts[0],
-                node_counts[1],
-                node_counts[2]
+                pool.pool_tiles
             ));
             return;
         }
-
-        let bytes = (node_count * 4).max(16);
-        let reallocated = self
-            .wetness
-            .as_ref()
-            .is_none_or(|buffer| buffer.size != bytes);
-        if reallocated {
+        // The wetness carries on only from a run of the same pool and cell
+        // size, the same epoch and an earlier or equal time; anything else
+        // starts over.
+        let same_pool = self.last_pool == Some(pool);
+        let elapsed = self
+            .last_time
+            .filter(|&last| same_pool && epoch == self.last_epoch && time >= last)
+            .map(|last| time - last);
+        let uniforms = WetnessUniforms {
+            pool_tiles: pool.pool_tiles,
+            elements: count,
+            h: pool.cell_size,
+            decay: film_left(elapsed, drying),
+        };
+        let prepared = {
             let gpu = ctx.gpu_encoder();
-            match gpu.device.try_create_buffer_shared(bytes) {
-                Ok(buffer) => {
-                    // A new buffer holds no state; a restart multiplies it by 0.
-                    buffer.zero_fill();
-                    self.wetness = Some(buffer);
-                }
-                Err(error) => {
-                    ctx.error(format!(
-                        "Surface Wetness: output allocation failed: {error}"
-                    ));
-                    return;
-                }
+            if self.wet_pipeline.is_none() {
+                self.wet_pipeline = Some(gpu.device.create_compute_pipeline(
+                    SHADER.as_str(),
+                    "cs_wetness",
+                    "node.surface_wetness",
+                ));
             }
+            self.ensure_state(gpu.device, pool)
+        };
+        if let Err(error) = prepared {
+            ctx.error(format!(
+                "Surface Wetness: a pool of {} tiles needs storage the device cannot give: {error}",
+                pool.pool_tiles
+            ));
+            return;
         }
-        let wetness = self
-            .wetness
-            .as_ref()
-            .expect("wetness buffer was just allocated")
-            .clone();
-
-        let bindings = [
-            GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::bytes_of(&uniforms),
-            },
-            GpuBinding::Buffer {
-                binding: 1,
-                buffer: field,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 2,
-                buffer: &wetness,
-                offset: 0,
-            },
-        ];
+        let (Some(pipeline), Some(wetness), Some(rows)) = (
+            self.wet_pipeline.as_ref(),
+            self.wetness.as_ref(),
+            self.slot_rows.as_ref(),
+        ) else {
+            return;
+        };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
-            self.wet_pipeline.as_ref().expect("pipeline prepared"),
-            &bindings,
-            [uniforms.node_count.div_ceil(THREADS), 1, 1],
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                buffer(1, field),
+                buffer(2, tiles),
+                buffer(3, rows),
+                buffer(4, wetness),
+            ],
+            [count.div_ceil(THREADS), 1, 1],
             "node.surface_wetness",
         );
         gpu.native_enc.compute_memory_barrier_buffers();
+        // Next frame's slots are compared with this frame's tiles.
+        gpu.native_enc.copy_buffer_range(
+            tiles,
+            slot_row_word(table_entries(pool.pool_tiles), 0) * 4,
+            rows,
+            0,
+            rows.size,
+        );
         self.last_time = Some(time);
         self.last_epoch = epoch;
-        self.last_nodes = Some(node_counts);
+        self.last_pool = Some(pool);
     }
 }
 
@@ -283,7 +280,7 @@ mod tests {
 
     #[test]
     fn shader_is_valid_wgsl() {
-        let module = naga::front::wgsl::parse_str(SHADER).expect("surface wetness shader parses");
+        let module = naga::front::wgsl::parse_str(&SHADER).expect("surface wetness shader parses");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -305,35 +302,13 @@ mod tests {
     }
 
     #[test]
-    fn the_wet_distance_is_the_smallest_spacing_of_a_non_cubic_lattice() {
-        let (u, nodes) = wetness_uniforms(
-            [0.5, -1.0, 2.0],
-            [2.0, 1.5, 2.5],
-            [33.0, 25.0, 41.0],
-            10.0,
-            4.0,
-            Some(30.0),
-        )
-        .unwrap();
-        assert_eq!(u.h, 0.0625);
-        assert_eq!(u.node_count, 33 * 25 * 41);
-        assert_eq!(nodes, [33, 25, 41]);
+    fn the_film_left_follows_the_drying_rate_and_a_restart_leaves_none() {
         let want = (-30.0_f64 * 4.0 / f64::from(DRY_SECONDS)).exp() as f32;
-        assert_eq!(u.decay, want);
-        let (start, _) = wetness_uniforms([0.0; 3], [2.0; 3], [33.0; 3], 10.0, 4.0, None).unwrap();
-        assert_eq!(start.decay, 0.0);
-    }
-
-    #[test]
-    fn a_bad_lattice_time_or_drying_is_an_error() {
-        let ok = |nodes: [f32; 3], size: [f32; 3], time: f32, drying: f32| {
-            wetness_uniforms([0.0; 3], size, nodes, time, drying, None)
-        };
-        assert!(ok([33.0, 1.0, 41.0], [2.0; 3], 1.0, 1.0).is_err());
-        assert!(ok([33.0; 3], [2.0, 0.0, 2.0], 1.0, 1.0).is_err());
-        assert!(ok([33.0; 3], [2.0; 3], f32::NAN, 1.0).is_err());
-        assert!(ok([33.0; 3], [2.0; 3], 1.0, -1.0).is_err());
-        assert!(ok([33.0; 3], [2.0; 3], 1.0, f32::NAN).is_err());
+        assert_eq!(film_left(Some(30.0), 4.0), want);
+        assert_eq!(film_left(Some(0.0), 4.0), 1.0);
+        // No drying never dries; a restart carries nothing whatever the rate.
+        assert_eq!(film_left(Some(600.0), 0.0), 1.0);
+        assert_eq!(film_left(None, 4.0), 0.0);
     }
 }
 

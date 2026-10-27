@@ -1,6 +1,7 @@
 // Full-screen cover draws for water fields: each pixel runs the same march as
 // Pass B, so the pick pass and the selection mask see the water that is drawn.
-// Starts after `water_march_core.wgsl`, which holds all the bindings.
+// Starts after `world_tiles_read.wgsl`, `field_tiles.wgsl` and
+// `water_march_core.wgsl`, which hold all the bindings.
 
 @vertex
 fn vs_cover(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
@@ -13,6 +14,7 @@ fn vs_cover(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
 // No opaque stop: the pick's depth test does the occluding and the mask wants
 // the whole silhouette.
 fn cover_depth(frag: vec4<f32>) -> f32 {
+    field_pool = u.tiles.xy;
     let uv = frag.xy / u.target_size.xy;
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let origin_w = unproject(ndc, 1.0);
@@ -26,7 +28,7 @@ fn cover_depth(frag: vec4<f32>) -> f32 {
     if t_hit < 0.0 { return -1.0; }
 
     let p = ray.o + ray.d * t_hit;
-    let world = u.local_to_world * vec4<f32>(p + u.lattice_min.xyz, 1.0);
+    let world = u.local_to_world * vec4<f32>(p, 1.0);
     let clip = u.view_proj * world;
     return clip.z / clip.w;
 }
@@ -41,7 +43,7 @@ struct CoverId {
 fn fs_cover_id(@builtin(position) frag: vec4<f32>) -> CoverId {
     let depth = cover_depth(frag);
     if depth < 0.0 { discard; }
-    return CoverId(vec4<f32>(f32(u.nodes.w), 0.0, 0.0, 1.0), depth);
+    return CoverId(vec4<f32>(f32(u.tiles.z), 0.0, 0.0, 1.0), depth);
 }
 
 @fragment

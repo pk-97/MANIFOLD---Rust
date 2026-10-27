@@ -1,9 +1,8 @@
 //! `node.carry_liquid_into_solids` — the water field's last solid step when
 //! the drawn surface should meet a wall flush. Inside a drawn solid the field
-//! is carried in from the wall's surface for `carry_cells` field cells (air
-//! beyond that); inside any other solid it is clipped to max(value, 0), the
-//! same clip applies: max(value, 0) inside the solid. With `carry_cells` 0 the
-//! output is exactly that clip.
+//! is carried in from the wall's surface for `carry_cells` display cells (air
+//! beyond that); inside any other solid it is clipped to max(value, 0). With
+//! `carry_cells` 0 the output is exactly that clip.
 
 use std::borrow::Cow;
 
@@ -12,118 +11,85 @@ use manifold_gpu::{GpuBinding, GpuComputePipeline};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::field_build::{FIELD_REDISTANCE_CELLS, SOLID_CARRY_CELLS};
 use manifold_water_liquid::float_param;
+use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 
-const BODY: &str = include_str!("shaders/carry_liquid_into_solids.wgsl");
+// The kernel after the world-tile read side it indexes nodes through.
+static BODY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{READ_SIDE}\n{}",
+        include_str!("shaders/carry_liquid_into_solids.wgsl")
+    )
+});
 const THREADS: u32 = 64;
 
-/// Field order identical to the shader's `CarryParams`; every row is 16 bytes.
+/// Field order identical to the shader's `CarryParams`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct CarryUniforms {
-    lattice_min: [f32; 3],
     cell: f32,
-    spacing: [f32; 3],
     carry_depth: f32,
-    nodes: [u32; 3],
-    node_count: u32,
-    solid_spacing: [f32; 3],
     air: f32,
-    solid_nodes: [u32; 3],
-    drawn_len: u32,
+    pool_tiles: u32,
+    element_count: u32,
+    has_drawn: u32,
+    pad_a: u32,
+    pad_b: u32,
 }
 
-fn whole_nodes(name: &str, nodes: [f32; 3]) -> Result<[u32; 3], String> {
-    if nodes.iter().any(|n| !(n.is_finite() && n.round() >= 2.0)) {
-        return Err(format!(
-            "Carry Liquid Into Solids: a {}×{}×{} {name} lattice has fewer than 2 nodes on an axis",
-            nodes[0], nodes[1], nodes[2]
-        ));
-    }
-    Ok(nodes.map(|n| n.round() as u32))
-}
-
-/// The shader's constants from the node's inputs. The field cell is the level
-/// set's smallest node spacing; the carry depth and the air value are
-/// multiples of it.
+/// The shader's constants from the node's inputs. The field cell is the
+/// display cell; the carry depth and the air value are multiples of it.
 fn carry_uniforms(
-    center: [f32; 3],
-    size: [f32; 3],
-    nodes: [f32; 3],
-    solid_nodes: [f32; 3],
+    pool: TilePool,
     carry_cells: f32,
-    drawn_len: u32,
+    has_drawn: bool,
 ) -> Result<CarryUniforms, String> {
-    let nodes = whole_nodes("level set", nodes)?;
-    let solid_nodes = whole_nodes("solid", solid_nodes)?;
-    if center.iter().any(|v| !v.is_finite()) || size.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
-        return Err(
-            "Carry Liquid Into Solids: the lattice box must be finite with a positive size".into(),
-        );
-    }
     if !carry_cells.is_finite() {
         return Err("Carry Liquid Into Solids: carry_cells must be finite".into());
     }
-    let node_count = nodes
-        .iter()
-        .try_fold(1u32, |total, &n| total.checked_mul(n))
-        .ok_or_else(|| {
-            format!(
-                "Carry Liquid Into Solids: a {}×{}×{} lattice has more nodes than an index can address",
-                nodes[0], nodes[1], nodes[2]
-            )
-        })?;
-    let spacing: [f32; 3] = std::array::from_fn(|a| size[a] / (nodes[a] - 1) as f32);
-    let cell = spacing.into_iter().fold(f32::INFINITY, f32::min);
+    let element_count = u32::try_from(pool.elements()).map_err(|_| {
+        format!(
+            "Carry Liquid Into Solids: a pool of {} tiles has more elements than an index can address",
+            pool.pool_tiles
+        )
+    })?;
     Ok(CarryUniforms {
-        lattice_min: std::array::from_fn(|a| center[a] - 0.5 * size[a]),
-        cell,
-        spacing,
-        carry_depth: carry_cells.max(0.0) * cell,
-        nodes,
-        node_count,
-        solid_spacing: std::array::from_fn(|a| size[a] / (solid_nodes[a] - 1) as f32),
-        air: FIELD_REDISTANCE_CELLS * cell,
-        solid_nodes,
-        drawn_len,
+        cell: pool.cell_size,
+        carry_depth: carry_cells.max(0.0) * pool.cell_size,
+        air: FIELD_REDISTANCE_CELLS * pool.cell_size,
+        pool_tiles: pool.pool_tiles,
+        element_count,
+        has_drawn: u32::from(has_drawn),
+        pad_a: 0,
+        pad_b: 0,
     })
 }
 
 manifold_node_engine::primitive! {
     name: CarryLiquidIntoSolids,
     type_id: "node.carry_liquid_into_solids",
-    purpose: "Clip the liquid level set against its solid lattice, carrying the water into the solids the scene draws so the drawn surface meets a wall flush. At each level-set node with solid distance sd (negative inside, trilinear on the solid lattice): outside solids the value is kept. Inside a carried solid (drawn_solid negative at the node, or every solid when drawn_solid is unwired) with sd above -carry_cells field cells, the value is the level set sampled trilinearly at the solid's surface point along the solid's normal plus half a field cell into the water; deeper it is air, FIELD_REDISTANCE_CELLS field cells. Inside any other solid, and inside every solid when carry_cells is 0, the value is max(value, 0), the clip rule. The field cell is the level set's smallest node spacing; the normal is the normalised central-difference gradient of solid at half a solid spacing (a zero gradient clips).",
+    purpose: "Clip the liquid level set against its solid, carrying the water into the solids the scene draws so the drawn surface meets a wall flush. All arrays are node arrays on the display's world tiles (node p at (p - 1/2) cells, the low corner of cell p), so the solid at a level-set node is its own element. At each node with solid distance sd (negative inside): outside solids the value is kept. Inside a carried solid (drawn_solid negative at the node, or every solid when drawn_solid is unwired) with sd above -carry_cells display cells, the value is the level set sampled trilinearly at the solid's surface point along the solid's normal plus half a cell into the water; deeper it is air, FIELD_REDISTANCE_CELLS cells. Inside any other solid, and inside every solid when carry_cells is 0, the value is max(value, 0), the clip rule. The normal is the normalised central difference of solid across the node's six neighbours (a zero gradient clips); a neighbour or sample in a tile the table does not hold reads the canonical element. A free slot and the canonical element hold three cells, the far value.",
     inputs: {
         levelset: Array(f32) required,
         solid: Array(f32) required,
         drawn_solid: Array(f32) optional,
-        center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
-        size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
-        solid_nodes_x: ScalarF32 optional, solid_nodes_y: ScalarF32 optional, solid_nodes_z: ScalarF32 optional,
+        tiles: Array(u32) required,
         carry_cells: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         out: Array(f32),
     },
     params: [
-        float_param!("center_x", "Center X", 0.0, -1000.0, 1000.0),
-        float_param!("center_y", "Center Y", 0.0, -1000.0, 1000.0),
-        float_param!("center_z", "Center Z", 0.0, -1000.0, 1000.0),
-        float_param!("size_x", "Size X", 4.0, 0.001, 1000.0),
-        float_param!("size_y", "Size Y", 4.0, 0.001, 1000.0),
-        float_param!("size_z", "Size Z", 4.0, 0.001, 1000.0),
-        float_param!("nodes_x", "Nodes X", 2.0, 2.0, 4096.0),
-        float_param!("nodes_y", "Nodes Y", 2.0, 2.0, 4096.0),
-        float_param!("nodes_z", "Nodes Z", 2.0, 2.0, 4096.0),
-        float_param!("solid_nodes_x", "Solid Nodes X", 2.0, 2.0, 4096.0),
-        float_param!("solid_nodes_y", "Solid Nodes Y", 2.0, 2.0, 4096.0),
-        float_param!("solid_nodes_z", "Solid Nodes Z", 2.0, 2.0, 4096.0),
         float_param!("carry_cells", "Carry Cells", SOLID_CARRY_CELLS, 0.0, 8.0),
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Place after the smoothing chain. Wire levelset from the last smoothing pass, nodes_x/y/z from node.particle_volume's volume_nodes_x/y/z, and solid, solid_nodes_x/y/z and center/size from the same wires node.particle_volume takes. drawn_solid is optional and lives on the solid lattice (same nodes, same box): negative inside the solids the scene draws. Unwired, every solid carries water; wired, only drawn solids do and the rest (the lattice padding, invisible colliders) still clip. carry_cells 0 gives the plain clamp. levelset must hold the level-set lattice, solid the solid lattice, and drawn_solid exactly as many values as solid, or nothing runs, a named error. It reads the level set at arbitrary nodes, so it is a graph fusion boundary.",
+    composition_notes: "Place after the smoothing chain. Wire levelset from the last smoothing pass, solid the display solid, and tiles, pool_tiles and cell_size from node.surface_tiles. drawn_solid is optional and on the same tiles as solid: negative inside the solids the scene draws. Unwired, every solid carries water; wired, only drawn solids do and the rest (invisible colliders) still clip. carry_cells 0 gives the plain clamp. levelset, solid, drawn_solid and the output each hold one value per pool element, or nothing runs, a named error. It reads the level set at arbitrary nodes, so it is a graph fusion boundary.",
     examples: [],
     picker: { label: "Carry Liquid Into Solids", category: Atom },
     summary: "Keeps the liquid surface out of walls and bodies, and lets the water reach the walls the scene draws so the surface meets them flush.",
@@ -155,36 +121,35 @@ impl Primitive for CarryLiquidIntoSolids {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         if self.carry_pipeline.is_none() {
+            let source = BODY.as_str();
             let gpu = ctx.gpu_encoder();
             self.carry_pipeline = Some(gpu.device.create_compute_pipeline(
-                BODY,
+                source,
                 "cs_main",
                 "node.carry_liquid_into_solids",
             ));
         }
-        let (Some(levelset), Some(solid), Some(out)) = (
+        let pool = match tile_pool(ctx, "Carry Liquid Into Solids") {
+            Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
+        let (Some(levelset), Some(solid), Some(tiles), Some(out)) = (
             ctx.inputs.array("levelset"),
             ctx.inputs.array("solid"),
+            ctx.inputs.array("tiles"),
             ctx.outputs.array("out"),
         ) else {
-            ctx.error("Carry Liquid Into Solids: levelset and solid must be wired and the output allocated");
+            ctx.error("Carry Liquid Into Solids: levelset, solid and tiles must be wired and the output allocated");
             return;
         };
         let drawn = ctx.inputs.array("drawn_solid");
-        let drawn_len = drawn.map_or(0, |buffer| (buffer.size / 4) as u32);
-        let center =
-            ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0));
-        let solid_nodes = ["solid_nodes_x", "solid_nodes_y", "solid_nodes_z"]
-            .map(|name| ctx.scalar_or_param(name, 2.0));
         let uniforms = match carry_uniforms(
-            center,
-            size,
-            nodes,
-            solid_nodes,
+            pool,
             ctx.scalar_or_param("carry_cells", SOLID_CARRY_CELLS),
-            drawn_len,
+            drawn.is_some(),
         ) {
             Ok(uniforms) => uniforms,
             Err(error) => {
@@ -192,37 +157,17 @@ impl Primitive for CarryLiquidIntoSolids {
                 return;
             }
         };
-        let node_count = u64::from(uniforms.node_count);
-        if levelset.size / 4 < node_count || out.size / 4 < node_count {
+        let elements = u64::from(uniforms.element_count);
+        let smallest = [Some(levelset), Some(solid), Some(out), drawn]
+            .into_iter()
+            .flatten()
+            .map(|buffer| buffer.size / 4)
+            .min()
+            .unwrap_or(0);
+        if smallest < elements {
             ctx.error(format!(
-                "Carry Liquid Into Solids: levelset holds {} values and the output {}; a {}×{}×{} lattice needs {node_count}. Wire nodes_x/y/z from the same producer as levelset.",
-                levelset.size / 4,
-                out.size / 4,
-                uniforms.nodes[0],
-                uniforms.nodes[1],
-                uniforms.nodes[2]
-            ));
-            return;
-        }
-        let solid_total = uniforms
-            .solid_nodes
-            .iter()
-            .map(|&n| u64::from(n))
-            .product::<u64>();
-        if solid.size / 4 < solid_total {
-            ctx.error(format!(
-                "Carry Liquid Into Solids: solid holds {} values; a {}×{}×{} solid lattice needs {solid_total}. Wire solid_nodes_x/y/z from the same producer as solid.",
-                solid.size / 4,
-                uniforms.solid_nodes[0],
-                uniforms.solid_nodes[1],
-                uniforms.solid_nodes[2]
-            ));
-            return;
-        }
-        if drawn.is_some() && u64::from(drawn_len) != solid.size / 4 {
-            ctx.error(format!(
-                "Carry Liquid Into Solids: drawn_solid holds {drawn_len} values but solid holds {}; it must be on the solid lattice.",
-                solid.size / 4
+                "Carry Liquid Into Solids: a pool of {} tiles needs {elements} values in levelset, solid, drawn_solid and the output; the smallest holds {smallest}",
+                pool.pool_tiles
             ));
             return;
         }
@@ -241,7 +186,7 @@ impl Primitive for CarryLiquidIntoSolids {
                 buffer: solid,
                 offset: 0,
             },
-            // Unwired: the solid stands in, never read because drawn_len is 0.
+            // Unwired: the solid stands in, never read because has_drawn is 0.
             GpuBinding::Buffer {
                 binding: 3,
                 buffer: drawn.unwrap_or(solid),
@@ -249,6 +194,11 @@ impl Primitive for CarryLiquidIntoSolids {
             },
             GpuBinding::Buffer {
                 binding: 4,
+                buffer: tiles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
                 buffer: out,
                 offset: 0,
             },
@@ -259,7 +209,7 @@ impl Primitive for CarryLiquidIntoSolids {
                 .as_ref()
                 .expect("carry pipeline prepared"),
             &bindings,
-            [uniforms.node_count.div_ceil(THREADS), 1, 1],
+            [uniforms.element_count.div_ceil(THREADS), 1, 1],
             "node.carry_liquid_into_solids",
         );
         gpu.native_enc.compute_memory_barrier_buffers();
@@ -272,7 +222,7 @@ mod tests {
 
     #[test]
     fn composed_shader_is_valid_wgsl() {
-        let module = naga::front::wgsl::parse_str(BODY).expect("carry shader parses");
+        let module = naga::front::wgsl::parse_str(&BODY).expect("carry shader parses");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -285,42 +235,42 @@ mod tests {
                 .iter()
                 .any(|point| point.name == "cs_main")
         );
-        assert_eq!(std::mem::size_of::<CarryUniforms>(), 80);
+        assert_eq!(std::mem::size_of::<CarryUniforms>(), 32);
     }
 
     #[test]
-    fn distances_follow_the_smallest_node_spacing_of_a_non_cubic_lattice() {
-        // Spacings 0.125, 0.125 and 0.1: the cell is the 0.1.
-        let u = carry_uniforms(
-            [0.5, -1.0, 2.0],
-            [2.0, 1.5, 2.5],
-            [17.0, 13.0, 26.0],
-            [9.0, 7.0, 11.0],
-            2.0,
-            0,
-        )
-        .unwrap();
-        assert!((u.cell - 0.1).abs() < 1e-6, "{}", u.cell);
+    fn distances_follow_the_display_cell_of_a_pool() {
+        let pool = TilePool {
+            pool_tiles: 12,
+            cell_size: 0.1,
+        };
+        let u = carry_uniforms(pool, 2.0, false).unwrap();
         assert!((u.carry_depth - 0.2).abs() < 1e-6);
         assert!((u.air - FIELD_REDISTANCE_CELLS * 0.1).abs() < 1e-6);
-        assert_eq!(u.lattice_min, [-0.5, -1.75, 0.75]);
-        assert_eq!(u.nodes, [17, 13, 26]);
-        assert_eq!(u.node_count, 17 * 13 * 26);
-        assert_eq!(u.solid_nodes, [9, 7, 11]);
-        assert!((u.solid_spacing[0] - 0.25).abs() < 1e-6);
-        assert_eq!(
-            carry_uniforms([0.0; 3], [2.0; 3], [17.0; 3], [9.0; 3], 0.0, 5)
-                .unwrap()
-                .carry_depth,
-            0.0
-        );
+        assert_eq!(u.cell, 0.1);
+        assert_eq!(u.pool_tiles, 12);
+        assert_eq!(u.element_count, 12 * 512 + 1);
+        assert_eq!(u.has_drawn, 0);
+        let drawn = carry_uniforms(pool, 0.0, true).unwrap();
+        assert_eq!(drawn.carry_depth, 0.0);
+        assert_eq!(drawn.has_drawn, 1);
+        // A negative depth is no depth: the plain clip.
+        assert_eq!(carry_uniforms(pool, -1.0, true).unwrap().carry_depth, 0.0);
     }
 
     #[test]
-    fn a_lattice_with_one_node_on_an_axis_is_an_error() {
-        assert!(carry_uniforms([0.0; 3], [2.0; 3], [17.0, 1.0, 9.0], [9.0; 3], 2.0, 0).is_err());
-        assert!(carry_uniforms([0.0; 3], [2.0; 3], [17.0; 3], [9.0, 9.0, 1.0], 2.0, 0).is_err());
-        assert!(carry_uniforms([0.0; 3], [0.0, 2.0, 2.0], [17.0; 3], [9.0; 3], 2.0, 0).is_err());
+    fn a_non_finite_depth_or_an_unaddressable_pool_is_an_error() {
+        let pool = TilePool {
+            pool_tiles: 12,
+            cell_size: 0.1,
+        };
+        assert!(carry_uniforms(pool, f32::NAN, false).is_err());
+        assert!(carry_uniforms(pool, f32::INFINITY, false).is_err());
+        let huge = TilePool {
+            pool_tiles: 9_000_000,
+            cell_size: 0.1,
+        };
+        assert!(carry_uniforms(huge, 2.0, false).is_err());
     }
 }
 

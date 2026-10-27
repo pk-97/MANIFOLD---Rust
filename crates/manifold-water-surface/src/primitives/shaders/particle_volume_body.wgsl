@@ -1,115 +1,80 @@
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+
 // Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
-// Negative-inside port of FLIP Fluids ParticleMesher: initialize 3r, then
-// visit each kernel's inclusive floor(p - 1.5r)..floor(p + 1.5r)+1 grid box.
-// `bounds` is node.blob_bounds' reduction of the same blobs: the largest kernel
-// radius and support. It sets the search reach, never a quality limit.
-// Solid zeros invert the native sign convention. Preview-only border replacement
-// is not part of the production mesher.
+// node.particle_volume — fusable BUFFER body, GATHER. One thread per pool
+// element of the display's world tiles (`buf_tiles`, `pool_tiles` tiles).
+// Element p is display node p, at (p - 1/2) cells, the low corner of cell p.
+// Negative-inside port of FLIP Fluids ParticleMesher: the value starts at
+// 3 * blob_reach (Particle Scale times the largest particle radius) and takes the nearest kernel sphere's |x - c| - r over every
+// blob whose inclusive floor(c - 1.5r)..floor(c + 1.5r)+1 grid box holds the
+// node. The blobs are sorted into the display cells (`buf_cell_ranges`, one
+// range per pool element), so a node reads only the cells whose blobs can
+// pass that test: those from floor(node - 1 - u) to floor(node + 1 + u), u
+// being 1.5 * blob_reach in cells. The reach bounds the largest blob radius;
+// it sets the search, never a quality limit. A node inside a solid (`buf_solid`
+// is a node array on the same tiles) is never inside the liquid. A free slot
+// and the canonical element hold the far value, FIELD_FAR_CELLS (3) cells.
 
-fn pv_solid(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
-    let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
-    let base = min(vec3<u32>(floor(g)), nodes - vec3<u32>(2u));
-    let f = g - vec3<f32>(base);
-    var value = 0.0;
-    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-        let o = vec3<u32>(corner & 1u, (corner >> 1u) & 1u, (corner >> 2u) & 1u);
-        let at = base + o;
-        let w = select(1.0 - f.x, f.x, o.x == 1u)
-            * select(1.0 - f.y, f.y, o.y == 1u)
-            * select(1.0 - f.z, f.z, o.z == 1u);
-        value = value + w * buf_solid[at.x + nodes.x * (at.y + nodes.y * at.z)];
+// The most cells a search window spans on an axis. The host refuses a reach of
+// more than 16 cells of support, whose window spans at most 36.
+const PV_MAX_SPAN: i32 = 40;
+// FIELD_FAR_CELLS (scene_object), the level set where no tile is held.
+const PV_FAR_CELLS: f32 = 3.0;
+
+fn body(idx: u32, count: u32, cell_size: f32, particle_scale: f32, sim_cell_size: f32, particle_radius: f32, pool_tiles: f32) -> f32 {
+    ww_pool_tiles = u32(pool_tiles);
+    let blob_reach = particle_scale * particle_radius * sim_cell_size;
+    let h = cell_size;
+    if idx >= ts_canon() {
+        return PV_FAR_CELLS * h;
     }
-    return value;
-}
-
-fn body(
-    idx: u32,
-    count: u32,
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
-    cell_size: f32,
-    resolution_scale: i32,
-    bins_x: i32,
-    bins_y: i32,
-    bins_z: i32,
-    band_extra: f32,
-    brick_pass: u32,
-) -> f32 {
-
-    let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
-    let scale = u32(clamp(resolution_scale, 1, 8));
-    let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);
-    let margin = length(vec3<f32>(size_x,size_y,size_z) / vec3<f32>(nodes - vec3<u32>(1u)));
-    let extra = band_extra + select(0.0, margin, band_extra > 0.0);
-    let bound = vec2<f32>(buf_bounds[0], buf_bounds[1]);
-    let band = 3.0 * bound.x + extra;
-    let bins = vec3<i32>(bins_x, bins_y, bins_z);
-    if idx >= nodes.x * nodes.y * nodes.z {
-        return band;
+    if ts_slot_entry(idx >> 9u) == WT_NONE {
+        return PV_FAR_CELLS * h;
     }
-    if any(bins < vec3<i32>(1)) && brick_pass != 2u {
-        return band;
-    }
-    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    ts_home(idx);
+    let node = ts_cell_coord(idx);
+    let p = (vec3<f32>(node) - vec3<f32>(0.5)) * h;
 
-    var phi = band;
-    if brick_pass != 2u {
-        let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
-        let reach_bins = i32(ceil((bound.y + extra + margin) / cell_size));
-        // The existing bound includes sphere support and
-        // the outer interpolation node. Locate its endpoints within the bins
-        // instead of rounding its radius up around an entire home bin. Expand
-        // outwards by more than eight f32 epsilons at the coordinate scale
-        // for coordinate and reciprocal-bin rounding, then only
-        // narrow the old search: contributor arithmetic/order stays unchanged.
-        let reach_world = bound.y + extra + margin;
-        let roundoff = 0.000001 * (abs(lattice_min) + abs(size) + vec3<f32>(reach_world + cell_size));
-        let query_lo = vec3<i32>(floor(clamp((p - lattice_min - vec3<f32>(reach_world) - roundoff) / cell_size, vec3<f32>(0.0), vec3<f32>(bins - vec3<i32>(1)))));
-        let query_hi = vec3<i32>(floor(clamp((p - lattice_min + vec3<f32>(reach_world) + roundoff) / cell_size, vec3<f32>(0.0), vec3<f32>(bins - vec3<i32>(1)))));
-        let first_bin = max(max(home - vec3<i32>(reach_bins), vec3<i32>(0)), query_lo);
-        let last_bin = min(min(home + vec3<i32>(reach_bins), bins - vec3<i32>(1)), query_hi);
-        for (var z = first_bin.z; z <= last_bin.z; z = z + 1) {
-            for (var y = first_bin.y; y <= last_bin.y; y = y + 1) {
-                for (var x = first_bin.x; x <= last_bin.x; x = x + 1) {
-                    let b = vec3<i32>(x, y, z);
-                    let range = buf_cell_ranges[u32(b.x + bins.x * (b.y + bins.y * b.z))];
-                    for (var k = range.start; k < range.start + range.count; k = k + 1u) {
-                        let blob = buf_blobs[k];
-                        let reach = blob.w;
-                        let d = p - blob.xyz;
-                        // Native support is a grid-aligned box including its outer
-                        // interpolation node. Spherical rejection loses the corners.
-                        let h = size / vec3<f32>(nodes - vec3<u32>(1u));
-                        let support = 1.5 * reach + extra;
-                        let first = vec3<i32>(floor((blob.xyz - vec3<f32>(support) - lattice_min) / h));
-                        let last = vec3<i32>(floor((blob.xyz + vec3<f32>(support) - lattice_min) / h)) + vec3<i32>(1);
-                        if !(reach > 0.0) || any(vec3<i32>(ijk) < first) || any(vec3<i32>(ijk) > last) {
-                            continue;
-                        }
-                        phi = min(phi, length(d) - reach);
+    // The slack covers rounding in the sort's cell product and in the support
+    // test below; it only widens the search, the tests stay exact.
+    let u = 1.5 * blob_reach / h;
+    let q = vec3<f32>(node);
+    let slack = vec3<f32>(1.0e-6) * (abs(q) + vec3<f32>(u + 2.0));
+    let lo = vec3<i32>(floor(q - vec3<f32>(u + 1.0) - slack));
+    let hi = vec3<i32>(floor(q + vec3<f32>(u + 1.0) + slack));
+    let span = clamp(hi - lo + vec3<i32>(1), vec3<i32>(0), vec3<i32>(PV_MAX_SPAN));
+    let canon = ts_canon();
+
+    var phi = 3.0 * blob_reach;
+    for (var dz = 0; dz < span.z; dz = dz + 1) {
+        for (var dy = 0; dy < span.y; dy = dy + 1) {
+            for (var dx = 0; dx < span.x; dx = dx + 1) {
+                let e = ts_cell_at(lo + vec3<i32>(dx, dy, dz));
+                if e >= canon {
+                    continue;
+                }
+                let range = buf_cell_ranges[e];
+                for (var k = range.start; k < range.start + range.count; k = k + 1u) {
+                    let blob = buf_blobs[k];
+                    let reach = blob.w;
+                    // Native support is a grid-aligned box including its outer
+                    // interpolation node. Spherical rejection loses the corners.
+                    let support = 1.5 * reach;
+                    let first = vec3<i32>(floor((blob.xyz - vec3<f32>(support)) / h + vec3<f32>(0.5)));
+                    let last = vec3<i32>(floor((blob.xyz + vec3<f32>(support)) / h + vec3<f32>(0.5))) + vec3<i32>(1);
+                    if !(reach > 0.0) || any(node < first) || any(node > last) {
+                        continue;
                     }
+                    phi = min(phi, length(p - blob.xyz) - reach);
                 }
             }
         }
     }
-    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
-    if pv_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {
+    if buf_solid[idx] < 0.0 {
         phi = max(phi, 0.0);
     }
     return phi;
-}
-
-fn liquid_brick_index(invocation: u32) -> u32 {
-    let dims = (max(vec3<u32>(vec3<f32>(params.nodes_x, params.nodes_y, params.nodes_z)), vec3<u32>(2u)) - vec3<u32>(1u)) * u32(clamp(params.resolution_scale, 1, 8)) + vec3<u32>(1u);
-    return liquid_brick_select(invocation, dims, params.brick_pass);
 }

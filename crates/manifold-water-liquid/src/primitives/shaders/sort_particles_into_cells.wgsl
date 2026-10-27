@@ -27,7 +27,9 @@
 // the grid), or (the world tiles) the pool index `ts_cell_at` of the world
 // cell holding it, with `bin_total` keys either way. A pooled point whose
 // tile has no slot keys to the canonical index, the bucket no stored cell
-// reads.
+// reads; with `drop_absent` it is not counted, so the canonical bin's range
+// is empty and a neighbour search that crosses into an absent tile finds
+// nothing there.
 
 struct CellRange {
     start: u32,
@@ -53,7 +55,9 @@ struct SortParams {
     count_word: u32,
     // H of the world-tile table (`ts_table_entries`); 0 when dense.
     table_entries: u32,
-    _pad: u32,
+    // 1 when a point keyed to the last, canonical, bin (its tile has no slot)
+    // is left out of the sort instead of counted there.
+    drop_absent: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: SortParams;
@@ -131,7 +135,12 @@ fn count_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
         rank[i] = NO_RANK;
         return;
     }
-    rank[i] = atomicAdd(&cell_counts[sort_key_of(position_of(i))], 1u);
+    let key = sort_key_of(position_of(i));
+    if params.drop_absent != 0u && key == params.bin_total - 1u {
+        rank[i] = NO_RANK;
+        return;
+    }
+    rank[i] = atomicAdd(&cell_counts[key], 1u);
 }
 
 @compute @workgroup_size(256)

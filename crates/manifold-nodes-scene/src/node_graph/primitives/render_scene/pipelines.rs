@@ -374,7 +374,7 @@ impl RenderScene {
                 ))
                 .or_insert_with(|| {
                     device.create_render_pipeline_depth_msaa_point_size(
-                        RENDER_SCENE_WGSL,
+                        RENDER_SCENE_WGSL.as_str(),
                         "vs_points",
                         "fs_unlit",
                         7,
@@ -443,7 +443,7 @@ impl RenderScene {
                 None if opaque_fast => (&[][..], &[][..], "node.render_scene"),
                 None => {
                     return device.create_render_pipeline_depth_msaa(
-                        RENDER_SCENE_WGSL,
+                        RENDER_SCENE_WGSL.as_str(),
                         "vs_main",
                         fs_entry,
                         manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -460,7 +460,7 @@ impl RenderScene {
             specs.extend_from_slice(Self::OPAQUE_FAST_SPECIALIZATIONS);
         }
         device.create_specialized_render_pipeline_depth_msaa(
-            RENDER_SCENE_WGSL,
+            RENDER_SCENE_WGSL.as_str(),
             "vs_main",
             fs_entry,
             &specs,
@@ -497,7 +497,7 @@ impl RenderScene {
             MaterialKind::Cel => "fs_cel",
         };
         device.create_render_pipeline_depth_msaa(
-            RENDER_SCENE_WGSL,
+            RENDER_SCENE_WGSL.as_str(),
             "vs_main",
             fs_entry,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -608,7 +608,7 @@ impl RenderScene {
         // lazily compiled on the first Points frame without this. Warm it so
         // flipping a scene to Points mid-show is a cache hit, not a stall.
         device.create_render_pipeline_depth_msaa_point_size(
-            RENDER_SCENE_WGSL,
+            RENDER_SCENE_WGSL.as_str(),
             "vs_points",
             "fs_unlit",
             7,

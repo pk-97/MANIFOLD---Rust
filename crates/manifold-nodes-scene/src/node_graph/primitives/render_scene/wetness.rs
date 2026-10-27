@@ -1,7 +1,7 @@
-//! The wetness look's uniforms: where the water's lattice sits, so every mesh
-//! shader can read the wetness field by world position
-//! (`look_wet_surface.wgsl`).
-use super::water_shade::lattice_frame;
+//! The wetness look's uniforms: where the water's wetness field sits, so every
+//! mesh shader can read it by world position (`look_wet_surface.wgsl`).
+use manifold_node_engine::scene::world_tiles::table_entries;
+
 use super::{FieldObject, mat4_inverse};
 
 /// Field for field with `WetUniforms` in `look_wet_surface.wgsl`.
@@ -9,37 +9,35 @@ use super::{FieldObject, mat4_inverse};
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct WetUniforms {
     world_to_local: [[f32; 4]; 4],
-    /// xyz object-space min corner, w 1 when a wetness field is bound.
-    lattice_min: [f32; 4],
-    /// xyz node spacing.
-    spacing: [f32; 4],
-    /// xyz node counts.
-    nodes: [u32; 4],
+    /// x pool tiles, y table entries, z 1 when a wetness field is bound.
+    tiles: [u32; 4],
+    /// x display cell size in metres.
+    cell: [f32; 4],
 }
 
 /// Uniforms for the scene's wetness field: all zeros (the shader's off value)
-/// for `None`, else the field's lattice in the water's object space.
+/// for `None`, else the field's table size, cell and place in the water's
+/// object space.
 pub(super) fn wet_uniforms(field: Option<&FieldObject>) -> Result<WetUniforms, &'static str> {
     match field {
         None => Ok(bytemuck::Zeroable::zeroed()),
-        Some(field) => wet_lattice(field.center, field.size, field.nodes, field.model),
+        Some(field) => wet_field(field.pool_tiles, field.cell_size, field.model),
     }
 }
 
-fn wet_lattice(
-    center: [f32; 3],
-    size: [f32; 3],
-    nodes: [u32; 3],
+fn wet_field(
+    pool_tiles: u32,
+    cell_size: f32,
     model: [[f32; 4]; 4],
 ) -> Result<WetUniforms, &'static str> {
     let world_to_local = mat4_inverse(model).ok_or("Wetness: singular water model matrix")?;
-    let (mut lattice_min, spacing) = lattice_frame(center, size, nodes)?;
-    lattice_min[3] = 1.0;
+    if !(cell_size > 0.0 && cell_size.is_finite()) || pool_tiles == 0 {
+        return Err("Wetness: the field needs a cell size above zero and a pool of tiles");
+    }
     Ok(WetUniforms {
         world_to_local,
-        lattice_min,
-        spacing,
-        nodes: [nodes[0], nodes[1], nodes[2], 0],
+        tiles: [pool_tiles, table_entries(pool_tiles), 1, 0],
+        cell: [cell_size, 0.0, 0.0, 0.0],
     })
 }
 
@@ -50,8 +48,8 @@ mod tests {
     use manifold_node_engine::mesh::pipeline::mat4_mul;
 
     #[test]
-    fn wet_uniforms_are_112_bytes() {
-        assert_eq!(std::mem::size_of::<WetUniforms>(), 112);
+    fn wet_uniforms_are_96_bytes() {
+        assert_eq!(std::mem::size_of::<WetUniforms>(), 96);
     }
 
     #[test]
@@ -61,13 +59,11 @@ mod tests {
     }
 
     #[test]
-    fn a_lattice_gives_its_corner_spacing_counts_and_inverse_model() {
+    fn a_field_gives_its_table_size_cell_and_inverse_model() {
         let model = model_matrix([0.3, 0.2, -0.4], [0.0, 0.35, 0.0], [1.25, 1.25, 1.25]);
-        let u = wet_lattice([0.1, -0.05, 0.2], [1.8, 1.6, 2.0], [37, 33, 41], model)
-            .expect("valid lattice");
-        assert_eq!(u.lattice_min, [0.1 - 0.9, -0.05 - 0.8, 0.2 - 1.0, 1.0]);
-        assert_eq!(u.spacing, [1.8 / 36.0, 1.6 / 32.0, 2.0 / 40.0, 0.0]);
-        assert_eq!(u.nodes, [37, 33, 41, 0]);
+        let u = wet_field(37, 0.045, model).expect("valid field");
+        assert_eq!(u.tiles, [37, 256, 1, 0]);
+        assert_eq!(u.cell, [0.045, 0.0, 0.0, 0.0]);
         let product = mat4_mul(u.world_to_local, model);
         for (c, column) in product.iter().enumerate() {
             for (r, &value) in column.iter().enumerate() {
@@ -81,11 +77,14 @@ mod tests {
     }
 
     #[test]
-    fn a_singular_model_or_a_one_node_axis_is_an_error() {
+    fn a_singular_model_or_a_field_without_cells_is_an_error() {
         let flat = model_matrix([0.0; 3], [0.0; 3], [1.0, 0.0, 1.0]);
-        assert!(wet_lattice([0.0; 3], [1.0; 3], [5, 5, 5], flat).is_err());
+        assert!(wet_field(5, 0.05, flat).is_err());
         let identity = model_matrix([0.0; 3], [0.0; 3], [1.0; 3]);
-        assert!(wet_lattice([0.0; 3], [1.0; 3], [5, 1, 5], identity).is_err());
+        assert!(wet_field(5, 0.05, identity).is_ok());
+        assert!(wet_field(0, 0.05, identity).is_err());
+        assert!(wet_field(5, 0.0, identity).is_err());
+        assert!(wet_field(5, f32::NAN, identity).is_err());
     }
 
     /// The soaked albedo of `look_wet_surface.wgsl`, in f64.

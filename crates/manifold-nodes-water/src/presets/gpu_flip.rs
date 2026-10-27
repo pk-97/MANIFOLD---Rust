@@ -527,14 +527,21 @@ const FIELD_WIRES: [&str; 9] = [
     "impulse_tick",
 ];
 
-/// The domain's bodies, walls and cell size into a node that rasterises the
-/// solids: the published surface's solid lattice or whitewater's obstacle
-/// source.
+/// The domain's bodies and walls into a node that rasterises the solids on
+/// world tiles: whitewater's obstacle source or the display's solid.
 fn solid_wires(b: &mut Builder, domain: usize, node: usize) {
-    b.wires(domain, node, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-    b.wire((domain, "cell_size"), node, "cell_size");
+    b.wires(
+        domain,
+        node,
+        &["bodies", "shapes", "atlas", "closed_faces", "body_count"],
+    );
     b.wire((domain, "body_rows"), node, "rows");
     b.wires(domain, node, &BOUNDS_WIRES);
+}
+
+/// The display table's tiles, pool and cell size into `node`.
+fn on_display_tiles(b: &mut Builder, tiles: usize, node: usize) {
+    b.wires(tiles, node, &["tiles", "pool_tiles", "cell_size"]);
 }
 
 manifold_core::testkit_visible! {
@@ -613,26 +620,11 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((stats, "stats_out"), state, "stats_in");
     b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
-    // The published surface's solid sits on the native grid.
-    const NATIVE_GRID: [(&str, &str); 6] = [
-        ("mesh_min_x", "lattice_min_x"), ("mesh_min_y", "lattice_min_y"), ("mesh_min_z", "lattice_min_z"),
-        ("mesh_nodes_x", "nodes_x"), ("mesh_nodes_y", "nodes_y"), ("mesh_nodes_z", "nodes_z"),
-    ];
-    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({}));
-    solid_wires(&mut b, domain, solid);
-    for (from, to) in NATIVE_GRID {
-        b.wire((domain, from), solid, to);
-    }
     let frame = b.node("frame", "node.liquid_frame", json!({}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
     b.wire((state, "identity"), frame, "identity");
-    b.wire((solid, "solid"), frame, "solid");
-    b.wires(domain, frame, &LATTICE_WIRES);
-    b.wires(domain, frame, &["closed_faces", "simulation_time", "display_time", "epoch", "display_cursor", "dropped_seconds"]);
-    // Solids pose their bodies at the end of the accepted interval, so they
-    // agree with the step at every Sim Rate.
-    feed_intervals(&b.nodes, &mut b.wires, domain as u32);
+    b.wires(domain, frame, &["simulation_time", "display_time", "epoch", "display_cursor", "dropped_seconds"]);
 
     let output = b.node("output", "system.final_output", json!({}));
     let sink = if scene.surface {
@@ -646,6 +638,9 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         sink
     };
     b.wire((sink, "out"), output, "in");
+    // Solids pose their bodies at the end of the accepted interval, so they
+    // agree with the step at every Sim Rate.
+    feed_intervals(&b.nodes, &mut b.wires, domain as u32);
     serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("water def")
 }
 }
@@ -684,18 +679,19 @@ const DOTS_RENDER_SLOT: &str = "object_6";
 /// all and the first owns it.
 const FIELD_SWITCH: &str = PHYSICS_VIEW_SWITCHES[0];
 const VELOCITY_SWITCH: &str = PHYSICS_VIEW_SWITCHES[1];
-const NODES_SWITCHES: [&str; 3] = [
-    PHYSICS_VIEW_SWITCHES[2],
-    PHYSICS_VIEW_SWITCHES[3],
-    PHYSICS_VIEW_SWITCHES[4],
-];
-const WATER_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[5];
-const DOTS_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[6];
-const DOTS_INSTANCES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[7];
-const DOTS_MESH_SWITCH: &str = PHYSICS_VIEW_SWITCHES[8];
-const FOAM_SWITCH: &str = PHYSICS_VIEW_SWITCHES[9];
-const MIST_SWITCH: &str = PHYSICS_VIEW_SWITCHES[10];
-const WETNESS_SWITCH: &str = PHYSICS_VIEW_SWITCHES[11];
+const TILES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[2];
+const EXTENT_SWITCH: &str = PHYSICS_VIEW_SWITCHES[3];
+const WATER_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[4];
+const DOTS_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[5];
+const DOTS_INSTANCES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[6];
+const DOTS_MESH_SWITCH: &str = PHYSICS_VIEW_SWITCHES[7];
+const FOAM_SWITCH: &str = PHYSICS_VIEW_SWITCHES[8];
+const MIST_SWITCH: &str = PHYSICS_VIEW_SWITCHES[9];
+const WETNESS_SWITCH: &str = PHYSICS_VIEW_SWITCHES[10];
+/// The display's world tiles and the solid on them, shared by every drawn
+/// field (`SURFACE_DETAIL_NODES` names the table).
+const DISPLAY_TILES: &str = manifold_core::scene_schema::SURFACE_DETAIL_NODES[0];
+const DISPLAY_SOLID: &str = "display_solid";
 /// The Platonic shape a physics dot is drawn with, scaled by the particle's radius.
 const TETRAHEDRON: usize = 0;
 
@@ -743,6 +739,7 @@ impl WaterScene {
             json!({}),
         );
         solid_wires(&mut b, domain, source);
+        b.wire((domain, "cell_size"), source, "cell_size");
         b.wires(step, source, &["tiles", "pool_tiles"]);
         b.wires(
             step,
@@ -872,7 +869,7 @@ impl WaterScene {
                 }
             }
         }
-        display_foam(&mut b, frame, surface, water);
+        display_foam(&mut b, frame, water);
         display_mist_and_wetness(&mut b, surface, water);
         let dots = display_dots(&mut b, frame, surface, water);
         b.wire((dots, "object"), output, DOTS_OUTPUT);
@@ -1350,29 +1347,26 @@ fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     metadata
 }
 
-/// Sets `resolution_scale` on the surface's bricks and volume in `value`,
-/// however deep the group nests them.
-fn set_surface_scale(value: &mut Value, scale: usize) {
-    match value {
-        Value::Object(map) => {
-            let surface = map
-                .get("nodeId")
-                .is_some_and(|id| id == "liquid_volume" || id == "liquid_bricks");
-            if surface && let Some(params) = map.get_mut("params") {
-                params["resolution_scale"] = int(scale);
-            }
-            map.values_mut().for_each(|v| set_surface_scale(v, scale));
-        }
-        Value::Array(items) => items.iter_mut().for_each(|v| set_surface_scale(v, scale)),
-        _ => {}
-    }
-}
-
-/// The liquid's field on the frame's seam outputs: frame B's particles and
-/// count, its solid lattice, and the lattice's bounds and nodes.
+/// The liquid's field on the display's own world tiles: the display table
+/// from frame B's particles at the scene's surface scale, the solid on it at
+/// the bodies' current poses, and the surface group over both.
 fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
+    let domain = b.id("domain");
+    let tiles = b.node(
+        DISPLAY_TILES,
+        "node.surface_tiles",
+        json!({"resolution_scale": int(scene.surface_scale)}),
+    );
+    b.wire((frame, "particles_b"), tiles, "particles");
+    b.wire((domain, "cell_size"), tiles, "sim_cell_size");
+    // The solver's pool, which every domain publishes.
+    b.wire((domain, "pool_tiles"), tiles, "sim_pool_tiles");
+    b.wire((domain, "display_time"), tiles, "time");
+    b.wire((domain, "epoch"), tiles, "epoch");
+    let solid = b.node(DISPLAY_SOLID, "node.liquid_solid_distance", json!({}));
+    solid_wires(b, domain, solid);
+    on_display_tiles(b, tiles, solid);
     let mut group = surface_group();
-    set_surface_scale(&mut group, scene.surface_scale);
     let id = b
         .nodes
         .iter()
@@ -1383,17 +1377,11 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     group["nodeId"] = json!("surface");
     b.nodes
         .push(serde_json::from_value(group).expect("surface group"));
-    for (from, to) in [
-        ("particles_b", "particles"),
-        ("count_b", "count"),
-        ("solid_b", "solid"),
-        ("grid_bounds", "bounds"),
-        ("grid_nodes_x", "nodes_x"),
-        ("grid_nodes_y", "nodes_y"),
-        ("grid_nodes_z", "nodes_z"),
-    ] {
-        b.wire((frame, from), id, to);
-    }
+    b.wire((frame, "particles_b"), id, "particles");
+    b.wire((frame, "count_b"), id, "count");
+    b.wire((solid, "solid"), id, "solid");
+    on_display_tiles(b, tiles, id);
+    b.wire((domain, "cell_size"), id, "sim_cell_size");
     (id, "level_set")
 }
 
@@ -1521,18 +1509,13 @@ pub const WATER_ABSORPTION_PER_METRE: [f64; 3] = [0.34, 0.057, 0.009];
 /// fed from the blended particles and solids, and the water object with its
 /// material. Returns the water object.
 fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
+    let [tiles, solid] = [DISPLAY_TILES, DISPLAY_SOLID].map(|name| b.id(name));
     let particles = b.node(
         "particle_blend",
         "node.interpolate_particle_frames",
         json!({}),
     );
-    let blend = b.node("solid_blend", "node.mix_arrays", json!({}));
     let push_out = b.node("particle_push_out", "node.push_out_of_solid", json!({}));
-    let lattice_box = b.node(
-        "display_lattice_box",
-        "node.transform_components",
-        json!({}),
-    );
     b.wires(
         frame,
         particles,
@@ -1547,34 +1530,16 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
             "span",
         ],
     );
-    b.wire((frame, "solid_a"), blend, "a");
-    b.wire((frame, "solid_b"), blend, "b");
-    b.wire((frame, "blend"), blend, "amount");
     b.wire((particles, "out"), push_out, "particles");
-    b.wire((blend, "out"), push_out, "solid");
-    b.wire((frame, "grid_bounds"), lattice_box, "transform");
-    for axis in ["x", "y", "z"] {
-        b.wire(
-            (lattice_box, &format!("pos_{axis}")),
-            push_out,
-            &format!("center_{axis}"),
-        );
-        b.wire(
-            (lattice_box, &format!("scale_{axis}")),
-            push_out,
-            &format!("size_{axis}"),
-        );
-        b.wire(
-            (frame, &format!("grid_nodes_{axis}")),
-            push_out,
-            &format!("nodes_{axis}"),
-        );
-    }
-    b.wires.retain(|w| {
-        w.to_node != surface as u32 || !["particles", "solid"].contains(&w.to_port.as_str())
-    });
+    b.wire((solid, "solid"), push_out, "solid");
+    on_display_tiles(b, tiles, push_out);
+    // The surface draws the blended particles pushed out of the solids. The
+    // display table stays on frame B's particles: the blend and the push-out
+    // move them less than the table's ring of tiles, and the blend keeps one
+    // reader so it fuses into the push-out.
+    b.wires
+        .retain(|w| !(w.to_node == surface as u32 && w.to_port == "particles"));
     b.wire((push_out, "out"), surface, "particles");
-    b.wire((blend, "out"), surface, "solid");
 
     let [red, green, blue] =
         WATER_ABSORPTION_PER_METRE.map(|absorption| float((-absorption).exp()));
@@ -1594,18 +1559,8 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
     );
     let water = b.node("water_object", "node.scene_object", json!({}));
     b.wire((material, "out"), water, "material");
-    for axis in ["x", "y", "z"] {
-        b.wire(
-            (lattice_box, &format!("pos_{axis}")),
-            water,
-            &format!("field_center_{axis}"),
-        );
-        b.wire(
-            (lattice_box, &format!("scale_{axis}")),
-            water,
-            &format!("field_size_{axis}"),
-        );
-    }
+    b.wire((tiles, "pool_tiles"), water, "field_pool_tiles");
+    b.wire((tiles, "cell_size"), water, "field_cell_size");
     let ripple_detail = b.node(
         "water_ripple_detail",
         "node.value",
@@ -1615,37 +1570,23 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
     water
 }
 
-/// The water's foam: the foam particles' display blend, the cover field made
-/// from them on the water field's lattice, and the switch that feeds it to the
-/// water object (off in Physics View, which hides the water).
-fn display_foam(b: &mut Builder, frame: usize, surface: usize, water: usize) {
-    let lattice_box = b.id("display_lattice_box");
+/// The water's foam: the foam particles' display blend, which also holds its
+/// tiles in the display table, the cover field made from them on that table,
+/// and the switch that feeds it to the water object (off in Physics View,
+/// which hides the water).
+fn display_foam(b: &mut Builder, frame: usize, water: usize) {
+    let tiles = b.id(DISPLAY_TILES);
     let blend = b.node("foam_blend", "node.interpolate_particle_frames", json!({}));
     b.wire((frame, "foam_b"), blend, "particles_b");
     b.wires(frame, blend, &["blend", "span"]);
+    b.wire((blend, "out"), tiles, "foam");
     let cover = b.node(
         "water_foam_cover",
         "node.foam_cover",
         json!({"strength": float(1.0)}),
     );
     b.wire((blend, "out"), cover, "particles");
-    for axis in ["x", "y", "z"] {
-        b.wire(
-            (lattice_box, &format!("pos_{axis}")),
-            cover,
-            &format!("center_{axis}"),
-        );
-        b.wire(
-            (lattice_box, &format!("scale_{axis}")),
-            cover,
-            &format!("size_{axis}"),
-        );
-        b.wire(
-            (surface, &format!("level_set_nodes_{axis}")),
-            cover,
-            &format!("nodes_{axis}"),
-        );
-    }
+    on_display_tiles(b, tiles, cover);
     let switch = b.node(
         FOAM_SWITCH,
         "node.switch_array",
@@ -1655,11 +1596,12 @@ fn display_foam(b: &mut Builder, frame: usize, surface: usize, water: usize) {
     b.wire((switch, "out"), water, "field_foam");
 }
 
-/// The water's mist and wetness: the spray's extinction and the surface's
-/// remembered wetness on the water field's lattice, each behind the switch that
-/// feeds it to the water object (off in Physics View, which hides the water).
+/// The water's mist and wetness: the spray's extinction (the spray's tiles
+/// held in the display table) and the surface's remembered wetness on that
+/// table, each behind the switch that feeds it to the water object (off in
+/// Physics View, which hides the water).
 fn display_mist_and_wetness(b: &mut Builder, surface: usize, water: usize) {
-    let lattice_box = b.id("display_lattice_box");
+    let tiles = b.id(DISPLAY_TILES);
     let spray = b.id("spray_blend");
     let domain = b.id("domain");
     let mist = b.node(
@@ -1672,28 +1614,13 @@ fn display_mist_and_wetness(b: &mut Builder, surface: usize, water: usize) {
         "node.surface_wetness",
         json!({"drying": float(1.0)}),
     );
+    b.wire((spray, "out"), tiles, "spray");
     b.wire((spray, "out"), mist, "particles");
     b.wire((surface, "level_set"), wetness, "field");
     b.wire((domain, "display_time"), wetness, "time");
     b.wire((domain, "epoch"), wetness, "epoch");
     for node in [mist, wetness] {
-        for axis in ["x", "y", "z"] {
-            b.wire(
-                (lattice_box, &format!("pos_{axis}")),
-                node,
-                &format!("center_{axis}"),
-            );
-            b.wire(
-                (lattice_box, &format!("scale_{axis}")),
-                node,
-                &format!("size_{axis}"),
-            );
-            b.wire(
-                (surface, &format!("level_set_nodes_{axis}")),
-                node,
-                &format!("nodes_{axis}"),
-            );
-        }
+        on_display_tiles(b, tiles, node);
     }
     for (name, from, port, to) in [
         (MIST_SWITCH, mist, "mist", "field_mist"),
@@ -1712,22 +1639,37 @@ fn display_dots(b: &mut Builder, frame: usize, surface: usize, water: usize) -> 
     // dots on in_1 of theirs, so the card prunes whichever side is off. In
     // Physics View the water is hidden and reads no field. An unwired choice
     // draws nothing; dots_visible hides the object.
-    for (name, port, to) in [
-        (FIELD_SWITCH, "level_set", "field"),
-        (VELOCITY_SWITCH, "velocity", "field_velocity"),
+    // The table is u32 words, so its switch is the u32 one.
+    let tiles = b.id(DISPLAY_TILES);
+    for (name, kind, from, to) in [
+        (
+            FIELD_SWITCH,
+            "node.switch_array",
+            (surface, "level_set"),
+            "field",
+        ),
+        (
+            VELOCITY_SWITCH,
+            "node.switch_array",
+            (surface, "velocity"),
+            "field_velocity",
+        ),
+        (
+            TILES_SWITCH,
+            "node.switch_indices",
+            (tiles, "tiles"),
+            "field_tiles",
+        ),
+        (
+            EXTENT_SWITCH,
+            "node.switch_array",
+            (tiles, "extent"),
+            "field_extent",
+        ),
     ] {
-        let switch = b.node(name, "node.switch_array", json!({"selector": float(0.0)}));
-        b.wire((surface, port), switch, "in_0");
+        let switch = b.node(name, kind, json!({"selector": float(0.0)}));
+        b.wire(from, switch, "in_0");
         b.wire((switch, "out"), water, to);
-    }
-    for (axis, name) in ["x", "y", "z"].into_iter().zip(NODES_SWITCHES) {
-        let switch = b.node(name, "node.switch_value", json!({"selector": float(0.0)}));
-        b.wire(
-            (surface, &format!("level_set_nodes_{axis}")),
-            switch,
-            "in_0",
-        );
-        b.wire((switch, "out"), water, &format!("field_nodes_{axis}"));
     }
     let water_visible = b.node(
         WATER_VISIBLE,

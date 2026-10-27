@@ -4,7 +4,6 @@ pub mod dot_products;
 pub mod face_sample_component;
 pub mod field_smooth_blend;
 pub mod fluid_role_source;
-pub mod liquid_bricks;
 pub mod liquid_cells;
 pub mod liquid_stats;
 pub mod offset_lattice;

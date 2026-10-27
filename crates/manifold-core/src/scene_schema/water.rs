@@ -116,12 +116,11 @@ pub const DOMAIN_ROLE: &str = "domain";
 /// inputs, the water's foam cover, its mist and its wetness. Each follows the
 /// World's Render Mode, on only in Physics View, so the side that is off is
 /// never computed.
-pub const PHYSICS_VIEW_SWITCHES: [&str; 12] = [
+pub const PHYSICS_VIEW_SWITCHES: [&str; 11] = [
     "water_field_switch",
     "water_velocity_switch",
-    "water_nodes_x_switch",
-    "water_nodes_y_switch",
-    "water_nodes_z_switch",
+    "water_tiles_switch",
+    "water_extent_switch",
     "water_visible",
     "dots_visible",
     "dots_instances_switch",
@@ -131,8 +130,9 @@ pub const PHYSICS_VIEW_SWITCHES: [&str; 12] = [
     "water_wet_switch",
 ];
 
-/// The template nodes Surface Detail sets together.
-pub const SURFACE_DETAIL_NODES: [&str; 2] = ["liquid_volume", "liquid_bricks"];
+/// The template nodes Surface Detail sets: the display's world tiles, whose
+/// cell size every drawn field shares.
+pub const SURFACE_DETAIL_NODES: [&str; 1] = ["surface_tiles"];
 
 /// Surface Detail 0 is one surface lattice node per cell, FLIP Fluids' default.
 pub const SURFACE_DETAIL_OFFSET: f32 = 1.0;
@@ -153,7 +153,7 @@ const DOMAIN: Reach = Reach::Own(DOMAIN_ROLE);
 const SPEED: Reach = Reach::Own("speed");
 const CELL_SIZE: Reach = Reach::Own("cell_size");
 const DETAIL: Reach = Reach::Own("surface_detail");
-const BLOBS: Reach = Reach::Own("liquid_blobs");
+const PARTICLE_SCALE: Reach = Reach::Own("liquid_particle_scale");
 const SMOOTHNESS: Reach = Reach::Own("liquid_smoothness");
 const RIPPLES: Reach = Reach::Own("water_ripple_detail");
 const FOAM: Reach = Reach::Own("water_foam_cover");
@@ -318,8 +318,8 @@ pub static WATER_ROWS: [PropertyRow; 41] = [
         .default(0.0)
         .range(0.0, 2.0)
         .when(surface),
-    row("surface_particle_scale", BLOBS, Surface, setup())
-        .param("particle_scale")
+    row("surface_particle_scale", PARTICLE_SCALE, Surface, setup())
+        .param("value")
         .name("Particle Scale")
         .when(surface),
     // Times the smoothing's leash (FIELD_LEASH_CELLS in manifold-water-liquid): 1 is the tuned surface, 0 the raw particle field.

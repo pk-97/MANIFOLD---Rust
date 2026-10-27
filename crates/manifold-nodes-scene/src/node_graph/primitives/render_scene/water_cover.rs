@@ -1,12 +1,20 @@
 //! The cover draws for the pick region and the selection mask: one
 //! full-screen triangle per field, marching the same field as Pass B.
+use std::sync::LazyLock;
+
 use super::water_march::{FieldGeometry, FieldView, MarchUniforms, march_uniforms};
 use super::*;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 
-pub(super) const COVER_WGSL: &str = concat!(
-    include_str!("../shaders/water_march_core.wgsl"),
-    include_str!("../shaders/water_cover.wgsl")
-);
+pub(super) static COVER_WGSL: LazyLock<String> = LazyLock::new(|| {
+    [
+        READ_SIDE,
+        FIELD_TILES_WGSL,
+        include_str!("../shaders/water_march_core.wgsl"),
+        include_str!("../shaders/water_cover.wgsl"),
+    ]
+    .concat()
+});
 
 /// The march uniforms for a cover draw of `field` through `view_proj`, a
 /// target of `width` x `height` pixels. Flags stay zero: a cover writes no
@@ -29,9 +37,8 @@ pub(super) fn cover_uniforms(
     march_uniforms(
         &view,
         &FieldGeometry {
-            center: field.center,
-            size: field.size,
-            nodes: field.nodes,
+            pool_tiles: field.pool_tiles,
+            cell_size: field.cell_size,
             model: field.model,
             prev_model: field.prev_model,
             slot: field.slot,
@@ -40,11 +47,12 @@ pub(super) fn cover_uniforms(
     )
 }
 
-/// The cover's bindings: the uniforms and the field's level set.
+/// The cover's bindings: the uniforms, the field's level set, its world-tile
+/// table and its extent.
 pub(super) fn cover_bindings<'a>(
     uniforms: &'a MarchUniforms,
     field: &FieldObject<'a>,
-) -> [GpuBinding<'a>; 2] {
+) -> [GpuBinding<'a>; 4] {
     [
         GpuBinding::Bytes {
             binding: 0,
@@ -53,6 +61,16 @@ pub(super) fn cover_bindings<'a>(
         GpuBinding::Buffer {
             binding: 1,
             buffer: field.levelset,
+            offset: 0,
+        },
+        GpuBinding::Buffer {
+            binding: 70,
+            buffer: field.tiles,
+            offset: 0,
+        },
+        GpuBinding::Buffer {
+            binding: 71,
+            buffer: field.extent,
             offset: 0,
         },
     ]
@@ -64,7 +82,7 @@ mod tests {
 
     #[test]
     fn cover_wgsl_parses_and_validates() {
-        let src = COVER_WGSL;
+        let src = COVER_WGSL.as_str();
         let module = naga::front::wgsl::parse_str(src).expect("water cover must naga-parse");
         let mut validator = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),

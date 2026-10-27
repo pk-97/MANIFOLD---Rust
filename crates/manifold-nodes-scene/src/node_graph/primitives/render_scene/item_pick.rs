@@ -148,7 +148,7 @@ impl RenderScene {
                 .field_pipeline
                 .get_or_insert_with(|| {
                     gpu.device.create_render_pipeline_depth(
-                        water_cover::COVER_WGSL,
+                        &water_cover::COVER_WGSL,
                         "vs_cover",
                         "fs_cover_id",
                         manifold_gpu::GpuTextureFormat::R32Float,
@@ -227,7 +227,7 @@ impl RenderScene {
                     .map(|uniforms| (field, uniforms))
             })
             .collect();
-        let cover_bindings: Vec<[GpuBinding; 2]> = cover_uniforms
+        let cover_bindings: Vec<[GpuBinding; 4]> = cover_uniforms
             .iter()
             .map(|(field, uniforms)| water_cover::cover_bindings(uniforms, field))
             .collect();

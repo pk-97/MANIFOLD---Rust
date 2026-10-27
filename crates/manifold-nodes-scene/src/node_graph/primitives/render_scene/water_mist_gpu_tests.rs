@@ -1,11 +1,14 @@
 //! GPU proofs for the mist's optical depth: the per-pixel `(tau, m)` against
-//! the chord of the camera ray through the lattice, in closed form, for a
-//! constant, a linear and a water-stopped field.
+//! the chord of the camera ray through the field's node box, in closed form,
+//! for a constant, a linear and a water-stopped field over world tiles that
+//! straddle the origin.
 use super::mat4_inverse;
-use super::water_march::{FieldDraw, FieldView, WaterMarch};
+use super::water_march::{FieldView, WaterMarch};
 use super::water_march_gpu_tests::{
-    CENTER, H, NODES, SIZE, W, depth_target, model, mul_point, pixel_ray, scene, shared_buffer,
+    CELL, FieldBuffers, H, W, depth_target, model, mul_point, pixel_ray, scene,
 };
+use crate::testkit::field_tiles::FieldTable;
+use manifold_node_engine::scene::scene_object::FIELD_FAR_CELLS;
 
 /// A pixel's optical depth and first moment as the shader wrote them.
 struct Mist {
@@ -13,11 +16,47 @@ struct Mist {
     moment: f32,
 }
 
-/// Runs the mist over the test lattice and returns every pixel's result.
-/// With `march_water` the level set is marched first, so the mist stops at
-/// its surface.
+/// 4 x 2 x 4 tiles across the origin: tiles -2..1 on x and z, -1..0 on y. All
+/// of their nodes are held, so inside the node box every value is exact.
+fn table() -> FieldTable {
+    FieldTable::new(
+        CELL,
+        32,
+        &FieldTable::tiles_between([-2, -1, -2], [1, 0, 1]),
+    )
+}
+
+/// The node box of `table()` in the object's space: the first and last held
+/// node of each axis.
+fn node_box(table: &FieldTable) -> ([f32; 3], [f32; 3]) {
+    let e = table.extent();
+    ([e[0], e[1], e[2]], [e[4], e[5], e[6]])
+}
+
+/// The extent the proofs give the shader: the node box shrunk by a cell on
+/// every side. The shader widens its extent by the cell that interpolates the
+/// outermost nodes, so its span is exactly the node box, where the field is
+/// exact.
+fn extent_inside_nodes(table: &FieldTable) -> [f32; 8] {
+    let (lo, hi) = node_box(table);
+    [
+        lo[0] + CELL,
+        lo[1] + CELL,
+        lo[2] + CELL,
+        0.0,
+        hi[0] - CELL,
+        hi[1] - CELL,
+        hi[2] - CELL,
+        0.0,
+    ]
+}
+
+/// Runs the mist over the test table and returns every pixel's result. With
+/// `march_water` the level set is marched first, so the mist stops at its
+/// surface.
 fn run(levelset: &[f32], mist: &[f32], march_water: bool) -> Vec<Mist> {
     let device = manifold_gpu::testkit::test_device();
+    let table = table();
     let sc = scene();
     let mut enc = device.create_encoder("water mist test");
     let opaque = depth_target(&device, &mut enc);
@@ -30,19 +69,15 @@ fn run(levelset: &[f32], mist: &[f32], march_water: bool) -> Vec<Mist> {
         width: W,
         height: H,
     };
-    let levelset = shared_buffer(&device, levelset);
-    let mist = shared_buffer(&device, mist);
-    let draw = FieldDraw {
-        levelset: &levelset,
-        velocity: None,
-        mist: Some(&mist),
-        center: CENTER,
-        size: SIZE,
-        nodes: NODES,
-        model: model(),
-        prev_model: model(),
-        slot: 0,
-    };
+    let buffers = FieldBuffers::new(
+        &device,
+        &table,
+        extent_inside_nodes(&table),
+        levelset,
+        None,
+        Some(mist),
+    );
+    let draw = buffers.draw(0);
     let mut march = WaterMarch::default();
     march.begin(&device, &mut enc, W, H);
     if march_water {
@@ -53,7 +88,7 @@ fn run(levelset: &[f32], mist: &[f32], march_water: bool) -> Vec<Mist> {
     let ran = march
         .encode_mist(&device, &mut enc, &view, &draw, &opaque)
         .expect("mist encodes");
-    assert!(ran, "a field with a mist lattice must run the mist");
+    assert!(ran, "a field with a mist array must run the mist");
     let bytes = u64::from(W * H) * 8;
     let read = device.create_buffer_shared(bytes);
     enc.copy_buffer_to_buffer(march.mist().expect("the mist ran"), &read, bytes);
@@ -73,26 +108,22 @@ fn run(levelset: &[f32], mist: &[f32], march_water: bool) -> Vec<Mist> {
         .collect()
 }
 
-/// The camera ray's pass through the lattice box.
+/// The camera ray's pass through the node box.
 struct Chord {
     /// World distances from the ray origin to where the ray enters and leaves.
     enter: f64,
     leave: f64,
-    /// Where it enters and leaves, in metres from the lattice's min corner.
+    /// Where it enters and leaves, in the object's space.
     enter_local: [f64; 3],
     leave_local: [f64; 3],
 }
 
-/// The slab test of the ray against the box, on the CPU and in f64.
+/// The slab test of the ray against the node box, on the CPU and in f64.
 fn chord(origin: [f32; 3], dir: [f32; 3]) -> Option<Chord> {
     let inverse = mat4_inverse(model()).expect("the model inverts");
-    let min = [
-        CENTER[0] - SIZE[0] * 0.5,
-        CENTER[1] - SIZE[1] * 0.5,
-        CENTER[2] - SIZE[2] * 0.5,
-    ];
-    let o_world = mul_point(inverse, origin, 1.0);
-    let o: [f64; 3] = std::array::from_fn(|i| f64::from(o_world[i] - min[i]));
+    let (lo, hi) = node_box(&table());
+    let o_local = mul_point(inverse, origin, 1.0);
+    let o: [f64; 3] = std::array::from_fn(|i| f64::from(o_local[i]));
     let d_raw = mul_point(inverse, dir, 0.0);
     let d_raw: [f64; 3] = std::array::from_fn(|i| f64::from(d_raw[i]));
     // World lengths times `scale` are local lengths.
@@ -100,8 +131,8 @@ fn chord(origin: [f32; 3], dir: [f32; 3]) -> Option<Chord> {
     let d: [f64; 3] = std::array::from_fn(|i| d_raw[i] / scale);
     let (mut t0, mut t1) = (0.0f64, f64::MAX);
     for axis in 0..3 {
-        let ta = -o[axis] / d[axis];
-        let tb = (f64::from(SIZE[axis]) - o[axis]) / d[axis];
+        let ta = (f64::from(lo[axis]) - o[axis]) / d[axis];
+        let tb = (f64::from(hi[axis]) - o[axis]) / d[axis];
         t0 = t0.max(ta.min(tb));
         t1 = t1.min(ta.max(tb));
     }
@@ -132,21 +163,11 @@ fn pixels(keep: impl Fn(&Chord, [f32; 3], [f32; 3]) -> bool) -> Vec<(u32, u32, C
     found.into_iter().step_by(stride).take(6).collect()
 }
 
-fn lattice_nodes() -> usize {
-    (NODES[0] * NODES[1] * NODES[2]) as usize
-}
-
-/// Node values from `f(ix, iy, iz)`, x fastest.
-fn per_node(f: impl Fn(u32, u32, u32) -> f32) -> Vec<f32> {
-    let mut values = Vec::with_capacity(lattice_nodes());
-    for iz in 0..NODES[2] {
-        for iy in 0..NODES[1] {
-            for ix in 0..NODES[0] {
-                values.push(f(ix, iy, iz));
-            }
-        }
-    }
-    values
+/// Node values from `f(position)` of every held node, canonical `canon`
+/// elsewhere.
+fn per_node(canon: f32, f: impl Fn([f32; 3]) -> f32) -> Vec<f32> {
+    let table = table();
+    table.pool(canon, |p| f(table.position(p)))
 }
 
 fn assert_close(what: &str, got: f64, want: f64, relative: f64, absolute: f64) {
@@ -160,11 +181,8 @@ fn assert_close(what: &str, got: f64, want: f64, relative: f64, absolute: f64) {
 /// mean position is the chord's midpoint.
 #[test]
 fn constant_mist_has_the_chord_for_its_depth() {
-    let result = run(
-        &vec![1.0; lattice_nodes()],
-        &vec![0.8; lattice_nodes()],
-        false,
-    );
+    let far = FIELD_FAR_CELLS * CELL;
+    let result = run(&per_node(far, |_| 1.0), &per_node(0.0, |_| 0.8), false);
     for (x, y, c) in pixels(|c, _, _| c.leave - c.enter > 0.3) {
         let got = &result[(y * W + x) as usize];
         let length = c.leave - c.enter;
@@ -190,11 +208,12 @@ fn constant_mist_has_the_chord_for_its_depth() {
 /// exact on it, so the depth is the chord times the mean of the two end values.
 #[test]
 fn linear_mist_has_the_mean_of_its_end_values() {
-    let sigma = |x: f64| 0.3 + 0.5 * x / f64::from(SIZE[0]);
-    let mist = per_node(|ix, _, _| {
-        sigma(f64::from(ix) * f64::from(SIZE[0]) / f64::from(NODES[0] - 1)) as f32
-    });
-    let result = run(&vec![1.0; lattice_nodes()], &mist, false);
+    let far = FIELD_FAR_CELLS * CELL;
+    let (lo, hi) = node_box(&table());
+    let width = f64::from(hi[0] - lo[0]);
+    let sigma = |x: f64| 0.3 + 0.5 * (x - f64::from(lo[0])) / width;
+    let mist = per_node(0.0, |p| sigma(f64::from(p[0])) as f32);
+    let result = run(&per_node(far, |_| 1.0), &mist, false);
     for (x, y, c) in pixels(|c, _, _| c.leave - c.enter > 0.3) {
         let got = &result[(y * W + x) as usize];
         let want = (c.leave - c.enter) * (sigma(c.enter_local[0]) + sigma(c.leave_local[0])) / 2.0;
@@ -212,16 +231,13 @@ fn linear_mist_has_the_mean_of_its_end_values() {
 /// air above the plane, not the whole chord.
 #[test]
 fn mist_stops_at_the_water() {
-    // The plane sits 0.7 m above the lattice's floor, in local y.
-    let plane_local = 0.7f32;
-    let cell = super::water_march_gpu_tests::cell();
-    let levelset = per_node(|_, iy, _| {
-        let y = iy as f32 * SIZE[1] / (NODES[1] - 1) as f32;
-        (y - plane_local).clamp(-4.0 * cell, 4.0 * cell)
-    });
-    let floor_y = CENTER[1] - SIZE[1] * 0.5;
-    let plane_world = f64::from(mul_point(model(), [0.0, floor_y + plane_local, 0.0], 1.0)[1]);
-    let result = run(&levelset, &vec![0.8; lattice_nodes()], true);
+    let far = FIELD_FAR_CELLS * CELL;
+    // The plane sits at local y = -0.3, inside the node box and low enough
+    // that the rays that reach it there cover a band of rows.
+    let plane_local = -0.3f32;
+    let levelset = per_node(far, |p| (p[1] - plane_local).clamp(-far, far));
+    let plane_world = f64::from(mul_point(model(), [0.0, plane_local, 0.0], 1.0)[1]);
+    let result = run(&levelset, &per_node(0.0, |_| 0.8), true);
     let sc = scene();
     // Rays that go down, enter above the plane and reach it inside the box.
     let crossing = |c: &Chord, o: [f32; 3], d: [f32; 3]| {

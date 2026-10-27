@@ -1,23 +1,26 @@
-// Foam cover: per lattice node, the fraction of the water surface foam covers.
+// Foam cover: per display node, the fraction of the water surface foam covers,
+// on the display's world tiles (composed after the read side,
+// `manifold_node_engine::scene::world_tiles::READ_SIDE`, and the shared splat
+// shape).
 //
 // Each live foam particle is a disc of area pi r^2 on the surface. Discs placed
 // independently cover 1 - exp(-tau) of the surface, tau being the expected disc
 // area per unit area at the node: strength * sum_k A_k W(|node - x_k|), W the
-// 2D cubic-spline kernel (Monaghan 1992) of smoothing length h, the lattice's
-// smallest node spacing, reaching 2h.
+// 2D cubic-spline kernel (Monaghan 1992) of smoothing length h, the display
+// cell size, reaching 2h. Node p sits at (p - 1/2) h and is element
+// `ts_cell_at(p)` of the pool; a node in a tile the table does not hold takes
+// nothing, and the canonical element reads 0.
 //
 // Three passes in command order: cs_clear zeroes the accumulator, cs_scatter
 // adds every particle's kernel-weighted area to the nodes within 2h, cs_resolve
 // turns each node's sum into a cover.
 
 struct Params {
-    lattice_min: vec3<f32>,
     h: f32,
-    spacing: vec3<f32>,
     strength: f32,
-    nodes: vec3<u32>,
+    pool_tiles: u32,
     particle_capacity: u32,
-    node_count: u32,
+    elements: u32,
     pad_a: u32,
     pad_b: u32,
     pad_c: u32,
@@ -31,10 +34,18 @@ struct Particle {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> particles: array<Particle>;
-@group(0) @binding(2) var<storage, read_write> accum: array<atomic<u32>>;
-@group(0) @binding(3) var<storage, read_write> cover: array<f32>;
+@group(0) @binding(2) var<storage, read> tiles: array<u32>;
+@group(0) @binding(3) var<storage, read_write> accum: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> cover: array<f32>;
+
+fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(params.pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 
 const PI: f32 = 3.14159265358979;
+// Past this many cells from the origin a position is no water's: it keeps
+// the node coordinate inside an i32.
+const REACH_CELLS: f32 = 1.0e9;
 
 // The 2D cubic-spline kernel, normalised over a plane: 10 / (7 pi h^2) f(q).
 fn kernel(distance: f32, h: f32) -> f32 {
@@ -43,7 +54,7 @@ fn kernel(distance: f32, h: f32) -> f32 {
 
 @compute @workgroup_size(64)
 fn cs_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= params.node_count {
+    if gid.x >= params.elements {
         return;
     }
     atomicStore(&accum[gid.x], 0u);
@@ -61,20 +72,28 @@ fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let x = p.position_radius.xyz;
     let reach = 2.0 * params.h;
-    let top = vec3<f32>(params.nodes) - vec3<f32>(1.0);
-    let lo = vec3<i32>(clamp(floor((x - reach - params.lattice_min) / params.spacing), vec3<f32>(0.0), top));
-    let hi = vec3<i32>(clamp(ceil((x + reach - params.lattice_min) / params.spacing), vec3<f32>(0.0), top));
+    // The particle's node coordinate: node n is at n = x / h + 1/2.
+    let q = x / params.h + vec3<f32>(0.5);
+    if !all(abs(q) < vec3<f32>(REACH_CELLS)) {
+        return;
+    }
+    let lo = vec3<i32>(floor(q - vec3<f32>(2.0)));
+    let hi = vec3<i32>(ceil(q + vec3<f32>(2.0)));
+    ts_home(ts_cell_at(vec3<i32>(floor(q))));
     let area = PI * r * r;
     for (var k = lo.z; k <= hi.z; k++) {
         for (var j = lo.y; j <= hi.y; j++) {
             for (var i = lo.x; i <= hi.x; i++) {
-                let node = params.lattice_min + params.spacing * vec3<f32>(f32(i), f32(j), f32(k));
-                let d = distance(node, x);
+                let node = vec3<i32>(i, j, k);
+                let d = distance((vec3<f32>(node) - vec3<f32>(0.5)) * params.h, x);
                 if d >= reach {
                     continue;
                 }
+                let index = ts_cell_at(node);
+                if index == ts_canon() {
+                    continue;
+                }
                 let add = u32(round(area * kernel(d, params.h) * SPLAT_FIXED_SCALE));
-                let index = ts_grid_index(vec3<i32>(i, j, k), vec3<i32>(params.nodes));
                 atomicAdd(&accum[index], add);
             }
         }
@@ -83,7 +102,7 @@ fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 @compute @workgroup_size(64)
 fn cs_resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= params.node_count {
+    if gid.x >= params.elements {
         return;
     }
     let tau = params.strength * f32(atomicLoad(&accum[gid.x])) / SPLAT_FIXED_SCALE;

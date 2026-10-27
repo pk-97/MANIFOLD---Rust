@@ -1,7 +1,7 @@
-//! `node.spray_mist` — per field-lattice node, the extinction coefficient (per
-//! metre) of the spray's droplets in the air. Each live particle is a droplet
-//! of cross-section pi r^2 and extinction efficiency 2; the kernel-smoothed sum
-//! over droplets is the coefficient at the node.
+//! `node.spray_mist` — per node of the display's world tiles, the extinction
+//! coefficient (per metre) of the spray's droplets in the air. Each live
+//! particle is a droplet of cross-section pi r^2 and extinction efficiency 2;
+//! the kernel-smoothed sum over droplets is the coefficient at the node.
 
 use std::borrow::Cow;
 
@@ -11,78 +11,57 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::tile_storage::TILE_GRID;
+use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 
 use super::PARTICLE_SPLAT;
 
-// The kernel after the grid helpers it indexes through and the shared splat shape.
+// The read side and the shared splat shape, then the kernel.
 static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
-        "{TILE_GRID}\n{PARTICLE_SPLAT}\n{}",
+        "{READ_SIDE}\n{PARTICLE_SPLAT}\n{}",
         include_str!("shaders/spray_mist.wgsl")
     )
 });
 const THREADS: u32 = 64;
 
-/// Field order identical to the shader's `Params`; every row is 16 bytes.
+/// Field order identical to the shader's `Params`; two 16-byte rows.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MistUniforms {
-    lattice_min: [f32; 3],
     h: f32,
-    spacing: [f32; 3],
     strength: f32,
-    nodes: [u32; 3],
+    pool_tiles: u32,
     particle_capacity: u32,
-    node_count: u32,
+    elements: u32,
     pad_a: u32,
     pad_b: u32,
     pad_c: u32,
 }
 
-/// The shader's constants from the node's inputs. `nodes` are the field
-/// lattice's node counts as wired (whole numbers, at least 2 per axis); the
-/// kernel's smoothing length is the smallest node spacing.
+/// The shader's constants for `pool`: the kernel's smoothing length is the
+/// display cell size.
 fn mist_uniforms(
-    center: [f32; 3],
-    size: [f32; 3],
-    nodes: [f32; 3],
+    pool: TilePool,
     strength: f32,
     particle_capacity: u32,
 ) -> Result<MistUniforms, String> {
-    if nodes.iter().any(|n| !(n.is_finite() && n.round() >= 2.0)) {
-        return Err(format!(
-            "Spray Mist: a {}×{}×{} field lattice has fewer than 2 nodes on an axis. Wire nodes_x/y/z from the water field's lattice.",
-            nodes[0], nodes[1], nodes[2]
-        ));
-    }
-    let nodes = nodes.map(|n| n.round() as u32);
-    if center.iter().any(|v| !v.is_finite()) || size.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
-        return Err("Spray Mist: the lattice box must be finite with a positive size".into());
-    }
     if !(strength.is_finite() && strength >= 0.0) {
         return Err("Spray Mist: strength must be finite and at least 0".into());
     }
-    let node_count = nodes
-        .iter()
-        .try_fold(1u32, |total, &n| total.checked_mul(n))
-        .ok_or_else(|| {
-            format!(
-                "Spray Mist: a {}×{}×{} field lattice has more nodes than an index can address",
-                nodes[0], nodes[1], nodes[2]
-            )
-        })?;
-    let spacing: [f32; 3] = std::array::from_fn(|a| size[a] / (nodes[a] - 1) as f32);
-    let h = spacing.into_iter().fold(f32::INFINITY, f32::min);
+    let elements = u32::try_from(pool.elements()).map_err(|_| {
+        format!(
+            "Spray Mist: a pool of {} tiles has more elements than an index can address",
+            pool.pool_tiles
+        )
+    })?;
     Ok(MistUniforms {
-        lattice_min: std::array::from_fn(|a| center[a] - 0.5 * size[a]),
-        h,
-        spacing,
+        h: pool.cell_size,
         strength,
-        nodes,
+        pool_tiles: pool.pool_tiles,
         particle_capacity,
-        node_count,
+        elements,
         pad_a: 0,
         pad_b: 0,
         pad_c: 0,
@@ -106,38 +85,39 @@ fn ensure_buffer(
     Ok(slot.as_ref().expect("buffer was just allocated").clone())
 }
 
+fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
+    GpuBinding::Buffer {
+        binding,
+        buffer,
+        offset: 0,
+    }
+}
+
 manifold_node_engine::primitive! {
     name: SprayMist,
     type_id: "node.spray_mist",
-    purpose: "Per node of the water's field lattice, the extinction coefficient per metre of the spray's droplets in the air. Each live particle (a slot with radius 0 is empty) is a droplet of cross-section pi r^2 and extinction efficiency 2 (droplets far larger than the wavelength remove twice their cross-section, the extinction paradox); the coefficient at a node is strength times the sum over droplets of 2 pi r^2 W(distance), W the 3D cubic-spline kernel normalised over space, with smoothing length the lattice's smallest node spacing, reaching two spacings.",
+    purpose: "Per node of the display's world tiles, the extinction coefficient per metre of the spray's droplets in the air. Each live particle (a slot with radius 0 is empty) is a droplet of cross-section pi r^2 and extinction efficiency 2 (droplets far larger than the wavelength remove twice their cross-section, the extinction paradox); the coefficient at a node is strength times the sum over droplets of 2 pi r^2 W(distance), W the 3D cubic-spline kernel normalised over space, with smoothing length the display cell size, reaching two cells. Node p is at (p - 1/2) cells; a node in a tile the table does not hold takes nothing, and the canonical element reads 0.",
     inputs: {
         particles: Array(FluidParticle) required,
-        center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
-        size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
-        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        tiles: Array(u32) required,
         strength: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
     },
     outputs: {
         mist: Array(f32),
     },
     params: [
-        float_param!("center_x", "Center X", 0.0, -1000.0, 1000.0),
-        float_param!("center_y", "Center Y", 0.0, -1000.0, 1000.0),
-        float_param!("center_z", "Center Z", 0.0, -1000.0, 1000.0),
-        float_param!("size_x", "Size X", 4.0, 0.001, 1000.0),
-        float_param!("size_y", "Size Y", 4.0, 0.001, 1000.0),
-        float_param!("size_z", "Size Z", 4.0, 0.001, 1000.0),
-        float_param!("nodes_x", "Field Nodes X", 2.0, 2.0, 16384.0),
-        float_param!("nodes_y", "Field Nodes Y", 2.0, 2.0, 16384.0),
-        float_param!("nodes_z", "Field Nodes Z", 2.0, 2.0, 16384.0),
         // Times the spray's droplet extinction: 1 is the mist the spray makes, 0 none.
         float_param!("strength", "Mist", 1.0, 0.0, 4.0),
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Takes the displayed spray particles (node.interpolate_particle_frames of the frame's spray) and the water field's lattice; its extinction feeds the water object's field_mist.",
+    composition_notes: "Takes the displayed spray particles (node.interpolate_particle_frames of the frame's spray) and tiles, pool_tiles and cell_size from node.surface_tiles, the table those spray particles helped build; its extinction feeds the water object's field_mist.",
     examples: [],
     picker: { label: "Spray Mist", category: Atom },
-    summary: "Turns the spray droplets into a mist density on the water's lattice.",
+    summary: "Turns the spray droplets into a mist density on the water's tiles.",
     category: Particles3D,
     role: Filter,
     aliases: ["spray mist", "mist", "droplet extinction"],
@@ -169,64 +149,55 @@ impl Primitive for SprayMist {
         _params: &ParamValues,
         _inputs: &[(&str, u32)],
     ) -> Option<u32> {
-        // Provided storage: a one-record hint, sized to the lattice at run time.
+        // Provided storage: a one-record hint, sized to the pool at run time.
         (port == "mist").then_some(1)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         {
             let gpu = ctx.gpu_encoder();
-            if self.clear_pipeline.is_none() {
-                self.clear_pipeline = Some(gpu.device.create_compute_pipeline(
-                    SHADER.as_str(),
-                    "cs_clear",
-                    "node.spray_mist",
-                ));
-            }
-            if self.scatter_pipeline.is_none() {
-                self.scatter_pipeline = Some(gpu.device.create_compute_pipeline(
-                    SHADER.as_str(),
-                    "cs_scatter",
-                    "node.spray_mist",
-                ));
-            }
-            if self.resolve_pipeline.is_none() {
-                self.resolve_pipeline = Some(gpu.device.create_compute_pipeline(
-                    SHADER.as_str(),
-                    "cs_resolve",
-                    "node.spray_mist",
-                ));
+            for (slot, entry) in [
+                (&mut self.clear_pipeline, "cs_clear"),
+                (&mut self.scatter_pipeline, "cs_scatter"),
+                (&mut self.resolve_pipeline, "cs_resolve"),
+            ] {
+                if slot.is_none() {
+                    *slot = Some(gpu.device.create_compute_pipeline(
+                        SHADER.as_str(),
+                        entry,
+                        "node.spray_mist",
+                    ));
+                }
             }
         }
-        let Some(particles) = ctx.inputs.array("particles") else {
-            ctx.error("Spray Mist: particles must be wired");
+        let pool = match tile_pool(ctx, "Spray Mist") {
+            Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
+        let (Some(particles), Some(tiles)) =
+            (ctx.inputs.array("particles"), ctx.inputs.array("tiles"))
+        else {
+            ctx.error("Spray Mist: particles and tiles must be wired");
             return;
         };
-        let center =
-            ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0));
         let capacity = u32::try_from(particles.size / std::mem::size_of::<FluidParticle>() as u64)
             .unwrap_or(u32::MAX);
-        let uniforms = match mist_uniforms(
-            center,
-            size,
-            nodes,
-            ctx.scalar_or_param("strength", 1.0),
-            capacity,
-        ) {
+        let uniforms = match mist_uniforms(pool, ctx.scalar_or_param("strength", 1.0), capacity) {
             Ok(uniforms) => uniforms,
             Err(error) => {
                 ctx.error(error);
                 return;
             }
         };
-        let node_count = u64::from(uniforms.node_count);
+        let element_bytes = u64::from(uniforms.elements) * 4;
 
         let buffers = {
             let gpu = ctx.gpu_encoder();
-            let accum = ensure_buffer(&mut self.accum, gpu.device, node_count * 4);
-            let mist = ensure_buffer(&mut self.mist, gpu.device, node_count * 4);
+            let accum = ensure_buffer(&mut self.accum, gpu.device, element_bytes);
+            let mist = ensure_buffer(&mut self.mist, gpu.device, element_bytes);
             accum.and_then(|a| mist.map(|m| (a, m)))
         };
         let (accum, mist) = match buffers {
@@ -242,30 +213,19 @@ impl Primitive for SprayMist {
                 binding: 0,
                 data: bytemuck::bytes_of(&uniforms),
             },
-            GpuBinding::Buffer {
-                binding: 1,
-                buffer: particles,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 2,
-                buffer: &accum,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 3,
-                buffer: &mist,
-                offset: 0,
-            },
+            buffer(1, particles),
+            buffer(2, tiles),
+            buffer(3, &accum),
+            buffer(4, &mist),
         ];
-        let node_groups = [uniforms.node_count.div_ceil(THREADS), 1, 1];
+        let element_groups = [uniforms.elements.div_ceil(THREADS), 1, 1];
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             self.clear_pipeline
                 .as_ref()
                 .expect("clear pipeline prepared"),
             &bindings,
-            node_groups,
+            element_groups,
             "node.spray_mist.clear",
         );
         gpu.native_enc.compute_memory_barrier_buffers();
@@ -285,7 +245,7 @@ impl Primitive for SprayMist {
                 .as_ref()
                 .expect("resolve pipeline prepared"),
             &bindings,
-            node_groups,
+            element_groups,
             "node.spray_mist.resolve",
         );
         gpu.native_enc.compute_memory_barrier_buffers();
@@ -311,32 +271,32 @@ mod tests {
                 "missing {entry}"
             );
         }
-        assert_eq!(std::mem::size_of::<MistUniforms>(), 64);
+        assert_eq!(std::mem::size_of::<MistUniforms>(), 32);
     }
 
     #[test]
-    fn smoothing_length_is_the_smallest_spacing_of_a_non_cubic_lattice() {
-        let u = mist_uniforms(
-            [0.5, -1.0, 2.0],
-            [2.0, 1.5, 2.5],
-            [33.0, 25.0, 41.0],
-            2.0,
-            100,
-        )
-        .unwrap();
+    fn the_smoothing_length_is_the_display_cell_over_a_pool_of_any_size() {
+        let pool = TilePool {
+            pool_tiles: 13,
+            cell_size: 0.0625,
+        };
+        let u = mist_uniforms(pool, 2.0, 100).unwrap();
         assert_eq!(u.h, 0.0625);
-        assert_eq!(u.lattice_min, [-0.5, -1.75, 0.75]);
-        assert_eq!(u.spacing, [0.0625, 0.0625, 0.0625]);
-        assert_eq!(u.node_count, 33 * 25 * 41);
+        assert_eq!(u.elements, 13 * 512 + 1);
+        assert_eq!(u.pool_tiles, 13);
+        assert_eq!(u.particle_capacity, 100);
         assert_eq!(u.strength, 2.0);
     }
 
     #[test]
-    fn a_bad_lattice_or_strength_is_an_error() {
-        assert!(mist_uniforms([0.0; 3], [2.0; 3], [33.0, 1.0, 41.0], 1.0, 10).is_err());
-        assert!(mist_uniforms([0.0; 3], [2.0, 0.0, 2.0], [33.0; 3], 1.0, 10).is_err());
-        assert!(mist_uniforms([0.0; 3], [2.0; 3], [33.0; 3], -1.0, 10).is_err());
-        assert!(mist_uniforms([0.0; 3], [2.0; 3], [33.0; 3], f32::NAN, 10).is_err());
+    fn a_bad_strength_is_an_error() {
+        let pool = TilePool {
+            pool_tiles: 1,
+            cell_size: 0.1,
+        };
+        assert!(mist_uniforms(pool, -1.0, 10).is_err());
+        assert!(mist_uniforms(pool, f32::NAN, 10).is_err());
+        assert!(mist_uniforms(pool, f32::INFINITY, 10).is_err());
     }
 }
 

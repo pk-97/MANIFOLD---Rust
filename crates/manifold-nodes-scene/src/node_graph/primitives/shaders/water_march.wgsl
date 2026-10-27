@@ -1,7 +1,8 @@
 // Per-pixel ray march of a water level set. Writes the nearest field hit per
 // pixel into the G-buffer `hits`, plus optional depth and motion vectors.
 // Starts after `water_march_core.wgsl`, which holds bindings 0 and 1, the
-// march constants, the field sampling and the hit search.
+// march constants, the field sampling and the hit search. The velocity is a
+// pooled field under the same world-tile table as the level set.
 
 @group(0) @binding(2) var<storage, read> velocity: array<f32>;
 @group(0) @binding(3) var opaque_depth: texture_depth_2d;
@@ -9,30 +10,22 @@
 @group(0) @binding(5) var depth_out: texture_storage_2d<r32float, write>;
 @group(0) @binding(6) var velocity_out: texture_storage_2d<rg16float, write>;
 
-fn node_velocity(i: vec3<i32>) -> vec3<f32> {
-    let hi = vec3<i32>(u.nodes.xyz) - vec3<i32>(1);
-    let c = clamp(i, vec3<i32>(0), hi);
-    let n = u32(c.x) + u.nodes.x * (u32(c.y) + u.nodes.y * u32(c.z));
-    return vec3<f32>(velocity[3u * n], velocity[3u * n + 1u], velocity[3u * n + 2u]);
+fn velocity_at_element(i: u32) -> vec3<f32> {
+    return vec3<f32>(velocity[3u * i], velocity[3u * i + 1u], velocity[3u * i + 2u]);
 }
 
+// The velocity at an object-space point: the trilinear of the node velocities.
 fn sample_velocity(p: vec3<f32>) -> vec3<f32> {
-    let g = lattice_coord(p);
-    let b = min(vec3<i32>(floor(g)), vec3<i32>(u.nodes.xyz) - vec3<i32>(2));
-    let f = g - vec3<f32>(b);
-    let c000 = node_velocity(b);
-    let c100 = node_velocity(b + vec3<i32>(1, 0, 0));
-    let c010 = node_velocity(b + vec3<i32>(0, 1, 0));
-    let c110 = node_velocity(b + vec3<i32>(1, 1, 0));
-    let c001 = node_velocity(b + vec3<i32>(0, 0, 1));
-    let c101 = node_velocity(b + vec3<i32>(1, 0, 1));
-    let c011 = node_velocity(b + vec3<i32>(0, 1, 1));
-    let c111 = node_velocity(b + vec3<i32>(1, 1, 1));
-    let x00 = mix(c000, c100, f.x);
-    let x10 = mix(c010, c110, f.x);
-    let x01 = mix(c001, c101, f.x);
-    let x11 = mix(c011, c111, f.x);
-    return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
+    let q = field_node_coord(p, u.cell.x);
+    field_enter(q);
+    let c = field_corners(q);
+    return field_mix3(
+        velocity_at_element(c.c000), velocity_at_element(c.c100),
+        velocity_at_element(c.c010), velocity_at_element(c.c110),
+        velocity_at_element(c.c001), velocity_at_element(c.c101),
+        velocity_at_element(c.c011), velocity_at_element(c.c111),
+        c.f,
+    );
 }
 
 fn bspline_w(t: f32) -> vec4<f32> {
@@ -56,9 +49,11 @@ fn bspline_dw(t: f32) -> vec4<f32> {
 }
 
 // Gradient of the cubic B-spline field (prototype `normal_cubic`,
-// levelset_proto/src/main.rs:134-156), in field units per metre.
+// levelset_proto/src/main.rs:134-156), in field units per metre. The 4 x 4 x 4
+// nodes lie in the home's tile or its neighbours, so the table is walked once.
 fn field_gradient_cubic(p: vec3<f32>) -> vec3<f32> {
-    let g = lattice_coord(p);
+    let g = field_node_coord(p, u.cell.x);
+    field_enter(g);
     let fl = floor(g);
     let t = g - fl;
     let base = vec3<i32>(fl) - vec3<i32>(1);
@@ -81,7 +76,7 @@ fn field_gradient_cubic(p: vec3<f32>) -> vec3<f32> {
             }
         }
     }
-    return vec3<f32>(gx, gy, gz) / u.spacing.xyz;
+    return vec3<f32>(gx, gy, gz) / u.cell.x;
 }
 
 @compute @workgroup_size(8, 8)
@@ -91,6 +86,7 @@ fn cs_march(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gid.x >= width || gid.y >= height { return; }
     let pix = vec2<i32>(gid.xy);
     let idx = gid.y * width + gid.x;
+    field_pool = u.tiles.xy;
 
     let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(u.target_size.xy);
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
@@ -119,11 +115,10 @@ fn cs_march(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let t_hit = march_surface(o, d, t0, t1);
     if t_hit < 0.0 { return; }
-    let cell = u.lattice_min.w;
+    let cell = u.cell.x;
 
     let p = o + d * t_hit;
-    let local = p + u.lattice_min.xyz;
-    let world = (u.local_to_world * vec4<f32>(local, 1.0)).xyz;
+    let world = (u.local_to_world * vec4<f32>(p, 1.0)).xyz;
     let clip = u.view_proj * vec4<f32>(world, 1.0);
     let depth = clip.z / clip.w;
     let n_local = field_gradient_cubic(p);
@@ -142,7 +137,7 @@ fn cs_march(@builtin(global_invocation_id) gid: vec3<u32>) {
     hits[idx] = FieldHit(
         depth,
         pack2x16snorm(oct_encode(n_world)),
-        pack2x16float(vec2<f32>(thickness_world, f32(u.nodes.w))),
+        pack2x16float(vec2<f32>(thickness_world, f32(u.tiles.z))),
     );
 
     if (u.flags.x & 1u) != 0u {
@@ -153,7 +148,7 @@ fn cs_march(@builtin(global_invocation_id) gid: vec3<u32>) {
         if u.target_size.z > 0.5 {
             v = (u.local_to_world * vec4<f32>(sample_velocity(p), 0.0)).xyz;
         }
-        let prev_world = (u.prev_local_to_world * vec4<f32>(local, 1.0)).xyz - v * u.spacing.w;
+        let prev_world = (u.prev_local_to_world * vec4<f32>(p, 1.0)).xyz - v * u.cell.y;
         let c0 = u.view_proj * vec4<f32>(world, 1.0);
         let c1 = u.prev_view_proj * vec4<f32>(prev_world, 1.0);
         let motion = c0.xy / c0.w - c1.xy / c1.w - (u.jitter.xy - u.jitter.zw);

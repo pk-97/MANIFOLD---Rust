@@ -1,6 +1,15 @@
-// node.liquid_solid_distance — fusable BUFFER body, GATHER. One thread per lattice node, x fastest: the seam's solid
-// lattice, positive in free space and negative inside a solid. It is the
-// smaller of the distance to the Wall faces of the Bounds box and every
+var<private> ww_pool_tiles: u32;
+fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
+
+// node.liquid_solid_distance — fusable BUFFER body, GATHER. One thread per
+// pool element of the display's world tiles (`buf_tiles`, `pool_tiles` tiles),
+// x fastest within a tile: the display's solid, positive in free space and
+// negative inside a solid, as a node array. Node p of the lattice sits at
+// (p − ½)·h, and is element `ts_cell_at(p)` of the pool; a free slot and the
+// canonical element read 1e30, the solid of a tile the table does not hold. It
+// is the smaller of the distance to the Wall faces of the Bounds box and every
 // enabled body's signed distance, sampled from its shape's lattice in the
 // atlas through its pose at the end of this frame's last tick (the row
 // rows − body_count moved for tick_seconds, as node.matter_move_bodies moves
@@ -13,8 +22,9 @@
 // manifold_water_liquid::lattice::bounds_distance.
 //
 // ABI: `bodies` (LiquidBody), `shapes` (LiquidShape) and `atlas` (distances
-// two halves per word) are gathered; the output is one f32 per node. Poses
-// and sampling are liquid_pose.wgsl's and liquid_collider.wgsl's.
+// two halves per word) are gathered with the table; the output is one f32 per
+// pool element. Poses and sampling are liquid_pose.wgsl's and
+// liquid_collider.wgsl's.
 
 struct ClockPlan {
     step_dt: f32,
@@ -31,7 +41,7 @@ struct ClockPlan {
     live_mode: u32,
 };
 
-@group(0) @binding(5) var<storage, read> clock_plan: array<ClockPlan>;
+@group(0) @binding(6) var<storage, read> clock_plan: array<ClockPlan>;
 
 fn adaptive_tick_seconds(tick_seconds: f32) -> f32 {
     return select(tick_seconds, clock_plan[0].elapsed, clock_plan[0].live_mode != 0u);
@@ -45,13 +55,7 @@ fn liquid_atlas_half(index: u32) -> f32 {
 fn body(
     idx: u32,
     count: u32,
-    lattice_min_x: f32,
-    lattice_min_y: f32,
-    lattice_min_z: f32,
     cell_size: f32,
-    nodes_x: i32,
-    nodes_y: i32,
-    nodes_z: i32,
     closed_faces: i32,
     bounds_lo_x: f32,
     bounds_lo_y: f32,
@@ -62,11 +66,13 @@ fn body(
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
+    pool_tiles: f32,
 ) -> f32 {
-    let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
-    let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
-    let lattice_min = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
-    let x = lattice_min + vec3<f32>(coord) * cell_size;
+    ww_pool_tiles = u32(pool_tiles);
+    if idx >= ts_canon() || ts_slot_entry(idx >> 9u) == WT_NONE {
+        return 1.0e30;
+    }
+    let x = (vec3<f32>(ts_cell_coord(idx)) - vec3<f32>(0.5)) * cell_size;
     let lo = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
     let hi = vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z);
     var distance = 1.0e30;

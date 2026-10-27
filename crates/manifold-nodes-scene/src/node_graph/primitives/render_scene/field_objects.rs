@@ -5,8 +5,11 @@
 use super::*;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::scene::scene_object::FieldSurface;
+use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
 
-/// One water field to march and shade this frame.
+/// One water field to march and shade this frame. Every array is a pooled
+/// field of `pool_len(pool_tiles)` elements under the world-tile table in
+/// `tiles`; the field has no CPU box, its extent lives on the GPU.
 pub(super) struct FieldObject<'ctx> {
     /// The object index, which also names the field in the G-buffer.
     pub slot: u32,
@@ -18,9 +21,13 @@ pub(super) struct FieldObject<'ctx> {
     pub mist: Option<&'ctx manifold_gpu::GpuBuffer>,
     /// Wetness per node, 0 to 1.
     pub wetness: Option<&'ctx manifold_gpu::GpuBuffer>,
-    pub center: [f32; 3],
-    pub size: [f32; 3],
-    pub nodes: [u32; 3],
+    /// The world-tile table (`world_tiles` layout) the arrays are read through.
+    pub tiles: &'ctx manifold_gpu::GpuBuffer,
+    /// Eight floats: the held tiles' node bounds in object space.
+    pub extent: &'ctx manifold_gpu::GpuBuffer,
+    pub pool_tiles: u32,
+    /// The display lattice's cell size in metres.
+    pub cell_size: f32,
     pub model: [[f32; 4]; 4],
     pub prev_model: [[f32; 4]; 4],
     /// Ripple detail strength over the automatic one (`FieldSurface::ripple_detail`).
@@ -187,19 +194,15 @@ impl RenderScene {
         None
     }
 
-    /// The buffer of an optional per-node array on the water's lattice,
-    /// `per_node` values per node. `Err` after the frame failure is reported.
-    fn lattice_array<'ctx>(
+    /// The buffer behind a field port, holding at least `needed` 4-byte
+    /// values. `Err` after the frame failure is reported.
+    fn field_array<'ctx>(
         ctx: &mut EffectNodeContext<'ctx, '_>,
         n: usize,
-        slot: Option<Slot>,
+        slot: Slot,
         port: &str,
-        per_node: u64,
-        nodes: [u32; 3],
-    ) -> Result<Option<&'ctx manifold_gpu::GpuBuffer>, ()> {
-        let Some(slot) = slot else {
-            return Ok(None);
-        };
+        needed: u64,
+    ) -> Result<&'ctx manifold_gpu::GpuBuffer, ()> {
         let Some(buffer) = ctx.inputs.array_slot(slot) else {
             Self::fail_field::<()>(
                 ctx,
@@ -208,23 +211,31 @@ impl RenderScene {
             );
             return Err(());
         };
-        let have = buffer.size / std::mem::size_of::<f32>() as u64;
-        let need = nodes.iter().map(|&c| u64::from(c)).product::<u64>() * per_node;
-        if have < need {
+        let have = buffer.size / 4;
+        if have < needed {
             Self::fail_field::<()>(
                 ctx,
                 n,
                 format!(
-                    "object_{n}: water field {} holds {have} values, its {}x{}x{} lattice needs {need}",
+                    "object_{n}: water field {} holds {have} values, its pool needs {needed}",
                     port.trim_start_matches("field_"),
-                    nodes[0],
-                    nodes[1],
-                    nodes[2]
                 ),
             );
             return Err(());
         }
-        Ok(Some(buffer))
+        Ok(buffer)
+    }
+
+    /// [`Self::field_array`] for a port that may be unwired.
+    fn optional_field_array<'ctx>(
+        ctx: &mut EffectNodeContext<'ctx, '_>,
+        n: usize,
+        slot: Option<Slot>,
+        port: &str,
+        needed: u64,
+    ) -> Result<Option<&'ctx manifold_gpu::GpuBuffer>, ()> {
+        slot.map(|slot| Self::field_array(ctx, n, slot, port, needed))
+            .transpose()
     }
 
     /// Validate one water object and compose its model and uniforms.
@@ -258,39 +269,30 @@ impl RenderScene {
         } = pre;
         let render_mode = effective_render_mode(render_mode, *rt_enabled);
         let inputs = ctx.inputs;
-        if !inputs.slot_content_ready(field.levelset)
-            || [field.velocity, field.foam, field.mist, field.wetness]
-                .into_iter()
-                .flatten()
-                .any(|slot| !inputs.slot_content_ready(slot))
+        if [field.levelset, field.tiles, field.extent]
+            .into_iter()
+            .chain(
+                [field.velocity, field.foam, field.mist, field.wetness]
+                    .into_iter()
+                    .flatten(),
+            )
+            .any(|slot| !inputs.slot_content_ready(slot))
         {
             return Some(None);
         }
-        let Some(levelset) = inputs.array_slot(field.levelset) else {
-            return Self::fail_field(
-                ctx,
-                n,
-                format!("object_{n}: water field `field` input is unavailable"),
-            );
-        };
-        let node_count = field.nodes.iter().map(|&c| u64::from(c)).product::<u64>();
-        let values = levelset.size / std::mem::size_of::<f32>() as u64;
-        if values < node_count {
-            return Self::fail_field(
-                ctx,
-                n,
-                format!(
-                    "object_{n}: water field level set holds {values} values, its {}x{}x{} lattice needs {node_count}",
-                    field.nodes[0], field.nodes[1], field.nodes[2]
-                ),
-            );
-        }
+        let pool_tiles = field.pool_tiles;
+        let elements = pool_len(pool_tiles);
+        let levelset = Self::field_array(ctx, n, field.levelset, "field", elements).ok()?;
         let velocity =
-            Self::lattice_array(ctx, n, field.velocity, "field_velocity", 3, field.nodes).ok()?;
-        let foam = Self::lattice_array(ctx, n, field.foam, "field_foam", 1, field.nodes).ok()?;
-        let mist = Self::lattice_array(ctx, n, field.mist, "field_mist", 1, field.nodes).ok()?;
+            Self::optional_field_array(ctx, n, field.velocity, "field_velocity", 3 * elements)
+                .ok()?;
+        let foam = Self::optional_field_array(ctx, n, field.foam, "field_foam", elements).ok()?;
+        let mist = Self::optional_field_array(ctx, n, field.mist, "field_mist", elements).ok()?;
         let wetness =
-            Self::lattice_array(ctx, n, field.wetness, "field_wetness", 1, field.nodes).ok()?;
+            Self::optional_field_array(ctx, n, field.wetness, "field_wetness", elements).ok()?;
+        let tiles =
+            Self::field_array(ctx, n, field.tiles, "field_tiles", table_words(pool_tiles)).ok()?;
+        let extent = Self::field_array(ctx, n, field.extent, "field_extent", 8).ok()?;
         let material = match Self::object_material(
             ctx,
             n,
@@ -338,9 +340,10 @@ impl RenderScene {
             foam,
             mist,
             wetness,
-            center: field.center,
-            size: field.size,
-            nodes: field.nodes,
+            tiles,
+            extent,
+            pool_tiles,
+            cell_size: field.cell_size,
             model,
             prev_model: prev_model_n,
             ripple_detail: field.ripple_detail,
