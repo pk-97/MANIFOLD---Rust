@@ -46,6 +46,9 @@ var<workgroup> rd_nodes: array<f32, 5832>;
 var<workgroup> rd_cross: array<atomic<u32>, 154>;
 var<workgroup> rd_held: u32;
 var<workgroup> rd_crossed: atomic<u32>;
+var<workgroup> rd_any: u32;
+// rd_cross once it is built, read without atomics.
+var<workgroup> rd_crossings: array<u32, 154>;
 
 fn rd_segment(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>) -> f32 {
     let v = b - a;
@@ -91,62 +94,81 @@ fn rd_case(w: vec3<i32>) -> u32 {
     return case_index;
 }
 
-// The distance from the node at window node `at` (tile-local `local`), the
-// same nearest-triangle search over the band's cells as one node at a time.
+// The nearest-triangle distance² from the node at window node `at` to the
+// crossed window cell `cell`, or `best` when it is no nearer. Positions are
+// metres from the node, so the node is the origin.
+fn rd_cell(at: vec3<i32>, cell: vec3<i32>, best: f32) -> f32 {
+    let cell_size = u.cell_size;
+    let box_low = vec3<f32>(cell - at) * cell_size;
+    let box_high = vec3<f32>(cell - at + vec3<i32>(1)) * cell_size;
+    let delta = max(max(box_low, -box_high), vec3<f32>(0.0));
+    if dot(delta, delta) > best { return best; }
+    let flat = rd_cell_index(cell);
+    if (rd_crossings[flat >> 5u] & (1u << (flat & 31u))) == 0u { return best; }
+    var corner: array<f32, 8>;
+    var case_index = 0u;
+    for (var c = 0u; c < 8u; c = c + 1u) {
+        corner[c] = rd_nodes[rd_node_index(cell + vec3<i32>(MC_CORNERS[c]))];
+        if corner[c] < 0.0 { case_index = case_index | (1u << c); }
+    }
+    let triangles = MC_TRIANGLE_COUNT[case_index];
+    var vertices: array<vec3<f32>, 12>;
+    // An edge crosses where the case's inside bits differ: one
+    // classification per corner, so a corner of exactly zero can never be
+    // inside for the case and outside for its edges (which would leave a
+    // triangle vertex unset at the node).
+    for (var e = 0u; e < 12u; e = e + 1u) {
+        let ca = MC_EDGE_A[e];
+        let cb = MC_EDGE_B[e];
+        if ((case_index >> ca) & 1u) != ((case_index >> cb) & 1u) {
+            let va = corner[ca];
+            let d = va - corner[cb];
+            let t = select(0.5, va / d, d != 0.0);
+            let a = cell + vec3<i32>(MC_CORNERS[ca]) - at;
+            let b = cell + vec3<i32>(MC_CORNERS[cb]) - at;
+            vertices[e] = (vec3<f32>(a) + t * vec3<f32>(b - a)) * cell_size;
+        }
+    }
+    let p = vec3<f32>(0.0);
+    var nearest = best;
+    for (var t = 0u; t < triangles; t = t + 1u) {
+        nearest = min(nearest, rd_triangle(p, vertices[mc_edge(case_index, 3u * t)],
+            vertices[mc_edge(case_index, 3u * t + 1u)], vertices[mc_edge(case_index, 3u * t + 2u)]));
+    }
+    return nearest;
+}
+
+// The distance from the node at window node `at` (tile-local `local`): the
+// nearest marching-cubes triangle in the band's cells. The cells are
+// searched in shells outward from the node, shell s the cells s cells away
+// along their farthest axis, so every cell of a later shell is at least
+// (s + 1) cells away: once the nearest found is that close, the rest cannot
+// be nearer and the search stops.
 fn rd_distance(local: vec3<i32>) -> f32 {
     let base = RD_MAX_REACH + 1;
     let at = local + vec3<i32>(base);
     let original = rd_nodes[rd_node_index(at)];
     let cell_size = u.cell_size;
     let band_m = u.band_cells * cell_size;
-    // Positions are metres from this node, so the node is the origin.
-    let p = vec3<f32>(0.0);
     let reach = i32(ceil(u.band_cells));
-    let low = at - vec3<i32>(reach + 1);
-    let high = at + vec3<i32>(reach);
-    var best = band_m*band_m;
-    for (var z=low.z; z<=high.z; z=z+1) {
-        for (var y=low.y; y<=high.y; y=y+1) {
-            for (var x=low.x; x<=high.x; x=x+1) {
-                let cell = vec3<i32>(x,y,z);
-                let box_low = vec3<f32>(cell-at)*cell_size;
-                let box_high = vec3<f32>(cell-at+vec3<i32>(1))*cell_size;
-                let delta = max(max(box_low-p,p-box_high),vec3<f32>(0.0));
-                if dot(delta,delta) > best { continue; }
-                let flat = rd_cell_index(cell);
-                if (atomicLoad(&rd_cross[flat >> 5u]) & (1u << (flat & 31u))) == 0u { continue; }
-                var corner: array<f32,8>;
-                var case_index = 0u;
-                for (var c=0u; c<8u; c=c+1u) {
-                    corner[c] = rd_nodes[rd_node_index(cell+vec3<i32>(MC_CORNERS[c]))];
-                    if corner[c] < 0.0 { case_index = case_index | (1u << c); }
-                }
-                let triangles = MC_TRIANGLE_COUNT[case_index];
-                var vertices: array<vec3<f32>,12>;
-                // An edge crosses where the case's inside bits differ: one
-                // classification per corner, so a corner of exactly zero can
-                // never be inside for the case and outside for its edges
-                // (which would leave a triangle vertex unset at the node).
-                for (var e=0u; e<12u; e=e+1u) {
-                    let ca = MC_EDGE_A[e];
-                    let cb = MC_EDGE_B[e];
-                    if ((case_index >> ca) & 1u) != ((case_index >> cb) & 1u) {
-                        let va = corner[ca];
-                        let d = va - corner[cb];
-                        let t = select(0.5, va / d, d != 0.0);
-                        let a = cell+vec3<i32>(MC_CORNERS[ca])-at;
-                        let b = cell+vec3<i32>(MC_CORNERS[cb])-at;
-                        vertices[e] = (vec3<f32>(a)+t*vec3<f32>(b-a))*cell_size;
-                    }
-                }
-                for (var t=0u; t<triangles; t=t+1u) {
-                    best = min(best,rd_triangle(p,vertices[mc_edge(case_index,3u*t)],
-                        vertices[mc_edge(case_index,3u*t+1u)],vertices[mc_edge(case_index,3u*t+2u)]));
+    var best = band_m * band_m;
+    for (var s = 0; s <= reach; s = s + 1) {
+        let low = at - vec3<i32>(s + 1);
+        let high = at + vec3<i32>(s);
+        for (var z = low.z; z <= high.z; z = z + 1) {
+            for (var y = low.y; y <= high.y; y = y + 1) {
+                // Off the shell's faces in y and z only its two x ends are on it.
+                let face = z == low.z || z == high.z || y == low.y || y == high.y;
+                let step = select(high.x - low.x, 1, face);
+                for (var x = low.x; x <= high.x; x = x + step) {
+                    best = rd_cell(at, vec3<i32>(x, y, z), best);
                 }
             }
         }
+        let next = f32(s + 1) * cell_size;
+        if best <= next * next { break; }
     }
-    return select(sqrt(best),-sqrt(best),original < 0.0);
+    return select(sqrt(best), -sqrt(best), original < 0.0);
 }
 
 @compute @workgroup_size(256)
@@ -190,7 +212,13 @@ fn cs_main(
         }
     }
     workgroupBarrier();
-    if atomicLoad(&rd_crossed) == 0u {
+    if lane == 0u {
+        rd_any = atomicLoad(&rd_crossed);
+    }
+    if lane < RD_CROSS_WORDS {
+        rd_crossings[lane] = atomicLoad(&rd_cross[lane]);
+    }
+    if workgroupUniformLoad(&rd_any) == 0u {
         // No triangle anywhere in reach: the search would end on the band.
         let band_m = u.band_cells * u.cell_size;
         let band = sqrt(band_m * band_m);
