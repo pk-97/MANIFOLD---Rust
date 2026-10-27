@@ -40,8 +40,9 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortCount, SortJob, SortLabels, key_storage_bytes, whitewater_record_read,
 };
 use manifold_water_liquid::primitives::whitewater_distance::{SurfaceDistance, scratch_bytes};
+use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 use manifold_water_liquid::whitewater::{
-    DEFAULT_CAPACITY, KnownValue, MAX_CAPACITY, WhitewaterParticle, WhitewaterPool, whitewater_pool,
+    DEFAULT_CAPACITY, KnownValue, MAX_CAPACITY, WhitewaterParticle,
 };
 
 const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
@@ -496,7 +497,7 @@ manifold_core::testkit_visible! {
 /// rule held. A change in either starts the stage's storage over.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct StepShape {
-    pub pool: WhitewaterPool,
+    pub pool: TilePool,
     pub capacity: u32,
 }
 }
@@ -504,7 +505,7 @@ pub(crate) struct StepShape {
 impl StepShape {
     /// Every placement rule, each a refusal by name: a capacity in range and
     /// a pool one dispatch can count.
-    pub fn new(pool: WhitewaterPool, capacity: u32) -> Result<Self, String> {
+    pub fn new(pool: TilePool, capacity: u32) -> Result<Self, String> {
         if !(1..=MAX_CAPACITY).contains(&capacity) {
             return Err(format!(
                 "capacity {capacity} is outside 1 to {MAX_CAPACITY}"
@@ -2006,7 +2007,7 @@ struct HandBuffers<'a> {
 }
 
 impl WhitewaterStep {
-    fn frame(ctx: &EffectNodeContext<'_, '_>, pool: WhitewaterPool) -> Result<StepFrame, String> {
+    fn frame(ctx: &EffectNodeContext<'_, '_>, pool: TilePool) -> Result<StepFrame, String> {
         let whole = |v: f32| v.round().max(0.0) as u32;
         let capacity = ctx
             .scalar_or_param("capacity", DEFAULT_CAPACITY as f32)
@@ -2127,7 +2128,7 @@ impl Primitive for WhitewaterStep {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let pool = match whitewater_pool(ctx, "Whitewater Step") {
+        let pool = match tile_pool(ctx, "Whitewater Step") {
             Ok(pool) => pool,
             Err(refusal) => {
                 ctx.error(refusal);

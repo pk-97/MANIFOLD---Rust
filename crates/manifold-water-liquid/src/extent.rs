@@ -152,9 +152,9 @@ pub fn whitewater_lattice(
     Ok((nodes, cells))
 }
 
-/// A pooled whitewater atom's grid: the `tiles` covering the table of its
-/// `pool_tiles` pool, and the elements every grid array holds.
-pub fn whitewater_pool(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
+/// A pooled atom's lattice: the `tiles` covering the table of its
+/// `pool_tiles` pool, and the elements every array on it holds.
+pub fn tile_pool(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
     let pool_tiles = whole(x, "pool_tiles", 1.0).max(1);
     x.covers(
         "tiles",

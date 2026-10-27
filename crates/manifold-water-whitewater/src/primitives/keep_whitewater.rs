@@ -19,7 +19,8 @@ use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::CellRange;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle, whitewater_pool};
+use manifold_water_liquid::tile_pool::tile_pool;
+use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle};
 
 /// FLIP's `_maxDiffuseParticlesPerCell`.
 pub(crate) const MAX_PER_CELL: f32 = 5000.0;
@@ -99,7 +100,7 @@ impl Primitive for KeepWhitewater {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let grid = match whitewater_pool(ctx, "Keep Whitewater") {
+        let grid = match tile_pool(ctx, "Keep Whitewater") {
             Ok(grid) => grid,
             Err(refusal) => {
                 ctx.error(refusal);

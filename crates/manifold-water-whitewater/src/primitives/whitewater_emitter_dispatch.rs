@@ -42,16 +42,14 @@ pub(super) fn run<P: Primitive>(
         }
     }
     if P::TYPE_ID == "node.turbulence_emission_count" {
-        let pool = match manifold_water_liquid::whitewater::whitewater_pool(
-            ctx,
-            "Turbulence Emission Count",
-        ) {
-            Ok(pool) => pool,
-            Err(refusal) => {
-                ctx.error(refusal);
-                return;
-            }
-        };
+        let pool =
+            match manifold_water_liquid::tile_pool::tile_pool(ctx, "Turbulence Emission Count") {
+                Ok(pool) => pool,
+                Err(refusal) => {
+                    ctx.error(refusal);
+                    return;
+                }
+            };
         if ctx
             .inputs
             .array("influence")

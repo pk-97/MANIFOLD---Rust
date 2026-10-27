@@ -3,11 +3,11 @@ use super::{FACE_RECORD, HISTORY_RECORD, SOURCE, StepShape};
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
-use manifold_water_liquid::extent::{field_reads, whitewater_pool, whole};
+use manifold_water_liquid::extent::{field_reads, tile_pool, whole};
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
+use manifold_water_liquid::tile_pool::TilePool;
 use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
 use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
-use manifold_water_liquid::whitewater::WhitewaterPool;
 use std::mem::size_of;
 
 fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -17,7 +17,7 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             "capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}"
         )));
     }
-    let pool = WhitewaterPool {
+    let pool = TilePool {
         pool_tiles: whole(x, "pool_tiles", 1.0).max(1),
         cell_size: x.scalar("cell_size", 0.0625),
     };
@@ -29,7 +29,7 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     let shape = StepShape::new(pool, capacity as u32).map_err(Verdict::Refused)?;
     // The tiles cover the table; every grid array holds the pool's elements.
-    let elements = whitewater_pool(x)?;
+    let elements = tile_pool(x)?;
     for port in [
         "foam_particles",
         "bubble_particles",

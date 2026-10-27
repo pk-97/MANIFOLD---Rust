@@ -97,7 +97,7 @@ pub fn middle(table: &BoxTable, cell_size: f32) -> [f32; 3] {
 /// The step's shape over `table`'s pool.
 pub fn step_shape(table: &BoxTable, cell_size: f32, capacity: u32) -> StepShape {
     StepShape::new(
-        WhitewaterPool {
+        TilePool {
             pool_tiles: table.pool_tiles,
             cell_size,
         },

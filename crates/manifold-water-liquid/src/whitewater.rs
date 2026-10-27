@@ -1,70 +1,14 @@
 //! Uses the particle id limit (256) from FLIP Fluids diffuseparticlesimulation.h `_diffuseParticleIDLimit` (MIT); see THIRD_PARTY_NOTICES.md.
 //! The whitewater grid and its records. The grid atoms run on the liquid
-//! step's world tiles (`WhitewaterPool`). The lifecycle still reads a dense
+//! step's world tiles (`TilePool`). The lifecycle still reads a dense
 //! grid, the frame's solid lattice read as cells: `nodes − 1` cells a side
 //! from the solid lattice's first node, the solid on the cell corners.
 
 use manifold_node_engine::channel_names::well_known;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
 /// Helpers every whitewater grid atom's body includes.
 pub const WHITEWATER_COMMON: &str = include_str!("primitives/shaders/whitewater_common.wgsl");
-
-/// Where a whitewater atom's grid arrays live: the liquid step's world tiles
-/// (`tiles`, `pool_tiles`) at `cell_size`. Every grid array holds
-/// `pool_len(P)` elements, world cell p's at its pool index, the last one
-/// canonical. A cell array holds cell p's value at its centre p·h; a node
-/// array (solid, influence, obstacle source) holds the value at cell p's low
-/// corner (p − ½)·h, so node n of a grid is element n as cell n of it is.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WhitewaterPool {
-    pub pool_tiles: u32,
-    pub cell_size: f32,
-}
-
-impl WhitewaterPool {
-    /// Elements of every grid array.
-    pub fn elements(self) -> u64 {
-        manifold_node_engine::scene::world_tiles::pool_len(self.pool_tiles)
-    }
-
-    /// Bytes of the table the arrays are read through.
-    pub fn table_bytes(self) -> u64 {
-        manifold_node_engine::scene::world_tiles::table_words(self.pool_tiles) * 4
-    }
-}
-
-/// A pooled whitewater atom's pool: `pool_tiles` and `cell_size`, wire else
-/// param, with the `tiles` input holding its table. `node` names the node in
-/// the refusal.
-pub fn whitewater_pool(
-    ctx: &EffectNodeContext<'_, '_>,
-    node: &str,
-) -> Result<WhitewaterPool, String> {
-    let pool_tiles = ctx.scalar_or_param("pool_tiles", 1.0).round();
-    if !(1.0..=16_777_216.0).contains(&pool_tiles) {
-        return Err(format!(
-            "{node}: a pool of {pool_tiles} tiles is not a pool"
-        ));
-    }
-    let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
-    if !(cell_size > 0.0 && cell_size.is_finite()) {
-        return Err(format!("{node}: cell size {cell_size} is not a length"));
-    }
-    let pool = WhitewaterPool {
-        pool_tiles: pool_tiles as u32,
-        cell_size,
-    };
-    match ctx.inputs.array("tiles") {
-        Some(tiles) if tiles.size >= pool.table_bytes() => Ok(pool),
-        Some(_) => Err(format!(
-            "{node}: the tiles hold less than a pool of {} tiles' table",
-            pool.pool_tiles
-        )),
-        None => Err(format!("{node}: needs the liquid step's tiles")),
-    }
-}
 
 /// A lattice value and whether it is known (1) or still to extrapolate (0),
 /// FLIP's valid flag carried beside the value.

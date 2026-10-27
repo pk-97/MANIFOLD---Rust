@@ -14,7 +14,7 @@ use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::whitewater::{WhitewaterPool, whitewater_pool};
+use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 
 /// Nearest solid-object properties at a node of the pooled node arrays. Kind: none 0, domain 1, obstacle 2.
 #[repr(C)]
@@ -147,7 +147,7 @@ impl Primitive for WhitewaterObstacleSource {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let pool = match whitewater_pool(ctx, "Whitewater Obstacle Source") {
+        let pool = match tile_pool(ctx, "Whitewater Obstacle Source") {
             Ok(pool) => pool,
             Err(refusal) => {
                 ctx.error(refusal);
@@ -258,7 +258,7 @@ const SOURCE_BYTES: u64 = std::mem::size_of::<WhitewaterSource>() as u64;
 pub(crate) struct ObstacleSourceJob<'a> {
     pub influence: f32,
     pub dust_strength: f32,
-    pub pool: WhitewaterPool,
+    pub pool: TilePool,
     /// Faces of the Bounds box that are solid Walls (bits −X +X −Y +Y −Z +Z).
     pub closed_faces: i32,
     /// The Bounds box in metres, as placed.

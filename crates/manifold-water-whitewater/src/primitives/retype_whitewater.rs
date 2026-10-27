@@ -16,7 +16,8 @@ use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::LIQUID_FACES;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle, whitewater_pool};
+use manifold_water_liquid::tile_pool::tile_pool;
+use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`,
 /// padded to 16 bytes.
@@ -81,7 +82,7 @@ impl Primitive for RetypeWhitewater {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let grid = match whitewater_pool(ctx, "Retype Whitewater") {
+        let grid = match tile_pool(ctx, "Retype Whitewater") {
             Ok(grid) => grid,
             Err(refusal) => {
                 ctx.error(refusal);

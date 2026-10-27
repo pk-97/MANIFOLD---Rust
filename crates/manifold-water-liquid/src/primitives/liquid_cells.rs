@@ -9,7 +9,8 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::float_param;
-use crate::whitewater::{WHITEWATER_COMMON, whitewater_pool};
+use crate::tile_pool::tile_pool;
+use crate::whitewater::WHITEWATER_COMMON;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -75,7 +76,7 @@ impl Primitive for LiquidCells {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let pool = match whitewater_pool(ctx, "Liquid Cells") {
+        let pool = match tile_pool(ctx, "Liquid Cells") {
             Ok(pool) => pool,
             Err(error) => {
                 ctx.error(error);

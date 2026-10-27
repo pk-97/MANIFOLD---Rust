@@ -22,7 +22,8 @@ use manifold_node_engine::scene::world_tiles::TILE_CELLS;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_node_engine::testkit::fused_atoms::{fused, member, run};
 use manifold_node_engine::{freeze::codegen::InputSource, particles::FluidParticle};
-use manifold_water_liquid::whitewater::{CELL_AIR, WhitewaterPool};
+use manifold_water_liquid::tile_pool::TilePool;
+use manifold_water_liquid::whitewater::CELL_AIR;
 use {super::whitewater_particle_cpu::Box3, crate::primitives::whitewater_particle_cpu as cpu};
 
 const ORIGIN: [i32; 3] = [-4, 0, 0];
@@ -342,7 +343,7 @@ fn whitewater_obstacle_source_closed_and_open_domain() {
     let rig = rig();
     // A pool one slot longer than the box's tiles: the table leaves that slot
     // free, and the pool's last element is the canonical one.
-    let pool = WhitewaterPool {
+    let pool = TilePool {
         pool_tiles: rig.nodes.pool_tiles + 1,
         cell_size: H,
     };
@@ -678,7 +679,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         32,
     );
     let shape = StepShape::new(
-        WhitewaterPool {
+        TilePool {
             pool_tiles: rig.cells.pool_tiles,
             cell_size: H,
         },

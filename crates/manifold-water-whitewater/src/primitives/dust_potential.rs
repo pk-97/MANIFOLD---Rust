@@ -14,7 +14,8 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, whitewater_pool};
+use manifold_water_liquid::tile_pool::tile_pool;
+use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
 
 /// FLIP turbulence normalization defaults; dust uses 0.75 times the minimum.
 pub(crate) const MIN_TURBULENCE: f32 = 100.0;
@@ -96,7 +97,7 @@ impl Primitive for DustPotential {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let pool = match whitewater_pool(ctx, "Dust Potential") {
+        let pool = match tile_pool(ctx, "Dust Potential") {
             Ok(pool) => pool,
             Err(refusal) => {
                 ctx.error(refusal);

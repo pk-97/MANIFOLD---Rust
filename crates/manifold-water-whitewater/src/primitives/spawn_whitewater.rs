@@ -21,7 +21,8 @@ use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::LIQUID_FACES;
-use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, whitewater_pool};
+use manifold_water_liquid::tile_pool::tile_pool;
+use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
 
 /// FLIP's lifetime rule (`_minDiffuseParticleLifetime`,
 /// `_maxDiffuseParticleLifetime`, `_lifetimeVariance`), seconds.
@@ -120,7 +121,7 @@ impl Primitive for SpawnWhitewater {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let pool = match whitewater_pool(ctx, "Spawn Whitewater") {
+        let pool = match tile_pool(ctx, "Spawn Whitewater") {
             Ok(pool) => pool,
             Err(refusal) => {
                 ctx.error(refusal);

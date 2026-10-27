@@ -15,7 +15,8 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::whitewater::{KnownValue, WHITEWATER_COMMON, whitewater_pool};
+use manifold_water_liquid::tile_pool::tile_pool;
+use manifold_water_liquid::whitewater::{KnownValue, WHITEWATER_COMMON};
 
 /// FLIP's defaults: curvature × cell size from which a crest starts to
 /// emit, where it emits fully, and the least cosine between the particle's
@@ -96,7 +97,7 @@ impl Primitive for WavecrestPotential {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let pool = match whitewater_pool(ctx, "Wavecrest Potential") {
+        let pool = match tile_pool(ctx, "Wavecrest Potential") {
             Ok(pool) => pool,
             Err(refusal) => {
                 ctx.error(refusal);

@@ -14,7 +14,8 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::whitewater::{KnownValue, WHITEWATER_COMMON, whitewater_pool};
+use manifold_water_liquid::tile_pool::tile_pool;
+use manifold_water_liquid::whitewater::{KnownValue, WHITEWATER_COMMON};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -74,7 +75,7 @@ impl Primitive for ExtendLattice {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let pool = match whitewater_pool(ctx, "Extend Lattice") {
+        let pool = match tile_pool(ctx, "Extend Lattice") {
             Ok(pool) => pool,
             Err(error) => {
                 ctx.error(error);

@@ -5,7 +5,7 @@
 //! pooled cell arrays on the step's world tiles; whitewater owns convergence
 //! reduction and calls its generated pipeline.
 use crate::float_param;
-use crate::whitewater::whitewater_pool;
+use crate::tile_pool::tile_pool;
 use manifold_gpu::GpuBinding;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -82,7 +82,7 @@ impl Primitive for UpwindDistance {
             .flatten()
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let pool = match whitewater_pool(ctx, "Upwind Distance") {
+        let pool = match tile_pool(ctx, "Upwind Distance") {
             Ok(pool) => pool,
             Err(refusal) => {
                 ctx.error(refusal);

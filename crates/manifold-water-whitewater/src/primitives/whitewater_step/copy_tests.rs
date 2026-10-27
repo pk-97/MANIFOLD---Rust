@@ -104,7 +104,7 @@ impl Fixture {
         source: (u32, f32),
     ) -> Self {
         let shape = StepShape::new(
-            WhitewaterPool {
+            TilePool {
                 pool_tiles,
                 cell_size: h,
             },

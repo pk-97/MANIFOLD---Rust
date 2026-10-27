@@ -23,6 +23,7 @@ pub mod frame_ring;
 pub mod gizmos;
 pub mod grid;
 pub mod lattice;
+pub mod tile_pool;
 pub mod tile_storage;
 pub mod world_pose;
 pub mod world_tiles;
