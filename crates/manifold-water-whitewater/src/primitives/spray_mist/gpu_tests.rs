@@ -8,7 +8,10 @@ use manifold_node_engine::scene::world_tiles::pool_len;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::testkit::world_box::BoxTable;
 
-const R: f32 = 0.01;
+/// A particle's size at full fade, and the fade most of the test particles
+/// carry: a particle's size is the node's radius times its fade, its `w`.
+const RADIUS: f32 = 0.02;
+const FADE: f32 = 0.5;
 const H: f32 = 0.05;
 const KERNEL_PEAK: f32 = 1.0 / (std::f32::consts::PI * H * H * H);
 
@@ -22,17 +25,17 @@ fn droplet_area(radius: f32) -> f32 {
     2.0 * std::f32::consts::PI * radius * radius
 }
 
-fn particle(position: [f32; 3], radius: f32, id: u32) -> FluidParticle {
+fn particle(position: [f32; 3], fade: f32, id: u32) -> FluidParticle {
     FluidParticle {
-        position_radius: [position[0], position[1], position[2], radius],
+        position_radius: [position[0], position[1], position[2], fade],
         velocity: [0.0; 3],
         id,
     }
 }
 
 /// A particle at node coordinate `q` (node n is at (n - 1/2)·h).
-fn at_node(q: [f32; 3], radius: f32, id: u32) -> FluidParticle {
-    particle(q.map(|c| (c - 0.5) * H), radius, id)
+fn at_node(q: [f32; 3], fade: f32, id: u32) -> FluidParticle {
+    particle(q.map(|c| (c - 0.5) * H), fade, id)
 }
 
 /// Where box node `c` sits.
@@ -49,6 +52,7 @@ fn mist_pool(table: &BoxTable, particles: &[FluidParticle], strength: f32) -> Ve
     let (mist_slot, _) = harness.array::<f32>(&[], 1);
     let run_params = params(&[
         ("strength", strength),
+        ("radius", RADIUS),
         ("cell_size", H),
         ("pool_tiles", table.pool_tiles as f32),
     ]);
@@ -88,7 +92,7 @@ fn reference_mist(particles: &[FluidParticle], node: [f32; 3]) -> f64 {
                 .map(|a| (f64::from(node[a]) - f64::from(x[a])).powi(2))
                 .sum::<f64>()
                 .sqrt();
-            let area = f64::from(droplet_area(x[3]));
+            let area = f64::from(droplet_area(RADIUS * x[3]));
             let kernel = 1.0 / (std::f64::consts::PI * h * h * h) * spline(d / h);
             if d >= 2.0 * h { 0.0 } else { area * kernel }
         })
@@ -98,18 +102,18 @@ fn reference_mist(particles: &[FluidParticle], node: [f32; 3]) -> f64 {
 /// Droplets on both sides of every tile face, in the corners, and one empty slot.
 fn cloud() -> Vec<FluidParticle> {
     [
-        ([-0.5, 0.0, 0.0], R),
-        ([-0.2, -0.5, 0.5], 0.012),
-        ([3.3, 2.7, -2.4], 0.008),
-        ([-3.2, -3.9, -4.6], R),
-        ([-0.45, 0.1, 0.05], R),
-        ([4.4, -4.1, 3.2], 0.015),
+        ([-0.5, 0.0, 0.0], FADE),
+        ([-0.2, -0.5, 0.5], 0.6),
+        ([3.3, 2.7, -2.4], 0.4),
+        ([-3.2, -3.9, -4.6], FADE),
+        ([-0.45, 0.1, 0.05], FADE),
+        ([4.4, -4.1, 3.2], 0.75),
         ([0.0, 0.0, -0.5], 0.0),
-        ([1.6, 1.4, 1.8], R),
+        ([1.6, 1.4, 1.8], FADE),
     ]
     .iter()
     .enumerate()
-    .map(|(id, &(q, radius))| at_node(q, radius, id as u32))
+    .map(|(id, &(q, fade))| at_node(q, fade, id as u32))
     .collect()
 }
 
@@ -144,13 +148,13 @@ fn one_droplet_follows_the_kernel_across_a_tile_face() {
     // Node (-1, 0, -1) is the last of tile -1 in x and z; its +x neighbour is
     // the first of tile 0.
     let on = [-1, 0, -1];
-    let pool = mist_pool(&table, &[at_node(on.map(|n| n as f32), R, 0)], 1.0);
+    let pool = mist_pool(&table, &[at_node(on.map(|n| n as f32), FADE, 0)], 1.0);
     let dense = table.from_pool(&pool);
     let at = |n: [i32; 3]| {
         let c: [u32; 3] = std::array::from_fn(|a| (n[a] - table.origin[a]) as u32);
         dense[(c[0] + table.cells[0] * (c[1] + table.cells[1] * c[2])) as usize]
     };
-    let peak = droplet_area(R) * KERNEL_PEAK;
+    let peak = droplet_area(RADIUS * FADE) * KERNEL_PEAK;
     let own = at(on);
     assert!(
         (own - peak).abs() <= 1e-5 * peak,
@@ -198,7 +202,7 @@ fn a_node_in_a_tile_the_table_does_not_hold_takes_nothing() {
     // and tile 1 is not in the table, so nodes 8 and 9 of its footprint are
     // lost.
     let table = table();
-    let particles = [at_node([7.6, 0.3, 0.3], R, 0)];
+    let particles = [at_node([7.6, 0.3, 0.3], FADE, 0)];
     let pool = mist_pool(&table, &particles, 1.0);
     assert_eq!(pool[pool.len() - 1], 0.0, "the canonical element stays 0");
     let dense = table.from_pool(&pool);

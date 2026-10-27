@@ -3,7 +3,8 @@
 // the read side, `manifold_node_engine::scene::world_tiles::READ_SIDE`, and
 // the shared splat shape).
 //
-// Each live spray particle is a droplet of geometric cross-section pi r^2 and
+// Each live spray particle is a droplet of radius r, `params.radius` times the
+// particle's fade, of geometric cross-section pi r^2 and
 // extinction efficiency Q = 2: droplets far larger than the wavelength remove
 // twice their cross-section from a beam, the extinction paradox (van de Hulst
 // 1957). Extinction at a node x is strength * sum_k Q pi r_k^2 W3(|x - x_k|),
@@ -22,7 +23,7 @@ struct Params {
     pool_tiles: u32,
     particle_capacity: u32,
     elements: u32,
-    pad_a: u32,
+    radius: f32,
     pad_b: u32,
     pad_c: u32,
 }
@@ -69,10 +70,13 @@ fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let p = particles[gid.x];
-    let r = p.position_radius.w;
-    if r <= 0.0 {
+    // The particle's w is its fade, 0 to 1 (0 an empty slot); its size is
+    // the node's radius times the fade.
+    let fade = p.position_radius.w;
+    if fade <= 0.0 {
         return;
     }
+    let r = params.radius * fade;
     let x = p.position_radius.xyz;
     let reach = 2.0 * params.h;
     // The droplet's node coordinate: node n is at n = x / h + 1/2.

@@ -1,6 +1,7 @@
 //! `node.spray_mist` — per node of the display's world tiles, the extinction
 //! coefficient (per metre) of the spray's droplets in the air. Each live
-//! particle is a droplet of cross-section pi r^2 and extinction efficiency 2;
+//! particle is a droplet of radius r, the node's radius times the particle's
+//! fade, cross-section pi r^2 and extinction efficiency 2;
 //! the kernel-smoothed sum over droplets is the coefficient at the node.
 
 use std::borrow::Cow;
@@ -35,7 +36,7 @@ struct MistUniforms {
     pool_tiles: u32,
     particle_capacity: u32,
     elements: u32,
-    pad_a: u32,
+    radius: f32,
     pad_b: u32,
     pad_c: u32,
 }
@@ -45,10 +46,14 @@ struct MistUniforms {
 fn mist_uniforms(
     pool: TilePool,
     strength: f32,
+    radius: f32,
     particle_capacity: u32,
 ) -> Result<MistUniforms, String> {
     if !(strength.is_finite() && strength >= 0.0) {
         return Err("Spray Mist: strength must be finite and at least 0".into());
+    }
+    if !(radius.is_finite() && radius >= 0.0) {
+        return Err("Spray Mist: radius must be finite and at least 0".into());
     }
     let elements = u32::try_from(pool.elements()).map_err(|_| {
         format!(
@@ -62,7 +67,7 @@ fn mist_uniforms(
         pool_tiles: pool.pool_tiles,
         particle_capacity,
         elements,
-        pad_a: 0,
+        radius,
         pad_b: 0,
         pad_c: 0,
     })
@@ -96,7 +101,7 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 manifold_node_engine::primitive! {
     name: SprayMist,
     type_id: "node.spray_mist",
-    purpose: "Per node of the display's world tiles, the extinction coefficient per metre of the spray's droplets in the air. Each live particle (a slot with radius 0 is empty) is a droplet of cross-section pi r^2 and extinction efficiency 2 (droplets far larger than the wavelength remove twice their cross-section, the extinction paradox); the coefficient at a node is strength times the sum over droplets of 2 pi r^2 W(distance), W the 3D cubic-spline kernel normalised over space, with smoothing length the display cell size, reaching two cells. Node p is at (p - 1/2) cells; a node in a tile the table does not hold takes nothing, and the canonical element reads 0.",
+    purpose: "Per node of the display's world tiles, the extinction coefficient per metre of the spray's droplets in the air. Each live particle (a slot with fade 0 is empty) is a droplet of radius r, the Droplet Radius times the particle's fade (its w, 0 to 1), and cross-section pi r^2 and extinction efficiency 2 (droplets far larger than the wavelength remove twice their cross-section, the extinction paradox); the coefficient at a node is strength times the sum over droplets of 2 pi r^2 W(distance), W the 3D cubic-spline kernel normalised over space, with smoothing length the display cell size, reaching two cells. Node p is at (p - 1/2) cells; a node in a tile the table does not hold takes nothing, and the canonical element reads 0.",
     inputs: {
         particles: Array(FluidParticle) required,
         tiles: Array(u32) required,
@@ -110,6 +115,8 @@ manifold_node_engine::primitive! {
     params: [
         // Times the spray's droplet extinction: 1 is the mist the spray makes, 0 none.
         float_param!("strength", "Mist", 1.0, 0.0, 4.0),
+        // A spray particle at full fade is a droplet as big as the spray draw's (3 mm).
+        float_param!("radius", "Droplet Radius", 0.003, 0.0, 0.1),
         float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
@@ -185,7 +192,12 @@ impl Primitive for SprayMist {
         };
         let capacity = u32::try_from(particles.size / std::mem::size_of::<FluidParticle>() as u64)
             .unwrap_or(u32::MAX);
-        let uniforms = match mist_uniforms(pool, ctx.scalar_or_param("strength", 1.0), capacity) {
+        let uniforms = match mist_uniforms(
+            pool,
+            ctx.scalar_or_param("strength", 1.0),
+            ctx.scalar_or_param("radius", 0.003),
+            capacity,
+        ) {
             Ok(uniforms) => uniforms,
             Err(error) => {
                 ctx.error(error);
@@ -280,23 +292,27 @@ mod tests {
             pool_tiles: 13,
             cell_size: 0.0625,
         };
-        let u = mist_uniforms(pool, 2.0, 100).unwrap();
+        let u = mist_uniforms(pool, 2.0, 0.004, 100).unwrap();
         assert_eq!(u.h, 0.0625);
         assert_eq!(u.elements, 13 * 512 + 1);
         assert_eq!(u.pool_tiles, 13);
         assert_eq!(u.particle_capacity, 100);
         assert_eq!(u.strength, 2.0);
+        assert_eq!(u.radius, 0.004);
     }
 
     #[test]
-    fn a_bad_strength_is_an_error() {
+    fn a_bad_strength_or_radius_is_an_error() {
         let pool = TilePool {
             pool_tiles: 1,
             cell_size: 0.1,
         };
-        assert!(mist_uniforms(pool, -1.0, 10).is_err());
-        assert!(mist_uniforms(pool, f32::NAN, 10).is_err());
-        assert!(mist_uniforms(pool, f32::INFINITY, 10).is_err());
+        assert!(mist_uniforms(pool, -1.0, 0.004, 10).is_err());
+        assert!(mist_uniforms(pool, 1.0, -1.0, 10).is_err());
+        assert!(mist_uniforms(pool, f32::NAN, 0.004, 10).is_err());
+        assert!(mist_uniforms(pool, 1.0, f32::NAN, 10).is_err());
+        assert!(mist_uniforms(pool, f32::INFINITY, 0.004, 10).is_err());
+        assert!(mist_uniforms(pool, 1.0, f32::INFINITY, 10).is_err());
     }
 }
 

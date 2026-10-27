@@ -36,7 +36,7 @@ struct CoverUniforms {
     pool_tiles: u32,
     particle_capacity: u32,
     elements: u32,
-    pad_a: u32,
+    radius: f32,
     pad_b: u32,
     pad_c: u32,
 }
@@ -46,10 +46,14 @@ struct CoverUniforms {
 fn cover_uniforms(
     pool: TilePool,
     strength: f32,
+    radius: f32,
     particle_capacity: u32,
 ) -> Result<CoverUniforms, String> {
     if !(strength.is_finite() && strength >= 0.0) {
         return Err("Foam Cover: strength must be finite and at least 0".into());
+    }
+    if !(radius.is_finite() && radius >= 0.0) {
+        return Err("Foam Cover: radius must be finite and at least 0".into());
     }
     let elements = u32::try_from(pool.elements()).map_err(|_| {
         format!(
@@ -63,7 +67,7 @@ fn cover_uniforms(
         pool_tiles: pool.pool_tiles,
         particle_capacity,
         elements,
-        pad_a: 0,
+        radius,
         pad_b: 0,
         pad_c: 0,
     })
@@ -97,7 +101,7 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 manifold_node_engine::primitive! {
     name: FoamCover,
     type_id: "node.foam_cover",
-    purpose: "Per node of the display's world tiles, the fraction of the surface foam covers, 0 to 1, from the foam particles. Each live particle (a slot with radius 0 is empty) is a disc of foam of area pi r^2 lying on the surface; discs placed independently cover 1 - exp(-tau) of it, with tau the expected disc area per unit area at the node: strength times the sum over particles of pi r^2 W(distance), W the 2D cubic-spline kernel normalised over a plane, with smoothing length the display cell size, reaching two cells. Node p is at (p - 1/2) cells; a node in a tile the table does not hold takes nothing, and the canonical element reads 0.",
+    purpose: "Per node of the display's world tiles, the fraction of the surface foam covers, 0 to 1, from the foam particles. Each live particle (a slot with fade 0 is empty) is a disc of foam of radius r, the Foam Radius times the particle's fade (its w, 0 to 1), and area pi r^2 lying on the surface; discs placed independently cover 1 - exp(-tau) of it, with tau the expected disc area per unit area at the node: strength times the sum over particles of pi r^2 W(distance), W the 2D cubic-spline kernel normalised over a plane, with smoothing length the display cell size, reaching two cells. Node p is at (p - 1/2) cells; a node in a tile the table does not hold takes nothing, and the canonical element reads 0.",
     inputs: {
         particles: Array(FluidParticle) required,
         tiles: Array(u32) required,
@@ -110,6 +114,8 @@ manifold_node_engine::primitive! {
     },
     params: [
         float_param!("strength", "Foam", 1.0, 0.0, 4.0),
+        // A foam particle at full fade stands for a disc of foam 5 mm in radius.
+        float_param!("radius", "Foam Radius", 0.005, 0.0, 0.1),
         float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
@@ -185,7 +191,12 @@ impl Primitive for FoamCover {
         };
         let capacity = u32::try_from(particles.size / std::mem::size_of::<FluidParticle>() as u64)
             .unwrap_or(u32::MAX);
-        let uniforms = match cover_uniforms(pool, ctx.scalar_or_param("strength", 1.0), capacity) {
+        let uniforms = match cover_uniforms(
+            pool,
+            ctx.scalar_or_param("strength", 1.0),
+            ctx.scalar_or_param("radius", 0.005),
+            capacity,
+        ) {
             Ok(uniforms) => uniforms,
             Err(error) => {
                 ctx.error(error);
@@ -280,23 +291,27 @@ mod tests {
             pool_tiles: 13,
             cell_size: 0.0625,
         };
-        let u = cover_uniforms(pool, 2.0, 100).unwrap();
+        let u = cover_uniforms(pool, 2.0, 0.004, 100).unwrap();
         assert_eq!(u.h, 0.0625);
         assert_eq!(u.elements, 13 * 512 + 1);
         assert_eq!(u.pool_tiles, 13);
         assert_eq!(u.particle_capacity, 100);
         assert_eq!(u.strength, 2.0);
+        assert_eq!(u.radius, 0.004);
     }
 
     #[test]
-    fn a_bad_strength_is_an_error() {
+    fn a_bad_strength_or_radius_is_an_error() {
         let pool = TilePool {
             pool_tiles: 1,
             cell_size: 0.1,
         };
-        assert!(cover_uniforms(pool, -1.0, 10).is_err());
-        assert!(cover_uniforms(pool, f32::NAN, 10).is_err());
-        assert!(cover_uniforms(pool, f32::INFINITY, 10).is_err());
+        assert!(cover_uniforms(pool, -1.0, 0.004, 10).is_err());
+        assert!(cover_uniforms(pool, 1.0, -1.0, 10).is_err());
+        assert!(cover_uniforms(pool, f32::NAN, 0.004, 10).is_err());
+        assert!(cover_uniforms(pool, 1.0, f32::NAN, 10).is_err());
+        assert!(cover_uniforms(pool, f32::INFINITY, 0.004, 10).is_err());
+        assert!(cover_uniforms(pool, 1.0, f32::INFINITY, 10).is_err());
     }
 }
 

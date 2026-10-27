@@ -3,7 +3,8 @@
 // `manifold_node_engine::scene::world_tiles::READ_SIDE`, and the shared splat
 // shape).
 //
-// Each live foam particle is a disc of area pi r^2 on the surface. Discs placed
+// Each live foam particle is a disc of radius r, `params.radius` times the
+// particle's fade, and area pi r^2 on the surface. Discs placed
 // independently cover 1 - exp(-tau) of the surface, tau being the expected disc
 // area per unit area at the node: strength * sum_k A_k W(|node - x_k|), W the
 // 2D cubic-spline kernel (Monaghan 1992) of smoothing length h, the display
@@ -21,7 +22,7 @@ struct Params {
     pool_tiles: u32,
     particle_capacity: u32,
     elements: u32,
-    pad_a: u32,
+    radius: f32,
     pad_b: u32,
     pad_c: u32,
 }
@@ -66,10 +67,13 @@ fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let p = particles[gid.x];
-    let r = p.position_radius.w;
-    if r <= 0.0 {
+    // The particle's w is its fade, 0 to 1 (0 an empty slot); its size is
+    // the node's radius times the fade.
+    let fade = p.position_radius.w;
+    if fade <= 0.0 {
         return;
     }
+    let r = params.radius * fade;
     let x = p.position_radius.xyz;
     let reach = 2.0 * params.h;
     // The particle's node coordinate: node n is at n = x / h + 1/2.
