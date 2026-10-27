@@ -24,15 +24,20 @@ fn clump(at: [usize; 3], sites: &[usize]) -> Vec<FluidParticle> {
 
 /// A lone particle and a cell of water, at rest in the air two cells above
 /// the floor of the small box, fall freely: after four ticks of 1/60 s each
-/// moves down at g t, within 5%.
+/// moves down at g t within 5%, and has dropped what the step's order gives
+/// within 2%: gravity first, then the move at the new velocity, so tick k
+/// drops g·dt²·k and four drop g·dt²·10, a quarter past g t² / 2.
 #[test]
 fn water_in_the_air_falls_at_g() {
     const TICKS: i32 = 4;
-    let fall = 9.81 * TICKS as f32 / 60.0;
+    let dt = 1.0 / 60.0;
+    let fall = 9.81 * TICKS as f32 * dt;
+    let drop = 9.81 * dt * dt * (TICKS * (TICKS + 1) / 2) as f32;
     let lone: &[usize] = &[0];
     let cell: &[usize] = &[0, 1, 2, 3, 4, 5, 6, 7];
     for (label, sites) in [("a lone particle", lone), ("a cell of water", cell)] {
-        let mut pool = RestingPool::new(clump([2, 2, 1], sites), |live| live);
+        let start = clump([2, 2, 1], sites);
+        let mut pool = RestingPool::new(start.clone(), |live| live);
         for tick in 0..TICKS {
             pool.tick(tick);
         }
@@ -43,6 +48,12 @@ fn water_in_the_air_falls_at_g() {
                 (v + fall).abs() <= 0.05 * fall,
                 "{label}: falls at {v} m/s after {TICKS} ticks, free fall is {}",
                 -fall
+            );
+            let from = start.iter().find(|s| s.id == p.id).expect("the particle's start");
+            let dropped = from.position_radius[1] - p.position_radius[1];
+            assert!(
+                (dropped - drop).abs() <= 0.02 * drop,
+                "{label}: dropped {dropped} m after {TICKS} ticks, the step drops {drop}"
             );
         }
     }
