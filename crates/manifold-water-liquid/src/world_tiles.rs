@@ -214,7 +214,8 @@ struct BuildParams {
     replay_count: u32,
     child_entries: u32,
     child_pool_tiles: u32,
-    _pad: [u32; 2],
+    clip_lo: [i32; 3],
+    clip_hi: [i32; 3],
 }
 
 /// The table's slot lists, `P` words each.
@@ -269,7 +270,17 @@ pub struct Allocation<'a> {
     /// A GPU FLIP clock plan: an inactive slot builds nothing and keeps the
     /// table.
     pub gate: &'a GpuBuffer,
+    /// The tiles a ring may hold, `lo..=hi` per axis: a ring tile past it is
+    /// never inserted, while a point's own tile always is. `None` clips
+    /// nothing.
+    pub clip: Option<TileClip>,
 }
+
+/// A box of world tiles, its first and last tile per axis.
+pub type TileClip = [[i32; 3]; 2];
+
+/// The clip a build without one runs under: every tile.
+const NO_CLIP: TileClip = [[i32::MIN; 3], [i32::MAX; 3]];
 
 /// A world tile table with its lists, counts, triples and build scratch,
 /// for a pool of `P` slots.
@@ -475,7 +486,8 @@ impl WorldTiles {
             replay_count: job.replay_count,
             child_entries: 0,
             child_pool_tiles: 0,
-            _pad: [0; 2],
+            clip_lo: job.clip.unwrap_or(NO_CLIP)[0],
+            clip_hi: job.clip.unwrap_or(NO_CLIP)[1],
         };
         let record = match job.count {
             PointCount::Record(record) => Some(record),
@@ -505,7 +517,8 @@ impl WorldTiles {
             replay_count: 0,
             child_entries: child.entries,
             child_pool_tiles: child.pool_tiles,
-            _pad: [0; 2],
+            clip_lo: NO_CLIP[0],
+            clip_hi: NO_CLIP[1],
         };
         self.encode_build(enc, &params, &child.table, None, gate);
     }

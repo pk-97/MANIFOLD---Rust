@@ -108,8 +108,10 @@ impl Mirror {
         }
     }
 
-    /// One build from points in `cells`.
-    pub fn build(&mut self, cells: &[[i32; 3]]) -> Built {
+    /// One build from points in `cells`, its rings inside `clip`.
+    pub fn build(&mut self, cells: &[[i32; 3]], clip: Option<super::TileClip>) -> Built {
+        let [lo, hi] = clip.unwrap_or(super::NO_CLIP);
+        let inside = |t: [i32; 3]| (0..3).all(|a| lo[a] <= t[a] && t[a] <= hi[a]);
         let h = self.entries as usize;
         let p = self.pool_tiles as usize;
         let r = self.reach.ring_max as i32;
@@ -127,7 +129,7 @@ impl Mirror {
             .filter(|&t| find(&keys, tile_key(t)).is_some())
             .collect();
         for &s in &seeds {
-            for d in cube(r).filter(|&d| d != [0; 3]) {
+            for d in cube(r).filter(|&d| d != [0; 3] && inside(add(s, d))) {
                 if keys.iter().filter(|&&k| k != EMPTY).count() >= h / 2 {
                     exhausted |= TABLE_FULL;
                     continue;

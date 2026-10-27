@@ -67,6 +67,7 @@ fn build(
     cells: &[[i32; 3]],
     gate: &GpuBuffer,
     replay: u32,
+    clip: Option<TileClip>,
 ) {
     let (records, count) = particles(device, cells);
     // The slots in use, as the step's slot record holds them.
@@ -81,6 +82,7 @@ fn build(
             inv_cell: 1.0 / CELL,
             replay_count: replay,
             gate,
+            clip,
         },
     );
     enc.commit_and_wait_completed();
@@ -237,8 +239,8 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
     ];
     let mut last = None;
     for (i, cells) in steps.iter().enumerate() {
-        build(&device, &tiles, cells, &run, 3);
-        let want = mirror.build(cells);
+        build(&device, &tiles, cells, &run, 3, None);
+        let want = mirror.build(cells, None);
         assert_eq!(
             want.exhausted(2),
             0,
@@ -260,7 +262,7 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
 
     let table = read(tiles.table(), table_words(512) as usize);
     let counts = read(tiles.counts(), count_words(2) as usize);
-    build(&device, &tiles, &steps[0], &plan(&device, false), 3);
+    build(&device, &tiles, &steps[0], &plan(&device, false), 3, None);
     assert_eq!(
         read(tiles.table(), table.len()),
         table,
@@ -300,7 +302,7 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
         .map(|t| t.map(|c| (c >> 1) * 8))
         .collect();
     let mut parent_mirror = Mirror::new(256, parents.reach(), true);
-    let want = parent_mirror.build(&cells);
+    let want = parent_mirror.build(&cells, None);
     assert_eq!(want.exhausted(0), 0, "parents: the pool holds them all");
     check(&parents, &want, 0, "parents");
     let rows = read(parents.child_rows().expect("children rows"), 8 * 256);
@@ -338,6 +340,35 @@ fn cell_set(cells: &[[i32; 3]], reach: i32) -> BTreeSet<[i32; 3]> {
     set
 }
 
+/// A clip at tile x = 0, the face of a wall: the water's rings stop at it, as
+/// the mirror says, and a point past it still gets its own tile, with no ring
+/// tile past the clip.
+#[test]
+fn rings_stop_at_the_clip() {
+    let device = test_device();
+    let reach = Reach {
+        ring_max: 2,
+        alloc_ring: 2,
+        cell_reach: 2,
+    };
+    let mut tiles = WorldTiles::new(&device, 512, reach, LIQUID_POINTS).expect("world tiles");
+    tiles.prepare(&device);
+    let mut mirror = Mirror::new(512, reach, false);
+    let clip = Some([[0, -9, -9], [9, 9, 9]]);
+    let cells = [cells_of([1, 2, 2], [4, 4, 4]), vec![[-20, 2, 2]]].concat();
+    build(&device, &tiles, &cells, &plan(&device, true), 0, clip);
+    let want = mirror.build(&cells, clip);
+    assert_eq!(want.exhausted(2), 0, "the pool and table hold it all");
+    check(&tiles, &want, 0, "clipped");
+    let held = |t: [i32; 3]| want.slot_of(t) != NONE;
+    assert!(held([0, 0, 0]) && held([2, 2, 2]) && held([0, -2, 2]), "rings inside the clip");
+    assert!(!held([-1, 0, 0]) && !held([-2, 0, 0]), "no ring past the clip");
+    assert!(held([-3, 0, 0]), "a point past the clip keeps its own tile");
+    // 3 of the cube's 5 tiles a side on x, all 5 on y and z, and the lone tile.
+    let total: usize = want.by_rank.iter().map(BTreeSet::len).sum();
+    assert_eq!(total, 3 * 5 * 5 + 1);
+}
+
 /// A pool of 64 slots for a lone water tile's 125: the cell set C (every tile
 /// within cell_reach of a point, 8 here, as the water sits in a corner of its
 /// tile) is handed out before the rest of rings 1 and 2, and the pool-short
@@ -358,8 +389,8 @@ fn a_short_pool_hands_out_the_cell_set_first() {
     let run = plan(&device, true);
     for (step, min) in [[-7, 1, 17], [1, 1, 17]].into_iter().enumerate() {
         let cells = cells_of(min, [3, 3, 3]);
-        build(&device, &tiles, &cells, &run, 0);
-        let want = mirror.build(&cells);
+        build(&device, &tiles, &cells, &run, 0, None);
+        let want = mirror.build(&cells, None);
         assert_eq!(
             want.exhausted(2),
             POOL_SHORT,
@@ -416,8 +447,8 @@ fn a_band_tile_taking_a_seed_entry_keeps_one_slot_a_tile() {
     let run = plan(&device, true);
     let cells = [w, second].map(|t| t.map(|v| 8 * v + 3));
     for step in 0..2 {
-        build(&device, &tiles, &cells, &run, 0);
-        let want = mirror.build(&cells);
+        build(&device, &tiles, &cells, &run, 0, None);
+        let want = mirror.build(&cells, None);
         assert_eq!(
             want.exhausted(2),
             0,
@@ -442,7 +473,7 @@ fn alias_and_full_table_are_reported() {
 
     let mut tiles = WorldTiles::new(&device, 64, reach, LIQUID_POINTS).expect("world tiles");
     tiles.prepare(&device);
-    build(&device, &tiles, &[[0, 0, 0], [8 * 2048, 0, 0]], &run, 0);
+    build(&device, &tiles, &[[0, 0, 0], [8 * 2048, 0, 0]], &run, 0, None);
     let counts = read(tiles.counts(), count_words(0) as usize);
     assert_ne!(counts[exhausted_word(0)] & ALIAS, 0, "alias reported");
     let keys = read(tiles.table(), tiles.table_entries() as usize);
@@ -452,7 +483,7 @@ fn alias_and_full_table_are_reported() {
     let mut tiny = WorldTiles::new(&device, 1, reach, LIQUID_POINTS).expect("world tiles");
     tiny.prepare(&device);
     let cells = [[0, 0, 0], [8, 0, 0], [16, 0, 0], [0, 8, 0], [0, 0, -8]];
-    build(&device, &tiny, &cells, &run, 0);
+    build(&device, &tiny, &cells, &run, 0, None);
     let counts = read(tiny.counts(), count_words(0) as usize);
     assert_eq!(
         counts[exhausted_word(0)],
@@ -530,7 +561,7 @@ fn cell_lookup_paths_agree_over_a_block_of_tiles() {
         .filter(|t| (t[0] + t[1] + t[2]).rem_euclid(2) == 0)
         .collect();
     let cells: Vec<[i32; 3]> = stored.iter().map(|t| t.map(|c| 8 * c + 3)).collect();
-    build(&device, &tiles, &cells, &plan(&device, true), 0);
+    build(&device, &tiles, &cells, &plan(&device, true), 0, None);
 
     let h = tiles.table_entries();
     let table = read(tiles.table(), table_words(pool) as usize);

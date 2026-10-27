@@ -738,6 +738,7 @@ impl FineTiles {
                 inv_cell: 1.0 / h,
                 replay_count: 0,
                 gate: &gate,
+                clip: None,
             },
         );
         enc.commit_and_wait_completed();

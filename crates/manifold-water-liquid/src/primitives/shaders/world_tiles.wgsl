@@ -49,8 +49,13 @@ struct WtParams {
     // The level below's H and P (parents build only).
     child_entries: u32,
     child_pool_tiles: u32,
-    _pad0: u32,
-    _pad1: u32,
+    // The tiles a ring may hold, first and last per axis (the build's clip).
+    clip_lo_x: i32,
+    clip_lo_y: i32,
+    clip_lo_z: i32,
+    clip_hi_x: i32,
+    clip_hi_y: i32,
+    clip_hi_z: i32,
 }
 
 @group(0) @binding(0) var<uniform> wt: WtParams;
@@ -320,6 +325,12 @@ fn wt_offset(o: u32) -> vec3<i32> {
     return vec3<i32>(cell) - vec3<i32>(i32(wt.ring_max));
 }
 
+// Whether tile t is inside the build's clip.
+fn wt_in_clip(t: vec3<i32>) -> bool {
+    return all(t >= vec3<i32>(wt.clip_lo_x, wt.clip_lo_y, wt.clip_lo_z))
+        && all(t <= vec3<i32>(wt.clip_hi_x, wt.clip_hi_y, wt.clip_hi_z));
+}
+
 // The point's tile.
 fn wt_point_tile(i: u32) -> vec3<i32> {
     return wt_point_cell(i) >> vec3<u32>(3u);
@@ -398,9 +409,10 @@ fn wt_seeds(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // (2·ring_max + 1)³ threads a seed (the dilation's triple): insert every tile
-// within ring_max of the seed while fewer than H/2 keys are held, so band
-// tiles never crowd out the water's own and probe runs stay short. A band
-// tile past the guard is not inserted and sets the table-full bit.
+// within ring_max of the seed and inside the clip while fewer than H/2 keys
+// are held, so band tiles never crowd out the water's own and probe runs stay
+// short. A band tile past the guard is not inserted and sets the table-full
+// bit; one past the clip is not inserted at all.
 @compute @workgroup_size(256)
 fn wt_dilate(@builtin(global_invocation_id) gid: vec3<u32>) {
     if wt_off() {
@@ -413,14 +425,15 @@ fn wt_dilate(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let d = wt_offset(gid.x % cube);
-    if all(d == vec3<i32>(0)) {
+    let t = wt_seed_tile(j) + d;
+    if all(d == vec3<i32>(0)) || !wt_in_clip(t) {
         return;
     }
     if atomicLoad(&wt_build[wt_keys_word()]) >= wt.entries / 2u {
         wt_flag(WT_TABLE_FULL);
         return;
     }
-    wt_insert(ts_tile_key(wt_seed_tile(j) + d));
+    wt_insert(ts_tile_key(t));
 }
 
 // The same threads as wt_dilate, the seed's own tile among them: look each

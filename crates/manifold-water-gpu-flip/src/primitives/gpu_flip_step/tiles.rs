@@ -3,9 +3,10 @@
 //! (`manifold_water_liquid::world_tiles`).
 
 use super::*;
+use manifold_node_engine::scene::world_tiles::tile_of_cell;
 use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
 use manifold_water_liquid::world_tiles::{
-    Allocation, PointCount, Reach, allocated_args_offset, fresh_args_offset, held_bytes,
+    Allocation, PointCount, Reach, TileClip, allocated_args_offset, fresh_args_offset, held_bytes,
     retired_args_offset, run_tiles,
 };
 
@@ -176,9 +177,31 @@ impl StepState {
     }
 }
 
+/// The tiles the step's table may hold past the water's own: on an axis side
+/// with a Wall face, none past the tile holding the wall's band, so no ring
+/// tile lies inside a wall or under the floor. An Open face, or no Bounds,
+/// clips nothing on its side.
+fn wall_clip(params: &StepParams) -> Option<TileClip> {
+    if params.wall_faces == 0 {
+        return None;
+    }
+    let (lo, cells) = band_box(params);
+    let first = tile_of_cell(lo);
+    let last = tile_of_cell(std::array::from_fn(|a| lo[a] + cells[a] as i32 - 1));
+    let mut clip = [[i32::MIN; 3], [i32::MAX; 3]];
+    for a in 0..3 {
+        if params.wall_faces & (1 << (2 * a)) != 0 {
+            clip[0][a] = first[a];
+        }
+        if params.wall_faces & (1 << (2 * a + 1)) != 0 {
+            clip[1][a] = last[a];
+        }
+    }
+    Some(clip)
+}
+
 /// The world cells of the Bounds box and its walls' band: the first cell
 /// and the count per axis.
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 fn band_box(params: &StepParams) -> ([i32; 3], [u32; 3]) {
     let cell = |x: f32| x * params.inv_cell;
     let band = BOX_BAND_CELLS.div_ceil(2) as i32;
@@ -258,6 +281,7 @@ pub(super) fn encode_tiles(
             inv_cell: params.inv_cell,
             replay_count: params.extension_layers,
             gate: plan,
+            clip: wall_clip(params),
         },
     );
     let ring = tiles.reach().ring_max;
