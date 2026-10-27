@@ -247,7 +247,8 @@ fn a_resize_within_the_pool_keeps_the_table() {
         "a resize within the pool keeps the table"
     );
     assert_eq!(left.tiles, words, "the water's tiles keep their slots");
-    grow(&mut rest, "pool_tiles", 8.0);
+    // A domain pool below the step's takes it down: a new pool.
+    grow(&mut rest, "pool_tiles", -8.0);
     rest.tick(2);
     let left = rest.left();
     assert!(

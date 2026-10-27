@@ -24,6 +24,50 @@ fn live_steps_follow_the_retired_speed() {
     assert_eq!(live_steps(Some(40.0), 1.0 / 60.0, 0.125, 1), 2);
 }
 
+/// The first tick runs on the ceiling; the first read holding water fits
+/// the pool to twice it, a read with none keeps the pool; after the fit the
+/// pool only grows, past two thirds or short, and never past the ceiling.
+#[test]
+fn the_pool_fits_the_water_then_only_grows() {
+    assert_eq!(next_pool(2744, None, None), (2744, false));
+    assert_eq!(
+        next_pool(2744, Some((2744, false)), Some((0, false))),
+        (2744, false)
+    );
+    assert_eq!(
+        next_pool(2744, Some((2744, false)), Some((640, false))),
+        (1280, true)
+    );
+    // A tank whose fill holds most of the ceiling stays at the ceiling.
+    assert_eq!(
+        next_pool(2744, Some((2744, false)), Some((2000, false))),
+        (2744, true)
+    );
+    assert_eq!(
+        next_pool(2744, Some((1280, true)), Some((853, false))),
+        (1280, true)
+    );
+    assert_eq!(
+        next_pool(2744, Some((1280, true)), Some((854, false))),
+        (1792, true)
+    );
+    // Water drains: the fitted pool keeps its room for the next fill.
+    assert_eq!(
+        next_pool(2744, Some((1792, true)), Some((10, false))),
+        (1792, true)
+    );
+    assert_eq!(next_pool(2744, Some((1792, true)), None), (1792, true));
+    assert_eq!(
+        next_pool(2744, Some((1792, true)), Some((10, true))),
+        (2744, true)
+    );
+    // A box made smaller takes the pool down with it.
+    assert_eq!(
+        next_pool(1024, Some((1792, true)), Some((300, false))),
+        (1024, true)
+    );
+}
+
 /// Max Iterations rounds and is refused outside 1..=MAX_ITERATIONS or
 /// non-finite; Auto converges within it; a fixed count runs as saved even
 /// past it.

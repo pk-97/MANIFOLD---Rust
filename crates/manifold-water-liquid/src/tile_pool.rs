@@ -32,7 +32,7 @@ impl TilePool {
 /// the `tiles` input holding its table. `node` names the node in the refusal.
 pub fn tile_pool(ctx: &EffectNodeContext<'_, '_>, node: &str) -> Result<TilePool, String> {
     let pool_tiles = ctx.scalar_or_param("pool_tiles", 1.0).round();
-    if !(1.0..=16_777_216.0).contains(&pool_tiles) {
+    if !(1.0..=MAX_POOL_TILES as f32).contains(&pool_tiles) {
         return Err(format!(
             "{node}: a pool of {pool_tiles} tiles is not a pool"
         ));
@@ -67,7 +67,7 @@ pub fn solver_origin_cell(first_node: [f32; 3], cell_size: f32) -> [i32; 3] {
 /// The `pool_tiles` wire, else its param: the pool's capacity in tiles.
 pub fn pool_tiles_wire(read: impl Fn(&str, f32) -> f32) -> Result<u32, String> {
     let value = read("pool_tiles", 1.0);
-    if value.fract() == 0.0 && (1.0..=MAX_POOL_TILES).contains(&value) {
+    if value.fract() == 0.0 && (1.0..=MAX_POOL_TILES as f32).contains(&value) {
         Ok(value as u32)
     } else {
         Err(format!(
@@ -76,7 +76,36 @@ pub fn pool_tiles_wire(read: impl Fn(&str, f32) -> f32) -> Result<u32, String> {
     }
 }
 
-const MAX_POOL_TILES: f32 = 16_777_216.0;
+/// Pools are counted on f32 wires, which hold whole numbers exactly up to 2²⁴.
+pub const MAX_POOL_TILES: u32 = 16_777_216;
+
+/// A pool that follows its water grows in whole grains of tiles.
+const POOL_GRAIN: u32 = 256;
+/// It grows once the held tiles fill this share of it, to `POOL_HEADROOM`
+/// times them: they are read a frame or two late.
+const GROW_AT: f64 = 2.0 / 3.0;
+const POOL_HEADROOM: u32 = 2;
+
+/// The pool that fits `held` tiles: `POOL_HEADROOM` times them in whole
+/// grains, at most what a wire counts.
+pub fn fitted_pool(held: u32) -> u32 {
+    held.max(1)
+        .saturating_mul(POOL_HEADROOM)
+        .div_ceil(POOL_GRAIN)
+        .saturating_mul(POOL_GRAIN)
+        .min(MAX_POOL_TILES)
+}
+
+/// The pool to grow to from a table of `pool` tiles that held `held` of them
+/// and found its free stack empty when `short`: `None` while it fits.
+pub fn grown_pool(pool: u32, held: u32, short: bool) -> Option<u32> {
+    let crowded = f64::from(held) > f64::from(pool) * GROW_AT;
+    if !short && !crowded {
+        return None;
+    }
+    let wanted = fitted_pool(held.max(if short { pool } else { 0 }));
+    Some(wanted.max(pool)).filter(|&grown| grown > pool)
+}
 
 /// Bytes the pooled faces and the world-tile table must hold for a pool of
 /// `pool_tiles` slots.
@@ -85,4 +114,38 @@ pub fn pooled_bytes(pool_tiles: u32) -> (u64, u64) {
         pool_len(pool_tiles) * size_of::<FaceSample>() as u64,
         table_words(pool_tiles) * 4,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pool_grows_ahead_of_the_held_tiles() {
+        // Two thirds full or less: it fits.
+        assert_eq!(grown_pool(1024, 0, false), None);
+        assert_eq!(grown_pool(1024, 682, false), None);
+        // Past two thirds: twice the held tiles in grains of 256.
+        assert_eq!(grown_pool(1024, 700, false), Some(1536));
+        assert_eq!(grown_pool(1536, 1100, false), Some(2304));
+        // Short of a slot: at least twice the whole pool.
+        assert_eq!(grown_pool(1024, 1024, true), Some(2048));
+        assert_eq!(grown_pool(1024, 10, true), Some(2048));
+        // Never past what a wire counts.
+        assert_eq!(
+            grown_pool(MAX_POOL_TILES - 1, MAX_POOL_TILES - 1, true),
+            Some(MAX_POOL_TILES)
+        );
+        assert_eq!(grown_pool(MAX_POOL_TILES, MAX_POOL_TILES, true), None);
+    }
+
+    #[test]
+    fn a_fitted_pool_is_twice_the_held_tiles_in_grains() {
+        assert_eq!(fitted_pool(0), 256);
+        assert_eq!(fitted_pool(128), 256);
+        assert_eq!(fitted_pool(129), 512);
+        assert_eq!(fitted_pool(640), 1280);
+        assert_eq!(fitted_pool(1632), 3328);
+        assert_eq!(fitted_pool(u32::MAX), MAX_POOL_TILES);
+    }
 }

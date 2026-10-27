@@ -633,6 +633,23 @@ impl WorldTiles {
         &self.counts
     }
 
+    /// The last finished build's held slots and whether its free stack ran
+    /// empty ([`POOL_SHORT`]), read from the shared counts a frame or two
+    /// late, without waiting on the GPU.
+    pub fn late_held(&self) -> Option<(u32, bool)> {
+        let ptr = self.counts.mapped_ptr()?.cast::<u32>();
+        let ring_max = self.reach.ring_max;
+        // SAFETY: the counts are a shared buffer of `count_words(ring_max)`
+        // u32 words; a word the GPU is writing reads as either value.
+        let (held, exhausted) = unsafe {
+            (
+                std::ptr::read_volatile(ptr.add(rank_count_word(ring_max + 1))),
+                std::ptr::read_volatile(ptr.add(exhausted_word(ring_max))),
+            )
+        };
+        Some((held, exhausted & POOL_SHORT != 0))
+    }
+
     /// A parents table's children rows: 8 slots of the level below per slot.
     pub fn child_rows(&self) -> Option<&GpuBuffer> {
         self.child_rows.as_ref()

@@ -357,6 +357,9 @@ pub(crate) struct StepState {
     /// from install until the first reserve, so the build's pipelines compile
     /// at install.
     tiles: Option<WorldTiles>,
+    /// The pool the last tick ran on, and whether a read of its table has
+    /// fitted it to the water (`tiles.rs` next_pool).
+    pool: Option<(u32, bool)>,
     /// Under [`set_all_tiles`]: one point in every tile of the box, the
     /// table's points in place of the particles, and their record.
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]

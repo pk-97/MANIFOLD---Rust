@@ -19,9 +19,9 @@ use manifold_node_engine::scene::world_tiles::{
     READ_SIDE, TILE, lattice_origin, slot_row_word, table_entries,
 };
 use manifold_water_liquid::primitives::prefix_scan::open_gate;
+use manifold_water_liquid::tile_pool::grown_pool;
 use manifold_water_liquid::world_tiles::{
-    Allocation, LIQUID_POINTS, POOL_SHORT, PointCount, Reach, WorldTiles, exhausted_word,
-    rank_count_word,
+    Allocation, LIQUID_POINTS, PointCount, Reach, WorldTiles,
 };
 use manifold_water_liquid::{float_param, int_param};
 
@@ -52,16 +52,8 @@ pub(crate) const REACH: Reach = Reach {
 /// The most the display subdivides a simulation cell per axis.
 pub(crate) const MAX_RESOLUTION_SCALE: f32 = 4.0;
 
-/// Pools are counted on f32 wires, which hold whole numbers exactly up to 2²⁴.
-const MAX_POOL_TILES: u32 = 16_777_216;
-
-/// The first pool, and the grain it grows by, in tiles.
+/// The first pool, in tiles; it grows by [`grown_pool`].
 pub(crate) const START_POOL_TILES: u32 = 1024;
-const POOL_GRAIN: u32 = 256;
-/// The pool grows once the held tiles fill this share of it, to
-/// `POOL_HEADROOM` times them: they are read a frame or two late.
-const GROW_AT: f64 = 2.0 / 3.0;
-const POOL_HEADROOM: u32 = 2;
 
 /// Field order identical to the shader's `Params`; three 16-byte rows.
 #[repr(C)]
@@ -92,21 +84,6 @@ pub(crate) fn display_cell_size(sim_cell_size: f32, resolution_scale: f32) -> Re
     }
     let scale = resolution_scale.round().clamp(1.0, MAX_RESOLUTION_SCALE);
     Ok(sim_cell_size / scale)
-}
-
-/// The pool to grow to from a table of `pool` tiles that held `held` of them
-/// and found its free stack empty when `short`: `None` while it fits.
-/// Headroom over the held tiles in whole grains, never past a wire's count.
-pub(crate) fn grown_pool(pool: u32, held: u32, short: bool) -> Option<u32> {
-    let crowded = f64::from(held) > f64::from(pool) * GROW_AT;
-    if !short && !crowded {
-        return None;
-    }
-    let wanted = held
-        .max(if short { pool } else { 0 })
-        .saturating_mul(POOL_HEADROOM);
-    let wanted = wanted.div_ceil(POOL_GRAIN).saturating_mul(POOL_GRAIN);
-    Some(wanted.clamp(pool, MAX_POOL_TILES)).filter(|&grown| grown > pool)
 }
 
 /// What the node's buffers are sized by; any change builds them again.
@@ -260,20 +237,10 @@ impl Held {
     }
 
     /// The pool this table's last finished build asks for, `None` while it
-    /// fits: held tiles and the short bit, read from the shared counts.
+    /// fits.
     fn grown(&self) -> Option<u32> {
-        let ring_max = REACH.ring_max;
-        let counts = self.tiles.counts();
-        let ptr = counts.mapped_ptr()?.cast::<u32>();
-        // SAFETY: the counts are a shared buffer of `count_words(ring_max)`
-        // u32 words; a word the GPU is writing reads as either value.
-        let (held, exhausted) = unsafe {
-            (
-                std::ptr::read_volatile(ptr.add(rank_count_word(ring_max + 1))),
-                std::ptr::read_volatile(ptr.add(exhausted_word(ring_max))),
-            )
-        };
-        grown_pool(self.layout.pool_tiles, held, exhausted & POOL_SHORT != 0)
+        let (held, short) = self.tiles.late_held()?;
+        grown_pool(self.layout.pool_tiles, held, short)
     }
 
     fn encode(&mut self, enc: &mut GpuEncoder, kernels: &Kernels, frame: &Frame<'_>) {
@@ -575,25 +542,6 @@ mod tests {
         assert!(display_cell_size(0.0, 1.0).is_err());
         assert!(display_cell_size(f32::NAN, 1.0).is_err());
         assert!(display_cell_size(0.25, f32::NAN).is_err());
-    }
-
-    #[test]
-    fn the_pool_grows_ahead_of_the_held_tiles() {
-        // Two thirds full or less: it fits.
-        assert_eq!(grown_pool(1024, 0, false), None);
-        assert_eq!(grown_pool(1024, 682, false), None);
-        // Past two thirds: twice the held tiles in grains of 256.
-        assert_eq!(grown_pool(1024, 700, false), Some(1536));
-        assert_eq!(grown_pool(1536, 1100, false), Some(2304));
-        // Short of a slot: at least twice the whole pool.
-        assert_eq!(grown_pool(1024, 1024, true), Some(2048));
-        assert_eq!(grown_pool(1024, 10, true), Some(2048));
-        // Never past what a wire counts.
-        assert_eq!(
-            grown_pool(MAX_POOL_TILES - 1, MAX_POOL_TILES - 1, true),
-            Some(MAX_POOL_TILES)
-        );
-        assert_eq!(grown_pool(MAX_POOL_TILES, MAX_POOL_TILES, true), None);
     }
 
     #[test]

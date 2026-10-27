@@ -1,6 +1,7 @@
 //! `node.gpu_flip_step` as a primitive: install, run and outputs.
 
 use super::*;
+use crate::primitives::gpu_flip_pressure::max_solve_level;
 use manifold_node_engine::scene::world_tiles::lattice_origin;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::substep_history::PooledFaces;
@@ -67,13 +68,15 @@ impl Primitive for GpuFlipStep {
             ctx.error(format!("{NAME}: cell_size is {h}; it must be positive"));
             return;
         }
-        let pool = match pool_tiles_wire(|name, default| ctx.scalar_or_param(name, default)) {
+        // The domain's pool is the ceiling; the step runs on what its water holds.
+        let ceiling = match pool_tiles_wire(|name, default| ctx.scalar_or_param(name, default)) {
             Ok(pool) => pool,
             Err(error) => {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
         };
+        let pool = self.state.next_pool(ceiling);
         let field = match ForceLatticeBinding::read(
             ctx,
             ctx.inputs.array("forces"),
@@ -188,8 +191,11 @@ impl Primitive for GpuFlipStep {
             ));
             return;
         }
-        let level = match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), pool) {
-            Ok(level) => level,
+        // Refused against the ceiling, as the domain refuses it; a pool that
+        // follows the water may hold fewer levels, and the gradient runs on
+        // the deepest it has.
+        let level = match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), ceiling) {
+            Ok(level) => level.min(max_solve_level(pool)),
             Err(error) => {
                 ctx.error(format!("{NAME}: {error}"));
                 return;

@@ -4,6 +4,7 @@
 
 use super::*;
 use manifold_node_engine::scene::world_tiles::tile_of_cell;
+use manifold_water_liquid::tile_pool::{fitted_pool, grown_pool};
 use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
 use manifold_water_liquid::world_tiles::{
     Allocation, PointCount, Reach, TileClip, allocated_args_offset, fresh_args_offset, held_bytes,
@@ -77,6 +78,30 @@ pub(crate) fn pool_tiles(cells: [u32; 3]) -> u32 {
         POOL_BUDGET_BYTES,
     )
 }
+}
+
+/// The pool a tick runs on and whether it is fitted yet, from `ceiling`
+/// ([`pool_tiles`], every tile the box can touch), the last tick's pool and
+/// fit (`None` before the first tick) and its table's late read (held
+/// tiles, short). The first tick runs on the ceiling, so any fill fits; the
+/// first read that holds water fits the pool to it, and from then on it
+/// only grows, so a restart's fill finds the room the first one had. Never
+/// past the ceiling. The passes launch over the whole pool, so a pool that
+/// follows the water costs what the water does.
+pub(super) fn next_pool(
+    ceiling: u32,
+    last: Option<(u32, bool)>,
+    read: Option<(u32, bool)>,
+) -> (u32, bool) {
+    let (pool, fitted) = match (last, read) {
+        (None, _) => (ceiling, false),
+        (Some((pool, true)), Some((held, short))) => {
+            (grown_pool(pool, held, short).unwrap_or(pool), true)
+        }
+        (Some((_, false)), Some((held, _))) if held > 0 => (fitted_pool(held), true),
+        (Some(last), _) => last,
+    };
+    (pool.min(ceiling), fitted)
 }
 
 /// Bytes of the world tiles of a pool of `pool_tiles`: the table, its

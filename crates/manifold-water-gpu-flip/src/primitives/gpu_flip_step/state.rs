@@ -33,6 +33,15 @@ impl StepState {
         self.sheeting.prepare(device);
     }
 
+    /// The pool this tick runs on under `ceiling`, from the last tick's and
+    /// its table's late read (`tiles.rs` next_pool).
+    pub(super) fn next_pool(&mut self, ceiling: u32) -> u32 {
+        let read = self.tiles.as_ref().and_then(WorldTiles::late_held);
+        let next = next_pool(ceiling, self.pool, read);
+        self.pool = Some(next);
+        next.0
+    }
+
     /// Size every array for a pool of `pool` tiles and `slots` before anything is encoded;
     /// removal reuses the sorted array. The emission scan is sized by the
     /// encode from the tick's sites.
