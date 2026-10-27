@@ -16,11 +16,14 @@ fn list_cell(gid: u32) -> u32 {
 // fractions' corners), since an absent tile is at least a tile from water.
 const CANON_CORNER_CELLS: f32 = 3.0;
 
-// The canonical cell values: water 0, φ 3h (particle_distance's start, kept
-// where no particle is within its scan), rhs 0.
+// The canonical φ in cells: particle_distance's start, kept where no
+// particle is within its scan.
+const CANON_PHI_CELLS: f32 = 3.0;
+
+// The canonical cell values: water 0, φ CANON_PHI_CELLS, rhs 0.
 fn canonical_cell(idx: u32) {
     tile_water[idx] = 0.0;
-    tile_phi[idx] = 3.0 * u.cell_size;
+    tile_phi[idx] = CANON_PHI_CELLS * u.cell_size;
     tile_rhs[idx] = 0.0;
 }
 

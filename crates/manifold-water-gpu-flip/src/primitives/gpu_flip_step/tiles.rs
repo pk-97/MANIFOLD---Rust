@@ -41,13 +41,14 @@ pub(crate) const POOL_BUDGET_BYTES: u64 = 3 << 29;
 
 /// Bytes per fine cell of every pooled field: the step's own (the lattice's
 /// cell arrays and face grids), the solver's vectors and rows, the
-/// sheeting's arrays and the sheet distance's two fields. The bodies hold
-/// none (their partials are per slot).
+/// sheeting's arrays, the sheet distance's two fields and Narrow Band's
+/// fields. The bodies hold none (their partials are per slot).
 pub(crate) fn pooled_bytes_per_cell() -> u64 {
     STEP_POOLED_BYTES_PER_CELL
         + crate::primitives::gpu_flip_pressure::POOLED_BYTES_PER_CELL
         + crate::primitives::gpu_flip_sheeting::POOLED_BYTES_PER_CELL
         + crate::primitives::gpu_flip_sheet_distance::POOLED_BYTES_PER_CELL
+        + super::narrow_band::pooled_bytes_per_cell()
 }
 
 /// Tiles a pool of `budget` bytes holds when a tile costs `tile_bytes`, at
@@ -282,7 +283,8 @@ pub(super) fn pooled<'a>(
 }
 
 /// The step's tiles for this step, before the sort: the shared build from
-/// `particles` (the slots in use `record` names), or under
+/// `particles` (the slots in use `record` names) and Narrow Band's `kept`
+/// words, or under
 /// [`set_all_tiles`] from one point per box tile; then the fresh slots set to
 /// their canonical values and the slots that left C retired. The sort keys
 /// on the table this leaves. An inactive slot of `plan` keeps the last
@@ -294,6 +296,7 @@ pub(super) fn encode_tiles(
     l: &LatticeBuffers,
     tiles: &WorldTiles,
     points: (&GpuBuffer, &GpuBuffer),
+    kept: Option<&GpuBuffer>,
     plan: &GpuBuffer,
 ) {
     let (points, record) = points;
@@ -307,6 +310,7 @@ pub(super) fn encode_tiles(
             replay_count: params.extension_layers,
             gate: plan,
             clip: wall_clip(params),
+            kept,
         },
     );
     let ring = tiles.reach().ring_max;

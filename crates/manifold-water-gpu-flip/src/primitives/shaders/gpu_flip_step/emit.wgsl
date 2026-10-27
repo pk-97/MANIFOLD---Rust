@@ -168,6 +168,7 @@ fn birth_tally_reset() {
     capped[INFLOW_REFUSED_TAIL] = 0u;
     capped[SHEET_REFUSED_TAIL] = 0u;
     capped[TILE_REMOVED_TAIL] = 0u;
+    capped[RESEED_REFUSED_TAIL] = 0u;
 }
 
 // One thread, after emit_write: the substep's inflow births (the slots in use

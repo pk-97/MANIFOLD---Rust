@@ -78,6 +78,7 @@ pub(crate) use read_params::{
 mod encode;
 mod extend;
 mod lattice;
+mod narrow_band;
 mod pipelines;
 mod pockets;
 mod primitive;
@@ -120,6 +121,7 @@ manifold_core::testkit_visible! { pub(crate) const STEP_SHADER: &str = concat!(
     include_str!("shaders/gpu_flip_step/count.wgsl"),
     include_str!("shaders/gpu_flip_step/tiles.wgsl"),
     include_str!("shaders/gpu_flip_step/marker_removal.wgsl"),
+    include_str!("shaders/gpu_flip_step/narrow_band.wgsl"),
 ); }
 const NAME: &str = "GPU FLIP Step";
 
@@ -292,7 +294,10 @@ pub(crate) struct StepParams {
     /// The move removes a particle that ends below this height in metres;
     /// `f32::MIN` removes none.
     pub(crate) kill_height: f32,
-    pub(crate) _pad: [u32; 2],
+    /// Narrow Band: 0 off, [`narrow_band::ON`] or [`narrow_band::RESTORE`].
+    pub(crate) narrow_band: u32,
+    /// The band's depth in cells ([`narrow_band::band_cells`]).
+    pub(crate) band_cells: f32,
     /// Each Bounds face plane's velocity along its axis in m/s, the low
     /// faces then the high: what a moving Wall gives the water it touches.
     pub(crate) wall_velocity_lo: [f32; 3],
@@ -397,6 +402,9 @@ pub(crate) struct StepState {
     sheet_distance: super::gpu_flip_sheet_distance::SheetDistance,
     sheeting: super::gpu_flip_sheeting::GpuSheeting,
     sheet_order: Option<GpuBuffer>,
+    /// Narrow Band: its distance and scan, prepared at install; its storage
+    /// only while it runs.
+    narrow_band: narrow_band::NarrowBand,
 }
 }
 
@@ -538,6 +546,7 @@ manifold_node_engine::primitive! {
         clock_source_count: ScalarF32 optional,
         live_hits: Array(f32) optional,
         live_hit_count: ScalarF32 optional,
+        narrow_band: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
@@ -550,6 +559,9 @@ manifold_node_engine::primitive! {
         tiles: Array(u32),
         // The pool's capacity in tiles, `P`.
         pool_tiles: ScalarF32,
+        // Narrow Band's grid interior on `tiles` (`pool_len(pool_tiles)` values):
+        // the water the grid holds below the particles' band, negative inside.
+        interior: Array(f32),
         substep_schedule: Array(f32),
         // The substeps' pooled faces: slots · pool_len(pool_tiles) · 4 floats, all on `tiles`.
         substep_faces: Array(f32),
@@ -601,9 +613,10 @@ manifold_node_engine::primitive! {
         // Shipped presets wire the domain's Sheet Fill Rate into the input, which wins;
         // only standalone graphs and tests reach this param.
         float_param!("sheet_fill_rate", "Sheet Fill Rate", 0.0, 0.0, 1.0),
+        int_param!("narrow_band", "Narrow Band", 0.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The cell size and pool_tiles, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. faces, distance, tiles and pool_tiles feed the whitewater stage; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A pool the device cannot hold is a named error.",
+    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The cell size and pool_tiles, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. faces, distance, tiles and pool_tiles feed the whitewater stage; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A pool the device cannot hold is a named error. Narrow Band 1 keeps particles only in a band under the surface as deep as the velocity extension (12 cells); the deeper water is the grid's, carried from step to step, and leaves as interior on tiles: wire it with tiles through node.liquid_state into node.surface_tiles and node.interior_fill, or the drawn water is hollow. Switching it off refills the grid's water with particles on the next tick.",
     examples: ["WaterDamBreakGpuFlip"],
     picker: { label: "GPU FLIP Step", category: Atom },
     summary: "Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion.",

@@ -13,6 +13,8 @@
 //! change takes the distance to the interpolated zero crossing, then Jacobi
 //! sweeps of the Godunov update of |grad u| = 1 carry it inward. It replaces
 //! the curvature distance for the sheeter only; the whitewater keeps its own.
+//! The narrow band builds its distance the same way, to its own depth
+//! (`gpu_flip_step/narrow_band.rs`).
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len};
@@ -31,10 +33,17 @@ pub(crate) const POOLED_BYTES_PER_CELL: u64 = 2 * 4;
 
 const ENTRIES: [&str; 2] = ["seed", "sweep"];
 
-/// Jacobi sweeps: a sweep carries the distance one cell along an axis, and a
-/// diagonal path to depth `SHEET_DISTANCE_CELLS` crosses up to sqrt(3) times
-/// that many cells. Even, so the result ends in the first buffer.
-pub(crate) const SHEET_DISTANCE_SWEEPS: u32 = ceil_cells(2.0 * SHEET_DISTANCE_CELLS);
+/// Jacobi sweeps for a distance true to `cells` deep: a sweep carries the
+/// distance one cell along an axis, and a diagonal path to that depth crosses
+/// up to sqrt(3) times as many cells. Even, so the result ends in the first
+/// buffer.
+const fn sweeps_for(cells: f64) -> u32 {
+    let sweeps = ceil_cells(2.0 * cells);
+    sweeps + sweeps % 2
+}
+
+/// The sheeter's sweeps, to `SHEET_DISTANCE_CELLS` deep.
+pub(crate) const SHEET_DISTANCE_SWEEPS: u32 = sweeps_for(SHEET_DISTANCE_CELLS);
 const _: () = assert!(SHEET_DISTANCE_SWEEPS.is_multiple_of(2));
 
 const fn ceil_cells(x: f64) -> u32 {
@@ -54,20 +63,39 @@ struct Params {
     entries: u32,
 }
 
-/// The depth the distance is true to, in metres.
+/// The sheeter's depth, in metres.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) fn depth_metres(h: f32) -> f32 {
     (SHEET_DISTANCE_CELLS * f64::from(h)) as f32
 }
 
-#[derive(Default)]
 pub(crate) struct SheetDistance {
     pipelines: Vec<GpuComputePipeline>,
     /// The two ping-pong fields, pooled cell fields of `pool_len` elements.
     buffers: Option<[GpuBuffer; 2]>,
     pool_tiles: u32,
+    /// The depth the distance is true to, in cells.
+    cells: f64,
+}
+
+/// The sheeter's distance.
+impl Default for SheetDistance {
+    fn default() -> Self {
+        Self::to_depth(SHEET_DISTANCE_CELLS)
+    }
 }
 
 impl SheetDistance {
+    /// A distance true to `cells` deep and clamped there.
+    pub(crate) const fn to_depth(cells: f64) -> Self {
+        Self {
+            pipelines: Vec::new(),
+            buffers: None,
+            pool_tiles: 0,
+            cells,
+        }
+    }
+
     /// Called even while sheeting is off, so switching it on mid-show does not
     /// compile on the content thread.
     pub(crate) fn prepare(&mut self, device: &GpuDevice) {
@@ -127,7 +155,7 @@ impl SheetDistance {
         let [a, b] = self.buffers.as_ref().expect("sheet distance reserved");
         let params = Params {
             h,
-            depth: depth_metres(h),
+            depth: (self.cells * f64::from(h)) as f32,
             pool_tiles: tiles.pool_tiles(),
             entries: tiles.table_entries(),
         };
@@ -178,7 +206,7 @@ impl SheetDistance {
             enc.compute_memory_barrier_buffers();
         };
         pass(0, b, a, "gpu_flip.sheet_distance.seed");
-        for sweep in 0..SHEET_DISTANCE_SWEEPS {
+        for sweep in 0..sweeps_for(self.cells) {
             if sweep % 2 == 0 {
                 pass(1, a, b, "gpu_flip.sheet_distance.sweep");
             } else {

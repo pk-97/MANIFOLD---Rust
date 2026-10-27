@@ -47,6 +47,11 @@ pub const LIQUID_POINTS: &str = include_str!("primitives/shaders/world_tiles_liq
 /// position finite, among the first [`PointCount::Slots`] records.
 pub const MATTER_POINTS: &str = include_str!("primitives/shaders/world_tiles_matter.wgsl");
 
+/// Points a particle build keeps besides its particles: one word per slot of
+/// the table's last build, the local index of a cell the slot's tile keeps or
+/// `NONE` ([`Allocation::kept`]).
+pub const KEPT_POINTS: &str = include_str!("primitives/shaders/world_tiles_kept.wgsl");
+
 /// Points from the level below's held slots, and the children rows pass.
 pub const PARENT_POINTS: &str = include_str!("primitives/shaders/world_tiles_parents.wgsl");
 
@@ -245,6 +250,13 @@ struct Pipelines {
     children: Option<GpuComputePipeline>,
 }
 
+/// The point passes over kept words ([`KEPT_POINTS`]): seed, seeds, near.
+struct KeptPipelines {
+    seed: GpuComputePipeline,
+    seeds: GpuComputePipeline,
+    near: GpuComputePipeline,
+}
+
 /// The records a particle build bins.
 #[derive(Clone, Copy)]
 pub enum PointCount<'a> {
@@ -274,6 +286,11 @@ pub struct Allocation<'a> {
     /// never inserted, while a point's own tile always is. `None` clips
     /// nothing.
     pub clip: Option<TileClip>,
+    /// [`KEPT_POINTS`] words, P of them, written against the table's last
+    /// build: each slot's kept cell joins the build as one more point, so a
+    /// tile holding water no particle marks stays in the table.
+    /// [`WorldTiles::prepare_kept`] first.
+    pub kept: Option<&'a GpuBuffer>,
 }
 
 /// A box of world tiles, its first and last tile per axis.
@@ -308,6 +325,7 @@ pub struct WorldTiles {
     child_rows: Option<GpuBuffer>,
     scan: PrefixScan,
     pipelines: Option<Pipelines>,
+    kept: Option<KeptPipelines>,
 }
 
 fn admit(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
@@ -433,6 +451,7 @@ impl WorldTiles {
             child_rows,
             scan,
             pipelines: None,
+            kept: None,
         })
     }
 
@@ -458,6 +477,21 @@ impl WorldTiles {
             slots: make("wt_slots"),
             finish: make("wt_finish"),
             children: self.child_rows.is_some().then(|| make("wt_children")),
+        });
+    }
+
+    /// Create the kept point passes ([`Allocation::kept`]), at install like
+    /// [`Self::prepare`].
+    pub fn prepare_kept(&mut self, device: &GpuDevice) {
+        if self.kept.is_some() {
+            return;
+        }
+        let source = format!("{READ_SIDE}\n{KEPT_POINTS}\n{SHADER}");
+        let make = |entry: &str| device.create_compute_pipeline(&source, entry, "world_tiles.kept");
+        self.kept = Some(KeptPipelines {
+            seed: make("wt_seed"),
+            seeds: make("wt_seeds"),
+            near: make("wt_near"),
         });
     }
 
@@ -493,7 +527,7 @@ impl WorldTiles {
             PointCount::Record(record) => Some(record),
             PointCount::Slots(_) => None,
         };
-        self.encode_build(enc, &params, job.points, record, job.gate);
+        self.encode_build(enc, &params, job.points, record, job.gate, job.kept);
     }
 
     /// Build a coarse level from `child`, the level below, encoded earlier
@@ -520,7 +554,7 @@ impl WorldTiles {
             clip_lo: NO_CLIP[0],
             clip_hi: NO_CLIP[1],
         };
-        self.encode_build(enc, &params, &child.table, None, gate);
+        self.encode_build(enc, &params, &child.table, None, gate, None);
     }
 
     fn encode_build(
@@ -530,6 +564,7 @@ impl WorldTiles {
         points: &GpuBuffer,
         record: Option<&GpuBuffer>,
         gate: &GpuBuffer,
+        kept: Option<&GpuBuffer>,
     ) {
         let pipes = self.pipelines.as_ref().expect("world tiles prepared");
         let fixed = [
@@ -551,6 +586,15 @@ impl WorldTiles {
             buffer(12, gate),
             buffer(POINTS_BINDING, points),
         ];
+        // The kept words in the points' place, for their own point passes.
+        let kept = kept.map(|words| {
+            let mut bound = fixed;
+            bound[13] = buffer(POINTS_BINDING, words);
+            (
+                self.kept.as_ref().expect("kept point passes prepared"),
+                bound,
+            )
+        });
         // Room after the fixed bindings for the slot record (a particle
         // build) or the children rows (the parents' last pass).
         let mut bound = [fixed[0]; 15];
@@ -581,9 +625,19 @@ impl WorldTiles {
             }
             enc.compute_memory_barrier_buffers();
         };
+        // A kept pass runs beside each particle pass, one thread a slot.
+        let per_kept =
+            |enc: &mut GpuEncoder, pass: fn(&KeptPipelines) -> &GpuComputePipeline, label| {
+                if let Some((pipes, bound)) = &kept {
+                    enc.dispatch_compute(pass(pipes), bound, per_slot, label);
+                    enc.compute_memory_barrier_buffers();
+                }
+            };
         pass(enc, &pipes.clear, per_entry, "world_tiles.clear");
         per_point(enc, &pipes.seed, "world_tiles.seed");
+        per_kept(enc, |k| &k.seed, "world_tiles.kept_seed");
         per_point(enc, &pipes.seeds, "world_tiles.seeds");
+        per_kept(enc, |k| &k.seeds, "world_tiles.kept_seeds");
         if self.reach.ring_max > 0 {
             for (pipeline, label) in [
                 (&pipes.dilate, "world_tiles.dilate"),
@@ -594,6 +648,7 @@ impl WorldTiles {
             }
         }
         per_point(enc, &pipes.near, "world_tiles.near");
+        per_kept(enc, |k| &k.near, "world_tiles.kept_near");
         pass(enc, &pipes.carry, per_slot, "world_tiles.carry");
         pass(enc, &pipes.wants, per_entry, "world_tiles.wants");
         self.scan.encode_labelled_gated(
@@ -711,6 +766,7 @@ mod tests {
         validate(LIQUID_POINTS);
         validate(MATTER_POINTS);
         validate(PARENT_POINTS);
+        validate(KEPT_POINTS);
     }
 
     /// The args keep every triple 4-byte aligned before an 8-byte aligned

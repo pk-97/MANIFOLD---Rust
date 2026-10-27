@@ -143,7 +143,13 @@ impl StepState {
         };
         #[cfg(not(all(any(test, feature = "testkit"), feature = "gpu-proofs")))]
         let points = (step.particles, record);
-        encode_tiles(enc, pipes, &base, l, tiles, points, step.clock_plan);
+        // Narrow Band's grid water holds its tiles beside the particles.
+        let kept = self.narrow_band.kept(p.narrow_band);
+        encode_tiles(enc, pipes, &base, l, tiles, points, kept, step.clock_plan);
+        let narrow = p.narrow_band != 0;
+        if narrow {
+            self.narrow_band.encode_fresh(enc, pipes, &base, tiles);
+        }
         // The solids at every held cell's corner: the Bounds Wall faces, which
         // are in the solid with the bodies as the engine's inverted domain
         // object is (a body flush with a wall then seals against it, where
@@ -205,6 +211,14 @@ impl StepState {
             &[buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
             "gpu_flip.step.distance",
         );
+        // Narrow Band: the particles' φ united with the grid's water, and the
+        // substep's distance the band's tests read.
+        let band = narrow.then(|| {
+            self.narrow_band
+                .encode_union(enc, pipes, &base, tiles, step, &l.phi)
+        });
+        // Bound where the band's distance is read; off, no pass reads it.
+        let band_distance = band.as_ref().map_or(&l.phi, |band| band.distance);
         over(
             enc,
             &pipes.gather,
@@ -212,6 +226,10 @@ impl StepState {
             &[buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g)],
             "gpu_flip.step.particles_to_faces",
         );
+        if let Some(band) = &band {
+            self.narrow_band
+                .encode_combine(enc, pipes, &base, tiles, step, band, &l.g, &l.corners);
+        }
         // The saved faces: the particles' own, extended so FLIP's change is
         // measured wherever a particle samples.
         extend(
@@ -531,6 +549,7 @@ impl StepState {
                     buffer(6, &l.water),
                     buffer(9, &l.corners),
                     buffer(5, &l.rhs),
+                    buffer(67, band_distance),
                 ],
                 "gpu_flip.step.density_source",
             );
@@ -662,11 +681,16 @@ impl StepState {
                 buffer(46, step.clock_plan),
                 buffer(51, table),
                 buffer(42, record),
+                buffer(67, band_distance),
             ],
             record,
             0,
             "gpu_flip.step.move",
         );
+        if let Some(band) = &band {
+            self.narrow_band
+                .encode_advect(enc, pipes, &base, tiles, step, band, out_faces);
+        }
         // Native removal precedes inflow. Stable cell ranks predate speed
         // removal: an extreme marker still consumes a cell quota place.
         enc.compute_memory_barrier_buffers();
@@ -710,6 +734,23 @@ impl StepState {
             c,
             "gpu_flip.step.remove_crowded",
         );
+        if let Some(band) = &band {
+            enc.compute_memory_barrier_buffers();
+            self.narrow_band.encode_reseed(
+                enc,
+                pipes,
+                &self.identity_ops,
+                &base,
+                tiles,
+                step,
+                band,
+                sorted,
+                ranges,
+                record,
+                &l.corners,
+                out_faces,
+            );
+        }
         enc.compute_memory_barrier_buffers();
         self.sorter.encode_pooled(
             device,
@@ -817,6 +858,10 @@ impl StepState {
                 [1, 1, 1],
                 "gpu_flip.step.emit_tally",
             );
+        }
+        if p.narrow_band == narrow_band::ON {
+            enc.compute_memory_barrier_buffers();
+            self.narrow_band.encode_keep(enc, pipes, &base, tiles, step);
         }
         enc.compute_memory_barrier_buffers();
         Ok(())

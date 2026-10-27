@@ -18,6 +18,7 @@ impl StepState {
             match WorldTiles::new(device, 1, step_reach(), LIQUID_POINTS) {
                 Ok(mut tiles) => {
                     tiles.prepare(device);
+                    tiles.prepare_kept(device);
                     self.tiles = Some(tiles);
                 }
                 Err(error) => log::warn!("GPU FLIP Step: world tiles at install: {error}"),
@@ -31,6 +32,7 @@ impl StepState {
         // must not compile pipelines on the content thread.
         self.sheet_distance.prepare(device);
         self.sheeting.prepare(device);
+        self.narrow_band.prepare(device);
     }
 
     /// The pool this tick runs on under `ceiling`, from the last tick's and
@@ -44,13 +46,14 @@ impl StepState {
 
     /// Size every array for a pool of `pool` tiles and `slots` before anything is encoded;
     /// removal reuses the sorted array. The emission scan is sized by the
-    /// encode from the tick's sites.
+    /// encode from the tick's sites. `narrow_band` is the run's band mode.
     pub(super) fn reserve(
         &mut self,
         device: &GpuDevice,
         pool: u32,
         slots: u64,
         sheeting: bool,
+        narrow_band: u32,
     ) -> Result<(), String> {
         if self.zeros.is_none() {
             let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
@@ -80,6 +83,7 @@ impl StepState {
             self.tiles = None;
             let mut tiles = WorldTiles::new(device, pool, step_reach(), LIQUID_POINTS)?;
             tiles.prepare(device);
+            tiles.prepare_kept(device);
             self.tiles = Some(tiles);
         }
         let sorted = slots.max(1) * size_of::<FluidParticle>() as u64;
@@ -91,6 +95,7 @@ impl StepState {
             self.sorted = None;
             self.sorted = Some(allocate(device, sorted)?);
         }
+        self.narrow_band.reserve(device, pool, narrow_band)?;
         if sheeting {
             let slot_count = u32::try_from(slots)
                 .map_err(|_| "sheeting particle capacity exceeds u32".to_string())?;

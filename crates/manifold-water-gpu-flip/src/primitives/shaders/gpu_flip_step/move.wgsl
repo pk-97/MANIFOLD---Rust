@@ -259,6 +259,9 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let before = sample(q0, lo, 1u);
     out.velocity = u.flip * (particle.velocity + after - before) + (1.0 - u.flip) * after;
+    if nb_grid_moves(q0, lo) {
+        out.velocity = after;
+    }
     if u.region_count > 0 {
         // An inflow sets the velocity of the water it holds
         // (_constrainMarkerParticleVelocities); an outflow removes the water

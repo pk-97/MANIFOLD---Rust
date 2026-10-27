@@ -69,6 +69,19 @@ fn build(
     replay: u32,
     clip: Option<TileClip>,
 ) {
+    build_kept(device, tiles, cells, gate, replay, clip, None);
+}
+
+/// [`build`] with each slot's kept word (`kept`) joining the points.
+fn build_kept(
+    device: &GpuDevice,
+    tiles: &WorldTiles,
+    cells: &[[i32; 3]],
+    gate: &GpuBuffer,
+    replay: u32,
+    clip: Option<TileClip>,
+    kept: Option<&GpuBuffer>,
+) {
     let (records, count) = particles(device, cells);
     // The slots in use, as the step's slot record holds them.
     let record = shared(device, &[count.div_ceil(256).max(1), 1, 1, count]);
@@ -83,6 +96,7 @@ fn build(
             replay_count: replay,
             gate,
             clip,
+            kept,
         },
     );
     enc.commit_and_wait_completed();
@@ -361,8 +375,14 @@ fn rings_stop_at_the_clip() {
     assert_eq!(want.exhausted(2), 0, "the pool and table hold it all");
     check(&tiles, &want, 0, "clipped");
     let held = |t: [i32; 3]| want.slot_of(t) != NONE;
-    assert!(held([0, 0, 0]) && held([2, 2, 2]) && held([0, -2, 2]), "rings inside the clip");
-    assert!(!held([-1, 0, 0]) && !held([-2, 0, 0]), "no ring past the clip");
+    assert!(
+        held([0, 0, 0]) && held([2, 2, 2]) && held([0, -2, 2]),
+        "rings inside the clip"
+    );
+    assert!(
+        !held([-1, 0, 0]) && !held([-2, 0, 0]),
+        "no ring past the clip"
+    );
     assert!(held([-3, 0, 0]), "a point past the clip keeps its own tile");
     // 3 of the cube's 5 tiles a side on x, all 5 on y and z, and the lone tile.
     let total: usize = want.by_rank.iter().map(BTreeSet::len).sum();
@@ -458,6 +478,50 @@ fn a_band_tile_taking_a_seed_entry_keeps_one_slot_a_tile() {
     }
 }
 
+/// A slot's kept cell holds its tile as a point there would: water in two
+/// blocks, then particles in the first only while the second's slot keeps
+/// one cell. The build equals the mirror's with that cell as a point, so
+/// the second block's tile keeps its slot in the cell set, where without
+/// the kept word it would retire.
+#[test]
+fn a_kept_cell_holds_its_tile_without_particles() {
+    let device = test_device();
+    let reach = Reach {
+        ring_max: 2,
+        alloc_ring: 2,
+        cell_reach: 2,
+    };
+    let pool = 512;
+    let mut tiles = WorldTiles::new(&device, pool, reach, LIQUID_POINTS).expect("world tiles");
+    tiles.prepare(&device);
+    tiles.prepare_kept(&device);
+    let mut mirror = Mirror::new(pool, reach, false);
+    let run = plan(&device, true);
+    let first = cells_of([-7, 1, 17], [3, 3, 3]);
+    let second = cells_of([19, 3, -12], [2, 2, 2]);
+    let both: Vec<[i32; 3]> = first.iter().chain(&second).copied().collect();
+    build(&device, &tiles, &both, &run, 0, None);
+    let before = mirror.build(&both, None);
+    check(&tiles, &before, 0, "step 0");
+    let cell = second[0];
+    let tile = tile_of_cell(cell);
+    let slot = before.slot_of(tile);
+    assert_ne!(slot, NONE, "step 0 holds the second block");
+    let mut words = vec![NONE; pool as usize];
+    words[slot as usize] = local_index(cell);
+    let kept = shared(&device, &words);
+    build_kept(&device, &tiles, &first, &run, 0, None, Some(&kept));
+    let mut points = first.clone();
+    points.push(cell);
+    let want = mirror.build(&points, None);
+    check(&tiles, &want, 0, "step 1");
+    assert_eq!(want.slot_of(tile), slot, "the kept tile keeps its slot");
+    assert!(
+        want.by_rank[0].contains(&slot),
+        "the kept tile is in the cell set"
+    );
+}
+
 /// Two live tiles a key span apart set the alias bit; five tiles in a
 /// four-entry table set the table-full bit and leave four of their keys;
 /// neither hangs the GPU.
@@ -473,7 +537,14 @@ fn alias_and_full_table_are_reported() {
 
     let mut tiles = WorldTiles::new(&device, 64, reach, LIQUID_POINTS).expect("world tiles");
     tiles.prepare(&device);
-    build(&device, &tiles, &[[0, 0, 0], [8 * 2048, 0, 0]], &run, 0, None);
+    build(
+        &device,
+        &tiles,
+        &[[0, 0, 0], [8 * 2048, 0, 0]],
+        &run,
+        0,
+        None,
+    );
     let counts = read(tiles.counts(), count_words(0) as usize);
     assert_ne!(counts[exhausted_word(0)] & ALIAS, 0, "alias reported");
     let keys = read(tiles.table(), tiles.table_entries() as usize);

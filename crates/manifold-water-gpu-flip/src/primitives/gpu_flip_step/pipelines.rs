@@ -54,6 +54,19 @@ pub(super) struct Pipelines {
     pub(super) tiles_tally: GpuComputePipeline,
     /// The canonical element of every pooled field, once per pool build.
     pub(super) pool_canon: GpuComputePipeline,
+    /// Narrow Band's passes (`narrow_band.wgsl`).
+    pub(super) nb_fresh: GpuComputePipeline,
+    pub(super) nb_canon: GpuComputePipeline,
+    pub(super) nb_union: GpuComputePipeline,
+    pub(super) nb_combine: GpuComputePipeline,
+    pub(super) nb_advect_phi: GpuComputePipeline,
+    pub(super) nb_advect_faces: GpuComputePipeline,
+    pub(super) nb_delete: GpuComputePipeline,
+    pub(super) nb_reseed_flags: GpuComputePipeline,
+    pub(super) nb_reseed_write: GpuComputePipeline,
+    pub(super) nb_reseed_tally: GpuComputePipeline,
+    pub(super) nb_kept_clear: GpuComputePipeline,
+    pub(super) nb_keep: GpuComputePipeline,
     /// The proofs' poison entry, dispatched under [`POISON`].
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub(super) poison: GpuComputePipeline,
@@ -135,6 +148,18 @@ impl Pipelines {
             solid_corners: pipe("solid_corners"),
             tiles_tally: pipe("tiles_tally"),
             pool_canon: pipe("pool_canon"),
+            nb_fresh: pipe("nb_fresh"),
+            nb_canon: pipe("nb_canon"),
+            nb_union: pipe("nb_union"),
+            nb_combine: pipe("nb_combine"),
+            nb_advect_phi: pipe("nb_advect_phi"),
+            nb_advect_faces: pipe("nb_advect_faces"),
+            nb_delete: pipe("nb_delete"),
+            nb_reseed_flags: pipe("nb_reseed_flags"),
+            nb_reseed_write: pipe("nb_reseed_write"),
+            nb_reseed_tally: pipe("nb_reseed_tally"),
+            nb_kept_clear: pipe("nb_kept_clear"),
+            nb_keep: pipe("nb_keep"),
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             poison: pipe(super::super::gpu_flip_tile_tests::POISON_ENTRY),
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]

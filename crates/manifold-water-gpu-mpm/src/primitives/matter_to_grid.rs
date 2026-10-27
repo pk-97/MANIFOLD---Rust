@@ -267,6 +267,7 @@ impl Primitive for MatterToGrid {
                     replay_count: 0,
                     gate,
                     clip: None,
+                    kept: None,
                 },
             );
             if let Err(error) = self

@@ -37,6 +37,7 @@ mod emit;
 mod face_gravity;
 mod free_fall;
 mod motion;
+mod narrow_band;
 mod pockets;
 mod slots;
 mod solids;

@@ -118,8 +118,11 @@ struct Params {
     // The move removes a particle that ends below this height in metres;
     // f32::MIN removes none.
     kill_height: f32,
-    _pad0: u32,
-    _pad1: u32,
+    // Narrow Band (narrow_band.wgsl): 0 off, NB_ON, or NB_RESTORE for the
+    // steps after it is switched off.
+    narrow_band: u32,
+    // The band's depth in cells, R.
+    band_cells: f32,
     // Each Bounds face plane's velocity along its axis in m/s, the low faces
     // then the high: what a moving Wall gives the water it touches.
     wall_velocity_lo: vec3<f32>,

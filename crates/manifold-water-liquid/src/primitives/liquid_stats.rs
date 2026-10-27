@@ -39,9 +39,9 @@ pub(crate) fn partial_bytes(slots: u32) -> u64 {
 /// have a solution, 16 the share of the pool's tiles the water holds
 /// (|C| / P) (8-16 are 0 without a `capped` input). Word 17 is the particles
 /// inflows added this tick, 18 the ones they wanted to add but the pool had
-/// no free slot for, 19 the sheet births the pool had no free slot for, and
-/// 20 the particles removed because their tile had no slot. Floats are
-/// stored as bits.
+/// no free slot for, 19 the sheet births the pool had no free slot for, 20
+/// the particles removed because their tile had no slot, and 21 the narrow
+/// band's reseeds the pool had no free slot for. Floats are stored as bits.
 /// The first solver word in the published stats array.
 pub const SOLVER_STATS_START: u32 = 10;
 /// The published stats word counting this tick's inflow births.
@@ -53,8 +53,11 @@ pub const SHEET_REFUSED_WORD: u32 = 19;
 /// The published stats word counting particles removed because their tile
 /// had no slot in the pool.
 pub const TILE_REMOVED_WORD: u32 = 20;
+/// The published stats word counting narrow band reseeds a full pool
+/// refused.
+pub const RESEED_REFUSED_WORD: u32 = 21;
 /// The number of words in the stats array.
-pub const LIQUID_STATS_WORDS: u32 = TILE_REMOVED_WORD + 1;
+pub const LIQUID_STATS_WORDS: u32 = RESEED_REFUSED_WORD + 1;
 /// The number of solver words copied from the capped counters.
 pub const SOLVER_WORDS: u32 = LIQUID_STATS_WORDS - SOLVER_STATS_START;
 /// The inflow births' offset within the solver tail.
@@ -65,6 +68,8 @@ pub const INFLOW_REFUSED_TAIL: u32 = INFLOW_REFUSED_WORD - SOLVER_STATS_START;
 pub const SHEET_REFUSED_TAIL: u32 = SHEET_REFUSED_WORD - SOLVER_STATS_START;
 /// The tile-removed count's offset within the solver tail.
 pub const TILE_REMOVED_TAIL: u32 = TILE_REMOVED_WORD - SOLVER_STATS_START;
+/// The refused reseeds' offset within the solver tail.
+pub const RESEED_REFUSED_TAIL: u32 = RESEED_REFUSED_WORD - SOLVER_STATS_START;
 
 /// One tick's statistics, decoded from the stats words.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -106,6 +111,9 @@ pub struct LiquidTickStats {
     /// Particles removed this tick because their tile had no slot: the pool
     /// is full where the water went.
     pub tile_removed: u32,
+    /// Narrow band reseeds this tick wanted slots the pool did not have: the
+    /// band's water entering from the grid went without particles.
+    pub reseed_refused: u32,
 }
 
 impl LiquidTickStats {
@@ -131,6 +139,7 @@ impl LiquidTickStats {
             inflow_refused: w[INFLOW_REFUSED_WORD as usize],
             sheet_refused: w[SHEET_REFUSED_WORD as usize],
             tile_removed: w[TILE_REMOVED_WORD as usize],
+            reseed_refused: w[RESEED_REFUSED_WORD as usize],
         }
     }
 }
@@ -141,7 +150,7 @@ impl LiquidTickStats {
 /// writers on one source of truth.
 pub fn with_stats_layout(source: &str) -> String {
     format!(
-        "const SOLVER_STATS_START: u32 = {SOLVER_STATS_START}u;\nconst SOLVER_WORDS: u32 = {SOLVER_WORDS}u;\nconst INFLOW_BIRTHS_TAIL: u32 = {INFLOW_BIRTHS_TAIL}u;\nconst INFLOW_REFUSED_TAIL: u32 = {INFLOW_REFUSED_TAIL}u;\nconst SHEET_REFUSED_TAIL: u32 = {SHEET_REFUSED_TAIL}u;\nconst TILE_REMOVED_TAIL: u32 = {TILE_REMOVED_TAIL}u;\n\n{source}"
+        "const SOLVER_STATS_START: u32 = {SOLVER_STATS_START}u;\nconst SOLVER_WORDS: u32 = {SOLVER_WORDS}u;\nconst INFLOW_BIRTHS_TAIL: u32 = {INFLOW_BIRTHS_TAIL}u;\nconst INFLOW_REFUSED_TAIL: u32 = {INFLOW_REFUSED_TAIL}u;\nconst SHEET_REFUSED_TAIL: u32 = {SHEET_REFUSED_TAIL}u;\nconst TILE_REMOVED_TAIL: u32 = {TILE_REMOVED_TAIL}u;\nconst RESEED_REFUSED_TAIL: u32 = {RESEED_REFUSED_TAIL}u;\n\n{source}"
     )
 }
 
@@ -425,6 +434,7 @@ mod tests {
         words[INFLOW_REFUSED_WORD as usize] = 64;
         words[SHEET_REFUSED_WORD as usize] = 7;
         words[TILE_REMOVED_WORD as usize] = 3;
+        words[RESEED_REFUSED_WORD as usize] = 11;
         let stats = LiquidTickStats::from_words(&words);
         assert_eq!(
             stats,
@@ -448,6 +458,7 @@ mod tests {
                 inflow_refused: 64,
                 sheet_refused: 7,
                 tile_removed: 3,
+                reseed_refused: 11,
             }
         );
         assert_eq!(words.len(), LIQUID_STATS_WORDS as usize);

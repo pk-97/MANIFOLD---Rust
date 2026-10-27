@@ -36,6 +36,11 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
         cell_out[idx] = 0.0;
         return;
     }
+    // The narrow band's grid water holds no particles and stays at rest.
+    if nb_deep_cell(idx, p) {
+        cell_out[idx] = 0.0;
+        return;
+    }
     // Positions in world cells; `solid_at` takes cells counted from its
     // `lo`, here the world origin.
     let solids = u.body_count > 0 || u.wall_faces != 0u;

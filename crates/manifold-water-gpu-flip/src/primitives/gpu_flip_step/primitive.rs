@@ -16,7 +16,7 @@ impl Primitive for GpuFlipStep {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(
             port,
-            "faces" | "distance" | "tiles" | "substep_schedule" | "substep_faces"
+            "faces" | "distance" | "tiles" | "interior" | "substep_schedule" | "substep_faces"
         )
     }
 
@@ -25,6 +25,7 @@ impl Primitive for GpuFlipStep {
             "faces" => self.state.lattice.as_ref().map(|l| &l.faces),
             "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
             "tiles" => self.state.tiles.as_ref().map(|t| t.table()),
+            "interior" => self.state.narrow_band.interior(),
             "substep_schedule" => self.state.history.schedule.as_ref(),
             "substep_faces" => self.state.history.faces.as_ref(),
             _ => None,
@@ -43,7 +44,9 @@ impl Primitive for GpuFlipStep {
                 .find(|(name, _)| *name == "particles")
                 .map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the lattice at run time.
-            "faces" | "distance" | "tiles" | "substep_schedule" | "substep_faces" => Some(1),
+            "faces" | "distance" | "tiles" | "interior" | "substep_schedule" | "substep_faces" => {
+                Some(1)
+            }
             "reaction_out" => inputs
                 .iter()
                 .find(|(name, _)| *name == "reaction")
@@ -221,11 +224,16 @@ impl Primitive for GpuFlipStep {
             _ => 0,
         };
         let band = step_band();
+        let narrow_band = self
+            .state
+            .narrow_band
+            .mode(ctx.scalar_or_param("narrow_band", 0.0) > 0.5);
         if let Err(error) = self.state.reserve(
             ctx.gpu_encoder().device,
             pool,
             u64::from(capacity),
             sheet_rate > 0.0,
+            narrow_band,
         ) {
             ctx.error(format!(
                 "{NAME}: a pool of {pool} tiles with {capacity} particle slots needs storage the device cannot give: {error}. Raise Cell Size."
@@ -392,7 +400,8 @@ impl Primitive for GpuFlipStep {
                 table_entries: manifold_water_liquid::tile_storage::table_entries(pool),
                 emit_sites,
                 kill_height,
-                _pad: [0; 2],
+                narrow_band,
+                band_cells: narrow_band::band_cells() as f32,
                 wall_velocity_lo,
                 _pad_lo: 0,
                 wall_velocity_hi,
@@ -566,6 +575,7 @@ impl Primitive for GpuFlipStep {
                 last_clock_plan = plan_buffer;
             }
         }
+        self.state.narrow_band.finish(narrow_band);
         // Tiles change slot, come and go between substeps: every captured
         // row moves onto the table the step publishes.
         self.state.history.remap(

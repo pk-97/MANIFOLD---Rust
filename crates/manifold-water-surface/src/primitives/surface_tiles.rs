@@ -300,6 +300,7 @@ impl Held {
                 replay_count: 0,
                 gate: &self.gate,
                 clip: None,
+                kept: None,
             },
         );
         pass(enc, &kernels.carry, per_slot, "node.surface_tiles.carry");

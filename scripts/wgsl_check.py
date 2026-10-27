@@ -164,6 +164,7 @@ STEP_PARTS = [
     "common", "transfer", "extend", "forces", "solids", "pocket_bindings",
     "tile_bindings", "pockets", "divergence", "particle_distance",
     "projection", "density", "move", "emit", "count", "tiles", "marker_removal",
+    "narrow_band",
 ]
 
 
@@ -176,7 +177,8 @@ def stats_layout() -> str:
         values[name] = int(eval(expr, {}, dict(values)))  # noqa: S307 - our own integer consts
 
     names = ["SOLVER_STATS_START", "SOLVER_WORDS", "INFLOW_BIRTHS_TAIL",
-             "INFLOW_REFUSED_TAIL", "SHEET_REFUSED_TAIL", "TILE_REMOVED_TAIL"]
+             "INFLOW_REFUSED_TAIL", "SHEET_REFUSED_TAIL", "TILE_REMOVED_TAIL",
+             "RESEED_REFUSED_TAIL"]
     return "".join(f"const {n}: u32 = {values[n]}u;\n" for n in names) + "\n"
 
 
@@ -210,6 +212,7 @@ STACKS = {
                          WW / "whitewater_fused.wgsl"]),
     "world_tiles_read": (False, [WORLD_READ, WORLD_READ_STUB]),
     "world_tiles": (False, [WORLD_READ, LIQ / "world_tiles_liquid.wgsl", LIQ / "world_tiles.wgsl"]),
+    "world_tiles_kept": (False, [WORLD_READ, LIQ / "world_tiles_kept.wgsl", LIQ / "world_tiles.wgsl"]),
     "world_tiles_parents": (False, [WORLD_READ, LIQ / "world_tiles_parents.wgsl",
                                     LIQ / "world_tiles.wgsl"]),
     "surface_tiles": (False, [WORLD_READ, SURF / "surface_tiles.wgsl"]),
