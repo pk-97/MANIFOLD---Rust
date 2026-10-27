@@ -9,7 +9,6 @@ pub mod offset_lattice;
 pub mod particle_identity;
 pub mod particle_publication;
 pub mod prefix_scan;
-pub mod redistance_lattice;
 pub mod running_total;
 pub mod smooth_lattice;
 // Keep this declaration outside a macro: the module exports float_param!.

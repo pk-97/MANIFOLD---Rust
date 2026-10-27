@@ -1,9 +1,8 @@
 //! One upwind reinitialisation sweep, ported from FLIP Fluids levelsetsolver.cpp.
 //! Copyright Ryan L. Guy & Dennis Fassbaender (MIT); THIRD_PARTY_NOTICES.md.
-//! Section 2.5 audit: redistance_lattice computes nearest triangle distance,
-//! which is not the engine upwind rule. This atom is a pure stencil sweep over
-//! pooled cell arrays on the step's world tiles; whitewater owns convergence
-//! reduction and calls its generated pipeline.
+//! The engine's upwind rule, not a nearest-triangle distance. This atom is a
+//! pure stencil sweep over pooled cell arrays on the step's world tiles;
+//! whitewater owns convergence reduction and calls its generated pipeline.
 use crate::float_param;
 use crate::tile_pool::tile_pool;
 use manifold_gpu::GpuBinding;

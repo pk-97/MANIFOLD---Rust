@@ -603,15 +603,15 @@ const NON_STANDALONE: &[&str] = &[
     // restart over one hand shader beside its fused atoms, its HandParams and
     // RestartParams reflected in uniform_layout_extended.
     "node.whitewater_step",
-    // The field build's surface weights (counts, then weights and velocity)
-    // and its carry into drawn solids: WeightUniforms and CarryUniforms are
-    // reflected in uniform_layout_extended.
+    // The field build's splat (one workgroup a tile), its surface weights
+    // (counts, then weights and velocity) and its carry into drawn solids:
+    // their Uniforms, WeightUniforms and CarryUniforms are reflected in
+    // uniform_layout_extended.
+    "node.particle_volume",
     "node.surface_weights",
     "node.carry_liquid_into_solids",
-    // The field build's re-distance, the surface mesh and the Narrow Band's
-    // interior fill: their Uniforms, MeshUniforms and FillUniforms are
-    // reflected in uniform_layout_extended.
-    "node.redistance_lattice",
+    // The surface mesh and the Narrow Band's interior fill: their
+    // MeshUniforms and FillUniforms are reflected in uniform_layout_extended.
     "node.tile_surface_mesh",
     "node.interior_fill",
     // The display table's hand build, surface wetness and the whitewater

@@ -282,12 +282,6 @@
             }
           },
           {
-            "handle": "Rebuild Surface Distance",
-            "id": 29,
-            "nodeId": "liquid_redistance",
-            "typeId": "node.redistance_lattice"
-          },
-          {
             "handle": "Surface Weights",
             "id": 33,
             "nodeId": "liquid_weights",
@@ -572,30 +566,6 @@
             "toPort": "sim_cell_size"
           },
           {
-            "fromNode": 7,
-            "fromPort": "levelset",
-            "toNode": 29,
-            "toPort": "levelset"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "tiles",
-            "toNode": 29,
-            "toPort": "tiles"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "pool_tiles",
-            "toNode": 29,
-            "toPort": "pool_tiles"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "cell_size",
-            "toNode": 29,
-            "toPort": "cell_size"
-          },
-          {
             "fromNode": 5,
             "fromPort": "sorted",
             "toNode": 33,
@@ -608,8 +578,8 @@
             "toPort": "cell_ranges"
           },
           {
-            "fromNode": 29,
-            "fromPort": "out",
+            "fromNode": 7,
+            "fromPort": "levelset",
             "toNode": 33,
             "toPort": "reference"
           },
@@ -638,8 +608,8 @@
             "toPort": "cell_size"
           },
           {
-            "fromNode": 29,
-            "fromPort": "out",
+            "fromNode": 7,
+            "fromPort": "levelset",
             "toNode": 40,
             "toPort": "levelset"
           },
@@ -716,8 +686,8 @@
             "toPort": "smoothed"
           },
           {
-            "fromNode": 29,
-            "fromPort": "out",
+            "fromNode": 7,
+            "fromPort": "levelset",
             "toNode": 43,
             "toPort": "prior"
           },
@@ -728,8 +698,8 @@
             "toPort": "weights"
           },
           {
-            "fromNode": 29,
-            "fromPort": "out",
+            "fromNode": 7,
+            "fromPort": "levelset",
             "toNode": 43,
             "toPort": "reference"
           },
@@ -848,8 +818,8 @@
             "toPort": "weights"
           },
           {
-            "fromNode": 29,
-            "fromPort": "out",
+            "fromNode": 7,
+            "fromPort": "levelset",
             "toNode": 47,
             "toPort": "reference"
           },
@@ -968,8 +938,8 @@
             "toPort": "weights"
           },
           {
-            "fromNode": 29,
-            "fromPort": "out",
+            "fromNode": 7,
+            "fromPort": "levelset",
             "toNode": 51,
             "toPort": "reference"
           },

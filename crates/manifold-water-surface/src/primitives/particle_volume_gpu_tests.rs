@@ -87,7 +87,7 @@ fn box_index(table: &BoxTable, w: [i32; 3]) -> usize {
 }
 
 /// The dense rule at world node `node`: the band, every blob whose support box
-/// holds the node, and the solid's clip.
+/// holds the node, and inside the solid at least the node's depth in it.
 fn dense_level(blobs: &[[f32; 4]], node: [i32; 3], band: f32, solid: f32) -> f32 {
     let p: [f32; 3] = std::array::from_fn(|a| (node[a] as f32 - 0.5) * H);
     let mut phi = band;
@@ -109,7 +109,7 @@ fn dense_level(blobs: &[[f32; 4]], node: [i32; 3], band: f32, solid: f32) -> f32
         phi = phi.min((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - reach);
     }
     if solid < 0.0 {
-        phi = phi.max(0.0);
+        phi = phi.max(-solid);
     }
     phi
 }
@@ -241,10 +241,12 @@ fn blobs_each_side_of_a_tile_face_match_a_dense_box() {
     );
     assert!((0..want.len()).any(|i| wins(i, &only_b, &only_a)));
     assert!(want.iter().filter(|&&v| v < 0.0).count() > 10);
-    assert!(
-        want.iter().filter(|&&v| v == 0.0).count() > 4,
-        "the solid clips nothing"
-    );
+    let clipped = |solid: &[f32]| {
+        (0..want.len())
+            .filter(|&i| solid[i] < 0.0 && want[i] == -solid[i])
+            .count()
+    };
+    assert!(clipped(&solid_dense) > 4, "the solid clips nothing");
     assert!(want.iter().filter(|&&v| v == band).count() > 1000);
 }
 
@@ -280,7 +282,11 @@ fn a_blob_cloud_matches_the_dense_box() {
     let want = dense_box(&blobs, &solid_dense, 3.0 * blob_reach);
     assert_all_close(&got, &want);
     assert!(want.iter().filter(|&&v| v < 0.0).count() > 500);
-    assert!(want.iter().filter(|&&v| v == 0.0).count() > 50);
+    // Nodes in the floor a blob reaches read their depth in it.
+    let clipped = (0..want.len())
+        .filter(|&i| solid_dense[i] < 0.0 && want[i] == -solid_dense[i])
+        .count();
+    assert!(clipped > 50, "{clipped}");
     assert!(want.iter().any(|&v| v > 0.0 && v < 3.0 * blob_reach));
 }
 

@@ -488,6 +488,13 @@ pub const CASES: &[CustomAbiCase] = &[
     // The GPU water surface's barriered kernels and the whitewater stage's
     // internal padding pass.
     CustomAbiCase {
+        source: "particle_volume.rs",
+        rust_struct: "Uniforms",
+        shader: "shaders/particle_volume.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "surface_weights.rs",
         rust_struct: "WeightUniforms",
         shader: "shaders/surface_weights.wgsl",
@@ -527,13 +534,6 @@ pub const CASES: &[CustomAbiCase] = &[
         rust_struct: "CarryUniforms",
         shader: "shaders/carry_liquid_into_solids.wgsl",
         shader_struct: "CarryParams",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "redistance_lattice.rs",
-        rust_struct: "Uniforms",
-        shader: "shaders/redistance_lattice.wgsl",
-        shader_struct: "Params",
         aliases: &[],
     },
     CustomAbiCase {

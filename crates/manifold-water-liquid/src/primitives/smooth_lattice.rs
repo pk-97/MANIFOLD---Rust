@@ -1,6 +1,6 @@
 //! `node.smooth_lattice` — binomial smoothing of a scalar lattice held in an
 //! `Array(f32)`: the liquid level set inside each step of the field
-//! smoothing, between `node.redistance_lattice` and `node.field_smooth_blend`. One axis per
+//! smoothing, between `node.particle_volume` and `node.field_smooth_blend`. One axis per
 //! atom; chained over x, y and z it is the full 3D binomial blur at 3·(2p + 1)
 //! taps per node instead of (2p + 1)³. A per-element gather on the codegen path,
 //! over the nodes of a world-tile pool.
@@ -60,7 +60,7 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Chain three, axes 0, 1 and 2, inside each step of the field smoothing, between node.redistance_lattice and node.field_smooth_blend, with tiles, pool_tiles and cell_size from the same world tiles as the level set (node.surface_tiles for the display) and one passes value wired into all three. More passes round the liquid surface and thin sheets further. Live: changing passes reshapes the next frame without touching the simulation.",
+    composition_notes: "Chain three, axes 0, 1 and 2, inside each step of the field smoothing, between node.particle_volume and node.field_smooth_blend, with tiles, pool_tiles and cell_size from the same world tiles as the level set (node.surface_tiles for the display) and one passes value wired into all three. More passes round the liquid surface and thin sheets further. Live: changing passes reshapes the next frame without touching the simulation.",
     examples: [],
     picker: { label: "Smooth Lattice", category: Atom },
     summary: "Softens a liquid's density field so its surface comes out smooth instead of lumpy.",

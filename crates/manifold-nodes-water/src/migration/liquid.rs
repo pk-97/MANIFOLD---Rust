@@ -612,6 +612,48 @@ pub(crate) fn wire_whitewater_removal(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Drop a saved surface's `node.redistance_lattice`, after flattening: every
+/// wire it fed takes its `levelset` source instead, the particles' splat
+/// (`node.particle_volume` keeps a solid's nodes at their depth in it, which
+/// is all the smoothing and the wetness needed from it). Idempotent.
+pub(crate) fn retire_redistance(def: &mut EffectGraphDef) -> bool {
+    const RETIRED: &str = "node.redistance_lattice";
+    let retired: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == RETIRED)
+        .map(|n| n.id)
+        .collect();
+    for &id in &retired {
+        let source = def
+            .wires
+            .iter()
+            .find(|w| w.to_node == id && w.to_port == "levelset")
+            .map(|w| (w.from_node, w.from_port.clone()));
+        def.wires.retain(|w| w.to_node != id);
+        match source {
+            Some((node, port)) => {
+                for w in def.wires.iter_mut().filter(|w| w.from_node == id) {
+                    w.from_node = node;
+                    w.from_port.clone_from(&port);
+                }
+            }
+            None => def.wires.retain(|w| w.from_node != id),
+        }
+    }
+    def.nodes.retain(|n| n.type_id != RETIRED);
+    !retired.is_empty()
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "retire_redistance",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 370,
+        apply: retire_redistance,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "wire_whitewater_removal",
@@ -717,6 +759,55 @@ mod tests {
         let migrated = def.wires.clone();
         assert!(!wire_whitewater_removal(&mut def));
         assert_eq!(def.wires, migrated);
+    }
+
+    /// A saved surface's re-distance goes, and the smoothing and weights it
+    /// fed read the splat it read; a second run changes nothing.
+    #[test]
+    fn saved_surface_reads_the_splat_without_its_redistance() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from,
+            from_port: output.into(),
+            to_node: to,
+            to_port: input.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                bare_node(1, "node.particle_volume"),
+                bare_node(2, "node.redistance_lattice"),
+                bare_node(3, "node.smooth_lattice"),
+                bare_node(4, "node.field_smooth_blend"),
+                bare_node(5, "node.surface_tiles"),
+            ],
+            wires: vec![
+                wire(1, "levelset", 2, "levelset"),
+                wire(5, "tiles", 2, "tiles"),
+                wire(5, "tiles", 3, "tiles"),
+                wire(2, "out", 3, "levelset"),
+                wire(2, "out", 4, "prior"),
+                wire(2, "out", 4, "reference"),
+            ],
+        };
+        assert!(retire_redistance(&mut def));
+        assert!(def.nodes.iter().all(|n| n.id != 2));
+        assert_eq!(
+            def.wires,
+            [
+                wire(5, "tiles", 3, "tiles"),
+                wire(1, "levelset", 3, "levelset"),
+                wire(1, "levelset", 4, "prior"),
+                wire(1, "levelset", 4, "reference"),
+            ]
+        );
+        let migrated = def.clone();
+        assert!(!retire_redistance(&mut def));
+        assert_eq!(def, migrated);
     }
 
     fn bare_node(id: u32, type_id: &str) -> EffectGraphNode {

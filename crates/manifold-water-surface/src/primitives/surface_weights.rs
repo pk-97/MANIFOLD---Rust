@@ -14,8 +14,8 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::field_build::{
-    FIELD_REDISTANCE_CELLS, NEIGHBOUR_COUNT_RADIUS_CELLS, WEIGHT_CARRY_RADIUS_CELLS,
-    WEIGHT_FADE_END, WEIGHT_FADE_START, expected_bulk_neighbours,
+    FIELD_BAND_CELLS, NEIGHBOUR_COUNT_RADIUS_CELLS, WEIGHT_CARRY_RADIUS_CELLS, WEIGHT_FADE_END,
+    WEIGHT_FADE_START, expected_bulk_neighbours,
 };
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::CellRange;
@@ -79,7 +79,7 @@ fn weight_uniforms(
         cell,
         count_reach: NEIGHBOUR_COUNT_RADIUS_CELLS * cell,
         carry_reach: WEIGHT_CARRY_RADIUS_CELLS * cell,
-        band: FIELD_REDISTANCE_CELLS * cell,
+        band: FIELD_BAND_CELLS * cell,
         fade_start: WEIGHT_FADE_START * bulk,
         fade_end: WEIGHT_FADE_END * bulk,
         count_cells: NEIGHBOUR_COUNT_RADIUS_CELLS,
@@ -111,7 +111,7 @@ fn ensure_buffer(
 manifold_node_engine::primitive! {
     name: SurfaceWeights,
     type_id: "node.surface_weights",
-    purpose: "Per node of the display's world tiles, how much smoothing the surface gets and the water's velocity there. weights holds one f32 per pool element: 1 in bulk water, fading to 0 on thin sheets and drops, from how many neighbours the particles near the node have (each particle counts the live particles within 1.5 display cells, the nodes average those counts over the particles within 2 display cells with a poly6 kernel, and the mean fades from 18% to 36% of the bulk count that particles_per_cell implies for one display cell). velocity holds three f32 per pool element (x, y, z, element-major, element e at 3e..3e+2), the same kernel's mean particle velocity in metres per second. Node p is at (p - 1/2) cells, the low corner of cell p, and reference holds one distance per node. Both are zero at nodes outside the re-distanced band (|reference| at least 4 display cells), where no particle is within reach, in a free slot and in the canonical element. A pure function of this frame's particles: no history, no frame counter.",
+    purpose: "Per node of the display's world tiles, how much smoothing the surface gets and the water's velocity there. weights holds one f32 per pool element: 1 in bulk water, fading to 0 on thin sheets and drops, from how many neighbours the particles near the node have (each particle counts the live particles within 1.5 display cells, the nodes average those counts over the particles within 2 display cells with a poly6 kernel, and the mean fades from 18% to 36% of the bulk count that particles_per_cell implies for one display cell). velocity holds three f32 per pool element (x, y, z, element-major, element e at 3e..3e+2), the same kernel's mean particle velocity in metres per second. Node p is at (p - 1/2) cells, the low corner of cell p, and reference holds one distance per node. Both are zero at nodes outside the field's band (|reference| at least 4 display cells), where no particle is within reach, in a free slot and in the canonical element. A pure function of this frame's particles: no history, no frame counter.",
     inputs: {
         particles: Array(FluidParticle) required,
         cell_ranges: Array(CellRange) required,
@@ -133,7 +133,7 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire particles and cell_ranges from one node.sort_particles_into_cells over the display tiles (sorted and cell_ranges, one range per pool element or nothing runs, a named error), reference from the re-distanced field on the same tiles, and tiles, pool_tiles and cell_size from node.surface_tiles (cell_size is the display cell the sort binned by). particles_per_cell is the simulation's particles per simulation cell (8 in the FLIP default) and sim_cell_size that cell's side in metres (wire it from the simulation's cell size); the node scales the density to the display cell, so the bulk count follows Surface Detail. Feed weights and velocity to the field smoothing and the surface march. Two compute passes in order (counts, then weights) with an owned output buffer, so it is a graph fusion boundary.",
+    composition_notes: "Wire particles and cell_ranges from one node.sort_particles_into_cells over the display tiles (sorted and cell_ranges, one range per pool element or nothing runs, a named error), reference from node.particle_volume's level set on the same tiles, and tiles, pool_tiles and cell_size from node.surface_tiles (cell_size is the display cell the sort binned by). particles_per_cell is the simulation's particles per simulation cell (8 in the FLIP default) and sim_cell_size that cell's side in metres (wire it from the simulation's cell size); the node scales the density to the display cell, so the bulk count follows Surface Detail. Feed weights and velocity to the field smoothing and the surface march. Two compute passes in order (counts, then weights) with an owned output buffer, so it is a graph fusion boundary.",
     examples: [],
     picker: { label: "Surface Weights", category: Atom },
     summary: "Works out where the water surface should be smoothed (bulk water) and left alone (thin sheets, drops), and how fast the water moves there.",
@@ -362,7 +362,7 @@ mod tests {
         assert_eq!(u.cell, 0.1);
         assert_eq!(u.count_reach, NEIGHBOUR_COUNT_RADIUS_CELLS * 0.1);
         assert_eq!(u.carry_reach, WEIGHT_CARRY_RADIUS_CELLS * 0.1);
-        assert_eq!(u.band, FIELD_REDISTANCE_CELLS * 0.1);
+        assert_eq!(u.band, FIELD_BAND_CELLS * 0.1);
         assert_eq!(u.count_cells, NEIGHBOUR_COUNT_RADIUS_CELLS);
         assert_eq!(u.carry_cells, WEIGHT_CARRY_RADIUS_CELLS);
         assert_eq!(u.fade_start, WEIGHT_FADE_START * bulk);

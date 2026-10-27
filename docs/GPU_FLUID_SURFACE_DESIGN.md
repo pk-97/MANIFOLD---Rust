@@ -16,12 +16,12 @@ frame.** The mesh feeds the existing scene, material, RT and volume-optics path 
 as the CPU mesh does now.
 
 **The surface today.** The surface is a level set, not a mesh. The group sorts the
-particles into cells, shapes blobs, writes the distance field (`node.particle_volume`),
-re-distances it, smooths it in three leashed steps (`node.field_smooth_blend` with
-`node.surface_weights`), carries it into solids (`node.carry_liquid_into_solids`), and
-the renderer's march draws the group's `level_set` output. No triangle mesh is built.
-Sections below that name meshing, mesh smoothing, normals or a solid clamp are gone;
-the sort, blobs, bricks, volume and re-distance parts describe current code.
+particles into cells, shapes blobs, writes the distance field (`node.particle_volume`,
+a solid's nodes at least their depth in it), smooths it in three steps leashed to that
+field (`node.field_smooth_blend` with `node.surface_weights`), carries it into solids
+(`node.carry_liquid_into_solids`), and the renderer's march draws the group's
+`level_set` output. Sections below that name meshing, mesh smoothing, normals or a
+solid clamp are gone; the sort, blobs, bricks and volume parts describe current code.
 
 What it does for the show: at a resolution the CPU solver can hold in real time (P1
 measures which), the surface looks like Detail 2 or better and moves at 60 fps. It does
@@ -201,7 +201,7 @@ keep their original simulation-grid solid contract until rebuilt. Whitewater
 retains its separately sampled simulation-grid solid. The interior field uses
 its exact cell count to distinguish native mesh padding from legacy solver padding, with matching CPU, shader and extent validation.
 The shared surface group carries these through splatting, blob bounds,
-smoothing, re-distance and the carry into solids. Solver padding remains unchanged.
+smoothing and the carry into solids. Solver padding remains unchanged.
 CPU node/crossing and dispatch-extent proofs justify the changed grid; no
 value golden or tolerance was changed. GPU value proofs are compiled only.
 The fused snapshot needs regeneration by the lead after GPU verification.
@@ -579,7 +579,7 @@ fluid_surface ─ particles_a/b, counts, identities, blend, span ─► interpol
       │                                                                             │ blobs
       └─ grid_bounds, grid_nodes_x/y/z ─────────────────────────► particle_volume ◄─┘ + solid_now ─► level set (Array f32)
                                                                           │
-                       redistance_lattice ─► field_smooth_blend (+ surface_weights) ─► carry_liquid_into_solids ─► level_set
+                       field_smooth_blend (+ surface_weights) ─► carry_liquid_into_solids ─► level_set
 ```
 
 Section 2.5 audit, per DECOMPOSING_GENERATORS.md section 2.5 (audit by analogy).
@@ -643,7 +643,7 @@ it is BLOCKED: file a `bd` bug naming the missing read-path and declare
 ## 6. Cost and the instrument
 
 Per display frame: one `mix_arrays`, one fused interpolate + push-out, the sort (count,
-scan levels, scatter), blobs, volume, re-distance, smoothing and the carry into solids.
+scan levels, scatter), blobs, volume, smoothing and the carry into solids.
 The content thread only manages the ring and computes `blend`, the obstacle pose and the
 coupled rigid pose. Per tick, the worker loses CPU meshing and gains one capture
 (memcpy-class, about 20 MB at 630k particles).
@@ -1058,15 +1058,10 @@ The Liquid Surface group exposes `stretch` (1) and `smoothing` (0) as **Stretch*
 parameter surface. UI ranges are 1–16 and 0–1; these are not runtime clamps. The
 integrated presets use particle scale 3.
 
-**Section 2.5 audit:** distance rebuilding exists for whitewater, but the liquid
-re-distance is genuinely new. `surface_crossings` seeds one crossing per coarse cell
-centre and `crossing_distance` measures against a tangent plane, capped at four cells
-with whitewater wall/epsilon policy; the liquid surface is node-centred and can be
-refined independently. Two atoms supply the missing operations: `offset_lattice`
-(coincident add, one dispatch) and `redistance_lattice` (gather, one dispatch, band-sized
-cell search, saturating at the authored band with no fixed search-size cap). Both have
-standalone generated kernels, freeze bodies and value proofs. Negative-inside sign is
-preserved.
+**Section 2.5 audit:** the liquid surface keeps no re-distance: the smoothing, its leash
+and the weights read the splat, exact within 1.5 kernel radii. `offset_lattice`
+(coincident add, one dispatch) supplies the one missing operation, with a standalone
+generated kernel, freeze body and value proof. Negative-inside sign is preserved.
 
 ### P7 — Add Fluid authors the GPU surface
 

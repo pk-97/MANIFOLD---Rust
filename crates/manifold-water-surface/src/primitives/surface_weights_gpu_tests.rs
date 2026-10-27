@@ -445,7 +445,7 @@ fn random_cloud_matches_the_cpu_reference() {
         stray.position_radius[3] = 0.0;
         particles.push(stray);
     }
-    // Some nodes outside the re-distanced band, some inside.
+    // Some nodes outside the field's band, some inside.
     let reference: Vec<f32> = (0..case.node_count())
         .map(|n| {
             if n % 5 == 0 {

@@ -1,4 +1,4 @@
-//! The water field build's constants: how deep the level set is re-distanced,
+//! The water field build's constants: how deep the field's band reaches,
 //! how it is smoothed, how surface weights are counted, and how far the field
 //! is carried into drawn solids. One home, so the build, the march and the
 //! card read the same numbers. Settled by the level-set prototype on the Dam
@@ -8,7 +8,7 @@
 /// [1 2 1] smoothing steps per axis (D2 step 3).
 pub const FIELD_SMOOTH_STEPS: u32 = 3;
 
-/// How far smoothing may move the field from its re-distanced value, in
+/// How far smoothing may move the field from the particles' splat, in
 /// cells: half a cell, the finest change a node-sampled grid represents
 /// (D2 step 4).
 pub const FIELD_LEASH_CELLS: f32 = 0.5;
@@ -17,14 +17,14 @@ pub const FIELD_LEASH_CELLS: f32 = 0.5;
 /// `FIELD_LEASH_CELLS`.
 pub const FIELD_SMOOTHNESS_MAX: f32 = 2.0;
 
-/// Re-distance depth in cells: the smoothing's reach (one cell per [1 2 1]
-/// step) plus the leash, rounded up, so every node smoothing can touch holds
-/// a true distance. The leash term is the largest leash the Smoothness slider
-/// reaches.
-pub const FIELD_REDISTANCE_CELLS: f32 =
-    redistance_cells(FIELD_SMOOTH_STEPS, FIELD_LEASH_CELLS * FIELD_SMOOTHNESS_MAX);
+/// The field's band in cells: the smoothing's reach (one cell per [1 2 1]
+/// step) plus the leash, rounded up, so every node smoothing can move lies
+/// inside it. The weights, the leash and the carry into solids work within
+/// it. The leash term is the largest leash the Smoothness slider reaches.
+pub const FIELD_BAND_CELLS: f32 =
+    band_cells(FIELD_SMOOTH_STEPS, FIELD_LEASH_CELLS * FIELD_SMOOTHNESS_MAX);
 
-const fn redistance_cells(steps: u32, leash_cells: f32) -> f32 {
+const fn band_cells(steps: u32, leash_cells: f32) -> f32 {
     let reach = steps as f32 + leash_cells;
     let whole = reach as u32 as f32;
     if whole < reach { whole + 1.0 } else { whole }
@@ -63,15 +63,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn redistance_depth_covers_the_smoothing_reach_and_the_leash() {
-        assert_eq!(FIELD_REDISTANCE_CELLS, 4.0);
+    fn the_band_covers_the_smoothing_reach_and_the_leash() {
+        assert_eq!(FIELD_BAND_CELLS, 4.0);
         assert_eq!(
-            redistance_cells(FIELD_SMOOTH_STEPS, FIELD_LEASH_CELLS),
-            FIELD_REDISTANCE_CELLS
+            band_cells(FIELD_SMOOTH_STEPS, FIELD_LEASH_CELLS),
+            FIELD_BAND_CELLS
         );
-        assert_eq!(redistance_cells(3, 0.0), 3.0);
-        assert_eq!(redistance_cells(2, 0.25), 3.0);
-        assert_eq!(redistance_cells(5, 0.5), 6.0);
+        assert_eq!(band_cells(3, 0.0), 3.0);
+        assert_eq!(band_cells(2, 0.25), 3.0);
+        assert_eq!(band_cells(5, 0.5), 6.0);
     }
 
     #[test]

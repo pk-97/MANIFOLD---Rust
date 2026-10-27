@@ -12,7 +12,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
-use manifold_water_liquid::field_build::{FIELD_REDISTANCE_CELLS, SOLID_CARRY_CELLS};
+use manifold_water_liquid::field_build::{FIELD_BAND_CELLS, SOLID_CARRY_CELLS};
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 
@@ -58,7 +58,7 @@ fn carry_uniforms(
     Ok(CarryUniforms {
         cell: pool.cell_size,
         carry_depth: carry_cells.max(0.0) * pool.cell_size,
-        air: FIELD_REDISTANCE_CELLS * pool.cell_size,
+        air: FIELD_BAND_CELLS * pool.cell_size,
         pool_tiles: pool.pool_tiles,
         element_count,
         has_drawn: u32::from(has_drawn),
@@ -70,7 +70,7 @@ fn carry_uniforms(
 manifold_node_engine::primitive! {
     name: CarryLiquidIntoSolids,
     type_id: "node.carry_liquid_into_solids",
-    purpose: "Clip the liquid level set against its solid, carrying the water into the solids the scene draws so the drawn surface meets a wall flush. All arrays are node arrays on the display's world tiles (node p at (p - 1/2) cells, the low corner of cell p), so the solid at a level-set node is its own element. At each node with solid distance sd (negative inside): outside solids the value is kept. Inside a carried solid (drawn_solid negative at the node, or every solid when drawn_solid is unwired) with sd above -carry_cells display cells, the value is the level set sampled trilinearly at the solid's surface point along the solid's normal plus half a cell into the water; deeper it is air, FIELD_REDISTANCE_CELLS cells. Inside any other solid, and inside every solid when carry_cells is 0, the value is max(value, 0), the clip rule. The normal is the normalised central difference of solid across the node's six neighbours (a zero gradient clips); a neighbour or sample in a tile the table does not hold reads the canonical element. A free slot and the canonical element hold three cells, the far value.",
+    purpose: "Clip the liquid level set against its solid, carrying the water into the solids the scene draws so the drawn surface meets a wall flush. All arrays are node arrays on the display's world tiles (node p at (p - 1/2) cells, the low corner of cell p), so the solid at a level-set node is its own element. At each node with solid distance sd (negative inside): outside solids the value is kept. Inside a carried solid (drawn_solid negative at the node, or every solid when drawn_solid is unwired) with sd above -carry_cells display cells, the value is the level set sampled trilinearly at the solid's surface point along the solid's normal plus half a cell into the water; deeper it is air, FIELD_BAND_CELLS cells. Inside any other solid, and inside every solid when carry_cells is 0, the value is max(value, 0), the clip rule. The normal is the normalised central difference of solid across the node's six neighbours (a zero gradient clips); a neighbour or sample in a tile the table does not hold reads the canonical element. A free slot and the canonical element hold three cells, the far value.",
     inputs: {
         levelset: Array(f32) required,
         solid: Array(f32) required,
@@ -246,7 +246,7 @@ mod tests {
         };
         let u = carry_uniforms(pool, 2.0, false).unwrap();
         assert!((u.carry_depth - 0.2).abs() < 1e-6);
-        assert!((u.air - FIELD_REDISTANCE_CELLS * 0.1).abs() < 1e-6);
+        assert!((u.air - FIELD_BAND_CELLS * 0.1).abs() < 1e-6);
         assert_eq!(u.cell, 0.1);
         assert_eq!(u.pool_tiles, 12);
         assert_eq!(u.element_count, 12 * 512 + 1);

@@ -85,23 +85,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         params.band_cells, params.pool_tiles);
 }
 """
-# What the codegen wraps around `particle_volume_body.wgsl`: the uniform, the
-# gathered buffers and an entry point calling `body`.
-VOLUME_STUB = """struct Params { cell_size: f32, particle_scale: f32, sim_cell_size: f32, particle_radius: f32, pool_tiles: f32, dispatch_count: u32 }
-struct CellRange { start: u32, count: u32 }
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> buf_blobs: array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read> buf_cell_ranges: array<CellRange>;
-@group(0) @binding(3) var<storage, read> buf_solid: array<f32>;
-@group(0) @binding(4) var<storage, read> buf_tiles: array<u32>;
-@group(0) @binding(5) var<storage, read_write> buf_out: array<f32>;
-"""
-VOLUME_MAIN = """@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    buf_out[gid.x] = body(gid.x, params.dispatch_count, params.cell_size, params.particle_scale, params.sim_cell_size, params.particle_radius, params.pool_tiles);
-}
-"""
-
 # What the codegen wraps around `push_out_of_solid_body.wgsl`: its uniform, its
 # gathered buffers and an entry point calling `body`.
 PUSH_OUT_STUB = """struct Element { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32 }
@@ -201,11 +184,9 @@ STACKS = {
     "state_records": (False, [FLIP / "liquid_state_records.wgsl"]),
     "sort_dense": (False, [SORT_DENSE_KEYS, LIQ / "sort_particles_into_cells.wgsl"]),
     "sort_pooled": (False, [WORLD_READ, SORT_POOLED_KEYS, LIQ / "sort_particles_into_cells.wgsl"]),
-    "redistance": (False, [WORLD_READ, LIQ / "marching_cubes_common.wgsl",
-                           LIQ / "redistance_lattice.wgsl"]),
     "smooth": (False, [WORLD_READ, SMOOTH_STUB, LIQ / "smooth_lattice_body.wgsl", SMOOTH_MAIN]),
     "blend": (False, [WORLD_READ, BLEND_STUB, LIQ / "field_smooth_blend_body.wgsl", BLEND_MAIN]),
-    "particle_volume": (False, [WORLD_READ, VOLUME_STUB, SURFACE / "particle_volume_body.wgsl", VOLUME_MAIN]),
+    "particle_volume": (False, [WORLD_READ, SURFACE / "particle_volume.wgsl"]),
     "surface_weights": (False, [WORLD_READ, SURFACE / "surface_weights.wgsl"]),
     "carry_liquid": (False, [WORLD_READ, SURFACE / "carry_liquid_into_solids.wgsl"]),
     "ww_step": (False, [WW / "whitewater_step.wgsl"]),

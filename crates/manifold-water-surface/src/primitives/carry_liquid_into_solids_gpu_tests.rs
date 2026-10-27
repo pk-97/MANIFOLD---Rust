@@ -145,7 +145,7 @@ fn carried_pool_meets_the_wall_flush() {
         }
     }
     // Deeper than the carry, the solid is air.
-    let air = FIELD_REDISTANCE_CELLS * H;
+    let air = FIELD_BAND_CELLS * H;
     for i in 15..NODES[0] {
         for j in 0..NODES[1] {
             for k in 3..=18u32 {
@@ -242,7 +242,7 @@ fn a_solid_beside_an_absent_tile_stays_finite() {
         // Kept, carried (the level set is far everywhere, so any sample is
         // far) and air.
         let want = if e & 7 == 7 {
-            FIELD_REDISTANCE_CELLS * H
+            FIELD_BAND_CELLS * H
         } else {
             far
         };

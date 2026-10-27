@@ -1,5 +1,5 @@
 use super::FieldSmoothBlend;
-use crate::field_build::{FIELD_LEASH_CELLS, FIELD_REDISTANCE_CELLS, FIELD_SMOOTH_STEPS};
+use crate::field_build::{FIELD_BAND_CELLS, FIELD_LEASH_CELLS, FIELD_SMOOTH_STEPS};
 use crate::primitives::smooth_lattice::SmoothLattice;
 use crate::testkit::world_box::{BoxTable, from_pool_under, table_words_of};
 use manifold_node_engine::exec::effect_node::ParamValues;
@@ -11,7 +11,7 @@ const CELL: f32 = 0.1;
 /// The world node of the box's first node: x from -6 puts tiles -1 and 0 in
 /// the box, y and z start inside their tiles.
 const ORIGIN: [i32; 3] = [-6, 3, -5];
-const BAND_CELLS: f32 = FIELD_REDISTANCE_CELLS;
+const BAND_CELLS: f32 = FIELD_BAND_CELLS;
 /// The canonical level set, `FIELD_FAR_CELLS` (3) cells.
 const FAR: f32 = 3.0 * CELL;
 /// Nodes in from a face of the box that the three smoothing steps' taps

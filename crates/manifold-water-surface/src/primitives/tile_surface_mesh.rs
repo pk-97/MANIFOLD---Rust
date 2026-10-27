@@ -21,7 +21,6 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::live_extent::{LiveExtent, LiveExtentOutput};
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::primitives::redistance_lattice::MARCHING_CUBES_COMMON;
 use manifold_water_liquid::tile_pool::tile_pool;
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
@@ -31,7 +30,8 @@ mod gpu_tests;
 
 static SOURCE: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "{READ_SIDE}\n{MARCHING_CUBES_COMMON}\n{}",
+        "{READ_SIDE}\n{}\n{}",
+        include_str!("shaders/marching_cubes_common.wgsl"),
         include_str!("shaders/tile_surface_mesh.wgsl")
     )
 });

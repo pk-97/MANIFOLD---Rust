@@ -1,7 +1,7 @@
 //! `node.field_smooth_blend`: the water field build's weighted, leashed blend
 //! after each smoothing step, over the nodes of a world-tile pool. A per-node
 //! atom that fuses with the z smoothing pass feeding it.
-use crate::field_build::{FIELD_REDISTANCE_CELLS, FIELD_SMOOTHNESS_MAX};
+use crate::field_build::{FIELD_BAND_CELLS, FIELD_SMOOTHNESS_MAX};
 use crate::float_param;
 use crate::tile_pool::tile_pool;
 use manifold_gpu::GpuBinding;
@@ -45,11 +45,11 @@ manifold_node_engine::primitive! {
     params: [
         float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
         float_param!("smoothness", "Smoothness", 1.0, 0.0, FIELD_SMOOTHNESS_MAX),
-        float_param!("band_cells", "Band Cells", FIELD_REDISTANCE_CELLS, 0.0, 16.0),
+        float_param!("band_cells", "Band Cells", FIELD_BAND_CELLS, 0.0, 16.0),
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Place after the z node.smooth_lattice pass of each smoothing step: smoothed is that pass, prior is the field the step started from, reference is the re-distanced field, weights come from node.surface_weights, all pooled node arrays on the same tiles, with tiles, pool_tiles and cell_size from the same world tiles (node.surface_tiles for the display). Smoothness 1 is the tuned surface (the field build's half-cell leash), 0 returns the re-distanced reference, 2 doubles the leash; band defaults to the field build's constant.",
+    composition_notes: "Place after the z node.smooth_lattice pass of each smoothing step: smoothed is that pass, prior is the field the step started from, reference is node.particle_volume's level set, weights come from node.surface_weights, all pooled node arrays on the same tiles, with tiles, pool_tiles and cell_size from the same world tiles (node.surface_tiles for the display). Smoothness 1 is the tuned surface (the field build's half-cell leash), 0 returns the reference, 2 doubles the leash; band defaults to the field build's constant.",
     examples: [],
     picker: { label: "Field Smooth Blend", category: Atom },
     summary: "Eases a smoothed liquid surface back toward the original where it is thin, and never lets it drift far from the true surface.",
@@ -89,7 +89,7 @@ impl Primitive for FieldSmoothBlend {
             }
         };
         let smoothness = ctx.scalar_or_param("smoothness", 1.0);
-        let band_cells = ctx.scalar_or_param("band_cells", FIELD_REDISTANCE_CELLS);
+        let band_cells = ctx.scalar_or_param("band_cells", FIELD_BAND_CELLS);
         let (Some(smoothed), Some(prior), Some(weights), Some(reference), Some(tiles), Some(field)) = (
             ctx.inputs.array("smoothed"),
             ctx.inputs.array("prior"),

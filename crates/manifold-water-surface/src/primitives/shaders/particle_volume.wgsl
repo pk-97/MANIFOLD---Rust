@@ -15,9 +15,11 @@
 // each blob lowers the nodes of the tile its box holds and whose window holds
 // its cell, through an order-preserving key in workgroup memory, so the
 // minimum is exact whatever order the blobs land in. A node inside a solid
-// (`solid` is a node array on the same tiles) is never inside the liquid. A
-// free slot and the canonical element hold the far value, FIELD_FAR_CELLS (3)
-// cells.
+// (`solid`, the solid's distance on the same tiles, negative inside) takes at
+// least its depth in the solid: never inside the liquid, water against a wall
+// reads its zero at the wall's face, and no node through the wall reads as
+// near the water. A free slot and the canonical element hold the far value,
+// FIELD_FAR_CELLS (3) cells.
 
 struct Params {
     cell_size: f32,
@@ -169,7 +171,7 @@ fn cs_main(
         let e = slot * 512u + l;
         var phi = pv_value(atomicLoad(&pv_best[l]));
         if solid[e] < 0.0 {
-            phi = max(phi, 0.0);
+            phi = max(phi, -solid[e]);
         }
         levelset[e] = phi;
     }

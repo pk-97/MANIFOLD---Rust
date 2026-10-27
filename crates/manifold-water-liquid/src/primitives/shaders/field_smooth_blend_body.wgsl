@@ -6,7 +6,7 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // node.field_smooth_blend — fusable BUFFER body. One thread per pool element
 // of the display's world tiles (`buf_tiles`, `pool_tiles` tiles): the
 // weighted, leashed blend of a smoothed level set toward its prior, held
-// within a leash of the re-distanced reference. `smoothed` is this element's
+// within a leash of the reference, the particles' level set. `smoothed` is this element's
 // own value; `prior`, `weights` and `reference` are read at the same pool
 // index. cell_size is the lattice spacing in metres and the band is in cells.
 // The leash is Smoothness times the field build's half-cell leash

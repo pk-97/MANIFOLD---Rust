@@ -1,11 +1,11 @@
 // Surface weights: per node of the display's world tiles, how much smoothing
 // the surface gets (1 in bulk water, 0 on thin sheets and drops) and the
 // water's velocity. A pure function of this frame's particles and the
-// re-distanced field.
+// splatted field.
 //
 // Two passes, in command order. cs_counts gives every particle the number of
 // live neighbours within count_reach. cs_weights gathers, for every node
-// inside the re-distanced band, the poly6-weighted mean count and velocity of
+// inside the field's band, the poly6-weighted mean count and velocity of
 // the particles within carry_reach, and fades the count into a weight.
 //
 // The particles are sorted into the display cells (`cell_ranges`, one range per
