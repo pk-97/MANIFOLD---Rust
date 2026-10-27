@@ -211,16 +211,13 @@ enum BodyRound {
     /// level k: the direction prolonged down and the product restricted up
     /// inside the round, every pass on the gate.
     GatedCoarse(usize),
-    /// The body product runs between the pieces, plain: only with the
-    /// gate switched off (the proofs' lever, gpu_flip_step gating).
-    Plain,
 }
 
 /// A conjugate gradient round's gated dispatches with `coarse` levels below
 /// the fine one: those up to and including the operator product, then
-/// those after it. Gated body passes fit in the first piece; only a plain
-/// body product needs a boundary. With bodies p · s needs its own pass
-/// after the body product; without, the operator pass folds it.
+/// those after it. Gated body passes fit in the first piece. With bodies
+/// p · s needs its own pass after the body product; without, the operator
+/// pass folds it.
 fn round_commands(coarse: usize, bodies: BodyRound) -> (u32, u32) {
     let v_cycle = (coarse * (4 * SMOOTH_ROUNDS + 3) + 1) as u32;
     // v_cycle (r·z folded), finalize, direction, apply | update (|r|∞ folded), check
@@ -230,8 +227,6 @@ fn round_commands(coarse: usize, bodies: BodyRound) -> (u32, u32) {
         // k zeroes and k prolongations down, the fine body zero, k
         // restrictions up
         BodyRound::GatedCoarse(k) => (v_cycle + 11 + 3 * k as u32, 0),
-        // apply plain | p·s partial, finalize
-        BodyRound::Plain => (v_cycle + 3, 4),
         // apply folds p·s | finalize
         BodyRound::Without => (v_cycle + 6, 0),
     }
@@ -966,7 +961,6 @@ impl PressureSolver {
             // triple: a round that runs after the stop writes nothing.
             let g = Gate {
                 buffer: &b.gate,
-                ranges: &b.ranges,
                 groups: &b.groups,
                 slots,
                 gated: true,
@@ -990,9 +984,8 @@ impl PressureSolver {
             // ride the gate, so a stopped solve's later rounds run none of them.
             let round = match bodies {
                 None => BodyRound::Without,
-                Some(_) if k == 0 && super::gpu_flip_step::gating() => BodyRound::Gated,
-                Some(_) if super::gpu_flip_step::gating() => BodyRound::GatedCoarse(k),
-                Some(_) => BodyRound::Plain,
+                Some(_) if k == 0 => BodyRound::Gated,
+                Some(_) => BodyRound::GatedCoarse(k),
             };
             let (before, after) = round_commands(b.coarse.len() - k, round);
             let body_count = match (round, bodies) {
@@ -1019,36 +1012,29 @@ impl PressureSolver {
             // template leaves the command buffer untouched. On the gate the body
             // product runs in live rounds only; at a coarse level its chain (the
             // direction down to the fine lattice, the product back up) rides the
-            // gate too. The proofs' gate-off lever (a plain body product) has no
-            // template and encodes round by round below.
-            let ticket = match round {
-                BodyRound::Plain => None,
-                _ => {
-                    debug_assert_eq!(after, 0, "a gated round is one segment");
-                    let store = self.templates.as_mut().ok_or("the solver was not prepared")?;
-                    let at = TemplateRanges { ranges: &b.ranges, first: CHUNK_ENTRIES, stride: 1, chunk: round_chunk() };
-                    let ticket = enc.prepare_template(store, at, before, iterations, |recorder| {
-                        let mut sink = Round { recorder, refused: None };
-                        r.head(&mut sink);
-                        match (round, bodies) {
-                            (BodyRound::Gated, Some((passes, bodies))) => {
-                                passes.apply_gated(&mut sink, bodies, g.tiles, &b.p, &b.scratch, &body_gate, table, pool_tiles)?;
-                            }
-                            (BodyRound::GatedCoarse(_), Some((passes, bodies))) => {
-                                let inside = Chain { g, ..chain };
-                                inside.prolong_down(&mut sink, &b.p, pressure, Spare::E);
-                                zero_in(&mut sink, pipes, g, 0, n, &b.body, plan);
-                                passes.apply_gated(&mut sink, bodies, g.tiles, pressure, &b.body, &body_gate, table, pool_tiles)?;
-                                inside.restrict_down(&mut sink, &b.body, &b.scratch, 0, RESTRICT_ADD);
-                            }
-                            _ => {}
-                        }
-                        r.tail(&mut sink);
-                        sink.refused.map_or(Ok(()), Err)
-                    })?;
-                    Some(ticket)
+            // gate too.
+            debug_assert_eq!(after, 0, "a gated round is one segment");
+            let store = self.templates.as_mut().ok_or("the solver was not prepared")?;
+            let at = TemplateRanges { ranges: &b.ranges, first: CHUNK_ENTRIES, stride: 1, chunk: round_chunk() };
+            let ticket = enc.prepare_template(store, at, before, iterations, |recorder| {
+                let mut sink = Round { recorder, refused: None };
+                r.head(&mut sink);
+                match (round, bodies) {
+                    (BodyRound::Gated, Some((passes, bodies))) => {
+                        passes.apply_gated(&mut sink, bodies, g.tiles, &b.p, &b.scratch, &body_gate, table, pool_tiles)?;
+                    }
+                    (BodyRound::GatedCoarse(_), Some((passes, bodies))) => {
+                        let inside = Chain { g, ..chain };
+                        inside.prolong_down(&mut sink, &b.p, pressure, Spare::E);
+                        zero_in(&mut sink, pipes, g, 0, n, &b.body, plan);
+                        passes.apply_gated(&mut sink, bodies, g.tiles, pressure, &b.body, &body_gate, table, pool_tiles)?;
+                        inside.restrict_down(&mut sink, &b.body, &b.scratch, 0, RESTRICT_ADD);
+                    }
+                    _ => {}
                 }
-            };
+                r.tail(&mut sink);
+                sink.refused.map_or(Ok(()), Err)
+            })?;
             if k > 0 {
                 chain.restrict_down(enc, rhs, rhs_k, RESTRICT_MASK, 0);
                 if let Some(hook) = coarse_rhs {
@@ -1105,38 +1091,8 @@ impl PressureSolver {
                     check(enc, pipes, b, plain, &Params { mode: WARM, ..fine });
                 }
             }
-            match (round, bodies) {
-                // The proofs' lever (gate off): a plain body product splits the
-                // round around an ungated chain, two segments a round, encoded
-                // round by round. On a coarse level
-                // the direction goes down to the fine lattice (the fine pressure
-                // is spare until the end) and the product comes back up. It runs
-                // whether or not the solve stopped: it writes s and its sums,
-                // which nothing reads again this solve.
-                (BodyRound::Plain, Some((passes, bodies))) => {
-                    for i in 0..iterations {
-                        g.begin_round(enc, 2 * i, before);
-                        r.head(enc);
-                        enc.end_gated_segments();
-                        if k == 0 {
-                            passes.apply(enc, bodies, plain.tiles, &b.p, &b.scratch, table, pool_tiles)?;
-                        } else {
-                            chain.prolong_down(enc, &b.p, pressure, Spare::E);
-                            zero(enc, pipes, n, &b.body, &b.armed, plan, table, pool_tiles);
-                            passes.apply(enc, bodies, plain.tiles, pressure, &b.body, table, pool_tiles)?;
-                            chain.restrict_down(enc, &b.body, &b.scratch, 0, RESTRICT_ADD);
-                        }
-                        g.begin_round(enc, 2 * i + 1, after);
-                        r.tail(enc);
-                    }
-                    enc.end_gated_segments();
-                }
-                _ => {
-                    if let (Some(ticket), Some(store)) = (ticket, self.templates.as_mut()) {
-                        enc.execute_template(store, ticket)?;
-                    }
-                }
-            }
+            let store = self.templates.as_mut().ok_or("the solver was not prepared")?;
+            enc.execute_template(store, ticket)?;
             if k > 0 {
                 chain.prolong_down(enc, x, pressure, Spare::E);
             }
@@ -1373,7 +1329,6 @@ pub(crate) const ROW_FLOATS: usize = ROW_BYTES as usize / 4;
 #[derive(Clone, Copy)]
 struct Gate<'a> {
     buffer: &'a GpuBuffer,
-    ranges: &'a GpuBuffer,
     groups: &'a [[u32; 3]],
     slots: Slots,
     gated: bool,
@@ -1518,11 +1473,6 @@ impl Gate<'_> {
         } else {
             enc.plain(pipeline, &all, groups, label);
         }
-    }
-
-    /// Open the gated segment of range entry `index`, `commands` dispatches long.
-    fn begin_round(self, enc: &mut GpuEncoder, index: u32, commands: u32) {
-        enc.begin_gated_segment(self.ranges, index, commands);
     }
 }
 
@@ -2080,10 +2030,12 @@ mod tests {
             passes([64; 3], Stop::Fixed(8)),
             (24, 4 + 8 * (4 * 11 + 1 + 6))
         );
-        assert_eq!(passes([64; 3], Stop::Converged(8)).1, 5 + 8 * (4 * 11 + 1 + 6));
+        assert_eq!(
+            passes([64; 3], Stop::Converged(8)).1,
+            5 + 8 * (4 * 11 + 1 + 6)
+        );
         assert_eq!(passes([3; 3], Stop::Fixed(3)), (4, 4 + 3 * 7));
         assert_eq!(round_commands(4, BodyRound::Without), (4 * 11 + 1 + 6, 0));
-        assert_eq!(round_commands(4, BodyRound::Plain), (4 * 11 + 1 + 3, 4));
         assert_eq!(round_commands(4, BodyRound::Gated), (4 * 11 + 1 + 10, 0));
         assert_eq!(
             round_commands(3, BodyRound::GatedCoarse(1)),

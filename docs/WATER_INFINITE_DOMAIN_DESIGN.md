@@ -32,7 +32,7 @@ Today the slot table has one word per box tile. Every kernel counts cells from t
 - [H, 2H): the slot of each entry, TS_NONE when none.
 - [2H, 2H + 4P): per slot, its tile coordinate (x, y, z as i32) and its entry index.
 - [2H + 4P, 2H + 31P): per slot, the slots of its 27 neighbour tiles, k = (dx + 1) + 3(dy + 1) + 9(dz + 1), k = 13 itself, TS_NONE where absent.
-- H = the power of two at or above 4P: 65,536 at P = 8,456. The table is 1.5 MB; its build scratch (ring, near and coordinate per entry, the seed list) about 1.6 MB more.
+- H = the power of two at or above 4P: 65,536 at P = 8,548. The table is 1.5 MB; its build scratch (ring, near and coordinate per entry, the seed list) about 1.6 MB more.
 
 **Hash and probing.** h(key) = (key · 2654435769) >> (32 − log2 H), Knuth's multiplicative hash. Ordered linear probing (Amble and Knuth 1974, "Ordered hash tables"): along a probe run keys sit in decreasing order, so a lookup stops at the first smaller key, and the table's layout is the same whatever order keys arrive in. The insert is Shun and Blelloch's phase-concurrent version (SPAA 2014, "Phase-concurrent hash tables for determinism"): walk from h(k); an empty word or a smaller key is swapped for k by `atomicCompareExchangeWeak` and the displaced key walks on; an equal key stops. Inserts and lookups never share a pass, so a lookup never meets a key in motion. The layout must be deterministic because slot numbers order the sort, and so the order of every sum over a cell's particles.
 
@@ -64,7 +64,7 @@ No single-thread pass remains. Today `tiles_allocate` and `tiles_lists` loop ove
 
 **Past the old box.** Tiles exist wherever particles are; nothing bounds where. Water poured over a ledge falls past where the box ended and spreads on a floor (S4b's check), as soon as the surface is on world tiles too.
 
-**Cost of a lone droplet.** A tile with water alone costs 125 tiles at ring 2 and 27 at ring 1, at 190 KB a tile (372 bytes a cell). A splash of droplets in separate tiles fills the 1.5 GiB pool long before the water does; the ring priority then drops the bands first. If memory reports show bands dominating, the lever is a second pool for band tiles holding only the face fields the band passes use. Not in S4.
+**Cost of a lone droplet.** A tile with water alone costs 125 tiles at ring 2 and 27 at ring 1, at 190 KB a tile (368 bytes a cell). A splash of droplets in separate tiles fills the 1.5 GiB pool long before the water does; the ring priority then drops the bands first. If memory reports show bands dominating, the lever is a second pool for band tiles holding only the face fields the band passes use. Not in S4.
 
 ## 3. Positions (decision 2)
 
@@ -99,7 +99,7 @@ Bounds is the Water item's box (its Transform: position and size) with six faces
 - **Card.** The Resolution row (`scene_schema/water.rs:234-239`, "cells across the longest side") becomes Cell Size, `Unit::Metres`, default 0.0625, limits 0.001 to 1.0 (Peter's call 1). The scene compiler's `resolution` value node (`scene_compile/water.rs:87-88`) becomes `cell_size`. The three whitewater capacity rows (`water.rs:269-302`) go: the whitewater pool holds a fixed WHITEWATER_SLOTS = WHITEWATER_PER_CELL × 64 = 102,400, today's default, and a full pool still replaces its oldest particles.
 - **Both solvers.** `domain_layout(domain, domain_size, resolution)` (`fluid_domain.rs:30-100`) becomes the cell size and the Bounds box (or none). No cell counts, no 32-bit grid check (no grid), no DOMAIN_EXTENT_METRES. The far-from-origin check (`fluid_domain.rs:86-92`) stays, at the Bounds or Initial Fill position. `domain_size` goes. Matter takes the same row; its `grid_budget_mcells` and `admit_lattice` (`matter_domain.rs:194`, `:285`, `:467`) give way to the pool budget (M2, M3).
 - **What restarts the water:** Cell Size, the solver, Reset, the Bounds switch (Peter's call 3), the Initial Fill and Fill Height, and for Matter Points per Cell and Seed. Not: Bounds position, size or faces, Speed, gravity, sources that move, or any Surface row.
-- **What the budget bounds.** The pool's P tiles hold the water and its band, 512·P·h³ of space: 1,057 m³ at 6.25 cm and 16.5 m³ at 1.56 cm for P = 8,456. Halving the cell size divides it by eight. The particle pool (S3.4) bounds the water itself, slots · h³ / 8. When either fills, sources stop and the card says why (S3.5). D4's budgets per resolution become one budget whatever the cell size: the lattice stays under POOL_BUDGET_BYTES (1.5 GiB), and every memory report lists tiles held against P.
+- **What the budget bounds.** The pool's P tiles hold the water and its band, 512·P·h³ of space: 1,057 m³ at 6.25 cm and 16.5 m³ at 1.56 cm for P = 8,548. Halving the cell size divides it by eight. The particle pool (S3.4) bounds the water itself, slots · h³ / 8. When either fills, sources stop and the card says why (S3.5). D4's budgets per resolution become one budget whatever the cell size: the lattice stays under POOL_BUDGET_BYTES (1.5 GiB), and every memory report lists tiles held against P.
 
 ## 6. Moving Domain Position or Bounds live (decision 5)
 

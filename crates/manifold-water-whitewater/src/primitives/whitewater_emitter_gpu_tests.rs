@@ -597,6 +597,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         ),
         h.array(&vec![0.0f32; 576], 576),
     ];
+    let identity = h.array(&[0u32, 0, 0, 0, 1, 1, 1, 32], 8);
     let pool = h.array(&vec![super::whitewater_step::empty_slot(); 256], 256);
     let state = h.array(&[0u32; 8], 8);
     let shape = StepShape::new(
@@ -615,7 +616,6 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         let mut step = Step::default();
         let frame = StepFrame {
             shape,
-            count: Some(32),
             ticks: 1,
             dt: 1.0 / 60.0,
             epoch: 0,
@@ -640,6 +640,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         let inputs = StepInputs {
             motion: None,
             particles: &particles.1,
+            identity: &identity.1,
             solid: &solid.1,
             obstacle_source: Some(&source.1),
             faces: super::whitewater_step::FaceSource::Axes([&f[0].1, &f[1].1, &f[2].1]),

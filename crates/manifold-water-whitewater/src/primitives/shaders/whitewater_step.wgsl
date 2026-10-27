@@ -36,8 +36,8 @@ struct Fluid {
 struct StepParams {
     capacity: u32,
     spawn_slots: u32,
-    emitters: u32,
     count: u32,
+    _pad: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: StepParams;
@@ -52,6 +52,11 @@ struct StepParams {
 @group(0) @binding(9) var<storage, read_write> spray: array<Fluid>;
 @group(0) @binding(10) var<storage, read_write> counts: array<u32>;
 @group(0) @binding(11) var<storage, read_write> dust: array<Fluid>;
+// The particle identity: word 7 counts the liquid particles in use, the
+// emitters whose running totals fill `offsets`.
+@group(0) @binding(12) var<storage, read> identity: array<u32>;
+
+const IDENTITY_N: u32 = 7u;
 
 const EMPTY: u32 = 3u;
 // FLIP's _diffuseParticleIDLimit.
@@ -164,9 +169,10 @@ fn append(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn append_state() {
     let live = min(state[0], params.capacity);
     let plan = append_plan(live, state[5]);
+    let emitters = identity[IDENTITY_N];
     var total = 0u;
-    if params.emitters > 0u {
-        total = offsets[params.emitters - 1u];
+    if emitters > 0u {
+        total = offsets[emitters - 1u];
     }
     state[0] = live + plan.x;
     state[5] = state[5] + plan.y;

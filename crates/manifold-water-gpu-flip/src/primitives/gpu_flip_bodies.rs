@@ -371,22 +371,21 @@ impl BodyPasses {
         Ok(())
     }
 
-    manifold_core::testkit_visible! {
-        /// Inside a conjugate gradient iteration: the bodies' share of the
-        /// operator on the search direction `direction`, added to `s`, over the
-        /// solver's fine active `tiles`.
-        pub(crate) fn apply<S: Sink>(
-            &self,
-            enc: &mut S,
-            bodies: &Bodies<'_>,
-            tiles: Tiles<'_>,
-            direction: &GpuBuffer,
-            s: &GpuBuffer,
-            table: &GpuBuffer,
-            pool_tiles: u32,
-        ) -> Result<(), String> {
-            self.apply_on(enc, bodies, tiles, direction, s, None, table, pool_tiles)
-        }
+    /// Inside a conjugate gradient iteration: the bodies' share of the
+    /// operator on the search direction `direction`, added to `s`, over the
+    /// solver's fine active `tiles`, ungated (the proofs run it outside a solve).
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn apply<S: Sink>(
+        &self,
+        enc: &mut S,
+        bodies: &Bodies<'_>,
+        tiles: Tiles<'_>,
+        direction: &GpuBuffer,
+        s: &GpuBuffer,
+        table: &GpuBuffer,
+        pool_tiles: u32,
+    ) -> Result<(), String> {
+        self.apply_on(enc, bodies, tiles, direction, s, None, table, pool_tiles)
     }
 
     /// [`Self::apply`] on the solve's gate: a round the stop switched off,

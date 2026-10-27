@@ -1,18 +1,15 @@
 // Publication copy: live records sorted by birth id, ties in source order,
 // then zeroed records. A stable LSD radix sort of (key, source index) pairs,
 // 4 bits a pass, then one gather of the records. Records are moved as words,
-// so every bit survives. Solver order is immutable.
+// so every bit survives. Solver order is immutable. The sort reads only the
+// slots in use, from the particle identity's record, and dispatches from it.
 struct Params {
-    count: u32,
-    slots: u32,
     shift: u32,
-    tiles: u32,
     // Pair capacity: keys at [0, cap), source indices at [cap, 2 cap).
     cap: u32,
     // Nonzero on the pass that reads first_upsweep's pairs, dead ones marked.
     first: u32,
     pad0: u32,
-    pad1: u32,
 }
 @group(0) @binding(0) var<uniform> p: Params;
 // FluidParticle records as two vec4<u32>: the radius is word 3, the id word 7.
@@ -20,17 +17,33 @@ struct Params {
 @group(0) @binding(2) var<storage, read_write> published: array<vec4<u32>>;
 // Tile digit counts, digit-major, scanned in place between upsweep and downsweep.
 @group(0) @binding(3) var<storage, read_write> scan: array<u32>;
+// Word 1: the identity epoch. Word 3: the full-reset request. Words 4-6: the
+// sort's dispatch triple [tiles, 1, 1]; word 7: n, the slots in use. No record
+// at or past n is read.
 @group(0) @binding(4) var<storage, read> identity: array<u32>;
 @group(0) @binding(5) var<storage, read> stats: array<u32>;
-// count, identity epoch, accepted, reserved. Only metadata is fenced/read back.
+// live count, identity epoch, accepted, high-water. The high-water is the
+// count of leading target records that may be nonzero: everything past it is
+// zero. Only metadata is fenced/read back.
 @group(0) @binding(6) var<storage, read_write> metadata: array<u32>;
 @group(0) @binding(7) var<storage, read> pairs_in: array<u32>;
 @group(0) @binding(8) var<storage, read_write> pairs_out: array<u32>;
-// Word 0: the live count, from the first pass's scan.
+// Word 0: the live count, from the first pass's scan. Words 1-3: the gather's
+// dispatch triple. Word 4: the target records the gather writes.
 @group(0) @binding(9) var<storage, read_write> live: array<u32>;
 
 const TILE: u32 = 256u;
 const DEAD: u32 = 0xffffffffu;
+
+// Sort tiles: the identity's dispatch triple, a group a tile.
+fn tiles() -> u32 {
+    return identity[4];
+}
+
+// Slots in use.
+fn in_use() -> u32 {
+    return identity[7];
+}
 
 // One 16-bit count per digit, two digits a word: a tile holds at most 256.
 var<workgroup> counts_lo: array<vec4<u32>, 256>;
@@ -75,7 +88,7 @@ fn count_tile(lid: u32, tile: u32, valid: bool, digit: u32) {
         workgroupBarrier();
     }
     if lid < 16u {
-        scan[lid * p.tiles + tile] = digit_count(Counts(counts_lo[0], counts_hi[0]), lid);
+        scan[lid * tiles() + tile] = digit_count(Counts(counts_lo[0], counts_hi[0]), lid);
     }
 }
 
@@ -109,7 +122,7 @@ fn first_upsweep(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgrou
     let i = wid.x * TILE + lid.x;
     var valid = false;
     var key = 0u;
-    if i < p.count {
+    if i < in_use() {
         valid = is_live(source[2u * i].w);
         key = source[2u * i + 1u].w;
         pairs_out[i] = key;
@@ -137,7 +150,7 @@ fn downsweep(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id
     var valid = false;
     var index = 0u;
     if p.first != 0u {
-        if i < p.count {
+        if i < in_use() {
             index = pairs_in[p.cap + i];
             valid = index != DEAD;
         }
@@ -154,25 +167,36 @@ fn downsweep(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id
     let digit = (key >> p.shift) & 15u;
     let rank = rank_tile(lid.x, valid, digit);
     if valid {
-        let destination = scan[digit * p.tiles + wid.x] - rank.y + rank.x;
+        let destination = scan[digit * tiles() + wid.x] - rank.y + rank.x;
         pairs_out[destination] = key;
         pairs_out[p.cap + destination] = index;
     }
     if p.first != 0u && i == 0u {
-        live[0] = scan[16u * p.tiles - 1u];
+        live[0] = scan[16u * tiles() - 1u];
     }
+}
+
+// One thread after the last pass: the metadata, and the gather's extent. The
+// gather writes the live records and zeroes every leading record this slot
+// held from an earlier publication, so a target keeps zeros past its live ones.
+@compute @workgroup_size(1)
+fn gather_args() {
+    let count = live[0];
+    let extent = max(count, metadata[3]);
+    live[1] = (extent + TILE - 1u) / TILE;
+    live[2] = 1u;
+    live[3] = 1u;
+    live[4] = extent;
+    metadata[0] = count;
+    metadata[1] = identity[1];
+    metadata[2] = select(0u, 1u, stats[0] == 0u && identity[3] == 0u);
+    metadata[3] = count;
 }
 
 @compute @workgroup_size(256)
 fn gather(@builtin(global_invocation_id) gid: vec3<u32>) {
     let k = gid.x;
-    if k == 0u {
-        metadata[0] = live[0];
-        metadata[1] = identity[1];
-        metadata[2] = select(0u, 1u, stats[0] == 0u && identity[3] == 0u);
-        metadata[3] = 0u;
-    }
-    if k >= p.slots {
+    if k >= live[4] {
         return;
     }
     var head = vec4<u32>(0u);

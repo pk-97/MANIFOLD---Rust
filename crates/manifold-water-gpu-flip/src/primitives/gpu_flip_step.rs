@@ -7,7 +7,12 @@
 //! `shaders/gpu_flip_step/*.wgsl`, the solver in [`super::gpu_flip_pressure`].
 //!
 //! Every scratch array is sized from the lattice and the particle slots
-//! before any pass is encoded, so no kernel reads `arrayLength`. The
+//! before any pass is encoded, so no kernel reads `arrayLength`. The step
+//! always encodes [`history_slots`] substeps; each slot opens a record
+//! `[groups, 1, 1, n]` of the slots in use (`shaders/gpu_flip_step/count.wgsl`,
+//! the birth identity's words 4-7), and every pass over the particles
+//! dispatches from it and stops at `n`, so a slot the clock plan leaves no
+//! time for launches no particle work and writes nothing. The
 //! lattice's cell and face fields live in the tile pool (`tiles.rs`): their
 //! passes index them through the storage helpers, and a tile is stored while
 //! the allocator holds it. The `faces` and `distance` outputs are the pooled
@@ -109,10 +114,10 @@ manifold_core::testkit_visible! { pub(crate) const STEP_SHADER: &str = concat!(
     include_str!("shaders/gpu_flip_step/density.wgsl"),
     include_str!("shaders/gpu_flip_step/move.wgsl"),
     include_str!("shaders/gpu_flip_step/emit.wgsl"),
+    include_str!("shaders/gpu_flip_step/count.wgsl"),
     include_str!("shaders/gpu_flip_step/tiles.wgsl"),
     include_str!("shaders/gpu_flip_step/marker_removal.wgsl"),
 ); }
-const MASK_SHADER: &str = include_str!("shaders/gpu_flip_commit_mask.wgsl");
 const NAME: &str = "GPU FLIP Step";
 
 manifold_core::testkit_visible! {
@@ -125,31 +130,14 @@ manifold_core::testkit_visible! {
 pub(crate) const ENGINE_CFL: u32 = 5;
 }
 
-/// A fenced maximum for the exact incoming marker state can prove that the
-/// GPU scheduler's first step consumes the entire interval. Keep a 1% margin
-/// from its ceil boundary for CPU/GPU length and division rounding. This only
-/// decides whether to omit unused command chains; GPU CFL and max steps stay
-/// unchanged. The caller excludes first-tick prediction and events, and the
-/// obstacle bound must describe the same initial state with zero reaction.
-fn one_step_cfl_safe(
-    marker_speed: f32,
-    obstacle_speed: f32,
-    interval: f32,
-    cell_size: f32,
-) -> bool {
-    marker_speed.is_finite()
-        && marker_speed >= 0.0
-        && obstacle_speed.is_finite()
-        && obstacle_speed >= 0.0
-        && interval.is_finite()
-        && interval > 0.0
-        && cell_size.is_finite()
-        && cell_size > 0.0
-        && f64::from(interval)
-            * (f64::from(marker_speed.max(obstacle_speed))
-                + manifold_physics::stepping::LIVE_CFL_EPSILON)
-            * 1.01
-            < f64::from(ENGINE_CFL) * f64::from(cell_size)
+/// Substeps the step encodes in a tick: the most the clock can schedule,
+/// `LIVE_DEFAULT_MAX_STEPS`, and one more for each event inside the interval.
+/// Both are CPU facts, so the encode never waits on a readback; the clock plan
+/// decides on the GPU which of them run, and an idle slot launches no particle,
+/// tile or solve work. The extent rule sizes the substep history with the same
+/// count.
+pub(crate) fn history_slots(live_hit_count: u32) -> u32 {
+    manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count
 }
 
 manifold_core::testkit_visible! {
@@ -176,26 +164,30 @@ pub fn set_poison(on: bool) {
     POISON.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Test-only lever for the inactive-slot proof (BUG-e6z6s (inactive FLIP
-/// slots)): with it set, every pass of an inactive clock slot runs as it did
-/// before the slots were gated. The gate plan is zeros, so only the passes
-/// that always read the clock see the slot as inactive.
+/// Test-only lever for the idle-slot proof (approved by the lead): the slots
+/// the step encodes in place of [`history_slots`], 0 for none set. A slot the
+/// clock leaves no time for must write nothing, so a scene the clock finishes
+/// in its first slot comes out the same at one slot as at the full count.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-static GATE_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ENCODED_SLOTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub fn set_gate_off(on: bool) {
-    GATE_OFF.store(on, std::sync::atomic::Ordering::SeqCst);
+pub fn set_encoded_slots(slots: Option<u32>) {
+    ENCODED_SLOTS.store(slots.unwrap_or(0), std::sync::atomic::Ordering::SeqCst);
 }
 
-pub(super) fn gating() -> bool {
+/// `rule` slots, or the proofs' lever's.
+fn encoded_slots(rule: u32) -> u32 {
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     {
-        !GATE_OFF.load(std::sync::atomic::Ordering::SeqCst)
+        match ENCODED_SLOTS.load(std::sync::atomic::Ordering::SeqCst) {
+            0 => rule,
+            slots => slots,
+        }
     }
     #[cfg(not(all(any(test, feature = "testkit"), feature = "gpu-proofs")))]
     {
-        true
+        rule
     }
 }
 
@@ -295,6 +287,15 @@ pub fn dispatch_pass(
     if !buffers.iter().any(|&(binding, _)| binding == 46) {
         bindings.push(buffer(46, &clock_plan));
     }
+    // The slots in use are the threads asked for, as a pass that dispatches
+    // from the step's record would find them.
+    let record = device.create_buffer_shared(16);
+    let slots = u32::try_from(threads).expect("thread count fits a word");
+    // SAFETY: a shared buffer of four words; no GPU work has touched it yet.
+    unsafe { record.write(0, bytemuck::cast_slice(&[groups(threads)[0], 1, 1, slots])) };
+    if !buffers.iter().any(|&(binding, _)| binding == 42) {
+        bindings.push(buffer(42, &record));
+    }
     let mut enc = device.create_encoder("gpu_flip.step.pass");
     enc.dispatch_compute(&pipeline, &bindings, groups(threads), "gpu_flip.step.pass");
     enc.commit_and_wait_completed();
@@ -305,7 +306,6 @@ manifold_core::testkit_visible! {
 pub(crate) struct StepState {
     identity_ops: manifold_water_liquid::primitives::particle_identity::ParticleIdentity,
     pipelines: Option<Pipelines>,
-    mask_pipeline: Option<GpuComputePipeline>,
     sorter: ParticleSorter,
     solver: PressureSolver,
     solid: Option<GpuComputePipeline>,
@@ -320,10 +320,10 @@ pub(crate) struct StepState {
     sorted: Option<GpuBuffer>,
     /// The emission flags' scan, one word a half-cell site.
     emit_scan: PrefixScan,
+    /// The slot's record `[groups, 1, 1, n]` (`count.wgsl`): written on the GPU
+    /// at the start of every slot, read by every pass over the particles.
+    slot_record: Option<GpuBuffer>,
     /// [`ZERO_BYTES`] zero bytes bound where an optional input is unwired.
-    saved_particles: Option<GpuBuffer>,
-    saved_distance: Option<GpuBuffer>,
-    saved_capped: Option<GpuBuffer>,
     zeros: Option<GpuBuffer>,
     /// This tick's bodies posed at the step's end (`pose_bodies`), one row a
     /// body of the tick.
@@ -346,6 +346,9 @@ pub(crate) struct StepState {
 /// Zero bytes bound for an unwired input: the uniform-sized arrays, and an
 /// empty reaction for every body a liquid holds.
 const ZERO_BYTES: u64 = (MAX_LIQUID_BODIES * REACTION_FLOATS * 4) as u64;
+
+/// Bytes of the slot record `[groups, 1, 1, n]`.
+const SLOT_RECORD_BYTES: u64 = 16;
 
 const SORT_LABELS: SortLabels = SortLabels {
     clear: "gpu_flip.step.sort.clear",
@@ -395,7 +398,6 @@ struct Step<'a> {
     /// tick's solver words (liquid_stats.rs SOLVER_WORDS) at byte `tally`.
     capped: &'a GpuBuffer,
     tally: u64,
-    count: u32,
     forces: &'a GpuBuffer,
     impulses: &'a GpuBuffer,
     bodies: &'a GpuBuffer,
@@ -437,7 +439,6 @@ manifold_node_engine::primitive! {
     inputs: {
         particles: Array(FluidParticle) required,
         identity: Array(u32) required,
-        count: ScalarF32 optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -450,7 +451,6 @@ manifold_node_engine::primitive! {
         impulse_tick: ScalarF32 optional,
         first_tick: ScalarF32 optional,
         tick_index: ScalarF32 optional,
-        retired_max_speed: ScalarF32 optional,
         interval_duration: ScalarF32 optional, limit_interval: ScalarF32 optional,
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
@@ -468,7 +468,6 @@ manifold_node_engine::primitive! {
         sheet_fill_rate: ScalarF32 optional,
         clock_obstacles: Array(f32) optional,
         clock_obstacle_count: ScalarF32 optional,
-        initial_obstacle_speed: ScalarF32 optional,
         clock_sources: Array(f32) optional,
         clock_source_count: ScalarF32 optional,
         live_hits: Array(f32) optional,
@@ -532,7 +531,7 @@ manifold_node_engine::primitive! {
         float_param!("sheet_fill_rate", "Sheet Fill Rate", 0.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
+    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
     examples: ["WaterDamBreakGpuFlip"],
     picker: { label: "GPU FLIP Step", category: Atom },
     summary: "Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion.",
@@ -580,7 +579,7 @@ impl StepParams {
         self
     }
 
-    /// The particle slots `tiles_mark` reads.
+    /// The particle slots the cell passes clamp a cell's range to.
     pub fn with_capacity_for_test(mut self, capacity: u32) -> Self {
         self.capacity = capacity;
         self

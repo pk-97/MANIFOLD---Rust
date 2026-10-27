@@ -35,6 +35,7 @@ use manifold_water_liquid::primitives::face_sample_component::{
     FaceSampleComponent, pool_tiles_wire, pooled_bytes,
 };
 use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
+use manifold_water_liquid::primitives::particle_identity::{COUNT_OFFSET, IDENTITY_BYTES};
 use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortCount, SortJob, SortLabels, range_storage_bytes, whitewater_record_read,
@@ -180,16 +181,13 @@ struct EmitParams {
     generation_rate: f32,
     points_per_cell: f32,
     ticks: f32,
-    live_count: f32,
     dt: f32,
     dust_enabled: f32,
     boundary_dust: f32,
-    count: u32,
-    _pad: [u32; 2],
 }
 
 impl EmitParams {
-    fn new(frame: &StepFrame, count: u32, dust: bool) -> Self {
+    fn new(frame: &StepFrame, dust: bool) -> Self {
         let s = &frame.shape;
         let [center_x, center_y, center_z] = s.center;
         let [size_x, size_y, size_z] = s.size;
@@ -233,12 +231,9 @@ impl EmitParams {
             generation_rate: frame.generation_rate,
             points_per_cell: 8.0,
             ticks: frame.ticks as f32,
-            live_count: count as f32,
             dt: frame.dt,
             dust_enabled: f32::from(u8::from(frame.dust_emission)),
             boundary_dust: f32::from(u8::from(frame.boundary_dust)),
-            count,
-            _pad: [0; 2],
         }
     }
 }
@@ -247,7 +242,6 @@ impl EmitParams {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SpawnParams {
     capacity: f32,
-    emitters: f32,
     face_cells_x: f32,
     face_cells_y: f32,
     face_cells_z: f32,
@@ -274,6 +268,7 @@ struct SpawnParams {
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
+    _pad3: u32,
 }
 
 #[repr(C)]
@@ -318,7 +313,7 @@ struct LifecycleParams {
 }
 
 impl SpawnParams {
-    fn new(frame: &StepFrame, emitters: u32, dust: bool) -> Self {
+    fn new(frame: &StepFrame, dust: bool) -> Self {
         let s = &frame.shape;
         let [center_x, center_y, center_z] = s.center;
         let [size_x, size_y, size_z] = s.size;
@@ -326,7 +321,6 @@ impl SpawnParams {
         let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
         Self {
             capacity: s.capacity as f32,
-            emitters: emitters as f32,
             center_x,
             center_y,
             center_z,
@@ -357,6 +351,7 @@ impl SpawnParams {
             _pad0: 0,
             _pad1: 0,
             _pad2: 0,
+            _pad3: 0,
         }
     }
 }
@@ -441,7 +436,7 @@ manifold_node_engine::primitive! {
     purpose: "With distance and pool state wired from a liquid tick region, emit and advance exactly one tick and publish through captured boundary results. Emit from where the surface crests and the water moves fast, then step the pool (spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages, dies, and leaves when it strays or crowds its cell), each particle's radius its fade. Spawns past the pool's room are counted as pool full; emissions past Capacity in one frame are thinned evenly and counted.",
     inputs: {
         particles: Array(FluidParticle) required,
-        count: ScalarF32 optional,
+        identity: Array(u32) required,
         capacity: ScalarF32 optional,
         solid: Array(f32) required,
         obstacle_source: Array(WhitewaterSource) optional,
@@ -556,7 +551,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "For per-tick GPU FLIP, wire the solver distance, tiles and pool_tiles from node.gpu_flip_step (its pooled phi and slot table), particles and packed faces (or all three projected face components); wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
+    composition_notes: "For per-tick GPU FLIP, wire the solver distance, tiles and pool_tiles from node.gpu_flip_step (its pooled phi and slot table), particles, identity (its identity_out, whose record counts the particles in use) and packed faces (or all three projected face components); wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
     examples: [],
     picker: { label: "Whitewater Step", category: Atom },
     summary: "Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU.",
@@ -713,8 +708,6 @@ manifold_core::testkit_visible! {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StepFrame {
     pub shape: StepShape,
-    /// Live liquid particles; `None` takes every slot.
-    pub count: Option<u32>,
     pub ticks: u32,
     /// Simulation seconds in the accepted interval: one Sim Rate interval of
     /// transport in export, every owed interval as one span live, both scaled
@@ -795,6 +788,9 @@ manifold_core::testkit_visible! {
 pub(crate) struct StepInputs<'a> {
     pub motion: Option<MotionInputs<'a>>,
     pub particles: &'a GpuBuffer,
+    /// The particle identity: words 4-6 dispatch a pass over the particles in
+    /// use, word 7 counts them. Slots at or past it are never read.
+    pub identity: &'a GpuBuffer,
     pub solid: &'a GpuBuffer,
     pub obstacle_source: Option<&'a GpuBuffer>,
     pub faces: FaceSource<'a>,
@@ -829,6 +825,12 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
     }
     if inputs.pool_tiles == 0 {
         return Err("the pool holds no tiles".into());
+    }
+    if inputs.identity.size < IDENTITY_BYTES {
+        return Err(format!(
+            "the identity holds {} bytes, fewer than the {IDENTITY_BYTES} of its record",
+            inputs.identity.size
+        ));
     }
     let (pooled_face_bytes, table_bytes) = pooled_bytes(shape.face_cells, inputs.pool_tiles);
     let wanted = [
@@ -943,6 +945,16 @@ enum Barrier {
     None,
 }
 
+/// How many groups a pass runs.
+#[derive(Clone, Copy)]
+enum Grid<'a> {
+    /// One thread each over a count the CPU knows.
+    Threads(u32),
+    /// The triple at the identity's [`COUNT_OFFSET`], written on the GPU
+    /// earlier in the command buffer.
+    Particles(&'a GpuBuffer),
+}
+
 /// Dispatch `pipeline` over `count` threads, the uniform at 0 and `buffers`
 /// from 1 in order, then `barrier`.
 fn dispatch(
@@ -957,6 +969,49 @@ fn dispatch(
     if count == 0 {
         return;
     }
+    encode(
+        enc,
+        pipeline,
+        uniform,
+        buffers,
+        Grid::Threads(count),
+        label,
+        barrier,
+    );
+}
+
+/// [`dispatch`] over the liquid particles in use, a thread each, the groups
+/// read from `identity` on the GPU. An empty population still runs one group
+/// that returns.
+fn dispatch_particles(
+    enc: &mut manifold_gpu::GpuEncoder,
+    pipeline: &GpuComputePipeline,
+    uniform: &[u8],
+    buffers: &[&GpuBuffer],
+    identity: &GpuBuffer,
+    label: &str,
+    barrier: Barrier,
+) {
+    encode(
+        enc,
+        pipeline,
+        uniform,
+        buffers,
+        Grid::Particles(identity),
+        label,
+        barrier,
+    );
+}
+
+fn encode(
+    enc: &mut manifold_gpu::GpuEncoder,
+    pipeline: &GpuComputePipeline,
+    uniform: &[u8],
+    buffers: &[&GpuBuffer],
+    grid: Grid<'_>,
+    label: &str,
+    barrier: Barrier,
+) {
     let bindings: [GpuBinding<'_>; 16] = std::array::from_fn(|i| match i {
         0 => GpuBinding::Bytes {
             binding: 0,
@@ -972,12 +1027,15 @@ fn dispatch(
             data: uniform,
         },
     });
-    enc.dispatch_compute(
-        pipeline,
-        &bindings[..=buffers.len()],
-        [count.div_ceil(256), 1, 1],
-        label,
-    );
+    let bindings = &bindings[..=buffers.len()];
+    match grid {
+        Grid::Threads(count) => {
+            enc.dispatch_compute(pipeline, bindings, [count.div_ceil(256), 1, 1], label);
+        }
+        Grid::Particles(identity) => {
+            enc.dispatch_compute_indirect(pipeline, bindings, identity, COUNT_OFFSET, label);
+        }
+    }
     if barrier == Barrier::After {
         enc.compute_memory_barrier_buffers();
     }
@@ -1137,8 +1195,8 @@ fn get(slot: &Option<GpuComputePipeline>) -> &GpuComputePipeline {
 struct HandParams {
     capacity: u32,
     spawn_slots: u32,
-    emitters: u32,
     count: u32,
+    _pad: u32,
 }
 
 fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, String> {
@@ -1460,10 +1518,9 @@ impl Step {
                 enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
                 enc.copy_buffer_to_buffer(state, &f.state, STATE_WORDS * 4);
                 let slots = (inputs.particles.size / PARTICLE) as u32;
-                let emitters = frame.count.map_or(slots, |count| count.min(slots));
                 let scratch = self.particles.reserve(gpu.device, slots)?.clone();
-                let offsets = self.emission_scan.buffer(gpu.device, emitters.max(1) as usize)?.clone();
-                let surface = self.emit(enc, frame, inputs, &scratch, &offsets, emitters);
+                let offsets = self.emission_scan.buffer(gpu.device, slots.max(1) as usize)?.clone();
+                let surface = self.emit(enc, frame, inputs, &scratch, &offsets);
                 self.tick(enc, gpu.device, frame, inputs, &surface)?;
             } else {
                 self.influence_epoch = None;
@@ -1491,13 +1548,13 @@ impl Step {
     }
 
     /// A pass of `whitewater_step.wgsl` over `count` threads; `bound` fills
-    /// bindings 1 to 10 in the shader's order.
+    /// bindings 1 to 12 in the shader's order.
     fn hand(
         &self,
         enc: &mut manifold_gpu::GpuEncoder,
         pass: Hand,
         params: HandParams,
-        bound: [&GpuBuffer; 11],
+        bound: [&GpuBuffer; 12],
     ) {
         let (pipeline, label) = self.pipelines.hand(pass);
         dispatch(
@@ -1519,7 +1576,7 @@ impl Step {
         pool_in: &'a GpuBuffer,
         pool_out: &'a GpuBuffer,
         extra: HandBuffers<'a>,
-    ) -> [&'a GpuBuffer; 11] {
+    ) -> [&'a GpuBuffer; 12] {
         let f = self.fields();
         let filler = &f.state;
         let [foam, bubble, spray, dust] = extra.populations.unwrap_or([filler; 4]);
@@ -1535,6 +1592,7 @@ impl Step {
             spray,
             extra.counts.unwrap_or(filler),
             dust,
+            extra.identity.unwrap_or(filler),
         ]
     }
 
@@ -1543,8 +1601,8 @@ impl Step {
         let params = HandParams {
             capacity: shape.capacity,
             spawn_slots: 0,
-            emitters: 0,
             count: shape.capacity.max(STATE_WORDS as u32),
+            _pad: 0,
         };
         let bound = self.bound(&f.pools[1], &f.pools[0], HandBuffers::default());
         self.hand(enc, Hand::SeedPool, params, bound);
@@ -1552,7 +1610,8 @@ impl Step {
 
     /// FLIP's emitter: the surface's distance and curvature from the level
     /// set, each liquid particle's energy and wavecrest potential, how many
-    /// it emits, the spawns, their kinds, appended to the pool.
+    /// it emits, the spawns, their kinds, appended to the pool. The emitters
+    /// are the liquid particles in use, a count the identity holds on the GPU.
     fn emit(
         &mut self,
         enc: &mut manifold_gpu::GpuEncoder,
@@ -1560,9 +1619,9 @@ impl Step {
         inputs: &StepInputs<'_>,
         scratch: &[GpuBuffer; 5],
         offsets: &GpuBuffer,
-        emitters: u32,
     ) -> GpuBuffer {
         let s = &frame.shape;
+        let slots = (inputs.particles.size / PARTICLE) as u32;
         let reset_influence = self.influence_epoch != Some(frame.epoch);
         self.influence_epoch = Some(frame.epoch);
         let influence_previous = self.influence_current;
@@ -1669,7 +1728,7 @@ impl Step {
         }
         let [sampled, energy, unscaled, dust_energy, wavecrest_bits] = scratch;
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-        let reference = self.reference.enabled;
+        let (reference, emitters) = (self.reference.enabled, self.reference.emitters(inputs));
         self.turbulence(enc, frame, inputs, distance);
         let [u, v, w] = self.face_axes(inputs.faces);
         let fused = &p.fused;
@@ -1690,10 +1749,10 @@ impl Step {
             },
             {
                 let pass = Fused::Emit;
-                dispatch(
+                dispatch_particles(
                     enc,
                     &fused[pass.index()],
-                    bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
+                    bytemuck::bytes_of(&EmitParams::new(frame, false)),
                     &[
                         inputs.particles,
                         u,
@@ -1709,14 +1768,15 @@ impl Step {
                         offsets,
                         unscaled,
                         wavecrest_bits,
+                        inputs.identity,
                     ],
-                    emitters,
+                    inputs.identity,
                     FUSED_ENTRIES[pass.index()].1,
                     Barrier::After,
                 );
                 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
                 self.reference
-                    .record_dispatch(FUSED_ENTRIES[pass.index()].1, emitters);
+                    .record_dispatch(FUSED_ENTRIES[pass.index()].1, slots);
             }
         );
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -1736,16 +1796,28 @@ impl Step {
             emitters,
             frame.dust_emission,
         );
-        self.emission_scan
-            .encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
-        self.spawn(
-            enc, frame, inputs, surface, offsets, sampled, energy, emitters, false,
+        emitter_path!(
+            reference,
+            {
+                self.emission_scan
+                    .encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
+            },
+            {
+                self.emission_scan.encode_labelled_counted(
+                    enc,
+                    slots.max(1) as usize,
+                    EMISSION_SCAN,
+                    inputs.identity,
+                    COUNT_OFFSET,
+                );
+            }
         );
+        self.spawn(enc, frame, inputs, surface, offsets, sampled, energy, false);
         let params = HandParams {
             capacity: s.capacity,
             spawn_slots: s.capacity,
-            emitters,
             count: s.capacity,
+            _pad: 0,
         };
         let pool = &f.pools[self.current];
         self.hand(
@@ -1772,6 +1844,7 @@ impl Step {
                 pool,
                 HandBuffers {
                     offsets: Some(offsets),
+                    identity: Some(inputs.identity),
                     ..HandBuffers::default()
                 },
             ),
@@ -1792,10 +1865,10 @@ impl Step {
                 },
                 {
                     let pass = Fused::Dust;
-                    dispatch(
+                    dispatch_particles(
                         enc,
                         &fused[pass.index()],
-                        bytemuck::bytes_of(&EmitParams::new(frame, emitters, true)),
+                        bytemuck::bytes_of(&EmitParams::new(frame, true)),
                         &[
                             unscaled,
                             inputs.solid,
@@ -1811,14 +1884,15 @@ impl Step {
                             offsets,
                             &f.state,
                             wavecrest_bits,
+                            inputs.identity,
                         ],
-                        emitters,
+                        inputs.identity,
                         FUSED_ENTRIES[pass.index()].1,
                         Barrier::After,
                     );
                     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
                     self.reference
-                        .record_dispatch(FUSED_ENTRIES[pass.index()].1, emitters);
+                        .record_dispatch(FUSED_ENTRIES[pass.index()].1, slots);
                 }
             );
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -1830,8 +1904,25 @@ impl Step {
             #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             self.reference
                 .capture_dust(enc, dust_energy, offsets, emitters);
-            self.emission_scan
-                .encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
+            emitter_path!(
+                reference,
+                {
+                    self.emission_scan.encode_labelled(
+                        enc,
+                        emitters.max(1) as usize,
+                        EMISSION_SCAN,
+                    );
+                },
+                {
+                    self.emission_scan.encode_labelled_counted(
+                        enc,
+                        slots.max(1) as usize,
+                        EMISSION_SCAN,
+                        inputs.identity,
+                        COUNT_OFFSET,
+                    );
+                }
+            );
             self.spawn(
                 enc,
                 frame,
@@ -1840,7 +1931,6 @@ impl Step {
                 offsets,
                 unscaled,
                 dust_energy,
-                emitters,
                 true,
             );
             self.hand(
@@ -1866,6 +1956,7 @@ impl Step {
                     pool,
                     HandBuffers {
                         offsets: Some(offsets),
+                        identity: Some(inputs.identity),
                         ..HandBuffers::default()
                     },
                 ),
@@ -1932,13 +2023,13 @@ impl Step {
         offsets: &GpuBuffer,
         sampled: &GpuBuffer,
         energy: &GpuBuffer,
-        emitters: u32,
         dust: bool,
     ) {
         let f = self.fields();
         emitter_path!(
             self.reference.enabled,
             {
+                let emitters = self.reference.emitters(inputs);
                 self.reference.spawn_reference(
                     enc, frame, inputs, f, surface, offsets, sampled, energy, emitters, dust,
                 );
@@ -1954,7 +2045,7 @@ impl Step {
                 dispatch(
                     enc,
                     &self.pipelines.fused[pass.index()],
-                    bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
+                    bytemuck::bytes_of(&SpawnParams::new(frame, dust)),
                     &[
                         sampled,
                         u,
@@ -1966,6 +2057,7 @@ impl Step {
                         energy,
                         inputs.solid,
                         &f.typed,
+                        inputs.identity,
                     ],
                     frame.shape.capacity,
                     label,
@@ -2154,8 +2246,8 @@ impl Step {
         let params = HandParams {
             capacity: cap,
             spawn_slots: 0,
-            emitters: 0,
             count: cap,
+            _pad: 0,
         };
         self.hand(
             enc,
@@ -2190,8 +2282,8 @@ impl Step {
         let params = HandParams {
             capacity: shape.capacity,
             spawn_slots: 0,
-            emitters: 0,
             count: 4 * shape.capacity,
+            _pad: 0,
         };
         self.hand(
             enc,
@@ -2215,6 +2307,8 @@ impl Step {
 #[derive(Default)]
 struct HandBuffers<'a> {
     offsets: Option<&'a GpuBuffer>,
+    /// The particle identity, whose word 7 counts the emitters.
+    identity: Option<&'a GpuBuffer>,
     populations: Option<[&'a GpuBuffer; 4]>,
     counts: Option<&'a GpuBuffer>,
 }
@@ -2242,10 +2336,6 @@ impl WhitewaterStep {
             ctx.inputs.transform("grid_bounds"),
             capacity as u32,
         )?;
-        let count = ctx
-            .inputs
-            .scalar("count")
-            .map(|_| whole(ctx.scalar_or_param("count", 0.0)));
         let (min_t, max_t) = (
             ctx.param_f32("min_turbulence", 100.0),
             ctx.param_f32("max_turbulence", 200.0),
@@ -2259,7 +2349,6 @@ impl WhitewaterStep {
             // A graph saved without the domain's interval wire runs on the project's Sim Rate.
             dt: ctx.scalar_or_param("dt", ctx.sim_step.interval.0 as f32),
             shape,
-            count,
             ticks: 1,
             epoch: whole(ctx.scalar_or_param("epoch", 0.0)),
             seed: ctx.scalar_or_param("tick_index", 0.0) * TICK as f32,
@@ -2378,13 +2467,16 @@ impl Primitive for WhitewaterStep {
                 return;
             }
         };
-        let (Some(particles), Some(solid), Some(distance), Some(tiles)) = (
+        let (Some(particles), Some(identity), Some(solid), Some(distance), Some(tiles)) = (
             ctx.inputs.array("particles"),
+            ctx.inputs.array("identity"),
             ctx.inputs.array("solid"),
             ctx.inputs.array("distance"),
             ctx.inputs.array("tiles"),
         ) else {
-            ctx.error("Whitewater Step: particles, solid, distance and tiles must all be wired");
+            ctx.error(
+                "Whitewater Step: particles, identity, solid, distance and tiles must all be wired",
+            );
             return;
         };
         let Some(ParamValue::Float(pool_tiles)) = ctx.inputs.scalar("pool_tiles") else {
@@ -2449,6 +2541,7 @@ impl Primitive for WhitewaterStep {
         let inputs = StepInputs {
             motion,
             particles,
+            identity,
             solid,
             obstacle_source: ctx.inputs.array("obstacle_source"),
             faces,

@@ -21,7 +21,7 @@ use manifold_water_gpu_flip::primitives::gpu_flip_bodies::{Bodies, BodyPasses};
 use manifold_water_gpu_flip::primitives::gpu_flip_pressure::{
     PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water,
 };
-use manifold_water_gpu_flip::primitives::gpu_flip_step::{set_all_tiles, set_gate_off, set_poison};
+use manifold_water_gpu_flip::primitives::gpu_flip_step::{set_all_tiles, set_poison};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::coupled_start;
 use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
@@ -1124,11 +1124,6 @@ struct BoxRun {
     frame: i64,
     all: bool,
     poison: bool,
-    /// Every pass of an inactive clock slot runs (`set_gate_off`).
-    ungated: bool,
-    /// Ticks each `step` frame covers; above 1 the coupled pair host-syncs
-    /// between them.
-    ticks_per_frame: u32,
 }
 
 const BOX_SIZE: u32 = 64;
@@ -1154,12 +1149,6 @@ impl BoxRun {
         Self::of(Self::at_level(fixture, level), all, poison)
     }
 
-    /// The scene with every pass of an inactive clock slot run, as before
-    /// the slots were gated.
-    fn ungated(fixture: manifold_nodes_water::testkit::conformance::Fixture, level: i32) -> Self {
-        Self::with_levers(Self::at_level(fixture, level), false, false, true)
-    }
-
     fn at_level(
         fixture: manifold_nodes_water::testkit::conformance::Fixture,
         level: i32,
@@ -1175,15 +1164,6 @@ impl BoxRun {
     }
 
     fn of(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool) -> Self {
-        Self::with_levers(def, all, poison, false)
-    }
-
-    fn with_levers(
-        def: manifold_core::effect_graph_def::EffectGraphDef,
-        all: bool,
-        poison: bool,
-        ungated: bool,
-    ) -> Self {
         let fixture = "box scene";
         let device = manifold_gpu::testkit::test_device();
         let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
@@ -1225,8 +1205,6 @@ impl BoxRun {
             frame: 0,
             all,
             poison,
-            ungated,
-            ticks_per_frame: 1,
         };
         // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
         let mut polls = 0u32;
@@ -1244,12 +1222,11 @@ impl BoxRun {
 
     fn render(&mut self, warming: bool) {
         use manifold_physics::clock::TICK;
-        let frame_seconds = f64::from(self.ticks_per_frame) * TICK;
-        let time = self.frame as f64 * frame_seconds;
+        let time = self.frame as f64 * TICK;
         let ctx = manifold_node_engine::runtime::preset_context::PresetContext {
             time,
             beat: time * 2.0,
-            dt: if warming { 0.0 } else { frame_seconds as f32 },
+            dt: if warming { 0.0 } else { TICK as f32 },
             width: BOX_SIZE,
             height: BOX_SIZE,
             output_width: BOX_SIZE,
@@ -1264,7 +1241,6 @@ impl BoxRun {
         let mut encoder = self.device.create_encoder("body sparse frame");
         set_all_tiles(self.all);
         set_poison(self.poison);
-        set_gate_off(self.ungated);
         let status = {
             let mut gpu =
                 manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
@@ -1275,7 +1251,6 @@ impl BoxRun {
         encoder.commit_and_wait_completed();
         set_all_tiles(false);
         set_poison(false);
-        set_gate_off(false);
         use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
         assert!(
             status == FrameRenderStatus::Complete
@@ -1285,7 +1260,7 @@ impl BoxRun {
         );
     }
 
-    /// One frame on: `ticks_per_frame` ticks.
+    /// One frame on: one tick.
     fn step(&mut self) {
         self.frame += 1;
         self.render(false);
@@ -1305,32 +1280,6 @@ impl BoxRun {
         encoder.copy_buffer_to_buffer(dump.buffer, &staging, bytes);
         encoder.commit_and_wait_completed();
         read(&staging, bytes as usize / 4)
-    }
-
-    /// The step's pooled `port` array (`faces`, `distance`) in tile order:
-    /// each tile's slot read through the step's slot table, then the
-    /// canonical block. Two runs agree when this matches, whatever order
-    /// their atomic slot allocation gave.
-    fn tile_ordered(&self, port: &str) -> Vec<u32> {
-        const STEP: &str = "node.gpu_flip_step";
-        let (pool, table) = (self.words(STEP, port), self.words(STEP, "tiles"));
-        // The distance holds one f32 per cell: P * 512 + 8 words.
-        let distance = self.words(STEP, "distance");
-        let pool_tiles = (distance.len() - 8) / 512;
-        let tiles = table.len() - pool_tiles;
-        let record_words = pool.len() / (pool_tiles * 512 + 8);
-        let slot_words = 512 * record_words;
-        let mut ordered = Vec::with_capacity(pool.len());
-        for &slot in &table[..tiles] {
-            if slot == u32::MAX {
-                ordered.push(u32::MAX);
-            } else {
-                let at = slot as usize * slot_words;
-                ordered.extend_from_slice(&pool[at..at + slot_words]);
-            }
-        }
-        ordered.extend_from_slice(&pool[pool_tiles * slot_words..]);
-        ordered
     }
 
     /// The share of 8^3 tiles the cell passes ran over, from the last tick.
@@ -1434,248 +1383,6 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
         println!(
             "{fixture:?} level {level}: 10 ticks bitwise; last solve {} iterations, capped {}",
             tail[0], tail[2]
-        );
-    }
-}
-
-/// Inactive clock slots (BUG-e6z6s (inactive FLIP slots)): a slot the
-/// clock leaves no time to step arms its solves off, zeroes its tile and
-/// pocket triples and skips its sorts and scans, and the step comes out as
-/// it did when every pass of such a slot ran: the body row, the reaction,
-/// the particles, the solver words, the faces, the substep schedule and
-/// every substep's faces bit for bit, tick after tick, over the submerged
-/// and the floating box at Solve Level 0 (the body product on the solve's
-/// gate) and the floating box at 1 (the plain one, the coarse pockets).
-/// Every frame dumps every array, so the ticks are few and level 1 runs one
-/// box. The distance may differ only where the gated step holds the
-/// canonical 3h: a tile that left C during a frame's inactive slots used to
-/// be retired there and then have its φ put back by the slot's commit mask,
-/// so it kept a stale φ outside C; now the next active step retires it.
-#[test]
-fn gpu_flip_inactive_slots_match_the_ungated_step() {
-    use manifold_nodes_water::testkit::conformance::Fixture;
-    const STEP: &str = "node.gpu_flip_step";
-    const TICKS: u32 = 30;
-    for (fixture, level) in [
-        (Fixture::SubmergedBox, 0),
-        (Fixture::FloatingBox, 0),
-        (Fixture::FloatingBox, 1),
-    ] {
-        let mut gated = BoxRun::new(fixture, false, false, level);
-        let mut ungated = BoxRun::ungated(fixture, level);
-        let (mut inactive, mut slots, mut canonical_cells) = (0usize, 0usize, 0usize);
-        for tick in 1..=TICKS {
-            gated.step();
-            ungated.step();
-            let at = format!("{fixture:?} level {level} tick {tick}");
-            let read = |run: &BoxRun| {
-                let mut arrays = run.left();
-                arrays.push(("faces", run.tile_ordered("faces")));
-                for port in ["substep_schedule", "substep_u", "substep_v", "substep_w"] {
-                    arrays.push((port, run.words(STEP, port)));
-                }
-                arrays
-            };
-            let (arrays, got) = (read(&ungated), read(&gated));
-            for ((what, a), (_, b)) in arrays.iter().zip(&got) {
-                assert_eq!(a.len(), b.len(), "{at}: {what} is sized differently");
-                if let Some(i) = first_differing(a, b) {
-                    panic!(
-                        "{at}: gated {what} differs first at word {i}: {} ({}) vs ungated {} ({})",
-                        b[i],
-                        f32::from_bits(b[i]),
-                        a[i],
-                        f32::from_bits(a[i])
-                    );
-                }
-            }
-            assert_eq!(gated.tile_share(), ungated.tile_share(), "{at}: tile share");
-            let schedule = &got
-                .iter()
-                .find(|(what, _)| *what == "substep_schedule")
-                .expect("the schedule")
-                .1;
-            slots += schedule.len() / 4;
-            inactive += schedule
-                .chunks_exact(4)
-                .filter(|row| f32::from_bits(row[0]) == 0.0)
-                .count();
-            let (a, b) = (
-                ungated.tile_ordered("distance"),
-                gated.tile_ordered("distance"),
-            );
-            assert_eq!(a.len(), b.len(), "{at}: distance is sized differently");
-            let three_h = b
-                .iter()
-                .map(|&w| f32::from_bits(w))
-                .fold(f32::MIN, f32::max);
-            assert!(three_h > 0.0, "{at}: no cell holds the canonical distance");
-            for (i, (&old, &new)) in a.iter().zip(&b).enumerate() {
-                if old != new {
-                    assert_eq!(
-                        new,
-                        three_h.to_bits(),
-                        "{at}: distance cell {i} differs and the gated one is not canonical: {} vs ungated {}",
-                        f32::from_bits(new),
-                        f32::from_bits(old)
-                    );
-                    canonical_cells += 1;
-                }
-            }
-        }
-        assert!(
-            inactive > 0,
-            "{fixture:?} level {level}: no inactive slot in {slots}, so nothing was gated"
-        );
-        println!(
-            "{fixture:?} level {level}: {TICKS} ticks bitwise; {inactive} of {slots} slots inactive; {canonical_cells} distance cells canonical where ungated kept a stale φ"
-        );
-    }
-}
-
-/// Fresh one-step recording equals the complete GPU scheduler with two-way
-/// coupling. An authored negative speed keeps the baseline on its six-slot
-/// loop without changing Steps, CFL, numerical caps or body controls.
-#[test]
-fn gpu_flip_fresh_speed_preserves_coupled_bodies() {
-    fresh_speed_preserves_coupled_bodies(1);
-}
-
-/// The second tick of a frame takes its speed sample and obstacle bound from
-/// the host sync before it. The clock status read after each frame is that
-/// second tick's, so a one-step shortcut there proves the sync sample was used.
-#[test]
-fn gpu_flip_fresh_speed_preserves_coupled_bodies_two_ticks_a_frame() {
-    fresh_speed_preserves_coupled_bodies(2);
-}
-
-fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
-    use manifold_nodes_water::testkit::conformance::Fixture;
-    const STEP: &str = "node.gpu_flip_step";
-    const TICKS: u32 = 8;
-    fn baseline(
-        def: manifold_core::effect_graph_def::EffectGraphDef,
-    ) -> manifold_core::effect_graph_def::EffectGraphDef {
-        use manifold_core::effect_graph_def::EffectGraphWire;
-        // The runtime builds this same flattened graph, so the edit lands on
-        // the step it runs, wherever the scene groups it.
-        let mut def = manifold_core::flatten::flatten_groups(&def).expect("box scene flattens");
-        let steps: Vec<_> = def
-            .nodes
-            .iter()
-            .filter(|node| node.type_id == STEP)
-            .map(|node| node.id)
-            .collect();
-        let [step] = steps[..] else {
-            panic!("coupled proof requires exactly one GPU FLIP step")
-        };
-        let id = def
-            .nodes
-            .iter()
-            .map(|node| node.id)
-            .max()
-            .expect("box scene nodes")
-            .checked_add(1)
-            .expect("room for baseline scalar id");
-        def.nodes.push(
-            serde_json::from_value(serde_json::json!({
-                "id": id,
-                "nodeId": "full_gpu_clock",
-                "typeId": "node.value",
-                "params": {"value": {"type": "Float", "value": -1.0}}
-            }))
-            .expect("baseline negative speed scalar"),
-        );
-        def.wires
-            .retain(|wire| !(wire.to_node == step && wire.to_port == "retired_max_speed"));
-        def.wires.push(EffectGraphWire {
-            from_node: id,
-            from_port: "out".into(),
-            to_node: step,
-            to_port: "retired_max_speed".into(),
-        });
-        def
-    }
-    for fixture in [Fixture::SubmergedBox, Fixture::FloatingBox] {
-        let def = BoxRun::at_level(fixture, 0);
-        let mut automatic = BoxRun::of(def.clone(), false, false);
-        let mut full = BoxRun::of(baseline(def), false, false);
-        automatic.ticks_per_frame = ticks_per_frame;
-        full.ticks_per_frame = ticks_per_frame;
-        let (mut shortcuts, mut reacting_ticks) = (0u32, 0u32);
-        for tick in 1..=TICKS {
-            automatic.step();
-            full.step();
-            let at = format!("{fixture:?} level 0, {ticks_per_frame} ticks a frame, frame {tick}");
-            let (mut got, mut want) = (automatic.left(), full.left());
-            let reaction = &got
-                .iter()
-                .find(|(what, _)| *what == "reaction")
-                .expect("body reaction")
-                .1;
-            reacting_ticks += u32::from(reaction.iter().any(|&word| {
-                let value = f32::from_bits(word);
-                value.is_finite() && value != 0.0
-            }));
-            for (what, type_id, port) in [
-                ("full capped", STEP, "capped"),
-                ("full stats", "node.liquid_stats", "stats_out"),
-            ] {
-                got.push((what, automatic.words(type_id, port)));
-                want.push((what, full.words(type_id, port)));
-            }
-            got.push(("faces", automatic.tile_ordered("faces")));
-            want.push(("faces", full.tile_ordered("faces")));
-            for ((what, a), (expected_what, b)) in got.iter().zip(&want) {
-                assert_eq!(what, expected_what, "{at}: matching array labels");
-                assert_eq!(a.len(), b.len(), "{at}: {what} is sized differently");
-                if let Some(i) = first_differing(a, b) {
-                    panic!(
-                        "{at}: automatic {what} differs first at word {i}: {} ({}) vs full scheduler {} ({})",
-                        a[i],
-                        f32::from_bits(a[i]),
-                        b[i],
-                        f32::from_bits(b[i])
-                    );
-                }
-            }
-            let (a, b) = (
-                automatic.words(STEP, "clock_status"),
-                full.words(STEP, "clock_status"),
-            );
-            assert!(a.len() >= 8 && b.len() >= 8, "{at}: complete clock status");
-            assert_eq!(
-                &a[1..8],
-                &b[1..8],
-                "{at}: identical completed interval and clock diagnostics"
-            );
-            for (label, status) in [("automatic", &a), ("full scheduler", &b)] {
-                assert_eq!(
-                    status[2],
-                    0.0f32.to_bits(),
-                    "{at}: {label} completed the interval"
-                );
-                assert_eq!(status[5], 0, "{at}: {label} has no nonfinite clock input");
-            }
-            assert_eq!(
-                b[0],
-                0.0f32.to_bits(),
-                "{at}: baseline must retain its inactive tail slots"
-            );
-            if f32::from_bits(a[0]) > 0.0 && a[6] == 1 {
-                shortcuts += 1;
-            }
-        }
-        assert!(
-            shortcuts > 0,
-            "{fixture:?}, {ticks_per_frame} ticks a frame: a frame's last tick never took the fresh one-step path"
-        );
-        assert!(
-            reacting_ticks > 0,
-            "{fixture:?}: no nonzero finite body reaction, so coupling was not exercised"
-        );
-        println!(
-            "{fixture:?} level 0, {ticks_per_frame} ticks a frame: {TICKS} coupled frames bitwise; {shortcuts} fresh one-step final ticks; {reacting_ticks} frames with body reaction"
         );
     }
 }

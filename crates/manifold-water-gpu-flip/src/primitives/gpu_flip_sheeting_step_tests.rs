@@ -20,7 +20,9 @@ use manifold_water_liquid::primitives::liquid_stats::{
     LIQUID_STATS_WORDS, LiquidTickStats, SHEET_REFUSED_TAIL, SHEET_REFUSED_WORD,
     SOLVER_STATS_START, SOLVER_WORDS,
 };
-use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
+use manifold_water_liquid::primitives::particle_identity::{
+    BirthReservation, COUNT_OFFSET, ParticleIdentity,
+};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortCount, SortJob, SortLabels,
@@ -36,6 +38,13 @@ const SOLVER: [usize; 3] = [40; 3];
 const DT: f32 = 1.0 / 120.0;
 const RADIUS: f32 = 0.31017524 * H;
 const V0: [f32; 3] = [0.4, 0.1, -0.3];
+
+/// A particle identity: the next id, epoch 1, and the record of `live` slots in
+/// use (`[groups, 1, 1, n]` at 256 threads a group), as the state publishes it.
+fn identity_words(next_id: u32, live: usize) -> [u32; 8] {
+    let live = live as u32;
+    [next_id, 1, 0, 0, live.div_ceil(256).max(1), 1, 1, live]
+}
 
 fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     let staged = device.create_buffer_shared(buffer.size);
@@ -101,7 +110,7 @@ impl Splash {
         let mut node = GpuFlipStep::new();
         node.prepare_pipelines(&h.device);
         let particles = h.array(&records, capacity);
-        let identity = h.array::<u32>(&[next_id, 1, 0, 0, 0, 1, 1, 0], 8);
+        let identity = h.array::<u32>(&identity_words(next_id, markers.len()), 8);
         let faces = h
             .array::<FaceSample>(&[], SOLVER.map(|n| n + 1).iter().product())
             .0;
@@ -404,10 +413,24 @@ fn gpu_flip_sheeting_births_share_the_pool() {
 /// to the particles, the identity, the stats or the stage.
 #[test]
 fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
+    step_passes_with_room(4000);
+}
+
+/// A pool with room for 40 births: the reservation grants 40 and the write
+/// stops at the record's count, the rest counted as refused.
+#[test]
+fn gpu_flip_sheeting_write_stops_at_the_granted_slots() {
+    step_passes_with_room(40);
+}
+
+/// One active slot, then an inactive one, over a pool with `room` free slots
+/// past the splash's markers.
+fn step_passes_with_room(room: usize) {
     let device = manifold_gpu::testkit::test_device();
     let (markers, _, cells, dx) = sheeter::fixtures::splash();
     let h = dx as f32;
-    let capacity = markers.len() + 4000;
+    let live = markers.len();
+    let capacity = live + room;
     let records: Vec<FluidParticle> = markers
         .iter()
         .enumerate()
@@ -480,7 +503,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     let faces = vec![face; cells.into_iter().map(|n| (n + 1) as usize).product()];
     let pooled_faces = records_to_pool(&faces, cells, &[face; 8]);
     let old = shared(bytemuck::cast_slice(&pooled_faces), 32 * pooled_faces.len());
-    let identity = shared(bytemuck::cast_slice(&[5000u32, 1, 0, 0, 0, 1, 1, 0]), 32);
+    let identity = shared(bytemuck::cast_slice(&identity_words(5000, live)), 32);
     let capped = shared(&[], 4 * SOLVER_WORDS as usize);
     let mut stage = GpuSheeting::default();
     stage.prepare(&device);
@@ -495,7 +518,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
             particles: &particles,
             order: &order,
             ranges,
-            count: capacity as u32,
+            count: (&identity, COUNT_OFFSET),
             phi,
             origin: [0.0; 3],
             h,
@@ -504,7 +527,6 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
         let births = StepBirths {
             old: &old,
             identity: &identity,
-            slots: capacity as u32,
             capped: &capped,
             capped_offset: 0,
             rate: 1.0,
@@ -522,7 +544,12 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
                 scan: stage.winners(),
                 plan,
                 step_record: None,
-                params: [capacity as u32, pool_len(pool_tiles) as u32, stage.ranks(), 1],
+                params: [
+                    capacity as u32,
+                    pool_len(pool_tiles) as u32,
+                    stage.ranks(),
+                    1,
+                ],
             },
         );
         enc.compute_memory_barrier_buffers();
@@ -537,7 +564,33 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
     };
     run(&stage, &plan(0.01), &phi);
     let stats: Vec<u32> = read(stage.stats(), 4);
-    assert!(stats[1] > 100, "the active slot seeds: {stats:?}");
+    assert!(stats[0] > 100, "the active slot seeds: {stats:?}");
+    let granted = stats[0].min(room as u32);
+    assert_eq!(stats[1], granted, "as many births as the pool has room for");
+    let written = live + granted as usize;
+    // The record counts the live slots and the births granted.
+    let record = copy_out(&device, &identity);
+    assert_eq!(
+        record[4..],
+        identity_words(0, written)[4..],
+        "the identity's record after the reservation"
+    );
+    let slots = copy_out(&device, &particles);
+    let radius = |slot: usize| f32::from_bits(slots[8 * slot + 3]);
+    assert!(
+        (live..written).all(|slot| radius(slot) > 0.0),
+        "every grant is a particle"
+    );
+    assert!(
+        (written..capacity).all(|slot| radius(slot) == 0.0),
+        "nothing is written past the grant"
+    );
+    let tally = copy_out(&device, &capped);
+    assert_eq!(
+        tally[SHEET_REFUSED_TAIL as usize],
+        stats[0] - granted,
+        "the refused births"
+    );
     let snapshot = |stage: &GpuSheeting| -> Vec<Vec<u32>> {
         let mut words: Vec<Vec<u32>> = stage
             .scratch()
@@ -547,6 +600,7 @@ fn gpu_flip_sheeting_step_passes_inactive_slot_write_nothing() {
         words.push(copy_out(&device, stage.winners()));
         words.push(copy_out(&device, &particles));
         words.push(copy_out(&device, &identity));
+        words.push(copy_out(&device, &capped));
         words
     };
     let before = snapshot(&stage);
@@ -633,7 +687,7 @@ fn a_resting_pool_seeds_nothing() {
     assert_eq!(placed, 2 * BOX as usize * 2 * BOX as usize * 24);
 
     let solver = BOX as usize + 3;
-    let identity = h.array::<u32>(&[placed as u32 + 1, 1, 0, 0, 0, 1, 1, 0], 8);
+    let identity = h.array::<u32>(&identity_words(placed as u32 + 1, placed), 8);
     let faces = h.array::<FaceSample>(&[], (solver + 1).pow(3)).0;
     let tiles = h.array::<u32>(&[], 1).0;
     let capped = h.array::<u32>(&[], 2 * placed + SOLVER_WORDS as usize).0;

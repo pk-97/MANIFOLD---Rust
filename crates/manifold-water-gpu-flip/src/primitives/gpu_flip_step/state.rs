@@ -1,4 +1,4 @@
-//! The step state's install, storage reservation and commit mask.
+//! The step state's install, storage reservation and slot record.
 
 use super::*;
 use manifold_water_liquid::tile_storage::pool_len;
@@ -8,13 +8,6 @@ impl StepState {
     pub(super) fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Pipelines::new(device));
-        }
-        if self.mask_pipeline.is_none() {
-            self.mask_pipeline = Some(device.create_compute_pipeline(
-                MASK_SHADER,
-                "commit_mask",
-                "gpu_flip.commit_mask",
-            ));
         }
         self.sorter.prepare_pooled(device);
         self.identity_ops.prepare(device);
@@ -43,31 +36,10 @@ impl StepState {
             zeros.zero_fill();
             self.zeros = Some(zeros);
         }
-        let saved_particle_bytes = slots.max(1) * size_of::<FluidParticle>() as u64;
-        if self
-            .saved_particles
-            .as_ref()
-            .is_none_or(|buffer| buffer.size < saved_particle_bytes)
-        {
-            self.saved_particles = Some(allocate(device, saved_particle_bytes)?);
+        if self.slot_record.is_none() {
+            self.slot_record = Some(allocate_zeroed(device, SLOT_RECORD_BYTES)?);
         }
         let pool = pool_tiles(cells);
-        let saved_distance_bytes = pool_cell_bytes(pool);
-        if self
-            .saved_distance
-            .as_ref()
-            .is_none_or(|buffer| buffer.size < saved_distance_bytes)
-        {
-            self.saved_distance = Some(allocate(device, saved_distance_bytes)?);
-        }
-        let saved_capped_bytes = slots.max(1) * 8 + u64::from(SOLVER_WORDS) * 4;
-        if self
-            .saved_capped
-            .as_ref()
-            .is_none_or(|buffer| buffer.size < saved_capped_bytes)
-        {
-            self.saved_capped = Some(allocate(device, saved_capped_bytes)?);
-        }
         // One range per element of a pooled field: the sort is keyed on the
         // pool index of each cell.
         self.sorter.reserve_keys(device, pool_len(pool))?;
@@ -110,32 +82,32 @@ impl StepState {
         Ok(())
     }
 
-    pub(super) fn commit_mask(
-        &self,
-        enc: &mut GpuEncoder,
-        plan: &GpuBuffer,
-        target: &GpuBuffer,
-        saved: &GpuBuffer,
-        label: &'static str,
-    ) {
-        let words = (target.size.min(saved.size) / 4).min(u64::from(u32::MAX)) as u32;
-        if words == 0 {
-            return;
-        }
-        let params = [words, 0, 0, 0];
+    /// The tick's first slot, before its clock: the slot record becomes the
+    /// identity's `[groups, 1, 1, n]`, which a reset or a recovery rewrote
+    /// since the last tick.
+    pub(super) fn load_slot(&self, enc: &mut GpuEncoder, identity: &GpuBuffer) {
+        let pipes = self.pipelines.as_ref().expect("step pipelines prepared");
+        let record = self.slot_record.as_ref().expect("slot record reserved");
         enc.dispatch_compute(
-            self.mask_pipeline.as_ref().expect("mask pipeline prepared"),
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&params),
-                },
-                buffer(1, plan),
-                buffer(2, target),
-                buffer(3, saved),
-            ],
-            groups(u64::from(words)),
-            label,
+            &pipes.slot_load,
+            &[buffer(42, record), buffer(47, identity)],
+            [1, 1, 1],
+            "gpu_flip.step.slot_load",
+        );
+        enc.compute_memory_barrier_buffers();
+    }
+
+    /// After each slot's clock plan: the slot record is the identity's when
+    /// the plan has time to step, else it holds no groups, so the slot's
+    /// particle passes launch nothing.
+    pub(super) fn open_slot(&self, enc: &mut GpuEncoder, plan: &GpuBuffer, identity: &GpuBuffer) {
+        let pipes = self.pipelines.as_ref().expect("step pipelines prepared");
+        let record = self.slot_record.as_ref().expect("slot record reserved");
+        enc.dispatch_compute(
+            &pipes.slot_open,
+            &[buffer(42, record), buffer(46, plan), buffer(47, identity)],
+            [1, 1, 1],
+            "gpu_flip.step.slot_open",
         );
         enc.compute_memory_barrier_buffers();
     }

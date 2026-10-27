@@ -1,6 +1,7 @@
 //! Live field placement and influence ownership, without golden recording.
 use super::super::whitewater_obstacle_source::WhitewaterSource;
 use super::super::whitewater_step::empty_slot;
+use super::fused_tests::gpu::identity_record;
 use super::fused_tests::pooled_distance;
 use super::*;
 use manifold_node_engine::particles::FluidParticle;
@@ -28,6 +29,7 @@ fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
 struct Fixture {
     shape: StepShape,
     particles: GpuBuffer,
+    identity: GpuBuffer,
     solid: GpuBuffer,
     distance: GpuBuffer,
     tiles: GpuBuffer,
@@ -102,6 +104,7 @@ impl Fixture {
         Self {
             shape,
             particles: shared(device, bytemuck::cast_slice(&particles)),
+            identity: identity_record(device, EMITTERS as u32),
             solid: shared(
                 device,
                 bytemuck::cast_slice(&vec![0.1f32; cell_total(nodes) as usize]),
@@ -118,6 +121,7 @@ impl Fixture {
         StepInputs {
             motion: None,
             particles: &self.particles,
+            identity: &self.identity,
             solid: &self.solid,
             obstacle_source: Some(&self.source),
             faces: FaceSource::Axes(self.faces.each_ref()),
@@ -130,7 +134,6 @@ impl Fixture {
     fn frame(&self, epoch: u32) -> StepFrame {
         StepFrame {
             shape: self.shape,
-            count: Some(EMITTERS as u32),
             ticks: 1,
             dt: 0.015625,
             epoch,

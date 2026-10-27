@@ -269,6 +269,15 @@ pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     // The frame no longer publishes a face grid; the whitewater reads the
     // step's pooled faces (`retire_dense_liquid_faces`).
     ("node.liquid_frame", "face_valid_layers"),
+    // GPU FLIP passes count their particles on the GPU (the identity
+    // record's slots in use); the CPU counts and the one-step shortcut's
+    // retired speed and obstacle bound are gone.
+    ("node.gpu_flip_step", "count"),
+    ("node.gpu_flip_step", "retired_max_speed"),
+    ("node.gpu_flip_step", "initial_obstacle_speed"),
+    ("node.liquid_stats", "count"),
+    ("node.liquid_frame", "count"),
+    ("node.whitewater_step", "count"),
     // The sky's sun disc follows the Sun light wired into the bake's `sun`
     // input; project load rewires saved scenes (`sky_sun::migrate_world_sun`).
     ("node.bake_environment", "sun_x"),

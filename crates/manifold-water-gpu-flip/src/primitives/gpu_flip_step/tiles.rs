@@ -26,7 +26,7 @@ pub(crate) fn ring_max(band: u32) -> u32 {
 pub(crate) const POOL_BUDGET_BYTES: u64 = 3 << 29;
 
 /// Bytes per fine cell of every pooled field: the step's own (the lattice's
-/// cell arrays and face grids and the saved distance), the solver's vectors
+/// cell arrays and face grids), the solver's vectors
 /// and rows, the sheeting's arrays and the sheet distance's two fields. The
 /// bodies hold none (their partials are per tile).
 pub(crate) fn pooled_bytes_per_cell() -> u64 {
@@ -247,8 +247,8 @@ impl TileTable {
 }
 
 /// The table's first half for this step, from the particles: nearness per
-/// tile (`tiles_clear`, then `tiles_mark` over the first `count` slots of
-/// `particles`), rings, then the pool's allocation (`tiles_allocate`: tiles
+/// tile (`tiles_clear`, then `tiles_mark` over the slots in use, which
+/// `record` names, of `particles`), rings, then the pool's allocation (`tiles_allocate`: tiles
 /// past `alloc_ring` freed, absent ones within it allocated, rings 0 and 1
 /// first) and the new tiles set to their canonical values. The sort keys on
 /// the table this leaves. An inactive slot of `plan` keeps the last active
@@ -260,7 +260,7 @@ pub(super) fn encode_tile_allocation(
     l: &LatticeBuffers,
     t: &TileTable,
     particles: &GpuBuffer,
-    count: u32,
+    record: &GpuBuffer,
     plan: &GpuBuffer,
 ) {
     let tiles = groups(tile_total(params.n));
@@ -275,15 +275,17 @@ pub(super) fn encode_tile_allocation(
         tiles,
         "gpu_flip.step.tiles.clear",
     );
-    enc.dispatch_compute(
+    enc.dispatch_compute_indirect(
         &pipes.tiles_mark,
         &[
             uniform(params),
             buffer(2, particles),
             buffer(27, &t.near),
             buffer(46, plan),
+            buffer(42, record),
         ],
-        groups(u64::from(count)),
+        record,
+        0,
         "gpu_flip.step.tiles.mark",
     );
     enc.dispatch_compute(

@@ -78,9 +78,13 @@ struct FluidParticle {
 
 @group(0) @binding(0) var<storage, read> marker_values: array<FluidParticle>;
 @group(0) @binding(1) var<storage, read_write> marker_partials: array<vec4<f32>>;
-@group(0) @binding(2) var<uniform> marker_reduce_params: ReduceParams;
 @group(0) @binding(7) var<storage, read_write> marker_histogram_atomic: array<atomic<u32>>;
 @group(0) @binding(20) var<storage, read_write> marker_outliers_atomic: array<atomic<u32>>;
+// The marker passes' slots in use, written by `marker_args`: [groups, 1, 1, n].
+// `groups` is the number of 64-thread groups over `n` slots, at least one, or
+// zero when this phase's reduction is off. A marker pass reads no slot at or
+// past `n`.
+@group(0) @binding(30) var<storage, read> marker_triple: array<u32>;
 
 var<workgroup> speeds: array<f32, 64>;
 var<workgroup> invalids: array<u32, 64>;
@@ -109,13 +113,13 @@ fn reduce_group(lid: u32, count: u32, value: f32, bad: u32) -> vec4<f32> {
 @compute @workgroup_size(64)
 fn reduce_marker(@builtin(local_invocation_id) local: vec3<u32>,
                  @builtin(workgroup_id) group: vec3<u32>) {
-    if !reduction_active(marker_reduce_params.phase) { return; }
     let lid = local.x;
     let gid = group.x;
     let idx = gid * 64u + lid;
+    let count = marker_triple[3];
     var speed = 0.0;
     var bad = 0u;
-    if (idx < marker_reduce_params.count) {
+    if (idx < count) {
         let particle = marker_values[idx];
         var v = particle.velocity;
         let event_index = current_event_index();
@@ -131,7 +135,7 @@ fn reduce_marker(@builtin(local_invocation_id) local: vec3<u32>,
             bad = 1u;
         }
     }
-    let reduced = reduce_group(lid, marker_reduce_params.count, speed, bad);
+    let reduced = reduce_group(lid, count, speed, bad);
     if (lid == 0u) { marker_partials[group.x] = reduced; }
 }
 
@@ -140,7 +144,7 @@ fn reduce_marker(@builtin(local_invocation_id) local: vec3<u32>,
 // the thresholds depend on the reduced maximum marker speed.
 fn classify_marker_lane(gid: vec3<u32>) {
     let idx = gid.x;
-    if idx >= marker_reduce_params.count {
+    if idx >= marker_triple[3] {
         return;
     }
     let particle = marker_values[idx];
@@ -239,7 +243,7 @@ fn remove_marker_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let idx = gid.x;
-    if idx >= marker_reduce_params.count {
+    if idx >= marker_triple[3] {
         return;
     }
     let particle = marker_values_rw[idx];
@@ -356,36 +360,84 @@ fn reduction_active(phase: u32) -> bool {
         select(state.remaining > 0.0, state.step_dt > 0.0, phase == 1u);
 }
 
-@compute @workgroup_size(64)
-fn reduce_partial(@builtin(local_invocation_id) local: vec3<u32>,
-                  @builtin(workgroup_id) group: vec3<u32>) {
-    if !reduction_active(partial_params.phase) { return; }
-    let lid = local.x;
-    let gid = group.x;
+struct ArgsParams {
+    capacity: u32,
+    phase: u32,
+    clear: u32,
+    _pad: u32,
+};
+@group(0) @binding(31) var<storage, read_write> marker_triple_out: array<u32>;
+// A record of the slots in use: [groups, 1, 1, n], n at word 3.
+@group(0) @binding(32) var<storage, read> count_record: array<u32>;
+@group(0) @binding(33) var<uniform> args_params: ArgsParams;
+@group(0) @binding(34) var<storage, read_write> obstacle_cleared: array<vec4<f32>>;
+@group(0) @binding(35) var<storage, read_write> source_cleared: array<vec4<f32>>;
+
+// Runs before each marker reduction. The marker passes dispatch from the
+// triple it writes: `n` slots (capped at the clock's capacity) in 64-thread
+// groups, at least one so an empty population still reduces to a zero
+// aggregate, and none when the phase is off, as an inactive slot's is. With
+// `clear` it also zeroes the obstacle and source aggregates, which a
+// population that skips its reduction must leave empty.
+@compute @workgroup_size(1)
+fn marker_args() {
+    let n = min(count_record[3], args_params.capacity);
+    var groups = 0u;
+    if reduction_active(args_params.phase) {
+        groups = max((n + 63u) / 64u, 1u);
+    }
+    marker_triple_out[0] = groups;
+    marker_triple_out[1] = 1u;
+    marker_triple_out[2] = 1u;
+    marker_triple_out[3] = n;
+    if args_params.clear != 0u {
+        obstacle_cleared[0] = vec4<f32>(0.0);
+        source_cleared[0] = vec4<f32>(0.0);
+    }
+}
+
+// One group's maximum of `count` partials, written to `partial_output[gid]`.
+fn reduce_partials(lid: u32, gid: u32, count: u32) {
     let idx = gid * 64u + lid;
     var speed = 0.0;
     var bad = 0u;
-    if (idx < partial_params.count) {
+    if (idx < count) {
         let v = partial_values[idx];
         speed = v.x;
         bad = u32(v.y != 0.0);
     }
-    speeds[lid] = speed;
-    invalids[lid] = bad;
-    workgroupBarrier();
-    var width = 32u;
-    loop {
-        if (lid < width) {
-            speeds[lid] = max(speeds[lid], speeds[lid + width]);
-            invalids[lid] = max(invalids[lid], invalids[lid + width]);
-        }
-        workgroupBarrier();
-        if (width == 1u) { break; }
-        width = width / 2u;
+    let reduced = reduce_group(lid, count, speed, bad);
+    if (lid == 0u) { partial_output[gid] = reduced; }
+}
+
+@compute @workgroup_size(64)
+fn reduce_partial(@builtin(local_invocation_id) local: vec3<u32>,
+                  @builtin(workgroup_id) group: vec3<u32>) {
+    if !reduction_active(partial_params.phase) { return; }
+    reduce_partials(local.x, group.x, partial_params.count);
+}
+
+struct LevelParams {
+    level: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+};
+@group(0) @binding(36) var<uniform> marker_level: LevelParams;
+
+// The marker reduction's later levels. They dispatch directly, with groups
+// shaped for the capacity, so the length of level `k` comes from the slots in
+// use: the first level leaves ceil(n / 64) partials, level `k` reduces
+// ceil(n / 64^k) of them. No level-0 groups means this phase's reduction is off.
+@compute @workgroup_size(64)
+fn reduce_partial_marker(@builtin(local_invocation_id) local: vec3<u32>,
+                         @builtin(workgroup_id) group: vec3<u32>) {
+    if marker_triple[0] == 0u { return; }
+    var count = marker_triple[3];
+    for (var k = 0u; k < marker_level.level; k = k + 1u) {
+        count = (count + 63u) / 64u;
     }
-    if (lid == 0u) {
-        partial_output[gid] = vec4<f32>(speeds[0], f32(invalids[0]), f32(partial_params.count), 0.0);
-    }
+    reduce_partials(local.x, group.x, count);
 }
 
 @group(0) @binding(11) var<storage, read> marker_result: array<vec4<f32>>;

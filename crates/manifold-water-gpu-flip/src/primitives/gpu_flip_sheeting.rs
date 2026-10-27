@@ -14,7 +14,8 @@
 //! `_updateSheetSeeding`): selection with the fill-rate draw and the rank
 //! scan (`encode_draw`), the caller's identity reservation over
 //! [`GpuSheeting::winners`], then `encode_write` puts each birth after the
-//! live prefix in the saved velocity at its seed.
+//! live prefix in the saved velocity at its seed, as many as the reservation
+//! granted: the record's `n` less the live end.
 //!
 //! Parity contract. Exact: cell and half-cell indexing (the f64 floor for
 //! results inside +-2^30, see the shader's `exact_floor`; beyond that and for
@@ -90,7 +91,8 @@ struct Params {
     nx: u32,
     ny: u32,
     nz: u32,
-    count: u32,
+    /// The tile pool's capacity P (gpu_flip_sheeting.wgsl ts_pool_tiles).
+    pool_tiles: u32,
     bx: u32,
     by: u32,
     bz: u32,
@@ -117,10 +119,9 @@ struct Params {
     rate: f32,
     tick: u32,
     substep: u32,
-    slots: u32,
-    /// The tile pool's capacity P (gpu_flip_sheeting.wgsl ts_pool_tiles).
-    pool_tiles: u32,
+    pad0: u32,
     pad1: u32,
+    pad2: u32,
 }
 
 /// Bytes per pooled cell excluding padded bucket rows: two sheet flags (the
@@ -171,8 +172,13 @@ pub(crate) struct SheetInputs<'a> {
     pub order: &'a GpuBuffer,
     /// One range per cell of the sort, its bins being the solver cells.
     pub ranges: &'a GpuBuffer,
-    /// Slots the marker pass visits; a slot at radius 0 is skipped.
-    pub count: u32,
+    /// The slots in use, on the GPU: a record `[groups, 1, 1, n]` at a byte
+    /// offset of a buffer (a particle identity's at `COUNT_OFFSET`, or a
+    /// step's own), `groups` at 256 threads. The marker pass dispatches from
+    /// it and visits the first `n` slots, skipping one at radius 0; no pass
+    /// reads a slot at or past `n`. In the step the reservation raises `n` by
+    /// the births it grants, which `encode_write` reads.
+    pub count: (&'a GpuBuffer, u64),
     /// The signed distance to the surface at the cell centres, a pooled cell
     /// field, true to `SHEET_DISTANCE_CELLS` deep (gpu_flip_sheet_distance).
     pub phi: &'a GpuBuffer,
@@ -190,8 +196,6 @@ pub(crate) struct StepBirths<'a> {
     /// liquid_state's birth identity, reserved by the caller between the
     /// draw and the write.
     pub identity: &'a GpuBuffer,
-    /// The pool's slots: births past them are dropped and counted.
-    pub slots: u32,
     /// The step's `capped` buffer and the byte offset of its solver words:
     /// the stage adds the births the pool refused to the tick's tally there.
     pub capped: &'a GpuBuffer,
@@ -376,7 +380,7 @@ impl GpuSheeting {
             inputs,
             &self.buffers.as_ref().expect("sheeting reserved")[9],
             None,
-            Some((&probe, inputs.count)),
+            Some(&probe),
             0..0,
             table,
             pool_tiles,
@@ -470,7 +474,7 @@ impl GpuSheeting {
         inputs: &SheetInputs<'_>,
         plan: &GpuBuffer,
         step: Option<&StepBirths<'_>>,
-        probe: Option<(&GpuComputePipeline, u32)>,
+        probe: Option<&GpuComputePipeline>,
         entries: std::ops::Range<usize>,
         table: &GpuBuffer,
         pool_tiles: u32,
@@ -498,7 +502,7 @@ impl GpuSheeting {
             nx: n[0],
             ny: n[1],
             nz: n[2],
-            count: inputs.count,
+            pool_tiles,
             bx: n[0].div_ceil(2),
             by: n[1].div_ceil(2),
             bz: n[2].div_ceil(2),
@@ -525,9 +529,9 @@ impl GpuSheeting {
             rate: step.map_or(1.0, |s| s.rate),
             tick: step.map_or(0, |s| s.tick),
             substep: step.map_or(0, |s| s.substep),
-            slots: step.map_or(0, |s| s.slots),
-            pool_tiles,
+            pad0: 0,
             pad1: 0,
+            pad2: 0,
         };
         fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
             GpuBinding::Buffer {
@@ -566,25 +570,41 @@ impl GpuSheeting {
                 offset: step.map_or(0, |s| s.capped_offset),
             },
             buffer(20, table),
+            GpuBinding::Buffer {
+                binding: 21,
+                buffer: inputs.count.0,
+                offset: inputs.count.1,
+            },
         ];
         let cells = n[0] * n[1] * n[2];
         let groups = |work: u32| [work.div_ceil(256).max(1), 1, 1];
-        if let Some((pipeline, work)) = probe {
-            enc.dispatch_compute(pipeline, &bindings, groups(work), "gpu_flip.sheeting.probe");
+        // One thread per slot in use: dispatched from the record.
+        let over_slots = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, label| {
+            enc.dispatch_compute_indirect(
+                pipeline,
+                &bindings,
+                inputs.count.0,
+                inputs.count.1,
+                label,
+            );
+        };
+        if let Some(pipeline) = probe {
+            over_slots(enc, pipeline, "gpu_flip.sheeting.probe");
             return;
         }
         let ranks = ranks(n) as u32;
+        // The threads of each entry; `None` is one per slot in use.
         let work = [
-            cells,
-            inputs.count,
-            cells,
-            cells,
-            cells,
-            ranks / 64,
-            8 * cells,
-            ranks,
-            ranks,
-            ranks,
+            Some(cells),
+            None,
+            Some(cells),
+            Some(cells),
+            Some(cells),
+            Some(ranks / 64),
+            Some(8 * cells),
+            Some(ranks),
+            Some(ranks),
+            Some(ranks),
         ];
         let labels = [
             "gpu_flip.sheeting.clear",
@@ -599,7 +619,12 @@ impl GpuSheeting {
             "gpu_flip.sheeting.write",
         ];
         for i in entries {
-            enc.dispatch_compute(&self.pipelines[i], &bindings, groups(work[i]), labels[i]);
+            match work[i] {
+                Some(threads) => {
+                    enc.dispatch_compute(&self.pipelines[i], &bindings, groups(threads), labels[i])
+                }
+                None => over_slots(enc, &self.pipelines[i], labels[i]),
+            }
             enc.compute_memory_barrier_buffers();
             if i == 7 {
                 self.scan.encode_labelled_gated(

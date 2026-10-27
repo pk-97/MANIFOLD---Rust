@@ -319,28 +319,6 @@ impl Run {
         )
     }
 
-    /// The force hook: the domain's uniform acceleration (Gravity X and Y),
-    /// m/s², from the next frame on. A uniform force field and gravity enter
-    /// the step identically, at every face.
-    #[cfg(test)]
-    pub(super) fn set_gravity(&mut self, x: f64, y: f64) {
-        let domain = node_named(&self.graph, "domain");
-        self.graph
-            .set_param(
-                domain,
-                "gravity_x",
-                manifold_node_engine::parameters::ParamValue::Float(x as f32),
-            )
-            .expect("gravity_x");
-        self.graph
-            .set_param(
-                domain,
-                "gravity",
-                manifold_node_engine::parameters::ParamValue::Float(y as f32),
-            )
-            .expect("gravity");
-    }
-
     /// Switch the executor's encode replay; the fill frame already ran
     /// (it ticks no step), every later frame honours the switch.
     #[cfg(test)]
@@ -353,8 +331,11 @@ impl Run {
         self.exec.replay_stats()
     }
 
+    /// The state's live particles: the identity record's count (word 7).
+    /// Slots past it hold whatever was there before, by design.
     pub(super) fn particles(&self) -> Vec<FluidParticle> {
-        self.read("state", "out", self.scene.particles() as usize)
+        let live = self.read::<u32>("state", "identity", 8)[7];
+        self.read("state", "out", live as usize)
     }
 
     /// The last tick's water cells, 1 or 0: φ < 0 over the particles it
@@ -992,140 +973,104 @@ fn gpu_flip_replay_changes_nothing() {
     );
 }
 
+/// The scene with the step's clock status readable after every frame.
 #[cfg(test)]
-fn run_with_retired_speed(scene: WaterScene, enabled: bool) -> Run {
+fn run_with_clock_status(scene: WaterScene) -> Run {
     let mut registry = PrimitiveRegistry::with_builtin();
     register_substep_test_nodes(&mut registry);
     let mut graph = water_def(scene)
         .into_graph(&registry, &Default::default())
         .expect("slot-cost water graph");
     let step = node_named(&graph, STEP_NODE);
-    if !enabled {
-        // An unwired custom graph retains the original adaptive loop.
-        graph
-            .disconnect((step, "retired_max_speed"))
-            .expect("retired speed wire");
-    }
     graph
         .add_external_output(step, "clock_status")
         .expect("clock status read");
     Run::with_graph(scene, graph)
 }
 
-/// The cost of recording inactive slots, with completed time and all final
-/// state proved identical. Readbacks happen after `frame`'s timing ends.
+/// An idle slot writes nothing. The step always encodes its full count of
+/// substeps and the clock plan gates the ones it leaves no time for, so a
+/// still pool the clock finishes in its first slot comes out of three ticks
+/// bit for bit the same with one slot encoded as with all six: the particles,
+/// the pooled φ and faces with their slot table, the stats and the solver
+/// words, at two sizes.
 #[test]
-fn gpu_flip_one_active_slot_matches_six_recorded_slots() {
-    const WARMUP: usize = 8;
-    const MEASURED: usize = 12;
-    fn median(values: &mut [f64]) -> f64 {
-        values.sort_by(f64::total_cmp);
-        (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
+fn gpu_flip_idle_slots_write_nothing() {
+    use manifold_water_gpu_flip::primitives::gpu_flip_step::set_encoded_slots;
+    struct FullCount;
+    impl Drop for FullCount {
+        fn drop(&mut self) {
+            set_encoded_slots(None);
+        }
     }
-    fn completed_one_step(run: &Run, n: usize, frame: usize, slots: u32) {
-        let status: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
-        let last_dt = if slots == 1 { 1.0f32 / 60.0 } else { 0.0 };
-        assert_eq!(
-            status[0],
-            last_dt.to_bits(),
-            "{n}³ tick {frame}, {slots} recorded slots: final slot proves the loop override took effect"
-        );
-        assert_eq!(
-            status[1],
-            (1.0f32 / 60.0).to_bits(),
-            "{n}³ tick {frame}, {slots} recorded slots: exact completed time"
-        );
-        assert_eq!(
-            status[2],
-            0.0f32.to_bits(),
-            "{n}³ tick {frame}, {slots} recorded slots: interval is complete"
-        );
-        assert_eq!(
-            status[6], 1,
-            "{n}³ tick {frame}, {slots} recorded slots: fixture must accept exactly one step"
-        );
-        assert_eq!(
-            (status[4], status[5]),
-            (0, 0),
-            "{n}³ tick {frame}, {slots} recorded slots: no cap or nonfinite clock input"
-        );
-    }
-    for n in [32, 64] {
+    let _reset = FullCount;
+    const TICKS: usize = 3;
+    for n in [16, 24] {
         let scene = WaterScene::still_pool(n).with_steps(1);
-        let mut one = run_with_retired_speed(scene, true);
-        let mut six = run_with_retired_speed(scene, false);
-        one.set_encode_replay(true);
-        six.set_encode_replay(true);
-        let mut one_gpu = Vec::with_capacity(MEASURED);
-        let mut one_cpu = Vec::with_capacity(MEASURED);
-        let mut six_gpu = Vec::with_capacity(MEASURED);
-        let mut six_cpu = Vec::with_capacity(MEASURED);
-        let mut warm_replay = [manifold_gpu::GpuReplayStats::default(); 2];
-        for frame in 0..WARMUP + MEASURED {
-            // Alternate which identical run gets the first GPU submission.
-            let (one_time, six_time) = if frame % 2 == 0 {
-                (one.timed_frame(), six.timed_frame())
-            } else {
-                let six_time = six.timed_frame();
-                (one.timed_frame(), six_time)
-            };
-            for (label, gpu_ms) in [("one", one_time.0), ("six", six_time.0)] {
-                assert!(
-                    gpu_ms.is_finite() && gpu_ms > 0.0,
-                    "{n}³ tick {frame}, {label}: GPU chunk span must be positive and finite, got {gpu_ms}"
+        let mut one = run_with_clock_status(scene);
+        let mut six = run_with_clock_status(scene);
+        for tick in 0..TICKS {
+            set_encoded_slots(Some(1));
+            one.frame();
+            set_encoded_slots(None);
+            six.frame();
+            let at = format!("{n}³ tick {tick}");
+            for (label, run, last_dt) in
+                [("one slot", &one, 1.0f32 / 60.0), ("six slots", &six, 0.0)]
+            {
+                let status: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
+                assert_eq!(
+                    status[0],
+                    last_dt.to_bits(),
+                    "{at}, {label}: the last encoded slot"
                 );
+                assert_eq!(
+                    status[1],
+                    (1.0f32 / 60.0).to_bits(),
+                    "{at}, {label}: the whole interval is stepped"
+                );
+                assert_eq!(status[2], 0.0f32.to_bits(), "{at}, {label}: nothing left");
+                assert_eq!(status[6], 1, "{at}, {label}: the clock needs one step");
             }
-            if frame >= WARMUP {
-                one_gpu.push(one_time.0);
-                one_cpu.push(one_time.1);
-                six_gpu.push(six_time.0);
-                six_cpu.push(six_time.1);
-            }
-            completed_one_step(&one, n, frame, if frame == 0 { 6 } else { 1 });
-            completed_one_step(&six, n, frame, 6);
-            let (op, sp) = (one.particles(), six.particles());
-            for (label, particles) in [("one", &op), ("six", &sp)] {
-                let stats = particle_stats(particles);
+            let count = one.read::<u32>(STEP_NODE, "identity_out", 8)[7] as usize;
+            for (what, a, b) in [
+                ("published particles", one.particles(), six.particles()),
+                (
+                    "step particles",
+                    one.read::<FluidParticle>(STEP_NODE, "out", count),
+                    six.read::<FluidParticle>(STEP_NODE, "out", count),
+                ),
+            ] {
+                assert!(
+                    bytemuck::cast_slice::<_, u8>(&a) == bytemuck::cast_slice::<_, u8>(&b),
+                    "{at}: {what} differ"
+                );
+                let stats = particle_stats(&a);
                 assert_eq!(
                     (stats.live, stats.bad),
                     (one.seeded, 0),
-                    "{n}³ tick {frame}, {label}: every particle remains live and finite"
+                    "{at}: every {what} record stays live and finite"
                 );
             }
-            assert!(
-                bytemuck::cast_slice::<_, u8>(&op) == bytemuck::cast_slice::<_, u8>(&sp),
-                "{n}³ tick {frame}: particle bits differ"
-            );
-            let (of, sf) = (one.faces(), six.faces());
+            let ((of, od, ot), (sf, sd, st)) = (one.pooled_outputs(), six.pooled_outputs());
             assert!(
                 bytemuck::cast_slice::<_, u8>(&of) == bytemuck::cast_slice::<_, u8>(&sf),
-                "{n}³ tick {frame}: final face bits differ"
+                "{at}: the pooled faces differ"
             );
-            let os: Vec<u32> = one.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
-            let ss: Vec<u32> = six.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
-            assert_eq!(os, ss, "{n}³ tick {frame}: full liquid stats differ");
-            let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
-            let oc: Vec<u32> = one.read(STEP_NODE, "capped", capped_words);
-            let sc: Vec<u32> = six.read(STEP_NODE, "capped", capped_words);
-            assert_eq!(oc, sc, "{n}³ tick {frame}: full capped words differ");
-            if frame + 1 == WARMUP {
-                warm_replay = [one.replay_stats(), six.replay_stats()];
-            }
-        }
-        println!(
-            "GPU FLIP {n}³ slot cost, {WARMUP} warmup + {MEASURED} measured ticks/run: median one GPU {:.3} ms CPU {:.3} ms; six GPU {:.3} ms CPU {:.3} ms",
-            median(&mut one_gpu),
-            median(&mut one_cpu),
-            median(&mut six_gpu),
-            median(&mut six_cpu),
-        );
-        for (label, run, warm) in [("one", &one, warm_replay[0]), ("six", &six, warm_replay[1])] {
-            let replay = run.replay_stats();
-            println!("GPU FLIP {n}³ {label} slots replay: after warmup {warm:?}; final {replay:?}");
             assert!(
-                replay.replayed > warm.replayed
-                    && replay.segments_replayed > warm.segments_replayed,
-                "{n}³ {label}: measured ticks must exercise ordinary encode replay"
+                bytemuck::cast_slice::<_, u8>(&od) == bytemuck::cast_slice::<_, u8>(&sd),
+                "{at}: the pooled distance differs"
+            );
+            assert_eq!(ot, st, "{at}: the slot table differs");
+            let stats = |run: &Run| -> Vec<u32> {
+                run.read("stats", "stats_out", LIQUID_STATS_WORDS as usize)
+            };
+            assert_eq!(stats(&one), stats(&six), "{at}: the stats differ");
+            let words = 2 * count + SOLVER_WORDS as usize;
+            assert_eq!(
+                one.read::<u32>(STEP_NODE, "capped", words),
+                six.read::<u32>(STEP_NODE, "capped", words),
+                "{at}: the capped and solver words differ"
             );
         }
     }
@@ -1153,10 +1098,10 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
         (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
     }
     manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_solid_velocity(false);
-    for (n, fresh) in [(16, true), (16, false), (64, true)] {
+    for n in [16, 64] {
         let scene = WaterScene::still_pool(n).with_steps(1);
-        let mut optimized = run_with_retired_speed(scene, fresh);
-        let mut original = run_with_retired_speed(scene, fresh);
+        let mut optimized = run_with_clock_status(scene);
+        let mut original = run_with_clock_status(scene);
         optimized.set_encode_replay(true);
         original.set_encode_replay(true);
         let mut optimized_gpu = Vec::with_capacity(MEASURED);
@@ -1174,12 +1119,12 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
             for (label, time) in [("clear", optimized_time), ("six passes", original_time)] {
                 assert!(
                     time.0.is_finite() && time.0 > 0.0,
-                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite GPU chunk span, got {}",
+                    "{n}³ tick {frame}, {label}: positive finite GPU chunk span, got {}",
                     time.0
                 );
                 assert!(
                     time.1.is_finite() && time.1 > 0.0,
-                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite CPU encode time, got {}",
+                    "{n}³ tick {frame}, {label}: positive finite CPU encode time, got {}",
                     time.1
                 );
             }
@@ -1191,38 +1136,27 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
             }
             let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
             let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
-            assert_eq!(
-                a, b,
-                "{n}³ fresh {fresh} tick {frame}: complete clock status differs"
-            );
-            let final_dt = if fresh && frame > 0 {
-                1.0f32 / 60.0
-            } else {
-                0.0
-            };
+            assert_eq!(a, b, "{n}³ tick {frame}: complete clock status differs");
             assert_eq!(
                 a[0],
-                final_dt.to_bits(),
-                "{n}³ fresh {fresh} tick {frame}: expected recording path"
+                0.0f32.to_bits(),
+                "{n}³ tick {frame}: the last recorded slot is inactive"
             );
             assert_eq!(
                 a[1],
                 (1.0f32 / 60.0).to_bits(),
-                "{n}³ fresh {fresh} tick {frame}: exact completed time"
+                "{n}³ tick {frame}: exact completed time"
             );
             assert_eq!(
                 a[2],
                 0.0f32.to_bits(),
-                "{n}³ fresh {fresh} tick {frame}: no unfinished interval"
+                "{n}³ tick {frame}: no unfinished interval"
             );
-            assert_eq!(
-                a[6], 1,
-                "{n}³ fresh {fresh} tick {frame}: exactly one active step"
-            );
+            assert_eq!(a[6], 1, "{n}³ tick {frame}: exactly one active step");
             assert_eq!(
                 (a[4], a[5]),
                 (0, 0),
-                "{n}³ fresh {fresh} tick {frame}: no cap or nonfinite input"
+                "{n}³ tick {frame}: no cap or nonfinite input"
             );
             let optimized_step: Vec<FluidParticle> =
                 optimized.read(STEP_NODE, "out", scene.particles() as usize);
@@ -1239,14 +1173,14 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
                 assert_eq!(
                     bytemuck::cast_slice::<_, u32>(&a),
                     bytemuck::cast_slice::<_, u32>(&b),
-                    "{n}³ fresh {fresh} tick {frame}: {what} bits differ"
+                    "{n}³ tick {frame}: {what} bits differ"
                 );
                 for particles in [&a, &b] {
                     let stats = particle_stats(particles);
                     assert_eq!(
                         (stats.live, stats.bad),
                         (optimized.seeded, 0),
-                        "{n}³ fresh {fresh} tick {frame}: every {what} record remains live and finite"
+                        "{n}³ tick {frame}: every {what} record remains live and finite"
                     );
                 }
             }
@@ -1254,27 +1188,21 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
             assert_eq!(
                 bytemuck::cast_slice::<_, u32>(&a),
                 bytemuck::cast_slice::<_, u32>(&b),
-                "{n}³ fresh {fresh} tick {frame}: face bits differ"
+                "{n}³ tick {frame}: face bits differ"
             );
             let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
             let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
-            assert_eq!(
-                a, b,
-                "{n}³ fresh {fresh} tick {frame}: full liquid stats differ"
-            );
+            assert_eq!(a, b, "{n}³ tick {frame}: full liquid stats differ");
             let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
             let a: Vec<u32> = optimized.read(STEP_NODE, "capped", capped_words);
             let b: Vec<u32> = original.read(STEP_NODE, "capped", capped_words);
-            assert_eq!(
-                a, b,
-                "{n}³ fresh {fresh} tick {frame}: full capped words differ"
-            );
+            assert_eq!(a, b, "{n}³ tick {frame}: full capped words differ");
             if frame + 1 == WARMUP {
                 warm_replay = [optimized.replay_stats(), original.replay_stats()];
             }
         }
         println!(
-            "GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {WARMUP} warmup + {MEASURED} measured ticks/run: median clear GPU {:.3} ms CPU {:.3} ms; six passes GPU {:.3} ms CPU {:.3} ms",
+            "GPU FLIP {n}³ no-body solid velocity, {WARMUP} warmup + {MEASURED} measured ticks/run: median clear GPU {:.3} ms CPU {:.3} ms; six passes GPU {:.3} ms CPU {:.3} ms",
             median(&mut optimized_gpu),
             median(&mut optimized_cpu),
             median(&mut original_gpu),
@@ -1286,12 +1214,12 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
         ] {
             let replay = run.replay_stats();
             println!(
-                "GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {label} replay: after warmup {warm:?}; final {replay:?}"
+                "GPU FLIP {n}³ no-body solid velocity, {label} replay: after warmup {warm:?}; final {replay:?}"
             );
             assert!(
                 replay.replayed > warm.replayed
                     && replay.segments_replayed > warm.segments_replayed,
-                "{n}³ fresh {fresh}, {label}: measured ticks must exercise ordinary encode replay"
+                "{n}³ {label}: measured ticks must exercise ordinary encode replay"
             );
         }
     }
@@ -1364,10 +1292,10 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
     }
     manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_indirect_pockets(false);
     let scene = WaterScene::still_pool(16).with_steps(2);
-    // Unwired retired speed keeps all six numerical slots: each interval
-    // records active work, an inactive tail, then active work next interval.
-    let mut segmented = run_with_retired_speed(scene, false);
-    let mut indirect = run_with_retired_speed(scene, false);
+    // All six numerical slots are recorded: each interval records active
+    // work, an inactive tail, then active work next interval.
+    let mut segmented = run_with_clock_status(scene);
+    let mut indirect = run_with_clock_status(scene);
     segmented.set_encode_replay(true);
     indirect.set_encode_replay(true);
     let mut warm = None;
@@ -1466,21 +1394,17 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
         values.sort_by(f64::total_cmp);
         (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
     }
-    fn compare(optimized: &Run, original: &Run, fresh: bool, frame: usize) {
+    fn compare(optimized: &Run, original: &Run, frame: usize) {
         let scene = optimized.scene;
-        let at = format!(
-            "{}³ Steps {} fresh {fresh} tick {frame}",
-            scene.pressure.n, scene.steps
-        );
+        let at = format!("{}³ Steps {} tick {frame}", scene.pressure.n, scene.steps);
         let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
         let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
         assert_eq!(a, b, "{at}: complete clock status differs");
-        let final_dt = if fresh && scene.steps == 1 && frame > 0 {
-            1.0f32 / 60.0
-        } else {
-            0.0
-        };
-        assert_eq!(a[0], final_dt.to_bits(), "{at}: expected recording path");
+        assert_eq!(
+            a[0],
+            0.0f32.to_bits(),
+            "{at}: the last recorded slot is inactive"
+        );
         assert_eq!(
             a[1],
             (1.0f32 / 60.0).to_bits(),
@@ -1530,10 +1454,10 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
         assert!(a == b, "{at}: full capped words differ");
     }
     manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_dense_extend(false);
-    for (n, steps, fresh) in [(16, 1, true), (16, 2, false), (64, 1, false)] {
+    for (n, steps) in [(16, 1), (16, 2), (64, 1)] {
         let scene = WaterScene::still_pool(n).with_steps(steps);
-        let mut optimized = run_with_retired_speed(scene, fresh);
-        let mut original = run_with_retired_speed(scene, fresh);
+        let mut optimized = run_with_clock_status(scene);
+        let mut original = run_with_clock_status(scene);
         optimized.set_encode_replay(true);
         original.set_encode_replay(true);
         let mut optimized_gpu = Vec::with_capacity(MEASURED);
@@ -1565,13 +1489,13 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
                 original_gpu.push(original_time.0);
                 original_cpu.push(original_time.1);
             }
-            compare(&optimized, &original, fresh, frame);
+            compare(&optimized, &original, frame);
             if frame + 1 == WARMUP {
                 warm_replay = [optimized.replay_stats(), original.replay_stats()];
             }
         }
         println!(
-            "GPU FLIP {n}³ inactive extension, Steps {steps} fresh {fresh}, {WARMUP} warmup + {MEASURED} measured ticks/run: median gated GPU {:.3} ms CPU {:.3} ms; dense GPU {:.3} ms CPU {:.3} ms",
+            "GPU FLIP {n}³ inactive extension, Steps {steps}, {WARMUP} warmup + {MEASURED} measured ticks/run: median gated GPU {:.3} ms CPU {:.3} ms; dense GPU {:.3} ms CPU {:.3} ms",
             median(&mut optimized_gpu),
             median(&mut optimized_cpu),
             median(&mut original_gpu),
@@ -1591,16 +1515,14 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
                 "{n}³ Steps {steps}, {label}: measured ticks must exercise ordinary encode replay"
             );
         }
-        if !fresh {
-            let gated_segments =
-                optimized.replay_stats().segments_replayed - warm_replay[0].segments_replayed;
-            let dense_segments =
-                original.replay_stats().segments_replayed - warm_replay[1].segments_replayed;
-            assert!(
-                gated_segments > dense_segments,
-                "{n}³ Steps {steps}: extension layers must use gated replay segments"
-            );
-        }
+        let gated_segments =
+            optimized.replay_stats().segments_replayed - warm_replay[0].segments_replayed;
+        let dense_segments =
+            original.replay_stats().segments_replayed - warm_replay[1].segments_replayed;
+        assert!(
+            gated_segments > dense_segments,
+            "{n}³ Steps {steps}: extension layers must use gated replay segments"
+        );
         if n == 16 && steps == 2 {
             optimized.set_encode_replay(false);
             original.set_encode_replay(false);
@@ -1608,7 +1530,7 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
             manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_dense_extend(false);
             optimized.timed_frame();
             original_frame(&mut original);
-            compare(&optimized, &original, fresh, WARMUP + MEASURED);
+            compare(&optimized, &original, WARMUP + MEASURED);
             for (label, run, before) in [
                 ("indirect", &optimized, direct_before[0]),
                 ("dense", &original, direct_before[1]),
@@ -1625,81 +1547,6 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
             }
         }
     }
-}
-
-#[test]
-fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
-    let scene = WaterScene::still_pool(32).with_steps(1);
-    let mut optimized = run_with_retired_speed(scene, true);
-    let mut original = run_with_retired_speed(scene, false);
-    let mut fast_steps = 0;
-    let mut adaptive_steps = 0;
-    for frame in 0..10 {
-        for run in [&mut optimized, &mut original] {
-            if frame == 3 {
-                // Throw the pool sideways fast enough to require CFL
-                // subdivision in the following interval, after its stats
-                // retire. Pulled upward, native water hangs from the floor.
-                run.set_gravity(4000.0, -G);
-            }
-            if frame == 5 {
-                run.set_gravity(0.0, -G);
-            }
-            if frame == 6 {
-                run.fps = 30.0;
-            }
-            if frame == 8 {
-                let step = node_named(&run.graph, STEP_NODE);
-                run.graph
-                    .set_param(
-                        step,
-                        "steps",
-                        manifold_node_engine::parameters::ParamValue::Float(3.0),
-                    )
-                    .unwrap();
-            }
-            run.frame();
-        }
-        let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
-        let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
-        assert_eq!(
-            &a[1..],
-            &b[1..],
-            "frame {frame}: completed time and CFL decisions"
-        );
-        assert_eq!(
-            a[2],
-            0.0f32.to_bits(),
-            "frame {frame}: no unfinished interval"
-        );
-        assert_eq!(a[5], 0, "frame {frame}: finite clock input");
-        fast_steps += usize::from(a[0] != 0 && a[6] == 1);
-        if (3..6).contains(&frame) {
-            adaptive_steps += usize::from(a[6] > 1);
-        }
-        if frame >= 8 {
-            assert!(a[6] >= 3, "authored minimum Steps remains active");
-        }
-        let (ap, bp) = (optimized.particles(), original.particles());
-        assert!(
-            bytemuck::cast_slice::<_, u8>(&ap) == bytemuck::cast_slice::<_, u8>(&bp),
-            "frame {frame}: particle bits differ"
-        );
-        assert_eq!(particle_stats(&ap).bad, 0, "frame {frame}: finite water");
-        let (af, bf) = (optimized.faces(), original.faces());
-        assert!(
-            bytemuck::cast_slice::<_, u8>(&af) == bytemuck::cast_slice::<_, u8>(&bf),
-            "frame {frame}: face bits differ"
-        );
-        let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
-        let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
-        assert_eq!(a, b, "frame {frame}: full liquid stats differ");
-    }
-    assert!(fast_steps > 0, "fixture must use the one-step shortcut");
-    assert!(
-        adaptive_steps > 0,
-        "the changed force must require fresh CFL subdivision"
-    );
 }
 
 /// The Dam Break with the step's Sheet Fill Rate set, when given.

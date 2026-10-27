@@ -77,12 +77,22 @@ fn live_plan(device: &GpuDevice, step_dt: f32) -> GpuBuffer {
     shared(device, bytemuck::cast_slice(&words))
 }
 
+/// A record of `n` slots in use, as a step writes it: `[groups, 1, 1, n]`.
+fn slots_record(device: &GpuDevice, n: u32) -> GpuBuffer {
+    shared(
+        device,
+        bytemuck::cast_slice(&[n.div_ceil(256).max(1), 1, 1, n]),
+    )
+}
+
 /// Markers sorted by cell (stable), and the order and ranges the stage reads.
 struct Sorted {
     particles: GpuBuffer,
     order: GpuBuffer,
     sorter: ParticleSorter,
     count: u32,
+    /// The slots in use: every marker.
+    record: GpuBuffer,
 }
 
 fn sort(device: &GpuDevice, markers: &[[f32; 3]], cells: [u32; 3], h: f32) -> Sorted {
@@ -133,6 +143,7 @@ fn sort(device: &GpuDevice, markers: &[[f32; 3]], cells: [u32; 3], h: f32) -> So
         order,
         sorter,
         count: records.len() as u32,
+        record: slots_record(device, records.len() as u32),
     }
 }
 
@@ -161,7 +172,7 @@ fn run(
         particles: &sorted.particles,
         order: &sorted.order,
         ranges: sorted.sorter.ranges().expect("ranges"),
-        count: sorted.count,
+        count: (&sorted.record, 0),
         phi,
         origin: [0.0; 3],
         h,
@@ -344,7 +355,7 @@ fn matches_port(
         particles: &sorted.particles,
         order: &sorted.order,
         ranges: sorted.sorter.ranges().expect("ranges"),
-        count: sorted.count,
+        count: (&sorted.record, 0),
         phi: &phi_buffer,
         origin: [0.0; 3],
         h,
@@ -525,6 +536,7 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
             .collect();
         let particles = shared(&device, bytemuck::cast_slice(&records));
         let zeros = shared(&device, &vec![0u8; 4 * 64000]);
+        let record = slots_record(&device, records.len() as u32);
         let pool = pool(&device, cells);
         let mut stage = GpuSheeting::default();
         stage.prepare(&device);
@@ -536,7 +548,7 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
             particles: &particles,
             order: &zeros,
             ranges: &zeros,
-            count: records.len() as u32,
+            count: (&record, 0),
             phi: &zeros,
             origin: [0.0; 3],
             h,
@@ -679,7 +691,7 @@ fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
                 particles: &sorted.particles,
                 order: &sorted.order,
                 ranges: sorted.sorter.ranges().unwrap(),
-                count: sorted.count,
+                count: (&sorted.record, 0),
                 phi: &phi_buffer,
                 origin: [0.0; 3],
                 h,
@@ -692,6 +704,45 @@ fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
         let flags = from_pool(&copy_out(&device, &stage.scratch()[0]), cells);
         let got: Vec<usize> = (0..flags.len()).filter(|&c| flags[c] != 0).collect();
         assert_eq!(got, want, "h {h}: thin cells differ");
+
+        // The marker pass covers the record's first n slots: with the last thin
+        // marker's slot and everything after it left out, its cell raises no flag.
+        let order = copy_out(&device, &sorted.order);
+        let thin_at = |slot: usize| trace.thin[order[slot] as usize];
+        let n = (0..markers.len())
+            .rev()
+            .find(|&slot| thin_at(slot))
+            .unwrap();
+        let mut want_n: Vec<usize> = (0..n)
+            .filter(|&slot| thin_at(slot))
+            .map(|slot| cell(&markers[order[slot] as usize]))
+            .collect();
+        want_n.sort_unstable();
+        assert!(
+            want_n.len() < thin,
+            "h {h}: the count leaves a thin marker out"
+        );
+        let short = slots_record(&device, n as u32);
+        let mut enc = device.create_encoder("sheeting detect short");
+        stage.encode_detect(
+            &mut enc,
+            &SheetInputs {
+                particles: &sorted.particles,
+                order: &sorted.order,
+                ranges: sorted.sorter.ranges().unwrap(),
+                count: (&short, 0),
+                phi: &phi_buffer,
+                origin: [0.0; 3],
+                h,
+                threshold: FILL_THRESHOLD,
+            },
+            &pool.table,
+            pool.tiles,
+        );
+        enc.commit_and_wait_completed();
+        let flags = from_pool(&copy_out(&device, &stage.scratch()[0]), cells);
+        let got: Vec<usize> = (0..flags.len()).filter(|&c| flags[c] != 0).collect();
+        assert_eq!(got, want_n, "h {h}: a marker past the count raised a flag");
         eprintln!(
             "SHEETING WALK h {h}: {thin} of {} markers thin, cells agree",
             markers.len()
@@ -716,7 +767,7 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
                 particles: &dummy,
                 order: &dummy,
                 ranges: &dummy,
-                count: 0,
+                count: (&dummy, 0),
                 phi: &dummy,
                 origin: [0.0; 3],
                 h: 1.0,
@@ -760,7 +811,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
     use manifold_gpu::GpuReplayCache;
     use manifold_water_liquid::fluid_particles::FaceSample;
     use manifold_water_liquid::primitives::particle_identity::{
-        BirthReservation, ParticleIdentity,
+        BirthReservation, COUNT_OFFSET, ParticleIdentity,
     };
 
     let device = manifold_gpu::testkit::test_device();
@@ -814,6 +865,18 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
     let plan = live_plan(&device, 0.01);
     let mut ids = ParticleIdentity::default();
     ids.prepare(&device);
+    // The identity before each tick: the next id, epoch 1, and the record of
+    // the slots in use, the sorted markers.
+    let identity_words = [
+        5000u32,
+        1,
+        0,
+        0,
+        sorted.count.div_ceil(256).max(1),
+        1,
+        1,
+        sorted.count,
+    ];
     // Reference/direct, rows/direct, rows/replayed, reference/replayed.
     let mut lanes: Vec<_> = (0..4)
         .map(|lane| {
@@ -827,7 +890,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             (
                 stage,
                 shared(&device, bytemuck::cast_slice(&initial)),
-                shared(&device, bytemuck::cast_slice(&[5000u32, 1, 0, 0, 0, 1, 1, 0])),
+                shared(&device, bytemuck::cast_slice(&identity_words)),
                 (lane >= 2).then(GpuReplayCache::default),
             )
         })
@@ -860,13 +923,13 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             // SAFETY: sized shared buffers, no GPU work in flight.
             unsafe {
                 particles.write(0, bytemuck::cast_slice(&initial));
-                identity.write(0, bytemuck::cast_slice(&[5000u32, 1, 0, 0, 0, 1, 1, 0]));
+                identity.write(0, bytemuck::cast_slice(&identity_words));
             }
             let inputs = SheetInputs {
                 particles,
                 order: &sorted.order,
                 ranges,
-                count: sorted.count,
+                count: (&*identity, COUNT_OFFSET),
                 phi: &phi,
                 origin: [0.0; 3],
                 h,
@@ -875,7 +938,6 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
             let births = StepBirths {
                 old: &old,
                 identity,
-                slots: capacity,
                 capped: &capped,
                 capped_offset: 0,
                 rate,

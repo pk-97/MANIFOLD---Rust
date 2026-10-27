@@ -1,6 +1,7 @@
 //! `node.gpu_flip_step` as a primitive: install, run and outputs.
 
 use super::*;
+use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 
 impl Primitive for GpuFlipStep {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
@@ -61,7 +62,7 @@ impl Primitive for GpuFlipStep {
                 .find(|(name, _)| *name == "particles")
                 .map(|&(_, n)| n.saturating_mul(2).saturating_add(SOLVER_WORDS)),
             "clock_status" => Some(8),
-            "identity_out" => Some(4),
+            "identity_out" => Some((IDENTITY_BYTES / 4) as u32),
             _ => None,
         }
     }
@@ -133,12 +134,6 @@ impl Primitive for GpuFlipStep {
             ctx.error(format!("{NAME}: the capped array holds fewer than two words a particle slot and {SOLVER_WORDS} solver words"));
             return;
         }
-        let count = match ctx.inputs.scalar("count") {
-            Some(ParamValue::Float(count)) if count.is_finite() => {
-                (count.max(0.0) as u32).min(capacity)
-            }
-            _ => capacity,
-        };
         let steps = ctx.scalar_or_param("steps", 1.0).round().clamp(1.0, 64.0);
         // A graph saved without the domain's interval wire runs on the project's Sim Rate.
         let interval_duration =
@@ -208,7 +203,11 @@ impl Primitive for GpuFlipStep {
             return;
         }
         let zeros = self.state.zeros.clone().expect("zeros prepared");
-        let Some(identity) = ctx.inputs.array("identity").filter(|b| b.size >= 16) else {
+        let Some(identity) = ctx
+            .inputs
+            .array("identity")
+            .filter(|b| b.size >= IDENTITY_BYTES)
+        else {
             ctx.error("GPU FLIP Step: persistent liquid_state identity is required");
             return;
         };
@@ -301,7 +300,7 @@ impl Primitive for GpuFlipStep {
         }
         let region_rows =
             (regions.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
-        let mut step = Step {
+        let step = Step {
             identity,
             params: StepParams {
                 n: cells,
@@ -357,7 +356,6 @@ impl Primitive for GpuFlipStep {
             particles,
             out,
             capped,
-            count,
             forces: field.forces.unwrap_or(&zeros),
             impulses: field.impulses.unwrap_or(&zeros),
             bodies,
@@ -380,38 +378,11 @@ impl Primitive for GpuFlipStep {
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
             .unwrap_or(0)
             .saturating_mul(size_of::<LiquidBody>() as u64);
-        // LiquidState supplies -1 unless its fenced stats describe these exact
-        // incoming particles. Later intervals in the same frame, skipped
-        // readbacks, reset/recovery, and an unwired custom graph take the full
-        // GPU-adaptive path. Forces applied inside this step do not change the
-        // first scheduler decision: it reads the incoming markers. Dynamic
-        // body reactions later in the step do not retroactively change that
-        // decision. Domain's initial obstacle bound includes current linear,
-        // angular and external acceleration, with reaction cleared before this
-        // first interval. A missing bound retains the full adaptive loop.
-        let obstacle_speed = if obstacle_count == 0 {
-            0.0
-        } else {
-            ctx.scalar_or_param("initial_obstacle_speed", -1.0)
-        };
-        let one_step = tick_index > 0
-            && steps == 1.0
-            && live_hit_count == 0
-            && source_count == 0
-            && one_step_cfl_safe(
-                ctx.scalar_or_param("retired_max_speed", -1.0),
-                obstacle_speed,
-                interval_duration as f32,
-                h,
-            );
-        let history_slots = if one_step {
-            1
-        } else {
-            manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count
-        };
+        // Every tick encodes the most substeps the clock can schedule; its
+        // plan gates the ones it leaves no time for on the GPU.
+        let history_slots = encoded_slots(history_slots(live_hit_count));
         log::debug!(target: "gpu_flip::schedule",
-            "tick={tick_index} slots={history_slots} interval={interval_duration} h={h} marker={} obstacle={obstacle_speed} minimum={steps} hits={live_hit_count} sources={source_count}",
-            ctx.scalar_or_param("retired_max_speed", -1.0));
+            "tick={tick_index} slots={history_slots} interval={interval_duration} h={h} minimum={steps} hits={live_hit_count} sources={source_count}");
         ctx.outputs
             .set_scalar("substep_count", ParamValue::Float(history_slots as f32));
         ctx.outputs.set_scalar(
@@ -457,6 +428,11 @@ impl Primitive for GpuFlipStep {
             constant_force: [gravity[0], gravity[1], gravity[2], 0.0],
         };
         let mut last_clock_plan = zeros.clone();
+        let slot_record = self
+            .state
+            .slot_record
+            .clone()
+            .expect("slot record reserved");
         let encoded_steps = history_slots;
         // Stage tags only name profiled spans; an unprofiled encoder ignores
         // them, and they touch no dispatch, binding or replay key.
@@ -466,7 +442,6 @@ impl Primitive for GpuFlipStep {
             clock.begin_frame(gpu.native_enc, &clock_params);
         }
         for k in 0..encoded_steps as i32 {
-            step.count = if k > 0 { out_slots } else { count };
             let particles_for_step = if k > 0 { out } else { particles };
             let params = StepParams {
                 step_in_tick: k,
@@ -475,13 +450,16 @@ impl Primitive for GpuFlipStep {
             };
             gpu.native_enc.set_profile_tag("gpu_flip.stage.clock");
             {
+                if k == 0 {
+                    self.state.load_slot(gpu.native_enc, identity);
+                }
                 let plan_buffer = {
                     let clock = self.state.clock.as_ref().expect("live clock prepared");
                     let plan = clock.dispatch(
                         gpu.native_enc,
                         GpuFlipClockInputs {
                             marker_particles: particles_for_step,
-                            marker_count: step.count,
+                            marker_count: &slot_record,
                             obstacle_vertices: clock_obstacles,
                             obstacle_count,
                             source_vertices: clock_sources,
@@ -503,6 +481,7 @@ impl Primitive for GpuFlipStep {
                     );
                     plan.buffer().clone()
                 };
+                self.state.open_slot(gpu.native_enc, &plan_buffer, identity);
                 let iteration = Step {
                     params,
                     particles: particles_for_step,
@@ -517,39 +496,6 @@ impl Primitive for GpuFlipStep {
                     return;
                 }
                 gpu.native_enc.set_profile_tag("gpu_flip.stage.finish");
-                self.state.commit_mask(
-                    gpu.native_enc,
-                    &plan_buffer,
-                    out,
-                    self.state
-                        .saved_particles
-                        .as_ref()
-                        .expect("particle mask prepared"),
-                    "gpu_flip.step.mask.particles",
-                );
-                // Public faces and body reactions already gate every write
-                // on the actual clock plan. Inactive slots leave them intact;
-                // they need neither an active-step backup nor a restore pass.
-                self.state.commit_mask(
-                    gpu.native_enc,
-                    &plan_buffer,
-                    &self.state.lattice.as_ref().expect("lattice prepared").phi,
-                    self.state
-                        .saved_distance
-                        .as_ref()
-                        .expect("distance mask prepared"),
-                    "gpu_flip.step.mask.distance",
-                );
-                self.state.commit_mask(
-                    gpu.native_enc,
-                    &plan_buffer,
-                    step.capped,
-                    self.state
-                        .saved_capped
-                        .as_ref()
-                        .expect("capped mask prepared"),
-                    "gpu_flip.step.mask.capped",
-                );
                 self.state.history.capture(
                     gpu.native_enc,
                     k as u32,

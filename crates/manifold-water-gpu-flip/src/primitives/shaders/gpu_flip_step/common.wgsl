@@ -63,7 +63,7 @@ struct Params {
     box_offset: f32,
     // subtract: 1 reads `phi` for the free surface, 0 keeps air at zero.
     ghost: u32,
-    // Particles the move writes.
+    // Particle slots the pool holds: the births' bound.
     particles: u32,
     // Records `shapes` holds.
     shapes_len: u32,

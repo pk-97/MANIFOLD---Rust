@@ -292,10 +292,11 @@ fn gpu_flip_step_order_dispatch_extents() {
     for count in [300u32, 512, 20_000] {
         let groups = u64::from(count.div_ceil(64));
         // Both vec4 reduction scratch buffers, three maxima, histogram,
-        // outlier counters and plan. Histogram index is clamped below six.
+        // outlier counters, plan and the marker triple. Histogram index is
+        // clamped below six.
         assert_eq!(
             super::gpu_flip_clock::GpuFlipClock::held_bytes(count, 1, 1),
-            2 * groups * 16 + 3 * 16 + 64 * 4 + 16 + 48
+            2 * groups * 16 + 3 * 16 + 64 * 4 + 16 + 48 + 16
         );
     }
     // Removal binds one CellRange per cell and writes only start..start+count.

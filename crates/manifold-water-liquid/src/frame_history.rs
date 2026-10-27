@@ -8,6 +8,7 @@
 //! have completed on the GPU.
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
+use manifold_node_engine::particles::FluidParticle;
 
 use crate::clock::display_blend;
 
@@ -295,8 +296,9 @@ impl HistoryCore {
     }
 
     /// Retire completed publications in publication order. `metadata` reads
-    /// a completed slot's words (count, identity, accepted, 0). Runs are
-    /// assigned here, from retired metadata only.
+    /// a completed slot's words (count, identity, accepted, high-water). Runs
+    /// are assigned here, from retired metadata only; the high-water is the
+    /// publication's own and never read here.
     pub fn retire(
         &mut self,
         complete: impl Fn(u64) -> bool,
@@ -437,6 +439,14 @@ impl SlotStorage for GpuBuffer {
     }
 }
 
+/// The words a new slot's metadata starts with for `particle_bytes` of
+/// particles: count, identity and accepted zero, and the high-water mark at
+/// the slot count, so the first publication writes every record, live or zero.
+fn fresh_metadata(particle_bytes: u64) -> [u32; 4] {
+    let slots = particle_bytes / std::mem::size_of::<FluidParticle>() as u64;
+    [0, 0, 0, slots as u32]
+}
+
 /// One slot's storage, allocated whole before its first publication.
 pub struct SlotBuffers<B = GpuBuffer> {
     pub particles: Option<B>,
@@ -506,14 +516,16 @@ impl<B: SlotStorage> FrameHistory<B> {
     /// whole under one `admit`. With no slot (budget exhausted) or a refused
     /// allocation the endpoint is skipped once and `Err` names a refusal.
     /// A failed allocation keeps the slot's previous storage and leaves it
-    /// Free; nothing partial is installed.
+    /// Free; nothing partial is installed. `create(bytes, words)` makes
+    /// `bytes` of storage starting with `words`: none for particles and
+    /// fields, `fresh_metadata` for the metadata.
     pub fn acquire_with(
         &mut self,
         time: f64,
         particle_bytes: u64,
         fields: &[u64; FIELDS],
         admit: impl FnOnce(u64) -> Result<(), String>,
-        mut create: impl FnMut(u64) -> Result<B, String>,
+        mut create: impl FnMut(u64, &[u32]) -> Result<B, String>,
     ) -> Result<Option<usize>, String> {
         for (capacity, &bytes) in self.field_capacity.iter_mut().zip(fields) {
             *capacity = (*capacity).max(bytes);
@@ -547,13 +559,13 @@ impl<B: SlotStorage> FrameHistory<B> {
             })
             .and_then(|()| {
                 let mut fresh = SlotBuffers {
-                    particles: Some(create(particle_bytes)?),
-                    metadata: Some(create(16)?),
+                    particles: Some(create(particle_bytes, &[])?),
+                    metadata: Some(create(16, &fresh_metadata(particle_bytes))?),
                     ..SlotBuffers::default()
                 };
                 for (field, &bytes) in fresh.fields.iter_mut().zip(fields) {
                     if bytes > 0 {
-                        *field = Some(create(bytes)?);
+                        *field = Some(create(bytes, &[])?);
                     }
                 }
                 Ok(fresh)
@@ -597,7 +609,15 @@ impl FrameHistory<GpuBuffer> {
                 )
                 .map_err(|e| e.to_string())
             },
-            |bytes| device.try_create_buffer_shared(bytes),
+            |bytes, words| {
+                let buffer = device.try_create_buffer_shared(bytes)?;
+                if !words.is_empty() {
+                    // SAFETY: new shared buffer of at least these words, not yet
+                    // visible to the GPU.
+                    unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
+                }
+                Ok(buffer)
+            },
         )
     }
 
@@ -1046,7 +1066,7 @@ mod tests {
             64,
             &fields,
             |_| Err("no memory".into()),
-            |b| Ok(Bytes(b)),
+            |b, _| Ok(Bytes(b)),
         );
         assert!(refused.is_err());
         assert_eq!(
@@ -1059,7 +1079,7 @@ mod tests {
         );
         // A partial allocation installs nothing.
         let mut made = 0;
-        let partial = history.acquire_with(2.0, 64, &fields, ok, |b| {
+        let partial = history.acquire_with(2.0, 64, &fields, ok, |b, _| {
             made += 1;
             if made == 2 {
                 Err("device refused".into())
@@ -1074,14 +1094,15 @@ mod tests {
         );
         // A slot that exists keeps its storage when its regrowth fails.
         let slot = history
-            .acquire_with(3.0, 64, &fields, ok, |b| Ok(Bytes(b)))
+            .acquire_with(3.0, 64, &fields, ok, |b, _| Ok(Bytes(b)))
             .unwrap()
             .expect("slot");
         history.core.begin(slot, 3.0, 0);
         history.core.fail(slot, 0);
         history.core.reclaim(|_| true);
         assert_eq!(history.core.state(slot), SlotState::Free);
-        let grown = history.acquire_with(4.0, 128, &fields, ok, |_| Err("device refused".into()));
+        let grown =
+            history.acquire_with(4.0, 128, &fields, ok, |_, _| Err("device refused".into()));
         assert!(grown.is_err());
         assert_eq!(history.slot(slot).particles.as_ref().map(|b| b.0), Some(64));
         assert_eq!(history.core.state(slot), SlotState::Free);
@@ -1090,7 +1111,7 @@ mod tests {
         for frame in 5..5 + H_MAX as u64 + 3 {
             let t = frame as f64;
             history.core.retire(|stamp| stamp == 0, |_| None);
-            if let Ok(Some(slot)) = history.acquire_with(t, 64, &fields, ok, |b| Ok(Bytes(b))) {
+            if let Ok(Some(slot)) = history.acquire_with(t, 64, &fields, ok, |b, _| Ok(Bytes(b))) {
                 history.core.begin(slot, t, frame);
             }
             assert!(!history.core.wants_publication(t));
@@ -1107,6 +1128,45 @@ mod tests {
             6,
             "the counter spans epochs"
         );
+    }
+
+    /// A new slot's metadata starts with its high-water at the slot count; a
+    /// reused slot keeps the words its last publication left.
+    #[test]
+    fn frame_history_new_slot_starts_with_its_whole_storage_to_clear() {
+        let mut history: FrameHistory<Bytes> = FrameHistory::default();
+        history.core.set_layout(layout(1));
+        let fields = [0; FIELDS];
+        let mut metadata = Vec::new();
+        let mut made = |bytes: u64, words: &[u32]| {
+            if bytes == 16 {
+                metadata.push(words.to_vec());
+            } else {
+                assert!(words.is_empty(), "only the metadata starts with words");
+            }
+            Ok(Bytes(bytes))
+        };
+        // 100 and 3000 records: slot counts that are not tile sizes.
+        let first = history
+            .acquire_with(1.0, 100 * 32, &fields, |_| Ok(()), &mut made)
+            .unwrap()
+            .expect("slot");
+        history.core.begin(first, 1.0, 0);
+        let second = history
+            .acquire_with(2.0, 3000 * 32, &fields, |_| Ok(()), &mut made)
+            .unwrap()
+            .expect("slot");
+        assert_ne!(first, second);
+        history.core.begin(second, 2.0, 0);
+        history.core.fail(first, 0);
+        history.core.reclaim(|_| true);
+        // The first slot is Free again and fits: it is reused untouched.
+        let reused = history
+            .acquire_with(3.0, 100 * 32, &fields, |_| Ok(()), &mut made)
+            .unwrap()
+            .expect("slot");
+        assert_eq!(reused, first);
+        assert_eq!(metadata, [[0, 0, 0, 100], [0, 0, 0, 3000]]);
     }
 
     #[test]

@@ -18,6 +18,7 @@ use manifold_water_liquid::frame_history::{
 };
 use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::primitives::particle_publication::{ParticlePublication, Publication};
 
 /// Whitewater class inputs and the selected frame's copies, by class.
@@ -46,7 +47,7 @@ const PROVIDED: [&str; PROVIDED_PORTS] = [
 manifold_node_engine::primitive! {
     name: LiquidFrame,
     type_id: "node.liquid_frame",
-    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: every frame that ends on a new simulated tick publishes a compact copy sorted by persistent nonzero birth id into a retained history slot, with the retired live count and a cleared tail; frames A and B are the retired pair bracketing the display time, with its blend and span. Publishes the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. The whitewater classes foam_in, bubble_in, spray_in and dust_in per frame as frame B's foam_b, bubble_b, spray_b and dust_b. A tick whose stats flag a non-finite record is never shown.",
+    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: every frame that ends on a new simulated tick publishes a compact copy of the slots in use, sorted by persistent nonzero birth id, into a retained history slot, with the retired live count and a cleared tail; frames A and B are the retired pair bracketing the display time, with its blend and span. Publishes the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. The whitewater classes foam_in, bubble_in, spray_in and dust_in per frame as frame B's foam_b, bubble_b, spray_b and dust_b. A tick whose stats flag a non-finite record is never shown.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
@@ -54,7 +55,6 @@ manifold_node_engine::primitive! {
         solid: Array(f32) optional,
         foam_in: Array(FluidParticle) optional, bubble_in: Array(FluidParticle) optional,
         spray_in: Array(FluidParticle) optional, dust_in: Array(FluidParticle) optional,
-        count: ScalarF32 optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -79,7 +79,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: std::borrow::Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Reads node.liquid_state's out and stats after the region; count comes from the fill, and the lattice, closed faces, simulation_time, display_time and epoch from the liquid's domain; GPU FLIP always publishes the native padded grid and takes solid from node.liquid_solid_distance sampled on the domain mesh_min/mesh_nodes outputs with mesh_wall_inset; the lattice inputs retain the authored scalar contract; the whitewater inputs from liquid_state's foam/bubble/spray/dust_particles, read back through foam_b..dust_b by node.interpolate_particle_frames as particles_b with this node's blend and span. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms and whitewater read any solver unchanged. identity_a/b carry each accepted frame identity epoch. Domain reset, identity renumbering and growth start a new run; a pair never straddles one. presented_time is the time the pair samples (t_A + blend × span); publications_skipped counts endpoints that found no history slot. Publication preserves solver storage order.",
+    composition_notes: "Reads node.liquid_state's out, stats and identity after the region; the identity's record says how many of out's slots are in use, and the lattice, closed faces, simulation_time, display_time and epoch from the liquid's domain; GPU FLIP always publishes the native padded grid and takes solid from node.liquid_solid_distance sampled on the domain mesh_min/mesh_nodes outputs with mesh_wall_inset; the lattice inputs retain the authored scalar contract; the whitewater inputs from liquid_state's foam/bubble/spray/dust_particles, read back through foam_b..dust_b by node.interpolate_particle_frames as particles_b with this node's blend and span. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms and whitewater read any solver unchanged. identity_a/b carry each accepted frame identity epoch. Domain reset, identity renumbering and growth start a new run; a pair never straddles one. presented_time is the time the pair samples (t_A + blend × span); publications_skipped counts endpoints that found no history slot. Publication preserves solver storage order.",
     examples: [],
     picker: { label: "Liquid Frame", category: Atom },
     summary: "Hands a simulated particle liquid to the liquid surface, one frame per simulation tick.",
@@ -205,7 +205,6 @@ impl Primitive for LiquidFrame {
             return;
         };
         let surface = lattice.surface();
-        let count = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
         let closed_faces = ctx
             .scalar_or_param("closed_faces", 63.0)
             .round()
@@ -223,9 +222,12 @@ impl Primitive for LiquidFrame {
                 transport: ctx.played(),
                 dropped: f64::from(ctx.scalar_or_param("dropped_seconds", 0.0)),
             });
+        let record = std::mem::size_of::<FluidParticle>() as u64;
         let particles = ctx.inputs.array("particles");
         let stats = ctx.inputs.array("stats");
         let identity = ctx.inputs.array("identity");
+        // Every slot the state holds: the history keeps room for all of them.
+        let slots = particles.map_or(0, |particles| (particles.size / record) as u32);
         let solid_in = ctx.inputs.array("solid");
         if let Some(solid) = solid_in
             && solid.size != surface.solid_bytes()
@@ -266,7 +268,7 @@ impl Primitive for LiquidFrame {
             fields,
         };
         // Placeholders take the size a slot would give the port.
-        let particle_bytes = u64::from(self.history.core.capacity_for(count))
+        let particle_bytes = u64::from(self.history.core.capacity_for(slots))
             * std::mem::size_of::<FluidParticle>() as u64;
         let field = |f: usize| if fields[f] > 0 { fields[f] } else { 4 };
         let sizes = [
@@ -317,11 +319,10 @@ impl Primitive for LiquidFrame {
             self.solid_key = Some(solid_key);
         }
 
-        let record = std::mem::size_of::<FluidParticle>() as u64;
         let ready = particles
             .zip(stats)
             .filter(|(_, stats)| stats.size >= u64::from(LIQUID_STATS_WORDS) * 4)
-            .filter(|_| identity.is_some_and(|b| b.size >= 16));
+            .filter(|_| identity.is_some_and(|b| b.size >= IDENTITY_BYTES));
         if let Some((particles, stats)) = ready
             && self.history.core.wants_publication(simulation_time)
         {
@@ -334,7 +335,6 @@ impl Primitive for LiquidFrame {
                     refused = Some(format!("Liquid Frame: {error}. Lower Resolution."));
                 }
                 Ok(Some(slot)) => {
-                    let count = count.min((particles.size / record) as u32);
                     let target = self.history.slot(slot);
                     let encoded = self.publication.encode(
                         gpu.device,
@@ -345,7 +345,6 @@ impl Primitive for LiquidFrame {
                             stats,
                             identity: identity.expect("identity checked"),
                             metadata: target.metadata.as_ref().expect("acquired slot"),
-                            count,
                         },
                     );
                     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]

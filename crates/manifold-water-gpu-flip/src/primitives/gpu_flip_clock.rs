@@ -78,13 +78,17 @@ impl GpuFlipClockParams {
 }
 
 /// Inputs to one scheduling dispatch.  Buffers are persistent solver-owned
-/// GPU buffers.  Counts may be any value that fits the corresponding buffer;
-/// there is no quality or population cap in this helper.
+/// GPU buffers.  Body counts may be any value that fits the corresponding
+/// buffer; there is no quality or population cap in this helper.
 pub struct GpuFlipClockInputs<'a> {
     /// `FluidParticle` records (32-byte packed layout).  A zero radius is an
     /// unused slot and is excluded by the reduction shader.
     pub marker_particles: &'a GpuBuffer,
-    pub marker_count: u32,
+    /// The marker slots in use, on the GPU: a record `[groups, 1, 1, n]` with
+    /// `n` at word 3 (a step's slot record). The marker passes cover the first
+    /// `n` slots, capped at the capacity the clock was created with, and read
+    /// none past.
+    pub marker_count: &'a GpuBuffer,
     pub obstacle_vertices: &'a GpuBuffer,
     pub obstacle_count: u32,
     pub source_vertices: &'a GpuBuffer,
@@ -129,7 +133,9 @@ impl<'a> GpuFlipClockPlan<'a> {
 /// FLIP domain is (re)allocated; [`Self::dispatch`] only encodes GPU work and
 /// does not allocate.
 pub struct GpuFlipClock {
+    marker_args: GpuComputePipeline,
     marker_reduce: GpuComputePipeline,
+    marker_partial: GpuComputePipeline,
     body_reduce: GpuComputePipeline,
     partial_reduce: GpuComputePipeline,
     marker_classify: GpuComputePipeline,
@@ -145,6 +151,26 @@ pub struct GpuFlipClock {
     marker_histogram: GpuBuffer,
     marker_outliers: GpuBuffer,
     plan: GpuBuffer,
+    /// `[groups, 1, 1, n]` for the marker passes of the phase in flight
+    /// (`marker_args`): level 0, classify and remove dispatch from it.
+    marker_triple: GpuBuffer,
+    marker_capacity: u32,
+    /// Groups of each later marker reduction level, for `marker_capacity`
+    /// slots; the last is one group and writes the aggregate.
+    marker_partial_groups: Vec<u32>,
+}
+
+/// Groups of the marker reduction's later levels for `capacity` slots: level 0
+/// leaves `ceil(capacity / 64)` partials and each level reduces the one before,
+/// 64 to a group, until a single group holds what is left.
+fn marker_partial_groups(capacity: u32) -> Vec<u32> {
+    let mut groups = Vec::new();
+    let mut partials = capacity.max(1).div_ceil(WORKGROUP);
+    while partials > 1 {
+        partials = partials.div_ceil(WORKGROUP);
+        groups.push(partials);
+    }
+    groups
 }
 
 impl GpuFlipClock {
@@ -162,7 +188,9 @@ impl GpuFlipClock {
             .max(source_capacity)
             .max(1);
         let partial_capacity = u64::from(max_capacity.div_ceil(WORKGROUP).max(1));
-        2 * partial_capacity * 16 + 16 * 3 + u64::from(HISTOGRAM_BINS) * 4 + 16 + 48
+        // Both vec4 reduction scratch buffers, three maxima, the histogram,
+        // the outlier counters, the plan and the marker dispatch triple.
+        2 * partial_capacity * 16 + 16 * 3 + u64::from(HISTOGRAM_BINS) * 4 + 16 + 48 + 16
     }
 
     /// Create resources sized from the largest input populations.  The caller
@@ -180,10 +208,20 @@ impl GpuFlipClock {
         let partial_capacity = max_capacity.div_ceil(WORKGROUP).max(1);
         let scratch_bytes = u64::from(partial_capacity) * 16;
         Self {
+            marker_args: device.create_compute_pipeline(
+                SHADER,
+                "marker_args",
+                "flip-clock-marker-args",
+            ),
             marker_reduce: device.create_compute_pipeline(
                 SHADER,
                 "reduce_marker",
                 "flip-clock-marker",
+            ),
+            marker_partial: device.create_compute_pipeline(
+                SHADER,
+                "reduce_partial_marker",
+                "flip-clock-marker-partial",
             ),
             body_reduce: device.create_compute_pipeline(SHADER, "reduce_body", "flip-clock-body"),
             partial_reduce: device.create_compute_pipeline(
@@ -216,6 +254,9 @@ impl GpuFlipClock {
             marker_histogram: device.create_buffer(u64::from(HISTOGRAM_BINS) * 4),
             marker_outliers: device.create_buffer(16),
             plan: device.create_buffer(48),
+            marker_triple: device.create_buffer(16),
+            marker_capacity,
+            marker_partial_groups: marker_partial_groups(marker_capacity),
         }
     }
 
@@ -250,11 +291,6 @@ impl GpuFlipClock {
         inputs: GpuFlipClockInputs<'_>,
         params: &GpuFlipClockParams,
     ) -> GpuFlipClockPlan<'a> {
-        // Zero-count populations must not reuse a previous frame's aggregate.
-        // This is a GPU blit, not a CPU readback or allocation.
-        encoder.clear_buffer(&self.marker_result);
-        encoder.clear_buffer(&self.obstacle_result);
-        encoder.clear_buffer(&self.source_result);
         let event_params = EventFieldParams {
             origin_spacing: [
                 inputs.impulse_origin[0],
@@ -269,24 +305,24 @@ impl GpuFlipClock {
                 inputs.impulse_stride,
             ],
         };
-        if inputs.marker_count > 0 {
-            let marker = self.reduce_marker(
-                encoder,
-                inputs.marker_particles,
-                inputs.marker_count,
-                inputs.live_hits,
-                inputs.live_hit_count,
-                inputs.event_impulses,
-                &event_params,
-                params,
-                ReductionPhase::Scheduling,
-            );
-            encoder.copy_buffer_to_buffer(marker, &self.marker_result, 16);
-            // The reduction result is consumed by the classification pass to
-            // apply the native relative-outlier thresholds. Keep this explicit
-            // because the copy and following dispatch target different resources.
-            encoder.compute_memory_barrier_buffers();
-        }
+        // A population that skips its reduction must not reuse a previous
+        // frame's aggregate: this zeroes the obstacle and source ones. The
+        // marker reduction always runs and writes its own.
+        self.marker_args(
+            encoder,
+            inputs.marker_count,
+            ReductionPhase::Scheduling,
+            true,
+        );
+        self.reduce_marker(
+            encoder,
+            inputs.marker_particles,
+            inputs.live_hits,
+            inputs.live_hit_count,
+            inputs.event_impulses,
+            &event_params,
+            params,
+        );
         if inputs.obstacle_count > 0 {
             let obstacle = self.reduce_body(
                 encoder,
@@ -372,25 +408,20 @@ impl GpuFlipClock {
         GpuFlipClockPlan { buffer: &self.plan }
     }
 
+    /// Histogram and outlier counts of the markers `marker_args` covers.
     fn classify_marker(
         &self,
         encoder: &mut GpuEncoder,
         input: &GpuBuffer,
-        count: u32,
         params: &GpuFlipClockParams,
     ) {
-        let reduce_params = reduce_bytes(count, 0, ReductionPhase::Cleanup);
-        encoder.dispatch_compute(
+        encoder.dispatch_compute_indirect(
             &self.marker_classify,
             &[
                 GpuBinding::Buffer {
                     binding: 0,
                     buffer: input,
                     offset: 0,
-                },
-                GpuBinding::Bytes {
-                    binding: 2,
-                    data: &reduce_params,
                 },
                 GpuBinding::Bytes {
                     binding: 22,
@@ -416,8 +447,14 @@ impl GpuFlipClock {
                     buffer: &self.marker_outliers,
                     offset: 0,
                 },
+                GpuBinding::Buffer {
+                    binding: 30,
+                    buffer: &self.marker_triple,
+                    offset: 0,
+                },
             ],
-            [count.div_ceil(WORKGROUP).max(1), 1, 1],
+            &self.marker_triple,
+            0,
             "flip-clock-marker-classify",
         );
         encoder.compute_memory_barrier_buffers();
@@ -460,11 +497,13 @@ impl GpuFlipClock {
     /// Recompute the native marker threshold from the post-step velocities and
     /// remove over-limit particles in place. This does not touch the clock
     /// cursor; it uses the accepted frame interval, as native _currentFrameDeltaTime.
+    /// `count` is the record of the slots in use (`GpuFlipClockInputs::marker_count`):
+    /// a particle at or past its `n` is neither measured nor removed.
     pub(crate) fn remove_extreme(
         &self,
         encoder: &mut GpuEncoder,
         particles: &GpuBuffer,
-        count: u32,
+        count: &GpuBuffer,
         params: &GpuFlipClockParams,
     ) {
         let empty_hits = self.marker_histogram.clone();
@@ -472,30 +511,22 @@ impl GpuFlipClock {
             origin_spacing: [0.0, 0.0, 0.0, 1.0],
             nodes_stride: [2, 2, 2, 0],
         };
-        if count > 0 {
-            let marker = self.reduce_marker(
-                encoder,
-                particles,
-                count,
-                &empty_hits,
-                0,
-                &empty_hits,
-                &empty_params,
-                params,
-                ReductionPhase::Cleanup,
-            );
-            encoder.copy_buffer_to_buffer(marker, &self.marker_result, 16);
-        } else {
-            encoder.clear_buffer(&self.marker_result);
-        }
-        encoder.compute_memory_barrier_buffers();
+        self.marker_args(encoder, count, ReductionPhase::Cleanup, false);
+        self.reduce_marker(
+            encoder,
+            particles,
+            &empty_hits,
+            0,
+            &empty_hits,
+            &empty_params,
+            params,
+        );
         encoder.clear_buffer(&self.marker_histogram);
         encoder.clear_buffer(&self.marker_outliers);
-        self.classify_marker(encoder, particles, count, params);
+        self.classify_marker(encoder, particles, params);
         self.finalize_marker_limit(encoder, params);
         encoder.compute_memory_barrier_buffers();
-        let reduce_params = reduce_bytes(count, 0, ReductionPhase::Cleanup);
-        encoder.dispatch_compute(
+        encoder.dispatch_compute_indirect(
             &self.marker_remove,
             &[
                 GpuBinding::Buffer {
@@ -503,39 +534,101 @@ impl GpuFlipClock {
                     buffer: particles,
                     offset: 0,
                 },
-                GpuBinding::Bytes {
-                    binding: 2,
-                    data: &reduce_params,
-                },
                 GpuBinding::Buffer {
                     binding: 24,
                     buffer: &self.plan,
                     offset: 0,
                 },
+                GpuBinding::Buffer {
+                    binding: 30,
+                    buffer: &self.marker_triple,
+                    offset: 0,
+                },
             ],
-            [count.div_ceil(WORKGROUP).max(1), 1, 1],
+            &self.marker_triple,
+            0,
             "flip-clock-marker-remove",
         );
     }
 
-    fn reduce_marker<'a>(
-        &'a self,
+    /// One thread: the marker passes' dispatch triple for `phase`, from the
+    /// record of the slots in use. With `clear_aggregates` it also zeroes the
+    /// obstacle and source aggregates.
+    fn marker_args(
+        &self,
+        encoder: &mut GpuEncoder,
+        record: &GpuBuffer,
+        phase: ReductionPhase,
+        clear_aggregates: bool,
+    ) {
+        let words = [
+            self.marker_capacity,
+            phase as u32,
+            u32::from(clear_aggregates),
+            0,
+        ];
+        encoder.dispatch_compute(
+            &self.marker_args,
+            &[
+                GpuBinding::Buffer {
+                    binding: 24,
+                    buffer: &self.plan,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 31,
+                    buffer: &self.marker_triple,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 32,
+                    buffer: record,
+                    offset: 0,
+                },
+                GpuBinding::Bytes {
+                    binding: 33,
+                    data: bytemuck::cast_slice(&words),
+                },
+                GpuBinding::Buffer {
+                    binding: 34,
+                    buffer: &self.obstacle_result,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 35,
+                    buffer: &self.source_result,
+                    offset: 0,
+                },
+            ],
+            [1, 1, 1],
+            "flip-clock-marker-args",
+        );
+        encoder.compute_memory_barrier_buffers();
+    }
+
+    /// The maximum marker speed over the slots `marker_args` covers, into
+    /// `marker_result`. Level 0 dispatches from the triple; the later levels
+    /// are shaped for the capacity and take their lengths from `n`, so the
+    /// chain is the same whatever the population and the last level always
+    /// writes the aggregate (zero for an empty one).
+    fn reduce_marker(
+        &self,
         encoder: &mut GpuEncoder,
         input: &GpuBuffer,
-        count: u32,
         live_hits: &GpuBuffer,
         live_hit_count: u32,
         event_impulses: &GpuBuffer,
         event_params: &EventFieldParams,
         clock_params: &GpuFlipClockParams,
-        phase: ReductionPhase,
-    ) -> &'a GpuBuffer {
-        debug_assert!(count > 0, "empty marker populations retain the cleared aggregate");
-        let mut n = count;
-        let mut pass = 0u32;
-        let reduce_data = reduce_bytes(n, 0, phase);
+    ) {
         let hit_params = [live_hit_count, 0, 0, 0];
-        encoder.dispatch_compute(
+        let later = self.marker_partial_groups.len();
+        let first = if later == 0 {
+            &self.marker_result
+        } else {
+            &self.scratch_a
+        };
+        encoder.dispatch_compute_indirect(
             &self.marker_reduce,
             &[
                 GpuBinding::Buffer {
@@ -545,12 +638,8 @@ impl GpuFlipClock {
                 },
                 GpuBinding::Buffer {
                     binding: 1,
-                    buffer: &self.scratch_a,
+                    buffer: first,
                     offset: 0,
-                },
-                GpuBinding::Bytes {
-                    binding: 2,
-                    data: &reduce_data,
                 },
                 GpuBinding::Buffer {
                     binding: 16,
@@ -579,21 +668,32 @@ impl GpuFlipClock {
                     binding: 26,
                     data: bytemuck::bytes_of(event_params),
                 },
+                GpuBinding::Buffer {
+                    binding: 30,
+                    buffer: &self.marker_triple,
+                    offset: 0,
+                },
             ],
-            [n.div_ceil(WORKGROUP), 1, 1],
+            &self.marker_triple,
+            0,
             "flip-clock-marker-reduce",
         );
         encoder.compute_memory_barrier_buffers();
-        n = n.div_ceil(WORKGROUP);
-        while n > 1 {
-            let (src, dst) = if pass.is_multiple_of(2) {
-                (&self.scratch_a, &self.scratch_b)
-            } else {
+        for (pass, &groups) in self.marker_partial_groups.iter().enumerate() {
+            let level = pass as u32 + 1;
+            let (src, dst) = if level.is_multiple_of(2) {
                 (&self.scratch_b, &self.scratch_a)
+            } else {
+                (&self.scratch_a, &self.scratch_b)
             };
-            let reduce_data = reduce_bytes(n, 0, phase);
+            let dst = if pass + 1 == later {
+                &self.marker_result
+            } else {
+                dst
+            };
+            let level_words = [level, 0, 0, 0];
             encoder.dispatch_compute(
-                &self.partial_reduce,
+                &self.marker_partial,
                 &[
                     GpuBinding::Buffer {
                         binding: 8,
@@ -606,22 +706,19 @@ impl GpuFlipClock {
                         offset: 0,
                     },
                     GpuBinding::Bytes {
-                        binding: 10,
-                        data: &reduce_data,
+                        binding: 36,
+                        data: bytemuck::cast_slice(&level_words),
                     },
-                    GpuBinding::Buffer { binding: 24, buffer: &self.plan, offset: 0 },
+                    GpuBinding::Buffer {
+                        binding: 30,
+                        buffer: &self.marker_triple,
+                        offset: 0,
+                    },
                 ],
-                [n.div_ceil(WORKGROUP), 1, 1],
+                [groups, 1, 1],
                 "flip-clock-marker-partial",
             );
             encoder.compute_memory_barrier_buffers();
-            n = n.div_ceil(WORKGROUP);
-            pass += 1;
-        }
-        if pass.is_multiple_of(2) {
-            &self.scratch_a
-        } else {
-            &self.scratch_b
         }
     }
 
@@ -636,7 +733,10 @@ impl GpuFlipClock {
         body_reaction: &GpuBuffer,
         params: &GpuFlipClockParams,
     ) -> &'a GpuBuffer {
-        debug_assert!(count > 0, "empty body populations retain the cleared aggregate");
+        debug_assert!(
+            count > 0,
+            "empty body populations retain the cleared aggregate"
+        );
         let mode = u32::from(source);
         let mut n = count;
         let mut pass = 0u32;
@@ -662,7 +762,11 @@ impl GpuFlipClock {
                     binding: 6,
                     data: params.as_bytes(),
                 },
-                GpuBinding::Buffer { binding: 24, buffer: &self.plan, offset: 0 },
+                GpuBinding::Buffer {
+                    binding: 24,
+                    buffer: &self.plan,
+                    offset: 0,
+                },
                 GpuBinding::Buffer {
                     binding: 28,
                     buffer: body_rows,
@@ -707,7 +811,11 @@ impl GpuFlipClock {
                         binding: 10,
                         data: &reduce_data,
                     },
-                    GpuBinding::Buffer { binding: 24, buffer: &self.plan, offset: 0 },
+                    GpuBinding::Buffer {
+                        binding: 24,
+                        buffer: &self.plan,
+                        offset: 0,
+                    },
                 ],
                 [n.div_ceil(WORKGROUP), 1, 1],
                 "flip-clock-body-partial",
@@ -750,8 +858,11 @@ fn expected_dt(
 ) -> f32 {
     let mut limit = p.cfl * p.cell_size / (speed as f32 + 1e-6);
     if let Some((condition, constant)) = restrictions.surface_tension {
-        limit = limit.min(condition as f32 * (p.cell_size * p.cell_size * p.cell_size).sqrt()
-            * (1.0 / (constant as f32 + 1e-6)).sqrt());
+        limit = limit.min(
+            condition as f32
+                * (p.cell_size * p.cell_size * p.cell_size).sqrt()
+                * (1.0 / (constant as f32 + 1e-6)).sqrt(),
+        );
     }
     if let Some(rate) = restrictions.color_mixing_rate {
         limit = limit.min(1.0 / (rate as f32 + 1e-6));
@@ -765,21 +876,34 @@ mod tests {
 
     #[test]
     fn gpu_flip_clock_epsilon_ceil_and_cap_cpu_proof() {
-        use manifold_physics::stepping::{CflRestrictions, LiveStepSchedule};
         use manifold_physics::Seconds;
+        use manifold_physics::stepping::{CflRestrictions, LiveStepSchedule};
         let p = GpuFlipClockParams {
-            frame_duration: 0.1, cell_size: 0.1, cfl: 5.0,
-            surface_condition: 0.0, surface_constant: 0.0, color_mixing_rate: 0.0,
-            _pad_prediction: 0.0, limit_interval: 0.1, min_frame_steps: 1,
-            max_frame_steps: 6, flags: 0, interval_sequence: 0, constant_force: [0.0; 4],
+            frame_duration: 0.1,
+            cell_size: 0.1,
+            cfl: 5.0,
+            surface_condition: 0.0,
+            surface_constant: 0.0,
+            color_mixing_rate: 0.0,
+            _pad_prediction: 0.0,
+            limit_interval: 0.1,
+            min_frame_steps: 1,
+            max_frame_steps: 6,
+            flags: 0,
+            interval_sequence: 0,
+            constant_force: [0.0; 4],
         };
         // 0.5 / (10 + epsilon) is below 0.05: ceil requires three
         // subdivisions, not the two in the old reaction proof.
-        assert_eq!(expected_dt(&p, 10.0, CflRestrictions::default()), p.frame_duration / 3.0);
+        assert_eq!(
+            expected_dt(&p, 10.0, CflRestrictions::default()),
+            p.frame_duration / 3.0
+        );
         for speed in [0.0, 5.0, 10.0, 100.0, 1000.0] {
             let duration = expected_dt(&p, speed, CflRestrictions::default());
-            let mut schedule = LiveStepSchedule::new(Seconds::ZERO,
-                Seconds(f64::from(p.frame_duration)), 1, 6).value;
+            let mut schedule =
+                LiveStepSchedule::new(Seconds::ZERO, Seconds(f64::from(p.frame_duration)), 1, 6)
+                    .value;
             let mut end = Seconds::ZERO;
             let mut capped = false;
             while let Some(step) = schedule.next(Seconds(f64::from(duration))).value {
@@ -790,6 +914,28 @@ mod tests {
             assert_eq!(end, Seconds(f64::from(p.frame_duration)));
             assert!(schedule.steps_taken() <= 6);
             assert_eq!(capped, speed >= 100.0);
+        }
+    }
+
+    #[test]
+    fn gpu_flip_clock_marker_levels_end_in_one_group() {
+        // Level 0 leaves ceil(capacity / 64) partials; each later level
+        // takes 64 to a group until one group holds the rest.
+        for (capacity, groups) in [
+            (0, vec![]),
+            (1, vec![]),
+            (64, vec![]),
+            (65, vec![1]),
+            (4_096, vec![1]),
+            (4_097, vec![2, 1]),
+            (70_000, vec![18, 1]),
+            (u32::MAX, vec![1_048_576, 16_384, 256, 4, 1]),
+        ] {
+            assert_eq!(
+                marker_partial_groups(capacity),
+                groups,
+                "capacity {capacity}"
+            );
         }
     }
 
@@ -808,11 +954,11 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_water_liquid::bodies::GpuFlipBodyVertex;
-    use manifold_node_engine::particles::FluidParticle;
-    use manifold_water_liquid::bodies::LiquidBody;
     use bytemuck::Zeroable;
+    use manifold_node_engine::particles::FluidParticle;
     use manifold_physics::stepping::CflRestrictions;
+    use manifold_water_liquid::bodies::GpuFlipBodyVertex;
+    use manifold_water_liquid::bodies::LiquidBody;
     use std::mem::size_of;
 
     #[repr(C)]
@@ -871,6 +1017,14 @@ mod gpu_tests {
         bytemuck::cast_slice(bytes).to_vec()
     }
 
+    /// A record of `n` slots in use as a step writes it: `[groups, 1, 1, n]`.
+    fn slots_record(device: &GpuDevice, n: u32) -> GpuBuffer {
+        let record = device.create_buffer_shared(16);
+        // SAFETY: a fresh shared buffer, no GPU work in flight.
+        unsafe { record.write(0, bytemuck::cast_slice(&[n.div_ceil(256).max(1), 1, 1, n])) };
+        record
+    }
+
     fn original_marker_clock(device: &GpuDevice, capacity: u32) -> GpuFlipClock {
         // Frozen global-atomic classifier: independent of the production
         // workgroup implementation, with identical per-particle f32 math.
@@ -880,7 +1034,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let idx = gid.x;
-    if idx >= marker_reduce_params.count {
+    if idx >= marker_triple[3] {
         return;
     }
     let particle = marker_values[idx];
@@ -906,29 +1060,37 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 "#;
-        let start = SHADER.find("fn classify_marker_lane(").expect("classifier lane helper");
-        let end = SHADER[start..].find("\n// The frame the marker speed limit").expect("classifier end") + start;
+        let start = SHADER
+            .find("fn classify_marker_lane(")
+            .expect("classifier lane helper");
+        let end = SHADER[start..]
+            .find("\n// The frame the marker speed limit")
+            .expect("classifier end")
+            + start;
         let mut shader = SHADER.to_owned();
         shader.replace_range(start..end, ORIGINAL);
         let mut clock = GpuFlipClock::new(device, capacity, 1, 1);
         clock.marker_classify = device.create_compute_pipeline(
-            &shader, "classify_marker", "marker-classify-original-proof",
+            &shader,
+            "classify_marker",
+            "marker-classify-original-proof",
         );
         clock
     }
 
     // Setup and readback use separate completed command buffers: total_ms
-    // below measures only the existing classifier dispatch and its barrier.
+    // below measures only the classifier dispatch and its barrier. The
+    // setup also derives the dispatch triple from the record.
     fn classify_probe(
         device: &GpuDevice,
         clock: &GpuFlipClock,
-        input: (&GpuBuffer, u32),
+        input: (&GpuBuffer, &GpuBuffer),
         p: &GpuFlipClockParams,
         plan: &PlanValue,
         seed: Option<&[u32; 68]>,
         buffers: &[GpuBuffer; 4],
     ) -> (Vec<u32>, f64) {
-        let (markers, count) = input;
+        let (markers, record) = input;
         let [plan_seed, maximum_seed, histogram, outliers] = buffers;
         unsafe {
             plan_seed.write(0, bytemuck::bytes_of(plan));
@@ -948,9 +1110,10 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             enc.clear_buffer(&clock.marker_histogram);
             enc.clear_buffer(&clock.marker_outliers);
         }
+        clock.marker_args(&mut enc, record, ReductionPhase::Cleanup, false);
         enc.commit_and_wait_completed();
         let mut enc = device.create_encoder("marker-classify-proof-dispatch");
-        clock.classify_marker(&mut enc, markers, count, p);
+        clock.classify_marker(&mut enc, markers, p);
         let timing = enc.commit_and_wait_profiled(device);
         let mut enc = device.create_encoder("marker-classify-proof-readback");
         enc.copy_buffer_to_buffer(&clock.marker_histogram, histogram, 256);
@@ -972,23 +1135,43 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let candidate = GpuFlipClock::new(&device, 257, 1, 1);
         let markers = device.create_buffer_shared(257 * 32);
         let buffers = classify_buffers(&device);
-        let active = PlanValue { dt: 0.25, live_mode: 1, ..PlanValue::zeroed() };
+        let active = PlanValue {
+            dt: 0.25,
+            live_mode: 1,
+            ..PlanValue::zeroed()
+        };
         // Include adjacent f32 words at bin and both relative-outlier edges.
         // Exact parity is against the production GPU math, including sqrt.
-        let edges = [0.0, f32::from_bits(0.5f32.to_bits() - 1), 0.5,
-            f32::from_bits(0.5f32.to_bits() + 1), 31.75, 32.0,
-            f32::from_bits((0.90f32 * 32.0).to_bits() - 1), 0.90 * 32.0,
+        let edges = [
+            0.0,
+            f32::from_bits(0.5f32.to_bits() - 1),
+            0.5,
+            f32::from_bits(0.5f32.to_bits() + 1),
+            31.75,
+            32.0,
+            f32::from_bits((0.90f32 * 32.0).to_bits() - 1),
+            0.90 * 32.0,
             f32::from_bits((0.90f32 * 32.0).to_bits() + 1),
-            f32::from_bits((0.99999f32 * 32.0).to_bits() - 1), 0.99999 * 32.0,
-            f32::from_bits((0.99999f32 * 32.0).to_bits() + 1)];
+            f32::from_bits((0.99999f32 * 32.0).to_bits() - 1),
+            0.99999 * 32.0,
+            f32::from_bits((0.99999f32 * 32.0).to_bits() + 1),
+        ];
         for count in [0, 1, 63, 64, 65, 257] {
+            let record = slots_record(&device, count);
             for max_steps in [1, 6, 64] {
-                let p = GpuFlipClockParams { max_frame_steps: max_steps, ..params() };
+                let p = GpuFlipClockParams {
+                    max_frame_steps: max_steps,
+                    ..params()
+                };
                 for mixed in [false, true] {
                     let mut particles = vec![particle(0.25); count as usize];
                     if mixed {
                         for (i, marker) in particles.iter_mut().enumerate() {
-                            *marker = particle(if i < edges.len() { edges[i] } else { (i % 64) as f32 * 0.5 + 0.25 });
+                            *marker = particle(if i < edges.len() {
+                                edges[i]
+                            } else {
+                                (i % 64) as f32 * 0.5 + 0.25
+                            });
                             match i {
                                 12 => marker.position_radius[3] = 0.0,
                                 13 => marker.position_radius[3] = -1.0,
@@ -1003,28 +1186,68 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                             }
                         }
                     }
-                    if let Some(last) = particles.last_mut() { *last = particle(32.0); }
-                    unsafe { markers.write(0, bytemuck::cast_slice(&particles)); }
+                    if let Some(last) = particles.last_mut() {
+                        *last = particle(32.0);
+                    }
+                    unsafe {
+                        markers.write(0, bytemuck::cast_slice(&particles));
+                    }
                     let mut previous = None;
                     for repeat in 0..2 {
-                        let (old, _) = classify_probe(&device, &original, (&markers, count), &p, &active, None, &buffers);
-                        let (new, _) = classify_probe(&device, &candidate, (&markers, count), &p, &active, None, &buffers);
-                        assert_eq!(old, new, "count {count}, max_steps {max_steps}, mixed {mixed}, repeat {repeat}");
+                        let (old, _) = classify_probe(
+                            &device,
+                            &original,
+                            (&markers, &record),
+                            &p,
+                            &active,
+                            None,
+                            &buffers,
+                        );
+                        let (new, _) = classify_probe(
+                            &device,
+                            &candidate,
+                            (&markers, &record),
+                            &p,
+                            &active,
+                            None,
+                            &buffers,
+                        );
+                        assert_eq!(
+                            old, new,
+                            "count {count}, max_steps {max_steps}, mixed {mixed}, repeat {repeat}"
+                        );
                         assert_eq!(&new[66..], &[0, 0], "unused outlier words stay clear");
-                        if let Some(previous) = &previous { assert_eq!(&new, previous, "cleared repeat"); }
+                        if let Some(previous) = &previous {
+                            assert_eq!(&new, previous, "cleared repeat");
+                        }
                         previous = Some(new);
                     }
                 }
             }
         }
         let seed = std::array::from_fn(|i| 0x1357_0000u32 + i as u32);
+        let record = slots_record(&device, 65);
         for inactive in [
-            PlanValue { live_mode: 0, ..active },
+            PlanValue {
+                live_mode: 0,
+                ..active
+            },
             PlanValue { dt: 0.0, ..active },
         ] {
             for clock in [&original, &candidate] {
-                let (words, _) = classify_probe(&device, clock, (&markers, 65), &params(), &inactive, Some(&seed), &buffers);
-                assert_eq!(words, seed, "inactive classifier preserves all seeded words");
+                let (words, _) = classify_probe(
+                    &device,
+                    clock,
+                    (&markers, &record),
+                    &params(),
+                    &inactive,
+                    Some(&seed),
+                    &buffers,
+                );
+                assert_eq!(
+                    words, seed,
+                    "inactive classifier preserves all seeded words"
+                );
             }
         }
     }
@@ -1032,40 +1255,70 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
     #[test]
     fn gpu_flip_clock_workgroup_marker_cleanup_exact_proof() {
         let device = manifold_gpu::testkit::test_device();
-        let clocks = [original_marker_clock(&device, 21_000), GpuFlipClock::new(&device, 21_000, 1, 1)];
-        let markers = [device.create_buffer_shared(21_000 * 32), device.create_buffer_shared(21_000 * 32)];
+        let clocks = [
+            original_marker_clock(&device, 21_000),
+            GpuFlipClock::new(&device, 21_000, 1, 1),
+        ];
+        let markers = [
+            device.create_buffer_shared(21_000 * 32),
+            device.create_buffer_shared(21_000 * 32),
+        ];
         let plan_seed = device.create_buffer_shared(48);
-        let plans = [device.create_buffer_shared(48), device.create_buffer_shared(48)];
+        let plans = [
+            device.create_buffer_shared(48),
+            device.create_buffer_shared(48),
+        ];
         let buffers = classify_buffers(&device);
         // Same native budget/floor populations as the CPU policy oracle.
         for (count, duration) in [(300, 0.25), (300, 1.0), (21_000, 1.0)] {
             let mut particles = vec![particle(1.25); count as usize];
-            for (i, marker) in particles.iter_mut().enumerate() { marker.id = i as u32 + 101; }
-            for marker in particles.iter_mut().take(9) { marker.velocity[0] = 11.0; }
+            for (i, marker) in particles.iter_mut().enumerate() {
+                marker.id = i as u32 + 101;
+            }
+            for marker in particles.iter_mut().take(9) {
+                marker.velocity[0] = 11.0;
+            }
             particles[9].velocity[0] = 3.25;
+            let record = slots_record(&device, count);
             for span in [1.0, 4.0] {
-                let p = GpuFlipClockParams { frame_duration: duration * span,
-                    limit_interval: if span == 1.0 { 0.0 } else { duration }, ..params() };
-                let plan = PlanValue { dt: duration / 3.0, remaining: duration * span,
-                    live_mode: 1, ..PlanValue::zeroed() };
+                let p = GpuFlipClockParams {
+                    frame_duration: duration * span,
+                    limit_interval: if span == 1.0 { 0.0 } else { duration },
+                    ..params()
+                };
+                let plan = PlanValue {
+                    dt: duration / 3.0,
+                    remaining: duration * span,
+                    live_mode: 1,
+                    ..PlanValue::zeroed()
+                };
                 unsafe {
                     plan_seed.write(0, bytemuck::bytes_of(&plan));
-                    for buffer in &markers { buffer.write(0, bytemuck::cast_slice(&particles)); }
+                    for buffer in &markers {
+                        buffer.write(0, bytemuck::cast_slice(&particles));
+                    }
                 }
                 let mut outputs = Vec::new();
                 for (i, clock) in clocks.iter().enumerate() {
                     let mut enc = device.create_encoder("marker-workgroup-cleanup-proof");
                     enc.copy_buffer_to_buffer(&plan_seed, &clock.plan, 48);
                     enc.compute_memory_barrier_buffers();
-                    clock.remove_extreme(&mut enc, &markers[i], count, &p);
+                    clock.remove_extreme(&mut enc, &markers[i], &record, &p);
                     enc.copy_buffer_to_buffer(&clock.plan, &plans[i], 48);
                     enc.copy_buffer_to_buffer(&clock.marker_histogram, &buffers[2], 256);
                     enc.copy_buffer_to_buffer(&clock.marker_outliers, &buffers[3], 16);
                     enc.commit_and_wait_completed();
-                    outputs.push((read_words(&markers[i], count as usize * 8),
-                        read_words(&plans[i], 12), read_words(&buffers[2], 64), read_words(&buffers[3], 4)));
+                    outputs.push((
+                        read_words(&markers[i], count as usize * 8),
+                        read_words(&plans[i], 12),
+                        read_words(&buffers[2], 64),
+                        read_words(&buffers[3], 4),
+                    ));
                 }
-                assert_eq!(outputs[0], outputs[1], "{count} markers, {duration}s, {span}x span: particles/plan/histogram/outliers");
+                assert_eq!(
+                    outputs[0], outputs[1],
+                    "{count} markers, {duration}s, {span}x span: particles/plan/histogram/outliers"
+                );
             }
         }
     }
@@ -1077,6 +1330,8 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         const COUNT: u32 = 512;
         let device = manifold_gpu::testkit::test_device();
         let clock = GpuFlipClock::new(&device, COUNT, COUNT, COUNT);
+        let full = slots_record(&device, COUNT);
+        let none = slots_record(&device, 0);
         let markers = device.create_buffer_shared(u64::from(COUNT) * 32);
         let vertices = device.create_buffer_shared(u64::from(COUNT) * 96);
         let plan_input = device.create_buffer_shared(48);
@@ -1107,41 +1362,51 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             poison.write(0, bytemuck::cast_slice(&poison_words));
         }
         let p = params();
-        let dispatch = |enc: &mut GpuEncoder, count| {
-            clock.dispatch(enc, GpuFlipClockInputs {
-                marker_particles: &markers,
-                marker_count: count,
-                obstacle_vertices: &vertices,
-                obstacle_count: count,
-                source_vertices: &vertices,
-                source_count: count,
-                live_hits: &markers,
-                live_hit_count: 0,
-                event_impulses: &markers,
-                impulse_stride: 0,
-                impulse_nodes: [2, 2, 2],
-                impulse_origin: [0.0; 3],
-                impulse_spacing: 1.0,
-                body_rows: &vertices,
-                body_rows_offset: 0,
-                body_reaction: &vertices,
-            }, &p);
+        let dispatch = |enc: &mut GpuEncoder, record: &GpuBuffer, count| {
+            clock.dispatch(
+                enc,
+                GpuFlipClockInputs {
+                    marker_particles: &markers,
+                    marker_count: record,
+                    obstacle_vertices: &vertices,
+                    obstacle_count: count,
+                    source_vertices: &vertices,
+                    source_count: count,
+                    live_hits: &markers,
+                    live_hit_count: 0,
+                    event_impulses: &markers,
+                    impulse_stride: 0,
+                    impulse_nodes: [2, 2, 2],
+                    impulse_origin: [0.0; 3],
+                    impulse_spacing: 1.0,
+                    body_rows: &vertices,
+                    body_rows_offset: 0,
+                    body_reaction: &vertices,
+                },
+                &p,
+            );
         };
         let copy_scratch = |enc: &mut GpuEncoder| {
-            for (scratch, readback) in [&clock.scratch_a, &clock.scratch_b].into_iter().zip(&scratch_readback) {
+            for (scratch, readback) in [&clock.scratch_a, &clock.scratch_b]
+                .into_iter()
+                .zip(&scratch_readback)
+            {
                 enc.copy_buffer_to_buffer(scratch, readback, scratch.size);
             }
         };
         let assert_poison = || {
             for readback in &scratch_readback {
-                assert_eq!(read_words(readback, poison_words.len()), poison_words,
-                    "inactive/empty reductions must not write either scratch buffer");
+                assert_eq!(
+                    read_words(readback, poison_words.len()),
+                    poison_words,
+                    "inactive reductions must not write either scratch buffer"
+                );
             }
         };
 
         let mut enc = device.create_encoder("flip-clock previously nonempty populations");
         clock.begin_frame(&mut enc, &p);
-        dispatch(&mut enc, COUNT);
+        dispatch(&mut enc, &full, COUNT);
         enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
         enc.copy_buffer_range(&clock.obstacle_result, 0, &aggregate_readback, 16, 16);
         enc.copy_buffer_range(&clock.source_result, 0, &aggregate_readback, 32, 16);
@@ -1149,64 +1414,97 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(read_plan(&plan_readback).maximum_speed, 1024.0);
         let aggregates = read_words(&aggregate_readback, 12);
         assert_eq!(f32::from_bits(aggregates[4]), 4.0);
-        assert_eq!(aggregates[8], 0, "outside startup, the unused source aggregate stays cleared");
+        assert_eq!(
+            aggregates[8], 0,
+            "outside startup, the unused source aggregate stays cleared"
+        );
 
         let mut enc = device.create_encoder("flip-clock populations become empty");
         enc.copy_buffer_to_buffer(&poison, &clock.scratch_a, poison.size);
         enc.copy_buffer_to_buffer(&poison, &clock.scratch_b, poison.size);
         clock.begin_frame(&mut enc, &p);
-        dispatch(&mut enc, 0);
-        for (index, aggregate) in [&clock.marker_result, &clock.obstacle_result, &clock.source_result].into_iter().enumerate() {
+        dispatch(&mut enc, &none, 0);
+        for (index, aggregate) in [
+            &clock.marker_result,
+            &clock.obstacle_result,
+            &clock.source_result,
+        ]
+        .into_iter()
+        .enumerate()
+        {
             enc.copy_buffer_range(aggregate, 0, &aggregate_readback, index as u64 * 16, 16);
         }
         enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
-        copy_scratch(&mut enc);
         enc.commit_and_wait_completed();
+        // The poisoned scratch is stale data an empty marker reduction must
+        // not read: every aggregate is zero.
         assert_eq!(read_words(&aggregate_readback, 12), vec![0; 12]);
         let empty = read_plan(&plan_readback);
         assert_eq!(empty.maximum_speed, 0.0);
         assert_eq!(empty.dt, p.frame_duration);
-        assert_poison();
 
         // Scheduling must stop on remaining == 0 even while the previous
         // step's dt is positive. schedule then sets dt to zero, so subsequent
         // cleanup must also leave both poisoned buffers untouched.
         let final_step = PlanValue {
-            dt: 0.1, elapsed: 1.0, remaining: 0.0, live_mode: 1,
+            dt: 0.1,
+            elapsed: 1.0,
+            remaining: 0.0,
+            live_mode: 1,
             ..PlanValue::zeroed()
         };
         // SAFETY: all earlier work has completed; plan_input is shared storage.
         unsafe { plan_input.write(0, bytemuck::bytes_of(&final_step)) };
+        // The empty population above reduced one zero partial into scratch;
+        // poison again so this stage sees only what inactive passes write.
         let mut enc = device.create_encoder("flip-clock inactive scheduling and cleanup");
+        enc.copy_buffer_to_buffer(&poison, &clock.scratch_a, poison.size);
+        enc.copy_buffer_to_buffer(&poison, &clock.scratch_b, poison.size);
         enc.copy_buffer_to_buffer(&plan_input, &clock.plan, 48);
-        dispatch(&mut enc, COUNT);
-        clock.remove_extreme(&mut enc, &markers, COUNT, &p);
+        dispatch(&mut enc, &full, COUNT);
+        clock.remove_extreme(&mut enc, &markers, &full, &p);
         copy_scratch(&mut enc);
         enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
         enc.commit_and_wait_completed();
         assert_poison();
         assert_eq!(read_plan(&plan_readback).dt, 0.0);
         let unchanged = read_words(&markers, COUNT as usize * 8);
-        assert_eq!(unchanged.as_slice(), bytemuck::cast_slice::<FluidParticle, u32>(&particles));
+        assert_eq!(
+            unchanged.as_slice(),
+            bytemuck::cast_slice::<FluidParticle, u32>(&particles)
+        );
 
         // The final accepted step still needs the complete reduction and
         // removal, despite having no interval remainder left to schedule.
         let mut enc = device.create_encoder("flip-clock final active cleanup");
         enc.copy_buffer_to_buffer(&plan_input, &clock.plan, 48);
-        clock.remove_extreme(&mut enc, &markers, COUNT, &p);
+        clock.remove_extreme(&mut enc, &markers, &full, &p);
         enc.copy_buffer_to_buffer(&clock.marker_result, &aggregate_readback, 16);
         enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
         enc.commit_and_wait_completed();
-        assert_eq!(f32::from_bits(read_words(&aggregate_readback, 4)[0]), 1024.0);
+        assert_eq!(
+            f32::from_bits(read_words(&aggregate_readback, 4)[0]),
+            1024.0
+        );
         let result = read_plan(&plan_readback);
         assert_eq!(result.remaining, 0.0);
         assert_eq!(result.dt, final_step.dt);
-        assert_eq!(result.marker_limit, p.max_frame_steps as f32 * p.cfl * p.cell_size / p.limit_interval);
+        assert_eq!(
+            result.marker_limit,
+            p.max_frame_steps as f32 * p.cfl * p.cell_size / p.limit_interval
+        );
         // SAFETY: the encoder completed and the buffer holds COUNT records.
-        let got = unsafe { std::slice::from_raw_parts(markers.mapped_ptr().unwrap().cast::<FluidParticle>(), COUNT as usize) };
+        let got = unsafe {
+            std::slice::from_raw_parts(
+                markers.mapped_ptr().unwrap().cast::<FluidParticle>(),
+                COUNT as usize,
+            )
+        };
         for (index, (before, after)) in particles.iter().zip(got).enumerate() {
             let mut want = *before;
-            if index == COUNT as usize - 1 { want.position_radius[3] = 0.0; }
+            if index == COUNT as usize - 1 {
+                want.position_radius[3] = 0.0;
+            }
             assert_eq!(bytemuck::bytes_of(after), bytemuck::bytes_of(&want));
         }
     }
@@ -1243,13 +1541,14 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             })
             .fold(0.0, f64::max);
         for count in [512, 0] {
+            let record = slots_record(&device, count);
             let mut enc = device.create_encoder("flip-clock marker proof");
             clock.begin_frame(&mut enc, &p);
             let plan = clock.dispatch(
                 &mut enc,
                 GpuFlipClockInputs {
                     marker_particles: &markers,
-                    marker_count: count,
+                    marker_count: &record,
                     obstacle_vertices: &empty,
                     obstacle_count: 0,
                     source_vertices: &empty,
@@ -1267,14 +1566,13 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 },
                 &p,
             );
-            clock.remove_extreme(&mut enc, &markers, count, &p);
+            clock.remove_extreme(&mut enc, &markers, &record, &p);
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
             enc.commit_and_wait_completed();
             let result = read_plan(&readback);
             let expected_speed = if count == 0 { 0.0 } else { speed };
             assert!((f64::from(result.maximum_speed) - expected_speed).abs() < 1e-5);
-            let expected_limit = p.max_frame_steps as f32 * p.cfl * p.cell_size
-                / p.limit_interval;
+            let expected_limit = p.max_frame_steps as f32 * p.cfl * p.cell_size / p.limit_interval;
             assert!((result.marker_limit - expected_limit).abs() < 1e-5);
             assert!(
                 (result.dt - expected_dt(&p, expected_speed, CflRestrictions::default())).abs()
@@ -1301,16 +1599,21 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         // exactly what export removes, where the span's own width would lower
         // the limit and delete ordinary water.
         use manifold_core::Seconds;
-        use manifold_physics::stepping::{marker_particle_speed_limit, MarkerSpeedLimitConfig};
+        use manifold_physics::stepping::{MarkerSpeedLimitConfig, marker_particle_speed_limit};
         let device = manifold_gpu::testkit::test_device();
         let cases = [(300u32, 0.25, 12.0), (300, 1.0, 3.0), (21_000, 1.0, 3.5)];
-        for ((count, duration, limit), span) in cases.into_iter().flat_map(|case| [(case, 1.0f32), (case, 4.0)]) {
+        for ((count, duration, limit), span) in cases
+            .into_iter()
+            .flat_map(|case| [(case, 1.0f32), (case, 4.0)])
+        {
             let clock = GpuFlipClock::new(&device, count, 1, 1);
             let markers = device.create_buffer_shared(u64::from(count) * 32);
             let empty = device.create_buffer_shared(96);
             let readback = device.create_buffer_shared(48);
             let mut particles = vec![particle(1.25); count as usize];
-            for (i, marker) in particles.iter_mut().enumerate() { marker.id = i as u32 + 101; }
+            for (i, marker) in particles.iter_mut().enumerate() {
+                marker.id = i as u32 + 101;
+            }
             for marker in particles.iter_mut().take(9) {
                 marker.velocity = [11.0, 0.0, 0.0];
             }
@@ -1319,14 +1622,19 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 markers.write(0, bytemuck::cast_slice(&particles));
             }
             let limit_interval = if span == 1.0 { 0.0 } else { duration };
-            let p = GpuFlipClockParams { frame_duration: duration * span, limit_interval, ..params() };
+            let p = GpuFlipClockParams {
+                frame_duration: duration * span,
+                limit_interval,
+                ..params()
+            };
+            let record = slots_record(&device, count);
             let mut enc = device.create_encoder("flip-clock marker histogram proof");
             clock.begin_frame(&mut enc, &p);
             let plan = clock.dispatch(
                 &mut enc,
                 GpuFlipClockInputs {
                     marker_particles: &markers,
-                    marker_count: count,
+                    marker_count: &record,
                     obstacle_vertices: &empty,
                     obstacle_count: 0,
                     source_vertices: &empty,
@@ -1344,27 +1652,43 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 },
                 &p,
             );
-            clock.remove_extreme(&mut enc, &markers, count, &p);
+            clock.remove_extreme(&mut enc, &markers, &record, &p);
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
             enc.commit_and_wait_completed();
             let result = read_plan(&readback);
             assert!((result.maximum_speed - 11.0).abs() < 1e-5);
             let speeds: Vec<f64> = particles.iter().map(|m| f64::from(m.velocity[0])).collect();
-            let cpu_limit = |dt: f32| marker_particle_speed_limit(
-                &speeds, Seconds(f64::from(dt)),
-                f64::from(p.cell_size), f64::from(p.cfl), p.max_frame_steps,
-                MarkerSpeedLimitConfig::default(), &mut [0; 6],
-            ).value as f32;
+            let cpu_limit = |dt: f32| {
+                marker_particle_speed_limit(
+                    &speeds,
+                    Seconds(f64::from(dt)),
+                    f64::from(p.cell_size),
+                    f64::from(p.cfl),
+                    p.max_frame_steps,
+                    MarkerSpeedLimitConfig::default(),
+                    &mut [0; 6],
+                )
+                .value as f32
+            };
             let case = format!("{count} markers, {duration} s frame, {span}x span");
             assert!(result.dt < p.frame_duration, "{case}: no CFL split");
             if span == 1.0 {
                 assert_ne!(cpu_limit(result.dt), limit, "{case}: step-dt width agrees");
             } else {
-                assert_ne!(cpu_limit(p.frame_duration), limit, "{case}: span width agrees");
+                assert_ne!(
+                    cpu_limit(p.frame_duration),
+                    limit,
+                    "{case}: span width agrees"
+                );
             }
             assert_eq!(cpu_limit(duration), limit, "{case}: CPU");
             assert_eq!(result.marker_limit, limit, "{case}: GPU");
-            let got = unsafe { std::slice::from_raw_parts(markers.mapped_ptr().unwrap().cast::<FluidParticle>(), count as usize) };
+            let got = unsafe {
+                std::slice::from_raw_parts(
+                    markers.mapped_ptr().unwrap().cast::<FluidParticle>(),
+                    count as usize,
+                )
+            };
             for (before, after) in particles.iter().zip(got) {
                 assert_eq!(after.position_radius[3] > 0.0, before.velocity[0] <= limit);
                 assert_eq!(before.id, after.id);
@@ -1376,6 +1700,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn gpu_flip_clock_obstacle_acceleration_angular_value_proof() {
         let device = manifold_gpu::testkit::test_device();
         let clock = GpuFlipClock::new(&device, 1, 2, 1);
+        let none = slots_record(&device, 0);
         let markers = device.create_buffer_shared(32);
         let obstacles = device.create_buffer_shared(192);
         let sources = device.create_buffer_shared(96);
@@ -1412,7 +1737,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &mut enc,
                 GpuFlipClockInputs {
                     marker_particles: &markers,
-                    marker_count: 0,
+                    marker_count: &none,
                     obstacle_vertices: &obstacles,
                     obstacle_count: 1,
                     source_vertices: &sources,
@@ -1440,6 +1765,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn gpu_flip_clock_coupled_reaction_shortens_next_cfl_value_proof() {
         let device = manifold_gpu::testkit::test_device();
         let clock = GpuFlipClock::new(&device, 1, 1, 1);
+        let none = slots_record(&device, 0);
         let markers = device.create_buffer_shared(32);
         let obstacles = device.create_buffer_shared(96);
         let sources = device.create_buffer_shared(96);
@@ -1483,7 +1809,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &mut enc,
                 GpuFlipClockInputs {
                     marker_particles: &markers,
-                    marker_count: 0,
+                    marker_count: &none,
                     obstacle_vertices: &obstacles,
                     obstacle_count: 1,
                     source_vertices: &sources,
@@ -1507,14 +1833,20 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         };
         let without_reaction = dispatch("flip-clock coupled body zero reaction proof");
         unsafe {
-            reaction.write(0, bytemuck::cast_slice(&[10.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            reaction.write(
+                0,
+                bytemuck::cast_slice(&[10.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            );
         }
         let with_reaction = dispatch("flip-clock coupled body reaction proof");
         assert_eq!(without_reaction.maximum_speed, 0.0);
         assert_eq!(without_reaction.dt, p.frame_duration);
         assert_eq!(with_reaction.maximum_speed, 10.0);
         assert!(with_reaction.dt < without_reaction.dt);
-        assert_eq!(with_reaction.dt, expected_dt(&p, 10.0, CflRestrictions::default()));
+        assert_eq!(
+            with_reaction.dt,
+            expected_dt(&p, 10.0, CflRestrictions::default())
+        );
     }
 
     #[test]
@@ -1526,7 +1858,8 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let clock = GpuFlipClock::new(&device, 1, 1, SOURCES);
         let zeros = device.create_buffer_shared(128);
         zeros.zero_fill();
-        let sources = device.create_buffer_shared(u64::from(SOURCES) * size_of::<GpuFlipBodyVertex>() as u64);
+        let sources =
+            device.create_buffer_shared(u64::from(SOURCES) * size_of::<GpuFlipBodyVertex>() as u64);
         let source = GpuFlipBodyVertex {
             position: [0.0, 0.0, 0.0, 1.0],
             velocity: [3.0, 0.0, 0.0, 0.0],
@@ -1534,16 +1867,28 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         };
         unsafe { sources.write(0, bytemuck::cast_slice(&[source; SOURCES as usize])) };
         let inputs = |source_count| GpuFlipClockInputs {
-            marker_particles: &zeros, marker_count: 0,
-            obstacle_vertices: &zeros, obstacle_count: 0,
-            source_vertices: &sources, source_count,
-            live_hits: &zeros, live_hit_count: 0,
-            event_impulses: &zeros, impulse_stride: 0,
-            impulse_nodes: [2; 3], impulse_origin: [0.0; 3], impulse_spacing: 1.0,
-            body_rows: &zeros, body_rows_offset: 0, body_reaction: &zeros,
+            marker_particles: &zeros,
+            marker_count: &zeros,
+            obstacle_vertices: &zeros,
+            obstacle_count: 0,
+            source_vertices: &sources,
+            source_count,
+            live_hits: &zeros,
+            live_hit_count: 0,
+            event_impulses: &zeros,
+            impulse_stride: 0,
+            impulse_nodes: [2; 3],
+            impulse_origin: [0.0; 3],
+            impulse_spacing: 1.0,
+            body_rows: &zeros,
+            body_rows_offset: 0,
+            body_reaction: &zeros,
         };
         let readback = device.create_buffer_shared(48);
-        let initial = GpuFlipClockParams { flags: flags::FIRST_SUBSTEP, ..params() };
+        let initial = GpuFlipClockParams {
+            flags: flags::FIRST_SUBSTEP,
+            ..params()
+        };
         let mut enc = device.create_encoder("flip-clock initial source proof");
         clock.begin_frame(&mut enc, &initial);
         let plan = clock.dispatch(&mut enc, inputs(SOURCES), &initial);
@@ -1564,22 +1909,34 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         enc.copy_buffer_to_buffer(&clock.scratch_a, &scratch, scratch.size);
         enc.commit_and_wait_completed();
         let result = read_plan(&readback);
-        assert_eq!((result.maximum_speed, result.dt, result.nonfinite), (0.0, later.frame_duration, 0));
-        let actual = unsafe { std::slice::from_raw_parts(scratch.mapped_ptr().unwrap().cast::<u32>(), untouched.len()) };
-        assert_eq!(actual, untouched, "later intervals must not scan sources or reduce their partials");
+        assert_eq!(
+            (result.maximum_speed, result.dt, result.nonfinite),
+            (0.0, later.frame_duration, 0)
+        );
+        let actual = unsafe {
+            std::slice::from_raw_parts(scratch.mapped_ptr().unwrap().cast::<u32>(), untouched.len())
+        };
+        assert_eq!(
+            actual, untouched,
+            "later intervals must not scan sources or reduce their partials"
+        );
 
         let mut enc = device.create_encoder("flip-clock absent source reference");
         clock.begin_frame(&mut enc, &later);
         let plan = clock.dispatch(&mut enc, inputs(0), &later);
         enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
         enc.commit_and_wait_completed();
-        assert_eq!(bytemuck::bytes_of(&result), bytemuck::bytes_of(&read_plan(&readback)));
+        assert_eq!(
+            bytemuck::bytes_of(&result),
+            bytemuck::bytes_of(&read_plan(&readback))
+        );
     }
 
     #[test]
     fn gpu_flip_clock_source_prediction_and_restrictions_value_proof() {
         let device = manifold_gpu::testkit::test_device();
         let clock = GpuFlipClock::new(&device, 1, 1, 1);
+        let one = slots_record(&device, 1);
         let markers = device.create_buffer_shared(32);
         let bodies = device.create_buffer_shared(96);
         let readback = device.create_buffer_shared(48);
@@ -1611,7 +1968,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &mut enc,
                 GpuFlipClockInputs {
                     marker_particles: &markers,
-                    marker_count: 1,
+                    marker_count: &one,
                     obstacle_vertices: &bodies,
                     obstacle_count: 0,
                     source_vertices: &bodies,
@@ -1639,7 +1996,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &mut enc,
                 GpuFlipClockInputs {
                     marker_particles: &markers,
-                    marker_count: 1,
+                    marker_count: &one,
                     obstacle_vertices: &bodies,
                     obstacle_count: 0,
                     source_vertices: &bodies,
@@ -1667,6 +2024,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn gpu_flip_clock_cap_and_nonfinite_value_proof() {
         let device = manifold_gpu::testkit::test_device();
         let clock = GpuFlipClock::new(&device, 1, 1, 1);
+        let one = slots_record(&device, 1);
         let markers = device.create_buffer_shared(32);
         let empty = device.create_buffer_shared(96);
         let readback = device.create_buffer_shared(48);
@@ -1682,7 +2040,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &mut enc,
                 GpuFlipClockInputs {
                     marker_particles: &markers,
-                    marker_count: 1,
+                    marker_count: &one,
                     obstacle_vertices: &empty,
                     obstacle_count: 0,
                     source_vertices: &empty,
@@ -1729,7 +2087,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             &mut enc,
             GpuFlipClockInputs {
                 marker_particles: &markers,
-                marker_count: 1,
+                marker_count: &one,
                 obstacle_vertices: &empty,
                 obstacle_count: 0,
                 source_vertices: &empty,
@@ -1760,6 +2118,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn gpu_flip_clock_event_boundary_predicts_impulse_once_and_reaches_cap() {
         let device = manifold_gpu::testkit::test_device();
         let clock = GpuFlipClock::new(&device, 1, 1, 1);
+        let one = slots_record(&device, 1);
         let before_hit = device.create_buffer_shared(32);
         let after_hit = device.create_buffer_shared(32);
         let empty = device.create_buffer_shared(96);
@@ -1768,8 +2127,16 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let readbacks: Vec<_> = (0..7).map(|_| device.create_buffer_shared(48)).collect();
         // Another interval's earlier event must neither split this interval
         // nor contribute to its predicted impulse velocity.
-        let hit = [0.01_f32, 0.0, f32::from_bits(6), 0.0,
-                   0.02_f32, 0.0, f32::from_bits(7), 0.0];
+        let hit = [
+            0.01_f32,
+            0.0,
+            f32::from_bits(6),
+            0.0,
+            0.02_f32,
+            0.0,
+            f32::from_bits(7),
+            0.0,
+        ];
         unsafe {
             hits.write(0, bytemuck::cast_slice(&hit));
             let mut lattice = [0.0_f32; 32];
@@ -1799,7 +2166,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &mut enc,
                 GpuFlipClockInputs {
                     marker_particles: markers,
-                    marker_count: 1,
+                    marker_count: &one,
                     obstacle_vertices: &empty,
                     obstacle_count: 0,
                     source_vertices: &empty,
@@ -1846,154 +2213,232 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
     }
 
+    /// The triple `marker_args` wrote for `record` under `plan`.
+    fn marker_triple_for(
+        device: &GpuDevice,
+        clock: &GpuFlipClock,
+        plan: &PlanValue,
+        record: &GpuBuffer,
+        phase: ReductionPhase,
+    ) -> Vec<u32> {
+        let plan_seed = device.create_buffer_shared(48);
+        let readback = device.create_buffer_shared(16);
+        // SAFETY: fresh shared buffer, no GPU work in flight.
+        unsafe { plan_seed.write(0, bytemuck::bytes_of(plan)) };
+        let mut enc = device.create_encoder("flip-clock marker args proof");
+        enc.copy_buffer_to_buffer(&plan_seed, &clock.plan, 48);
+        clock.marker_args(&mut enc, record, phase, false);
+        enc.copy_buffer_to_buffer(&clock.marker_triple, &readback, 16);
+        enc.commit_and_wait_completed();
+        read_words(&readback, 4)
+    }
+
     #[test]
-    fn gpu_flip_clock_commit_mask_preserves_active_bits_and_offline_writes() {
-        const MASK_SHADER: &str = include_str!("shaders/gpu_flip_commit_mask.wgsl");
+    fn gpu_flip_clock_marker_triple_follows_the_count_and_the_phase() {
         let device = manifold_gpu::testkit::test_device();
-        let pipeline =
-            device.create_compute_pipeline(MASK_SHADER, "commit_mask", "flip-clock-mask-proof");
-        let plan = device.create_buffer_shared(48);
-        let target = device.create_buffer_shared(32);
-        let saved = device.create_buffer_shared(32);
-        let active = PlanValue {
-            dt: 0.25,
-            elapsed: 0.25,
-            remaining: 0.75,
+        let clock = GpuFlipClock::new(&device, 512, 1, 1);
+        let live = PlanValue {
+            dt: 0.1,
+            remaining: 0.5,
             live_mode: 1,
             ..PlanValue::zeroed()
         };
-        let inactive = PlanValue {
-            live_mode: 1,
-            ..PlanValue::zeroed()
+        // 64-thread groups over n, at least one, n capped at the capacity.
+        for (n, groups, covered) in [
+            (0, 1, 0),
+            (1, 1, 1),
+            (63, 1, 63),
+            (64, 1, 64),
+            (65, 2, 65),
+            (300, 5, 300),
+            (512, 8, 512),
+            (513, 8, 512),
+            (100_000, 8, 512),
+        ] {
+            let record = slots_record(&device, n);
+            for phase in [ReductionPhase::Scheduling, ReductionPhase::Cleanup] {
+                assert_eq!(
+                    marker_triple_for(&device, &clock, &live, &record, phase),
+                    [groups, 1, 1, covered],
+                    "n {n}"
+                );
+            }
+        }
+        // Scheduling needs time left; cleanup needs a step taken. A plan with
+        // neither launches nothing, whatever the population; offline always runs.
+        let record = slots_record(&device, 300);
+        let no_time = PlanValue {
+            dt: 0.1,
+            remaining: 0.0,
+            ..live
+        };
+        let no_step = PlanValue {
+            dt: 0.0,
+            remaining: 0.5,
+            ..live
+        };
+        let idle = PlanValue {
+            dt: 0.0,
+            remaining: 0.0,
+            ..live
         };
         let offline = PlanValue {
-            dt: 0.5,
             live_mode: 0,
+            ..idle
+        };
+        for (plan, scheduling, cleanup, label) in [
+            (no_time, 0, 5, "no time left"),
+            (no_step, 5, 0, "no step taken"),
+            (idle, 0, 0, "idle"),
+            (offline, 5, 5, "offline"),
+        ] {
+            for (phase, groups) in [
+                (ReductionPhase::Scheduling, scheduling),
+                (ReductionPhase::Cleanup, cleanup),
+            ] {
+                let triple = marker_triple_for(&device, &clock, &plan, &record, phase);
+                assert_eq!(triple, [groups, 1, 1, 300], "{label}");
+            }
+        }
+    }
+
+    /// The top speed the clock plans from one frame over `markers`, and the
+    /// plan's bytes.
+    fn planned_speed(
+        device: &GpuDevice,
+        clock: &GpuFlipClock,
+        markers: &GpuBuffer,
+        record: &GpuBuffer,
+    ) -> PlanValue {
+        let empty = device.create_buffer_shared(96);
+        let readback = device.create_buffer_shared(48);
+        let p = params();
+        let mut enc = device.create_encoder("flip-clock slots in use proof");
+        clock.begin_frame(&mut enc, &p);
+        let plan = clock.dispatch(
+            &mut enc,
+            GpuFlipClockInputs {
+                marker_particles: markers,
+                marker_count: record,
+                obstacle_vertices: &empty,
+                obstacle_count: 0,
+                source_vertices: &empty,
+                source_count: 0,
+                live_hits: &empty,
+                live_hit_count: 0,
+                event_impulses: &empty,
+                impulse_stride: 0,
+                impulse_nodes: [2, 2, 2],
+                impulse_origin: [0.0; 3],
+                impulse_spacing: 1.0,
+                body_rows: &empty,
+                body_rows_offset: 0,
+                body_reaction: &empty,
+            },
+            &p,
+        );
+        enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
+        enc.commit_and_wait_completed();
+        read_plan(&readback)
+    }
+
+    #[test]
+    fn gpu_flip_clock_top_speed_ignores_slots_past_the_count() {
+        // 70,000 slots reduce in three levels (1,094 and 18 partials), and
+        // the counts below end in the middle of a group at each level.
+        const CAPACITY: usize = 70_000;
+        let device = manifold_gpu::testkit::test_device();
+        let clock = GpuFlipClock::new(&device, CAPACITY as u32, 1, 1);
+        for n in [1usize, 300, 4_097, 65_000, CAPACITY] {
+            let mut particles = vec![particle(1.0); CAPACITY];
+            particles[n - 1] = particle(3.0);
+            let clean = device.create_buffer_shared(CAPACITY as u64 * 32);
+            // A faster decoy and a non-finite one past the count.
+            let mut decoys = particles.clone();
+            for decoy in decoys.iter_mut().skip(n) {
+                *decoy = particle(1000.0);
+            }
+            if n < CAPACITY {
+                decoys[n].velocity[0] = f32::NAN;
+            }
+            let decoyed = device.create_buffer_shared(CAPACITY as u64 * 32);
+            for particle in particles.iter_mut().skip(n) {
+                *particle = FluidParticle::zeroed();
+            }
+            // SAFETY: fresh shared buffers, no GPU work in flight.
+            unsafe {
+                clean.write(0, bytemuck::cast_slice(&particles));
+                decoyed.write(0, bytemuck::cast_slice(&decoys));
+            }
+            let record = slots_record(&device, n as u32);
+            let want = planned_speed(&device, &clock, &clean, &record);
+            let got = planned_speed(&device, &clock, &decoyed, &record);
+            assert_eq!(want.maximum_speed, 3.0, "n {n}");
+            assert_eq!(want.nonfinite, 0, "n {n}");
+            assert_eq!(
+                bytemuck::bytes_of(&got),
+                bytemuck::bytes_of(&want),
+                "n {n}: a decoy past the count changed the plan"
+            );
+            if n < CAPACITY {
+                // The decoys are seen once the count covers them.
+                let all = slots_record(&device, CAPACITY as u32);
+                assert_eq!(
+                    planned_speed(&device, &clock, &decoyed, &all).nonfinite,
+                    1,
+                    "n {n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_flip_clock_removal_leaves_particles_past_the_count_alone() {
+        const CAPACITY: usize = 512;
+        const COUNT: usize = 300;
+        let device = manifold_gpu::testkit::test_device();
+        let clock = GpuFlipClock::new(&device, CAPACITY as u32, 1, 1);
+        let record = slots_record(&device, COUNT as u32);
+        let markers = device.create_buffer_shared(CAPACITY as u64 * 32);
+        let mut particles = vec![particle(1.0); CAPACITY];
+        // Over the limit inside the count and at every slot past it.
+        particles[COUNT - 1] = particle(1024.0);
+        for decoy in particles.iter_mut().skip(COUNT) {
+            *decoy = particle(1024.0);
+        }
+        // SAFETY: fresh shared buffer, no GPU work in flight.
+        unsafe { markers.write(0, bytemuck::cast_slice(&particles)) };
+        let plan_seed = device.create_buffer_shared(48);
+        let step = PlanValue {
+            dt: 0.1,
+            elapsed: 1.0,
+            remaining: 0.0,
+            live_mode: 1,
             ..PlanValue::zeroed()
         };
-        let original: [u32; 8] = [
-            0x0000_0000,
-            0x7fff_ffff,
-            0x8000_0000,
-            0xffff_ffff,
-            0x1357_9bdf,
-            0x2468_ace0,
-            0xdead_beef,
-            0xcafe_babe,
-        ];
-        let corrupted = [0xaaaaaaaau32; 8];
-        let offline_bits: [u32; 8] = [
-            0x1122_3344,
-            0x5566_7788,
-            0x99aa_bbcc,
-            0xddee_ff00,
-            0x0102_0304,
-            0x0506_0708,
-            0x0a0b_0c0d,
-            0x0e0f_1011,
-        ];
-        let params = [8_u32, 0, 0, 0];
-        unsafe {
-            plan.write(0, bytemuck::bytes_of(&active));
-            target.write(0, bytemuck::cast_slice(&original));
-            saved.zero_fill();
-        }
-        let mut enc = device.create_encoder("flip-clock-mask-active");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&params),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &plan,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: &target,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: &saved,
-                    offset: 0,
-                },
-            ],
-            [1, 1, 1],
-            "flip-clock-mask-active",
-        );
+        // SAFETY: fresh shared buffer, no GPU work in flight.
+        unsafe { plan_seed.write(0, bytemuck::bytes_of(&step)) };
+        let mut enc = device.create_encoder("flip-clock removal past the count");
+        enc.copy_buffer_to_buffer(&plan_seed, &clock.plan, 48);
+        clock.remove_extreme(&mut enc, &markers, &record, &params());
         enc.commit_and_wait_completed();
-        assert_eq!(read_words(&saved, 8).as_slice(), original.as_slice());
-
-        unsafe {
-            target.write(0, bytemuck::cast_slice(&corrupted));
-            plan.write(0, bytemuck::bytes_of(&inactive));
+        // SAFETY: the encoder completed and the buffer holds CAPACITY records.
+        let got = unsafe {
+            std::slice::from_raw_parts(
+                markers.mapped_ptr().unwrap().cast::<FluidParticle>(),
+                CAPACITY,
+            )
+        };
+        for (index, (before, after)) in particles.iter().zip(got).enumerate() {
+            let mut want = *before;
+            if index == COUNT - 1 {
+                want.position_radius[3] = 0.0;
+            }
+            assert_eq!(
+                bytemuck::bytes_of(after),
+                bytemuck::bytes_of(&want),
+                "slot {index}"
+            );
         }
-        let mut enc = device.create_encoder("flip-clock-mask-inactive");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&params),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &plan,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: &target,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: &saved,
-                    offset: 0,
-                },
-            ],
-            [1, 1, 1],
-            "flip-clock-mask-inactive",
-        );
-        enc.commit_and_wait_completed();
-        assert_eq!(read_words(&target, 8).as_slice(), original.as_slice());
-
-        unsafe {
-            target.write(0, bytemuck::cast_slice(&offline_bits));
-            plan.write(0, bytemuck::bytes_of(&offline));
-        }
-        let mut enc = device.create_encoder("flip-clock-mask-offline");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&params),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &plan,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: &target,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: &saved,
-                    offset: 0,
-                },
-            ],
-            [1, 1, 1],
-            "flip-clock-mask-offline",
-        );
-        enc.commit_and_wait_completed();
-        assert_eq!(read_words(&target, 8).as_slice(), offline_bits.as_slice());
     }
 }

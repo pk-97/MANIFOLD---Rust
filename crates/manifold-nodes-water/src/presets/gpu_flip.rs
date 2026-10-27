@@ -557,24 +557,22 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, fill, &LATTICE_WIRES);
     b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch", "particle_capacity"]);
     b.wire((domain, "mesh_wall_inset"), fill, "wall_inset");
-    let count = (fill, "count");
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
-    b.wire(count, state, "count");
+    b.wire((fill, "count"), state, "count");
     b.wires(domain, state, &["ticks", "epoch", "simulation_time", "target_time", "dropped_seconds"]);
     let particles: Port = (state, "out");
     let step = water_step(&mut b, scene, (domain, state));
     b.wire(particles, step, "particles");
     b.wire((state, "identity"), step, "identity");
     b.wire((step, "identity_out"), state, "identity_in");
-    b.wire(count, step, "count");
     b.wire((domain, "reaction"), step, "reaction");
     b.wires(domain, step, &["regions", "region_count"]);
     let particles = (step, "out");
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
     b.wire((state, "stats"), stats, "stats");
-    b.wire(count, stats, "count");
+    b.wire((step, "identity_out"), stats, "identity");
     b.wire((domain, "particle_mass"), stats, "particle_mass");
     b.wire((step, "capped"), stats, "capped");
     b.wire(particles, state, "in");
@@ -602,7 +600,6 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((state, "stats"), frame, "stats");
     b.wire((state, "identity"), frame, "identity");
     b.wire((solid, "solid"), frame, "solid");
-    b.wire(count, frame, "count");
     b.wires(domain, frame, &LATTICE_WIRES);
     b.wires(domain, frame, &["closed_faces", "simulation_time", "display_time", "epoch", "display_cursor", "dropped_seconds"]);
     // Solids pose their bodies at the end of the accepted interval, so they
@@ -743,6 +740,7 @@ impl WaterScene {
             ],
         );
         b.wire((step, "out"), whitewater, "particles");
+        b.wire((step, "identity_out"), whitewater, "identity");
         b.wire((solid, "solid"), whitewater, "solid");
         b.wire((source, "solid"), whitewater, "obstacle_source");
         b.wires(
@@ -1400,7 +1398,7 @@ fn padded_lattice(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
 /// The tick's water:
 /// one node.gpu_flip_step of `scene.steps` substeps on the domain's lattice, gravity,
 /// fields and bodies, and the state's tick index. The caller wires its
-/// particles and count.
+/// particles and identity.
 fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize {
     let (domain, state) = tick;
     let iterations = |n: usize, auto: u32| int(if n == auto as usize { 0 } else { n });
@@ -1431,12 +1429,6 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((domain, "gravity_z"), step, "gravity_z");
     b.wires(domain, step, &FIELD_WIRES);
     b.wire((state, "tick_index"), step, "tick_index");
-    b.wire((state, "retired_max_speed"), step, "retired_max_speed");
-    b.wire(
-        (domain, "initial_obstacle_speed"),
-        step,
-        "initial_obstacle_speed",
-    );
     b.wires(
         domain,
         step,

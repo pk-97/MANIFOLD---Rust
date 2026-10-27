@@ -33,10 +33,11 @@ impl StepState {
             .pipelines
             .as_ref()
             .expect("step pipelines built by prepare_pipelines at install");
-        let (Some(l), Some(tiles), Some(sorted)) = (
+        let (Some(l), Some(tiles), Some(sorted), Some(record)) = (
             self.lattice.as_ref(),
             self.tiles.as_ref(),
             self.sorted.as_ref(),
+            self.slot_record.as_ref(),
         ) else {
             return Err("the step's storage was not reserved".into());
         };
@@ -47,25 +48,21 @@ impl StepState {
         let pool = tiles.pool_tiles;
         let p = step.params;
         let capacity = p.capacity;
-        // What reads this slot's activity beyond the passes that always did:
-        // the clock plan, or zeros (always active) under the test lever.
-        let gated = gating();
-        let gate_plan = if gated {
-            step.clock_plan
-        } else {
-            self.zeros.as_ref().expect("zero storage prepared")
-        };
+        // Every sort covers the slots in use, from the slot record.
         let sort_job = |particles, sorted| SortJob {
             particles,
             read: LIQUID_PARTICLE_READ,
             capacity,
-            count: SortCount::Slots(step.count),
+            count: SortCount::Record {
+                buffer: record,
+                offset: 0,
+            },
             bin_min: p.box_min,
             inv_cell: 1.0 / p.cell_size,
             bins: cells,
             sorted: Some(sorted),
             order: None,
-            gate: Some(gate_plan),
+            gate: Some(step.clock_plan),
         };
         // A copy of the params, so each Bytes binding borrows a value that
         // lives across its dispatch.
@@ -161,8 +158,8 @@ impl StepState {
             l,
             tiles,
             step.particles,
-            step.count,
-            gate_plan,
+            record,
+            step.clock_plan,
         );
         self.sorter.encode_pooled(
             device,
@@ -180,10 +177,16 @@ impl StepState {
             .ranges()
             .ok_or("the cell ranges were not reserved")?;
         // The slots in use are the sort's live end, for whatever reads the
-        // identity's record.
+        // identity's record and the slot record.
         let keys = pool_len(pool) as u32;
-        self.identity_ops
-            .settle(enc, ranges, keys, step.identity, gate_plan, None);
+        self.identity_ops.settle(
+            enc,
+            ranges,
+            keys,
+            step.identity,
+            step.clock_plan,
+            Some(record),
+        );
         encode_tile_lists(
             enc,
             pipes,
@@ -191,7 +194,7 @@ impl StepState {
             tiles,
             step.capped,
             step.tally,
-            gate_plan,
+            step.clock_plan,
         );
         enc.dispatch_compute_indirect(
             &pipes.tiles_retire,
@@ -318,7 +321,7 @@ impl StepState {
                         uniform(&base),
                         buffer(3, from),
                         buffer(4, to),
-                        buffer(46, gate_plan),
+                        buffer(46, step.clock_plan),
                         buffer(51, table),
                     ],
                     face_groups,
@@ -361,7 +364,7 @@ impl StepState {
             cells,
             step.capped,
             step.tally,
-            gate_plan,
+            step.clock_plan,
         );
         enc.dispatch_compute(
             &pipes.pocket_pin,
@@ -371,14 +374,14 @@ impl StepState {
                 buffer(23, &l.pocket),
                 buffer(25, &l.pocket_label),
                 buffer(5, &l.solve_water),
-                buffer(46, gate_plan),
+                buffer(46, step.clock_plan),
                 buffer(51, table),
             ],
             cells_groups,
             "gpu_flip.step.pocket_pin",
         );
         if step.level > 0 {
-            encode_pocket_coarsen(enc, pipes, &base, l, table, gate_plan);
+            encode_pocket_coarsen(enc, pipes, &base, l, table, step.clock_plan);
         }
         if bodies && !step.dynamic {
             enc.dispatch_compute(
@@ -388,7 +391,7 @@ impl StepState {
                     buffer(4, &l.v),
                     buffer(10, &l.s),
                     buffer(23, &l.pocket),
-                    buffer(46, gate_plan),
+                    buffer(46, step.clock_plan),
                     buffer(51, table),
                 ],
                 face_groups,
@@ -417,7 +420,7 @@ impl StepState {
             0,
             step.capped,
             step.tally,
-            gate_plan,
+            step.clock_plan,
         );
         // At a coarse solve level the restricted right-hand side loses each
         // pocket's zero sum (design section 11), so the mean comes off once
@@ -440,7 +443,7 @@ impl StepState {
                     solve,
                     step.capped,
                     step.tally,
-                    gate_plan,
+                    step.clock_plan,
                 );
             }
         };
@@ -452,7 +455,7 @@ impl StepState {
             faces: &l.s,
             phi: step.ghost.then_some(&l.phi),
         };
-        self.solver.set_clock_plan(gate_plan);
+        self.solver.set_clock_plan(step.clock_plan);
         self.solver.prepare(device, enc, &water, table, pool)?;
         // Dynamic bodies join the solve as the engine's mass-aware PCG
         // (RigidFluidCoupling) has them, at the pose the solid takes.
@@ -602,7 +605,7 @@ impl StepState {
                 1,
                 step.capped,
                 step.tally,
-                gate_plan,
+                step.clock_plan,
             );
             // The density solve uses the same pocket-only water mask as
             // pressure, with air at the cell centres and no body coupling.
@@ -681,7 +684,7 @@ impl StepState {
                 particles: sorted,
                 order,
                 ranges,
-                count: capacity,
+                count: (record, 0),
                 phi,
                 origin: p.box_min,
                 h: p.cell_size,
@@ -690,7 +693,6 @@ impl StepState {
             let births = super::super::gpu_flip_sheeting::StepBirths {
                 old: &l.a,
                 identity: step.identity,
-                slots: base.particles,
                 capped: step.capped,
                 capped_offset: step.tally,
                 rate: step.sheet_rate,
@@ -707,7 +709,7 @@ impl StepState {
                     ranges,
                     scan: self.sheeting.winners(),
                     plan: step.clock_plan,
-                    step_record: None,
+                    step_record: Some(record),
                     params: [
                         base.particles,
                         pool_len(pool) as u32,
@@ -721,7 +723,7 @@ impl StepState {
                 .encode_write(enc, &inputs, step.clock_plan, &births, table, pool);
         }
         enc.set_profile_tag("gpu_flip.stage.move");
-        enc.dispatch_compute(
+        enc.dispatch_compute_indirect(
             &pipes.advect,
             &[
                 uniform(&base),
@@ -737,8 +739,10 @@ impl StepState {
                 buffer(36, step.regions),
                 buffer(46, step.clock_plan),
                 buffer(51, table),
+                buffer(42, record),
             ],
-            groups(u64::from(base.particles)),
+            record,
+            0,
             "gpu_flip.step.move",
         );
         // Native removal precedes inflow. Stable cell ranks predate speed
@@ -747,10 +751,7 @@ impl StepState {
         self.sorter.encode_pooled(
             device,
             enc,
-            &SortJob {
-                count: SortCount::Slots(base.particles),
-                ..sort_job(step.out, sorted)
-            },
+            &sort_job(step.out, sorted),
             table,
             pool,
             &SORT_LABELS,
@@ -759,13 +760,19 @@ impl StepState {
             .sorter
             .ranges()
             .ok_or("the cell ranges were not reserved")?;
-        self.identity_ops
-            .settle(enc, ranges, keys, step.identity, gate_plan, None);
+        self.identity_ops.settle(
+            enc,
+            ranges,
+            keys,
+            step.identity,
+            step.clock_plan,
+            Some(record),
+        );
         enc.compute_memory_barrier_buffers();
         self.clock
             .as_ref()
             .expect("live clock prepared")
-            .remove_extreme(enc, sorted, base.particles, clock_params);
+            .remove_extreme(enc, sorted, record, clock_params);
         enc.compute_memory_barrier_buffers();
         enc.dispatch_compute(
             &pipes.remove_crowded,
@@ -783,10 +790,7 @@ impl StepState {
         self.sorter.encode_pooled(
             device,
             enc,
-            &SortJob {
-                count: SortCount::Slots(base.particles),
-                ..sort_job(sorted, step.out)
-            },
+            &sort_job(sorted, step.out),
             table,
             pool,
             &SORT_LABELS,
@@ -795,21 +799,23 @@ impl StepState {
             .sorter
             .ranges()
             .ok_or("the cell ranges were not reserved")?;
-        self.identity_ops
-            .settle(enc, ranges, keys, step.identity, gate_plan, None);
+        self.identity_ops.settle(
+            enc,
+            ranges,
+            keys,
+            step.identity,
+            step.clock_plan,
+            Some(record),
+        );
         // New inflow is first transferred and advected by the following step.
         if p.region_count > 0 {
             let sites = emit_sites(cells);
             let scan = self.emit_scan.buffer(device, sites as usize)?.clone();
-            let emission = StepParams {
-                capacity: base.particles,
-                ..base
-            };
             enc.compute_memory_barrier_buffers();
             enc.dispatch_compute(
                 &pipes.emit_flags,
                 &[
-                    uniform(&emission),
+                    uniform(&base),
                     buffer(1, ranges),
                     buffer(2, step.out),
                     buffer(9, &l.corners),
@@ -831,7 +837,7 @@ impl StepState {
                     blocks: "gpu_flip.step.emit_scan.blocks",
                     add: "gpu_flip.step.emit_scan.add",
                 },
-                gate_plan,
+                step.clock_plan,
             );
             self.identity_ops.reserve(
                 enc,
@@ -841,14 +847,14 @@ impl StepState {
                     ranges,
                     scan: &scan,
                     plan: step.clock_plan,
-                    step_record: None,
-                    params: [emission.capacity, pool_len(pool) as u32, sites as u32, 1],
+                    step_record: Some(record),
+                    params: [base.particles, pool_len(pool) as u32, sites as u32, 1],
                 },
             );
             enc.dispatch_compute(
                 &pipes.emit_write,
                 &[
-                    uniform(&emission),
+                    uniform(&base),
                     buffer(1, ranges),
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
@@ -864,7 +870,7 @@ impl StepState {
             enc.dispatch_compute(
                 &pipes.emit_tally,
                 &[
-                    uniform(&emission),
+                    uniform(&base),
                     buffer(1, ranges),
                     buffer(37, &scan),
                     buffer(46, step.clock_plan),

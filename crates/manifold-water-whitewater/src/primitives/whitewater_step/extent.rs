@@ -5,6 +5,7 @@ use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::extent::{field_reads, whole};
 use manifold_water_liquid::primitives::face_sample_component::{pool_tiles_wire, pooled_bytes};
+use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
 use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
@@ -40,6 +41,8 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.provide(port, shape.population_bytes());
     }
     x.hold(shape.held_bytes(x.items("particles").unwrap_or(0)));
+    // The emit passes dispatch and count from the identity's record.
+    x.covers("identity", IDENTITY_BYTES)?;
     if x.input("pool_tiles").is_none() {
         return Err(Verdict::Refused("pool_tiles is not wired".into()));
     }

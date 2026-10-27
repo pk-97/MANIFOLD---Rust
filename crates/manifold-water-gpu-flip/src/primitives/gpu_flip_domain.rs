@@ -263,7 +263,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 57] = [
+const OUTPUTS: [&str; 56] = [
     "lattice_min_x",
     "lattice_min_y",
     "lattice_min_z",
@@ -313,7 +313,6 @@ const OUTPUTS: [&str; 57] = [
     "mesh_nodes_x",
     "mesh_nodes_y",
     "mesh_nodes_z",
-    "initial_obstacle_speed",
     "mesh_wall_inset",
     "max_iterations",
     "display_cursor",
@@ -325,14 +324,9 @@ const OUTPUTS: [&str; 57] = [
 const TICKS: usize = 19;
 const EPOCH: usize = 20;
 const IMPULSE_TICK: usize = 33;
-const INITIAL_OBSTACLE_SPEED: usize = 49;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
-const _: () = assert!(matches!(
-    OUTPUTS[INITIAL_OBSTACLE_SPEED].as_bytes(),
-    b"initial_obstacle_speed"
-));
 
 /// The coupled half of the domain: the paired physics world's latest
 /// observation, and the rigid owner built from it.
@@ -435,7 +429,6 @@ manifold_node_engine::primitive! {
     interval_duration: ScalarF32,
     limit_interval: ScalarF32,
     clock_obstacle_count: ScalarF32, clock_source_count: ScalarF32,
-    initial_obstacle_speed: ScalarF32,
     clock_obstacles: Array(f32), clock_sources: Array(f32),
     live_hits: Array(f32), live_hit_count: ScalarF32,
         target_time: ScalarF32,
@@ -515,15 +508,8 @@ manifold_node_engine::primitive! {
         fields: LiquidFields = LiquidFields::default(),
         acceleration: Option<FieldValue> = None,
         holding: bool = false,
-        // The obstacle CFL bound of a later tick of this frame, prepared by
-        // the host step before it (see `substep_clock_interval`).
-        later_obstacle: [(&'static str, f32); 1] = [(OUTPUTS[INITIAL_OBSTACLE_SPEED], -1.0)],
-        later_obstacle_tick: Option<u32> = None,
     },
 }
-
-/// A later tick whose bodies no host step prepared has no obstacle bound.
-const NO_OBSTACLE_BOUND: &[(&str, f32)] = &[(OUTPUTS[INITIAL_OBSTACLE_SPEED], -1.0)];
 
 impl Primitive for GpuFlipDomain {
     fn reconfigure(&mut self, params: &ParamValues) {
@@ -599,30 +585,19 @@ impl Primitive for GpuFlipDomain {
         self.role_pending
     }
 
-    /// The frame's outputs carry the first tick's obstacle bound. A later
-    /// tick gets its own once the host step has prepared its bodies, and
-    /// none before, so a step never pairs one tick's bodies with another's.
     fn substep_clock_interval(
         &self,
         iteration: u32,
     ) -> Option<manifold_node_engine::exec::substeps::SubstepClockOutput<'_>> {
         let frame = self.scheduled_frame.as_ref()?;
         frame.interval(u64::from(iteration)).map(|interval| {
-            let mut output = manifold_node_engine::exec::substeps::SubstepClockOutput::single(
+            manifold_node_engine::exec::substeps::SubstepClockOutput::single(
                 "interval_duration",
                 interval.start,
                 interval.end,
                 iteration,
                 frame.ticks,
-            );
-            if iteration > 0 {
-                output.scalars = if self.later_obstacle_tick == Some(iteration) {
-                    &self.later_obstacle
-                } else {
-                    NO_OBSTACLE_BOUND
-                };
-            }
-            output
+            )
         })
     }
 
@@ -645,18 +620,7 @@ impl Primitive for GpuFlipDomain {
         let Some(exchange) = self.coupled.exchange.clone() else {
             return Ok(());
         };
-        let duration = exchange
-            .frame
-            .interval(u64::from(iteration))
-            .map(|interval| interval.duration().0 as f32);
         let result = self.exchange_tick(iteration, exchange);
-        if result.is_ok()
-            && let Some(duration) = duration
-        {
-            // exchange_tick prepared this tick's clock vertices.
-            self.later_obstacle[0].1 = self.bodies.initial_clock_obstacle_speed(duration);
-            self.later_obstacle_tick = Some(iteration);
-        }
         if let Err(error) = &result {
             // The pair restarts next frame with a fresh rigid owner.
             self.coupled.exchange = None;
@@ -730,7 +694,6 @@ impl Primitive for GpuFlipDomain {
         // there is nothing to hold, so the outputs are declared pending.
         self.coupled.exchange = None;
         self.scheduled_frame = None;
-        self.later_obstacle_tick = None;
         let computed = if self.role_pending {
             Ok(None)
         } else {
@@ -741,7 +704,6 @@ impl Primitive for GpuFlipDomain {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
             held[TICKS] = 0.0;
             held[IMPULSE_TICK] = -1.0;
-            held[INITIAL_OBSTACLE_SPEED] = -1.0;
             held
         };
         self.coupled.failed = false;
@@ -1315,15 +1277,6 @@ impl GpuFlipDomain {
             ("handover_velocity", handover.velocity),
             ("handover_rotation", handover.rotation),
             ("first_tick", first_tick as f32),
-            // Prepared first rows, before the first interval's cleared reaction
-            // changes. Later intervals require their own freshness proof.
-            (
-                "initial_obstacle_speed",
-                frame.interval(0).map_or(-1.0, |interval| {
-                    self.bodies
-                        .initial_clock_obstacle_speed(interval.duration().0 as f32)
-                }),
-            ),
         ];
         let mut values = [0.0; OUTPUTS.len()];
         let mut written = 0u64;
@@ -1553,40 +1506,6 @@ mod tests {
             _ => default,
         };
         gpu_flip_geometry(read, None, volume)
-    }
-
-    /// A later tick of a frame reads the obstacle bound its host step
-    /// prepared, or none; it never inherits the first tick's.
-    #[test]
-    fn gpu_flip_domain_later_ticks_get_their_own_obstacle_bound() {
-        use manifold_physics::clock::SimulationClock;
-        let mut clock = SimulationClock::default();
-        clock.advance(PlayedTime::from_played(0.0), 0.5, 1.0, 0.0, false, true);
-        let frame = clock.advance(PlayedTime::from_played(1.0), 0.5, 1.0, 0.0, false, true);
-        assert!(frame.ticks >= 2, "the fixture needs a later tick");
-        let mut domain = GpuFlipDomain::new();
-        domain.scheduled_frame = Some(frame);
-        let scalars = |domain: &GpuFlipDomain, iteration| {
-            domain
-                .substep_clock_interval(iteration)
-                .expect("an accepted interval")
-                .scalars
-                .to_vec()
-        };
-        assert!(
-            scalars(&domain, 0).is_empty(),
-            "the first tick keeps the frame's bound"
-        );
-        assert_eq!(scalars(&domain, 1), vec![("initial_obstacle_speed", -1.0)]);
-        domain.later_obstacle[0].1 = 2.5;
-        domain.later_obstacle_tick = Some(1);
-        assert_eq!(scalars(&domain, 1), vec![("initial_obstacle_speed", 2.5)]);
-        domain.later_obstacle_tick = Some(2);
-        assert_eq!(
-            scalars(&domain, 1),
-            vec![("initial_obstacle_speed", -1.0)],
-            "another tick's bound"
-        );
     }
 
     /// A pending liquid makes a hit wait for it; only a failed one refuses

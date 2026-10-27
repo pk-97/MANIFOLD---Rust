@@ -2,18 +2,30 @@
 use crate::primitives::liquid_frame::WHITEWATER_INPUTS;
 use crate::primitives::liquid_frame::WHITEWATER_OUTPUTS;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::extent::PARTICLE;
 use manifold_water_liquid::extent::liquid_lattice;
 use manifold_water_liquid::frame_history::H_MAX;
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The retained history at its budget: every slot admitted whole.
     const SLOTS: u64 = H_MAX as u64;
-    x.covers("identity", 16)?;
+    x.covers("identity", IDENTITY_BYTES)?;
     let lattice = liquid_lattice(x)?;
     let surface = lattice.surface();
-    let count = x.count("count", 0.0)?;
+    // Every slot of the state: the history keeps room for all of them, and the
+    // count outputs plan for them.
+    let count = x
+        .items("particles")
+        .ok_or_else(|| x.uncovered("particles is unbound".into()))?;
+    if count > u64::from(EXACT_F32_COUNT) {
+        return Err(x.uncovered(format!(
+            "particles holds {count} records, more than the {EXACT_F32_COUNT} a particle count carries exactly"
+        )));
+    }
+    let count = count as u32;
     let particles = u64::from(count.max(1)) * PARTICLE;
     let solid = surface.solid_bytes();
     x.hold(
@@ -49,7 +61,6 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     {
         x.publish(port, n as f32);
     }
-    x.covers("particles", u64::from(count) * PARTICLE)?;
     x.covers("stats", u64::from(LIQUID_STATS_WORDS) * 4)?;
     if wired {
         if x.bytes("solid") != Some(solid) {

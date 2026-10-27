@@ -35,12 +35,9 @@ struct EmitParams {
     generation_rate: f32,
     points_per_cell: f32,
     ticks: f32,
-    live_count: f32,
     dt: f32,
     dust_enabled: f32,
     boundary_dust: f32,
-    count: u32,
-    _pad: vec2<u32>,
 }
 @group(0) @binding(0) var<uniform> p: EmitParams;
 @group(0) @binding(1) var<storage, read> buf_particles: array<Element>;
@@ -57,6 +54,11 @@ struct EmitParams {
 @group(0) @binding(12) var<storage, read_write> out_counts: array<u32>;
 @group(0) @binding(13) var<storage, read_write> out_unscaled: array<Element>;
 @group(0) @binding(14) var<storage, read_write> out_wavecrest_bits: array<u32>;
+// The particle identity: word 7 counts the liquid particles in use. The emit
+// and dust passes dispatch over them from the record's groups (words 4-6) and
+// read no slot at or past it.
+@group(0) @binding(15) var<storage, read> buf_identity: array<u32>;
+const IDENTITY_N: u32 = 7u;
 // Dust has disjoint entry-point resources; its solid/source occupy the face slots.
 @group(0) @binding(2) var<storage, read> buf_solid: array<f32>;
 @group(0) @binding(3) var<storage, read> buf_source: array<WhitewaterSource>;
@@ -479,14 +481,15 @@ fn ww_phase_dust(
 @compute @workgroup_size(256)
 fn ww_emit(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
-    if idx >= p.count { return; }
-    let jittered = ww_phase_jitter(idx, p.count, buf_particles[idx], p.cell_size, p.seed, p.epoch);
-    let unscaled = ww_phase_sample(idx, p.count, jittered, p.face_cells_x, p.face_cells_y, p.face_cells_z, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z);
-    let sampled = ww_phase_velocity(idx, p.count, unscaled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.spray_speed, p.seed, p.epoch);
-    let energy = ww_phase_energy(idx, p.count, sampled, p.min_energy, p.max_energy);
-    let wavecrest = ww_phase_wavecrest(idx, p.count, sampled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.min_curvature, p.max_curvature, p.sharpness);
-    let inside = ww_phase_inside(idx, p.count, sampled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.min_turbulence, p.max_turbulence, p.inside_enabled);
-    let counts = ww_phase_count(idx, p.count, sampled, energy, wavecrest, inside, p.rate, p.turbulence_rate, p.generation_rate, p.seed, p.epoch, p.points_per_cell, p.ticks, p.live_count, p.dt, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z);
+    let n = buf_identity[IDENTITY_N];
+    if idx >= n { return; }
+    let jittered = ww_phase_jitter(idx, n, buf_particles[idx], p.cell_size, p.seed, p.epoch);
+    let unscaled = ww_phase_sample(idx, n, jittered, p.face_cells_x, p.face_cells_y, p.face_cells_z, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z);
+    let sampled = ww_phase_velocity(idx, n, unscaled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.spray_speed, p.seed, p.epoch);
+    let energy = ww_phase_energy(idx, n, sampled, p.min_energy, p.max_energy);
+    let wavecrest = ww_phase_wavecrest(idx, n, sampled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.min_curvature, p.max_curvature, p.sharpness);
+    let inside = ww_phase_inside(idx, n, sampled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.min_turbulence, p.max_turbulence, p.inside_enabled);
+    let counts = ww_phase_count(idx, n, sampled, energy, wavecrest, inside, p.rate, p.turbulence_rate, p.generation_rate, p.seed, p.epoch, p.points_per_cell, p.ticks, f32(n), p.dt, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z);
     out_sampled[idx] = sampled;
     out_energy[idx] = energy;
     out_counts[idx] = counts;
@@ -501,11 +504,12 @@ fn ww_emit(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn ww_dust(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
-    if idx >= p.count { return; }
+    let n = buf_identity[IDENTITY_N];
+    if idx >= n { return; }
     let unscaled = buf_particles[idx];
-    let dust = ww_phase_dust(idx, p.count, unscaled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.min_turbulence, p.max_turbulence, p.dust_enabled, p.boundary_dust);
-    let energy = ww_phase_energy(idx, p.count, unscaled, p.min_energy, p.max_energy);
-    let counts = ww_phase_count(idx, p.count, unscaled, energy, bitcast<f32>(out_wavecrest_bits[idx]), dust, p.rate, p.turbulence_rate, p.generation_rate, p.seed, p.epoch, p.points_per_cell, p.ticks, p.live_count, p.dt, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z);
+    let dust = ww_phase_dust(idx, n, unscaled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.min_turbulence, p.max_turbulence, p.dust_enabled, p.boundary_dust);
+    let energy = ww_phase_energy(idx, n, unscaled, p.min_energy, p.max_energy);
+    let counts = ww_phase_count(idx, n, unscaled, energy, bitcast<f32>(out_wavecrest_bits[idx]), dust, p.rate, p.turbulence_rate, p.generation_rate, p.seed, p.epoch, p.points_per_cell, p.ticks, f32(n), p.dt, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z);
     out_energy[idx] = energy;
     out_counts[idx] = counts;
 }
@@ -515,7 +519,6 @@ struct Spawn { position_lifetime: vec4<f32>, velocity: vec3<f32>, kind: u32, }
 struct Pool { position_lifetime: vec4<f32>, velocity: vec3<f32>, kind: u32, id: u32, _pad0: u32, _pad1: u32, _pad2: u32, }
 struct SpawnParams {
     capacity: f32,
-    emitters: f32,
     face_cells_x: f32,
     face_cells_y: f32,
     face_cells_z: f32,
@@ -542,6 +545,7 @@ struct SpawnParams {
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
+    _pad3: u32,
 }
 struct LifecycleParams {
     center_x: f32,
@@ -587,6 +591,8 @@ struct LifecycleParams {
 @group(0) @binding(8) var<storage, read> buf_energy: array<f32>;
 @group(0) @binding(9) var<storage, read> buf_spawn_solid: array<f32>;
 @group(0) @binding(10) var<storage, read_write> out_typed: array<Spawn>;
+// The particle identity: word 7 is the emitters, the entries of `buf_offsets`.
+@group(0) @binding(11) var<storage, read> buf_spawn_identity: array<u32>;
 @group(0) @binding(1) var<storage, read> buf_pool: array<Pool>;
 @group(0) @binding(7) var<storage, read> buf_lifecycle_solid: array<f32>;
 @group(0) @binding(8) var<storage, read> buf_substep_schedule: array<f32>;
@@ -1473,7 +1479,7 @@ fn ww_phase_age(
 fn ww_spawn(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
     if idx >= sp.count { return; }
-    let spawn = ww_phase_spawn(idx, sp.count, sp.capacity, sp.emitters, sp.face_cells_x, sp.face_cells_y, sp.face_cells_z, sp.center_x, sp.center_y, sp.center_z, sp.size_x, sp.size_y, sp.size_z, sp.nodes_x, sp.nodes_y, sp.nodes_z, sp.seed, sp.epoch, sp.min_lifetime, sp.max_lifetime, sp.lifetime_variance, sp.dt);
+    let spawn = ww_phase_spawn(idx, sp.count, sp.capacity, f32(buf_spawn_identity[IDENTITY_N]), sp.face_cells_x, sp.face_cells_y, sp.face_cells_z, sp.center_x, sp.center_y, sp.center_z, sp.size_x, sp.size_y, sp.size_z, sp.nodes_x, sp.nodes_y, sp.nodes_z, sp.seed, sp.epoch, sp.min_lifetime, sp.max_lifetime, sp.lifetime_variance, sp.dt);
     let typed = ww_phase_type(idx, sp.count, spawn, sp.center_x, sp.center_y, sp.center_z, sp.size_x, sp.size_y, sp.size_z, sp.nodes_x, sp.nodes_y, sp.nodes_z, sp.spray_speed, sp.type_seed, sp.type_epoch, sp.dust);
     out_typed[idx] = typed;
 }

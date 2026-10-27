@@ -80,8 +80,9 @@ fn emit_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
 // One thread per half-cell site, after the flags' inclusive scan: a flagged
 // site writes a new particle at rest in its inflow's velocity to slot
 // live + rank of the sorted particles, live being the sorted prefix's end.
-// A rank past the pool's slots emits nothing: a full pool shows as the
-// stats' live count reaching the slots, never as an error.
+// A rank at or past `n`, the slots in use the birth stage left in the identity
+// (`reserve` grants what the pool holds), emits nothing: a full pool shows as
+// the stats' live count reaching the slots, never as an error.
 @compute @workgroup_size(256)
 fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     if birth_identity[3] != 0u { return; }
@@ -99,7 +100,7 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     // The last key's range ends at the live total.
     let last = ranges[ts_pool_len() - 1u];
     let slot = last.start + last.count + before;
-    if slot >= u.capacity {
+    if slot >= birth_identity[7] {
         return;
     }
     let j = emit_site(idx);
@@ -121,10 +122,10 @@ fn birth_tally_reset() {
     capped[SHEET_REFUSED_TAIL] = 0u;
 }
 
-// One thread, after emit_write: the substep's inflow births and the ones the
-// pool had no free slot for, summed over the tick into the solver tail
-// (stats words 27 and 28). A refusal is how a full pool reaches the setup
-// check.
+// One thread, after emit_write: the substep's inflow births (the slots in use
+// the stage added, `n` less the live end) and the ones the pool had no free
+// slot for, summed over the tick into the solver tail (stats words 27 and 28).
+// A refusal is how a full pool reaches the setup check.
 @compute @workgroup_size(1)
 fn emit_tally() {
     if !clock_active() || birth_identity[3] != 0u { return; }
@@ -132,8 +133,8 @@ fn emit_tally() {
     let requested = emit_scan[s.x * s.y * s.z - 1u];
     let last = ranges[ts_pool_len() - 1u];
     let live = last.start + last.count;
-    let room = select(0u, u.capacity - live, u.capacity > live);
-    let births = min(requested, room);
+    let in_use = birth_identity[7];
+    let births = select(0u, in_use - live, in_use > live);
     capped[INFLOW_BIRTHS_TAIL] += births;
     capped[INFLOW_REFUSED_TAIL] += requested - births;
 }

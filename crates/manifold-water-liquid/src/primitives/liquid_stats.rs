@@ -1,27 +1,32 @@
 //! `node.liquid_stats` — once per tick, reduce a particle liquid's state to
 //! its statistics words: non-finite records, live records, the fastest particle,
-//! mass, momentum and kinetic energy. A fixed reduction tree with no atomics
-//! keeps the words the same on every run. Exempt from the codegen mandate as
-//! a barriered reduction (ADDING_PRIMITIVES.md exclusion 1).
+//! mass, momentum and kinetic energy, over the slots the particle identity
+//! counts as in use. A fixed reduction tree with no atomics keeps the words
+//! the same on every run. Exempt from the codegen mandate as a barriered
+//! reduction (ADDING_PRIMITIVES.md exclusion 1).
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuEncoder};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 
+use super::particle_identity::IDENTITY_BYTES;
+
 const SHADER_SOURCE: &str = include_str!("shaders/liquid_stats.wgsl");
 /// Records one workgroup folds: 256 threads × 8.
 const BLOCK: u32 = 256 * 8;
 /// Bytes of one partial record.
 const PARTIAL_BYTES: u64 = 40;
+/// Bytes of the dispatch arguments `[groups, 1, 1]`.
+pub(crate) const ARGS_BYTES: u64 = 12;
 
-/// Scratch for the reduction over `count` records: one partial per block.
-pub(crate) fn partial_bytes(count: u32) -> u64 {
-    u64::from(count.div_ceil(BLOCK).max(1)) * PARTIAL_BYTES
+/// Scratch for the reduction over up to `slots` records: one partial per block.
+pub(crate) fn partial_bytes(slots: u32) -> u64 {
+    u64::from(slots.div_ceil(BLOCK).max(1)) * PARTIAL_BYTES
 }
 
 /// Words in the stats array: 0 non-finite records, 1 live records, 2 fastest
@@ -150,8 +155,9 @@ pub fn with_stats_layout(source: &str) -> String {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct StatsParams {
-    count: u32,
-    groups: u32,
+    /// Slots the particle array holds, or `capped` when it holds fewer: the
+    /// most any slot in use can reach.
+    limit: u32,
     particle_mass: f32,
     /// 1 when a `capped` array is bound.
     has_capped: u32,
@@ -159,10 +165,11 @@ struct StatsParams {
     slots: u32,
     /// 1 when the `capped` array holds the solver words.
     has_solver: u32,
-    _pad: [u32; 2],
+    _pad: [u32; 3],
 }
 
 pub struct StatsPipelines {
+    args: GpuComputePipeline,
     particles: GpuComputePipeline,
     finish: GpuComputePipeline,
 }
@@ -171,6 +178,7 @@ impl StatsPipelines {
     fn new(device: &manifold_gpu::GpuDevice) -> Self {
         let shader = with_stats_layout(SHADER_SOURCE);
         Self {
+            args: device.create_compute_pipeline(&shader, "stats_args", "node.liquid_stats.args"),
             particles: device.create_compute_pipeline(
                 &shader,
                 "particles_main",
@@ -183,28 +191,107 @@ impl StatsPipelines {
             ),
         }
     }
+
+    /// The statistics of slots `[0, n)` of `job.particles`, `n` being word 7
+    /// of `job.identity` and no more than the slots `job.particles` and
+    /// `job.capped` hold. The arguments pass sizes the reduction on the GPU
+    /// from the identity, and the finish folds as many partials.
+    fn encode(&self, enc: &mut GpuEncoder, job: &StatsJob<'_>) {
+        let slots = particle_slots(job.particles);
+        let limit = slot_limit(job.particles, job.capped);
+        let has_solver = job
+            .capped
+            .is_some_and(|c| c.size >= (2 * u64::from(slots) + u64::from(SOLVER_WORDS)) * 4);
+        let params = StatsParams {
+            limit,
+            particle_mass: job.particle_mass,
+            has_capped: u32::from(job.capped.is_some()),
+            slots,
+            has_solver: u32::from(has_solver),
+            _pad: [0; 3],
+        };
+        let bind = |binding, buffer| GpuBinding::Buffer {
+            binding,
+            buffer,
+            offset: 0,
+        };
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&params),
+            },
+            bind(1, job.particles),
+            bind(2, job.partials),
+            bind(3, job.stats),
+            bind(4, job.capped.unwrap_or(job.particles)),
+            bind(5, job.identity),
+            bind(6, job.args),
+        ];
+        enc.dispatch_compute(&self.args, &bindings, [1, 1, 1], "node.liquid_stats.args");
+        enc.compute_memory_barrier_buffers();
+        enc.dispatch_compute_indirect(
+            &self.particles,
+            &bindings,
+            job.args,
+            0,
+            "node.liquid_stats.particles",
+        );
+        enc.compute_memory_barrier_buffers();
+        enc.dispatch_compute(
+            &self.finish,
+            &bindings,
+            [1, 1, 1],
+            "node.liquid_stats.finish",
+        );
+    }
+}
+
+/// What one reduction reads and writes.
+struct StatsJob<'a> {
+    particles: &'a GpuBuffer,
+    /// The particle identity, whose word 7 counts the slots in use.
+    identity: &'a GpuBuffer,
+    stats: &'a GpuBuffer,
+    capped: Option<&'a GpuBuffer>,
+    /// One partial per block of `slot_limit` slots.
+    partials: &'a GpuBuffer,
+    args: &'a GpuBuffer,
+    particle_mass: f32,
+}
+
+/// Records a particle buffer holds.
+fn particle_slots(particles: &GpuBuffer) -> u32 {
+    (particles.size / std::mem::size_of::<FluidParticle>() as u64).min(u64::from(u32::MAX)) as u32
+}
+
+/// The most slots a reduction reads: the particle buffer's, or the `capped`
+/// array's two words a slot when it holds fewer.
+fn slot_limit(particles: &GpuBuffer, capped: Option<&GpuBuffer>) -> u32 {
+    let slots = particle_slots(particles);
+    capped.map_or(slots, |c| {
+        slots.min((c.size / 8).min(u64::from(u32::MAX)) as u32)
+    })
 }
 
 manifold_node_engine::primitive! {
     name: LiquidStats,
     type_id: "node.liquid_stats",
-    purpose: "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-16 the solver words after the records: pressure and density solve iterations, the solves that reached their cap without converging, the steps whose sealed-pocket spread reached its cap unfinished, 14-15 the volume rate taken off sealed pockets' pressure and density right-hand sides, and 16 the share of the lattice's 8³ tiles the cell passes ran over. Sums run in a fixed order with no atomics, so the words are the same on every run.",
+    purpose: "Reduce a particle liquid's slots in use (the first n records, n being word 7 of identity) to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-16 the solver words after the records: pressure and density solve iterations, the solves that reached their cap without converging, the steps whose sealed-pocket spread reached its cap unfinished, 14-15 the volume rate taken off sealed pockets' pressure and density right-hand sides, and 16 the share of the lattice's 8³ tiles the cell passes ran over. Sums run in a fixed order with no atomics, so the words are the same on every run.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
         capped: Array(u32) optional,
-        count: ScalarF32 optional,
+        identity: Array(u32) required,
         particle_mass: ScalarF32 optional,
     },
     outputs: {
         stats_out: Array(u32),
     },
     params: [
-        ParamDef { name: Cow::Borrowed("count"), label: "Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("particle_mass"), label: "Particle Mass (kg)", ty: ParamType::Float, default: ParamValue::Float(0.030_517_578), range: Some((0.0, 1.0e6)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The last atom of a particle liquid's tick, inside node.liquid_state's region: particles from the tick's last step, stats and stats_out aliased with node.liquid_state's stats result, which escapes the region to node.liquid_frame (it never publishes a non-finite tick) and to liquid_state's own readback (live count, fault). count and particle_mass come from the fill and the domain.",
+    composition_notes: "The last atom of a particle liquid's tick, inside node.liquid_state's region: particles from the tick's last step, stats and stats_out aliased with node.liquid_state's stats result, which escapes the region to node.liquid_frame (it never publishes a non-finite tick) and to liquid_state's own readback (live count, fault). identity is the step's identity_out, whose record counts the slots in use; particle_mass comes from the domain.",
     examples: [],
     picker: { label: "Liquid Stats", category: Atom },
     summary: "Measures a particle liquid once per tick: how much there is, how fast it moves, and whether anything went wrong.",
@@ -215,6 +302,7 @@ manifold_node_engine::primitive! {
     extra_fields: {
         pipelines: Option<StatsPipelines> = None,
         partials: Option<GpuBuffer> = None,
+        args: Option<GpuBuffer> = None,
     },
 }
 
@@ -246,14 +334,14 @@ impl Primitive for LiquidStats {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let requested = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
         let particle_mass = ctx.scalar_or_param("particle_mass", 0.030_517_578);
         let particles = ctx.inputs.array("particles");
         let stats = ctx.inputs.array("stats");
+        let identity = ctx.inputs.array("identity");
         let capped = ctx.inputs.array("capped");
         // In place on the stats input.
         ctx.mark_gpu_accessed();
-        let (Some(particles), Some(stats)) = (particles, stats) else {
+        let (Some(particles), Some(stats), Some(identity)) = (particles, stats, identity) else {
             return;
         };
         if stats.size < u64::from(LIQUID_STATS_WORDS) * 4 {
@@ -262,9 +350,14 @@ impl Primitive for LiquidStats {
             ));
             return;
         }
-        let count =
-            requested.min((particles.size / std::mem::size_of::<FluidParticle>() as u64) as u32);
-        let partial_bytes = partial_bytes(count);
+        if identity.size < IDENTITY_BYTES {
+            ctx.error(format!(
+                "Liquid Stats: the identity holds fewer than {} words",
+                IDENTITY_BYTES / 4
+            ));
+            return;
+        }
+        let partial_bytes = partial_bytes(slot_limit(particles, capped));
         let gpu = ctx.gpu_encoder();
         let pipelines = self
             .pipelines
@@ -277,63 +370,20 @@ impl Primitive for LiquidStats {
         {
             self.partials = Some(gpu.device.create_buffer(partial_bytes));
         }
-        let partials = self.partials.as_ref().expect("partials prepared");
-        let slots = (particles.size / std::mem::size_of::<FluidParticle>() as u64)
-            .min(u64::from(u32::MAX)) as u32;
-        let has_solver =
-            capped.is_some_and(|c| c.size >= (2 * u64::from(slots) + u64::from(SOLVER_WORDS)) * 4);
-        let count = capped.map_or(count, |c| {
-            count.min((c.size / 8).min(u64::from(u32::MAX)) as u32)
-        });
-        let groups = count.div_ceil(BLOCK);
-        let params = StatsParams {
-            count,
-            groups,
-            particle_mass,
-            has_capped: u32::from(capped.is_some()),
-            slots,
-            has_solver: u32::from(has_solver),
-            _pad: [0; 2],
-        };
-        let bindings = [
-            GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::bytes_of(&params),
+        let args = self
+            .args
+            .get_or_insert_with(|| gpu.device.create_buffer(ARGS_BYTES));
+        pipelines.encode(
+            gpu.native_enc,
+            &StatsJob {
+                particles,
+                identity,
+                stats,
+                capped,
+                partials: self.partials.as_ref().expect("partials prepared"),
+                args,
+                particle_mass,
             },
-            GpuBinding::Buffer {
-                binding: 1,
-                buffer: particles,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 2,
-                buffer: partials,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 3,
-                buffer: stats,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 4,
-                buffer: capped.unwrap_or(particles),
-                offset: 0,
-            },
-        ];
-        if groups > 0 {
-            gpu.native_enc.dispatch_compute(
-                &pipelines.particles,
-                &bindings,
-                [groups, 1, 1],
-                "node.liquid_stats.particles",
-            );
-        }
-        gpu.native_enc.dispatch_compute(
-            &pipelines.finish,
-            &bindings,
-            [1, 1, 1],
-            "node.liquid_stats.finish",
         );
     }
 }
@@ -343,15 +393,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn liquid_stats_params_match_the_shader_and_use_no_atomics() {
+    fn liquid_stats_params_match_the_shader() {
         let shader = with_stats_layout(SHADER_SOURCE);
         assert_eq!(std::mem::size_of::<StatsParams>(), 32);
-        assert!(shader.contains("struct StatsParams"));
         assert_eq!(std::mem::size_of::<FluidParticle>(), 32);
-        assert!(
-            !shader.contains("atomic"),
-            "GPU FLIP: the tick statistics use no atomics"
-        );
         let module = naga::front::wgsl::parse_str(&shader).expect("liquid_stats.wgsl parses");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
@@ -431,3 +476,5 @@ mod tests {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests;

@@ -266,8 +266,8 @@ fn tiles_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// One thread per particle slot, after `tiles_clear`: a live particle (radius
-// positive, as the step's sort counts it) in cell c, binned as the sort bins
+// One thread per slot in use (`slot_record`), after `tiles_clear`: a live
+// particle (radius positive, as the step's sort counts it) in cell c, binned as the sort bins
 // it (the same clamp), lowers `tile_near` of every tile within CELL_REACH
 // cells to the Chebyshev cell distance from c to the tile's box clipped to
 // the lattice. So a tile's value is the distance to the nearest
@@ -277,7 +277,7 @@ fn tiles_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn tiles_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() || u.all_tiles != 0u { return; }
     let i = gid.x;
-    if i >= u.capacity { return; }
+    if i >= slots_in_use() { return; }
     let particle = sorted[i];
     if !(particle.position_radius.w > 0.0) { return; }
     let n = ts_cells();

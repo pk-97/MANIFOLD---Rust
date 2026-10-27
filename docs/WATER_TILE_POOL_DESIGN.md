@@ -38,7 +38,7 @@ Per active step, after `tiles_rings`:
 Slot numbers follow tile order, so runs are bitwise reproducible even where an order follows the slots (the S3.3 sort); reductions stay indexed by box tile (the pressure partials, `2 · tile + half`).
 
 - **Allocated set.** A = tiles with ring ≤ `ring_max` (the extension band's reach: 2 at 64, 3 at 128). C ⊆ ring ≤ 1 ⊆ A. Every read a pass over A or C makes lands in A or reads canonical at A's far edge, at least `8 · ring_max - CELL_REACH` cells from any particle.
-- **Capacity and the exhausted word.** `P = min(T³, POOL_BUDGET_BYTES / tile_bytes)`, `tile_bytes` = 512 × the pooled bytes per cell summed over the step, solver, sheeting and sheet distance (372 bytes, so 8,456 tiles), `POOL_BUDGET_BYTES` the D4 live budget for the lattice (1.5 GiB: 128 live under 2 GB total, the rest particles and the render). At 64 and 128 in today's box `P = T³`. `exhausted` is a word in `tile_counts`; S3.4 makes sources stop and the card say why.
+- **Capacity and the exhausted word.** `P = min(T³, POOL_BUDGET_BYTES / tile_bytes)`, `tile_bytes` = 512 × the pooled bytes per cell summed over the step, solver, sheeting and sheet distance (368 bytes, so 8,548 tiles), `POOL_BUDGET_BYTES` the D4 live budget for the lattice (1.5 GiB: 128 live under 2 GB total, the rest particles and the render). At 64 and 128 in today's box `P = T³`. `exhausted` is a word in `tile_counts`; S3.4 makes sources stop and the card say why.
 - **First step after a pool build:** every slot free, every tile absent; the first `tiles_allocate` allocates A and `tiles_fresh` fills it.
 
 ## 5. Passes and consumers

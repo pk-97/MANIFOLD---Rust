@@ -44,7 +44,6 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
                 ("clock_sources", "clock_sources"),
                 ("clock_obstacle_count", "clock_obstacle_count"),
                 ("clock_source_count", "clock_source_count"),
-                ("initial_obstacle_speed", "initial_obstacle_speed"),
                 ("live_hits", "live_hits"),
                 ("live_hit_count", "live_hit_count"),
                 ("limit_interval", "limit_interval"),
@@ -99,20 +98,6 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
                         .find(|n| n.id == w.from_node && n.type_id == "node.liquid_state")
                 });
             if let Some(state) = state {
-                if node.type_id == "node.gpu_flip_step"
-                    && !def
-                        .wires
-                        .iter()
-                        .any(|w| w.to_node == node.id && w.to_port == "retired_max_speed")
-                {
-                    def.wires.push(EffectGraphWire {
-                        from_node: state.id,
-                        from_port: "retired_max_speed".into(),
-                        to_node: node.id,
-                        to_port: "retired_max_speed".into(),
-                    });
-                    changed = true;
-                }
                 if !def
                     .wires
                     .iter()
@@ -140,6 +125,32 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
                     });
                     changed = true;
                 }
+            }
+        }
+        if node.type_id == "node.liquid_stats"
+            && !def
+                .wires
+                .iter()
+                .any(|w| w.to_node == node.id && w.to_port == "identity")
+        {
+            // The identity the measured step hands on counts the slots in use.
+            let step = def
+                .wires
+                .iter()
+                .filter(|w| w.to_node == node.id && w.to_port == "particles")
+                .find_map(|w| {
+                    def.nodes
+                        .iter()
+                        .find(|n| n.id == w.from_node && n.type_id == "node.gpu_flip_step")
+                });
+            if let Some(step) = step {
+                def.wires.push(EffectGraphWire {
+                    from_node: step.id,
+                    from_port: "identity_out".into(),
+                    to_node: node.id,
+                    to_port: "identity".into(),
+                });
+                changed = true;
             }
         }
         if node.type_id == "node.liquid_state"
@@ -389,7 +400,17 @@ pub(crate) fn retire_dense_liquid_faces(def: &mut EffectGraphDef) -> bool {
             })
             .map(|w| w.from_node);
         let Some(step) = step else { continue };
-        for (output, input) in [("tiles", "tiles"), ("pool_tiles", "pool_tiles")] {
+        // Whitewater also counts its emitters from the step's identity record.
+        let ports: &[(&str, &str)] = if node.type_id == "node.whitewater_step" {
+            &[
+                ("tiles", "tiles"),
+                ("pool_tiles", "pool_tiles"),
+                ("identity_out", "identity"),
+            ]
+        } else {
+            &[("tiles", "tiles"), ("pool_tiles", "pool_tiles")]
+        };
+        for &(output, input) in ports {
             if !def
                 .wires
                 .iter()
@@ -1298,21 +1319,11 @@ mod tests {
                 .contains(&wire(1, "interval_duration", 3, "interval_duration"))
         );
         assert!(def.wires.contains(&wire(1, "live_hits", 3, "live_hits")));
-        assert!(def.wires.contains(&wire(
-            1,
-            "initial_obstacle_speed",
-            3,
-            "initial_obstacle_speed"
-        )));
         assert!(
             def.wires
                 .contains(&wire(3, "clock_status", 2, "clock_status_in"))
         );
         assert!(def.wires.contains(&wire(2, "identity", 3, "identity")));
-        assert!(
-            def.wires
-                .contains(&wire(2, "retired_max_speed", 3, "retired_max_speed"))
-        );
         assert!(
             def.wires
                 .contains(&wire(3, "identity_out", 2, "identity_in"))
@@ -1387,7 +1398,7 @@ mod tests {
     }
 
     #[test]
-    fn retired_speed_wires_preserve_authored_inputs_and_follow_each_steps_state() {
+    fn identity_wires_preserve_authored_inputs_and_follow_each_steps_state() {
         use manifold_core::effect_graph_def::EffectGraphWire;
         let wire = |from, output: &str, to, input: &str| EffectGraphWire {
             from_node: from,
@@ -1395,7 +1406,7 @@ mod tests {
             to_node: to,
             to_port: input.into(),
         };
-        let authored = wire(5, "out", 4, "retired_max_speed");
+        let authored = wire(5, "out", 4, "identity");
         let mut def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None,
@@ -1409,24 +1420,32 @@ mod tests {
                 bare_node(4, "node.gpu_flip_step"),
                 bare_node(5, "node.scalar"),
                 bare_node(6, "node.gpu_flip_step"),
+                bare_node(7, "node.liquid_stats"),
+                bare_node(8, "node.liquid_stats"),
+                bare_node(9, "node.liquid_stats"),
             ],
             wires: vec![
                 wire(1, "out", 2, "particles"),
                 wire(3, "out", 4, "particles"),
                 authored.clone(),
+                wire(2, "out", 7, "particles"),
+                wire(4, "out", 8, "particles"),
+                wire(5, "out", 9, "particles"),
+                wire(6, "identity_out", 8, "identity"),
             ],
         };
         assert!(wire_liquid_intervals(&mut def));
+        assert!(def.wires.contains(&wire(1, "identity", 2, "identity")));
         assert!(
             def.wires
-                .contains(&wire(1, "retired_max_speed", 2, "retired_max_speed"))
+                .contains(&wire(2, "identity_out", 1, "identity_in"))
         );
         assert!(def.wires.contains(&authored));
         for step in [2, 4] {
             assert_eq!(
                 def.wires
                     .iter()
-                    .filter(|w| w.to_node == step && w.to_port == "retired_max_speed")
+                    .filter(|w| w.to_node == step && w.to_port == "identity")
                     .count(),
                 1
             );
@@ -1434,6 +1453,16 @@ mod tests {
         assert!(
             !def.wires.iter().any(|w| w.to_node == 6),
             "no state is inferred for an unconnected step"
+        );
+        // Stats take the identity of the step they measure, and keep one they
+        // were given.
+        assert!(def.wires.contains(&wire(2, "identity_out", 7, "identity")));
+        assert!(def.wires.contains(&wire(6, "identity_out", 8, "identity")));
+        assert!(
+            !def.wires
+                .iter()
+                .any(|w| w.to_node == 9 && w.to_port == "identity"),
+            "stats that measure no step get no identity"
         );
         let migrated = def.wires.clone();
         assert!(!wire_liquid_intervals(&mut def));

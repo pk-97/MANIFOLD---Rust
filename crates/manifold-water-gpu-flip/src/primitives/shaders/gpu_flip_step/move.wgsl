@@ -238,7 +238,7 @@ fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
     return false;
 }
 
-// One thread per particle slot, `sorted` to `particles_out`. A live particle
+// One thread per slot in use (`slot_record`), `sorted` to `particles_out`. A live particle
 // (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
 // and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus the density
@@ -247,12 +247,12 @@ fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
 // moving solid swept over it, is pushed out (push_out), never removed. A
 // non-finite move or velocity
 // is written as it is: the tick's stats must see it to halt the liquid.
-// Radius and id are kept otherwise; unused slots pass through.
+// Radius and id are kept otherwise; a dead slot below the count passes through.
 @compute @workgroup_size(256)
 fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = gid.x;
-    if idx >= u.particles {
+    if idx >= slots_in_use() {
         return;
     }
     let particle = sorted[idx];

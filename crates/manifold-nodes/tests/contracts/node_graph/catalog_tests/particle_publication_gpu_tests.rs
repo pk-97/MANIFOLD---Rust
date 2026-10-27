@@ -28,6 +28,20 @@ fn particle(id: u32, x: f32) -> FluidParticle {
         id,
     }
 }
+/// The identity words a publication reads: the epoch and reset request in
+/// words 0-3, then the record of `n` slots in use.
+fn identity_words(words: [u32; 4], n: u32) -> [u32; 8] {
+    [
+        words[0],
+        words[1],
+        words[2],
+        words[3],
+        n.div_ceil(256).max(1),
+        1,
+        1,
+        n,
+    ]
+}
 
 #[test]
 fn particle_publication_reorder_death_birth_empty_and_retired_tails() {
@@ -38,8 +52,9 @@ fn particle_publication_reorder_death_birth_empty_and_retired_tails() {
     // stats LIQUID_STATS_WORDS; each guarded radix/scatter dispatch reaches <=257.
     let capacity = 257;
     let frame = shared(&device, &vec![particle(999, -1.0); capacity]);
-    let metadata = shared(&device, &[0u32; 4]);
-    let identity = shared(&device, &[7u32, 12, 0, 0]);
+    // A new slot's high-water is its slot count.
+    let metadata = shared(&device, &[0u32, 0, 0, capacity as u32]);
+    let identity = shared(&device, &identity_words([7, 12, 0, 0], 0));
     let stats = shared(&device, &[0u32; LIQUID_STATS_WORDS as usize]);
     let mut dead = particle(2, 10.0);
     dead.position_radius[3] = 0.0;
@@ -65,6 +80,9 @@ fn particle_publication_reorder_death_birth_empty_and_retired_tails() {
         );
         assert!(source.size >= state.len() as u64 * 32);
         assert_eq!(frame.size, capacity as u64 * 32);
+        let record = identity_words([7, 12, 0, 0], state.len() as u32);
+        // SAFETY: the previous publication retired before the record is rewritten.
+        unsafe { identity.write(0, bytemuck::cast_slice(&record)) };
         let mut encoder = device.create_encoder("particle-publication-fixture");
         publisher
             .encode(
@@ -76,14 +94,16 @@ fn particle_publication_reorder_death_birth_empty_and_retired_tails() {
                     identity: &identity,
                     stats: &stats,
                     metadata: &metadata,
-                    count: state.len() as u32,
                 },
             )
             .unwrap();
         encoder.commit_and_wait_completed();
         let (expected, count) = reference(&state, capacity);
         assert_eq!(read::<FluidParticle>(&frame, capacity), expected);
-        assert_eq!(read::<u32>(&metadata, 4), [count as u32, 12, 1, 0]);
+        assert_eq!(
+            read::<u32>(&metadata, 4),
+            [count as u32, 12, 1, count as u32]
+        );
         assert_eq!(
             read::<FluidParticle>(&source, state.len()),
             state,
@@ -219,7 +239,7 @@ fn particle_identity_multiple_substeps_keep_birth_ids() {
     let mut publisher = ParticlePublication::default();
     publisher.prepare(&device);
     let frame = shared(&device, &[FluidParticle::default(); 4]);
-    let metadata = shared(&device, &[0u32; 4]);
+    let metadata = shared(&device, &[0u32, 0, 0, 4]);
     let stats = shared(&device, &[0u32; LIQUID_STATS_WORDS as usize]);
     // Four records cover all movement and publication accesses; production
     // encode checks metadata, identity, stats and scan storage before dispatch.
@@ -259,7 +279,6 @@ fn particle_identity_multiple_substeps_keep_birth_ids() {
                 identity: &identity,
                 stats: &stats,
                 metadata: &metadata,
-                count: 4,
             },
         )
         .unwrap();
@@ -272,13 +291,16 @@ fn particle_identity_multiple_substeps_keep_birth_ids() {
     let working = [particle(3, 20.75), particle(2, 10.75), particle(1, 0.75)];
     let (expected, count) = reference(&working, 4);
     assert_eq!(read::<FluidParticle>(&frame, 4), expected);
-    assert_eq!(read::<u32>(&metadata, 4), [count as u32, 7, 1, 0]);
+    assert_eq!(
+        read::<u32>(&metadata, 4),
+        [count as u32, 7, 1, count as u32]
+    );
 }
 
 /// One publication input and the buffers it starts from.
 struct Case {
     label: String,
-    /// The source buffer's records; `count` of them are published.
+    /// The source buffer's records; the first `count` are in use and published.
     records: Vec<FluidParticle>,
     count: u32,
     slots: u32,
@@ -470,8 +492,12 @@ fn publish_case(
 ) -> Result<(Vec<u32>, Vec<u32>), String> {
     let source = shared(device, &case.records);
     let target = shared(device, &vec![0xa5a5_a5a5u32; case.slots as usize * 8]);
-    let metadata = shared(device, &[0xcafe_babeu32; 4]);
-    let identity = shared(device, &case.identity);
+    // A new slot: garbage metadata but for its high-water, the slot count.
+    let metadata = shared(
+        device,
+        &[0xcafe_babeu32, 0xcafe_babe, 0xcafe_babe, case.slots],
+    );
+    let identity = shared(device, &identity_words(case.identity, case.count));
     let stats = shared(device, &case.stats);
     let mut encoder = device.create_encoder("particle-publication-oracle");
     publisher
@@ -484,7 +510,6 @@ fn publish_case(
                 identity: &identity,
                 stats: &stats,
                 metadata: &metadata,
-                count: case.count,
             },
         )
         .map_err(|error| format!("{}: encode refused: {error}", case.label))?;
@@ -629,5 +654,119 @@ fn particle_publication_edge_radii_match_the_reference() {
             })
             .collect();
         panic!("{failure}\n{}", verdicts.join("\n"));
+    }
+}
+
+const EPOCH: u32 = 12;
+const IDENTITY: [u32; 4] = [7, EPOCH, 0, 0];
+
+/// 300 slots in use, every third one dead and the 200 live ones with ids all
+/// different, followed by `decoys` live records past the 300 that the
+/// identity's record leaves out.
+fn three_hundred_in_use(decoys: u32) -> Vec<FluidParticle> {
+    (0..300u32)
+        .map(|i| {
+            let mut record = particle((i * 37) % 301 + 1, i as f32);
+            if i % 3 == 2 {
+                record.position_radius[3] = 0.0;
+            }
+            record
+        })
+        .chain((0..decoys).map(|i| particle(5000 + i, 999.0)))
+        .collect()
+}
+
+/// Publishes `source`'s first `in_use` slots into `target` under `metadata`.
+fn republish(
+    device: &manifold_gpu::testkit::TestDevice,
+    publisher: &mut ParticlePublication,
+    source: &[FluidParticle],
+    in_use: u32,
+    target: &GpuBuffer,
+    metadata: &GpuBuffer,
+) {
+    let source = shared(device, source);
+    let identity = shared(device, &identity_words(IDENTITY, in_use));
+    let stats = shared(device, &[0u32; LIQUID_STATS_WORDS as usize]);
+    let mut encoder = device.create_encoder("particle-publication-high-water");
+    publisher
+        .encode(
+            device,
+            &mut encoder,
+            Publication {
+                source: &source,
+                target,
+                identity: &identity,
+                stats: &stats,
+                metadata,
+            },
+        )
+        .unwrap();
+    encoder.commit_and_wait_completed();
+}
+
+/// A slot holding 1000 live records, republished with 300 slots in use of
+/// which 200 are live, keeps its first 200 records id-sorted and zeroes the
+/// 800 after them. Live records past the 300 in use are never read.
+#[test]
+fn particle_publication_zeroes_what_a_longer_publication_left() {
+    let device = manifold_gpu::testkit::test_device();
+    let mut publisher = ParticlePublication::default();
+    publisher.prepare(&device);
+    let slots = 1000u32;
+    let target = shared(&device, &vec![0xa5a5_a5a5u32; slots as usize * 8]);
+    let metadata = shared(&device, &[0xcafe_babeu32, 0xcafe_babe, 0xcafe_babe, slots]);
+    let full: Vec<FluidParticle> = (0..slots).map(|i| particle(slots - i, i as f32)).collect();
+    republish(&device, &mut publisher, &full, slots, &target, &metadata);
+    assert_eq!(read::<u32>(&metadata, 4), [slots, EPOCH, 1, slots]);
+
+    let source = three_hundred_in_use(700);
+    republish(&device, &mut publisher, &source, 300, &target, &metadata);
+    let got = read::<u32>(&target, slots as usize * 8);
+    let case = Case {
+        label: "300 in use of 1000 after a full publication".into(),
+        records: source,
+        count: 300,
+        slots,
+        identity: IDENTITY,
+        stats: [0; LIQUID_STATS_WORDS as usize],
+    };
+    let got_metadata = read::<u32>(&metadata, 4);
+    check_case(&case, &got, &got_metadata).unwrap_or_else(|failure| panic!("{failure}"));
+    assert!(
+        got[200 * 8..].iter().all(|&word| word == 0),
+        "records past the 200 live are zero"
+    );
+    assert_eq!(got_metadata, [200, EPOCH, 1, 200]);
+}
+
+/// A new slot whose storage is garbage is zero past its live records after
+/// its first publication, whatever it holds in use.
+#[test]
+fn particle_publication_clears_a_new_slot_past_its_live_records() {
+    let device = manifold_gpu::testkit::test_device();
+    let mut publisher = ParticlePublication::default();
+    publisher.prepare(&device);
+    for (in_use, live) in [(300u32, 200usize), (0, 0), (1000, 1000)] {
+        let slots = 1000u32;
+        let target = shared(&device, &vec![0xa5a5_a5a5u32; slots as usize * 8]);
+        let metadata = shared(&device, &[0xcafe_babeu32, 0xcafe_babe, 0xcafe_babe, slots]);
+        let source: Vec<FluidParticle> = if in_use == 1000 {
+            (0..slots).map(|i| particle(slots - i, i as f32)).collect()
+        } else {
+            three_hundred_in_use(700)
+        };
+        republish(&device, &mut publisher, &source, in_use, &target, &metadata);
+        let got = read::<u32>(&target, slots as usize * 8);
+        assert!(
+            got[live * 8..].iter().all(|&word| word == 0),
+            "{in_use} in use: records past the {live} live are zero"
+        );
+        let live = live as u32;
+        assert_eq!(
+            read::<u32>(&metadata, 4),
+            [live, EPOCH, 1, live],
+            "{in_use} in use"
+        );
     }
 }

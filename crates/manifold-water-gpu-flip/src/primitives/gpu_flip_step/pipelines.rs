@@ -42,6 +42,10 @@ pub(super) struct Pipelines {
     pub(super) emit_write: GpuComputePipeline,
     pub(super) emit_tally: GpuComputePipeline,
     pub(super) birth_tally_reset: GpuComputePipeline,
+    /// The slot record, loaded from the identity at a tick's start and opened
+    /// after each slot's clock plan (`count.wgsl`).
+    pub(super) slot_load: GpuComputePipeline,
+    pub(super) slot_open: GpuComputePipeline,
     pub(super) tiles_clear: GpuComputePipeline,
     pub(super) tiles_mark: GpuComputePipeline,
     pub(super) tiles_rings: GpuComputePipeline,
@@ -112,6 +116,8 @@ impl Pipelines {
             emit_write: pipe("emit_write"),
             emit_tally: pipe("emit_tally"),
             birth_tally_reset: pipe("birth_tally_reset"),
+            slot_load: pipe("slot_load"),
+            slot_open: pipe("slot_open"),
             tiles_clear: pipe("tiles_clear"),
             tiles_mark: pipe("tiles_mark"),
             tiles_rings: pipe("tiles_rings"),

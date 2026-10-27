@@ -7,7 +7,15 @@
 //! the reuse point. Barriered and multi-pass, it stays a hand-written helper
 //! inside liquid_frame's cross-frame boundary (ADDING_PRIMITIVES.md
 //! exclusion 2).
+//!
+//! The sort covers the slots in use only: its passes dispatch indirectly from
+//! the particle identity's record and read the count `n` from it, so the CPU
+//! never sizes them. The target keeps zeros past its live records for the
+//! display, which reads whole slots. Its metadata word 3 is the high-water
+//! mark, how many leading records can be nonzero: the gather zeroes up to the
+//! larger of the new live count and the old mark, then stores the live count.
 use super::liquid_stats::with_stats_layout;
+use super::particle_identity::{COUNT_OFFSET, IDENTITY_BYTES};
 use super::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
@@ -24,10 +32,15 @@ const SCAN: ScanLabels = ScanLabels {
 };
 
 /// Sort tiles over `records`; one when there are none, so the live count is
-/// still written.
+/// still written. The identity record holds the same number.
 fn tiles(records: u32) -> u32 {
     records.div_ceil(TILE).max(1)
 }
+
+/// The live buffer: word 0 the live count, words 1-3 the gather's dispatch
+/// triple at byte [`GATHER_OFFSET`], word 4 the target records it writes.
+const LIVE_BYTES: u64 = 32;
+const GATHER_OFFSET: u64 = 4;
 
 /// One pair array: `slots` keys, then `slots` source indices.
 fn pair_bytes(slots: u32) -> u64 {
@@ -36,16 +49,16 @@ fn pair_bytes(slots: u32) -> u64 {
 
 manifold_core::testkit_visible! {
 /// Everything the publisher allocates for a target of `slots` records: two
-/// pair arrays, the live-count word and the digit scan's storage.
+/// pair arrays, the live record and the digit scan's storage.
 pub(crate) fn scratch_bytes(slots: u32) -> u64 {
     let slots = slots.max(1);
-    2 * pair_bytes(slots) + 16 + storage_words((DIGITS * tiles(slots)) as usize) as u64 * 4
+    2 * pair_bytes(slots) + LIVE_BYTES + storage_words((DIGITS * tiles(slots)) as usize) as u64 * 4
 }
 }
 
 #[derive(Default)]
 pub struct ParticlePublication {
-    pipelines: Option<[GpuComputePipeline; 4]>,
+    pipelines: Option<[GpuComputePipeline; 5]>,
     pairs: Option<[GpuBuffer; 2]>,
     live: Option<GpuBuffer>,
     scan: PrefixScan,
@@ -54,10 +67,12 @@ manifold_core::testkit_visible! {
 pub struct Publication<'a> {
     pub source: &'a GpuBuffer,
     pub target: &'a GpuBuffer,
+    /// The particle identity: its record names the slots of `source` in use.
     pub identity: &'a GpuBuffer,
     pub stats: &'a GpuBuffer,
+    /// Four words: live count, identity epoch, accepted, high-water. A new
+    /// target's high-water is its slot count.
     pub metadata: &'a GpuBuffer,
-    pub count: u32,
 }
 }
 impl ParticlePublication {
@@ -65,9 +80,11 @@ impl ParticlePublication {
         pub fn prepare(&mut self, device: &GpuDevice) {
             if self.pipelines.is_none() {
                 let shader = with_stats_layout(SHADER);
-                self.pipelines = Some(["first_upsweep", "upsweep", "downsweep", "gather"].map(
-                    |entry| device.create_compute_pipeline(&shader, entry, "particle_publication"),
-                ));
+                self.pipelines = Some(
+                    ["first_upsweep", "upsweep", "downsweep", "gather_args", "gather"].map(
+                        |entry| device.create_compute_pipeline(&shader, entry, "particle_publication"),
+                    ),
+                );
             }
             self.scan.prepare(device);
         }
@@ -81,9 +98,8 @@ impl ParticlePublication {
         ) -> Result<(), String> {
             let slots = (job.target.size / 32) as u32;
             if slots == 0
-                || u64::from(job.count) * 32 > job.source.size
-                || job.count > slots
-                || job.identity.size < 16
+                || job.source.size / 32 > u64::from(slots)
+                || job.identity.size < IDENTITY_BYTES
                 || job.metadata.size < 16
                 || job.stats.size < u64::from(super::liquid_stats::LIQUID_STATS_WORDS) * 4
             {
@@ -100,7 +116,7 @@ impl ParticlePublication {
                     device.try_create_buffer_shared(pair_bytes(slots))?,
                     device.try_create_buffer_shared(pair_bytes(slots))?,
                 ];
-                let live = device.try_create_buffer_shared(16)?;
+                let live = device.try_create_buffer_shared(LIVE_BYTES)?;
                 self.pairs = Some(pairs);
                 self.live = Some(live);
             }
@@ -108,53 +124,89 @@ impl ParticlePublication {
             let pairs = self.pairs.as_ref().expect("publication reserved");
             let live = self.live.as_ref().expect("publication reserved");
             let pipes = self.pipelines.as_ref().expect("publication prepared");
-            let sort_tiles = tiles(job.count);
-            let groups = [sort_tiles, 1, 1];
+            let [first_upsweep, upsweep, downsweep, gather_args, gather] = pipes;
+            // A sort pass runs one group a tile, from the identity's record.
+            // The digit counts sit at stride `tiles(n)` from the same record,
+            // so the scan, sized for a full target, sums them first and the
+            // stale entries after them reach nothing.
+            let sorted = |enc: &mut GpuEncoder,
+                          pipeline: &GpuComputePipeline,
+                          bindings: &[GpuBinding<'_>],
+                          label: &str| {
+                enc.dispatch_compute_indirect(pipeline, bindings, job.identity, COUNT_OFFSET, label);
+                enc.compute_memory_barrier_buffers();
+            };
             let cap = (pairs[0].size / 8) as u32;
-            let mut params = [job.count, slots, 0, sort_tiles, cap, 1, 0, 0];
-            enc.dispatch_compute(
-                &pipes[0],
-                &[uniform(&params), binding(1, job.source), binding(3, &scan), binding(8, &pairs[0])],
-                groups,
+            let mut params = [0, cap, 1, 0];
+            sorted(
+                enc,
+                first_upsweep,
+                &[
+                    uniform(&params),
+                    binding(1, job.source),
+                    binding(3, &scan),
+                    binding(4, job.identity),
+                    binding(8, &pairs[0]),
+                ],
                 "particle_publication.upsweep",
             );
-            enc.compute_memory_barrier_buffers();
             for pass in 0..PASSES {
-                params[2] = pass * 4;
-                params[5] = u32::from(pass == 0);
+                params[0] = pass * 4;
+                params[2] = u32::from(pass == 0);
                 let input = &pairs[pass as usize % 2];
                 let output = &pairs[(pass as usize + 1) % 2];
                 if pass > 0 {
-                    enc.dispatch_compute(
-                        &pipes[1],
-                        &[uniform(&params), binding(3, &scan), binding(7, input), binding(9, live)],
-                        groups,
+                    sorted(
+                        enc,
+                        upsweep,
+                        &[
+                            uniform(&params),
+                            binding(3, &scan),
+                            binding(4, job.identity),
+                            binding(7, input),
+                            binding(9, live),
+                        ],
                         "particle_publication.upsweep",
                     );
-                    enc.compute_memory_barrier_buffers();
                 }
-                self.scan.encode_labelled(enc, (DIGITS * sort_tiles) as usize, SCAN);
-                enc.dispatch_compute(
-                    &pipes[2],
-                    &[uniform(&params), binding(3, &scan), binding(7, input), binding(8, output), binding(9, live)],
-                    groups,
+                self.scan.encode_labelled(enc, (DIGITS * tiles(slots)) as usize, SCAN);
+                sorted(
+                    enc,
+                    downsweep,
+                    &[
+                        uniform(&params),
+                        binding(3, &scan),
+                        binding(4, job.identity),
+                        binding(7, input),
+                        binding(8, output),
+                        binding(9, live),
+                    ],
                     "particle_publication.downsweep",
                 );
-                enc.compute_memory_barrier_buffers();
             }
             enc.dispatch_compute(
-                &pipes[3],
+                gather_args,
+                &[
+                    binding(4, job.identity),
+                    binding(5, job.stats),
+                    binding(6, job.metadata),
+                    binding(9, live),
+                ],
+                [1, 1, 1],
+                "particle_publication.gather_args",
+            );
+            enc.compute_memory_barrier_buffers();
+            enc.dispatch_compute_indirect(
+                gather,
                 &[
                     uniform(&params),
                     binding(1, job.source),
                     binding(2, job.target),
-                    binding(4, job.identity),
-                    binding(5, job.stats),
-                    binding(6, job.metadata),
                     binding(7, &pairs[0]),
                     binding(9, live),
                 ],
-                [slots.div_ceil(TILE), 1, 1],
+                live,
+                GATHER_OFFSET,
                 "particle_publication.gather",
             );
             enc.compute_memory_barrier_buffers();
@@ -172,7 +224,7 @@ impl ParticlePublication {
         pairs + live + self.scan.buffer(device, 1).map_or(0, |scan| scan.size)
     }
 }
-fn uniform(params: &[u32; 8]) -> GpuBinding<'_> {
+fn uniform(params: &[u32; 4]) -> GpuBinding<'_> {
     GpuBinding::Bytes {
         binding: 0,
         data: bytemuck::cast_slice(params),
@@ -197,7 +249,9 @@ pub mod reference {
         radius >= f32::MIN_POSITIVE
     }
 
-    /// The target's `slots` records and the four metadata words.
+    /// The target's `slots` records and the four metadata words (live count,
+    /// epoch, accepted, high-water) after a publication into a target whose
+    /// high-water covered every record.
     pub fn publish(
         source: &[FluidParticle],
         count: u32,
@@ -243,7 +297,8 @@ pub mod reference {
             std::mem::swap(&mut src, &mut dst);
         }
         let accepted = stats[0] == 0 && identity[3] == 0;
-        (src, [scan[slots - 1], identity[1], u32::from(accepted), 0])
+        let live = scan[slots - 1];
+        (src, [live, identity[1], u32::from(accepted), live])
     }
 
     /// The same contract stated plainly: live records stably sorted by id,
@@ -334,7 +389,7 @@ mod tests {
                 .iter()
                 .filter(|p| reference::live(p.position_radius[3]))
                 .count() as u32;
-            assert_eq!(metadata, [live, 0xdead_beef, 1, 0]);
+            assert_eq!(metadata, [live, 0xdead_beef, 1, live]);
         }
     }
 

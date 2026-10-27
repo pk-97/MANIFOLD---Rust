@@ -39,50 +39,6 @@ fn max_iterations_bounds_auto_only() {
     assert!(read_iterations(f32::NAN, 900).is_err());
 }
 
-#[test]
-fn one_step_bound_requires_a_whole_reference_interval() {
-    use manifold_physics::{
-        Seconds,
-        stepping::{CflPolicy, CflRestrictions},
-    };
-    for interval in [1.0f32 / 24.0, 1.0 / 60.0, 1.0 / 120.0] {
-        for cell_size in [0.01f32, 0.1, 1.0] {
-            let edge = ENGINE_CFL as f32 * cell_size / interval;
-            for fraction in [0.0, 0.5, 0.98, 0.999, 1.0, 1.01, 2.0] {
-                let speed = edge * fraction;
-                let safe = one_step_cfl_safe(speed, 0.0, interval, cell_size);
-                if safe {
-                    let reference = CflPolicy {
-                        cell_size: f64::from(cell_size),
-                        ..Default::default()
-                    }
-                    .duration(
-                        Seconds(f64::from(interval)),
-                        f64::from(speed),
-                        CflRestrictions::default(),
-                    );
-                    assert!(reference.diagnostic.is_none());
-                    assert_eq!(reference.value.0, f64::from(interval));
-                }
-                assert_eq!(safe, fraction < 0.99, "speed fraction {fraction}");
-                assert_eq!(
-                    one_step_cfl_safe(0.0, speed, interval, cell_size),
-                    safe,
-                    "obstacles share CFL maximum"
-                );
-            }
-        }
-    }
-    for bad in [-1.0, f32::NAN, f32::INFINITY] {
-        assert!(!one_step_cfl_safe(bad, 0.0, 1.0 / 60.0, 0.1));
-        assert!(!one_step_cfl_safe(0.0, bad, 1.0 / 60.0, 0.1));
-        assert!(!one_step_cfl_safe(0.0, 0.0, bad, 0.1));
-        assert!(!one_step_cfl_safe(0.0, 0.0, 1.0 / 60.0, bad));
-    }
-    assert!(!one_step_cfl_safe(0.0, 0.0, 0.0, 0.1));
-    assert!(!one_step_cfl_safe(0.0, 0.0, 1.0 / 60.0, 0.0));
-}
-
 /// The pocket sums' two-word add with carry (gpu_flip_step/pockets.wgsl
 /// pocket_fixed, pocket_add, pocket_value) gives the exact sum of the
 /// fixed-point values in any order.
@@ -135,14 +91,6 @@ fn pocket_carry_sum_is_exact_in_any_order() {
 
 #[test]
 fn step_shader_validates_with_every_entry() {
-    let mask = naga::front::wgsl::parse_str(MASK_SHADER)
-        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(MASK_SHADER)));
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(&mask)
-    .unwrap_or_else(|e| panic!("{e:?}"));
     let source = step_source();
     let module = naga::front::wgsl::parse_str(&source)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
@@ -188,6 +136,8 @@ fn step_shader_validates_with_every_entry() {
         "tiles_fresh",
         "tiles_lists",
         "tiles_retire",
+        "slot_load",
+        "slot_open",
         "pool_canon",
         "pocket_accumulate_coarse",
         "pocket_remove_coarse",
@@ -284,7 +234,7 @@ fn band_layers_match_configured_engine_cfl() {
 #[test]
 fn pool_size_follows_the_budget() {
     let tile_bytes = u64::from(TILE).pow(3) * pooled_bytes_per_cell();
-    assert_eq!(tile_bytes, 512 * 372);
+    assert_eq!(tile_bytes, 512 * 368);
     for resolution in [64u32, 128] {
         let cells = [resolution + 3; 3];
         assert_eq!(
@@ -295,7 +245,10 @@ fn pool_size_follows_the_budget() {
         assert!(tile_total(cells) * tile_bytes <= POOL_BUDGET_BYTES);
     }
     assert_eq!(pool_capacity(4913, tile_bytes, 10 * tile_bytes), 10);
-    assert_eq!(pool_capacity(4913, tile_bytes, 10 * tile_bytes + tile_bytes - 1), 10);
+    assert_eq!(
+        pool_capacity(4913, tile_bytes, 10 * tile_bytes + tile_bytes - 1),
+        10
+    );
     assert_eq!(pool_capacity(4913, tile_bytes, u64::MAX / 2), 4913);
     assert_eq!(pool_capacity(7, tile_bytes, 10 * tile_bytes), 7);
 }

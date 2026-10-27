@@ -7,14 +7,14 @@
 // sub-cell goes to the lowest engine-order candidate that passes the plane
 // test, unless a marker already holds it.
 struct Params {
-    nx: u32, ny: u32, nz: u32, count: u32,
+    nx: u32, ny: u32, nz: u32, pool_tiles: u32,
     bx: u32, by: u32, bz: u32, capacity: u32,
     ox: f32, oy: f32, oz: f32, h: f32,
     inv_h: f32, inv_sub: f32, half_h: f32, sub_dx: f32,
     max_depth: f32, step_distance: f32, steps: u32, max_seed_depth: f32,
     max_radius: f32, threshold: f32, inv_h_bits_lo: u32, inv_h_bits_hi: u32,
     inv_sub_bits_lo: u32, inv_sub_bits_hi: u32, rate: f32, tick: u32,
-    substep: u32, slots: u32, pool_tiles: u32, pad1: u32,
+    substep: u32, pad0: u32, pad1: u32, pad2: u32,
 };
 struct FluidParticle { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32 };
 struct CellRange { start: u32, count: u32 };
@@ -67,6 +67,11 @@ struct ClockPlan {
 // and `old` are pooled fields, and so are the sort's `ranges` (keyed by
 // the pool index of the cell); the bucket rows are dense.
 @group(0) @binding(20) var<storage, read> ts_table: array<u32>;
+// The slots in use, `[groups, 1, 1, n]` bound at the record's offset: slots
+// [0, n) may hold particles, none at or past n is read. In the step it is the
+// step's record, which the birth reservation raises to the live end plus the
+// births it grants.
+@group(0) @binding(21) var<storage, read> record: array<u32>;
 
 const NO_CLAIM: u32 = 0xffffffffu;
 const MAX_PARTICLES_PER_CELL: u32 = 6u;
@@ -76,6 +81,8 @@ const EPS: f32 = 1e-5;
 fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
 }
+
+fn slots_in_use() -> u32 { return record[3]; }
 
 fn ts_cells() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
@@ -255,8 +262,8 @@ fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let s = gid.x;
-    if s >= u.count { return; }
-    // In the step, count is every slot: the sort leaves a dead tail at radius 0.
+    if s >= slots_in_use() { return; }
+    // A slot in use can be dead (radius 0).
     if !(particles[s].position_radius.w > 0.0) { return; }
     let p = local(particles[s]);
     let g = cell_of(p);
@@ -594,7 +601,7 @@ fn place(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn index_probe(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = gid.x;
-    if s >= u.count { return; }
+    if s >= slots_in_use() { return; }
     let p = local(particles[s]);
     births[2u * s] = bitcast<vec4<f32>>(vec4<i32>(cell_of(p), 0));
     births[2u * s + 1u] = bitcast<vec4<f32>>(vec4<i32>(sub_of(p), 0));
@@ -657,10 +664,11 @@ fn saved_velocity(q: vec3<f32>) -> vec3<f32> {
 }
 
 // Each drawn birth into the slot after the live prefix its scan index gives,
-// up to the pool's slots, in the saved velocity at its seed (the engine's
-// birth velocity; the FLIP update then gives it the new field's), with the
-// identity the reservation set aside. Births past the pool are dropped and
-// counted. The birth list keeps each seed at its birth index, for the proofs.
+// in the saved velocity at its seed (the engine's birth velocity; the FLIP
+// update then gives it the new field's), with the identity the reservation
+// set aside. The reservation granted the slots from the live end to the
+// record's n; births past them are dropped and counted. The birth list keeps
+// each seed at its birth index, for the proofs.
 @compute @workgroup_size(256)
 fn write(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
@@ -669,15 +677,17 @@ fn write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let total = rank_total();
     let last = ranges[ts_pool_len() - 1u];
     let live = last.start + last.count;
-    let room = select(0u, u.slots - live, live <= u.slots);
+    let n = slots_in_use();
+    // The sort set n to the live end and the reservation only raised it.
+    let granted = n - live;
     if r == 0u {
         let requested = winners[total - 1u];
         atomicStore(&birth_count[0], requested);
         stats[0] = requested;
-        stats[1] = min(requested, room);
+        stats[1] = granted;
         stats[2] = stats[2] + requested;
-        stats[3] = stats[3] + min(requested, room);
-        capped[SHEET_REFUSED_TAIL] += requested - min(requested, room);
+        stats[3] = stats[3] + granted;
+        capped[SHEET_REFUSED_TAIL] += requested - granted;
     }
     if r >= total { return; }
     var before = 0u;
@@ -688,7 +698,7 @@ fn write(@builtin(global_invocation_id) gid: vec3<u32>) {
     if before < u.capacity {
         births[before] = vec4<f32>(e.p, bitcast<f32>(r));
     }
-    if before >= room { return; }
+    if live + before >= n { return; }
     let origin = vec3<f32>(u.ox, u.oy, u.oz);
     let world = e.p + origin;
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.

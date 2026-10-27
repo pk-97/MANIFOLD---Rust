@@ -31,14 +31,6 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
         + pocket_sum_bytes(cells)
         + pocket_coarse_bytes(cells)
         + tile_scratch_bytes(cells, ring_max)
-        + mask_saved_bytes(cells, slots.max(1))
-}
-
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-pub(super) fn mask_saved_bytes(cells: [u32; 3], slots: u64) -> u64 {
-    slots * size_of::<FluidParticle>() as u64
-        + pool_cell_bytes(pool_tiles(cells))
-        + (slots * 8 + u64::from(SOLVER_WORDS) * 4)
 }
 
 /// The lattice's pooled cell arrays (`LatticeBuffers`): water, φ, the
@@ -50,13 +42,9 @@ pub(super) const LATTICE_CELL_ARRAYS: u64 = 8;
 /// open-fraction and solid-velocity grids and the step's internal faces.
 pub(super) const LATTICE_FACE_GRIDS: u64 = 7;
 
-/// The saved (old) distance the commit mask restores: one more pooled cell
-/// array, held by the state beside the lattice.
-pub(super) const SAVED_CELL_ARRAYS: u64 = 1;
-
 /// Bytes per fine cell of the step's own pooled fields.
-pub(crate) const STEP_POOLED_BYTES_PER_CELL: u64 = (LATTICE_CELL_ARRAYS + SAVED_CELL_ARRAYS) * 4
-    + LATTICE_FACE_GRIDS * size_of::<FaceSample>() as u64;
+pub(crate) const STEP_POOLED_BYTES_PER_CELL: u64 =
+    LATTICE_CELL_ARRAYS * 4 + LATTICE_FACE_GRIDS * size_of::<FaceSample>() as u64;
 
 /// Scratch for one lattice.
 ///

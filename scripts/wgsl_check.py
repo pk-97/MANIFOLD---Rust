@@ -32,7 +32,7 @@ fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 STEP_PARTS = [
     "common", "transfer", "extend", "forces", "solids", "pocket_bindings",
     "tile_bindings", "pockets", "divergence", "particle_distance",
-    "projection", "density", "move", "emit", "tiles", "marker_removal",
+    "projection", "density", "move", "emit", "count", "tiles", "marker_removal",
 ]
 
 
@@ -58,9 +58,14 @@ STACKS = {
     "coarse_inverse": (False, [*TILE_STORAGE, FLIP / "coarse_inverse.wgsl"]),
     "bodies": (False, [*TILE_STORAGE, FLIP / "gpu_flip_bodies.wgsl"]),
     "lentine": (False, [LIQ / "tile_grid.wgsl", FLIP / "gpu_flip_lentine.wgsl"]),
+    "clock": (False, [FLIP / "gpu_flip_clock.wgsl"]),
     "sheeting": (True, [*TILE_STORAGE, FLIP / "gpu_flip_sheeting.wgsl"]),
     "sheet_distance": (False, [*TILE_STORAGE, FLIP / "gpu_flip_sheet_distance.wgsl"]),
+    "publication": (True, [LIQ / "particle_publication.wgsl"]),
+    "stats": (True, [LIQ / "liquid_stats.wgsl"]),
+    "state_records": (False, [FLIP / "liquid_state_records.wgsl"]),
     "ww_gather": (False, [*TILE_STORAGE, WW / "gather_distance.wgsl"]),
+    "ww_step": (False, [WW / "whitewater_step.wgsl"]),
     "ww_fused": (False, [LIQ / "tile_grid.wgsl", LIQ / "whitewater_common.wgsl",
                          LIQ / "liquid_faces.wgsl",
                          C / "manifold-nodes-physics/src/shaders/force_lattice.wgsl",

@@ -38,6 +38,7 @@ mod emit;
 mod face_gravity;
 mod motion;
 mod pockets;
+mod slots;
 mod solids;
 mod step_order;
 

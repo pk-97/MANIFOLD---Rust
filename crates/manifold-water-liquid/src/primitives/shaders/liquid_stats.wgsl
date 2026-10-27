@@ -1,6 +1,7 @@
-// node.liquid_stats — one tick's statistics of a particle liquid
-//Two passes with one
-// shared uniform:
+// node.liquid_stats — one tick's statistics of a particle liquid over the
+// slots in use (the identity's word 7). Three passes with one shared uniform:
+//   stats_args     — one thread sizes the next pass: a group per block of
+//                    slots in use;
 //   particles_main — each workgroup folds a fixed block of records, then a
 //                    fixed workgroup-memory tree, into one partial;
 //   finish_main    — one workgroup folds the partials in a fixed order and
@@ -29,8 +30,8 @@ struct Partial {
 }
 
 struct StatsParams {
-    count: u32,
-    groups: u32,
+    // Slots the particle array holds, or `capped` when it holds fewer.
+    limit: u32,
     particle_mass: f32,
     has_capped: u32,
     // The solver words start at word 2 · slots of `capped`.
@@ -38,6 +39,7 @@ struct StatsParams {
     has_solver: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 const GROUP: u32 = 256u;
@@ -49,8 +51,17 @@ const PER_THREAD: u32 = 8u;
 @group(0) @binding(3) var<storage, read_write> stats: array<u32>;
 // Two words per record from the solver; any buffer when has_capped is 0.
 @group(0) @binding(4) var<storage, read> capped: array<u32>;
+// The particle identity: word 7 is n, the slots in use.
+@group(0) @binding(5) var<storage, read> identity: array<u32>;
+// Threadgroups of the particle pass: [groups, 1, 1].
+@group(0) @binding(6) var<storage, read_write> args: array<u32>;
 
 var<workgroup> scratch: array<Partial, 256>;
+
+// The slots in use, no more than the buffers hold.
+fn slots_in_use() -> u32 {
+    return min(identity[7], params.limit);
+}
 
 fn finite(x: f32) -> bool {
     return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u;
@@ -107,14 +118,22 @@ fn reduce_shared(t: u32) {
     }
 }
 
+@compute @workgroup_size(1)
+fn stats_args() {
+    args[0] = (slots_in_use() + GROUP * PER_THREAD - 1u) / (GROUP * PER_THREAD);
+    args[1] = 1u;
+    args[2] = 1u;
+}
+
 @compute @workgroup_size(256)
 fn particles_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let t = lid.x;
     var acc = empty();
     let base = wg.x * GROUP * PER_THREAD;
+    let n = slots_in_use();
     for (var k = 0u; k < PER_THREAD; k = k + 1u) {
         let i = base + k * GROUP + t;
-        if i < params.count {
+        if i < n {
             var r = record_partial(particles[i]);
             if params.has_capped != 0u {
                 r.speed_capped = capped[2u * i];
@@ -135,7 +154,8 @@ fn particles_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocatio
 fn finish_main(@builtin(local_invocation_id) lid: vec3<u32>) {
     let t = lid.x;
     var acc = empty();
-    for (var i = t; i < params.groups; i = i + GROUP) {
+    let groups = args[0];
+    for (var i = t; i < groups; i = i + GROUP) {
         acc = combine(acc, partials[i]);
     }
     scratch[t] = acc;

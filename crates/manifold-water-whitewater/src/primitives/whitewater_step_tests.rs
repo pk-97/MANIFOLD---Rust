@@ -307,6 +307,10 @@ mod gpu {
             })
             .collect();
         let particles = shared(bytemuck::cast_slice(&particles));
+        let identity = crate::primitives::whitewater_step::fused_tests::gpu::identity_record(
+            &harness.device,
+            256,
+        );
         // Each tick owns immutable inputs, including when two ticks share an
         // encoder. CPU overwrites of a shared face array would hide this bug.
         let faces: Vec<[GpuBuffer; 3]> = (0..12)
@@ -339,6 +343,7 @@ mod gpu {
                         motion: None,
                         obstacle_source: None,
                         particles: &particles,
+                        identity: &identity,
                         solid: &solid,
                         faces: crate::primitives::whitewater_step::FaceSource::Axes([
                             &f[0], &f[1], &f[2],
@@ -349,7 +354,6 @@ mod gpu {
                     };
                     let settings = StepFrame {
                         shape,
-                        count: Some(256),
                         ticks: 1,
                         dt: TICK as f32,
                         epoch: 0,

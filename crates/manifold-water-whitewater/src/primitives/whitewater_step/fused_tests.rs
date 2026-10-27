@@ -17,7 +17,7 @@ fn validate_wgsl(source: &str) -> naga::Module {
 #[test]
 fn whitewater_fused_and_gather_validate_on_cpu() {
     let module = validate_wgsl(&fused_source());
-    assert_eq!(std::mem::size_of::<EmitParams>(), 144);
+    assert_eq!(std::mem::size_of::<EmitParams>(), 128);
     assert_eq!(std::mem::size_of::<SpawnParams>(), 112);
     assert_eq!(std::mem::size_of::<LifecycleParams>(), 144);
     assert_eq!(std::mem::size_of::<TurbulenceParams>(), 32);
@@ -175,10 +175,21 @@ pub mod gpu {
         buffer
     }
 
+    /// The identity words of `n` liquid particles in use: the dispatch triple
+    /// at words 4-6 (at least one group) and `n` at word 7.
+    pub fn identity_words(n: u32) -> [u32; 8] {
+        [0, 0, 0, 0, n.div_ceil(256).max(1), 1, 1, n]
+    }
+
+    pub fn identity_record(device: &GpuDevice, n: u32) -> GpuBuffer {
+        shared(device, &identity_words(n))
+    }
+
     pub struct Fixture {
         pub shape: StepShape,
         pub records: Vec<FluidParticle>,
         particles: GpuBuffer,
+        identity: GpuBuffer,
         solid: GpuBuffer,
         distance: GpuBuffer,
         tiles: GpuBuffer,
@@ -197,6 +208,7 @@ pub mod gpu {
             Self {
                 shape,
                 particles: shared(device, &records),
+                identity: identity_record(device, records.len() as u32),
                 records,
                 solid: shared(device, &vec![0.1f32; 13 * 13 * 13]),
                 distance: shared(device, &phi),
@@ -222,7 +234,6 @@ pub mod gpu {
         pub fn frame(&self, dust: bool) -> StepFrame {
             StepFrame {
                 shape: self.shape,
-                count: Some(8),
                 ticks: 3,
                 dt: 0.015625,
                 epoch: 7,
@@ -249,12 +260,23 @@ pub mod gpu {
             StepInputs {
                 motion: None,
                 particles: &self.particles,
+                identity: &self.identity,
                 solid: &self.solid,
                 obstacle_source: Some(&self.source),
                 faces: FaceSource::Axes(self.faces.each_ref()),
                 distance: &self.distance,
                 tiles: &self.tiles,
                 pool_tiles: self.pool_tiles,
+            }
+        }
+        /// Count `n` of the fixture's particles in use from now on. Call
+        /// between ticks: no committed encoder may still read the identity.
+        pub fn set_emitters(&self, n: u32) {
+            // SAFETY: the identity's shared storage holds eight words and the
+            // caller's last encoder has completed.
+            unsafe {
+                self.identity
+                    .write(0, bytemuck::cast_slice(&identity_words(n)));
             }
         }
     }
@@ -301,7 +323,10 @@ pub mod gpu {
                 let mut frame = fixture.frame(dust);
                 frame.turbulence_emission = rate;
                 frame.dust_rate = rate;
-                frame.count = Some(count);
+                // The fused kernels count from the identity, the atoms from
+                // the scalar; both are the same `count` of the eight slots.
+                fixture.set_emitters(count);
+                stage.reference.emitters = Some(count);
                 stage
                     .advance_tick(
                         &mut GpuEncoder::new(&mut encoder, &device),
@@ -343,11 +368,13 @@ pub mod gpu {
                 );
             }
         }
-        assert_eq!(stages[0].reference.emit_dispatches.get(), 5);
+        // The fused passes dispatch every tick, an empty population included;
+        // the atoms skip it.
+        assert_eq!(stages[0].reference.emit_dispatches.get(), 6);
         assert_eq!(stages[1].reference.emit_dispatches.get(), 35);
         assert_eq!(
             stages[0].reference.dust_dispatches.get(),
-            if dust { 5 } else { 0 }
+            if dust { 6 } else { 0 }
         );
         assert_eq!(
             stages[1].reference.dust_dispatches.get(),
@@ -461,6 +488,10 @@ pub mod gpu {
         )
         .unwrap();
         let mut stages = particle_stages(&device, shape, 3);
+        let identity = identity_record(&device, 3);
+        for stage in &mut stages {
+            stage.reference.emitters = Some(3);
+        }
         let records: Vec<_> = (0..3)
             .map(|i| FluidParticle {
                 position_radius: [0.9 + 0.1 * i as f32, 1.0, 1.0, 0.025],
@@ -508,10 +539,10 @@ pub mod gpu {
                         enc.copy_buffer_to_buffer(&air, &stage.fields().cells, air.size);
                         let mut inputs = fixture.inputs();
                         inputs.solid = &solid;
+                        inputs.identity = &identity;
                         inputs.faces = FaceSource::Axes(faces.each_ref());
                         stage.spawn(
-                            &mut enc, &frame, &inputs, &surface, &offsets, &sampled, &energy, 3,
-                            dust,
+                            &mut enc, &frame, &inputs, &surface, &offsets, &sampled, &energy, dust,
                         );
                         captures.push(copy_shared(
                             &device,
@@ -771,6 +802,83 @@ pub mod gpu {
         }
         assert_eq!(stages[0].reference.lifecycle_dispatches.get(), 4);
         assert_eq!(stages[1].reference.lifecycle_dispatches.get(), 12);
+    }
+
+    /// Emission reads the liquid particles in use and nothing past them:
+    /// the same `n` emitters in a buffer that goes on with live-looking and
+    /// NaN records give the same pool, state, counts and populations as in a
+    /// buffer that ends at `n`. `n` covers one partial group and two groups,
+    /// the second one partial; the 300 emitters make more spawns than the
+    /// pool holds, so the thinned subset is compared too.
+    #[test]
+    fn whitewater_emission_ignores_slots_past_the_count() {
+        let device = manifold_gpu::testkit::test_device();
+        let fixture = Fixture::new(&device);
+        let emitter = |i: u32| FluidParticle {
+            position_radius: [
+                0.35 + 0.5 * (i as f32 * 0.618_034).fract(),
+                0.35 + 0.5 * (i as f32 * 0.414_214).fract(),
+                0.5,
+                0.025,
+            ],
+            velocity: [17.0, -3.25, 0.75],
+            id: 255 - i % 256,
+        };
+        let ports = [
+            "pool_out",
+            "state_out",
+            "counts_out",
+            "foam_particles",
+            "bubble_particles",
+            "spray_particles",
+            "dust_particles",
+        ];
+        for n in [6u32, 300] {
+            let live: Vec<_> = (0..n).map(emitter).collect();
+            let mut past = live.clone();
+            for i in 0..n {
+                past.push(if i % 3 == 0 {
+                    FluidParticle {
+                        position_radius: [f32::NAN, 0.5, 0.5, 0.025],
+                        velocity: [f32::NAN; 3],
+                        id: 7,
+                    }
+                } else {
+                    emitter(n + i)
+                });
+            }
+            let identity = identity_record(&device, n);
+            let mut rows = Vec::new();
+            for records in [&live, &past] {
+                let particles = shared(&device, records);
+                let mut inputs = fixture.inputs();
+                inputs.particles = &particles;
+                inputs.identity = &identity;
+                let mut stage = Step::default();
+                let mut enc = device.create_encoder("whitewater emission past the count");
+                stage
+                    .advance_tick(
+                        &mut GpuEncoder::new(&mut enc, &device),
+                        &fixture.frame(true),
+                        &inputs,
+                        &fixture.pool,
+                        &fixture.state,
+                        true,
+                    )
+                    .unwrap();
+                let row: Vec<_> = ports
+                    .iter()
+                    .map(|port| copy_shared(&device, &mut enc, stage.tick_output(port).unwrap()))
+                    .collect();
+                enc.commit_and_wait_completed();
+                rows.push(row);
+            }
+            for (i, port) in ports.into_iter().enumerate() {
+                compare_buffers(&rows[1][i], &rows[0][i], n as usize, port);
+            }
+            let emitted = read::<u32>(&rows[0][1], 8)[3];
+            assert!(emitted > 0, "n {n}: the emitters must spawn");
+        }
     }
 
     #[test]

@@ -89,8 +89,8 @@ fn planned_particles(params: &ParamValues) -> u32 {
     .clamp(1, u64::from(EXACT_F32_COUNT)) as u32
 }
 
-/// Particle slots the pool holds: the fill, or `capacity` when larger (0
-/// means the fill's count). Slots past the fill start dead; sources emit
+/// Particle slots the pool holds: the filled sites, or `capacity` when larger (0
+/// means the filled sites). Slots past the fill start dead; sources emit
 /// into them.
 pub(crate) fn pool_slots(placed: u64, capacity: f32) -> u64 {
     placed.max(capacity.round().max(0.0) as u64)
@@ -129,7 +129,7 @@ struct FillUniforms {
 manifold_node_engine::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. With wall_inset above 0 (node.gpu_flip_domain's mesh_wall_inset) the test is the FLIP engine's instead: the six walls, wall_inset cells in from a grid 1.5 cells outside the box, and the bodies, read together trilinearly from that grid's nodes. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two and count is its slot count. Every slot the fill leaves dead is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. With wall_inset above 0 (node.gpu_flip_domain's mesh_wall_inset) the test is the FLIP engine's instead: the six walls, wall_inset cells in from a grid 1.5 cells outside the box, and the bodies, read together trilinearly from that grid's nodes. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two, and count is the filled sites, the slots a liquid starts with. Every slot past them starts dead and is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -173,7 +173,7 @@ manifold_node_engine::primitive! {
         float_param!("wall_inset", "Wall Inset (cells)", 0.0, 0.0, 8.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.liquid_state's seed and, through count, every atom that takes a live particle count. The pool and box sites, the padded lattice, bodies, shapes, atlas, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
+    composition_notes: "Feeds node.liquid_state's seed; count is the filled sites that state starts its live slots from. The pool and box sites, the padded lattice, bodies, shapes, atlas, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
     examples: [],
     picker: { label: "Liquid Fill", category: Atom },
     summary: "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -238,7 +238,8 @@ impl Primitive for LiquidFill {
             ctx.error("Liquid Fill: particle_capacity must be 0 or a positive count".to_string());
             return;
         }
-        let slots = pool_slots(filled_sites(nodes, pool, sites), requested);
+        let filled = filled_sites(nodes, pool, sites);
+        let slots = pool_slots(filled, requested);
         if slots > u64::from(EXACT_F32_COUNT) {
             ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
             ctx.error(format!(
@@ -248,7 +249,7 @@ impl Primitive for LiquidFill {
         }
         let capacity = (slots as u32).max(1);
         ctx.outputs
-            .set_scalar("count", ParamValue::Float(slots as f32));
+            .set_scalar("count", ParamValue::Float(filled as f32));
         let bytes = u64::from(capacity) * std::mem::size_of::<FluidParticle>() as u64;
         if self.buffer.as_ref().is_none_or(|b| b.size != bytes) {
             match ctx.gpu_encoder().device.try_create_buffer_shared(bytes) {

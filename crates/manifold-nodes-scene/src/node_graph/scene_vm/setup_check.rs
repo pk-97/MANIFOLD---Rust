@@ -68,7 +68,7 @@ impl SetupProblemKind {
             Self::BodiesNotCoupled(count) => format!("{count} bodies not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest"),
             Self::CopiesNotMade(1) => "1 copy not made; the world's copy pool is full".to_owned(),
             Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
-            Self::PoolFull => "Water pool is full; the inflow is held back. Add a Drain or lower Resolution".to_owned(),
+            Self::PoolFull => "The water is full, so inflows and sheets pause until some drains away. Add a Drain or lower Resolution.".to_owned(),
             Self::BodyRefused(reason) => sentence(reason),
         }
     }

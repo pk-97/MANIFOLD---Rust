@@ -246,10 +246,9 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .collect();
     let mut pool = sorted.clone();
     pool.resize(capacity + 4, FluidParticle::default());
-    let params = StepParams {
-        capacity: capacity as u32,
-        ..params
-    };
+    // The identity after the birth stage granted the room: ids from 1000, and
+    // `n` the live prefix plus the births that fit.
+    let identity = [0u32, 0, 1000, 0, 1, 1, 1, capacity as u32];
     let written: Vec<FluidParticle> = Pass::new()
         .bind_ranges(&ranges)
         .bind(15, &[shape], Layout::Dense)
@@ -257,7 +256,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(36, &[row], Layout::Dense)
         .bind(37, &scan, Layout::Dense)
         .bind(38, &pool, Layout::Dense)
-        .bind(47, &[0u32, 0, 1000, 0], Layout::Dense)
+        .bind(47, &identity, Layout::Dense)
         .run("emit_write", &params, 38, pool.len(), site_count);
     assert_eq!(
         written[..sorted.len()],
@@ -327,7 +326,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         let got: Vec<u32> = Pass::new()
             .bind_ranges(&ranges)
             .bind(37, &scan, Layout::Dense)
-            .bind(47, &[0u32, 0, 1000, 0], Layout::Dense)
+            .bind(47, &identity, Layout::Dense)
             .bind(22, &words, Layout::Dense)
             .run(
                 "emit_tally",
@@ -371,7 +370,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(36, &[row], Layout::Dense)
         .bind(37, &scan, Layout::Dense)
         .bind(38, &pool, Layout::Dense)
-        .bind(47, &[0u32, 0, 1000, 0], Layout::Dense)
+        .bind(47, &identity, Layout::Dense)
         .run("emit_write", &params, 38, pool.len(), site_count);
     let substep = 3u32 * 64 + 1;
     let mut spread = 0.0f64;

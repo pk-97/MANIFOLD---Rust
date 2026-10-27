@@ -5,6 +5,7 @@ use crate::primitives::gpu_flip_pressure::scratch_bytes as pressure_scratch_byte
 use crate::primitives::gpu_flip_step::ENGINE_CFL;
 use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use crate::primitives::gpu_flip_step::band_layers;
+use crate::primitives::gpu_flip_step::history_slots;
 use crate::primitives::gpu_flip_step::pool_tiles;
 use crate::primitives::gpu_flip_step::ring_max;
 use crate::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
@@ -17,14 +18,15 @@ use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, whole};
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::FlipSolverGrid;
+use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::primitives::prefix_scan::storage_words;
 use manifold_water_liquid::primitives::sort_particles_into_cells::key_storage_bytes;
 use manifold_water_liquid::tile_storage::{pool_len, tile_total};
 use std::mem::size_of;
 
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    x.covers("identity", 16)?;
-    x.covers_if_bound("identity_out", 16)?;
+    x.covers("identity", IDENTITY_BYTES)?;
+    x.covers_if_bound("identity_out", IDENTITY_BYTES)?;
     let cells = FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells();
     if let Some(reason) = lattice_refusal(cells) {
         return Err(Verdict::Refused(format!(
@@ -36,19 +38,17 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("distance", pool_len(pool) * 4);
     x.provide("tiles", (tile_total(cells) + u64::from(pool)) * 4);
     x.publish("pool_tiles", pool as f32);
-    let history_slots =
-        manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + whole(x, "live_hit_count", 0.0);
-    x.provide("substep_schedule", u64::from(history_slots) * 16);
+    let history = history_slots(whole(x, "live_hit_count", 0.0));
+    x.provide("substep_schedule", u64::from(history) * 16);
     for (axis, port) in ["substep_u", "substep_v", "substep_w"]
         .into_iter()
         .enumerate()
     {
-        x.provide(port, u64::from(history_slots) * face_len(cells, axis) * 4);
+        x.provide(port, u64::from(history) * face_len(cells, axis) * 4);
     }
-    x.publish("substep_count", history_slots as f32);
+    x.publish("substep_count", history as f32);
     x.hold(manifold_water_liquid::substep_history::history_bytes(
-        cells,
-        history_slots,
+        cells, history,
     ));
     let lattice = FlipSolverGrid::from_lattice(liquid_lattice(x)?);
     x.publish_transform("grid_bounds", lattice.bounds());
