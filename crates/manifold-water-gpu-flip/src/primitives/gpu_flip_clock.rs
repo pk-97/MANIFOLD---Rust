@@ -47,7 +47,10 @@ pub struct GpuFlipClockParams {
     pub surface_condition: f32,
     pub surface_constant: f32,
     pub color_mixing_rate: f32,
-    pub _pad_prediction: f32,
+    /// The numerical steps the tick encoded slots for, 0 for
+    /// `max_frame_steps`: the last of them takes all remaining frame time.
+    /// The marker speed limit still measures against `max_frame_steps`.
+    pub encoded_steps: u32,
     /// One Sim Rate interval of simulated time for a live frame, or 0 to
     /// measure the marker speed limit against the whole frame (export). The
     /// kernel uses the shorter of the two, so a late live span never lowers
@@ -885,7 +888,7 @@ mod tests {
             surface_condition: 0.0,
             surface_constant: 0.0,
             color_mixing_rate: 0.0,
-            _pad_prediction: 0.0,
+            encoded_steps: 0,
             limit_interval: 0.1,
             min_frame_steps: 1,
             max_frame_steps: 6,
@@ -986,7 +989,7 @@ mod gpu_tests {
             surface_condition: 0.0,
             surface_constant: 0.0,
             color_mixing_rate: 0.0,
-            _pad_prediction: 0.0,
+            encoded_steps: 0,
             limit_interval: 1.0,
             min_frame_steps: 1,
             max_frame_steps: 6,
@@ -2018,6 +2021,72 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             enc.commit_and_wait_completed();
             assert_eq!(read_plan(&readback).maximum_speed, 10.0);
         }
+    }
+
+    /// A live tick that encoded slots for two of six steps: the second takes
+    /// all the frame's remaining time and reports the cap, while the marker
+    /// speed limit still measures against all six.
+    #[test]
+    fn gpu_flip_clock_encoded_steps_end_the_frame_early() {
+        let device = manifold_gpu::testkit::test_device();
+        let clock = GpuFlipClock::new(&device, 1, 1, 1);
+        let one = slots_record(&device, 1);
+        let markers = device.create_buffer_shared(32);
+        let empty = device.create_buffer_shared(96);
+        unsafe {
+            markers.write(0, bytemuck::bytes_of(&particle(1000.0)));
+        }
+        let run = |encoded_steps: u32| {
+            let p = GpuFlipClockParams {
+                encoded_steps,
+                ..params()
+            };
+            let plans = [
+                device.create_buffer_shared(48),
+                device.create_buffer_shared(48),
+            ];
+            let mut enc = device.create_encoder("flip-clock encoded steps proof");
+            clock.begin_frame(&mut enc, &p);
+            for out in &plans {
+                let plan = clock.dispatch(
+                    &mut enc,
+                    GpuFlipClockInputs {
+                        marker_particles: &markers,
+                        marker_count: &one,
+                        obstacle_vertices: &empty,
+                        obstacle_count: 0,
+                        source_vertices: &empty,
+                        source_count: 0,
+                        live_hits: &markers,
+                        live_hit_count: 0,
+                        event_impulses: &markers,
+                        impulse_stride: 0,
+                        impulse_nodes: [2, 2, 2],
+                        impulse_origin: [0.0; 3],
+                        impulse_spacing: 1.0,
+                        body_rows: &markers,
+                        body_rows_offset: 0,
+                        body_reaction: &markers,
+                    },
+                    &p,
+                );
+                enc.copy_buffer_to_buffer(plan.buffer(), out, 48);
+            }
+            enc.commit_and_wait_completed();
+            (p, read_plan(&plans[0]), read_plan(&plans[1]))
+        };
+        let (p, first, second) = run(2);
+        assert_eq!(first.cap_hit, 0);
+        assert!(first.remaining > 0.0);
+        assert_eq!(second.dt, first.remaining);
+        assert_eq!(second.elapsed, p.frame_duration);
+        assert_eq!(second.remaining, 0.0);
+        assert_eq!(second.step_index, 2);
+        assert_eq!(second.cap_hit, 1);
+        let (_, all_first, all_second) = run(0);
+        assert_eq!(all_first.dt, first.dt, "the first step keeps its CFL step");
+        assert!(all_second.remaining > 0.0, "with every slot the frame goes on");
+        assert_eq!(all_first.marker_limit, first.marker_limit);
     }
 
     #[test]

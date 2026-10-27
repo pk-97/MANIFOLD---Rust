@@ -418,13 +418,29 @@ impl Primitive for GpuFlipStep {
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
             .unwrap_or(0)
             .saturating_mul(size_of::<LiquidBody>() as u64);
-        // Every tick encodes the most substeps the clock can schedule; its
-        // plan gates the ones it leaves no time for on the GPU.
-        let history_slots = encoded_slots(history_slots(live_hit_count));
+        // The history holds the most substeps the clock can schedule. Export
+        // encodes them all; live encodes the numerical steps the newest
+        // retired tick's speed asks for (live_steps), and the hits. The plan
+        // gates the slots the clock leaves no time for on the GPU.
+        let rule = history_slots(live_hit_count);
+        let history_slots = encoded_slots(rule);
+        let frame_clock = ctx
+            .gpu_encoder()
+            .device
+            .frame_clock()
+            .filter(|_| !ctx.sim_step.offline());
+        let numerical_steps = match &frame_clock {
+            Some(clock) if history_slots == rule => {
+                let speed = self.state.poll_plans(clock);
+                live_steps(speed, interval_duration as f32, h, steps as u32)
+            }
+            _ => manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS,
+        };
+        let encoded_steps = (numerical_steps + live_hit_count).min(history_slots);
         log::debug!(target: "gpu_flip::schedule",
-            "tick={tick_index} slots={history_slots} interval={interval_duration} h={h} minimum={steps} hits={live_hit_count} sources={source_count}");
+            "tick={tick_index} slots={encoded_steps}/{history_slots} interval={interval_duration} h={h} minimum={steps} hits={live_hit_count} sources={source_count}");
         ctx.outputs
-            .set_scalar("substep_count", ParamValue::Float(history_slots as f32));
+            .set_scalar("substep_count", ParamValue::Float(encoded_steps as f32));
         ctx.outputs
             .set_scalar("pool_tiles", ParamValue::Float(pool as f32));
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -451,7 +467,7 @@ impl Primitive for GpuFlipStep {
             surface_condition: 1.0,
             surface_constant: 1.0,
             color_mixing_rate: 0.0,
-            _pad_prediction: 0.0,
+            encoded_steps: numerical_steps,
             limit_interval,
             min_frame_steps: steps as u32,
             max_frame_steps: manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS,
@@ -469,7 +485,6 @@ impl Primitive for GpuFlipStep {
             .slot_record
             .clone()
             .expect("slot record reserved");
-        let encoded_steps = history_slots;
         // Stage tags only name profiled spans; an unprofiled encoder ignores
         // them, and they touch no dispatch, binding or replay key.
         gpu.native_enc.set_profile_tag("gpu_flip.stage.clock");
@@ -555,6 +570,10 @@ impl Primitive for GpuFlipStep {
         if let Some(status) = clock_status {
             gpu.native_enc
                 .copy_buffer_to_buffer(&last_clock_plan, &status, 32);
+        }
+        if let Some(clock) = &frame_clock {
+            self.state
+                .read_plan(gpu.device, gpu.native_enc, &last_clock_plan, clock);
         }
     }
 }

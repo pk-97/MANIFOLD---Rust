@@ -1,4 +1,5 @@
-//! The step state's install, storage reservation and slot record.
+//! The step state's install, storage reservation, slot record and plan
+//! readbacks.
 
 use super::*;
 use manifold_water_liquid::tile_storage::pool_len;
@@ -125,5 +126,70 @@ impl StepState {
             "gpu_flip.step.slot_open",
         );
         enc.compute_memory_barrier_buffers();
+    }
+}
+
+/// Bytes of a plan the CPU reads: step dt, elapsed, remaining and the
+/// fastest speed (gpu_flip_clock.wgsl Plan).
+const PLAN_READBACK_BYTES: u64 = 16;
+/// Plan readbacks in flight; a tick with none free skips its copy, so live
+/// never waits on the GPU.
+const PLAN_READBACKS: usize = 3;
+
+/// One tick's last clock plan, copied for the CPU.
+pub(crate) struct PlanReadback {
+    buffer: GpuBuffer,
+    stamp: u64,
+    pending: bool,
+}
+
+impl StepState {
+    /// The fastest speed of the newest tick whose frame has retired.
+    pub(super) fn poll_plans(&mut self, clock: &manifold_gpu::FrameClock) -> Option<f32> {
+        let mut newest: Option<(u64, f32)> = None;
+        for slot in self.plan_readbacks.iter_mut().filter(|s| s.pending) {
+            if !clock.is_complete(slot.stamp) {
+                continue;
+            }
+            slot.pending = false;
+            let Some(ptr) = slot.buffer.mapped_ptr() else {
+                continue;
+            };
+            // SAFETY: the frame that wrote this shared slot has retired.
+            let words = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), 4) };
+            if newest.is_none_or(|(stamp, _)| slot.stamp >= stamp) {
+                newest = Some((slot.stamp, words[3]));
+            }
+        }
+        if let Some((_, speed)) = newest {
+            self.retired_speed = Some(speed);
+        }
+        self.retired_speed
+    }
+
+    /// Copy `plan`, this tick's last, for the CPU when a readback is free.
+    pub(super) fn read_plan(
+        &mut self,
+        device: &GpuDevice,
+        enc: &mut GpuEncoder,
+        plan: &GpuBuffer,
+        clock: &manifold_gpu::FrameClock,
+    ) {
+        let index = match self.plan_readbacks.iter().position(|s| !s.pending) {
+            Some(index) => index,
+            None if self.plan_readbacks.len() < PLAN_READBACKS => {
+                self.plan_readbacks.push(PlanReadback {
+                    buffer: device.create_buffer_shared(PLAN_READBACK_BYTES),
+                    stamp: 0,
+                    pending: false,
+                });
+                self.plan_readbacks.len() - 1
+            }
+            None => return,
+        };
+        let slot = &mut self.plan_readbacks[index];
+        enc.copy_buffer_range(plan, 0, &slot.buffer, 0, PLAN_READBACK_BYTES);
+        slot.stamp = clock.stamp();
+        slot.pending = true;
     }
 }

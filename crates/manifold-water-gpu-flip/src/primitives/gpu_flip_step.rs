@@ -82,6 +82,7 @@ mod pipelines;
 mod pockets;
 mod primitive;
 mod state;
+use state::PlanReadback;
 mod tiles;
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -140,6 +141,21 @@ pub(crate) const ENGINE_CFL: u32 = 5;
 /// count.
 pub(crate) fn history_slots(live_hit_count: u32) -> u32 {
     manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count
+}
+
+/// The numerical substeps a live tick encodes slots for: what the fastest
+/// speed of the newest retired tick asks for at the CFL over `interval`,
+/// half again so the speed can grow before its plan is read, at least
+/// `minimum`. With no retired tick, every slot. An encoded slot the clock
+/// leaves idle still costs its passes, and a tick that needs more than it
+/// got stretches its last step over the rest of the frame.
+pub(crate) fn live_steps(speed: Option<f32>, interval: f32, cell_size: f32, minimum: u32) -> u32 {
+    let max = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS;
+    let Some(speed) = speed.filter(|s| s.is_finite() && *s >= 0.0) else {
+        return max;
+    };
+    let wanted = (1.5 * speed * interval / (ENGINE_CFL as f32 * cell_size)).ceil();
+    (wanted.min(max as f32) as u32).clamp(minimum.clamp(1, max), max)
 }
 
 manifold_core::testkit_visible! {
@@ -368,6 +384,11 @@ pub(crate) struct StepState {
     clock: Option<GpuFlipClock>,
     clock_capacities: [u32; 3],
     history: manifold_water_liquid::substep_history::SubstepHistory,
+    /// Each live tick's last clock plan, copied for the CPU until its frame
+    /// retires (`state.rs`).
+    plan_readbacks: Vec<PlanReadback>,
+    /// The fastest speed the newest retired tick's clock measured.
+    retired_speed: Option<f32>,
     /// Sheet seeding (BUG-j9l9w): the true distance it reads, the stage,
     /// and each sorted slot's input index. Reserved only when the rate is on.
     sheet_distance: super::gpu_flip_sheet_distance::SheetDistance,

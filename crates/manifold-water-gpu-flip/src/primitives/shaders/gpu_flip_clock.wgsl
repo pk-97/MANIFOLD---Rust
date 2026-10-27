@@ -21,7 +21,8 @@ struct ClockParams {
     surface_condition: f32,
     surface_constant: f32,
     color_mixing_rate: f32,
-    _pad_prediction: f32,
+    // The numerical steps the tick encoded slots for, 0 for max_frame_steps.
+    encoded_steps: u32,
     limit_interval: f32,
     min_frame_steps: u32,
     max_frame_steps: u32,
@@ -520,6 +521,13 @@ fn begin_frame() {
         0.0, 0.0, 0u, 1u);
 }
 
+// The numerical steps this tick may take: max_frame_steps, or the fewer the
+// tick encoded slots for. The last of them takes all remaining frame time.
+fn step_budget() -> u32 {
+    let encoded = select(clock.max_frame_steps, min(clock.max_frame_steps, clock.encoded_steps), clock.encoded_steps > 0u);
+    return max(encoded, 1u);
+}
+
 @compute @workgroup_size(1)
 fn schedule() {
     let state = output_plan[0];
@@ -614,17 +622,19 @@ fn schedule() {
         dt = min(substep_time, state.remaining);
     }
     // FLIP Fluids' internal final-step rule: the last allowed substep takes
-    // ALL remaining frame time, bending CFL for that one step.
+    // ALL remaining frame time, bending CFL for that one step. The cap is
+    // reported only when it bends: a last step the CFL step already fills
+    // took no more than it asked for.
     var cap_hit = 0u;
-    if (!pending && state.step_index + 1u >= max(clock.max_frame_steps, 1u)) {
+    if (!pending && state.step_index + 1u >= step_budget()) {
+        cap_hit = select(0u, 1u, state.remaining > dt);
         dt = state.remaining;
-        cap_hit = 1u;
     }
     // An interior event is a transport boundary even when the CFL step has
     // reached the cap. The next dispatch continues with the same numerical
     // step budget, so the stretched remainder rule still owns the tail.
     var numerical_end = select(state.elapsed + dt, state.numerical_end, pending);
-    if (pending && state.step_index + 1u < max(clock.max_frame_steps, 1u)) {
+    if (pending && state.step_index + 1u < step_budget()) {
         let pending_dt = min(state.remaining, clock.frame_duration / count);
         if (pending_dt < numerical_end - state.elapsed) {
             dt = pending_dt;

@@ -2,6 +2,28 @@ use super::*;
 use manifold_node_engine::scene::world_tiles::tile_of_cell;
 use manifold_water_liquid::tile_storage::TILE_CELLS;
 
+/// A live tick encodes the substeps the retired speed asks for at the CFL,
+/// with half again to spare: 10 m/s at 1/16 m over 1/60 s wants 0.53 of a
+/// step and gets 1, 40 m/s wants 2.1 and gets 4. Never under the minimum or
+/// over every slot; no reading, or a broken one, takes every slot.
+#[test]
+fn live_steps_follow_the_retired_speed() {
+    let max = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS;
+    let at = |speed, minimum| live_steps(speed, 1.0 / 60.0, 0.0625, minimum);
+    assert_eq!(at(Some(10.0), 1), 1);
+    assert_eq!(at(Some(40.0), 1), 4);
+    assert_eq!(at(Some(0.0), 1), 1);
+    assert_eq!(at(Some(10.0), 3), 3);
+    assert_eq!(at(Some(1e6), 1), max);
+    assert_eq!(at(Some(10.0), 64), max);
+    assert_eq!(at(None, 1), max);
+    assert_eq!(at(Some(f32::NAN), 1), max);
+    assert_eq!(at(Some(f32::INFINITY), 1), max);
+    // A coarser cell or a shorter interval asks for fewer.
+    assert_eq!(live_steps(Some(40.0), 1.0 / 120.0, 0.0625, 1), 2);
+    assert_eq!(live_steps(Some(40.0), 1.0 / 60.0, 0.125, 1), 2);
+}
+
 /// Max Iterations rounds and is refused outside 1..=MAX_ITERATIONS or
 /// non-finite; Auto converges within it; a fixed count runs as saved even
 /// past it.
