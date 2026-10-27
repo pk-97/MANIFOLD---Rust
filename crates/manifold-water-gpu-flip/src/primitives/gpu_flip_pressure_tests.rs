@@ -1154,8 +1154,12 @@ fn pressure_module_passes_match_the_count() {
         // the warm start's residual) is what a solve encodes besides them.
         let round = passes(pool, Stop::Fixed(2)).1 - passes(pool, Stop::Fixed(1)).1;
         let prelude = solve - 8 * round;
-        let executes =
-            manifold_gpu::template_chunks(8, super::gpu_flip_pressure::ROUND_CHUNK).count();
+        let executes = manifold_gpu::template_chunks(
+            8,
+            super::gpu_flip_pressure::ROUND_CHUNK,
+            super::gpu_flip_pressure::SINGLE_ROUNDS,
+        )
+        .count();
         let own = profile
             .spans
             .iter()
@@ -1470,7 +1474,12 @@ fn pressure_module_replay_matches_direct() {
                 );
                 assert_eq!(
                     template.executes - last_template.executes,
-                    manifold_gpu::template_chunks(rounds, 32).count() as u64,
+                    manifold_gpu::template_chunks(
+                        rounds,
+                        super::gpu_flip_pressure::ROUND_CHUNK,
+                        super::gpu_flip_pressure::SINGLE_ROUNDS,
+                    )
+                    .count() as u64,
                     "{stop:?} frame {frame}: one execute per chunk of rounds"
                 );
                 assert_eq!(
@@ -2240,7 +2249,7 @@ fn pressure_module_refuses_a_level_past_the_coarsest() {
 /// run at 16³.
 #[test]
 fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
-    use super::gpu_flip_pressure::{CHUNK_ENTRIES, ROUND_CHUNK};
+    use super::gpu_flip_pressure::{CHUNK_ENTRIES, ROUND_CHUNK, SINGLE_ROUNDS};
     const M: usize = 16;
     let (n, dam) = load_fixture(DAM_BREAK);
     let (_, density) = load_fixture("deep_pool_density_problems");
@@ -2299,7 +2308,9 @@ fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
                         "chunk {chunk} {stop:?}: the first execute runs"
                     );
                 }
-                for (j, (start, rounds)) in manifold_gpu::template_chunks(cap, chunk).enumerate() {
+                for (j, (start, rounds)) in
+                    manifold_gpu::template_chunks(cap, chunk, SINGLE_ROUNDS).enumerate()
+                {
                     let want = if start < completed {
                         rounds * per_round
                     } else {

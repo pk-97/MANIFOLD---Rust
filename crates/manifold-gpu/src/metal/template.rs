@@ -45,8 +45,9 @@ const IDLE_SLOTS_KEPT: usize = 4;
 /// Store ids, so a ticket from one store is refused by another.
 static NEXT_STORE: AtomicU64 = AtomicU64::new(0);
 
-/// Where a template's rounds run: grouped into executes of up to `chunk`
-/// rounds (`crate::template_chunks`), execute j by range entry
+/// Where a template's rounds run: grouped into executes of one round for
+/// the first `singles`, then up to `chunk` (`crate::template_chunks`),
+/// execute j by range entry
 /// `first + j * stride` of `ranges` (`GATED_RANGE_BYTES` per entry), which
 /// the GPU writes as {0, rounds · commands} while live and {0, 0} once the
 /// work is done. Rounds of an execute that run after the GPU decided to
@@ -57,6 +58,7 @@ pub struct TemplateRanges<'a> {
     pub first: u32,
     pub stride: u32,
     pub chunk: u32,
+    pub singles: u32,
 }
 
 /// What a template store did, summed over its life.
@@ -714,7 +716,7 @@ fn prepare(
     copies: u32,
     body: impl FnOnce(&mut GatedRecorder<'_>) -> Result<(), String>,
 ) -> Result<TemplateTicket, String> {
-    let executes = template_chunks(copies, at.chunk).count() as u32;
+    let executes = template_chunks(copies, at.chunk, at.singles).count() as u32;
     let last = executes
         .checked_sub(1)
         .and_then(|c| c.checked_mul(at.stride))

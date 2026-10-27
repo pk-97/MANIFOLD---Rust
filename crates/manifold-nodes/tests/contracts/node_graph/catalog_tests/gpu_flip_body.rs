@@ -27,7 +27,7 @@ use manifold_node_engine::testkit::atom::{
 };
 use manifold_water_gpu_flip::primitives::gpu_flip_bodies::{Bodies, BodyPasses};
 use manifold_water_gpu_flip::primitives::gpu_flip_pressure::{
-    PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water,
+    PROGRESS_FLOATS, PressureSolver, ROUND_CHUNK, SINGLE_ROUNDS, Solve, Stop, Water,
 };
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::coupled_start;
@@ -1039,7 +1039,7 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
             );
             assert_eq!(
                 template.executes - last_template.executes,
-                manifold_gpu::template_chunks(ROUNDS, 32).count() as u64,
+                manifold_gpu::template_chunks(ROUNDS, ROUND_CHUNK, SINGLE_ROUNDS).count() as u64,
                 "visit {visit}: one execute per chunk of rounds, including stopped/inactive rounds"
             );
             assert_eq!(

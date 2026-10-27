@@ -28,7 +28,7 @@ pub use trace_planner::*;
 // buffers; that store lifts this allow.
 #[cfg_attr(feature = "vulkan", allow(dead_code))]
 mod replay;
-pub use replay::{GATED_RANGE_BYTES, GpuReplayStats, REPLAY_RING, template_chunks};
+pub use replay::{GATED_RANGE_BYTES, GpuReplayStats, REPLAY_RING, chunk_rounds, template_chunks};
 
 /// Point-in-time device memory values used by resource admission. The
 /// snapshot is deliberately plain data so callers can capture it once at an

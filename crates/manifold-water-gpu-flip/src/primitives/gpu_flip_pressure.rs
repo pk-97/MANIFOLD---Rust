@@ -290,7 +290,9 @@ struct Params {
     bodies: u32,
     /// restrict: the fine side's first word in the flags.
     below_base: u32,
-    _pad: [u32; 2],
+    /// arm and check: the single executes of the round layout.
+    singles: u32,
+    _pad: u32,
 }
 
 impl Params {
@@ -511,9 +513,17 @@ const TRIPLE_BYTES: u64 = 12;
 const RANGES_BYTES: u64 = 3 * MAX_ITERATIONS as u64 * GATED_RANGE_BYTES;
 /// The first chunked execute's range entry (gpu_flip_pressure.wgsl CHUNK_ENTRIES).
 pub(crate) const CHUNK_ENTRIES: u32 = 2 * MAX_ITERATIONS;
-/// Most rounds one execute runs: executes cover 1, 2, 4, … rounds doubling
-/// to this, so a stop leaves at most this less one guarded round running.
-pub(crate) const ROUND_CHUNK: u32 = 32;
+manifold_core::testkit_visible! {
+/// Most rounds one execute runs, past the single executes: they double to
+/// this, so a stop there leaves at most this less one guarded round running.
+pub(crate) const ROUND_CHUNK: u32 = 64;
+}
+manifold_core::testkit_visible! {
+/// Executes of one round each at the solve's start: every stop in the first
+/// rounds, where solves stop, leaves no guarded round, which costs a whole
+/// V-cycle, against an empty execute's few microseconds for each more.
+pub(crate) const SINGLE_ROUNDS: u32 = 40;
+}
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static CHUNK_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -1012,7 +1022,7 @@ impl PressureSolver {
             let grad = Params { triples: slots.triples(), tolerance: stop.tolerance(), ..Params::at(top.cell_size).over(&top) };
             // The arm's `mode` is the rounds and `live` the chunk, for the chunked
             // executes' range entries.
-            let arm = Params { color: before, slot: after, armed_triples: slots.armed(), bodies: body_count, mode: iterations, live: round_chunk(), ..grad };
+            let arm = Params { color: before, slot: after, armed_triples: slots.armed(), bodies: body_count, mode: iterations, live: round_chunk(), singles: SINGLE_ROUNDS, ..grad };
             let body_gate = BodyGate {
                 buffer: &b.gate,
                 partial: slots.body_partial() as u64 * TRIPLE_BYTES,
@@ -1023,8 +1033,9 @@ impl PressureSolver {
             let r = RoundPasses { pipes, b, water, fine, g, top, grad, x, k, bodies: bodies.is_some() };
             // Every round encodes the same bytes (the round index is the GPU's
             // progress[1]), so one walked round is the template the GPU runs once
-            // per round, in executes of 1, 2, 4, … up to ROUND_CHUNK rounds,
-            // execute j by range entry CHUNK_ENTRIES + j, on every encoder path.
+            // per round, in executes of one round for the first SINGLE_ROUNDS,
+            // then 1, 2, 4, … up to ROUND_CHUNK rounds, execute j by range
+            // entry CHUNK_ENTRIES + j, on every encoder path.
             // It is prepared before anything of the solve encodes, so a refused
             // template leaves the command buffer untouched. On the gate the body
             // product runs in live rounds only; at a coarse level its chain (the
@@ -1032,7 +1043,7 @@ impl PressureSolver {
             // gate too.
             debug_assert_eq!(after, 0, "a gated round is one segment");
             let store = self.templates.as_mut().ok_or("the solver was not prepared")?;
-            let at = TemplateRanges { ranges: &b.ranges, first: CHUNK_ENTRIES, stride: 1, chunk: round_chunk() };
+            let at = TemplateRanges { ranges: &b.ranges, first: CHUNK_ENTRIES, stride: 1, chunk: round_chunk(), singles: SINGLE_ROUNDS };
             let ticket = enc.prepare_template(store, at, before, iterations, |recorder| {
                 let mut sink = Round { recorder, refused: None };
                 r.head(&mut sink);
@@ -1947,6 +1958,7 @@ fn check<S: Sink>(enc: &mut S, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step
         color: partial_count(step.pool_tiles),
         live: g.live,
         slot: round_chunk(),
+        singles: SINGLE_ROUNDS,
         ..*step
     };
     g.dispatch(

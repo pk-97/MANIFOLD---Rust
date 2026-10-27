@@ -562,24 +562,31 @@ mod tests {
     }
 }
 
-/// The rounds of a `copies`-round gated template, grouped into executes:
-/// 1, 2, 4, … doubling up to `chunk` rounds an execute, then `chunk` at a
-/// time, the last cut to what remains. Each item is (first round, rounds).
-/// The GPU writes execute j's range entry as {0, rounds · commands} while
-/// live, and the same layout must be computed wherever those entries are
-/// written (gpu_flip_pressure.wgsl chunk_rounds).
-pub fn template_chunks(copies: u32, chunk: u32) -> impl Iterator<Item = (u32, u32)> {
-    let chunk = chunk.max(1);
+/// Rounds execute `j` of a gated template runs before the last cut: one
+/// each for the first `singles` executes, then 1, 2, 4, … doubling up to
+/// `chunk`. A stop inside an execute leaves its later rounds running
+/// guarded, so the single executes cover the rounds a solve usually stops
+/// in, and the doubling keeps the executes after a stop few.
+pub fn chunk_rounds(j: u32, chunk: u32, singles: u32) -> u32 {
+    (1u32 << j.saturating_sub(singles).min(31)).min(chunk.max(1))
+}
+
+/// The rounds of a `copies`-round gated template, grouped into executes of
+/// [`chunk_rounds`], the last cut to what remains. Each item is (first
+/// round, rounds). The GPU writes execute j's range entry as {0, rounds ·
+/// commands} while live, and the same layout must be computed wherever
+/// those entries are written (gpu_flip_pressure.wgsl chunk_rounds).
+pub fn template_chunks(copies: u32, chunk: u32, singles: u32) -> impl Iterator<Item = (u32, u32)> {
     let mut start = 0u32;
-    let mut size = 1u32;
+    let mut j = 0u32;
     std::iter::from_fn(move || {
         if start >= copies {
             return None;
         }
-        let len = size.min(chunk).min(copies - start);
+        let len = chunk_rounds(j, chunk, singles).min(copies - start);
         let item = (start, len);
         start += len;
-        size = size.saturating_mul(2);
+        j += 1;
         Some(item)
     })
 }
@@ -591,7 +598,7 @@ mod chunk_tests {
     #[test]
     fn template_chunks_double_then_hold() {
         let rounds = |copies, chunk| {
-            template_chunks(copies, chunk)
+            template_chunks(copies, chunk, 0)
                 .map(|(_, len)| len)
                 .collect::<Vec<_>>()
         };
@@ -601,7 +608,18 @@ mod chunk_tests {
         assert_eq!(rounds(13, 32), [1, 2, 4, 6]);
         assert_eq!(rounds(5, 1), [1, 1, 1, 1, 1]);
         assert_eq!(rounds(0, 32), Vec::<u32>::new());
-        let starts: Vec<u32> = template_chunks(40, 8).map(|(s, _)| s).collect();
+        let starts: Vec<u32> = template_chunks(40, 8, 0).map(|(s, _)| s).collect();
         assert_eq!(starts, [0, 1, 3, 7, 15, 23, 31, 39]);
+    }
+
+    #[test]
+    fn template_chunks_run_singles_then_double() {
+        let rounds: Vec<u32> = template_chunks(30, 8, 5).map(|(_, len)| len).collect();
+        assert_eq!(rounds, [1, 1, 1, 1, 1, 1, 2, 4, 8, 8, 2]);
+        assert_eq!(rounds.iter().sum::<u32>(), 30);
+        // A stop at any round up to the singles leaves no guarded round.
+        let starts: Vec<u32> = template_chunks(900, 64, 40).map(|(s, _)| s).collect();
+        assert!((0..=40).all(|r| starts.contains(&r)));
+        assert_eq!(starts.len(), 59);
     }
 }

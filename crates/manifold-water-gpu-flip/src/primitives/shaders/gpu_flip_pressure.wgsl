@@ -94,8 +94,9 @@ struct Params {
     bodies: u32,
     // restrict: the fine side's first word in `flags`.
     below_base: u32,
+    // arm and check: the round layout's single executes (chunk_rounds).
+    singles: u32,
     pad0: u32,
-    pad1: u32,
 };
 
 struct FaceSample {
@@ -1217,9 +1218,10 @@ const ACCEPTABLE: f32 = 1.0;
 // execute (gpu_flip_pressure.rs chunk entries; manifold_gpu template_chunks).
 const CHUNK_ENTRIES: u32 = 2u * ROUNDS;
 
-// Execute j's rounds before the last cut: 1, 2, 4, … doubling to `chunk`.
-fn chunk_rounds(j: u32, chunk: u32) -> u32 {
-    return min(1u << min(j, 31u), max(chunk, 1u));
+// Execute j's rounds before the last cut: one each for the first `singles`,
+// then 1, 2, 4, … doubling to `chunk` (manifold_gpu::chunk_rounds).
+fn chunk_rounds(j: u32, chunk: u32, singles: u32) -> u32 {
+    return min(1u << min(j - min(j, singles), 31u), max(chunk, 1u));
 }
 fn stop(first: u32) {
     progress[2] = 1.0;
@@ -1237,7 +1239,7 @@ fn stop(first: u32) {
         if start >= first {
             ranges[2u * (CHUNK_ENTRIES + j) + 1u] = 0u;
         }
-        start = start + chunk_rounds(j, u.slot);
+        start = start + chunk_rounds(j, u.slot, u.singles);
     }
 }
 
@@ -1337,7 +1339,7 @@ fn arm_main(@builtin(local_invocation_index) lane: u32) {
     if lane == 0u {
         var start = 0u;
         for (var j = 0u; j < ROUNDS; j = j + 1u) {
-            let rounds = select(min(chunk_rounds(j, u.live), u.mode - start), 0u, start >= u.mode);
+            let rounds = select(min(chunk_rounds(j, u.live, u.singles), u.mode - start), 0u, start >= u.mode);
             ranges[2u * (CHUNK_ENTRIES + j)] = 0u;
             ranges[2u * (CHUNK_ENTRIES + j) + 1u] = select(rounds * u.color, 0u, off);
             start = start + rounds;

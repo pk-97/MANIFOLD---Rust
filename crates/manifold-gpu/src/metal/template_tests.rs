@@ -417,6 +417,7 @@ fn prepare_rounds(
         first: spec.first,
         stride: spec.stride,
         chunk: spec.chunk,
+        singles: 0,
     };
     enc.prepare_template(store, at, spec.declared, spec.copies, |rec| {
         for i in 0..spec.mixes as usize {
@@ -633,7 +634,7 @@ fn template_matches_the_unrolled_reference_on_every_path() {
                 "{path:?} frame {frame} {spec:?}: the template diverged from the reference"
             );
             let after = run.store.stats();
-            let executes = template_chunks(spec.copies, spec.chunk).count() as u64;
+            let executes = template_chunks(spec.copies, spec.chunk, 0).count() as u64;
             assert_eq!(
                 (after.walks - before.walks, after.executes - before.executes),
                 (1, executes),
