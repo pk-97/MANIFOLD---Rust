@@ -8,9 +8,10 @@
 // RD_MAX_REACH + 1 nodes round it into workgroup memory once, marks the cells
 // the zero surface crosses, and each node then searches every cell its band
 // can reach, reading corners from workgroup memory and building triangles
-// only in crossed cells. A node in a tile the table does not hold reads the
-// canonical element, far from the surface. The canonical element and a free
-// slot hold the canonical level set.
+// only in crossed cells. A window the surface crosses nowhere puts every node
+// at the band, signed, without a search. A node in a tile the table does not
+// hold reads the canonical element, far from the surface. The canonical
+// element and a free slot hold the canonical level set.
 
 struct Params {
     cell_size: f32,
@@ -44,6 +45,7 @@ const RD_THREADS: u32 = 256u;
 var<workgroup> rd_nodes: array<f32, 5832>;
 var<workgroup> rd_cross: array<atomic<u32>, 154>;
 var<workgroup> rd_held: u32;
+var<workgroup> rd_crossed: atomic<u32>;
 
 fn rd_segment(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>) -> f32 {
     let v = b - a;
@@ -156,6 +158,7 @@ fn cs_main(
     // FIELD_FAR_CELLS (scene_object) cells: the level set where no tile is stored.
     let far = 3.0 * u.cell_size;
     if lane == 0u {
+        atomicStore(&rd_crossed, 0u);
         rd_held = u32(slot < u.pool_tiles && ts_slot_entry(slot) != WT_NONE);
         if slot == u.pool_tiles {
             out[ts_canon()] = far;
@@ -183,9 +186,21 @@ fn cs_main(
         let w = vec3<i32>(i32(i) % RD_CELLS, (i32(i) / RD_CELLS) % RD_CELLS, i32(i) / (RD_CELLS * RD_CELLS));
         if MC_TRIANGLE_COUNT[rd_case(w)] != 0u {
             atomicOr(&rd_cross[i >> 5u], 1u << (i & 31u));
+            atomicStore(&rd_crossed, 1u);
         }
     }
     workgroupBarrier();
+    if atomicLoad(&rd_crossed) == 0u {
+        // No triangle anywhere in reach: the search would end on the band.
+        let band_m = u.band_cells * u.cell_size;
+        let band = sqrt(band_m * band_m);
+        let base = vec3<i32>(RD_MAX_REACH + 1);
+        for (var n = lane; n < 512u; n = n + RD_THREADS) {
+            let original = rd_nodes[rd_node_index(ts_local_coord(n) + base)];
+            out[slot * 512u + n] = select(band, -band, original < 0.0);
+        }
+        return;
+    }
     for (var n = lane; n < 512u; n = n + RD_THREADS) {
         out[slot * 512u + n] = rd_distance(ts_local_coord(n));
     }
