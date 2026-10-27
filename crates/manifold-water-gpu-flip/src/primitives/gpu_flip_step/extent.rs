@@ -26,7 +26,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let cells = FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells();
     if let Some(reason) = lattice_refusal(cells) {
         return Err(Verdict::Refused(format!(
-            "GPU FLIP Step: {reason}. Lower Resolution."
+            "GPU FLIP Step: {reason}. Raise Cell Size."
         )));
     }
     let pool = pool_tiles(cells);

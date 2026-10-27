@@ -139,6 +139,8 @@ struct PresetSettings {
     frame_node: String,
     resolution: u32,
     domain_size: f64,
+    /// The domain's Cell Size in metres; the grid is `domain_size / cell_size`.
+    cell_size: f64,
     surface_detail: u32,
     viscosity: f64,
     surface_tension: f64,
@@ -356,6 +358,7 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
             frame_node: String::new(),
             resolution: 0,
             domain_size: 0.0,
+            cell_size: 0.0,
             surface_detail: 0,
             viscosity: 0.0,
             surface_tension: 0.0,
@@ -415,12 +418,14 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
         .into());
     }
     // Shared names across domains.
-    let resolution = param_or_default(domain, domain_type.as_ref(), "resolution")?;
+    let cell_size = param_or_default(domain, domain_type.as_ref(), "cell_metres")?;
     let domain_size = param_or_default(domain, domain_type.as_ref(), "domain_size")?;
-    if !(resolution.is_finite()
-        && resolution >= 1.0
+    let resolution = domain_size / cell_size;
+    if !(cell_size.is_finite()
+        && cell_size > 0.0
         && domain_size.is_finite()
-        && domain_size > 0.0)
+        && domain_size > 0.0
+        && resolution >= 1.0)
     {
         return Err(io::Error::other("preset liquid domain settings are invalid").into());
     }
@@ -435,6 +440,7 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
         frame_node,
         resolution: resolution.round() as u32,
         domain_size,
+        cell_size,
         surface_detail: 0,
         viscosity: 0.0,
         surface_tension: 0.0,
@@ -1248,7 +1254,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     }
     let mut capture_ms = 0.0;
     let mut look = options.look_metrics.then(|| {
-        let layout = domain_layout(None, preset.domain_size as f32, preset.resolution)
+        let layout = domain_layout(None, preset.domain_size as f32, preset.cell_size)
             .expect("preset domain settings were validated");
         let spacing = layout.cell_size as f32 / (preset.points_per_cell as f32).cbrt();
         LookRecorder::new(Cells::from_layout(&layout), spacing)
@@ -1525,7 +1531,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         render_width,
         render_height,
         grid: [preset.resolution; 3],
-        cell_size: preset.domain_size / f64::from(preset.resolution),
+        cell_size: preset.cell_size,
         surface_detail: preset.surface_detail,
         viscosity: preset.viscosity,
         surface_tension: preset.surface_tension,

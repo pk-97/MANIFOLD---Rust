@@ -79,7 +79,7 @@ pub enum ControlGroup {
     /// The physics setting and its rows (titled Physics).
     Body,
     Copies,
-    /// A Water's domain box and its Resolution.
+    /// A Water's domain box, its Cell Size and its Bounds faces.
     Domain,
     Simulation,
     /// A Water's surface dials.

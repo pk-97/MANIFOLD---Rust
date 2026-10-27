@@ -210,20 +210,21 @@ fn gpu_flip_auto_inflow_pool_is_about_a_gigabyte() {
     assert!((0.5e9..1.5e9).contains(&pool), "{pool} bytes");
 }
 
-/// Resolution is a card: the graph built at 64 runs at any Resolution,
-/// odd and uneven sides included, because every lattice node reads the
-/// domain's wires and the step's faces follow them (BUG-o65k (GPU FLIP
-/// lattice wiring), BUG-9an1 (resolution change)).
+/// Cell Size is a card: the graph built at 64 cells across the tank runs at
+/// any cell size, odd and uneven counts included, because every lattice
+/// node reads the domain's wires and the step's faces follow them.
 #[test]
-fn gpu_flip_any_resolution_walks_on_the_built_graph() {
+fn gpu_flip_any_cell_size_walks_on_the_built_graph() {
     for n in [16, 24, 32, 63, 72, 100, 128] {
         let mut def = render_def(WaterScene::dam_break(64));
         let domain = find_node_mut(&mut def.nodes, "domain").expect("domain");
         domain.params.insert(
-            "resolution".into(),
-            manifold_core::effect_graph_def::SerializedParamValue::Int { value: n },
+            "cell_metres".into(),
+            manifold_core::effect_graph_def::SerializedParamValue::Float {
+                value: 4.0 / n as f32,
+            },
         );
-        let report = walked(&def, false, &format!("the 64³ graph at Resolution {n}"));
+        let report = walked(&def, false, &format!("the 64³ graph at {n} cells across"));
         assert!(report.scene_bytes > 0);
     }
 }
@@ -240,14 +241,14 @@ fn gpu_flip_dam_break_past_the_count_rail_is_refused() {
         .find(|node| node.node_id.as_str() == "domain")
         .expect("domain");
     domain.params.insert(
-        "resolution".into(),
-        manifold_core::effect_graph_def::SerializedParamValue::Int { value: 256 },
+        "cell_metres".into(),
+        manifold_core::effect_graph_def::SerializedParamValue::Float { value: 4.0 / 256.0 },
     );
     match walk(&def, false) {
         Err(ExtentError::Refused { node, reason }) => {
             assert!(
                 node.starts_with("domain")
-                    && reason.contains("Resolution")
+                    && reason.contains("Cell Size")
                     && reason.contains("Fill Height"),
                 "{node}: {reason}"
             );

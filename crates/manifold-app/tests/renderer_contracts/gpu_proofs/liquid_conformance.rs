@@ -1131,8 +1131,8 @@ fn liquid_export_matches_live_project_schedule() {
             set_type_param(
                 &mut def,
                 GPU_FLIP_DOMAIN_TYPE_ID,
-                "resolution",
-                SerializedParamValue::Int { value: 4 },
+                "cell_metres",
+                SerializedParamValue::Float { value: 1.0 },
             );
             if live {
                 without_display_delay(&mut def);
@@ -2458,8 +2458,8 @@ fn liquid_live_700ms_frame_preserves_128_pool_and_matches_two_fixed_steps() {
         set_type_param(
             &mut def,
             GPU_FLIP_DOMAIN_TYPE_ID,
-            "resolution",
-            SerializedParamValue::Int { value: 128 },
+            "cell_metres",
+            SerializedParamValue::Float { value: 4.0 / 128.0 },
         );
         LiquidRun::on(row, def, 1, true, false, Some(Clocked::new()))
     };
@@ -2533,8 +2533,8 @@ fn liquid_nonfinite_live_flip_reseeds_without_stopping_clock() {
     set_type_param(
         &mut def,
         GPU_FLIP_DOMAIN_TYPE_ID,
-        "resolution",
-        SerializedParamValue::Int { value: 16 },
+        "cell_metres",
+        SerializedParamValue::Float { value: 4.0 / 16.0 },
     );
     let tap = NodeErrorTap::new();
     let mut run = LiquidRun::new(row, def, 1, true, false);
@@ -2621,8 +2621,8 @@ fn liquid_live_flip_force_and_coupling_match_accepted_progress() {
     set_type_param(
         &mut def,
         GPU_FLIP_DOMAIN_TYPE_ID,
-        "resolution",
-        SerializedParamValue::Int { value: 4 },
+        "cell_metres",
+        SerializedParamValue::Float { value: 2.0 / 4.0 },
     );
     let (def, fire) = with_force_and_impulse(&def, 2.0);
     let raw_dump = |run: &mut LiquidRun| {

@@ -35,7 +35,7 @@ fn fluid_fill_pits_expanded_band_matches_all_blobs() {
 
 #[test]
 fn fluid_mesh_grid_native_particle_field_matches_reference() {
-    let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
+    let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, 2.0 / 8.0).unwrap();
     let mesh = manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout).surface();
     // Odd cell count, even node count and native half-cell origin, including
     // sparse blob bounds and the expanded closing band at subdivision two.

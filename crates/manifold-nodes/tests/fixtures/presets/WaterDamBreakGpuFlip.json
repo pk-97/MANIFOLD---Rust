@@ -11,15 +11,15 @@
     "isLineBased": false,
     "params": [
       {
-        "id": "resolution",
-        "name": "Resolution",
-        "min": 8.0,
-        "max": 512.0,
-        "defaultValue": 64.0,
-        "wholeNumbers": true,
+        "id": "cell_size",
+        "name": "Cell Size",
+        "min": 0.001,
+        "max": 1.0,
+        "defaultValue": 0.0625,
+        "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
-        "formatString": "F0",
+        "formatString": "F4",
         "section": "Fluid"
       },
       {
@@ -370,16 +370,16 @@
     ],
     "bindings": [
       {
-        "id": "resolution",
-        "label": "Resolution",
-        "defaultValue": 64.0,
+        "id": "cell_size",
+        "label": "Cell Size",
+        "defaultValue": 0.0625,
         "target": {
           "kind": "node",
           "nodeId": "domain",
-          "param": "resolution"
+          "param": "cell_metres"
         },
         "convert": {
-          "type": "IntRound"
+          "type": "Float"
         },
         "defaultMirrorsNodeParam": true
       },
@@ -1391,9 +1391,9 @@
                 "type": "Float",
                 "value": 0.16
               },
-              "resolution": {
-                "type": "Int",
-                "value": 64
+              "cell_metres": {
+                "type": "Float",
+                "value": 0.0625
               },
               "sheet_fill_rate": {
                 "type": "Float",

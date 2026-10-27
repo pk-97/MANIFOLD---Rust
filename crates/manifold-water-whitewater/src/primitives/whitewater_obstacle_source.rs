@@ -206,7 +206,7 @@ impl Primitive for WhitewaterObstacleSource {
                 }
                 Err(error) => {
                     ctx.error(format!(
-                        "Whitewater Obstacle Source: the lattice's {nodes} nodes need {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                        "Whitewater Obstacle Source: the lattice's {nodes} nodes need {bytes} bytes the device cannot give: {error}. Raise Cell Size."
                     ));
                     return;
                 }

@@ -291,8 +291,8 @@ fn gpu_flip_dam_break_paused_live_frames_hold() {
     }
 }
 
-/// Export `frames` frames at 60 fps of the Dam Break at simulation resolution
-/// 32 into a small output, `runs` times on one content thread, and return
+/// Export `frames` frames at 60 fps of the Dam Break at a cell size of
+/// 12.5 cm (32 cells across the tank) into a small output, `runs` times on one content thread, and return
 /// the last frame's linear SDR output of each run.
 fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>> {
     const W: u32 = 256;
@@ -303,7 +303,7 @@ fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let mut content = headless_content_thread(project, W, H);
     let (state_tx, state_rx) = crate::content_state::state_channel();
-    crate::headless_harness::set_generator_param(&mut content, &layer_id, "resolution", 32.0);
+    crate::headless_harness::set_generator_param(&mut content, &layer_id, "cell_size", 4.0 / 32.0);
     crate::headless_harness::warm_project(&mut content, &state_tx);
     (0..runs)
         .map(|run| {

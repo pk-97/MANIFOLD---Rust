@@ -270,7 +270,6 @@ impl WaterScene {
     }
 
     /// The cell side in metres: the tank's side over the lattice.
-    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn cell_size(&self) -> f64 {
         self.size / self.pressure.n as f64
     }
@@ -286,10 +285,10 @@ impl WaterScene {
         1.0 / (60.0 * self.steps as f64)
     }
 
-    /// The tank: the domain's layout at this resolution, no domain box.
+    /// The tank: the domain's layout at this cell size, no domain box.
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn layout(&self) -> FluidDomainLayout {
-        domain_layout(None, self.size as f32, self.pressure.n as u32).expect("the tank's layout")
+        domain_layout(None, self.size as f32, self.cell_size()).expect("the tank's layout")
     }
 
     /// The tank's lowest corner.
@@ -311,9 +310,8 @@ impl WaterScene {
     /// The domain's own reading of the scene: the fill's sites, the padded
     /// lattice and the particle count, from node.gpu_flip_domain's function.
     pub fn geometry(&self) -> GpuFlipGeometry {
-        let n = self.pressure.n as f32;
         let read = |name: &str, default: f32| match name {
-            "resolution" => n,
+            "cell_metres" => self.cell_size() as f32,
             "domain_size" => self.size as f32,
             "fill_height" => self.fill_height as f32,
             _ => default,
@@ -529,7 +527,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut b = Builder::default();
     let geometry = scene.geometry();
     let mut params = json!({
-        "resolution": int(scene.pressure.n),
+        "cell_metres": float(scene.cell_size()),
         "domain_size": float(scene.size),
         "fill_height": float(scene.fill_height),
     });
@@ -1317,8 +1315,8 @@ fn particle_view_cards(def: &Value) -> Value {
 }
 
 /// The shipped cards with every default at the value this scene's def bakes,
-/// so no card overwrites what the extent proof checked: Resolution at the
-/// lattice, Surface Detail at the surface scale, gone past its range.
+/// so no card overwrites what the extent proof checked: Cell Size at the
+/// lattice's, Surface Detail at the surface scale, gone past its range.
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     let mut metadata = metadata.clone();
@@ -1330,8 +1328,8 @@ fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
         let entries = metadata[list].as_array_mut().expect("card lists");
         entries.retain(|entry| entry["id"] != "surface_detail" || detail.is_some());
         for entry in entries.iter_mut() {
-            if entry["id"] == "resolution" {
-                entry["defaultValue"] = json!(scene.pressure.n as f64);
+            if entry["id"] == "cell_size" {
+                entry["defaultValue"] = json!(scene.cell_size());
             }
             if let Some(detail) = detail
                 && entry["id"] == "surface_detail"

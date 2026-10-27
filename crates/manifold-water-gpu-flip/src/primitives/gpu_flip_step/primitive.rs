@@ -95,7 +95,7 @@ impl Primitive for GpuFlipStep {
                 .set_scalar(port, ParamValue::Float(value as f32));
         }
         if let Some(reason) = lattice_refusal(cells) {
-            ctx.error(format!("{NAME}: {reason}. Lower Resolution."));
+            ctx.error(format!("{NAME}: {reason}. Raise Cell Size."));
             return;
         }
         let field = match ForceLatticeBinding::read(
@@ -227,7 +227,7 @@ impl Primitive for GpuFlipStep {
             sheet_rate > 0.0,
         ) {
             ctx.error(format!(
-                "{NAME}: a {}×{}×{} lattice with {capacity} particle slots needs storage the device cannot give: {error}. Lower Resolution.",
+                "{NAME}: a {}×{}×{} lattice with {capacity} particle slots needs storage the device cannot give: {error}. Raise Cell Size.",
                 cells[0], cells[1], cells[2]
             ));
             return;

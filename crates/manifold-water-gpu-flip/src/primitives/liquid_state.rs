@@ -115,6 +115,18 @@ pub fn births_held_back(node: &dyn manifold_node_engine::exec::effect_node::Effe
         .is_some_and(|stats| stats.inflow_refused > 0 || stats.sheet_refused > 0)
 }
 
+/// How many particles `node`'s last read tick removed because their tile got
+/// no pool slot, 0 when `node` is not a liquid state or has read no tick. The
+/// water runtime puts it on the domain's setup report.
+pub fn particles_removed_for_tiles(
+    node: &dyn manifold_node_engine::exec::effect_node::EffectNode,
+) -> u32 {
+    node.as_any()
+        .downcast_ref::<LiquidState>()
+        .and_then(|state| state.last_stats)
+        .map_or(0, |stats| stats.tile_removed)
+}
+
 /// Leaves `stats` on a liquid state as its last retired tick, for tests of
 /// what reads them without a GPU step.
 #[cfg(any(test, feature = "testkit"))]

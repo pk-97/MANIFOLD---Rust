@@ -14,9 +14,9 @@
           "type": "Float",
           "value": 0.3
         },
-        "resolution": {
-          "type": "Int",
-          "value": 112
+        "cell_metres": {
+          "type": "Float",
+          "value": 0.07142857142857142
         },
         "sheet_fill_rate": {
           "type": "Float",
@@ -2769,16 +2769,16 @@
     "bindings": [
       {
         "convert": {
-          "type": "IntRound"
+          "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 112.0,
-        "id": "resolution",
-        "label": "Resolution",
+        "defaultValue": 0.07142857142857142,
+        "id": "cell_size",
+        "label": "Cell Size",
         "target": {
           "kind": "node",
           "nodeId": "domain",
-          "param": "resolution"
+          "param": "cell_metres"
         }
       },
       {
@@ -3036,16 +3036,16 @@
     "oscPrefix": "waterseawallgpuflip",
     "params": [
       {
-        "defaultValue": 112.0,
-        "formatString": "F0",
-        "id": "resolution",
+        "defaultValue": 0.07142857142857142,
+        "formatString": "F4",
+        "id": "cell_size",
         "isToggle": false,
         "isTrigger": false,
-        "max": 512.0,
-        "min": 8.0,
-        "name": "Resolution",
+        "max": 1.0,
+        "min": 0.001,
+        "name": "Cell Size",
         "section": "Fluid",
-        "wholeNumbers": true
+        "wholeNumbers": false
       },
       {
         "defaultValue": 0.0,

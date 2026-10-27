@@ -19,7 +19,7 @@
 //! Paired with a physics world, the scene's Box3D bodies join the water two
 //! ways. The domain owns the rigid world in-thread and steps it one settled
 //! tick at a time with the steps' reaction. Every lattice atom reads the
-//! lattice from its wires, so Resolution applies on change. Exempt from the
+//! lattice from its wires, so Cell Size applies on change. Exempt from the
 //! codegen mandate as a CPU bridge (ADDING_PRIMITIVES.md exclusion 3).
 
 use std::borrow::Cow;
@@ -34,7 +34,9 @@ use super::gpu_flip_step::{
 };
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_core::fluid_domain::{
+    CELL_SIZE_METRES, DEFAULT_CELL_SIZE, FluidDomainLayout, domain_layout,
+};
 use manifold_core::liquid_setup::{
     ColumnOutcome, DEFAULT_FILL_HEIGHT, FillFit, SetupFit, fit_column, fit_fill_height,
 };
@@ -194,6 +196,7 @@ fn fill_sites(
         fill_capped: matches!(filled, FillFit::Capped(_)),
         column: ColumnOutcome::Fits,
         pool_full: false,
+        tile_removed: 0,
     };
     let fill_height = filled.height();
     let min = layout.min.map(f64::from);
@@ -241,10 +244,10 @@ pub fn gpu_flip_geometry(
     initial_fill: Option<Transform>,
 ) -> Result<GpuFlipGeometry, String> {
     let bounds = read("bounds", 1.0) != 0.0;
-    let resolution = read("resolution", 64.0).round().max(0.0) as u32;
+    let cell_size = read("cell_metres", DEFAULT_CELL_SIZE);
     let domain_size = read("domain_size", 4.0);
     let world = domain.map(manifold_water_liquid::world_pose::world_domain_box);
-    let layout = on_world_cells(domain_layout(world.map(Into::into), domain_size, resolution)?);
+    let layout = on_world_cells(domain_layout(world.map(Into::into), domain_size, f64::from(cell_size))?);
     let bounds_box = match world {
         Some(pose) => box_about(pose.pos, pose.scale),
         // No Water item: the cube `domain_layout` places, centred in X/Z with
@@ -253,7 +256,7 @@ pub fn gpu_flip_geometry(
     };
     let solver = FlipSolverGrid::from_lattice(LiquidLattice::from_layout(&layout));
     if let Some(reason) = lattice_refusal(solver.cells()) {
-        return Err(format!("GPU FLIP: {reason}. Lower Resolution."));
+        return Err(format!("GPU FLIP: {reason}. Raise Cell Size."));
     }
     let solve_level = read_solve_level(read("solve_level", 0.0), pool_tiles(solver.cells())).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
@@ -266,7 +269,7 @@ pub fn gpu_flip_geometry(
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
-            "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution or Fill Height."
+            "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Raise Cell Size or lower Fill Height."
         ));
     }
     let setup = GpuFlipSetup { lattice: LiquidLattice::from_layout(&layout), bounds, pool_sites, box_sites, particle_capacity: 0 };
@@ -629,11 +632,11 @@ fn reaction_floats(buffer: Option<&GpuBuffer>) -> Option<&[f32]> {
 manifold_node_engine::primitive! {
     name: GpuFlipDomain,
     type_id: "node.gpu_flip_domain",
-    purpose: "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, initial fill height and the box an Initial Fill role places, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the scene box, and the padded lattice for the step, the solid distance and the particle frame. Bounds is the Water item's box exactly as placed (bounds_lo_x/y/z, bounds_hi_x/y/z in metres) with six faces: a face is a Wall (closed_faces, bit 2d the low face of axis d, bit 2d + 1 the high one) unless its Closed param is off, which makes it Open (open_faces, same bits), where the water that reaches it is removed. Bounds off has no box to hold the water: both masks are 0, and kill_height is the height (metres) below which water is removed, the lowest Fixed body's lowest point (else the lowest body's, else the lowest Initial Fill or Inflow when the epoch began) minus drawn_radius, which defaults to the particle radius; with Bounds on kill_height is the lowest float and the scene box is the Bounds box. A Fill Height above 0 with Bounds off is refused. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, each body is one row per tick with a shape and a distance lattice packed in one half-precision atlas, the water flowing around it, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Beside each region row region_sites carries the half-cell sites its inflow can reach during the tick (an Outflow's and a disabled row's are empty), eight words a row, and region_site_total the most sites any tick's inflows hold together. The domain box is moved onto whole world cells (cell p of the world centred on p·h, under half a cell from where it was authored), and cell_origin_x/y/z name the solver grid's first cell in them. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. An Initial Fill role is the water's starting box and never a body; a second Initial Fill switched on is refused by name.",
+    purpose: "Define a GPU FLIP liquid domain with the shared liquid scene contract: the axis-aligned domain box, cell size, initial fill height and the box an Initial Fill role places, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the scene box, and the padded lattice for the step, the solid distance and the particle frame. Bounds is the Water item's box exactly as placed (bounds_lo_x/y/z, bounds_hi_x/y/z in metres) with six faces: a face is a Wall (closed_faces, bit 2d the low face of axis d, bit 2d + 1 the high one) unless its Closed param is off, which makes it Open (open_faces, same bits), where the water that reaches it is removed. Bounds off has no box to hold the water: both masks are 0, and kill_height is the height (metres) below which water is removed, the lowest Fixed body's lowest point (else the lowest body's, else the lowest Initial Fill or Inflow when the epoch began) minus drawn_radius, which defaults to the particle radius; with Bounds on kill_height is the lowest float and the scene box is the Bounds box. A Fill Height above 0 with Bounds off is refused. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, each body is one row per tick with a shape and a distance lattice packed in one half-precision atlas, the water flowing around it, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Beside each region row region_sites carries the half-cell sites its inflow can reach during the tick (an Outflow's and a disabled row's are empty), eight words a row, and region_site_total the most sites any tick's inflows hold together. The domain box is moved onto whole world cells (cell p of the world centred on p·h, under half a cell from where it was authored), and cell_origin_x/y/z name the solver grid's first cell in them. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. An Initial Fill role is the water's starting box and never a body; a second Initial Fill switched on is refused by name.",
     inputs: {
         domain: Transform optional,
         acceleration_field: VectorField optional,
-        resolution: ScalarF32 optional,
+        cell_metres: ScalarF32 optional,
         domain_size: ScalarF32 optional,
         fill_height: ScalarF32 optional,
         drawn_radius: ScalarF32 optional,
@@ -691,7 +694,7 @@ manifold_node_engine::primitive! {
         forces: Array(f32), impulses: Array(f32),
     },
     params: [
-        ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((8.0, 512.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("cell_metres"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_CELL_SIZE), range: Some(CELL_SIZE_METRES), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("solve_level"), label: "Coarse Solve", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("max_iterations"), label: "Max Iterations", ty: ParamType::Int, default: ParamValue::Float(MAX_ITERATIONS as f32), range: Some((1.0, MAX_ITERATIONS as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("sheet_fill_rate"), label: "Sheet Fill Rate", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
@@ -716,7 +719,7 @@ manifold_node_engine::primitive! {
     composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites, the padded lattice, bounds_lo/hi and closed_faces into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, regions, region_count, shapes, atlas, dynamic_bodies, the padded lattice, bounds_lo/hi, closed_faces, open_faces and kill_height into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance (which also takes bounds_lo/hi and closed_faces), node.whitewater_obstacle_source (the same), node.liquid_frame and node.face_sample_component (which also takes cell_origin_x/y/z); region_sites and region_site_total into every node.gpu_flip_step for its emission; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats; particle_capacity into node.liquid_fill. The domain box, Resolution, Bounds and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most two fixed Sim Rate intervals per display frame and reports dropped time; export runs every interval.",
     examples: [],
     picker: { label: "GPU FLIP Domain", category: Atom },
-    summary: "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
+    summary: "Sets up a GPU FLIP liquid: its box, cell size, starting fill, gravity and speed.",
     category: Particles3D,
     role: Source,
     aliases: ["gpu flip", "gpu water", "liquid domain"],
@@ -1839,7 +1842,7 @@ mod tests {
         volume: Option<Transform>,
     ) -> Result<GpuFlipGeometry, String> {
         let read = |name: &str, default: f32| match name {
-            "resolution" => resolution,
+            "cell_metres" => 4.0 / resolution,
             "fill_height" => fill,
             _ => default,
         };
@@ -2002,7 +2005,7 @@ mod tests {
                 .1
         };
         let dam_break = geometry(64.0, 0.16, None).unwrap();
-        assert_eq!(dam_break.layout, domain_layout(None, 4.0, 64).unwrap());
+        assert_eq!(dam_break.layout, domain_layout(None, 4.0, 0.0625).unwrap());
         assert_eq!(dam_break.cell_origin(), [-33, -1, -33]);
 
         // Off the grid on every axis, across the world origin on x and z: the
@@ -2012,7 +2015,13 @@ mod tests {
             scale: [4.0; 3],
             ..Transform::default()
         };
-        let read = |name: &str, default: f32| if name == "resolution" { 64.0 } else { default };
+        let read = |name: &str, default: f32| {
+            if name == "cell_metres" {
+                0.0625
+            } else {
+                default
+            }
+        };
         let moved = gpu_flip_geometry(read, Some(pose), None).expect("fills");
         let h = moved.layout.cell_size;
         assert_eq!(h, 0.0625);
@@ -2051,7 +2060,7 @@ mod tests {
         // moves the full half cell, not more.
         let odd = geometry(63.0, 0.16, None).unwrap();
         let h = odd.layout.cell_size;
-        let unmoved = domain_layout(None, 4.0, 63).unwrap();
+        let unmoved = domain_layout(None, 4.0, f64::from(4.0_f32 / 63.0)).unwrap();
         for axis in [0, 2] {
             let shift = (f64::from(odd.layout.min[axis]) - f64::from(unmoved.min[axis])).abs();
             assert!((shift - 0.5 * h).abs() < 1e-6, "axis {axis}: {shift}");
@@ -2076,7 +2085,7 @@ mod tests {
             ..Transform::default()
         };
         let read = |name: &str, default: f32| match name {
-            "resolution" => 64.0,
+            "cell_metres" => 0.0625,
             "fill_height" => 0.16,
             _ => default,
         };
@@ -2205,7 +2214,7 @@ mod tests {
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
         assert!(
-            over.contains("Resolution") && over.contains("Fill Height"),
+            over.contains("Cell Size") && over.contains("Fill Height"),
             "{over}"
         );
     }
@@ -2261,7 +2270,7 @@ mod tests {
     fn gpu_flip_domain_sites_a_fitting_column_as_before() {
         let read = |name: &str, default: f32| match name {
             "domain_size" => 8.0,
-            "resolution" => 112.0,
+            "cell_metres" => 8.0 / 112.0,
             "fill_height" => 0.16,
             _ => default,
         };
@@ -2288,7 +2297,7 @@ mod tests {
     fn gpu_flip_domain_makes_room_for_an_inflow() {
         let at_resolution = |resolution: f32, saved_capacity: f32| {
             let read = |name: &str, default: f32| match name {
-                "resolution" => resolution,
+                "cell_metres" => 4.0 / resolution,
                 "fill_height" => 0.16,
                 "particle_capacity" => saved_capacity,
                 _ => default,
@@ -2586,7 +2595,7 @@ mod tests {
     fn gpu_flip_domain_refuses_a_solve_level_the_lattice_lacks() {
         let at = |resolution: f32, level: f32| {
             let read = |name: &str, default: f32| match name {
-                "resolution" => resolution,
+                "cell_metres" => 4.0 / resolution,
                 "fill_height" => 0.16,
                 "solve_level" => level,
                 _ => default,

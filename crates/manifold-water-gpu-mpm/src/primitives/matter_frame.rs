@@ -165,7 +165,7 @@ impl Primitive for MatterFrame {
         let ring = if wants_tick && points.is_some() && stats.is_some() {
             self.ring.begin(gpu.device, bytes, epoch).map(Some).unwrap_or_else(|error| {
                 refused = Some(format!(
-                    "Matter Frame: the particle frames need 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                    "Matter Frame: the particle frames need 3 × {bytes} bytes the device cannot give: {error}. Raise Cell Size."
                 ));
                 None
             })
@@ -236,7 +236,7 @@ impl Primitive for MatterFrame {
                     .and_then(|()| (0..RING).map(|_| device.try_create_buffer_shared(bytes.max(4))).collect::<Result<_, _>>())
                         .unwrap_or_else(|error| {
                             refused = Some(format!(
-                                "Matter Frame: the solid lattice needs 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                                "Matter Frame: the solid lattice needs 3 × {bytes} bytes the device cannot give: {error}. Raise Cell Size."
                             ));
                             Vec::new()
                         });

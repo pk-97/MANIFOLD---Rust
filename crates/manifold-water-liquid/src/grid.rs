@@ -164,7 +164,7 @@ impl PublishedFaces {
                     Err(error) => {
                         self.faces[axis] = None;
                         refused = Some(format!(
-                            "{node}: the face grid needs 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                            "{node}: the face grid needs 3 × {bytes} bytes the device cannot give: {error}. Raise Cell Size."
                         ));
                         continue;
                     }
@@ -182,7 +182,7 @@ impl PublishedFaces {
             let len = bytes.min(input.size).min(target.size) / 4;
             let Ok(len) = u32::try_from(len) else {
                 refused = Some(format!(
-                    "{node}: a face array of {len} faces is past 32-bit GPU indexing. Lower Resolution."
+                    "{node}: a face array of {len} faces is past 32-bit GPU indexing. Raise Cell Size."
                 ));
                 continue;
             };

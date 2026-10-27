@@ -1,6 +1,6 @@
 //! A node that reports `ctx.error` fails the frame (BUG-hc5h).
 //! Invalid Simulation Speed reaches the domain's runtime validation; unlike
-//! Resolution, it cannot describe a valid dynamically sized solver lattice.
+//! Cell Size, it cannot describe a valid dynamically sized solver lattice.
 //!
 //! The graph is the smallest that keeps the GPU FLIP domain live: the domain
 //! with the Dam Break's own params, its tick count read by a noise source that
@@ -30,7 +30,7 @@ fn domain_graph(speed: f32) -> String {
             { "id": 1, "typeId": manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, "handle": "domain", "nodeId": "domain", "params": {
                 "domain_size": { "type": "Float", "value": 4.0 },
                 "fill_height": { "type": "Float", "value": 0.16 },
-                "resolution": { "type": "Int", "value": 64 },
+                "cell_metres": { "type": "Float", "value": 0.0625 },
                 "speed": { "type": "Float", "value": speed }
             } },
             { "id": 2, "typeId": "node.noise", "handle": "noise", "nodeId": "noise" },

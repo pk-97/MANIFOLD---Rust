@@ -406,13 +406,13 @@ mod tests {
         value
     }
 
-    /// A 20 m open ground plane in a 20 m liquid at the default resolution:
+    /// A 20 m open ground plane in a 20 m liquid at a 20 / 64 m cell:
     /// the shell's top face, where the water rests, is within one water cell
     /// of the drawn floor. Before the lattice followed the liquid's cells its
     /// spacing was 20 / 32 m and the face sat two of those cells up.
     #[test]
     fn scene_physics_fluid_role_ground_plane_shell_follows_the_liquid_cells() {
-        let layout = manifold_core::fluid_domain::domain_layout(None, 20.0, 64).unwrap();
+        let layout = manifold_core::fluid_domain::domain_layout(None, 20.0, 20.0 / 64.0).unwrap();
         let cell = layout.cell_size as f32;
         let geometry = PreparedFluidGeometry::new(vec![ground(10.0)]);
         assert!(geometry.has_open_parts());

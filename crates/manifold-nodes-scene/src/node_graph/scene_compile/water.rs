@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use manifold_core::scene_doc::{Item, ItemFields, ItemKind, SceneDoc, SourceShape};
+use manifold_core::scene_doc::{Item, ItemFields, ItemKind, SceneDoc, SourceShape, WaterSolver};
 use manifold_core::scene_schema::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
     WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily, role_index, template_roles,
@@ -73,7 +73,7 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
             b.adopt(owner, role, id);
         }
     }
-    let (Some(domain), Some(state)) = (node(DOMAIN_ROLE), node("state")) else {
+    let Some(domain) = node(DOMAIN_ROLE) else {
         return;
     };
     let frame = group.and_then(|group| b.group_frames.get(group).copied());
@@ -84,14 +84,19 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
     }
     b.wire(transform, "transform", domain, "domain");
 
-    let resolution = b.add(owner, "resolution", "node.value");
-    b.wire(resolution, "out", domain, "resolution");
-    // Only GPU FLIP has whitewater; its pool follows the Resolution.
-    if let Some(whitewater) = node("whitewater") {
-        let capacity = b.add(owner, "whitewater_capacity", "node.math");
-        b.wire(resolution, "out", capacity, "a");
-        b.wire(capacity, "out", whitewater, "capacity");
-        b.wire(capacity, "out", state, "whitewater_capacity");
+    let cell_size = b.add(owner, "cell_size", "node.value");
+    b.wire(cell_size, "out", domain, "cell_metres");
+    // Only GPU FLIP's domain has the Bounds switch.
+    if let ItemFields::Water(water) = &item.fields
+        && water.solver == WaterSolver::Flip
+    {
+        b.set(
+            domain,
+            "bounds",
+            SerializedParamValue::Bool {
+                value: water.bounds,
+            },
+        );
     }
 
     // Speed is the Water's own times the World's.

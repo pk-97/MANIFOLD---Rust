@@ -205,6 +205,7 @@ mod tests {
             fill_capped: true,
             column: ColumnOutcome::Clipped,
             pool_full: false,
+            tile_removed: 0,
         };
         report.accept(clipped, Some(([2.0, 1.0, 0.0], [2.0, 1.0, 1.0])));
         let taken = snapshot(&report);

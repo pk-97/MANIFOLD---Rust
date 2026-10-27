@@ -317,7 +317,8 @@ fn lattice_at(atlas: &[u32], shape: &LiquidShape, g: [f32; 3]) -> f32 {
 /// moving into it leave with no velocity into it.
 #[test]
 fn matter_grid_update_projects_colliders() {
-    let lat = LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
+    let lat =
+        LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain"));
     let dx = lat.cell_size();
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
@@ -535,7 +536,8 @@ fn set_field(bench: &mut Bench, field: &ForceLattice) {
 /// `ForceSample::step_velocity`.
 #[test]
 fn matter_grid_update_applies_field_lattices() {
-    let lat = LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
+    let lat =
+        LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain"));
     let dx = lat.cell_size();
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
@@ -714,7 +716,8 @@ fn collider_normal(
 /// words match Σ inv_mass·m·(v − v_projected) computed on the CPU.
 #[test]
 fn matter_body_reaction_counts_field_velocity() {
-    let lat = LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
+    let lat =
+        LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain"));
     let dx = lat.cell_size();
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
@@ -907,7 +910,8 @@ fn matter_body_reaction_counts_field_velocity() {
 /// dynamic_count 0 each write nothing.
 #[test]
 fn matter_push_out_reaction_matches_removed_momentum() {
-    let lat = LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
+    let lat =
+        LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("unit domain"));
     let dx = lat.cell_size();
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
@@ -1163,10 +1167,7 @@ fn matter_collider_penetration_bounded() {
         "matter_collider_penetration_bounded: deepest point {worst:.5} m (bound {:.5}), {touching} point-ticks within a cell of the box",
         -0.5 * dx
     );
-    assert!(
-        touching > 5,
-        "the box never reached the liquid: {touching}"
-    );
+    assert!(touching > 5, "the box never reached the liquid: {touching}");
     assert!(worst >= -0.5 * dx, "a point sits {worst} m inside the box");
 }
 
@@ -1217,10 +1218,7 @@ fn matter_open_mesh_collider_holds_liquid() {
         plane_y - half_shell,
         plane_y + half_shell
     );
-    assert!(
-        resting > 5,
-        "the liquid never reached the plane: {resting}"
-    );
+    assert!(resting > 5, "the liquid never reached the plane: {resting}");
     assert!(
         lowest > plane_y - half_shell,
         "a point passed through the open mesh to {lowest} m"

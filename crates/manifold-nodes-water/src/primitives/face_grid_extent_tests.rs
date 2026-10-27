@@ -110,7 +110,7 @@ fn check_matter(lattice: &LiquidLattice) {
 fn face_grid_extents_at_64() {
     check_gpu_flip([64; 3]);
     check_gpu_flip([6, 5, 4]);
-    let lattice = LiquidLattice::from_layout(&domain_layout(None, 4.0, 64).expect("layout"));
+    let lattice = LiquidLattice::from_layout(&domain_layout(None, 4.0, 0.0625).expect("layout"));
     assert_eq!(lattice.cells(), [64; 3]);
     check_matter(&lattice);
     assert_eq!(face_len([64; 3], 0), 266_240);
@@ -144,7 +144,7 @@ fn whitewater_refuses_unextended_faces() {
 fn face_grid_extents_at_every_matter_resolution() {
     for res in 8..=512 {
         check_matter(&LiquidLattice::from_layout(
-            &domain_layout(None, 4.0, res).expect("layout"),
+            &domain_layout(None, 4.0, 4.0 / f64::from(res)).expect("layout"),
         ));
     }
     assert_eq!(

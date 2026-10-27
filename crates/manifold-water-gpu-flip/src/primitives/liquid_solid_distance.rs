@@ -164,7 +164,7 @@ impl Primitive for LiquidSolidDistance {
                 }
                 Err(error) => {
                     ctx.error(format!(
-                        "Liquid Solid Distance: the lattice's {nodes} nodes need {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                        "Liquid Solid Distance: the lattice's {nodes} nodes need {bytes} bytes the device cannot give: {error}. Raise Cell Size."
                     ));
                     return;
                 }

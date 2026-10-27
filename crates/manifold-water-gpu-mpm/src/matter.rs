@@ -570,8 +570,12 @@ mod tests {
     fn matter_block_bins_are_base_node_blocks() {
         for domain in [0.5f32, 1.0, 4.0, 20.0] {
             for resolution in [8u32, 32, 63, 64, 100, 128, 512] {
-                let layout =
-                    manifold_core::fluid_domain::domain_layout(None, domain, resolution).unwrap();
+                let layout = manifold_core::fluid_domain::domain_layout(
+                    None,
+                    domain,
+                    f64::from(domain) / f64::from(resolution),
+                )
+                .unwrap();
                 let lattice = LiquidLattice::from_layout(&layout);
                 let (_, size, bin) = block_sort_box(&lattice);
                 assert_eq!(
@@ -581,7 +585,7 @@ mod tests {
                 );
             }
         }
-        let layout = manifold_core::fluid_domain::domain_layout(None, 4.0, 64).unwrap();
+        let layout = manifold_core::fluid_domain::domain_layout(None, 4.0, 0.0625).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
         assert_eq!(lattice_blocks(&lattice), [18; 3]);
         let (centre, size, bin) = block_sort_box(&lattice);
@@ -621,7 +625,7 @@ mod grid_budget_tests {
     fn matter_grid_budget_gates_every_resolution() {
         let mut largest_default = 0;
         for resolution in 8..=512 {
-            let layout = domain_layout(None, 4.0, resolution).expect("layout");
+            let layout = domain_layout(None, 4.0, 4.0 / f64::from(resolution)).expect("layout");
             let lattice = LiquidLattice::from_layout(&layout);
             let nodes = lattice_nodes(lattice.nodes());
             for budget in [8.0f32, 512.0] {

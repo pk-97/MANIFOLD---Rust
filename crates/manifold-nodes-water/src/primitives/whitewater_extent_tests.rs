@@ -26,7 +26,7 @@ use manifold_water_whitewater::primitives::surface_crossings::SurfaceCrossings;
 
 /// The solid lattice both hosts publish at 64: the matter layout's.
 fn lattice_at_64() -> LiquidLattice {
-    LiquidLattice::from_layout(&domain_layout(None, 4.0, 64).expect("layout"))
+    LiquidLattice::from_layout(&domain_layout(None, 4.0, 0.0625).expect("layout"))
 }
 
 fn grid_params(nodes: [u32; 3]) -> ParamValues {

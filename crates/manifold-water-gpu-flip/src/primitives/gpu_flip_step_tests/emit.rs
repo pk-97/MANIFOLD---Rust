@@ -100,7 +100,7 @@ pub(super) fn gpu_flip_liquid_fill_places_pool_then_box() {
         &mut domain,
         &[],
         &[],
-        &params(&[("fill_height", 9.0), ("resolution", 8.0)]),
+        &params(&[("fill_height", 9.0), ("cell_metres", 0.5)]),
     );
     let snapshot = manifold_water_rigid::node::PhysicsNode::fluid_domain_snapshot(&domain)
         .expect("a snapshot");

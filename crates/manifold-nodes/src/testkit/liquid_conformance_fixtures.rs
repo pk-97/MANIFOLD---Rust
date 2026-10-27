@@ -68,11 +68,11 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                     set_type_param(
                         def,
                         MATTER_DOMAIN_TYPE_ID,
-                        "resolution",
-                        SerializedParamValue::Int { value: 256 },
+                        "cell_metres",
+                        SerializedParamValue::Float { value: 4.0 / 256.0 },
                     )
                 },
-                names: &["grid_budget_mcells", "resolution"],
+                names: &["grid_budget_mcells", "Cell Size"],
             },
             RefusalCase {
                 what: "Particles per Cell 27 at Resolution 176 on Still Pool Matter",
@@ -81,8 +81,8 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                     set_type_param(
                         def,
                         MATTER_DOMAIN_TYPE_ID,
-                        "resolution",
-                        SerializedParamValue::Int { value: 176 },
+                        "cell_metres",
+                        SerializedParamValue::Float { value: 4.0 / 176.0 },
                     );
                     set_type_param(
                         def,
@@ -91,7 +91,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                         SerializedParamValue::Enum { value: 1 },
                     );
                 },
-                names: &["resolution", "points_per_cell"],
+                names: &["Cell Size", "points_per_cell"],
             },
             RefusalCase {
                 what: "Dam Break Matter's Initial Fill turned 0.3 rad",
@@ -144,11 +144,11 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                     set_type_param(
                         def,
                         GPU_FLIP_DOMAIN_TYPE_ID,
-                        "resolution",
-                        SerializedParamValue::Int { value: 256 },
+                        "cell_metres",
+                        SerializedParamValue::Float { value: 4.0 / 256.0 },
                     )
                 },
-                names: &["resolution", "fill_height"],
+                names: &["Cell Size", "fill_height"],
             },
             RefusalCase {
                 what: "Dam Break GPU FLIP's Initial Fill turned 0.3 rad",
@@ -525,10 +525,11 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
         None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
         None if fixture == Fixture::FaceGrid => {
             let mut def = matter_dam_break_faces(None);
-            let resolution = SerializedParamValue::Int {
-                value: FACE_GRID_RESOLUTION as i32,
+            // The Dam Break's 4 m box at the face grid's resolution.
+            let cell_size = SerializedParamValue::Float {
+                value: 4.0 / FACE_GRID_RESOLUTION as f32,
             };
-            set_type_param(&mut def, MATTER_DOMAIN_TYPE_ID, "resolution", resolution);
+            set_type_param(&mut def, MATTER_DOMAIN_TYPE_ID, "cell_metres", cell_size);
             def
         }
         None => bundled("WaterDamBreakMatter"),

@@ -369,7 +369,8 @@ mod tests {
             &observations.frames[1].as_ref().unwrap().domains
         ));
         observations.scratch[0].1.state = FluidDomainState::Ready;
-        observations.scratch[0].1.accepted_layout = Some(domain_layout(None, 4.0, 24).unwrap());
+        observations.scratch[0].1.accepted_layout =
+            Some(domain_layout(None, 4.0, 4.0 / 24.0).unwrap());
         observations.record(2, 3, 0, request, Ok(FrameRenderStatus::Complete));
         assert!(!Arc::ptr_eq(
             &initial,

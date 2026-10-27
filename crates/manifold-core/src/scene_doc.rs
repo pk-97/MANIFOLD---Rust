@@ -516,6 +516,8 @@ pub struct WaterFields {
     pub draw: WaterDraw,
     /// What the water draws with; none draws the solver's own water look.
     pub material: Option<ItemId>,
+    /// The Bounds switch: the Water's own box and walls, instead of the world's.
+    pub bounds: bool,
 }
 
 /// The liquid solver a Water runs: GPU FLIP, or MLS-MPM (Matter).

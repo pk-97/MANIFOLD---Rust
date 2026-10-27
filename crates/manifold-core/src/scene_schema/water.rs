@@ -11,7 +11,7 @@
 //! template node keeps the template's tuned value (Coarse Solve, Max
 //! Iterations, Sheet Fill Rate and the rest are automatic), except the ones a
 //! row below names. The card is the rows of section 8: the domain box, the
-//! Resolution, Speed, the solver's dials, the Surface dials and the
+//! Cell Size, Speed, the solver's dials, the Surface dials and the
 //! whitewater Amount.
 
 use std::sync::Arc;
@@ -20,11 +20,12 @@ use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{
-    Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, wrong_value,
+    Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, is_on, on_off,
+    parse_on, wrong_value,
 };
 use super::{Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use crate::fluid_domain::DOMAIN_EXTENT_METRES;
+use crate::fluid_domain::{CELL_SIZE_METRES, DEFAULT_CELL_SIZE, DOMAIN_EXTENT_METRES};
 use crate::scene_doc::{Item, ItemFields, SourceRole, WaterDraw, WaterFields, WaterSolver};
 
 /// The water family the scene compiler splices for each Water: the solver,
@@ -136,12 +137,6 @@ pub const SURFACE_DETAIL_NODES: [&str; 2] = ["liquid_volume", "liquid_bricks"];
 /// Surface Detail 0 is one surface lattice node per cell, FLIP Fluids' default.
 pub const SURFACE_DETAIL_OFFSET: f32 = 1.0;
 
-/// Whitewater particles the pool holds per cell across the domain's longest
-/// side: 102,400 at the default Resolution of 64. Memory: the pool's buffers
-/// are sized by it when the water starts, so it follows the lattice instead
-/// of a fixed count. A full pool replaces its oldest particles.
-pub const WHITEWATER_PER_CELL: f32 = 1600.0;
-
 /// The value node that follows each World control the domain takes, in
 /// `scene_world_controls::WORLD_INPUTS` order.
 pub const WORLD_FOLLOWS: [&str; 6] = [
@@ -156,8 +151,7 @@ pub const WORLD_FOLLOWS: [&str; 6] = [
 const T: Reach = Reach::Own("transform");
 const DOMAIN: Reach = Reach::Own(DOMAIN_ROLE);
 const SPEED: Reach = Reach::Own("speed");
-const RESOLUTION: Reach = Reach::Own("resolution");
-const CAPACITY: Reach = Reach::Own("whitewater_capacity");
+const CELL_SIZE: Reach = Reach::Own("cell_size");
 const DETAIL: Reach = Reach::Own("surface_detail");
 const BLOBS: Reach = Reach::Own("liquid_blobs");
 const SMOOTHNESS: Reach = Reach::Own("liquid_smoothness");
@@ -183,6 +177,11 @@ fn water(fields: &ItemFields) -> Option<&WaterFields> {
     }
 }
 
+/// The Water's own box and walls are on: the size and wall rows exist.
+fn bounded(fields: &ItemFields) -> bool {
+    water(fields).is_some_and(|water| water.bounds)
+}
+
 fn flip(fields: &ItemFields) -> bool {
     water(fields).is_some_and(|water| water.solver == WaterSolver::Flip)
 }
@@ -201,7 +200,7 @@ fn flip_surface(fields: &ItemFields) -> bool {
     flip(fields) && surface(fields)
 }
 
-pub static WATER_ROWS: [PropertyRow; 38] = [
+pub static WATER_ROWS: [PropertyRow; 41] = [
     row("pos_x", T, Domain, setup())
         .unit(Unit::Metres)
         .limit(HardLimit::Unlimited),
@@ -216,27 +215,49 @@ pub static WATER_ROWS: [PropertyRow; 38] = [
         .name("Size X")
         .unit(Unit::Metres)
         .limit(SIZE)
-        .default(DOMAIN_SIDE),
+        .default(DOMAIN_SIDE)
+        .when(bounded),
     row("scale_y", T, Domain, setup())
         .name("Size Y")
         .unit(Unit::Metres)
         .limit(SIZE)
-        .default(DOMAIN_SIDE),
+        .default(DOMAIN_SIDE)
+        .when(bounded),
     row("scale_z", T, Domain, setup())
         .name("Size Z")
         .unit(Unit::Metres)
         .limit(SIZE)
-        .default(DOMAIN_SIDE),
+        .default(DOMAIN_SIDE)
+        .when(bounded),
     row("rot_x", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
     row("rot_y", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
     row("rot_z", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
     row("billboard", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
-    // Cells across the longest side; the solver takes 8 to 512.
-    row("resolution", RESOLUTION, Domain, setup())
+    row("closed_neg_x", DOMAIN, Domain, setup())
+        .name("Left Wall")
+        .when(bounded),
+    row("closed_pos_x", DOMAIN, Domain, setup())
+        .name("Right Wall")
+        .when(bounded),
+    row("closed_neg_y", DOMAIN, Domain, setup())
+        .name("Floor")
+        .when(bounded),
+    row("closed_pos_y", DOMAIN, Domain, setup())
+        .name("Ceiling")
+        .when(bounded),
+    row("closed_neg_z", DOMAIN, Domain, setup())
+        .name("Back Wall")
+        .when(bounded),
+    row("closed_pos_z", DOMAIN, Domain, setup())
+        .name("Front Wall")
+        .when(bounded),
+    // The cell edge in metres; the box's cells follow from its size.
+    row("cell_size", CELL_SIZE, Domain, setup())
         .param("value")
-        .name("Resolution")
-        .default(64.0)
-        .limit(HardLimit::Between(8.0, 512.0)),
+        .name("Cell Size")
+        .unit(Unit::Metres)
+        .default(DEFAULT_CELL_SIZE)
+        .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1)),
     row("speed", SPEED, Simulation, perform(CardBand::Scene, 0))
         .param("b")
         .name("Speed")
@@ -277,31 +298,6 @@ pub static WATER_ROWS: [PropertyRow; 38] = [
     row("seed", DOMAIN, Simulation, setup())
         .name("Seed")
         .when(mpm),
-    row(
-        "whitewater_capacity_cells",
-        CAPACITY,
-        Whitewater,
-        Exposure::Automatic("the Resolution"),
-    )
-    .param("a")
-    .when(flip),
-    row(
-        "whitewater_capacity_per_cell",
-        CAPACITY,
-        Whitewater,
-        Exposure::Internal("whitewater per cell across the longest side"),
-    )
-    .param("b")
-    .default(WHITEWATER_PER_CELL)
-    .when(flip),
-    row(
-        "whitewater_capacity_op",
-        CAPACITY,
-        Whitewater,
-        Exposure::Automatic("Resolution times whitewater per cell"),
-    )
-    .param("op")
-    .when(flip),
     row(
         "domain_size",
         DOMAIN,
@@ -383,10 +379,8 @@ pub static WATER_ROWS: [PropertyRow; 38] = [
 pub fn template_roles() -> impl Iterator<Item = &'static str> {
     WATER_ROWS.iter().filter_map(|row| match row.reach {
         Reach::Own(role)
-            if !matches!(
-                role,
-                "transform" | "speed" | "resolution" | "whitewater_capacity" | "surface_detail"
-            ) && !WORLD_FOLLOWS.contains(&role) =>
+            if !matches!(role, "transform" | "speed" | "cell_size" | "surface_detail")
+                && !WORLD_FOLLOWS.contains(&role) =>
         {
             Some(role)
         }
@@ -431,7 +425,24 @@ pub fn choice_unavailable(item: &Item, field: &str, key: &str) -> Option<&'stati
     }
 }
 
-pub static WATER_FIELDS: [FieldRow; 3] = [
+pub static WATER_FIELDS: [FieldRow; 4] = [
+    FieldRow {
+        id: "bounds",
+        label: "Bounds",
+        section: ControlGroup::Domain,
+        control: on_off(),
+        applies: always,
+        disabled: enabled,
+        read: |fields| is_on(matches!(fields, ItemFields::Water(w) if w.bounds)),
+        write: |fields, value| {
+            let on = parse_on("bounds", value)?;
+            match fields {
+                ItemFields::Water(w) => w.bounds = on,
+                _ => return Err(wrong_value("bounds", value)),
+            }
+            Ok(())
+        },
+    },
     FieldRow {
         id: "solver",
         label: "Solver",
@@ -494,3 +505,35 @@ pub static WATER_FIELDS: [FieldRow; 3] = [
     },
     MATERIAL_BINDING,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_schema::applicable;
+
+    fn applies(fields: &ItemFields, property: &str) -> bool {
+        applicable(fields).any(|row| row.property == property)
+    }
+
+    /// The box size and the six walls are the Bounds switch's rows: they
+    /// exist with Bounds on and not with it off.
+    #[test]
+    fn size_and_wall_rows_follow_bounds() {
+        let on = ItemFields::Water(WaterFields {
+            bounds: true,
+            ..WaterFields::default()
+        });
+        let off = ItemFields::Water(WaterFields::default());
+        for property in [
+            "scale_x",
+            "scale_y",
+            "scale_z",
+            "closed_neg_x",
+            "closed_pos_z",
+        ] {
+            assert!(applies(&on, property), "{property} with Bounds on");
+            assert!(!applies(&off, property), "{property} with Bounds off");
+        }
+        assert!(applies(&off, "cell_size"));
+    }
+}

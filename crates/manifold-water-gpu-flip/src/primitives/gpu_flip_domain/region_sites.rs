@@ -101,7 +101,7 @@ impl RegionSiteRows {
                 in_tick += u64::from(sites.count);
                 if in_tick > u64::from(EXACT_F32_COUNT) {
                     return Err(format!(
-                        "GPU FLIP: the Inflows' site boxes pass {EXACT_F32_COUNT} sites in one tick, more than a count carries exactly. Make an Inflow smaller or lower Resolution."
+                        "GPU FLIP: the Inflows' site boxes pass {EXACT_F32_COUNT} sites in one tick, more than a count carries exactly. Make an Inflow smaller or raise Cell Size."
                     ));
                 }
                 self.rows.push(sites);
@@ -143,7 +143,7 @@ fn row_sites(
         count *= u64::from(sites.size[a]);
     }
     sites.count = u32::try_from(count).map_err(|_| {
-        format!("GPU FLIP: an Inflow's site box holds {count} sites, more than a count carries exactly. Make it smaller or lower Resolution.")
+        format!("GPU FLIP: an Inflow's site box holds {count} sites, more than a count carries exactly. Make it smaller or raise Cell Size.")
     })?;
     Ok(sites)
 }
@@ -405,7 +405,7 @@ mod tests {
         let row = inflow([0.0; 3], [0.0; 3], [0.0; 3], 0.0);
         let refused = rebuilt(&[row], 1, &shapes, 1.0 / 60.0).expect_err("too many sites");
         assert!(
-            refused.contains("Inflow") && refused.contains("Resolution"),
+            refused.contains("Inflow") && refused.contains("Cell Size"),
             "{refused}"
         );
     }

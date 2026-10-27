@@ -278,6 +278,7 @@ impl MatterScene {
             .add_external_output(frame, "particles_b")
             .expect("frame output");
 
+        let cell_size = f64::from(settings.domain_size) / f64::from(settings.resolution);
         let set = |graph: &mut Graph, name: &str, value: ParamValue| {
             graph
                 .set_param(domain, name, value)
@@ -290,8 +291,8 @@ impl MatterScene {
         );
         set(
             &mut graph,
-            "resolution",
-            ParamValue::Float(settings.resolution as f32),
+            "cell_metres",
+            ParamValue::Float(cell_size as f32),
         );
         set(
             &mut graph,
@@ -383,7 +384,7 @@ impl MatterScene {
         let stats_res = output(state, "stats");
         let frame_b = output(frame, "particles_b");
         let lattice = LiquidLattice::from_layout(
-            &domain_layout(None, settings.domain_size, settings.resolution).expect("scene layout"),
+            &domain_layout(None, settings.domain_size, cell_size).expect("scene layout"),
         );
         let solid_b = (!settings.colliders.is_empty()).then(|| output(frame, "solid_b"));
         let mut scene = Self {
@@ -688,7 +689,6 @@ impl MatterScene {
             .live_scalar_input(self.state_node, name)
             .unwrap_or_else(|| panic!("the state node read no `{name}`"))
     }
-
 }
 
 /// A 1 m domain at resolution 32 with a quarter-width, 0.6 m column on a

@@ -50,6 +50,9 @@ pub enum SetupProblemKind {
     /// The particle pool is full and an inflow wants more: the inflow is
     /// held back until water drains. Only the solver sees it.
     PoolFull,
+    /// The water ran out of memory: this many particles were removed because
+    /// their tile got no pool slot.
+    MemoryFull(u32),
     /// The world left a body or copy group out. Carries the world's reason.
     BodyRefused(String),
 }
@@ -68,7 +71,8 @@ impl SetupProblemKind {
             Self::BodiesNotCoupled(count) => format!("{count} bodies not coupled; water marks each cell with one byte, so it takes 255 bodies and passes through the rest"),
             Self::CopiesNotMade(1) => "1 copy not made; the world's copy pool is full".to_owned(),
             Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
-            Self::PoolFull => "The water is full, so inflows and sheets pause until some drains away. Add a Drain or lower Resolution.".to_owned(),
+            Self::PoolFull => "The water is full, so inflows and sheets pause until some drains away. Add a Drain or raise Cell Size.".to_owned(),
+            Self::MemoryFull(count) => format!("Water memory is full: {count} particles removed. Raise Cell Size or make the water smaller."),
             Self::BodyRefused(reason) => sentence(reason),
         }
     }
@@ -700,33 +704,40 @@ pub fn problems_with_runtime<'a>(
                 None,
             );
         }
-        if report.fit.pool_full {
+        if report.fit.pool_full || report.fit.tile_removed > 0 {
             // The pool holds a fixed number of sites, so a coarser lattice
-            // holds more water; Resolution is the Water's, beside Fill Height.
+            // holds more water; Cell Size is the Water's, beside Fill Height.
             let item = anchor
                 .fill
                 .param_id
                 .strip_suffix("fill_height")
                 .unwrap_or_default();
-            let resolution = ParamAddr {
-                param_id: format!("{item}resolution"),
+            let cell_size = ParamAddr {
+                param_id: format!("{item}cell_size"),
                 ..anchor.fill.clone()
             };
-            add(
-                SetupProblemKind::PoolFull,
-                &[resolution, anchor.fill.clone()],
-                layout_box.or(anchor.domain_bounds),
-            );
+            let params = [cell_size, anchor.fill.clone()];
+            let bounds = layout_box.or(anchor.domain_bounds);
+            if report.fit.pool_full {
+                add(SetupProblemKind::PoolFull, &params, bounds);
+            }
+            if report.fit.tile_removed > 0 {
+                add(
+                    SetupProblemKind::MemoryFull(report.fit.tile_removed),
+                    &params,
+                    bounds,
+                );
+            }
         }
     }
 }
 
 /// How a liquid domain's box is laid out: the Water's Transform rows place
-/// the box, and its Resolution sets the cells.
+/// the box, and its Cell Size sets the cells.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SiteLayout {
     pub(super) transform: Box<super::TransformVm>,
-    pub(super) resolution: (ParamAddr, f32),
+    pub(super) cell_size: (ParamAddr, f32),
 }
 
 /// One liquid domain's setup as the check reads it: the shapes it checks (by
@@ -776,7 +787,7 @@ impl SetupSite {
         let layout = {
             let SiteLayout {
                 transform,
-                resolution,
+                cell_size,
             } = &self.layout;
             let triple = |addr: &(ParamAddr, ParamAddr, ParamAddr), v: (f32, f32, f32)| {
                 [
@@ -795,7 +806,7 @@ impl SetupSite {
             manifold_core::fluid_domain::domain_layout(
                 Some(pose),
                 0.0,
-                at_value(value, resolution).round() as u32,
+                f64::from(at_value(value, cell_size)),
             )
         };
         let state = match &layout {
@@ -897,7 +908,7 @@ pub(super) fn water_sites(
             owner,
             layout: SiteLayout {
                 transform: Box::new(transform),
-                resolution: (card("resolution"), at("resolution")),
+                cell_size: (card("cell_size"), at("cell_size")),
             },
             box_shape: Some(box_shape),
             column,
@@ -1112,6 +1123,7 @@ mod tests {
                 fill_capped: false,
                 column: ColumnOutcome::Outside,
                 pool_full: false,
+                tile_removed: 0,
             },
             refusal: None,
             layout: Some(&layout()),
@@ -1174,6 +1186,7 @@ mod tests {
                 fill_capped: false,
                 column: ColumnOutcome::Outside,
                 pool_full: false,
+                tile_removed: 0,
             },
             refusal: None,
             layout: None,
@@ -1314,10 +1327,10 @@ mod tests {
     }
 
     /// BUG-3zq4r (inflow runs out): a pool too full for an inflow is never
-    /// silent. It warns on Resolution (then Fill Height) and outlines the
+    /// silent. It warns on Cell Size (then Fill Height) and outlines the
     /// domain the solver ran.
     #[test]
-    fn a_full_pool_warns_on_resolution() {
+    fn a_full_pool_warns_on_cell_size() {
         let anchors = [anchor()];
         let node = NodeId::new("water");
         let fit = SetupFit {
@@ -1336,7 +1349,7 @@ mod tests {
         let problems = runtime(&anchors, &[], report);
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].kind, SetupProblemKind::PoolFull);
-        assert_eq!(problems[0].params[0].param_id, "resolution");
+        assert_eq!(problems[0].params[0].param_id, "cell_size");
         assert_eq!(problems[0].params[1], anchors[0].fill);
         let layout = layout();
         assert_eq!(
@@ -1346,6 +1359,41 @@ mod tests {
                 std::array::from_fn(|d| layout.min[d] + layout.size[d])
             ))
         );
-        assert!(problems[0].kind.message().contains("inflow is held back"));
+        assert!(
+            problems[0]
+                .kind
+                .message()
+                .contains("inflows and sheets pause")
+        );
+    }
+
+    /// Particles removed for want of a tile slot warn on Cell Size (then Fill
+    /// Height) with the count, beside a full pool's own warning.
+    #[test]
+    fn removed_tiles_warn_on_cell_size() {
+        let anchors = [anchor()];
+        let node = NodeId::new("water");
+        let fit = SetupFit {
+            tile_removed: 4096,
+            ..SetupFit::default()
+        };
+        let report = RuntimeFit {
+            node: &node,
+            fit,
+            refusal: None,
+            layout: Some(&layout()),
+            column_box: None,
+            uncoupled_bodies: 0,
+            copies_not_made: 0,
+        };
+        let problems = runtime(&anchors, &[], report);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].kind, SetupProblemKind::MemoryFull(4096));
+        assert_eq!(problems[0].params[0].param_id, "cell_size");
+        assert_eq!(problems[0].params[1], anchors[0].fill);
+        assert_eq!(
+            problems[0].kind.message(),
+            "Water memory is full: 4096 particles removed. Raise Cell Size or make the water smaller."
+        );
     }
 }

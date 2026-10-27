@@ -7,9 +7,9 @@
       "handle": "Domain",
       "nodeId": "domain",
       "params": {
-        "resolution": {
-          "type": "Int",
-          "value": 64
+        "cell_metres": {
+          "type": "Float",
+          "value": 0.0625
         },
         "domain_size": {
           "type": "Float",

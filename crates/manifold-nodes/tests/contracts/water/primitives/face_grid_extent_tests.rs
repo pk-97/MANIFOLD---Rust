@@ -72,7 +72,7 @@ fn matter_face_scene_covers_every_dispatch() {
         match preset.check(res) {
             Ok(_) => ran += 1,
             Err(ExtentError::Refused { reason, .. })
-                if reason.contains("Grid Budget") || reason.contains("Resolution") => {}
+                if reason.contains("Grid Budget") || reason.contains("Cell Size") => {}
             Err(error) => panic!("Resolution {res}: {error}"),
         }
     }

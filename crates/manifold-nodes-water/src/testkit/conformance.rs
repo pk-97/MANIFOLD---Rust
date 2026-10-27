@@ -657,10 +657,8 @@ impl BoxScene {
         set_type_param(
             &mut def,
             type_id,
-            "resolution",
-            SerializedParamValue::Int {
-                value: self.resolution,
-            },
+            "cell_metres",
+            float(self.domain_size / self.resolution as f32),
         );
         set_type_param(&mut def, type_id, "fill_height", float(self.fill));
         set_type_param(&mut def, type_id, "gravity", float(self.liquid_gravity));

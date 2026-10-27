@@ -264,22 +264,23 @@ fn liquid_frame_solid_shrink_keeps_mix_capacity() {
         let spec = def
             .preset_metadata
             .as_ref()
-            .and_then(|cards| cards.params.iter().find(|card| card.id == "resolution"))
-            .expect("the Resolution card")
+            .and_then(|cards| cards.params.iter().find(|card| card.id == "cell_size"))
+            .expect("the Cell Size card")
             .clone();
         let mut show = Show::new(def, (96, 54), false, &[]);
         show.restart();
-        for n in [32u32, 16] {
+        // 32 then 16 cells across the 4 m tank.
+        for h in [0.125f32, 0.25] {
             let mut card = Param::bundled(spec.clone());
-            card.value = n as f32;
-            card.base = n as f32;
+            card.value = h;
+            card.base = h;
             show.set_cards(ParamManifest::from_params(vec![card]));
             for _ in 0..4 {
                 show.frame(false);
             }
             assert!(
                 show.errors().is_empty(),
-                "solid wired {wired}, Resolution {n}: {:?}",
+                "solid wired {wired}, Cell Size {h}: {:?}",
                 show.errors()
             );
         }

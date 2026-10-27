@@ -32,7 +32,14 @@ fn column() -> Transform {
 }
 
 fn cells() -> Cells {
-    Cells::from_layout(&domain_layout(None, DOMAIN_SIZE, RESOLUTION).expect("domain"))
+    Cells::from_layout(
+        &domain_layout(
+            None,
+            DOMAIN_SIZE,
+            f64::from(DOMAIN_SIZE) / f64::from(RESOLUTION),
+        )
+        .expect("domain"),
+    )
 }
 
 fn dam_break(liveliness: f32) -> SceneSettings {

@@ -1,8 +1,8 @@
 //! The families a scene's Water splices (SCENE_DOCUMENT_DESIGN.md section
 //! 7.10 (Water, Water Source, Ocean)), one per solver and draw: no fill of
 //! their own and no host interface. The scene compiler wires the Water's
-//! sources into the domain's role inputs, the objects into its render node
-//! and, for GPU FLIP, a whitewater capacity that follows Resolution.
+//! sources into the domain's role inputs and the objects into its render
+//! node.
 //!
 //! GPU FLIP is the Dam Break family. MPM is main's Matter solver (the "Live
 //! Matter" group of its Matter scenes, kept as `assets/matter_solver.json`)

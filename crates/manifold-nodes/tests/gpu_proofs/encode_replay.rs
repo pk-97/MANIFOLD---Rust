@@ -382,7 +382,7 @@ fn encode_replay_survives_changes() {
             set("speed", 1.5);
         }
         if frame == 20 {
-            set("resolution", 48.0);
+            set("cell_size", 4.0 / 48.0);
         }
     };
     let off = dam_break(false, FRAMES, dam_change);

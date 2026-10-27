@@ -209,6 +209,7 @@ impl Seen<'_> {
         let mut fit = entry.fit;
         fit.fill_capped |= self.fit.fill_capped;
         fit.pool_full |= self.fit.pool_full;
+        fit.tile_removed = fit.tile_removed.max(self.fit.tile_removed);
         fit.column = match (fit.column, self.fit.column) {
             (ColumnOutcome::Fits, ran) => ran,
             // A column that was outside also crossed the wall.

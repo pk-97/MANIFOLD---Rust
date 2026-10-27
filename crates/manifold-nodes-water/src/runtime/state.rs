@@ -60,7 +60,10 @@ impl RuntimeExtension for WaterRuntimeState {
             let held_back = graph.get_node(*instance).is_some_and(|node| {
                 manifold_water_gpu_flip::primitives::births_held_back(node.node.as_ref())
             });
-            if !held_back {
+            let removed = graph.get_node(*instance).map_or(0, |node| {
+                manifold_water_gpu_flip::primitives::particles_removed_for_tiles(node.node.as_ref())
+            });
+            if !held_back && removed == 0 {
                 continue;
             }
             let Some(domain) = graph
@@ -75,7 +78,8 @@ impl RuntimeExtension for WaterRuntimeState {
             };
             if let Some((_, snapshot)) = output[first..].iter_mut().find(|(id, _)| id == domain_id)
             {
-                snapshot.fit.pool_full = true;
+                snapshot.fit.pool_full |= held_back;
+                snapshot.fit.tile_removed = snapshot.fit.tile_removed.max(removed);
             }
         }
     }
@@ -280,67 +284,86 @@ mod tests {
     use manifold_node_engine::runtime::extensions::RuntimeSlot;
     use manifold_water_liquid::primitives::liquid_stats::LiquidTickStats;
 
+    /// The fit the domain's snapshot carries after its liquid state retires a
+    /// tick with these stats.
+    fn state_with(refused: u32, sheet_refused: u32, tile_removed: u32) -> (bool, u32) {
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut graph = Graph::new();
+        let domain = graph.add_node(
+            registry
+                .construct(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
+                .expect("domain"),
+        );
+        let liquid = graph.add_node(
+            registry
+                .construct("node.liquid_state")
+                .expect("liquid state"),
+        );
+        graph
+            .connect((domain, "ticks"), (liquid, "ticks"))
+            .expect("the domain clocks the liquid");
+        let stats = LiquidTickStats {
+            inflow_births: 3,
+            inflow_refused: refused,
+            sheet_refused,
+            tile_removed,
+            ..LiquidTickStats::default()
+        };
+        manifold_water_gpu_flip::primitives::retire_stats_for_test(
+            graph.get_node_mut(liquid).expect("liquid").node.as_mut(),
+            stats,
+        );
+        let node_map = [
+            (NodeId::new("water"), domain),
+            (NodeId::new("liquid"), liquid),
+        ];
+        let runtime = WaterRuntimeState {
+            impulse_identity: Arc::new(()),
+            scene_impulses: SceneImpulses::default(),
+            sample_steps: None,
+            input_snapshot: None,
+            last_frame_time: None,
+            replay_from: None,
+            project_tempo: None,
+        };
+        let effect = EffectId::new("water_effect");
+        let slot = RuntimeSlot {
+            effect_id: &effect,
+            legacy_index: 0,
+            node_map: &node_map,
+            card_prefix: "",
+            def_content_key: 0,
+            bindings: &[],
+        };
+        let mut output = Vec::new();
+        runtime.write_fluid_domains(&graph, slot, &mut output);
+        assert_eq!(output.len(), 1, "one domain snapshot");
+        assert_eq!(output[0].0, NodeId::new("water"));
+        (output[0].1.fit.pool_full, output[0].1.fit.tile_removed)
+    }
+
     /// BUG-3zq4r (inflow runs out): a tick that refused inflow or sheet births marks
     /// the snapshot of the domain whose clock feeds that liquid, so the
     /// setup check shows Pool Full; a tick that refused none leaves it clear.
     #[test]
     fn a_refused_birth_marks_the_domain_pool_full() {
-        let registry = PrimitiveRegistry::with_builtin();
-        let state_with = |refused: u32, sheet_refused: u32| {
-            let mut graph = Graph::new();
-            let domain = graph.add_node(
-                registry
-                    .construct(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
-                    .expect("domain"),
-            );
-            let liquid = graph.add_node(
-                registry
-                    .construct("node.liquid_state")
-                    .expect("liquid state"),
-            );
-            graph
-                .connect((domain, "ticks"), (liquid, "ticks"))
-                .expect("the domain clocks the liquid");
-            let stats = LiquidTickStats {
-                inflow_births: 3,
-                inflow_refused: refused,
-                sheet_refused,
-                ..LiquidTickStats::default()
-            };
-            manifold_water_gpu_flip::primitives::retire_stats_for_test(
-                graph.get_node_mut(liquid).expect("liquid").node.as_mut(),
-                stats,
-            );
-            let node_map = [
-                (NodeId::new("water"), domain),
-                (NodeId::new("liquid"), liquid),
-            ];
-            let runtime = WaterRuntimeState {
-                impulse_identity: Arc::new(()),
-                scene_impulses: SceneImpulses::default(),
-                sample_steps: None,
-                input_snapshot: None,
-                last_frame_time: None,
-                replay_from: None,
-                project_tempo: None,
-            };
-            let effect = EffectId::new("water_effect");
-            let slot = RuntimeSlot {
-                effect_id: &effect,
-                legacy_index: 0,
-                node_map: &node_map,
-                card_prefix: "",
-                def_content_key: 0,
-                bindings: &[],
-            };
-            let mut output = Vec::new();
-            runtime.write_fluid_domains(&graph, slot, &mut output);
-            assert_eq!(output.len(), 1, "one domain snapshot");
-            assert_eq!(output[0].0, NodeId::new("water"));
-            output[0].1.fit.pool_full
-        };
-        assert!(state_with(5, 0), "refused inflow births mark the pool full");
-        assert!(state_with(0, 2), "refused sheet births mark it full too");
-        assert!(!state_with(0, 0), "a tick with room leaves it clear");
+        assert!(
+            state_with(5, 0, 0).0,
+            "refused inflow births mark the pool full"
+        );
+        assert!(
+            state_with(0, 2, 0).0,
+            "refused sheet births mark it full too"
+        );
+        assert!(!state_with(0, 0, 0).0, "a tick with room leaves it clear");
+    }
+
+    /// Particles removed for want of a tile slot reach the domain's snapshot
+    /// without marking the pool full.
+    #[test]
+    fn removed_tile_particles_reach_the_domain_snapshot() {
+        let (pool_full, tile_removed) = state_with(0, 0, 7);
+        assert!(!pool_full);
+        assert_eq!(tile_removed, 7);
     }
 }

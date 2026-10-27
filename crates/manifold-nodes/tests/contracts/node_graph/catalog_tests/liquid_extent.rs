@@ -7,7 +7,7 @@ use manifold_water_liquid::lattice::LiquidLattice;
 #[test]
 fn liquid_lattice_native_dispatch_extents_are_covered() {
     for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
-        let layout = domain_layout(None, size, resolution).unwrap();
+        let layout = domain_layout(None, size, size as f64 / resolution as f64).unwrap();
         let mesh = LiquidLattice::from_layout(&layout).surface();
         let solid_nodes = mesh.nodes().map(u64::from);
         let solid_count = solid_nodes.into_iter().product::<u64>();
@@ -270,7 +270,7 @@ fn liquid_presets_all_extent_checked() {
     for (id, (resolution, reason)) in &refusals {
         println!("{id}: first refused at resolution {resolution}: {reason}");
         assert!(
-            reason.contains("Resolution") || reason.contains("Grid Budget"),
+            reason.contains("Cell Size") || reason.contains("Grid Budget"),
             "{id}: {reason}"
         );
     }

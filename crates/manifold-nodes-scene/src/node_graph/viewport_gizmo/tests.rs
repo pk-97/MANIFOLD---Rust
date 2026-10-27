@@ -1699,7 +1699,7 @@ fn selected_domain_draws_cell_boundaries_of_the_reported_layout() {
         scale: [4.0, 2.0, 4.0],
         billboard: false,
     };
-    let layout = domain_layout(Some(pose), 4.0, 64).unwrap();
+    let layout = domain_layout(Some(pose), 4.0, 4.0 / 64.0).unwrap();
     let eye = Camera::look_at(
         [30.0, 20.0, 40.0],
         [0.0, 2.0, 0.0],
@@ -1775,7 +1775,7 @@ fn a_wide_domain_strides_within_the_line_budget() {
         scale: [20.0, 0.5, 20.0],
         billboard: false,
     };
-    let layout = domain_layout(Some(pose), 20.0, 1280).unwrap();
+    let layout = domain_layout(Some(pose), 20.0, 20.0 / 1280.0).unwrap();
     assert!(layout.cells[0] > 257, "{:?}", layout.cells);
     let mut lines = Vec::new();
     // No screen thinning: the cap alone.
@@ -1820,7 +1820,7 @@ fn a_dense_domain_is_thinned_to_the_screen_spacing() {
         scale: [6.0, 4.0, 6.0],
         billboard: false,
     };
-    let layout = domain_layout(Some(pose), 6.0, 256).unwrap();
+    let layout = domain_layout(Some(pose), 6.0, 6.0 / 256.0).unwrap();
     let cam = Camera::look_at(
         [9.0, 7.0, 13.0],
         [0.0, 2.0, 0.0],

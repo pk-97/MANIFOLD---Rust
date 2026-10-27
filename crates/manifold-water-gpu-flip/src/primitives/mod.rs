@@ -30,9 +30,9 @@ pub mod gpu_flip_volume;
 pub(crate) mod liquid_fill;
 manifold_core::testkit_visible! { pub(crate) mod liquid_solid_distance; }
 pub(crate) mod liquid_state;
-pub use liquid_state::births_held_back;
 #[cfg(any(test, feature = "testkit"))]
 pub use liquid_state::retire_stats_for_test;
+pub use liquid_state::{births_held_back, particles_removed_for_tiles};
 manifold_core::testkit_visible! { pub(crate) mod push_out_of_solid; }
 mod apply_radial_burst_3d_to_particles;
 mod apply_radial_burst_to_particles;

@@ -126,7 +126,7 @@ pub(crate) fn fill_count(
     match u32::try_from(count) {
         Ok(count) if count <= EXACT_F32_COUNT => Ok(count),
         _ => Err(format!(
-            "Matter fill: {count} points exceeds the exact f32 range of the count wire ({EXACT_F32_COUNT}). Lower Resolution, Particles per Cell or the fill."
+            "Matter fill: {count} points exceeds the exact f32 range of the count wire ({EXACT_F32_COUNT}). Raise Cell Size, or lower Particles per Cell or the fill."
         )),
     }
 }
@@ -337,7 +337,7 @@ mod tests {
         );
         let error = fill_count([256, 33, 256], 33, empty, 8).unwrap_err();
         assert!(
-            error.contains("exact f32 range") && error.contains("Resolution"),
+            error.contains("exact f32 range") && error.contains("Cell Size"),
             "{error}"
         );
         assert!(

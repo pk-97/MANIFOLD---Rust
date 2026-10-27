@@ -282,7 +282,7 @@ impl Primitive for MatterState {
                 Err(error) => {
                     *buffer = None;
                     refused = Some(format!(
-                        "Matter: a {}×{}×{} lattice needs {bytes} bytes of grid the device cannot give: {error}. Lower Resolution.",
+                        "Matter: a {}×{}×{} lattice needs {bytes} bytes of grid the device cannot give: {error}. Raise Cell Size.",
                         nodes[0], nodes[1], nodes[2]
                     ));
                     break;

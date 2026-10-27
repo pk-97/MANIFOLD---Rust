@@ -34,6 +34,8 @@ pub struct SetupFit {
     /// The particle pool is full and an inflow wanted more: the inflow is
     /// held back until water drains. Reported by the solver as it runs.
     pub pool_full: bool,
+    /// Particles the last tick removed because their tile got no pool slot.
+    pub tile_removed: u32,
 }
 
 impl SetupFit {

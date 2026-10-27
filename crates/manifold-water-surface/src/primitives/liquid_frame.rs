@@ -332,7 +332,7 @@ impl Primitive for LiquidFrame {
             {
                 Ok(None) => {}
                 Err(error) => {
-                    refused = Some(format!("Liquid Frame: {error}. Lower Resolution."));
+                    refused = Some(format!("Liquid Frame: {error}. Raise Cell Size."));
                 }
                 Ok(Some(slot)) => {
                     let target = self.history.slot(slot);

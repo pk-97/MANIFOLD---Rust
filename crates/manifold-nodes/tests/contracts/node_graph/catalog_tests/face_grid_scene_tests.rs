@@ -22,7 +22,7 @@ use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_water_liquid::primitives::dot_products::DotProducts;
 
-/// WaterDamBreakMatter's lattice at its default Resolution, in its unwired
+/// WaterDamBreakMatter's lattice at its default Cell Size, in its unwired
 /// 4 m domain.
 const CELLS: [u32; 3] = [64; 3];
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;

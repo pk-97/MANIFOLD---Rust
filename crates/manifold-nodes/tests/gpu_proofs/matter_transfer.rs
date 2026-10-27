@@ -285,7 +285,7 @@ impl Chain {
 }
 
 fn lattice() -> LiquidLattice {
-    LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("16-cell unit domain"))
+    LiquidLattice::from_layout(&domain_layout(None, 1.0, 1.0 / 16.0).expect("16-cell unit domain"))
 }
 
 /// 512 points (8 per cell over a 4×4×4-cell blob) resting on the floor,

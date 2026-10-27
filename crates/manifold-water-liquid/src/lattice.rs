@@ -158,7 +158,7 @@ impl LiquidLattice {
         /// The lattice a domain published on its scalar wires (`lattice_min_x/y/z`,
         /// `cell_size`, `nodes_x/y/z`; generated uniforms pack scalars only, so
         /// the lattice travels that way). Defaults are the 4 m Dam Break lattice
-        /// at resolution 64, matching each atom's param defaults. Wires no padded
+        /// at cell size 0.0625 m, matching each atom's param defaults. Wires no padded
         /// layout could have produced are reported as `node`'s error and give
         /// `None`.
         pub fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn flip_solver_grid_matches_native_counts_without_reinterpreting_authored_wires() {
         for resolution in [8, 31, 64] {
-            let layout = domain_layout(None, 4.0, resolution).unwrap();
+            let layout = domain_layout(None, 4.0, 4.0 / f64::from(resolution)).unwrap();
             let authored = LiquidLattice::from_layout(&layout);
             let solver = FlipSolverGrid::from_lattice(authored);
             assert_eq!(authored.cells(), [resolution; 3]);
@@ -362,8 +362,9 @@ mod tests {
         // Independent native formula: config adds 3 cells, native_origin
         // subtracts 1.5h; particlemesher.cpp multiplies by subdivision then
         // adds one; polygonizer3d.cpp emits h * index without another shift.
-        for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
-            let layout = domain_layout(None, size, resolution).unwrap();
+        for (size, resolution) in [(4.0f32, 64u32), (1.0, 8), (6.0, 32)] {
+            let layout =
+                domain_layout(None, size, f64::from(size) / f64::from(resolution)).unwrap();
             let mesh = LiquidLattice::from_layout(&layout).surface();
             let (native_bounds, native_nodes) = native_solid_lattice(&layout);
             assert_eq!(mesh.nodes(), native_nodes);
@@ -400,7 +401,7 @@ mod tests {
 
     #[test]
     fn liquid_lattice_pads_the_authored_box() {
-        let layout = domain_layout(None, 4.0, 64).unwrap();
+        let layout = domain_layout(None, 4.0, 0.0625).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
         assert_eq!(lattice.nodes(), [71; 3]);
         assert_eq!(lattice.cell_size(), 0.0625);
@@ -412,7 +413,7 @@ mod tests {
     /// instead of clamping to a one-node lattice.
     #[test]
     fn liquid_lattice_wires_refuse_by_name() {
-        let layout = domain_layout(None, 4.0, 32).unwrap();
+        let layout = domain_layout(None, 4.0, 0.125).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
         let wires = |name: &str| match name {
             "nodes_x" | "nodes_y" | "nodes_z" => lattice.nodes()[0] as f32,
@@ -444,7 +445,7 @@ mod tests {
 
     #[test]
     fn liquid_wall_distance_is_signed_distance_to_closed_faces() {
-        let layout = domain_layout(None, 1.0, 8).unwrap();
+        let layout = domain_layout(None, 1.0, 0.125).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
         let dx = lattice.cell_size();
         let all = lattice.wall_distance(63);
@@ -468,7 +469,8 @@ mod tests {
     fn liquid_lattice_padding_is_solid_behind_closed_walls() {
         for domain in [0.5f32, 4.0, 20.0] {
             for resolution in [8u32, 33, 64] {
-                let layout = domain_layout(None, domain, resolution).unwrap();
+                let layout =
+                    domain_layout(None, domain, f64::from(domain) / f64::from(resolution)).unwrap();
                 let lattice = LiquidLattice::from_layout(&layout);
                 let distance = lattice.wall_distance(63);
                 let half_cell = 0.5 * lattice.cell_size();

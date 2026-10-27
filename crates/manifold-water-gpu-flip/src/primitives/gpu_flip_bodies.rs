@@ -46,6 +46,8 @@ fn shader() -> String {
     format!("{READ_SIDE}\n{SHADER_BODY}")
 }
 
+// The poison pass's workgroup size.
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 const THREADS: u64 = 256;
 const SUM_FLOATS: u64 = 16;
 /// Floats one partial slot holds (six used).
@@ -167,6 +169,7 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
     }
 }
 
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 fn groups(threads: u64) -> [u32; 3] {
     [threads.div_ceil(THREADS).max(1) as u32, 1, 1]
 }

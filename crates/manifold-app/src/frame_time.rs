@@ -1,4 +1,4 @@
-//! `manifold frame-time <project.manifold> --frames N [--frame-clock] [--resolution R]
+//! `manifold frame-time <project.manifold> --frames N [--frame-clock] [--cell-size M]
 //! [--solve-level L] [--sim-rate HZ] [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]` —
 //! the whole frame of a real project the way the app runs it: the
 //! production loader, the headless content thread, the project's own frame
@@ -27,8 +27,8 @@
 //! work outlasts the tick interval (every one of them at 128). Measure a
 //! coupled project with `--stamp-every 1` or use `--frame-clock`.
 //! The first `S` frames are the splash, the rest
-//! the calm; both tables print. `--resolution` and `--solve-level` override
-//! the GPU FLIP generator's `resolution` and `solve_level` cards in memory,
+//! the calm; both tables print. `--cell-size` (metres) and `--solve-level`
+//! override the GPU FLIP generator's `cell_size` and `solve_level` cards in memory,
 //! never on disk; `--sim-rate` overrides the project's Sim Rate the same way.
 //! Presentation is not timed here (no window); the pacing doc's vsync
 //! quantisation applies on top of these numbers.
@@ -54,7 +54,7 @@ use crate::content_command::ContentCommand;
 use crate::perf_soak::{PreparedProject, prepare_project_edited};
 
 const GENERATOR: &str = "WaterDamBreakGpuFlip";
-const RESOLUTION_PARAM: &str = "resolution";
+const CELL_SIZE_PARAM: &str = "cell_size";
 const SOLVE_LEVEL_PARAM: &str = "solve_level";
 const STEP: &str = "node.gpu_flip_step";
 const WHITEWATER: &str = "node.whitewater_step";
@@ -68,7 +68,7 @@ struct Args {
     project: String,
     frames: usize,
     frame_clock: bool,
-    resolution: Option<f32>,
+    cell_size: Option<f32>,
     solve_level: Option<f32>,
     sim_rate: Option<manifold_core::settings::SimRate>,
     stamp_every: usize,
@@ -82,7 +82,7 @@ struct Args {
 fn usage_exit(msg: &str) -> ! {
     eprintln!("frame-time: {msg}");
     eprintln!(
-        "usage: manifold frame-time <project.manifold> --frames N [--frame-clock] [--resolution R] [--solve-level L] [--sim-rate 15|20|30|60] \
+        "usage: manifold frame-time <project.manifold> --frames N [--frame-clock] [--cell-size M] [--solve-level L] [--sim-rate 15|20|30|60] \
          [--stamp-every K] [--stamp-granularity dispatch|node] [--splash-frames S] \
          [--png-frame T --png <path>] [--transport-log <path>] [--pre-play-delay-seed N]"
     );
@@ -126,9 +126,9 @@ fn parse(args: &[String]) -> Args {
     let granularity = granularity(value(args, "--stamp-granularity").as_deref())
         .unwrap_or_else(|e| usage_exit(&e));
     let splash_frames = number("--splash-frames", Some(frames / 2));
-    let resolution = value(args, "--resolution").map(|s| {
+    let cell_size = value(args, "--cell-size").map(|s| {
         s.parse::<f32>()
-            .unwrap_or_else(|_| usage_exit("--resolution must be a number"))
+            .unwrap_or_else(|_| usage_exit("--cell-size must be a number of metres"))
     });
     let solve_level = value(args, "--solve-level").map(|s| {
         s.parse::<f32>()
@@ -154,7 +154,7 @@ fn parse(args: &[String]) -> Args {
         project,
         frames,
         frame_clock,
-        resolution,
+        cell_size,
         solve_level,
         sim_rate,
         stamp_every,
@@ -1092,7 +1092,7 @@ fn probe(args: &Args) -> Result<(), String> {
         }
         sim_rate = project.settings.physics.sim_rate;
         let overrides = [
-            (RESOLUTION_PARAM, args.resolution),
+            (CELL_SIZE_PARAM, args.cell_size),
             (SOLVE_LEVEL_PARAM, args.solve_level),
         ];
         for layer in &mut project.timeline.layers {
@@ -1111,16 +1111,16 @@ fn probe(args: &Args) -> Result<(), String> {
             }
         }
     })?;
-    let asked = usize::from(args.resolution.is_some()) + usize::from(args.solve_level.is_some());
+    let asked = usize::from(args.cell_size.is_some()) + usize::from(args.solve_level.is_some());
     if asked > 0 && overridden < asked {
         return Err(format!(
-            "a {GENERATOR} layer took {overridden} of the {asked} overrides (resolution, solve level)"
+            "a {GENERATOR} layer took {overridden} of the {asked} overrides (cell size, solve level)"
         ));
     }
-    let resolution_note = args
-        .resolution
-        .map_or("the file's resolution".to_owned(), |r| {
-            format!("resolution {r}")
+    let cell_note = args
+        .cell_size
+        .map_or("the file's cell size".to_owned(), |h| {
+            format!("cell size {h} m")
         })
         + &args
             .solve_level
@@ -1136,7 +1136,7 @@ fn probe(args: &Args) -> Result<(), String> {
         "real-time paced; wall = tick interval"
     };
     println!(
-        "frame-time: {mode}; {} at {width}x{height} @ {frame_rate} project fps, {resolution_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",
+        "frame-time: {mode}; {} at {width}x{height} @ {frame_rate} project fps, {cell_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",
         args.project,
         args.frames,
         args.stamp_every,
