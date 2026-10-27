@@ -7,9 +7,10 @@
 // Passes, a barrier between each: sm_reset, sm_tiles, sm_finish, sm_tail.
 // sm_tiles runs one workgroup per pool slot. It loads the nodes round its
 // tile into workgroup memory (one below, two above on every axis: the corners
-// of the tile's 8³ cells and the central differences at them), counts its
-// cells' triangles, takes its run of the vertex buffer with one atomic and
-// writes them. Node p sits at (p - 1/2)·cell in the object's space; a node in
+// of the tile's 8³ cells, the cells round their edges and the central
+// differences at them), counts its cells' triangles, takes its run of the
+// vertex buffer with one atomic and writes them, each vertex relaxed once
+// toward its neighbours (sm_relaxed). Node p sits at (p - 1/2)·cell in the object's space; a node in
 // a tile the table does not hold reads the canonical element. An edge's
 // vertex comes from its two nodes in the same order whichever tile owns the
 // cell, so neighbouring tiles' triangles meet exactly. A free slot writes
@@ -89,25 +90,90 @@ fn sm_case(c: vec3<i32>) -> u32 {
     return case_index;
 }
 
-// The vertex on edge `edge` of tile-local cell c, the tile's first node at
-// world node `origin`.
-fn sm_vertex(c: vec3<i32>, edge: u32, origin: vec3<i32>) -> MeshVertex {
+// Edge `edge` of tile-local cell c: its two tile-local nodes, the lower first
+// (they differ along one axis), and where the level set crosses it, 0 at lo.
+struct SmEdge {
+    lo: vec3<i32>,
+    hi: vec3<i32>,
+    mu: f32,
+}
+
+fn sm_edge(c: vec3<i32>, edge: u32) -> SmEdge {
     var a = c + vec3<i32>(MC_CORNERS[MC_EDGE_A[edge]]);
     var b = c + vec3<i32>(MC_CORNERS[MC_EDGE_B[edge]]);
-    // The two nodes differ along one axis: take the lower one first.
     if any(b < a) {
         let swap = a;
         a = b;
         b = swap;
     }
-    let wa = a + vec3<i32>(1);
-    let wb = b + vec3<i32>(1);
-    let phi_a = sm_at(wa);
-    let phi_b = sm_at(wb);
-    let mu = clamp(-phi_a / (phi_b - phi_a), 1e-6, 1.0 - 1e-6);
-    let node = vec3<f32>(origin + a) + mu * vec3<f32>(b - a);
-    let position = (node - vec3<f32>(0.5)) * u.cell_size;
-    var normal = mix(sm_gradient(wa), sm_gradient(wb), mu);
+    let phi_a = sm_at(a + vec3<i32>(1));
+    let phi_b = sm_at(b + vec3<i32>(1));
+    return SmEdge(a, b, clamp(-phi_a / (phi_b - phi_a), 1e-6, 1.0 - 1e-6));
+}
+
+// Where edge e's vertex sits in the object's space, the tile's first node at
+// world node `origin`.
+fn sm_point(e: SmEdge, origin: vec3<i32>) -> vec3<f32> {
+    let node = vec3<f32>(origin + e.lo) + e.mu * vec3<f32>(e.hi - e.lo);
+    return (node - vec3<f32>(0.5)) * u.cell_size;
+}
+
+// How far each vertex moves toward the mean of its neighbours, in one Jacobi
+// pass of FLIP Fluids' umbrella smoothing (trianglemesh.cpp smooth): about
+// the two passes at 0.5 the water's mesh took before. It rounds a drop of a
+// cell or two and thins a sheet without deleting either, which smoothing the
+// level set would.
+const SM_RELAX: f32 = 1.0;
+
+// Edge e's vertex moved SM_RELAX of the way to the mean of the vertices it
+// shares a triangle with. They lie in the four cells round its edge, walked in
+// an order fixed by the edge, so every copy of the vertex (in any cell or
+// tile) sums the same values in the same order and lands on the same bits:
+// the mesh stays closed. Each neighbour is met twice, from the triangles on
+// either side of the edge they share, so the mean over meetings is the mean
+// over neighbours. The cells reach one node below the edge, inside the window.
+fn sm_relaxed(e: SmEdge, origin: vec3<i32>) -> vec3<f32> {
+    let here = sm_point(e, origin);
+    let along = e.hi - e.lo;
+    let across_a = along.yzx;
+    let across_b = along.zxy;
+    var sum = vec3<f32>(0.0);
+    var met = 0u;
+    for (var k = 0; k < 4; k = k + 1) {
+        let n = e.lo - (k & 1) * across_a - ((k >> 1) & 1) * across_b;
+        let case_index = sm_case(n);
+        for (var t = 0u; t < MC_TRIANGLE_COUNT[case_index]; t = t + 1u) {
+            var corners: array<SmEdge, 3>;
+            var hit = 3u;
+            for (var corner = 0u; corner < 3u; corner = corner + 1u) {
+                corners[corner] = sm_edge(n, mc_edge(case_index, 3u * t + corner));
+                if all(corners[corner].lo == e.lo) && all(corners[corner].hi == e.hi) {
+                    hit = corner;
+                }
+            }
+            if hit == 3u {
+                continue;
+            }
+            for (var corner = 0u; corner < 3u; corner = corner + 1u) {
+                if corner != hit {
+                    sum = sum + sm_point(corners[corner], origin);
+                    met = met + 1u;
+                }
+            }
+        }
+    }
+    if met == 0u {
+        return here;
+    }
+    return here + SM_RELAX * (sum / f32(met) - here);
+}
+
+// The vertex on edge `edge` of tile-local cell c, relaxed, its normal the
+// level set's gradient where the edge crosses it.
+fn sm_vertex(c: vec3<i32>, edge: u32, origin: vec3<i32>) -> MeshVertex {
+    let e = sm_edge(c, edge);
+    let position = sm_relaxed(e, origin);
+    var normal = mix(sm_gradient(e.lo + vec3<i32>(1)), sm_gradient(e.hi + vec3<i32>(1)), e.mu);
     let length_squared = dot(normal, normal);
     if length_squared > 0.0 {
         normal = normal * inverseSqrt(length_squared);

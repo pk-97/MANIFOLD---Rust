@@ -1706,7 +1706,13 @@
                   "id": 16,
                   "nodeId": "liquid_carry_into_solids",
                   "typeId": "node.carry_liquid_into_solids",
-                  "handle": "Carry Into Solids"
+                  "handle": "Carry Into Solids",
+                  "params": {
+                    "carry_cells": {
+                      "type": "Float",
+                      "value": 0.0
+                    }
+                  }
                 },
                 {
                   "id": 29,

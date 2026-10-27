@@ -1,6 +1,7 @@
 //! `node.tile_surface_mesh` — the triangle list of a pooled level set's zero
-//! surface (marching cubes), built tile by tile on the display's world tiles.
-//! Each held tile meshes its own 8³ cells in workgroup memory and takes its
+//! surface (marching cubes, each vertex relaxed once toward its neighbours so
+//! small drops come out round), built tile by tile on the display's world
+//! tiles. Each held tile meshes its own 8³ cells in workgroup memory and takes its
 //! run of the vertex buffer with one atomic, so the only memory past the field
 //! is the triangles: it follows the water's surface area, not a box.
 //!
@@ -191,7 +192,7 @@ impl Mesh {
 manifold_node_engine::primitive! {
     name: TileSurfaceMesh,
     type_id: "node.tile_surface_mesh",
-    purpose: "The marching-cubes triangle list of a pooled level set's zero surface, on world tiles: node p at (p - 1/2) cells, a cell's corners its eight nodes, inside where the level set is below zero, normals the interpolated central-difference gradient pointing outward. Each held tile meshes its own 8^3 cells; an edge shared by two tiles gives both the same vertex, so the surface is watertight across tile faces. A node in a tile the table does not hold reads the canonical element. UV is the vertex's xz in metres. The vertex buffer starts at 65536 triangles and grows from the triangles the surface asked for, read a frame late; a frame that asks for more than the buffer holds drops the rest and the buffer grows. Vertices past the live triangles are zero, and the live extent is published.",
+    purpose: "The marching-cubes triangle list of a pooled level set's zero surface, on world tiles: node p at (p - 1/2) cells, a cell's corners its eight nodes, inside where the level set is below zero, normals the interpolated central-difference gradient pointing outward. Each vertex moves once to the mean of the vertices it shares a triangle with (one pass of umbrella smoothing), which rounds drops and thins sheets without deleting either. Each held tile meshes its own 8^3 cells; an edge shared by two tiles gives both the same vertex, so the surface is watertight across tile faces. A node in a tile the table does not hold reads the canonical element. UV is the vertex's xz in metres. The vertex buffer starts at 65536 triangles and grows from the triangles the surface asked for, read a frame late; a frame that asks for more than the buffer holds drops the rest and the buffer grows. Vertices past the live triangles are zero, and the live extent is published.",
     inputs: {
         levelset: Array(f32) required,
         tiles: Array(u32) required,
