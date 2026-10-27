@@ -55,8 +55,9 @@ pub(super) fn shader() -> String {
 const COARSEST_SIDE: u32 = 4;
 /// Red-black sweeps the coarsest level takes each way in a V-cycle: from
 /// zero red then black, then as many black then red, so the level's
-/// approximate solve stays symmetric.
-const COARSEST_SWEEPS: usize = 8;
+/// approximate solve stays symmetric. One workgroup runs them all in one
+/// dispatch (gpu_flip_pressure.wgsl coarsest_main).
+const COARSEST_SWEEPS: u32 = 8;
 manifold_core::testkit_visible! {
 /// Iterations one solve may run, FLIP Fluids' cap: the scalars buffer holds
 /// two per iteration. Rounds past the stop cost nothing: the template executes
@@ -221,7 +222,7 @@ enum BodyRound {
 /// p · s needs its own pass after the body product; without, the operator
 /// pass folds it.
 fn round_commands(coarse: usize, bodies: BodyRound) -> (u32, u32) {
-    let v_cycle = (coarse * (4 * SMOOTH_ROUNDS + 3) + 4 * COARSEST_SWEEPS) as u32;
+    let v_cycle = (coarse * (4 * SMOOTH_ROUNDS + 3) + 1) as u32;
     // v_cycle (r·z folded), finalize, direction, apply | update (|r|∞ folded), check
     match bodies {
         // apply, impulse partial, finalize, body product, p·s partial, finalize
@@ -332,6 +333,7 @@ impl Params {
 
 struct Pipelines {
     smooth: GpuComputePipeline,
+    coarsest: GpuComputePipeline,
     residual: GpuComputePipeline,
     restrict: GpuComputePipeline,
     prolong: GpuComputePipeline,
@@ -366,6 +368,7 @@ impl Pipelines {
             #[cfg(all(test, feature = "gpu-proofs"))]
             poison: pipeline("poison_main", "gpu_flip.pressure.poison"),
             smooth: pipeline("smooth_main", "gpu_flip.pressure.smooth"),
+            coarsest: pipeline("coarsest_main", "gpu_flip.pressure.coarsest"),
             residual: pipeline("residual_main", "gpu_flip.pressure.residual"),
             restrict: pipeline("restrict_main", "gpu_flip.pressure.restrict"),
             prolong: pipeline("prolong_main", "gpu_flip.pressure.prolong"),
@@ -1650,23 +1653,27 @@ fn v_cycle<'a, S: Sink>(
         restrict(enc, pipes, g, &v, &coarse, &b.scratch, coarse.rhs, 0);
     }
     // The coarsest level: red then black from zero, then black then red,
-    // COARSEST_SWEEPS of each, a symmetric approximate solve.
+    // COARSEST_SWEEPS of each, a symmetric approximate solve in one workgroup.
     let v = at(last);
-    for sweep in 0..COARSEST_SWEEPS {
-        for color in [0, 1] {
-            let from = if sweep == 0 && color == 0 {
-                Sweep::FromZero
-            } else {
-                Sweep::Plain
-            };
-            smooth(enc, pipes, &v, color, from, g);
-        }
-    }
-    for _ in 0..COARSEST_SWEEPS {
-        for color in [1, 0] {
-            smooth(enc, pipes, &v, color, Sweep::Plain, g);
-        }
-    }
+    g.dispatch(
+        enc,
+        &pipes.coarsest,
+        &[
+            bytes(&Params {
+                color: COARSEST_SWEEPS,
+                ghost: v.ghost,
+                ..Params::at(v.cell_size).over(&v)
+            }),
+            buffer(1, v.water),
+            buffer(3, v.rhs),
+            buffer(4, v.rhs),
+            buffer(5, v.e),
+            buffer(17, v.rows),
+            buffer(22, v.tiles.table()),
+        ],
+        g.slots.single(),
+        "gpu_flip.pressure.coarsest",
+    );
     for level in (start..last).rev() {
         let v = at(level);
         let coarse = at(level + 1);
@@ -2006,12 +2013,12 @@ mod tests {
     /// start's residual, and on the engine's stop the warm start's check.
     #[test]
     fn pass_counts_follow_the_levels() {
-        let v_cycle = 4 * 11 + 4 * COARSEST_SWEEPS;
+        let v_cycle = 4 * 11 + 1;
         assert_eq!(passes(512, Stop::Fixed(8)), (27, 4 + 8 * (v_cycle + 6)));
         assert_eq!(passes(512, Stop::Converged(8)).1, 5 + 8 * (v_cycle + 6));
         assert_eq!(
             passes(1, Stop::Fixed(3)),
-            (9, 4 + 3 * (11 + 4 * COARSEST_SWEEPS + 6))
+            (9, 4 + 3 * (11 + 1 + 6))
         );
         assert_eq!(
             round_commands(4, BodyRound::Without),
@@ -2023,7 +2030,7 @@ mod tests {
         );
         assert_eq!(
             round_commands(3, BodyRound::GatedCoarse(1)),
-            ((3 * 11 + 4 * COARSEST_SWEEPS) as u32 + 11 + 3, 0)
+            (3 * 11 + 1 + 11 + 3, 0)
         );
         let slots = Slots { levels: 5 };
         assert_eq!(

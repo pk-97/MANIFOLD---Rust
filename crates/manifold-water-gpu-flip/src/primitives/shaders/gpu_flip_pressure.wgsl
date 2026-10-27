@@ -512,6 +512,43 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
     }
 }
 
+// The coarsest level's whole approximate solve in one workgroup: red then
+// black from zero, `color` sweeps of each, then as many black then red, the
+// same updates smooth_main makes one sweep a dispatch. A color's cells read
+// only the other color, so each sweep's order is free and the barrier
+// between sweeps is all the passes need. A stopped solve's gate leaves the
+// level no cells.
+@compute @workgroup_size(256, 1, 1)
+fn coarsest_main(@builtin(local_invocation_index) li: u32) {
+    let cells = armed[3u * u.level] * 256u;
+    let sweeps = 2u * u.color;
+    let h2 = u.cell_size * u.cell_size;
+    for (var sweep = 0u; sweep < 2u * sweeps; sweep = sweep + 1u) {
+        // Red then black on the way down, black then red on the way back.
+        let color = (sweep & 1u) ^ select(0u, 1u, sweep >= sweeps);
+        let from_zero = sweep == 0u;
+        for (var gid = li; gid < cells; gid = gid + 256u) {
+            let idx = listed_cell(gid);
+            // A tile's origin is a multiple of 8: its local x + y + z parity
+            // is the cell's global checkerboard color.
+            if ((gid ^ (gid >> 3u) ^ (gid >> 6u)) & 1u) != color {
+                if from_zero {
+                    out[idx] = 0.0;
+                }
+                continue;
+            }
+            ts_home(idx);
+            if is_water(idx) {
+                let s = stencil(idx, select(0u, 2u, from_zero));
+                out[idx] = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
+            } else if from_zero {
+                out[idx] = 0.0;
+            }
+        }
+        storageBarrier();
+    }
+}
+
 // rhs − L value in a water cell with an open face, else 0; rhs in `src`
 // (0 with mode bit 0, which makes −L value), value in `aux`. With REDUCE
 // (the operator product s = −L p with no bodies) each thread also folds
