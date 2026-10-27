@@ -1509,11 +1509,6 @@ pub(super) fn fused_as_rendered(
 #[doc(hidden)]
 pub mod testkit;
 
-/// Pure water's absorption per metre at red, green and blue (Pope and Fry
-/// 1997, at 650, 550 and 450 nm). The attenuation colour is what one metre lets
-/// through.
-pub const WATER_ABSORPTION_PER_METRE: [f64; 3] = [0.34, 0.057, 0.009];
-
 /// The water drawn from frame B through the push-out: the surface's field
 /// fed from the blended particles and solids, and the water object with its
 /// material. Returns the water object.
@@ -1550,20 +1545,26 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
         .retain(|w| !(w.to_node == surface as u32 && w.to_port == "particles"));
     b.wire((push_out, "out"), surface, "particles");
 
-    let [red, green, blue] =
-        WATER_ABSORPTION_PER_METRE.map(|absorption| float((-absorption).exp()));
+    // Blue-teal glass. Clear water on a dark stage shows only the black behind
+    // it, so the look is stylised: the base colour tints thin sheets cyan,
+    // absorption over 10 cm turns thick water deep blue, and a little teal
+    // scattering lights the body from the sky.
     let material = b.node(
         "water_material",
         "node.pbr_material",
         json!({
             "ambient": float(0.0),
-            "color_r": float(1.0), "color_g": float(1.0), "color_b": float(1.0),
-            "metallic": float(0.0), "roughness": float(0.0),
+            "color_r": float(0.3725), "color_g": float(0.7294), "color_b": float(1.0),
+            "metallic": float(0.0), "roughness": float(0.15),
             "ior": float(1.333), "transmission": float(1.0),
-            "volume_attenuation_color_r": red,
-            "volume_attenuation_color_g": green,
-            "volume_attenuation_color_b": blue,
-            "volume_attenuation_distance": float(1.0),
+            "volume_attenuation_color_r": float(0.35),
+            "volume_attenuation_color_g": float(0.72),
+            "volume_attenuation_color_b": float(0.8),
+            "volume_attenuation_distance": float(0.1),
+            "volume_scattering_color_r": float(0.15),
+            "volume_scattering_color_g": float(0.5),
+            "volume_scattering_color_b": float(0.6),
+            "volume_scattering_density": float(0.6),
         }),
     );
     let water = b.node("water_object", "node.scene_object", json!({}));

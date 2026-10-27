@@ -1201,6 +1201,16 @@ fn volume_attenuation_coefficient() -> vec3<f32> {
     return -log(safe_color) / max(attenuation_distance, 1e-4);
 }
 
+// Light through a scattering volume over `optical_density`: what comes through
+// dims by exp(-optical_density), and the volume adds its scattering colour, lit
+// by the environment's diffuse light from above, for the rest. Isotropic single
+// scattering, not a multiple-scattering solve.
+fn volume_inscatter(through: vec3<f32>, optical_density: f32) -> vec3<f32> {
+    let visibility = exp(-optical_density);
+    let illumination = textureSampleLevel(irradiance_map, envmap_sampler, vec2<f32>(0.5, 1.0), 0.0).rgb;
+    return through * visibility + u.volume_scattering_color.rgb * illumination * (1.0 - visibility);
+}
+
 // Mip of `opaque_scene_color` a transmission sample reads: roughness scales
 // the mip chain, fading in with the ior above 1.
 fn transmission_mip_level(roughness: f32, ior: f32) -> f32 {

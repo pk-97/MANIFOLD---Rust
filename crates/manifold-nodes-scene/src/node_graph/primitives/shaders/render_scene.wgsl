@@ -783,14 +783,10 @@ fn transmission_diffuse(
         let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
         let pixel = clamp(vec2<i32>(uv * vec2<f32>(textureDimensions(volume_density))), vec2<i32>(0), vec2<i32>(textureDimensions(volume_density)) - vec2<i32>(1));
         let embedded = max(textureLoad(volume_density, pixel, 0).r, 0.0);
+        // Embedded density is screen-space and assumes particles belong to
+        // this volume.
         let optical_density = u.volume_optics.y * travelled + embedded;
-        let visibility = exp(-optical_density);
-        // Isotropic single-scattering approximation lit by the existing diffuse
-        // environment. Embedded density is screen-space and assumes particles
-        // belong to this volume; it is not a world-space multiple-scattering solve.
-        let illumination = textureSampleLevel(irradiance_map, envmap_sampler, vec2<f32>(0.5, 1.0), 0.0).rgb;
-        let inscatter = u.volume_scattering_color.rgb * illumination;
-        attenuated = attenuated * visibility + inscatter * (1.0 - visibility);
+        attenuated = volume_inscatter(attenuated, optical_density);
     }
 
     // Same specular-reflectance fraction the split-sum IBL above already

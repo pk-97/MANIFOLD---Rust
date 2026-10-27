@@ -84,9 +84,14 @@ fn fs_water(@builtin(position) pos: vec4<f32>) -> WaterOut {
         n, view, world, thickness, vec3<f32>(1.0), ior,
         transmission_mip_level(surface.roughness, ior),
     );
-    let tint = exp(-volume_attenuation_coefficient() * thickness);
+    var through = background * exp(-volume_attenuation_coefficient() * thickness);
+    // The water's own scattering over the same path, where its material has any.
+    let scattering = u.volume_optics.y;
+    if scattering > 0.0 {
+        through = volume_inscatter(through, scattering * thickness);
+    }
     let transmitted = (vec3<f32>(1.0) - transmission_specular_fraction(ibl.ibl_f0, base_f90, ibl.env_brdf))
-        * background * tint * u.base_color.rgb;
+        * through * u.base_color.rgb;
 
     var lit = look_thin_water_light(thickness, reflection + transmitted);
     lit = look_foam(world, pos.xy, view, n, lit);
