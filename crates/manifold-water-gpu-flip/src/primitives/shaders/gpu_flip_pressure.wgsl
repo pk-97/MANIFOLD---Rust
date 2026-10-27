@@ -429,37 +429,70 @@ struct Stencil {
     sum: f32,
 };
 
+// The 27 tiles round the tile a workgroup's half tile lies in, by
+// neighbour index: a listed pass stages them once a half tile, and its
+// stencil reads past the tile take their slot from here instead of the
+// table's neighbour row.
+var<workgroup> near_slots: array<u32, 27>;
+
+// Stage the neighbour slots of the half tile from list cell `first`; every
+// thread of the workgroup calls it, so the barrier is whole.
+fn stage_near(first: u32, li: u32) {
+    if li < WT_NEIGHBOURS {
+        near_slots[li] = ts_neighbour_slot(listed_slot(first), li);
+    }
+    workgroupBarrier();
+}
+
+// The pool index of stencil neighbour p, one cell from the home tile: the
+// staged slots when `staged`, else the read side's lookup.
+fn stencil_cell(p: vec3<i32>, staged: bool) -> u32 {
+    if !staged {
+        return ts_cell_at(p);
+    }
+    let d = (p >> vec3<u32>(3u)) - ts_home_tile;
+    var slot = ts_home_slot;
+    if any(d != vec3<i32>(0)) {
+        slot = near_slots[ts_neighbour_index(d)];
+    }
+    if slot == WT_NONE {
+        return ts_canon();
+    }
+    return slot * 512u + ts_local(p);
+}
+
 // A zero weight must not read its neighbour (which may be in a tile with no
 // slot). Keep the six additions in the original face order without a
 // dynamic loop or dynamic vector-component indexing in each smoothing or
 // operator pass.
-fn stencil_add(sum: f32, source: u32, weight: f32, p: vec3<i32>, a: i32, d: i32) -> f32 {
+fn stencil_add(sum: f32, source: u32, weight: f32, p: vec3<i32>, a: i32, d: i32, staged: bool) -> f32 {
     if !(weight > 0.0) {
         return sum;
     }
     var q = p;
     q[a] = p[a] + d;
-    let at = ts_cell_at(q);
+    let at = stencil_cell(q, staged);
     if source == 0u {
         return sum + weight * out[at];
     }
     return sum + weight * aux[at];
 }
 
-// Cell idx's stencil, the thread's home set on idx.
-fn stencil(idx: u32, source: u32) -> Stencil {
+// Cell idx's stencil, the thread's home set on idx; `staged` when the
+// workgroup staged idx's neighbour slots (stage_near).
+fn stencil(idx: u32, source: u32, staged: bool) -> Stencil {
     let row = rows[idx];
     var s = Stencil(select(row.hi.w, row.hi.z, u.ghost == 1u), 0.0);
     if source == 2u {
         return s;
     }
     let p = ts_cell_coord(idx);
-    s.sum = stencil_add(s.sum, source, row.lo.x, p, 0, -1);
-    s.sum = stencil_add(s.sum, source, row.lo.y, p, 0, 1);
-    s.sum = stencil_add(s.sum, source, row.lo.z, p, 1, -1);
-    s.sum = stencil_add(s.sum, source, row.lo.w, p, 1, 1);
-    s.sum = stencil_add(s.sum, source, row.hi.x, p, 2, -1);
-    s.sum = stencil_add(s.sum, source, row.hi.y, p, 2, 1);
+    s.sum = stencil_add(s.sum, source, row.lo.x, p, 0, -1, staged);
+    s.sum = stencil_add(s.sum, source, row.lo.y, p, 0, 1, staged);
+    s.sum = stencil_add(s.sum, source, row.lo.z, p, 1, -1, staged);
+    s.sum = stencil_add(s.sum, source, row.lo.w, p, 1, 1, staged);
+    s.sum = stencil_add(s.sum, source, row.hi.x, p, 2, -1, staged);
+    s.sum = stencil_add(s.sum, source, row.hi.y, p, 2, 1, staged);
     return s;
 }
 
@@ -485,7 +518,7 @@ fn smooth_at(gid: u32, li: u32) {
     var e = out[idx];
     if is_water(idx) {
         let h2 = u.cell_size * u.cell_size;
-        let s = stencil(idx, select(0u, 2u, from_zero()));
+        let s = stencil(idx, select(0u, 2u, from_zero()), true);
         e = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
         out[idx] = e;
     } else if from_zero() {
@@ -519,6 +552,7 @@ fn smooth_at(gid: u32, li: u32) {
 @compute @workgroup_size(128, 1, 1)
 fn smooth_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        stage_near(256u * g, li);
         smooth_at(128u * g + li, li);
         workgroupBarrier();
     }
@@ -552,7 +586,7 @@ fn coarsest_main(@builtin(local_invocation_index) li: u32) {
             }
             ts_home(idx);
             if is_water(idx) {
-                let s = stencil(idx, select(0u, 2u, from_zero));
+                let s = stencil(idx, select(0u, 2u, from_zero), false);
                 out[idx] = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
             } else if from_zero {
                 out[idx] = 0.0;
@@ -574,7 +608,7 @@ fn residual_at(gid: u32, li: u32) {
     ts_home(idx);
     var result = 0.0;
     if is_water(idx) {
-        let s = stencil(idx, 1u);
+        let s = stencil(idx, 1u, true);
         if s.diagonal > 0.0 {
             let rhs = select(src[idx], 0.0, from_zero());
             result = rhs - (s.sum - s.diagonal * aux[idx]) / (u.cell_size * u.cell_size);
@@ -590,6 +624,7 @@ fn residual_at(gid: u32, li: u32) {
 @compute @workgroup_size(256, 1, 1)
 fn residual_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        stage_near(256u * g, li);
         residual_at(256u * g + li, li);
         workgroupBarrier();
     }
@@ -1236,7 +1271,7 @@ fn warm_at(gid: u32, li: u32) {
         if no_divergence {
             out[idx] = 0.0;
         } else {
-            let s = stencil(idx, 0u);
+            let s = stencil(idx, 0u, true);
             if s.diagonal > 0.0 {
                 r = src[idx] - (s.sum - s.diagonal * out[idx]) / (u.cell_size * u.cell_size);
                 out2[idx] = r;
@@ -1251,6 +1286,7 @@ fn warm_at(gid: u32, li: u32) {
 @compute @workgroup_size(256, 1, 1)
 fn warm_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) launched: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     for (var g = wg.x; listed(256u * g); g = g + launched.x) {
+        stage_near(256u * g, li);
         warm_at(256u * g + li, li);
         workgroupBarrier();
     }
