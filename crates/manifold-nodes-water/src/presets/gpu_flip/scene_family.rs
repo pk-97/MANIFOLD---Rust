@@ -32,6 +32,7 @@ const ICOSAHEDRON: usize = 3;
 pub(super) fn particles_draw(b: &mut Builder) {
     b.remove(&[
         "surface",
+        "water_mesh",
         "dots_mesh",
         "dots_material",
         "dots_blend",

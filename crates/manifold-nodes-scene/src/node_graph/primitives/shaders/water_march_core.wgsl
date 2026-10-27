@@ -134,6 +134,34 @@ fn field_ahead(p: vec3<f32>, d: vec3<f32>) -> FieldAhead {
     return FieldAhead(level_at(field_corners(q)), 0.0);
 }
 
+// The crossing on a bracket [a, b] of the local ray, the field fa > 0 at a and
+// fb <= 0 at b. False position: the field is near linear across a short
+// bracket, so a line root usually lands on the crossing at once. The end that
+// stays has its value halved (Illinois), so a curved stretch or a skipped
+// tile's stand-in value cannot stall the bracket.
+fn refine_crossing(o: vec3<f32>, d: vec3<f32>, a0: f32, fa0: f32, b0: f32, fb0: f32) -> f32 {
+    let hit = MARCH_HIT_CELLS * u.cell.x;
+    var a = a0;
+    var fa = fa0;
+    var b = b0;
+    var fb = fb0;
+    for (var k = 0u; k < MARCH_REFINES; k++) {
+        let m = b - fb * (b - a) / min(fb - fa, -1e-20);
+        let fm = sample_field(o + d * m);
+        if abs(fm) < hit { return m; }
+        if fm > 0.0 {
+            a = m;
+            fa = fm;
+            fb = 0.5 * fb;
+        } else {
+            b = m;
+            fb = fm;
+            fa = 0.5 * fa;
+        }
+    }
+    return b - fb * (b - a) / min(fb - fa, -1e-20);
+}
+
 // The first surface crossing along the local ray within [t0, t1], or -1.0
 // when the ray leaves the span without one.
 fn march_surface(o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> f32 {
@@ -153,31 +181,7 @@ fn march_surface(o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> f32 {
         if t > t1 { return -1.0; }
         let next = field_ahead(o + d * t, d);
         if next.phi <= 0.0 {
-            // False position on the bracket: the field is near linear across
-            // the last step, so a line root usually lands on the crossing at
-            // once. The end that stays has its value halved (Illinois), so a
-            // curved stretch or a skipped tile's stand-in value cannot stall
-            // the bracket.
-            let hit = MARCH_HIT_CELLS * cell;
-            var a = prev_t;
-            var fa = here.phi;
-            var b = t;
-            var fb = next.phi;
-            for (var k = 0u; k < MARCH_REFINES; k++) {
-                let m = b - fb * (b - a) / min(fb - fa, -1e-20);
-                let fm = sample_field(o + d * m);
-                if abs(fm) < hit { return m; }
-                if fm > 0.0 {
-                    a = m;
-                    fa = fm;
-                    fb = 0.5 * fb;
-                } else {
-                    b = m;
-                    fb = fm;
-                    fa = 0.5 * fa;
-                }
-            }
-            return b - fb * (b - a) / min(fb - fa, -1e-20);
+            return refine_crossing(o, d, prev_t, here.phi, t, next.phi);
         }
         here = next;
     }

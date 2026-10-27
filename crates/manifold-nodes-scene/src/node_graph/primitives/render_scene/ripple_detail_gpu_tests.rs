@@ -128,6 +128,7 @@ pub(super) fn field(lattices: &Lattices) -> FieldObject<'_> {
         prev_model: identity(),
         ripple_detail: 1.0,
         uniforms: bytemuck::Zeroable::zeroed(),
+        mesh: None,
     }
 }
 

@@ -2162,6 +2162,13 @@
       "id": 530,
       "nodeId": "display_solid",
       "typeId": "node.liquid_solid_distance"
+    },
+    {
+      "id": 531,
+      "nodeId": "water_mesh",
+      "typeId": "node.tile_surface_mesh",
+      "params": {},
+      "handle": "Water Mesh"
     }
   ],
   "presetMetadata": {
@@ -4529,6 +4536,36 @@
       "fromPort": "pool_tiles",
       "toNode": 6,
       "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "level_set",
+      "toNode": 531,
+      "toPort": "levelset"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "tiles",
+      "toNode": 531,
+      "toPort": "tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "pool_tiles",
+      "toNode": 531,
+      "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "cell_size",
+      "toNode": 531,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 531,
+      "fromPort": "vertices",
+      "toNode": 442,
+      "toPort": "vertices"
     }
   ]
 }

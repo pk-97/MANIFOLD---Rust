@@ -33,6 +33,19 @@ pub(super) struct FieldObject<'ctx> {
     /// Ripple detail strength over the automatic one (`FieldSurface::ripple_detail`).
     pub ripple_detail: f32,
     pub uniforms: RenderSceneUniforms,
+    /// The field's surface mesh, the object's `vertices` when wired: its
+    /// depth over the opaque scene is where each ray meets the water.
+    pub mesh: Option<FieldMesh<'ctx>>,
+}
+
+/// A water field's surface mesh: a triangle list of `MeshVertex`.
+pub(super) struct FieldMesh<'ctx> {
+    pub vertices: &'ctx manifold_gpu::GpuBuffer,
+    pub live_extent: Option<manifold_node_engine::scene::live_extent::LiveExtent>,
+    /// Vertices drawn: the live bound, or every whole triangle.
+    pub vertex_count: u32,
+    /// This frame's indirect arguments, when the mesh has a live extent.
+    pub live_args: Option<(manifold_gpu::GpuBuffer, u64)>,
 }
 
 /// The material an object draws with this frame.
@@ -276,10 +289,33 @@ impl RenderScene {
                     .into_iter()
                     .flatten(),
             )
+            .chain(object.mesh)
             .any(|slot| !inputs.slot_content_ready(slot))
         {
             return Some(None);
         }
+        let mesh = match object.mesh {
+            Some(slot) => {
+                let Some(vertices) = inputs.array_slot(slot) else {
+                    return Self::fail_field(
+                        ctx,
+                        n,
+                        format!("object_{n}: the water's `vertices` input is unavailable"),
+                    );
+                };
+                let live_extent = inputs.live_extent_slot(slot);
+                let capacity = whole_triangle_vertices(vertices);
+                Some(FieldMesh {
+                    vertices,
+                    vertex_count: live_extent
+                        .as_ref()
+                        .map_or(capacity, |extent| extent.bound.min(capacity)),
+                    live_extent,
+                    live_args: None,
+                })
+            }
+            None => None,
+        };
         let pool_tiles = field.pool_tiles;
         let elements = pool_len(pool_tiles);
         let levelset = Self::field_array(ctx, n, field.levelset, "field", elements).ok()?;
@@ -348,6 +384,7 @@ impl RenderScene {
             prev_model: prev_model_n,
             ripple_detail: field.ripple_detail,
             uniforms,
+            mesh,
         }))
     }
 }

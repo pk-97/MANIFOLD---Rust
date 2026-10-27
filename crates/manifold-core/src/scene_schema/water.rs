@@ -113,10 +113,10 @@ pub const DOMAIN_ROLE: &str = "domain";
 /// The template's Physics View switches: the field's inputs (its level set,
 /// its velocity lattice and its node counts, which come from the surface's
 /// volume), the water's visibility, the dots' visibility, the dots' two
-/// inputs, the water's foam cover, its mist and its wetness. Each follows the
-/// World's Render Mode, on only in Physics View, so the side that is off is
-/// never computed.
-pub const PHYSICS_VIEW_SWITCHES: [&str; 11] = [
+/// inputs, the water's foam cover, its mist, its wetness and its surface mesh.
+/// Each follows the World's Render Mode, on only in Physics View, so the side
+/// that is off is never computed.
+pub const PHYSICS_VIEW_SWITCHES: [&str; 12] = [
     "water_field_switch",
     "water_velocity_switch",
     "water_tiles_switch",
@@ -128,6 +128,7 @@ pub const PHYSICS_VIEW_SWITCHES: [&str; 11] = [
     "water_foam_switch",
     "water_mist_switch",
     "water_wet_switch",
+    "water_vertices_switch",
 ];
 
 /// The template nodes Surface Detail sets: the display's world tiles, whose

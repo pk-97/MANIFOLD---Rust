@@ -692,6 +692,7 @@ const DOTS_MESH_SWITCH: &str = PHYSICS_VIEW_SWITCHES[7];
 const FOAM_SWITCH: &str = PHYSICS_VIEW_SWITCHES[8];
 const MIST_SWITCH: &str = PHYSICS_VIEW_SWITCHES[9];
 const WETNESS_SWITCH: &str = PHYSICS_VIEW_SWITCHES[10];
+const VERTICES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[11];
 /// The display's world tiles and the solid on them, shared by every drawn
 /// field (`SURFACE_DETAIL_NODES` names the table).
 const DISPLAY_TILES: &str = manifold_core::scene_schema::SURFACE_DETAIL_NODES[0];
@@ -887,6 +888,7 @@ impl WaterScene {
                 "water_material" => Some("Water Material"),
                 "water_object" => Some("Water"),
                 "water_ripple_detail" => Some("Ripple Detail"),
+                "water_mesh" => Some("Water Mesh"),
                 "whitewater" => Some("Whitewater"),
                 "whitewater_budget" => Some("Whitewater Budget"),
                 "spray_object" => Some("Spray"),
@@ -1680,6 +1682,18 @@ fn display_dots(b: &mut Builder, frame: usize, surface: usize, water: usize) -> 
         b.wire(from, switch, "in_0");
         b.wire((switch, "out"), water, to);
     }
+    // The surface's own mesh: the renderer draws its depth and marches each
+    // ray only round it.
+    let mesh = b.node("water_mesh", "node.tile_surface_mesh", json!({}));
+    b.wire((surface, "level_set"), mesh, "levelset");
+    on_display_tiles(b, tiles, mesh);
+    let switch = b.node(
+        VERTICES_SWITCH,
+        "node.switch_mesh",
+        json!({"selector": float(0.0)}),
+    );
+    b.wire((mesh, "vertices"), switch, "in_0");
+    b.wire((switch, "out"), water, "vertices");
     let water_visible = b.node(
         WATER_VISIBLE,
         "node.switch_value",

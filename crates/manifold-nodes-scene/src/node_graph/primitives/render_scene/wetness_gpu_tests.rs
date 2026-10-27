@@ -149,6 +149,7 @@ fn wetness_blends_albedo_and_smooths_roughness() {
         prev_model: water_model(),
         ripple_detail: 1.0,
         uniforms: bytemuck::Zeroable::zeroed(),
+        mesh: None,
     };
     let on = wet_uniforms(Some(&object)).expect("a real model inverts");
     let off = wet_uniforms(None).expect("off is not an error");

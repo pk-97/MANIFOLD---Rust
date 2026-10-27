@@ -371,6 +371,7 @@ fn run(fields: &[TestField], wants_velocity: bool, frame_seconds: f32) -> Run {
                 &buffers.draw(f.slot),
                 &opaque,
                 None,
+                None,
                 velocity_out.as_ref(),
             )
             .expect("march encodes");
@@ -824,6 +825,7 @@ fn tile_flags_cover_the_far_faces_of_a_tiles_cells() {
             &view,
             &buffers.draw(0),
             &opaque,
+            None,
             None,
             None,
         )

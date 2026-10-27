@@ -853,6 +853,19 @@
         "convert": {
           "type": "Float"
         }
+      },
+      {
+        "id": "physics_view",
+        "label": "Physics View",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "water_vertices_switch",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ],
     "stringParams": [
@@ -2985,6 +2998,23 @@
                 "value": 0.0
               }
             }
+          },
+          {
+            "id": 50,
+            "nodeId": "water_mesh",
+            "typeId": "node.tile_surface_mesh",
+            "handle": "Water Mesh"
+          },
+          {
+            "id": 51,
+            "nodeId": "water_vertices_switch",
+            "typeId": "node.switch_mesh",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
           }
         ],
         "wires": [
@@ -4673,6 +4703,42 @@
             "fromPort": "pool_tiles",
             "toNode": 4,
             "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "level_set",
+            "toNode": 50,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "tiles",
+            "toNode": 50,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "pool_tiles",
+            "toNode": 50,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "cell_size",
+            "toNode": 50,
+            "toPort": "cell_size"
+          },
+          {
+            "fromNode": 50,
+            "fromPort": "vertices",
+            "toNode": 51,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 51,
+            "fromPort": "out",
+            "toNode": 17,
+            "toPort": "vertices"
           }
         ]
       }

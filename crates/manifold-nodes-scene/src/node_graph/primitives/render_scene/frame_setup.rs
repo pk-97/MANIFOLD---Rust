@@ -619,10 +619,16 @@ impl RenderScene {
             .iter()
             .filter(|d| d.live_extent.is_some() || d.trims_instances())
             .count();
-        if live > 0 {
+        let live_meshes = fields
+            .iter()
+            .filter(|f| f.mesh.as_ref().is_some_and(|m| m.live_extent.is_some()))
+            .count();
+        if live + live_meshes > 0 {
             let culled = draws.iter().filter(|d| d.culls_copies()).count();
             let gpu = ctx.gpu_encoder();
-            let args = self.live_draw_args.prepare(gpu.device, live + culled);
+            let args = self
+                .live_draw_args
+                .prepare(gpu.device, live + culled + live_meshes);
             for (slot, draw) in draws
                 .iter_mut()
                 .filter(|d| d.live_extent.is_some() || d.trims_instances())
@@ -685,6 +691,22 @@ impl RenderScene {
                     prev: None,
                 });
                 view_block += 1;
+            }
+            // The water meshes' blocks follow the view blocks.
+            let mut block = (live + culled) as u64;
+            for mesh in fields.iter_mut().filter_map(|f| f.mesh.as_mut()) {
+                let Some(extent) = &mesh.live_extent else {
+                    continue;
+                };
+                self.live_draw_args.write(
+                    gpu.native_enc,
+                    block as usize,
+                    extent,
+                    whole_triangle_vertices(mesh.vertices),
+                    1,
+                );
+                mesh.live_args = Some((args.clone(), block * live_draw_args::ARGS_BYTES));
+                block += 1;
             }
         }
         // A field draws in Pass B, so it needs every resource the glass gate

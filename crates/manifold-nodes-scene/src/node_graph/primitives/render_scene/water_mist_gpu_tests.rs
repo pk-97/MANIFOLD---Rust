@@ -80,7 +80,7 @@ fn run(levelset: &[f32], mist: &[f32]) -> Vec<Mist> {
     let mut march = WaterMarch::default();
     march.begin(&device, &mut enc, W, H);
     march
-        .encode(&device, &mut enc, &view, &draw, &opaque, None, None)
+        .encode(&device, &mut enc, &view, &draw, &opaque, None, None, None)
         .expect("march encodes");
     let ran = march
         .encode_mist(&device, &mut enc, &view, &draw, &opaque)

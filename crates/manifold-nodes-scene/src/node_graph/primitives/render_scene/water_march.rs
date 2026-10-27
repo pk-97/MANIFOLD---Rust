@@ -247,8 +247,14 @@ impl WaterMarch {
     }
 
     /// Flag one field's tiles, then march it into `hits`, keeping whatever
-    /// nearer field an earlier call already drew. `begin` must have run this
-    /// frame with the same size.
+    /// nearer field an earlier call already drew. `first_hit`, for a field
+    /// with a surface mesh, is the water meshes' nearest depth over the
+    /// opaque scene: the march searches only round it. `begin` must have run
+    /// this frame with the same size.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one march dispatch: the field, the camera and its five targets"
+    )]
     pub(super) fn encode(
         &mut self,
         device: &GpuDevice,
@@ -256,12 +262,14 @@ impl WaterMarch {
         view: &FieldView,
         field: &FieldDraw,
         opaque_depth: &GpuTexture,
+        first_hit: Option<&GpuTexture>,
         depth_out: Option<&GpuTexture>,
         velocity_out: Option<&GpuTexture>,
     ) -> Result<(), &'static str> {
         let mut uniforms = march_uniforms(view, &FieldGeometry::of(field))?;
         uniforms.flags[0] =
             u32::from(depth_out.is_some()) | (u32::from(velocity_out.is_some()) << 1);
+        uniforms.flags[2] = u32::from(first_hit.is_some());
         let pipeline = self
             .pipeline
             .as_ref()
@@ -366,6 +374,10 @@ impl WaterMarch {
             GpuBinding::Texture {
                 binding: 6,
                 texture: velocity_out,
+            },
+            GpuBinding::Texture {
+                binding: 8,
+                texture: first_hit.unwrap_or(opaque_depth),
             },
             GpuBinding::Buffer {
                 binding: 70,

@@ -3,14 +3,45 @@
 // Starts after `water_march_core.wgsl`, which holds bindings 0 and 1, the
 // march constants, the field sampling and the hit search. The velocity is a
 // pooled field under the same world-tile table as the level set, and
-// `tile_flags` the field's per-slot flags (`water_tile_flags.wgsl`).
+// `tile_flags` the field's per-slot flags (`water_tile_flags.wgsl`). With
+// `u.flags.z` set, `first_hit` is the water meshes' nearest depth over the
+// opaque scene: a ray meets water only where a mesh is in front, and the
+// search runs only within MESH_WINDOW_CELLS of it.
 
 @group(0) @binding(2) var<storage, read> velocity: array<f32>;
 @group(0) @binding(3) var opaque_depth: texture_depth_2d;
 @group(0) @binding(4) var<storage, read_write> hits: array<FieldHit>;
 @group(0) @binding(5) var depth_out: texture_storage_2d<r32float, write>;
 @group(0) @binding(6) var velocity_out: texture_storage_2d<rg16float, write>;
+@group(0) @binding(8) var first_hit: texture_depth_2d;
 @group(0) @binding(72) var<storage, read> tile_flags: array<u32>;
+
+// How far the field's zero surface can lie from its marching-cubes mesh along
+// a ray, in cells: the mesh's vertices are on the field's edge crossings, and
+// inside a cell the two part by under a cell diagonal.
+const MESH_WINDOW_CELLS: f32 = 2.0;
+// The even step that brackets the crossing round the mesh, in cells: a step
+// sized by the field's value could pass a sheet thinner than its error.
+const MESH_STEP_CELLS: f32 = 0.25;
+
+// The first crossing in [t0, t1] by even steps, refined on its bracket; -1.0
+// when there is none.
+fn march_window(o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> f32 {
+    let step = MESH_STEP_CELLS * u.cell.x;
+    var a = t0;
+    var fa = sample_field(o + d * a);
+    if fa <= 0.0 { return a; }
+    while a < t1 {
+        let b = min(a + step, t1);
+        let fb = sample_field(o + d * b);
+        if fb <= 0.0 {
+            return refine_crossing(o, d, a, fa, b, fb);
+        }
+        a = b;
+        fa = fb;
+    }
+    return -1.0;
+}
 
 fn field_tile_dry(slot: u32) -> bool {
     return (tile_flags[slot] & TILE_WATER) == 0u;
@@ -115,11 +146,22 @@ fn cs_march(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = ray.s;
 
     let span = lattice_span(o, d);
-    let t0 = span.x;
+    // The ray's water ends at t1, which bounds the thickness walk.
+    var t0 = span.x;
     let t1 = min(span.y, t_stop * s);
     if t0 >= t1 { return; }
-
-    let t_hit = march_surface(o, d, t0, t1);
+    var t_hit = -1.0;
+    if u.flags.z == 0u {
+        t_hit = march_surface(o, d, t0, t1);
+    } else {
+        // Reversed depth: a mesh is in front where its depth is above the
+        // opaque scene's.
+        let md = textureLoad(first_hit, pix, 0);
+        if md <= od { return; }
+        let tm = dot(unproject(ndc, md) - origin_w, dir_w) * s;
+        let window = MESH_WINDOW_CELLS * u.cell.x;
+        t_hit = march_window(o, d, max(t0, tm - window), min(t1, tm + window));
+    }
     if t_hit < 0.0 { return; }
     let cell = u.cell.x;
 

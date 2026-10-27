@@ -939,6 +939,80 @@ impl RenderScene {
                         .profile_next_encoder("node.render_scene water march");
                     self.ripple_detail
                         .encode(gpu.device, gpu.native_enc, fields, seconds);
+                    // The water meshes' nearest depth over the opaque scene:
+                    // where each ray meets the water, so the march only
+                    // refines the hit.
+                    let meshed = fields.iter().any(|field| field.mesh.is_some());
+                    if meshed {
+                        gpu.native_enc.copy_texture_to_texture(
+                            opaque_depth_snapshot,
+                            transmissive_depth_scratch,
+                            width,
+                            height,
+                            1,
+                        );
+                    }
+                    for field in fields {
+                        let Some(mesh) = &field.mesh else {
+                            continue;
+                        };
+                        // Gain 1, no weights, not a cutout: the solid depth
+                        // pipeline discards nothing.
+                        let uniforms = ShadowUniforms {
+                            light_view_proj: pre.view_proj,
+                            model: field.model,
+                            appearance: [1.0, 0.0, 0.0, 0.0],
+                            alpha: [0.0, 0.0, 1.0, 0.0],
+                            uv_m: [0.0; 4],
+                            uv_t: [0.0; 4],
+                            instance_inner: field.uniforms.instance_inner,
+                        };
+                        let bindings = [
+                            GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(&uniforms),
+                            },
+                            GpuBinding::Buffer {
+                                binding: 1,
+                                buffer: mesh.vertices,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 2,
+                                buffer: identity_stub,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 3,
+                                buffer: mesh.vertices,
+                                offset: 0,
+                            },
+                            GpuBinding::Texture {
+                                binding: 4,
+                                texture: dummy,
+                            },
+                            GpuBinding::Sampler {
+                                binding: 5,
+                                sampler: self.ripple_detail.sampler(),
+                            },
+                        ];
+                        let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(
+                            &solid_depth_pipeline,
+                            &bindings,
+                            mesh.vertex_count,
+                            1,
+                        );
+                        let draw = match &mesh.live_args {
+                            Some((args, offset)) => draw.indirect(args, *offset),
+                            None => draw,
+                        };
+                        gpu.native_enc.draw_instanced_depth_only_batch_loaded(
+                            transmissive_depth_scratch,
+                            opaque_depth_stencil,
+                            std::slice::from_ref(&draw),
+                            "node.render_scene water first hit",
+                        );
+                    }
                     self.water_march
                         .begin(gpu.device, gpu.native_enc, width, height);
                     for field in fields {
@@ -948,6 +1022,7 @@ impl RenderScene {
                             &view,
                             &field_draw(field),
                             opaque_depth_snapshot,
+                            field.mesh.is_some().then_some(transmissive_depth_scratch),
                             depth_resolve_target,
                             velocity_resolve_target,
                         ) {
