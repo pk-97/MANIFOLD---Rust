@@ -4,7 +4,10 @@
 //! display cell size. A tile water touched stays held, in its slot, for
 //! `keep_seconds` after the water leaves, so the wetness stored in it can dry.
 //! The pool follows the water: it starts at [`START_POOL_TILES`] and grows
-//! ahead of the tiles the table holds, read a frame or two late.
+//! ahead of the tiles the table holds, read a frame or two late. With GPU
+//! FLIP Narrow Band on, the deep water has no particles: the step's grid
+//! interior holds the tiles it fills, so `node.interior_fill` has tiles to
+//! draw it on.
 
 use std::borrow::Cow;
 use std::sync::LazyLock;
@@ -30,10 +33,14 @@ mod extent;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 
-// The read side, then the passes around the build.
+// The read side, the water's (the same text renamed sim_ts_ / SIM_WT_, for
+// the interior's table), then the passes around the build.
 static SOURCE: LazyLock<String> = LazyLock::new(|| {
+    let sim = READ_SIDE
+        .replace("ts_", "sim_ts_")
+        .replace("WT_", "SIM_WT_");
     format!(
-        "{READ_SIDE}\n{}",
+        "{READ_SIDE}\n{sim}\n{}",
         include_str!("shaders/surface_tiles.wgsl")
     )
 });
@@ -66,7 +73,9 @@ struct TileUniforms {
     time: f32,
     keep_seconds: f32,
     cell: f32,
-    _pad: [u32; 3],
+    sim_pool_tiles: u32,
+    sim_cell: f32,
+    interior_at: u32,
 }
 
 /// The display cell size for a simulation of `sim_cell_size` metres:
@@ -93,15 +102,20 @@ pub(crate) struct Layout {
     pub foam: u32,
     pub spray: u32,
     pub pool_tiles: u32,
+    /// Records for the water's grid interior: one an octant of each of its
+    /// slots (8 · its pool), 0 without one.
+    pub interior: u32,
 }
 
 impl Layout {
-    /// The records the build bins: the frame's points, then a keep record a slot.
+    /// The records the build bins: the frame's points, a keep record a slot,
+    /// then the interior's.
     fn records(self) -> u64 {
         u64::from(self.particles)
             + u64::from(self.foam)
             + u64::from(self.spray)
             + u64::from(self.pool_tiles)
+            + u64::from(self.interior)
     }
 
     /// Records before the keep records.
@@ -139,7 +153,7 @@ pub(crate) struct Held {
     layout: Layout,
     tiles: WorldTiles,
     /// The records the build bins: particles, foam and spray copied end to
-    /// end, then one keep record a slot.
+    /// end, one keep record a slot, then the interior's records.
     points: GpuBuffer,
     /// `[groups, 1, 1, n]` over `points`: the build's point passes.
     record: GpuBuffer,
@@ -168,6 +182,10 @@ struct Frame<'a> {
     particles: &'a GpuBuffer,
     foam: Option<&'a GpuBuffer>,
     spray: Option<&'a GpuBuffer>,
+    /// The step's grid interior and its table, while Narrow Band runs.
+    interior: Option<(&'a GpuBuffer, &'a GpuBuffer)>,
+    /// The water's cell size.
+    sim_cell: f32,
     time: f32,
     epoch: Option<f32>,
     keep_seconds: f32,
@@ -256,7 +274,9 @@ impl Held {
             time: frame.time,
             keep_seconds: frame.keep_seconds,
             cell: frame.cell_size,
-            _pad: [0; 3],
+            sim_pool_tiles: layout.interior / 8,
+            sim_cell: frame.sim_cell,
+            interior_at: head + pool,
         };
         let bindings = [
             GpuBinding::Bytes {
@@ -289,6 +309,19 @@ impl Held {
                 enc.copy_buffer_range(source, 0, &self.points, at, bytes);
             }
             at += bytes;
+        }
+        if let Some((interior, interior_tiles)) = frame.interior.filter(|_| layout.interior > 0) {
+            let mut bound = [bindings[0]; 9];
+            bound[..7].copy_from_slice(&bindings);
+            bound[7] = buffer(7, interior);
+            bound[8] = buffer(8, interior_tiles);
+            enc.dispatch_compute(
+                &kernels.interior,
+                &bound,
+                [layout.interior.div_ceil(THREADS), 1, 1],
+                "node.surface_tiles.interior",
+            );
+            enc.compute_memory_barrier_buffers();
         }
         self.tiles.encode_allocation(
             enc,
@@ -337,6 +370,7 @@ pub(crate) struct Kernels {
     touch: GpuComputePipeline,
     keep: GpuComputePipeline,
     extent: GpuComputePipeline,
+    interior: GpuComputePipeline,
 }
 
 impl Kernels {
@@ -350,6 +384,7 @@ impl Kernels {
             touch: make("st_touch"),
             keep: make("st_keep"),
             extent: make("st_extent"),
+            interior: make("st_interior"),
         }
     }
 }
@@ -362,6 +397,8 @@ manifold_node_engine::primitive! {
         particles: Array(FluidParticle) required,
         foam: Array(FluidParticle) optional,
         spray: Array(FluidParticle) optional,
+        interior: Array(f32) optional,
+        interior_tiles: Array(u32) optional,
         sim_cell_size: ScalarF32 optional,
         time: ScalarF32 required,
         epoch: ScalarF32 optional,
@@ -379,7 +416,7 @@ manifold_node_engine::primitive! {
         float_param!("sim_cell_size", "Water Cell Size", 0.0625, 0.0001, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire particles from the liquid frame's blended particles, foam and spray from the displayed whitewater, sim_cell_size from the water step, time from the domain's display_time and epoch from its epoch. Every display atom takes tiles, pool_tiles and cell_size from here; extent feeds the water object's field_extent. Keep it running while the water is shown: the tiles it keeps are the wetness's memory.",
+    composition_notes: "Wire particles from the liquid frame's blended particles, foam and spray from the displayed whitewater, interior and interior_tiles from node.liquid_state's (GPU FLIP Narrow Band's grid water: every water tile with a grid cell under water joins the table), sim_cell_size from the water step, time from the domain's display_time and epoch from its epoch. Every display atom takes tiles, pool_tiles and cell_size from here; extent feeds the water object's field_extent. Keep it running while the water is shown: the tiles it keeps are the wetness's memory.",
     examples: [],
     picker: { label: "Surface Tiles", category: Atom },
     summary: "Builds the tiles the drawn water lives in, following the displayed water and keeping wet ground for a while.",
@@ -449,10 +486,8 @@ impl Primitive for SurfaceTiles {
             ctx.error("Surface Tiles: keep seconds must be finite and at least 0");
             return;
         }
-        let cell_size = match display_cell_size(
-            ctx.scalar_or_param("sim_cell_size", 0.0625),
-            ctx.param_f32("resolution_scale", 1.0),
-        ) {
+        let sim_cell = ctx.scalar_or_param("sim_cell_size", 0.0625);
+        let cell_size = match display_cell_size(sim_cell, ctx.param_f32("resolution_scale", 1.0)) {
             Ok(cell_size) => cell_size,
             Err(error) => {
                 ctx.error(error);
@@ -461,6 +496,13 @@ impl Primitive for SurfaceTiles {
         };
         let foam = ctx.inputs.array("foam");
         let spray = ctx.inputs.array("spray");
+        let interior = ctx
+            .inputs
+            .array("interior")
+            .zip(ctx.inputs.array("interior_tiles"));
+        let interior_pool = interior
+            .and_then(|(interior, _)| super::interior_fill::interior_pool(interior.size))
+            .unwrap_or(0);
         // A count past a u32 saturates, and the layout refuses it by name.
         let slots = |buffer: Option<&GpuBuffer>| {
             u32::try_from(buffer.map_or(0, |buffer| buffer.size / PARTICLE)).unwrap_or(u32::MAX)
@@ -474,6 +516,7 @@ impl Primitive for SurfaceTiles {
             foam: slots(foam),
             spray: slots(spray),
             pool_tiles,
+            interior: interior_pool.saturating_mul(8),
         };
         let prepared = {
             let gpu = ctx.gpu_encoder();
@@ -497,6 +540,8 @@ impl Primitive for SurfaceTiles {
             particles,
             foam,
             spray,
+            interior,
+            sim_cell,
             time,
             epoch,
             keep_seconds,
@@ -523,7 +568,14 @@ mod tests {
         )
         .validate(&module)
         .expect("surface tiles shader validates");
-        for entry in ["st_reset", "st_carry", "st_touch", "st_keep", "st_extent"] {
+        for entry in [
+            "st_reset",
+            "st_carry",
+            "st_touch",
+            "st_keep",
+            "st_extent",
+            "st_interior",
+        ] {
             assert!(
                 module.entry_points.iter().any(|point| point.name == entry),
                 "missing {entry}"
@@ -552,12 +604,13 @@ mod tests {
             foam: 200,
             spray: 0,
             pool_tiles: 40,
+            interior: 24,
         };
         assert_eq!(layout.head(), 1200);
-        assert_eq!(layout.records(), 1240);
+        assert_eq!(layout.records(), 1264);
         assert_eq!(
             layout.bytes(),
-            1240 * 32 + 16 + 4 * 40 + 16 * 40 + 24 + 32 + 48
+            1264 * 32 + 16 + 4 * 40 + 16 * 40 + 24 + 32 + 48
         );
     }
 }

@@ -24,6 +24,10 @@ fn surface_tiles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         foam: slots("foam")?,
         spray: slots("spray")?,
         pool_tiles: pool,
+        interior: x
+            .items("interior")
+            .and_then(|items| super::super::interior_fill::interior_pool(4 * items))
+            .map_or(0, |pool| pool.saturating_mul(8)),
     };
     x.provide("tiles", table_words(pool) * 4);
     x.provide("extent", 32);

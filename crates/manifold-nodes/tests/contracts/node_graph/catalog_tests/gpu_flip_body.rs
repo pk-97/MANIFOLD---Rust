@@ -392,6 +392,7 @@ impl Lattice {
                 replay_count: 0,
                 gate: &gate,
                 clip: None,
+                kept: None,
             },
         );
         enc.commit_and_wait_completed();

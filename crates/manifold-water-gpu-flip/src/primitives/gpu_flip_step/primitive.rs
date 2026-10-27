@@ -79,7 +79,11 @@ impl Primitive for GpuFlipStep {
                 return;
             }
         };
-        let pool = self.state.next_pool(ceiling);
+        let next = self.state.next_pool(ceiling);
+        let (pool, narrow_band) = self
+            .state
+            .narrow_band
+            .plan(ctx.scalar_or_param("narrow_band", 0.0) > 0.5, next);
         let field = match ForceLatticeBinding::read(
             ctx,
             ctx.inputs.array("forces"),
@@ -224,10 +228,6 @@ impl Primitive for GpuFlipStep {
             _ => 0,
         };
         let band = step_band();
-        let narrow_band = self
-            .state
-            .narrow_band
-            .mode(ctx.scalar_or_param("narrow_band", 0.0) > 0.5);
         if let Err(error) = self.state.reserve(
             ctx.gpu_encoder().device,
             pool,

@@ -123,9 +123,9 @@ fn mpm(draw: WaterDraw) -> WaterFamily {
     let mut b = Builder::from_def(solver);
     let [domain, frame] = ["domain", "frame"].map(|name| b.id(name));
     let scene = WaterScene::dam_break(64);
-    let (surface, _) = surface(&mut b, scene, frame);
+    let (surface, level_set) = surface(&mut b, scene, frame);
     let water = display_head(&mut b, frame, surface);
-    display_dots(&mut b, frame, surface, water);
+    display_dots(&mut b, frame, (surface, (surface, level_set)), water);
     feed_intervals(&b.nodes, &mut b.wires, domain as u32);
     let mut objects = vec!["water_object".to_owned(), "dots_object".to_owned()];
     if draw == WaterDraw::Particles {

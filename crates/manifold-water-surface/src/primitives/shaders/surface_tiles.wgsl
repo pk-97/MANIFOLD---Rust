@@ -1,15 +1,20 @@
 // Surface tiles: what happens around the display's world-tile build
 // (`manifold_water_liquid::world_tiles`), composed after the read side
-// (`manifold_node_engine::scene::world_tiles::READ_SIDE`).
+// (`manifold_node_engine::scene::world_tiles::READ_SIDE`) and the water's
+// (the same read side renamed sim_ts_ / SIM_WT_).
 //
 // The build bins one buffer of liquid particle records: this frame's
 // particles, foam and spray (copied in, `head` records), then one keep record
-// per slot of the pool. A keep record is a point at the middle of a tile that
-// water touched within `keep_seconds`, so the next build still holds that tile
-// and its slot (wetness lives in slots, and a wet tile must keep its own).
+// per slot of the pool, then GPU FLIP Narrow Band's interior records. A keep
+// record is a point at the middle of a tile that water touched within
+// `keep_seconds`, so the next build still holds that tile and its slot
+// (wetness lives in slots, and a wet tile must keep its own). An interior
+// record holds the display tiles over grid water no particle marks.
 //
-// Passes, a barrier between each; `st_reset` runs only on a fresh start:
+// Passes, a barrier between each; `st_reset` runs only on a fresh start and
+// `st_interior` only with an interior:
 //   st_reset   every slot untouched, every keep record empty
+//   st_interior one record an octant of each water slot
 //   (the build)
 //   st_carry   a slot that holds another tile than last frame, or was free,
 //              forgets when water last touched it; the extent starts empty
@@ -31,9 +36,10 @@ struct Params {
     keep_seconds: f32,
     // h, the display cell size.
     cell: f32,
-    pad0: u32,
-    pad1: u32,
-    pad2: u32,
+    // The water's pool and cell size, and the first interior record.
+    sim_pool_tiles: u32,
+    sim_cell: f32,
+    interior_at: u32,
 }
 
 struct Point {
@@ -58,6 +64,14 @@ struct Point {
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_entries() -> u32 { let n = 4u * max(params.pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
+
+// The step's grid interior (negative under water) on its own table.
+@group(0) @binding(7) var<storage, read> interior: array<f32>;
+@group(0) @binding(8) var<storage, read> interior_tiles: array<u32>;
+
+fn sim_ts_pool_tiles() -> u32 { return params.sim_pool_tiles; }
+fn sim_ts_table_entries() -> u32 { let n = 4u * max(params.sim_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn sim_ts_table_word(i: u32) -> u32 { return interior_tiles[i]; }
 
 // No stamp: a slot water has not touched since it took its tile.
 const ST_NEVER: u32 = 0xffffffffu;
@@ -168,4 +182,37 @@ fn st_extent() {
     extent[5] = high.y;
     extent[6] = high.z;
     extent[7] = 0.0;
+}
+
+// Record i is octant i % 8 of water slot i / 8: a point at the octant's middle
+// when any of its 64 cells holds grid water, else empty. Water cell c is
+// centred on c·h_water, so an octant's middle is 1.5 cells past its first.
+// An octant is at most 16 display cells a side (the scale is at most 4), so
+// its middle's tile and the ring round it cover every display tile it
+// touches.
+@compute @workgroup_size(256)
+fn st_interior(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= 8u * params.sim_pool_tiles {
+        return;
+    }
+    let slot = i >> 3u;
+    var record = st_empty_record();
+    if sim_ts_slot_entry(slot) != SIM_WT_NONE {
+        let octant = 4u * vec3<u32>(i & 1u, (i >> 1u) & 1u, (i >> 2u) & 1u);
+        var wet = false;
+        for (var k = 0u; k < 64u; k = k + 1u) {
+            let local = octant + vec3<u32>(k & 3u, (k >> 2u) & 3u, k >> 4u);
+            if interior[slot * 512u + local.x + 8u * local.y + 64u * local.z] < 0.0 {
+                wet = true;
+                break;
+            }
+        }
+        if wet {
+            let first = sim_ts_slot_tile(slot) * 8 + vec3<i32>(octant);
+            let middle = (vec3<f32>(first) + vec3<f32>(1.5)) * params.sim_cell;
+            record.position_radius = vec4<f32>(middle, params.cell);
+        }
+    }
+    points[params.interior_at + i] = record;
 }

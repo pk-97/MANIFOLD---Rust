@@ -110,6 +110,9 @@ pub(crate) struct WaterScene {
     /// [`render_def`] draws it, since the coupling is the render scene's.
     #[allow(dead_code)]
     pub obstacle: bool,
+    /// GPU FLIP Narrow Band: particles only near the surface, the deep water
+    /// on the step's grid, drawn through `node.interior_fill`.
+    pub narrow_band: bool,
 }
 }
 
@@ -149,6 +152,16 @@ impl WaterScene {
             volume_projection: false,
             closed_faces: 63,
             obstacle: false,
+            narrow_band: false,
+        }
+    }
+
+    /// The scene with Narrow Band on.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn with_narrow_band(self) -> Self {
+        Self {
+            narrow_band: true,
+            ..self
         }
     }
 
@@ -605,6 +618,12 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, state, &["ticks", "epoch", "simulation_time", "target_time", "dropped_seconds"]);
     let particles: Port = (state, "out");
     let step = water_step(&mut b, scene, (domain, state));
+    if scene.narrow_band {
+        // The grid's water and the table it lives on leave the tick for the
+        // display.
+        b.wire((step, "interior"), state, "interior_in");
+        b.wire((step, "tiles"), state, "interior_tiles_in");
+    }
     b.wire(particles, step, "particles");
     b.wire((state, "identity"), step, "identity");
     b.wire((step, "identity_out"), state, "identity_in");
@@ -875,8 +894,9 @@ impl WaterScene {
             }
         }
         display_foam(&mut b, frame, water);
-        display_mist_and_wetness(&mut b, surface, water);
-        let dots = display_dots(&mut b, frame, surface, water);
+        let level_set = drawn_level_set(&b, self, surface);
+        display_mist_and_wetness(&mut b, level_set, water);
+        let dots = display_dots(&mut b, frame, (surface, level_set), water);
         b.wire((dots, "object"), output, DOTS_OUTPUT);
         // Resolve durations inside the domain-owning scope before it is wrapped.
         feed_intervals(&b.nodes, &mut b.wires, domain as u32);
@@ -1355,7 +1375,9 @@ fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
 
 /// The liquid's field on the display's own world tiles: the display table
 /// from frame B's particles at the scene's surface scale, the solid on it at
-/// the bodies' current poses, and the surface group over both.
+/// the bodies' current poses, and the surface group over both. With Narrow
+/// Band the table also holds the grid's water and the field is filled from
+/// it ([`drawn_level_set`]).
 fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     let domain = b.id("domain");
     let tiles = b.node(
@@ -1386,7 +1408,32 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     b.wire((solid, "solid"), id, "solid");
     on_display_tiles(b, tiles, id);
     b.wire((domain, "cell_size"), id, "sim_cell_size");
-    (id, "level_set")
+    if !scene.narrow_band {
+        return (id, "level_set");
+    }
+    let state = b.id("state");
+    let fill = b.node(INTERIOR_FILL, "node.interior_fill", json!({}));
+    for node in [tiles, fill] {
+        b.wire((state, "interior"), node, "interior");
+        b.wire((state, "interior_tiles"), node, "interior_tiles");
+    }
+    b.wire((id, "level_set"), fill, "levelset");
+    on_display_tiles(b, tiles, fill);
+    b.wire((domain, "cell_size"), fill, "sim_cell_size");
+    (fill, "out")
+}
+
+/// Narrow Band's fill of the surface's level set.
+const INTERIOR_FILL: &str = "interior_fill";
+
+/// The level set the water is drawn from: the surface group's, filled from
+/// the grid's water when the scene runs Narrow Band.
+fn drawn_level_set(b: &Builder, scene: WaterScene, surface: usize) -> Port {
+    if scene.narrow_band {
+        (b.id(INTERIOR_FILL), "out")
+    } else {
+        (surface, "level_set")
+    }
 }
 
 /// The domain's own values of `wires` for the scene as params, plus
@@ -1469,6 +1516,15 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
         ],
     );
     b.wire((domain, "body_rows"), step, "rows");
+    if scene.narrow_band {
+        find_node_mut(&mut b.nodes, STEP_NODE)
+            .expect("the step")
+            .params
+            .insert(
+                "narrow_band".into(),
+                serde_json::from_value(int(1)).expect("narrow band"),
+            );
+    }
     step
 }
 
@@ -1610,7 +1666,7 @@ fn display_foam(b: &mut Builder, frame: usize, water: usize) {
 /// held in the display table) and the surface's remembered wetness on that
 /// table, each behind the switch that feeds it to the water object (off in
 /// Physics View, which hides the water).
-fn display_mist_and_wetness(b: &mut Builder, surface: usize, water: usize) {
+fn display_mist_and_wetness(b: &mut Builder, level_set: Port, water: usize) {
     let tiles = b.id(DISPLAY_TILES);
     let spray = b.id("spray_blend");
     let domain = b.id("domain");
@@ -1626,7 +1682,7 @@ fn display_mist_and_wetness(b: &mut Builder, surface: usize, water: usize) {
     );
     b.wire((spray, "out"), tiles, "spray");
     b.wire((spray, "out"), mist, "particles");
-    b.wire((surface, "level_set"), wetness, "field");
+    b.wire(level_set, wetness, "field");
     b.wire((domain, "display_time"), wetness, "time");
     b.wire((domain, "epoch"), wetness, "epoch");
     for node in [mist, wetness] {
@@ -1644,7 +1700,12 @@ fn display_mist_and_wetness(b: &mut Builder, surface: usize, water: usize) {
 
 /// Physics View: the switches between the surface and the particle dots,
 /// and the dots object. Returns the dots object.
-fn display_dots(b: &mut Builder, frame: usize, surface: usize, water: usize) -> usize {
+fn display_dots(
+    b: &mut Builder,
+    frame: usize,
+    (surface, level_set): (usize, Port),
+    water: usize,
+) -> usize {
     // Physics View: the surface's field sits on in_0 of its switches and the
     // dots on in_1 of theirs, so the card prunes whichever side is off. In
     // Physics View the water is hidden and reads no field. An unwired choice
@@ -1652,12 +1713,7 @@ fn display_dots(b: &mut Builder, frame: usize, surface: usize, water: usize) -> 
     // The table is u32 words, so its switch is the u32 one.
     let tiles = b.id(DISPLAY_TILES);
     for (name, kind, from, to) in [
-        (
-            FIELD_SWITCH,
-            "node.switch_array",
-            (surface, "level_set"),
-            "field",
-        ),
+        (FIELD_SWITCH, "node.switch_array", level_set, "field"),
         (
             VELOCITY_SWITCH,
             "node.switch_array",
@@ -1684,7 +1740,7 @@ fn display_dots(b: &mut Builder, frame: usize, surface: usize, water: usize) -> 
     // The surface's own mesh: the renderer draws its depth and marches each
     // ray only round it.
     let mesh = b.node("water_mesh", "node.tile_surface_mesh", json!({}));
-    b.wire((surface, "level_set"), mesh, "levelset");
+    b.wire(level_set, mesh, "levelset");
     on_display_tiles(b, tiles, mesh);
     let switch = b.node(
         VERTICES_SWITCH,

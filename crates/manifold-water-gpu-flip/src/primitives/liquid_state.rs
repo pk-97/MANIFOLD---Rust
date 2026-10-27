@@ -73,6 +73,16 @@ const RESULTS: &[SubstepResultPorts] = &[
         output: "identity",
         optional: true,
     },
+    SubstepResultPorts {
+        capture: "interior_in",
+        output: "interior",
+        optional: true,
+    },
+    SubstepResultPorts {
+        capture: "interior_tiles_in",
+        output: "interior_tiles",
+        optional: true,
+    },
 ];
 
 /// The region's contract: the tick's index in the epoch.
@@ -170,6 +180,8 @@ manifold_node_engine::primitive! {
         bubble_particles_in: Array(FluidParticle) optional,
         spray_particles_in: Array(FluidParticle) optional,
         dust_particles_in: Array(FluidParticle) optional,
+        interior_in: Array(f32) optional,
+        interior_tiles_in: Array(u32) optional,
         count: ScalarF32 optional,
         whitewater_capacity: ScalarF32 optional,
         ticks: ScalarF32 optional,
@@ -190,12 +202,16 @@ manifold_node_engine::primitive! {
         bubble_particles: Array(FluidParticle),
         spray_particles: Array(FluidParticle),
         dust_particles: Array(FluidParticle),
+        // GPU FLIP Narrow Band's grid interior and the step's table it is
+        // stored on, as the tick's last step left them.
+        interior: Array(f32),
+        interior_tiles: Array(u32),
         tick_index: ScalarF32,
         fault: ScalarF32,
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in. out and stats escape to node.liquid_frame.",
+    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in. out and stats escape to node.liquid_frame. With GPU FLIP Narrow Band on, wire the step's interior and tiles into interior_in and interior_tiles_in: the display reads them from interior and interior_tiles, each the size the step's pool gives it.",
     examples: [],
     picker: { label: "Liquid State", category: Atom },
     summary: "Keeps a particle liquid between frames and runs one pass of its simulation per tick.",
@@ -229,6 +245,8 @@ manifold_node_engine::primitive! {
         bubble_particles: Option<GpuBuffer> = None,
         spray_particles: Option<GpuBuffer> = None,
         dust_particles: Option<GpuBuffer> = None,
+        interior: Option<GpuBuffer> = None,
+        interior_tiles: Option<GpuBuffer> = None,
         whitewater_capacity: u32 = 0,
     },
 }
@@ -412,6 +430,8 @@ impl Primitive for LiquidState {
             "bubble_particles_in",
             "spray_particles_in",
             "dust_particles_in",
+            "interior_in",
+            "interior_tiles_in",
         ]
     }
 
@@ -428,6 +448,8 @@ impl Primitive for LiquidState {
             "bubble_particles",
             "spray_particles",
             "dust_particles",
+            "interior",
+            "interior_tiles",
         ]
     }
 
@@ -442,6 +464,8 @@ impl Primitive for LiquidState {
                 | "bubble_particles"
                 | "spray_particles"
                 | "dust_particles"
+                | "interior"
+                | "interior_tiles"
         )
     }
 
@@ -455,6 +479,8 @@ impl Primitive for LiquidState {
             "bubble_particles" => self.bubble_particles.as_ref(),
             "spray_particles" => self.spray_particles.as_ref(),
             "dust_particles" => self.dust_particles.as_ref(),
+            "interior" => self.interior.as_ref(),
+            "interior_tiles" => self.interior_tiles.as_ref(),
             _ => None,
         }
     }
@@ -479,7 +505,8 @@ impl Primitive for LiquidState {
             "clock_status" => Some(8),
             // Provided storage: a one-record hint, sized at run time.
             "whitewater_pool" | "whitewater_state" | "whitewater_counts" | "foam_particles"
-            | "bubble_particles" | "spray_particles" | "dust_particles" => Some(1),
+            | "bubble_particles" | "spray_particles" | "dust_particles" | "interior"
+            | "interior_tiles" => Some(1),
             _ => None,
         }
     }
@@ -718,6 +745,39 @@ impl Primitive for LiquidState {
                 ctx.gpu_encoder()
                     .native_enc
                     .copy_buffer_to_buffer(candidate, state, size);
+            }
+        }
+        // The interior and its table follow the step's pool: held at the
+        // candidate's size, so a reader takes the pool from the length.
+        for (candidate, port) in [
+            ("interior_in", "interior"),
+            ("interior_tiles_in", "interior_tiles"),
+        ] {
+            let held = if port == "interior" {
+                &mut self.interior
+            } else {
+                &mut self.interior_tiles
+            };
+            let Some(candidate) = ctx.inputs.array(candidate) else {
+                *held = None;
+                continue;
+            };
+            let gpu = ctx.gpu_encoder();
+            if held.as_ref().is_none_or(|held| held.size != candidate.size) {
+                *held = None;
+                match create_shared_buffer(gpu.device, candidate.size) {
+                    Ok(buffer) => *held = Some(buffer),
+                    Err(error) => {
+                        ctx.error(format!(
+                            "Liquid State: the {port} could not be held: {error}"
+                        ));
+                        continue;
+                    }
+                }
+            }
+            if let Some(held) = held.as_ref() {
+                gpu.native_enc
+                    .copy_buffer_to_buffer(candidate, held, candidate.size);
             }
         }
         self.captures += 1;

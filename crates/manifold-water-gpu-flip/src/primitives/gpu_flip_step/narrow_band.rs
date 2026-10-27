@@ -84,13 +84,18 @@ impl NarrowBand {
         self.scan.prepare(device);
     }
 
-    /// This run's mode from the Narrow Band switch: on, the restore after
-    /// it was on, or off.
-    pub(super) fn mode(&self, on: bool) -> u32 {
-        match (on, self.was_on) {
-            (true, _) => ON,
-            (false, true) => RESTORE,
-            (false, false) => 0,
+    /// This run's pool and mode from the step's `next` pool and the Narrow
+    /// Band switch: on, the restore after it was on, or off. The grid's water
+    /// lives on the band's pool and does not move to another, so while the
+    /// band holds water on a pool other than `next`, the run stays on that
+    /// pool once more and restores the water with particles; the band starts
+    /// over on `next` the run after.
+    pub(super) fn plan(&self, on: bool, next: u32) -> (u32, u32) {
+        match (&self.storage, on, self.was_on) {
+            (Some(storage), _, true) if storage.pool_tiles != next => (storage.pool_tiles, RESTORE),
+            (_, true, _) => (next, ON),
+            (_, false, true) => (next, RESTORE),
+            (_, false, false) => (next, 0),
         }
     }
 
@@ -139,13 +144,11 @@ impl NarrowBand {
         self.storage.as_ref().map(|s| &s.grid)
     }
 
-    /// The kept words for the next build, while the band is on (a restore
-    /// keeps none: the particles it adds hold their own tiles).
+    /// The kept words for the build, while the band runs: the grid's water
+    /// holds its tiles, so a restore reaches the water it refills. A restore
+    /// writes none after it; the particles it adds hold their own tiles.
     pub(super) fn kept(&self, mode: u32) -> Option<&GpuBuffer> {
-        self.storage
-            .as_ref()
-            .filter(|_| mode == ON)
-            .map(|s| &s.kept)
+        self.storage.as_ref().filter(|_| mode != 0).map(|s| &s.kept)
     }
 
     fn storage(&self) -> &Storage {

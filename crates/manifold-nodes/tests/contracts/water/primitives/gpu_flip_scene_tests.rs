@@ -151,7 +151,7 @@ impl Run {
             (node_named(&graph, "stats"), "stats_out"),
         ]);
         if scene.surface {
-            read.push((node_ending(&graph, "liquid_carry_into_solids"), "out"));
+            read.push((node_ending(&graph, drawn_level_set(scene)), "out"));
         }
         for &(node, port) in &read {
             graph
@@ -197,7 +197,7 @@ impl Run {
             self.scene.surface_scale, 1,
             "the lattice read assumes the default surface scale"
         );
-        let carry = node_ending(&self.graph, "liquid_carry_into_solids");
+        let carry = node_ending(&self.graph, drawn_level_set(self.scene));
         let resource = output_of(&self.plan, carry, "out");
         let elements = self
             .exec
@@ -906,6 +906,49 @@ fn gpu_flip_still_pool_keeps_its_level_set_volume() {
         drift < 5e-3,
         "a resting pool's level-set volume moved {:.3}%",
         100.0 * drift
+    );
+}
+
+/// The node whose `out` is the drawn level set: the surface group's, or
+/// Narrow Band's fill of it.
+fn drawn_level_set(scene: WaterScene) -> &'static str {
+    if scene.narrow_band {
+        "interior_fill"
+    } else {
+        "liquid_carry_into_solids"
+    }
+}
+
+/// Narrow Band on a pool 3 m deep at 64³: the water more than 12 cells from
+/// the surface, the floor and every wall (40 × 24 × 40 of its 64 × 48 × 64
+/// cells) keeps no particles, while the drawn water, its shell from the band's
+/// particles and its body from the grid, holds the full particle run's volume
+/// within the still pool's 0.5%. The step's pool shrinks to fit the water on
+/// the second tick, which the band crosses by refilling its grid's water with
+/// particles for that tick.
+#[test]
+fn gpu_flip_narrow_band_drops_the_deep_particles_and_keeps_the_volume() {
+    let scene = WaterScene::deep_pool(64).with_surface();
+    let mut full = Run::new(scene);
+    let mut band = Run::new(scene.with_narrow_band());
+    for _ in 0..30 {
+        full.frame();
+        band.frame();
+    }
+    let (kept, all) = (band.particles().len(), full.particles().len());
+    let ((v_band, _), (v_full, _)) = (band.surface_measure(), full.surface_measure());
+    println!(
+        "Narrow Band deep pool, frame 30: {kept} of {all} particles ({:.1}%), drawn volume {v_band:.4} m³ vs {v_full:.4} m³ ({:+.3}%)",
+        100.0 * kept as f64 / all as f64,
+        100.0 * (v_band / v_full - 1.0)
+    );
+    assert!(
+        (kept as f64) < 0.9 * all as f64,
+        "the band kept {kept} of {all} particles"
+    );
+    assert!(
+        (v_band / v_full - 1.0).abs() < 5e-3,
+        "the band draws {v_band:.4} m³ where the full run draws {v_full:.4} m³"
     );
 }
 

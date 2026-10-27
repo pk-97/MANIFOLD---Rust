@@ -26,6 +26,9 @@ SURFACE = C / "manifold-water-surface/src/primitives/shaders"
 SCENE = C / "manifold-nodes-scene/src/node_graph/primitives/shaders"
 
 WORLD_READ = C / "manifold-node-engine/src/scene/world_tiles_read.wgsl"
+# A second table's read side, as `surface_tiles.rs` and `interior_fill.rs`
+# compose it: the same text renamed sim_ts_ / SIM_WT_.
+SIM_READ = WORLD_READ.read_text().replace("ts_", "sim_ts_").replace("WT_", "SIM_WT_")
 # The read side's includer contract, as a hand shader defines it.
 WORLD_READ_STUB = """@group(0) @binding(0) var<storage, read> ts_table: array<u32>;
 fn ts_pool_tiles() -> u32 { return 3u; }
@@ -215,7 +218,8 @@ STACKS = {
     "world_tiles_kept": (False, [WORLD_READ, LIQ / "world_tiles_kept.wgsl", LIQ / "world_tiles.wgsl"]),
     "world_tiles_parents": (False, [WORLD_READ, LIQ / "world_tiles_parents.wgsl",
                                     LIQ / "world_tiles.wgsl"]),
-    "surface_tiles": (False, [WORLD_READ, SURF / "surface_tiles.wgsl"]),
+    "surface_tiles": (False, [WORLD_READ, SIM_READ, SURF / "surface_tiles.wgsl"]),
+    "interior_fill": (False, [WORLD_READ, SIM_READ, SURF / "interior_fill.wgsl"]),
     "surface_wetness": (False, [WORLD_READ, SURF / "surface_wetness.wgsl"]),
     "foam_cover": (False, [WORLD_READ, WW / "particle_splat.wgsl", WW / "foam_cover.wgsl"]),
     "spray_mist": (False, [WORLD_READ, WW / "particle_splat.wgsl", WW / "spray_mist.wgsl"]),

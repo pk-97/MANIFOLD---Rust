@@ -96,8 +96,27 @@ impl Rig {
 
     /// One frame at display `time` and `epoch` over `points`.
     fn run(&mut self, points: &[[f32; 3]], time: f32, epoch: f32) -> Built {
+        self.run_with(points, time, epoch, H, None)
+    }
+
+    /// [`Self::run`] for water of `sim_cell` metres at the display cell `H`,
+    /// with a grid `interior` (its pool values, then its table words).
+    fn run_with(
+        &mut self,
+        points: &[[f32; 3]],
+        time: f32,
+        epoch: f32,
+        sim_cell: f32,
+        interior: Option<(&[f32], &[u32])>,
+    ) -> Built {
         let records: Vec<FluidParticle> = points.iter().map(|&p| particle(p)).collect();
         let (particles, _) = self.harness.array(&records, CAPACITY);
+        let interior = interior.map(|(values, words)| {
+            (
+                self.harness.array(values, values.len()).0,
+                self.harness.array(words, words.len()).0,
+            )
+        });
         self.harness
             .backend
             .set_scalar(self.time, ParamValue::Float(time));
@@ -105,17 +124,21 @@ impl Rig {
             .backend
             .set_scalar(self.epoch, ParamValue::Float(epoch));
         let run_params = params(&[
-            ("sim_cell_size", H),
-            ("resolution_scale", 1.0),
+            ("sim_cell_size", sim_cell),
+            ("resolution_scale", (sim_cell / H).round()),
             ("keep_seconds", KEEP),
         ]);
+        let mut inputs = vec![
+            ("particles", particles),
+            ("time", self.time),
+            ("epoch", self.epoch),
+        ];
+        if let Some((values, words)) = interior {
+            inputs.extend([("interior", values), ("interior_tiles", words)]);
+        }
         let (scalars, errors) = self.harness.run(
             &mut self.node,
-            &[
-                ("particles", particles),
-                ("time", self.time),
-                ("epoch", self.epoch),
-            ],
+            &inputs,
             &[
                 ("tiles", self.tiles),
                 ("extent", self.extent),
@@ -184,6 +207,56 @@ fn the_tiles_of_points_either_side_of_the_origin_and_their_ring_are_held() {
             0.0
         ]
     );
+}
+
+/// Narrow Band's grid water holds the display tiles over it with no
+/// particle there: water three display cells to a water cell, in one octant
+/// of a water tile across the origin, holds the ring round the display tile
+/// of the octant's middle, which covers every display cell the octant's water
+/// reaches; the air elsewhere holds nothing.
+#[test]
+fn the_grid_interior_holds_the_display_tiles_over_its_water() {
+    let sim_cell = 3.0 * H;
+    let water = manifold_water_liquid::testkit::world_box::BoxTable::new([-8, 0, 0], [16, 8, 8]);
+    // World cells x -4..=-1, y and z 0..=3: octant (1, 0, 0) of water tile
+    // (-1, 0, 0).
+    let wet = |c: [i32; 3]| {
+        (-4..=-1).contains(&c[0]) && (0..=3).contains(&c[1]) && (0..=3).contains(&c[2])
+    };
+    let cells = water.cells.map(|n| n as i32);
+    let dense: Vec<f32> = (0..cells.iter().product::<i32>())
+        .map(|i| {
+            let c = [
+                water.origin[0] + i % cells[0],
+                water.origin[1] + (i / cells[0]) % cells[1],
+                water.origin[2] + i / (cells[0] * cells[1]),
+            ];
+            if wet(c) { -sim_cell } else { sim_cell }
+        })
+        .collect();
+    let values = water.to_pool(&dense, 3.0 * sim_cell);
+    let mut rig = Rig::new();
+    let built = rig.run_with(&[], 10.0, 0.0, sim_cell, Some((&values, &water.words)));
+    let middle = [-2.5, 1.5, 1.5].map(|c: f32| c * sim_cell);
+    assert_eq!(built.tiles(), ring(&[tile_of(middle)]));
+    // Water cell c spans (c ± 1/2)·h_water; every display cell centred in the
+    // octant's water is held.
+    let held = built.tiles();
+    for z in 0..12 {
+        for y in 0..12 {
+            for x in 0..12 {
+                let at = [
+                    (-4.5 * sim_cell) + (x as f32 + 0.5) * H,
+                    (-0.5 * sim_cell) + (y as f32 + 0.5) * H,
+                    (-0.5 * sim_cell) + (z as f32 + 0.5) * H,
+                ];
+                assert!(
+                    held.contains(&tile_of(at)),
+                    "display cell at {at:?} is not held"
+                );
+            }
+        }
+    }
 }
 
 #[test]
