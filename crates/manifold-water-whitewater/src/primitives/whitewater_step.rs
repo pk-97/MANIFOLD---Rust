@@ -595,7 +595,7 @@ pub(crate) struct Removal {
     pub kill_height: f32,
 }}
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(all(test, feature = "gpu-proofs"))]
 impl Removal {
     /// Nothing leaves: no Open face and no kill height.
     pub(crate) const NONE: Self = Self {

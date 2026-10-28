@@ -400,6 +400,7 @@ pub(super) fn advect(
 
 /// `node.retype_whitewater` for one slot, and the smallest gap between a
 /// deciding value and its threshold, in cells.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn retype(
     particle: WhitewaterParticle,
     f: &Fields<'_>,

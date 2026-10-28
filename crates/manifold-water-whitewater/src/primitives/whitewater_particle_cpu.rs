@@ -14,7 +14,7 @@ use manifold_node_engine::particles::FluidParticle;
 #[cfg(test)]
 use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 use manifold_water_liquid::grid::face_dims;
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 use manifold_water_liquid::whitewater::{CELL_AIR, KnownValue};
 
 /// A whitewater grid as the particle atoms read it.
@@ -81,13 +81,13 @@ fn corner_weight(f: [f32; 3], c: usize) -> f32 {
         .product()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
 }
 
 /// `node.jitter_particles` for slot `idx`.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn jitter(
     p: FluidParticle,
     idx: u32,
@@ -160,7 +160,7 @@ pub(super) fn sample_faces(
 }
 
 /// `node.energy_potential`.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn energy(p: FluidParticle, min: f32, max: f32) -> f32 {
     if p.position_radius[3] <= 0.0 || max <= min {
         return 0.0;
@@ -174,7 +174,7 @@ pub(super) fn energy(p: FluidParticle, min: f32, max: f32) -> f32 {
 
 /// FLIP's wavecrest limits.
 #[derive(Clone, Copy)]
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) struct Crest {
     pub min_curvature: f32,
     pub max_curvature: f32,
@@ -184,7 +184,7 @@ pub(super) struct Crest {
 /// `node.wavecrest_potential`, and the smallest gap between a thresholded
 /// quantity and its threshold on the way there (in that quantity's units,
 /// relative where it has a scale).
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn wavecrest(
     p: FluidParticle,
     distance: &[f32],
@@ -452,7 +452,7 @@ pub(super) fn spawn(
 
 /// `node.whitewater_type` for one record, and the smallest gap between a
 /// deciding value and its threshold, in cells.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn kind(
     spawn: WhitewaterSpawn,
     distance: &[f32],

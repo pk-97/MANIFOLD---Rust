@@ -10,25 +10,32 @@
 // The GPU proofs (`whitewater_grid_tests`, feature gpu-proofs) call every
 // item here; a default test build compiles only the extrapolation check.
 
+#[cfg(all(test, feature = "gpu-proofs"))]
 use manifold_water_liquid::fluid_particles::FaceSample;
-use manifold_water_liquid::whitewater::{CELL_AIR, CELL_LIQUID, CELL_SOLID, KnownValue};
+#[cfg(all(test, feature = "gpu-proofs"))]
+use manifold_water_liquid::whitewater::{CELL_AIR, CELL_LIQUID, CELL_SOLID};
+use manifold_water_liquid::whitewater::KnownValue;
 
 /// The canonical liquid distance for cells of `h` metres: air, three cells out.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn canonical_distance(h: f32) -> f32 {
     3.0 * h
 }
 
 /// The canonical surface distance, five cells out.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn canonical_surface(h: f32) -> f32 {
     5.0 * h
 }
 
 /// The canonical solid distance: far from every wall.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) const CANONICAL_SOLID: f32 = 1e30;
 
 /// A whitewater grid over a solid lattice of `nodes`.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Grid {
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub nodes: [u32; 3],
     pub cells: [u32; 3],
 }
@@ -36,6 +43,7 @@ pub(super) struct Grid {
 impl Grid {
     pub fn new(nodes: [u32; 3]) -> Self {
         Self {
+            #[cfg(all(test, feature = "gpu-proofs"))]
             nodes,
             cells: nodes.map(|n| n - 1),
         }
@@ -69,6 +77,7 @@ impl Grid {
     }
 
     /// The solid at cell `c`'s eight corners, bit 0 x, bit 1 y, bit 2 z.
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn corners(&self, solid: &[f32], c: [u32; 3]) -> [f32; 8] {
         let [nx, ny, _] = self.nodes.map(|n| n as usize);
         std::array::from_fn(|corner| {
@@ -78,11 +87,13 @@ impl Grid {
         })
     }
 
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn centre(c: [u32; 3]) -> [f32; 3] {
         c.map(|v| v as f32 + 0.5)
     }
 }
 
+#[cfg(all(test, feature = "gpu-proofs"))]
 fn cell_kind(grid: &Grid, distance: &[f32], solid: &[f32], c: [u32; 3]) -> u32 {
     let solid: f32 = grid.corners(solid, c).iter().sum();
     if 0.125 * solid < 0.0 {
@@ -96,6 +107,7 @@ fn cell_kind(grid: &Grid, distance: &[f32], solid: &[f32], c: [u32; 3]) -> u32 {
 
 /// `node.liquid_cells` for one cell. A face neighbour outside the grid is the
 /// canonical element, air.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn liquid_cell(grid: &Grid, distance: &[f32], solid: &[f32], c: [u32; 3]) -> u32 {
     let own = cell_kind(grid, distance, solid, c);
     if own != CELL_LIQUID {
@@ -110,6 +122,7 @@ pub(super) fn liquid_cell(grid: &Grid, distance: &[f32], solid: &[f32], c: [u32;
 
 /// `node.lattice_curvature` for one cell. A cell outside the grid has the
 /// canonical surface distance, outside the band.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn lattice_curvature(grid: &Grid, distance: &[f32], h: f32, c: [u32; 3]) -> KnownValue {
     let unknown = KnownValue {
         value: 0.0,
@@ -198,6 +211,7 @@ pub(super) fn extend_lattice(grid: &Grid, values: &[KnownValue], c: [u32; 3]) ->
 /// record of each cell of the grid's nodes box (cell `n` of the cells box is
 /// record `n`, its low faces); a record outside the box is the canonical one,
 /// no weight and so no velocity.
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(super) fn turbulence_field(
     grid: &Grid,
     distance: &[f32],
