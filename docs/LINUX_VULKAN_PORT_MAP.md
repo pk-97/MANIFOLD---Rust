@@ -125,14 +125,14 @@ About 230 `target_os` lines in 36 files. Grouped by what they gate:
 
 | Group | Lines | Files | Linux needs | Phase |
 |---|---|---|---|---|
-| Export, still capture, recording, video and images | ~42 | `content_export.rs` (13), `content_thread.rs` (8), `content_commands.rs` (8), `app.rs` (4). Off-Mac clips get `StubRenderer` (`content_thread.rs` `playback_engine`): no video and no images. `export-repro` and the journey proofs wait with export | FFmpeg decode and encode, then drop the off-Mac `dead_code` allow at the top of `main.rs` | P5 |
+| Export, still capture, recording and video | ~39 | `content_export.rs` (13), `content_thread.rs` (8), `content_commands.rs` (8), `app.rs` (4). Off-Mac video clips get `StubRenderer` (`content_thread.rs` `playback_engine`); image clips play everywhere. `export-repro` and the journey proofs wait with export | FFmpeg decode and encode, then drop the off-Mac `dead_code` allow at the top of `main.rs` | P5 |
 | Clipboard and file paste | ~20 | `input_host.rs` (11), `card_edit.rs`, `ui_snapshot/script.rs`, `window_input.rs`, `app.rs`, `main.rs:111` | Text fields and copy actions use `text_clipboard.rs` (arboard) everywhere. Finder file paste stays Mac-only; winit 0.30 has no file drops on Wayland | P4 |
 | Menus | 2 | `menu.rs:187-197`; seven actions exist only in the menu (`app_render.rs:438-467`) | In-app entries for them, then section 10 item 3 | P4 |
 | Misc | 2 | `main.rs:379,732` (App Nap, nothing on Linux) | Gate stays | Build hygiene |
 
 **Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`, `percussion_backend.rs:210`) wait for Linux packaging (P4).
 
-**Gated until P4 or P5.** On Linux the app compiles with these off: the display link (P4 pacing), the video and image decoders and video prewarm, video and still export, and live recording (P5). The headless harness, its tests, `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `ui-snap` build everywhere.
+**Gated until P4 or P5.** On Linux the app compiles with these off: the display link (P4 pacing), the video decoder and video prewarm, video and still export, and live recording (P5). The headless harness, its tests, `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `ui-snap` build everywhere.
 
 ---
 

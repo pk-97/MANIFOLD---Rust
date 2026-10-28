@@ -14,7 +14,6 @@ mod decoder_ffi;
 pub mod export_config;
 pub mod export_session;
 pub mod frame_rate;
-#[cfg(target_os = "macos")]
 pub mod image_renderer;
 pub mod metadata;
 #[cfg(target_os = "macos")]

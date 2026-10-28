@@ -268,7 +268,7 @@ pub struct ContentThread {
 
 /// The engine every content thread plays `project` with, at `w × h`: video
 /// (the Mac's decoder; a stand-in elsewhere until video decode lands), still
-/// images on the Mac, and generators, with the live-clip sink installed.
+/// images, and generators, with the live-clip sink installed.
 pub(crate) fn playback_engine(
     device: &Arc<manifold_gpu::GpuDevice>,
     project: manifold_core::project::Project,
@@ -290,7 +290,6 @@ pub(crate) fn playback_engine(
         // Static-image clips. Claims clips with an `image_path`;
         // GeneratorRenderer explicitly excludes those so dispatch is
         // order-independent, but image stays ahead of it anyway.
-        #[cfg(target_os = "macos")]
         Box::new(manifold_media::image_renderer::ImageRenderer::new(
             Arc::clone(device),
             w,

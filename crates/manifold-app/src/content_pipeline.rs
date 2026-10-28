@@ -2440,7 +2440,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 {
                     return Some(t);
                 }
-                #[cfg(target_os = "macos")]
                 if let Some(img_r) = r
                     .as_any()
                     .downcast_ref::<manifold_media::image_renderer::ImageRenderer>()
@@ -2852,7 +2851,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                                 return Some(t);
                             }
                         }
-                        #[cfg(target_os = "macos")]
                         if let Some(i) = r
                             .as_any()
                             .downcast_ref::<manifold_media::image_renderer::ImageRenderer>()
@@ -3558,7 +3556,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.output_h = height;
         // Image resizing schedules a CPU re-fit; its old texture stays visible
         // until the asynchronous replacement is ready.
-        #[cfg(target_os = "macos")]
         for renderer in renderers {
             if let Some(image) = renderer
                 .as_any_mut()
