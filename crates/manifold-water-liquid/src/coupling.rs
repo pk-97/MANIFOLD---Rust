@@ -51,6 +51,10 @@ struct Coupled {
     face_area: f32,
     /// The water's slip friction along this body ([`set_friction`]).
     friction: f32,
+    /// A Fixed body (a Collider): Box3D moves it by teleport, so the water
+    /// takes its motion from its pose change over each tick
+    /// ([`fixed_motion`]).
+    fixed: bool,
     /// The world's shape revision of this body the geometry was built from;
     /// an in-place reshape bumps it and the geometry is built again.
     revision: u32,
@@ -636,6 +640,35 @@ fn set_friction(bodies: &mut [Coupled], inputs: &RigidSceneInputs) {
         body.friction = source
             .filter(|body| body.kind != 0)
             .map_or(0.0, |body| body.friction.clamp(0.0, 1.0));
+        body.fixed = source.is_some_and(|body| body.kind == 0);
+    }
+}
+
+/// A Fixed body's motion over a tick of `dt` seconds, from its row at the
+/// tick's start (`before`) to its row now: Box3D teleports a moved Collider
+/// and reports no velocity, so a keyframed paddle would sweep through the
+/// water without pushing it. The linear velocity is the centre's move over
+/// `dt`, the angular one the rotation between the two quaternions over `dt`.
+fn fixed_motion(before: &LiquidBody, now: &mut LiquidBody, dt: f32) {
+    let (a, b) = (before.rotation, now.rotation);
+    for i in 0..3 {
+        now.linear_velocity[i] = (now.position_inv_mass[i] - before.position_inv_mass[i]) / dt;
+    }
+    // b · conj(a), on the short way round.
+    let mut q = [
+        a[3] * b[0] - b[3] * a[0] - (b[1] * a[2] - b[2] * a[1]),
+        a[3] * b[1] - b[3] * a[1] - (b[2] * a[0] - b[0] * a[2]),
+        a[3] * b[2] - b[3] * a[2] - (b[0] * a[1] - b[1] * a[0]),
+        a[3] * b[3] + a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+    ];
+    if q[3] < 0.0 {
+        q = q.map(|v| -v);
+    }
+    let sin = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt();
+    let angle = 2.0 * sin.atan2(q[3]);
+    let scale = if sin > 1e-12 { angle / (sin * dt) } else { 2.0 / dt };
+    for (w, q) in now.angular_velocity.iter_mut().zip(&q[..3]) {
+        *w = q * scale;
     }
 }
 
@@ -703,6 +736,7 @@ fn bind(
             source,
             face_area,
             friction: 0.0,
+            fixed: false,
             revision,
         });
         geometries.push(geometry);
@@ -908,7 +942,16 @@ impl SubstepExchange for &mut LiquidCoupling<'_> {
             epoch: self.expected.epoch,
             tick: self.expected.tick + 1,
         };
+        let before = std::mem::take(self.rows);
         capture_rows(rigid, self.bodies, self.rows, self.contacts)?;
+        if before.len() == self.rows.len() {
+            let dt = self.duration.0 as f32;
+            for ((body, before), now) in self.bodies.iter().zip(&before).zip(self.rows.iter_mut()) {
+                if body.fixed {
+                    fixed_motion(before, now, dt);
+                }
+            }
+        }
         self.finished = true;
         Ok(())
     }
@@ -1084,6 +1127,39 @@ pub trait SharesSolids {
 mod tests {
     use super::*;
     use manifold_physics::PlayedTime;
+
+    /// A Collider moved 0.3 m along x and turned a quarter turn about y over
+    /// a tick moves at 0.3 / dt and turns at (pi/2) / dt, whichever sign its
+    /// quaternion was written with.
+    #[test]
+    fn a_moved_collider_moves_at_its_pose_change_over_the_tick() {
+        let dt = 1.0 / 30.0;
+        let half = std::f32::consts::FRAC_PI_4;
+        let before = LiquidBody {
+            position_inv_mass: [1.0, 2.0, 3.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            ..LiquidBody::default()
+        };
+        for sign in [1.0, -1.0] {
+            let mut now = LiquidBody {
+                position_inv_mass: [1.3, 2.0, 3.0, 0.0],
+                rotation: [0.0, sign * half.sin(), 0.0, sign * half.cos()],
+                ..LiquidBody::default()
+            };
+            fixed_motion(&before, &mut now, dt);
+            let close = |a: f32, b: f32| (a - b).abs() < 1e-3 * b.abs().max(1.0);
+            assert!(close(now.linear_velocity[0], 0.3 / dt), "{:?}", now.linear_velocity);
+            assert!(close(now.linear_velocity[1], 0.0) && close(now.linear_velocity[2], 0.0));
+            let turn = std::f32::consts::FRAC_PI_2 / dt;
+            assert!(close(now.angular_velocity[1], turn), "{:?}", now.angular_velocity);
+            assert!(close(now.angular_velocity[0], 0.0) && close(now.angular_velocity[2], 0.0));
+        }
+        // Standing still: no motion.
+        let mut still = before;
+        fixed_motion(&before, &mut still, dt);
+        assert_eq!(still.linear_velocity[..3], [0.0; 3]);
+        assert_eq!(still.angular_velocity[..3], [0.0; 3]);
+    }
 
     const OPEN: DomainWalls = DomainWalls {
         bounds: None,
