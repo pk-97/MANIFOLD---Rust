@@ -1217,6 +1217,8 @@ pub struct RenderScene {
     prev_positions_dummy: Option<manifold_gpu::GpuBuffer>,
     /// Copies vertex positions into a `prev_positions` buffer after Pass A.
     pack_prev_positions_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    /// Writes the camera's turn into empty velocity pixels after Pass 2.
+    sky_velocity_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     /// Previous frame's scene `view_proj`.
     /// `None` = no history yet (same first-frame seeding rule as
     /// `prev_model`); reset on every `rebuild`.

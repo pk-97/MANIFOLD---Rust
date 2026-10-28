@@ -1347,6 +1347,59 @@ impl RenderScene {
             }
         }
 
+        // Where nothing drew, the velocity output holds the camera's own turn
+        // since last frame, so a pan smears the sky like the scene. Runs after
+        // every other velocity writer, and needs this frame's depth, which
+        // Motion Blur always wires.
+        if let (Some(velocity), Some(depth)) = (velocity_resolve_target, depth_resolve_target)
+            && let Some(inv_view_proj) = super::mat4_inverse(pre.view_proj)
+        {
+            #[repr(C)]
+            #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+            struct SkyVelocityUniforms {
+                inv_view_proj: [[f32; 4]; 4],
+                prev_view_proj: [[f32; 4]; 4],
+                jitter: [f32; 4],
+            }
+            let uniforms = SkyVelocityUniforms {
+                inv_view_proj,
+                prev_view_proj: pre.prev_view_proj,
+                jitter: [
+                    pre.jitter_ndc.0,
+                    pre.jitter_ndc.1,
+                    pre.prev_jitter_ndc.0,
+                    pre.prev_jitter_ndc.1,
+                ],
+            };
+            let gpu = ctx.gpu_encoder();
+            let pipeline = self.sky_velocity_pipeline.get_or_insert_with(|| {
+                gpu.device.create_compute_pipeline(
+                    include_str!("../shaders/sky_velocity.wgsl"),
+                    "cs_main",
+                    "node.render_scene sky velocity",
+                )
+            });
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: depth,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 2,
+                        texture: velocity,
+                    },
+                ],
+                [velocity.width.div_ceil(16), velocity.height.div_ceil(16), 1],
+                "node.render_scene sky velocity",
+            );
+        }
+
         Some((
             target.clone(),
             resolve_target.clone(),

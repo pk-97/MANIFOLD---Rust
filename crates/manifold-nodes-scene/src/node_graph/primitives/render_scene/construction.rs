@@ -61,6 +61,7 @@ impl RenderScene {
             prev_instances: Vec::new(),
             prev_positions_dummy: None,
             pack_prev_positions_pipeline: None,
+            sky_velocity_pipeline: None,
             prev_view_proj: None,
             prev_cam_state: None,
             rendered_camera: None,
