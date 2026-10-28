@@ -33,6 +33,13 @@ const KEY_SIM_RATE: u64 = 71_003;
 const SIM_RATE_TOOLTIP: &str =
     "Simulation updates per second. Hits land up to one update late; kicks are read at this rate.";
 
+fn sim_rate_index(rate: SimRate) -> f32 {
+    SimRate::ALL
+        .iter()
+        .position(|choice| *choice == rate)
+        .expect("rate choice") as f32
+}
+
 fn sim_rate_text(index: f32) -> String {
     format!(
         "{} Hz",
@@ -174,11 +181,8 @@ impl SettingsPopup {
     pub fn sync_sim_rate(&mut self, tree: &mut UITree, rate: SimRate) {
         self.sim_rate = rate;
         if !self.sim_rate_drag.is_dragging() {
-            let index = SimRate::ALL
-                .iter()
-                .position(|r| *r == rate)
-                .expect("rate choice");
-            self.sim_rate_drag.sync(tree, index as f32, &sim_rate_text);
+            self.sim_rate_drag
+                .sync(tree, sim_rate_index(rate), &sim_rate_text);
         }
     }
 
@@ -233,17 +237,13 @@ impl SettingsPopup {
             .child(
                 View::slider_row(SliderSpec {
                     label: Some("Sim Rate".into()),
-                    value: SimRate::ALL
-                        .iter()
-                        .position(|rate| *rate == self.sim_rate)
-                        .expect("rate choice") as f32
-                        / 3.0,
-                    default: 2.0 / 3.0,
+                    value: sim_rate_index(self.sim_rate) / 3.0,
+                    default: sim_rate_index(SimRate::default()) / 3.0,
                     value_text: format!("{} Hz", self.sim_rate.hz()),
                     colors: SliderColors::default_slider(),
                     font_size: BTN_FONT,
                     label_width: LABEL_W,
-                    reset: PanelAction::Project(ProjectAction::SetSimRate(SimRate::Hz30)),
+                    reset: PanelAction::Project(ProjectAction::SetSimRate(SimRate::default())),
                 })
                 .fill_w()
                 .h(Sizing::Fixed(ROW_H))
@@ -542,7 +542,7 @@ impl Overlay for SettingsPopup {
                 node_id: Some(id), ..
             } if self.sim_rate_drag.track_id() == Some(*id) => {
                 OverlayResponse::Consumed(vec![PanelAction::Project(ProjectAction::SetSimRate(
-                    SimRate::Hz30,
+                    SimRate::default(),
                 ))])
             }
             UIEvent::KeyDown {

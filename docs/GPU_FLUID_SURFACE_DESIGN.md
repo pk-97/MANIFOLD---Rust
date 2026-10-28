@@ -848,7 +848,7 @@ interpolation/projection fusion proof; resolve BUG-adcx before claiming full fus
 
 **Sim Rate (built on the BUG-7qzk (live sim clock) owner):** one authored value,
 `ProjectSettings.physics.simRate`, choices 15/20/30/60 Hz. New projects start at
-30 Hz; a saved project without the value loads at 60 Hz, its old behaviour. Water
+60 Hz, and so does a saved project without the value. Water
 uses its project's rate. The project settings slider edits it through the undoable
 `ChangeSimRateCommand`; live and export read the same value and step on the same
 boundary grid (LIVE_SIM_CLOCK_DESIGN.md D7 (Shared Sim Rate)). A rate edit restarts

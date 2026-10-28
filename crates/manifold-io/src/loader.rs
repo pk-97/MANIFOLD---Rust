@@ -1008,7 +1008,7 @@ mod sim_rate_tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("project.manifold");
         let mut project = Project::default();
-        assert_eq!(project.settings.physics.sim_rate, SimRate::Hz30);
+        assert_eq!(project.settings.physics.sim_rate, SimRate::Hz60);
         for rate in SimRate::ALL {
             project.settings.physics.sim_rate = rate;
             crate::saver::save_project_v1(&project, &path).unwrap();

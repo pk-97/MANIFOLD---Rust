@@ -233,17 +233,8 @@ impl Default for RtQualitySettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PhysicsSettings {
-    #[serde(default = "SimRate::legacy")]
+    #[serde(default)]
     pub sim_rate: SimRate,
-}
-
-impl PhysicsSettings {
-    /// Files predating authored physics settings retain their 60 Hz rate.
-    pub const fn legacy() -> Self {
-        Self {
-            sim_rate: SimRate::Hz60,
-        }
-    }
 }
 
 /// Simulation updates per transport second, independent of display/export fps.
@@ -252,16 +243,13 @@ impl PhysicsSettings {
 pub enum SimRate {
     Hz15,
     Hz20,
-    #[default]
     Hz30,
+    #[default]
     Hz60,
 }
 
 impl SimRate {
     pub const ALL: [Self; 4] = [Self::Hz15, Self::Hz20, Self::Hz30, Self::Hz60];
-    pub const fn legacy() -> Self {
-        Self::Hz60
-    }
     pub const fn hz(self) -> u32 {
         match self {
             Self::Hz15 => 15,

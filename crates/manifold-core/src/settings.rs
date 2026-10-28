@@ -14,7 +14,7 @@ pub use manifold_foundation::settings::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSettings {
-    #[serde(default = "PhysicsSettings::legacy")]
+    #[serde(default)]
     pub physics: PhysicsSettings,
     #[serde(default = "default_1920")]
     pub output_width: i32,
@@ -331,15 +331,6 @@ fn default_neg_one_i32() -> i32 {
 }
 fn default_true() -> bool {
     true
-}
-
-impl ProjectSettings {
-    pub fn legacy() -> Self {
-        Self {
-            physics: PhysicsSettings::legacy(),
-            ..Self::default()
-        }
-    }
 }
 
 #[cfg(test)]

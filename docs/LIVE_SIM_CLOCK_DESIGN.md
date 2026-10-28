@@ -70,7 +70,7 @@ The replay evaluates authored values at its own sample times, never holding a fr
 
 **D6 — Lag uses completed time.** Lag=max(target−completed,0), in ms. Successfully stretched time is not lag, and is never subtracted from target. Submitted GPU time is not completed time. Display delay and audio-analysis latency are separate.
 
-**D7 — Shared Sim Rate (Peter, 2026-10-03).** `ProjectSettings.physics.simRate` (shared `manifold_foundation::settings::PhysicsSettings`, re-exported by the physics API) sets one boundary grid for live and export: 15/20/30/60 Hz, new projects 30 Hz, missing saved values 60 Hz, one epoch per undoable rate edit, per-solver stability subdivisions unchanged. Both modes accept the same boundaries, so equal clock inputs give equal intervals; authored values are sampled on them. The display time is the simulation one interval of transport ago, read through the Speed history, so it stays inside the accepted pair however the frames jitter.
+**D7 — Shared Sim Rate (Peter, 2026-10-03).** `ProjectSettings.physics.simRate` (shared `manifold_foundation::settings::PhysicsSettings`, re-exported by the physics API) sets one boundary grid for live and export: 15/20/30/60 Hz, new projects and missing saved values 60 Hz, one epoch per undoable rate edit, per-solver stability subdivisions unchanged. Both modes accept the same boundaries, so equal clock inputs give equal intervals; authored values are sampled on them. The display time is the simulation one interval of transport ago, read through the Speed history, so it stays inside the accepted pair however the frames jitter.
 
 
 ## 3. Clock, events and ownership
