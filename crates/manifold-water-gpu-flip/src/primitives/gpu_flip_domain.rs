@@ -21,6 +21,7 @@
 //! codegen mandate as a CPU bridge (ADDING_PRIMITIVES.md exclusion 3).
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_nodes_physics::force_lattice::felt_field;
@@ -60,7 +61,9 @@ use manifold_water_liquid::coupling::{
     DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, SharedSolids, SharesSolids,
     decode_reaction, takes_reaction,
 };
-use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, take_initial_fill};
+use manifold_water_liquid::fluid_role::{
+    FluidRole, FluidRoleKind, InitialFill, PreparedFluidGeometry, take_initial_fill,
+};
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_liquid::{PARTICLE_RADIUS_CELLS, RolePorts, WATER_DENSITY};
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
@@ -385,7 +388,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 65] = [
+const OUTPUTS: [&str; 66] = [
     "fill_min_x",
     "fill_min_y",
     "fill_min_z",
@@ -451,6 +454,7 @@ const OUTPUTS: [&str; 65] = [
     "wall_velocity_hi_y",
     "wall_velocity_hi_z",
     "pool_tiles",
+    "fill_region",
 ];
 const TICKS: usize = 19;
 const EPOCH: usize = 20;
@@ -584,6 +588,7 @@ manifold_node_engine::primitive! {
         sheet_fill_rate: ScalarF32,
         region_site_total: ScalarF32,
         pool_tiles: ScalarF32,
+        fill_region: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), region_sites: Array(u32), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(f32),
         contacts: Array(f32),
@@ -632,6 +637,9 @@ manifold_node_engine::primitive! {
         // The pool height and the Initial Fill's site range of the grid box
         // this frame ran (the fill gizmos).
         fill_sites: (u32, [[u32; 2]; 3]) = (0, [[0; 2]; 3]),
+        // The shaped Initial Fill's geometry the accepted setup seeded; a new
+        // one restarts the liquid, so the fill seeds the new shape.
+        fill_shape: Option<Arc<PreparedFluidGeometry>> = None,
         // Last frame's Bounds box, None with Bounds off: the walls' velocity
         // is this frame's box against it.
         last_bounds: Option<[[f32; 3]; 2]> = None,
@@ -1131,11 +1139,12 @@ impl GpuFlipDomain {
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
-        fill: Result<Option<Transform>, String>,
+        fill: Result<Option<InitialFill>, String>,
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
         let geometry = fill
             .map_err(|reason| format!("GPU FLIP: {reason}"))
-            .and_then(|column| {
+            .and_then(|fill| {
+                let column = fill.map(|fill| fill.column);
                 gpu_flip_geometry(
                     geometry_read(ctx.params, |name, default| {
                         ctx.scalar_or_param(name, default)
@@ -1143,10 +1152,12 @@ impl GpuFlipDomain {
                     ctx.inputs.transform("domain"),
                     column,
                 )
-                .map(|geometry| (geometry, column))
+                .map(|geometry| (geometry, column, fill.and_then(|fill| fill.shape)))
             });
-        let (geometry, column) = match geometry {
-            Ok((geometry, column)) => (geometry.sized_for(role_kinds(roles)), column),
+        let (geometry, column, shaped) = match geometry {
+            Ok((geometry, column, shaped)) => {
+                (geometry.sized_for(role_kinds(roles)), column, shaped)
+            }
             Err(reason) => {
                 self.setup_report.refuse(&reason);
                 return Err(reason);
@@ -1221,7 +1232,14 @@ impl GpuFlipDomain {
         {
             return Ok(None);
         }
-        let restart = self.setup != Some(geometry.setup) || self.coupled.owner_fresh;
+        let fill_shape = shaped
+            .and_then(|slot| roles[slot].as_ref())
+            .map(|role| Arc::clone(&role.geometry));
+        let reshaped = match (&self.fill_shape, &fill_shape) {
+            (Some(seeded), Some(shape)) => !Arc::ptr_eq(seeded, shape),
+            (seeded, shape) => seeded.is_some() != shape.is_some(),
+        };
+        let restart = self.setup != Some(geometry.setup) || self.coupled.owner_fresh || reshaped;
         // Finish the prior reaction before reusing its buffer. Live and
         // offline share per-tick exchanges; only the clock limits live work.
         if !restart
@@ -1273,6 +1291,7 @@ impl GpuFlipDomain {
             }
         }
         self.setup = Some(geometry.setup);
+        self.fill_shape = fill_shape;
         self.layout = Some(geometry.layout);
         self.fill_sites = (geometry.pool_sites, geometry.box_sites);
         let frame = self.clock.advance(
@@ -1482,6 +1501,14 @@ impl GpuFlipDomain {
             ("handover_velocity", handover.velocity),
             ("handover_rotation", handover.rotation),
             ("first_tick", first_tick as f32),
+            // The shaped fill's region row in a tick, -1 for a box or none:
+            // the fill seeds only the sites inside its shape.
+            (
+                "fill_region",
+                shaped
+                    .and_then(|slot| self.bodies.region_of(slot))
+                    .map_or(-1.0, |row| row as f32),
+            ),
         ];
         let simulated: f64 = (0..u64::from(frame.ticks))
             .map(|tick| {

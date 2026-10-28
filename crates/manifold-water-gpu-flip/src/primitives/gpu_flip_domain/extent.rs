@@ -49,6 +49,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("dynamic_bodies", 0.0);
     x.publish("region_count", 0.0);
     x.publish("region_site_total", 0.0);
+    x.publish("fill_region", -1.0);
     x.publish("clock_obstacle_count", 0.0);
     x.publish("clock_source_count", 0.0);
     x.publish("live_hit_count", 0.0);

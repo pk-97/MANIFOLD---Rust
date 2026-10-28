@@ -19,8 +19,11 @@
 // enabled body at its pose (rows 0..body_count of `bodies`, sampled from its
 // shape's lattice in the atlas), each node of a grid 1.5 cells outside the
 // box the smaller of the two, read trilinearly as
-// _solidSDF.trilinearInterpolate. `bodies` (LiquidBody → Element), `shapes`
-// (LiquidShape → Element2) and `atlas` are gathered.
+// _solidSDF.trilinearInterpolate. With fill_region at or above 0 the box is a
+// shaped fill's: a site outside region row fill_region of `regions` (its
+// lattice in `shapes` and `atlas`, read as the step reads a region) is dead
+// too. `bodies` and `regions` (LiquidBody → Element), `shapes` (LiquidShape →
+// Element2) and `atlas` are gathered.
 
 fn liquid_fill_hash(x: u32) -> u32 {
     let s = x * 747796405u + 2891336453u;
@@ -75,6 +78,20 @@ fn liquid_fill_solid_node(y: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>, faces: u32
     return d;
 }
 
+// Whether shaped fill region `r` holds `x`: its lattice distance at or below
+// 0, scaled to metres; a point the lattice does not cover is outside.
+fn liquid_fill_in_shape(x: vec3<f32>, r: i32) -> bool {
+    let bd = buf_regions[u32(r)];
+    let shape_index = i32(bd.accel_shape.w);
+    if shape_index < 0 {
+        return false;
+    }
+    let sh = buf_shapes[u32(shape_index)];
+    let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
+    let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
+    return liquid_lattice_holds(g, dims) && liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w <= 0.0;
+}
+
 // Whether the engine's solid holds `x`: the solid distance read from the grid
 // of nodes `h` apart that starts 1.5 cells outside the box at `box_lo`.
 fn liquid_fill_in_native_solid(x: vec3<f32>, box_lo: vec3<f32>, h: f32, lo: vec3<f32>, hi: vec3<f32>, faces: u32, body_count: i32) -> bool {
@@ -120,6 +137,7 @@ fn body(
     bounds_hi_x: f32,
     bounds_hi_y: f32,
     bounds_hi_z: f32,
+    fill_region: i32,
 ) -> Element3 {
     var out = Element3(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
     let n = 2u * vec3<u32>(max(vec3<i32>(fill_cells_x, fill_cells_y, fill_cells_z), vec3<i32>(0)));
@@ -155,7 +173,8 @@ fn body(
         vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z),
         vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z),
         u32(closed_faces), body_count);
-    let radius = select(0.31017524 * cell_size, 0.0, solid);
+    let outside = idx >= pool_count && fill_region >= 0 && !liquid_fill_in_shape(x, fill_region);
+    let radius = select(0.31017524 * cell_size, 0.0, solid || outside);
     out.position_radius = vec4<f32>(x, radius);
     out.id = idx + 1u;
     return out;

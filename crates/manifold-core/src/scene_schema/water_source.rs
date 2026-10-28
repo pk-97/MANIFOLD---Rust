@@ -1,20 +1,22 @@
 //! Water Source: a child of a Water with a role (Fill, Inflow, Drain) and a
-//! shape (Box, Sphere). It compiles to one `node.fluid_role_source` placed by
-//! its Transform, wired into its Water's domain; a Sphere draws its region
-//! from a `node.sphere_mesh` one metre across, the size of the unit box.
-//! Role and Shape are open lists (section 7.18): mesh-shaped fills and
-//! absorb zones join here later.
+//! shape (Box, Sphere, Model). It compiles to one `node.fluid_role_source`
+//! wired into its Water's domain. A Box or Sphere is placed by its Transform;
+//! a Sphere draws its region from a `node.sphere_mesh` one metre across, the
+//! size of the unit box. A Model takes a scene Object's mesh where the Object
+//! stands, so it has no Transform of its own. Role is an open list (section
+//! 7.18): absorb zones join here later.
 //!
-//! A Fill fills an axis-aligned box once, and a Water takes one: the Fill
-//! choice is disabled with its reason on a Sphere or beside another Fill,
-//! and so is Sphere on a Fill (section 7.10). MPM only fills, so Inflow and
-//! Drain are disabled in an MPM Water.
+//! A Fill fills its shape once, and a Water takes one: the Fill choice is
+//! disabled with its reason beside another Fill (section 7.10). MPM fills a
+//! box and only fills, so a shaped Fill, Inflow and Drain are disabled in an
+//! MPM Water.
 
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, wrong_value};
 use super::{Exposure, PropertyRow, Reach, perform, row, setup};
+use crate::scene_doc::Shape;
 use crate::scene_doc::{Item, ItemFields, SceneDoc, SourceRole, SourceShape, WaterSolver};
 
 const ROLES: &[Choice] = &[
@@ -40,6 +42,10 @@ const SHAPES: &[Choice] = &[
     Choice {
         key: "sphere",
         label: "Sphere",
+    },
+    Choice {
+        key: "model",
+        label: "Model",
     },
 ];
 
@@ -69,8 +75,27 @@ fn source(fields: &ItemFields) -> Option<&crate::scene_doc::WaterSourceFields> {
     }
 }
 
+/// A Box or Sphere, which its Transform places; a Model stands where its
+/// Object does.
+fn placed(fields: &ItemFields) -> bool {
+    source(fields).is_some_and(|s| s.shape != SourceShape::Model)
+}
+
+/// A placed source that turns: anything but a Fill's box, which fills
+/// straight.
 fn turns(fields: &ItemFields) -> bool {
-    source(fields).is_some_and(|s| s.role != SourceRole::Fill)
+    source(fields).is_some_and(|s| {
+        s.shape == SourceShape::Sphere || s.role != SourceRole::Fill && s.shape == SourceShape::Box
+    })
+}
+
+fn modelled(fields: &ItemFields) -> bool {
+    source(fields).is_some_and(|s| s.shape == SourceShape::Model)
+}
+
+/// An Object with a mesh a source can take: anything but an Ocean.
+fn is_model(item: &Item) -> bool {
+    matches!(&item.fields, ItemFields::Object(o) if o.shape != Shape::Ocean)
 }
 
 fn inflows(fields: &ItemFields) -> bool {
@@ -81,8 +106,7 @@ fn sphere(fields: &ItemFields) -> bool {
     source(fields).is_some_and(|s| s.shape == SourceShape::Sphere)
 }
 
-const BOX_OR_SPHERE: &str =
-    "a source is a box or a sphere; meshes join with the mesh-shaped sources";
+const BOX_OR_SPHERE: &str = "a source is a box, a sphere or a scene Object's mesh";
 
 const fn shaped(property: &'static str) -> PropertyRow {
     row(property, SOURCE, Source, Exposure::Internal(BOX_OR_SPHERE))
@@ -103,13 +127,16 @@ const SOURCE_SIZE: HardLimit = HardLimit::AtLeast(0.001);
 pub static WATER_SOURCE_ROWS: [PropertyRow; 32] = [
     row("pos_x", T, Transform, setup())
         .unit(Unit::Metres)
-        .limit(HardLimit::Unlimited),
+        .limit(HardLimit::Unlimited)
+        .when(placed),
     row("pos_y", T, Transform, setup())
         .unit(Unit::Metres)
-        .limit(HardLimit::Unlimited),
+        .limit(HardLimit::Unlimited)
+        .when(placed),
     row("pos_z", T, Transform, setup())
         .unit(Unit::Metres)
-        .limit(HardLimit::Unlimited),
+        .limit(HardLimit::Unlimited)
+        .when(placed),
     row("rot_x", T, Transform, setup())
         .limit(HardLimit::Unlimited)
         .when(turns),
@@ -121,13 +148,16 @@ pub static WATER_SOURCE_ROWS: [PropertyRow; 32] = [
         .when(turns),
     row("scale_x", T, Transform, setup())
         .unit(Unit::Metres)
-        .limit(SOURCE_SIZE),
+        .limit(SOURCE_SIZE)
+        .when(placed),
     row("scale_y", T, Transform, setup())
         .unit(Unit::Metres)
-        .limit(SOURCE_SIZE),
+        .limit(SOURCE_SIZE)
+        .when(placed),
     row("scale_z", T, Transform, setup())
         .unit(Unit::Metres)
-        .limit(SOURCE_SIZE),
+        .limit(SOURCE_SIZE)
+        .when(placed),
     row(
         "billboard",
         T,
@@ -216,10 +246,15 @@ pub fn choice_unavailable(
     key: &str,
 ) -> Option<&'static str> {
     let fields = source(&item.fields)?;
+    let mpm = || {
+        water_of(doc, item).is_some_and(
+            |water| matches!(&water.fields, ItemFields::Water(w) if w.solver == WaterSolver::Mpm),
+        )
+    };
     match (field, key) {
         ("role", "fill") if fields.role != SourceRole::Fill => {
-            if fields.shape == SourceShape::Sphere {
-                return Some("A Fill fills a box; set Shape to Box first");
+            if fields.shape != SourceShape::Box && mpm() {
+                return Some("MPM fills a box; set Shape to Box first");
             }
             let water = water_of(doc, item)?;
             let filled = water.children.iter().any(|child| {
@@ -227,17 +262,17 @@ pub fn choice_unavailable(
             });
             filled.then_some(crate::scene_doc::ONE_FILL)
         }
-        ("shape", "sphere") if fields.role == SourceRole::Fill => Some("A Fill fills a box; set Role to Inflow or Drain first"),
-        ("role", "inflow" | "drain")
-            if water_of(doc, item).is_some_and(|water| matches!(&water.fields, ItemFields::Water(w) if w.solver == WaterSolver::Mpm)) =>
-        {
+        ("shape", "sphere" | "model") if fields.role == SourceRole::Fill && mpm() => {
+            Some("MPM fills a box; set the Water's Solver to FLIP for a shaped Fill")
+        }
+        ("role", "inflow" | "drain") if mpm() => {
             Some("MPM fills only; set the Water's Solver to FLIP for Inflow and Drain")
         }
         _ => None,
     }
 }
 
-pub static WATER_SOURCE_FIELDS: [FieldRow; 2] = [
+pub static WATER_SOURCE_FIELDS: [FieldRow; 3] = [
     FieldRow {
         id: "role",
         label: "Role",
@@ -278,10 +313,10 @@ pub static WATER_SOURCE_FIELDS: [FieldRow; 2] = [
         disabled: enabled,
         read: |fields| match fields {
             ItemFields::WaterSource(s) => FieldValue::Choice(
-                if s.shape == SourceShape::Sphere {
-                    "sphere"
-                } else {
-                    "box"
+                match s.shape {
+                    SourceShape::Box => "box",
+                    SourceShape::Sphere => "sphere",
+                    SourceShape::Model => "model",
                 }
                 .to_owned(),
             ),
@@ -294,8 +329,29 @@ pub static WATER_SOURCE_FIELDS: [FieldRow; 2] = [
             s.shape = match key.as_str() {
                 "box" => SourceShape::Box,
                 "sphere" => SourceShape::Sphere,
+                "model" => SourceShape::Model,
                 _ => return Err(wrong_value("shape", value)),
             };
+            Ok(())
+        },
+    },
+    // The Object a Model takes its mesh and place from.
+    FieldRow {
+        id: "model",
+        label: "Model",
+        section: ControlGroup::Source,
+        control: FieldControl::Item {
+            items: is_model,
+            none: "None",
+        },
+        applies: modelled,
+        disabled: enabled,
+        read: |fields| FieldValue::Item(source(fields).and_then(|s| s.model.clone())),
+        write: |fields, value| {
+            let (ItemFields::WaterSource(s), FieldValue::Item(model)) = (fields, value) else {
+                return Err(wrong_value("model", value));
+            };
+            s.model.clone_from(model);
             Ok(())
         },
     },

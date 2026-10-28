@@ -541,6 +541,19 @@ const WALL_VELOCITY_WIRES: [&str; 6] = [
     "wall_velocity_hi_z",
 ];
 
+/// The colliders and the shaped fill's region the fill seeds around, and the
+/// pool it seeds into, as the domain publishes them.
+pub(crate) const FILL_SHAPE_WIRES: [&str; 8] = [
+    "bodies",
+    "shapes",
+    "atlas",
+    "regions",
+    "fill_region",
+    "body_count",
+    "epoch",
+    "particle_capacity",
+];
+
 /// The fill's sites, as the domain publishes them.
 const FILL_WIRES: [&str; 7] = [
     "pool_sites",
@@ -630,7 +643,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     );
     b.wires(domain, fill, &FILL_WIRES);
     b.wires(domain, fill, &FILL_BOX_WIRES);
-    b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch", "particle_capacity"]);
+    b.wires(domain, fill, &FILL_SHAPE_WIRES);
     b.wires(domain, fill, &BOUNDS_WIRES);
     b.wire((domain, "closed_faces"), fill, "closed_faces");
     let state = b.node("state", "node.liquid_state", json!({}));

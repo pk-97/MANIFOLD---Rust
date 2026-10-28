@@ -15,7 +15,7 @@ use manifold_core::liquid_setup::{
     AxisFit, BoxFit, ColumnOutcome, FillFit, SetupFit, axis_fits, fit_box, fit_fill_height,
 };
 use manifold_core::physics_members::BodyRefusalRow;
-use manifold_core::scene_doc::{ItemFields, SceneDoc, SourceRole, param_id};
+use manifold_core::scene_doc::{ItemFields, SceneDoc, SourceRole, SourceShape, param_id};
 use manifold_core::scene_schema::DOMAIN_ROLE;
 use manifold_foundation::scene_surface::SceneShape;
 
@@ -859,6 +859,11 @@ pub(super) fn water_sites(
             let ItemFields::WaterSource(source) = &child.fields else {
                 continue;
             };
+            // A Model stands where its Object does: its own Transform places
+            // nothing.
+            if source.shape == SourceShape::Model {
+                continue;
+            }
             let role = match source.role {
                 SourceRole::Fill => FluidRole::InitialFill,
                 SourceRole::Inflow => FluidRole::Inflow,

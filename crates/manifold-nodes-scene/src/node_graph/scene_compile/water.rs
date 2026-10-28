@@ -3,9 +3,9 @@
 //! template for its Solver and Draw As (`scene_schema::water_family`), its
 //! node ids `<water id>:<template node id>`, and draws the template's
 //! objects. Its Transform node is the domain box. Each Water Source child
-//! compiles to a `node.fluid_role_source` placed by its own Transform, wired
-//! into the domain's role inputs in tree order; the domain has a role input
-//! per source.
+//! compiles to a `node.fluid_role_source` placed by its own Transform (a
+//! Model's by its Object's), wired into the domain's role inputs in tree
+//! order; the domain has a role input per source.
 //!
 //! Inside a Group, the domain box and the sources sit in the group's frame
 //! and the water follows the group's visibility. The domain stays
@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use manifold_core::scene_doc::{Item, ItemFields, ItemKind, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
-    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
+    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
     WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily, role_index, template_roles,
     water_family,
 };
@@ -165,7 +165,9 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
 }
 
 /// One source: its Transform places a `node.fluid_role_source` (a unit box,
-/// or a ball one metre across) wired into the domain's `role_<port>`.
+/// or a ball one metre across) wired into the domain's `role_<port>`. A
+/// Model takes its Object's mesh and stands where the Object does, in the
+/// frame of the groups round it; with no Object picked it is off.
 fn emit_source(b: &mut Builder<'_>, item: &Item, domain: u32, port: usize, frame: Option<u32>) {
     let ItemFields::WaterSource(fields) = &item.fields else {
         return;
@@ -183,10 +185,33 @@ fn emit_source(b: &mut Builder<'_>, item: &Item, domain: u32, port: usize, frame
             value: role_index(fields.role),
         },
     );
-    b.wire(transform, "transform", role, "transform");
-    if fields.shape == SourceShape::Sphere {
-        let sphere = b.add(owner, "sphere", "node.sphere_mesh");
-        b.wire(sphere, "source", role, "mesh_0");
+    match fields.shape {
+        SourceShape::Box => b.wire(transform, "transform", role, "transform"),
+        SourceShape::Sphere => {
+            b.wire(transform, "transform", role, "transform");
+            let sphere = b.add(owner, "sphere", "node.sphere_mesh");
+            b.wire(sphere, "source", role, "mesh_0");
+        }
+        SourceShape::Model => {
+            let target = fields.model.as_ref().and_then(|model| b.doc.find(model));
+            let mesh = target.and_then(|target| {
+                let id = target.id.as_str();
+                b.id(id, "mesh").or_else(|| b.id(id, SOLID))
+            });
+            let placed = target.zip(mesh).and_then(|(target, mesh)| {
+                Some((super::swarm::emit_frame(b, owner, target)?, mesh))
+            });
+            match placed {
+                Some((frame, mesh)) => {
+                    b.wire(frame, "transform", role, "transform");
+                    b.wire(mesh, "source", role, "mesh_0");
+                }
+                None => {
+                    b.wire(transform, "transform", role, "transform");
+                    b.set(role, "enabled", SerializedParamValue::Bool { value: false });
+                }
+            }
+        }
     }
     b.wire(role, "role", domain, &format!("role_{port}"));
     b.rows(item);

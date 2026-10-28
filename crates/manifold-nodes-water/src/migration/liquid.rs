@@ -612,6 +612,57 @@ pub(crate) fn wire_whitewater_removal(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Wire a saved GPU FLIP fill to the domain's regions and shaped fill
+/// region, after flattening, from the domain that feeds its `pool_sites`, so
+/// a Fill shaped as a sphere or a model seeds inside its shape. A port
+/// already wired is kept. Idempotent.
+pub(crate) fn wire_shaped_fill(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let kind = |id: u32| {
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.type_id.as_str())
+    };
+    let mut added = Vec::new();
+    for fill in def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.liquid_fill")
+        .map(|n| n.id)
+    {
+        let Some(domain) = def
+            .wires
+            .iter()
+            .find(|w| {
+                w.to_node == fill
+                    && w.to_port == "pool_sites"
+                    && kind(w.from_node) == Some(GPU_FLIP_DOMAIN_TYPE_ID)
+            })
+            .map(|w| w.from_node)
+        else {
+            continue;
+        };
+        for port in crate::presets::gpu_flip::FILL_SHAPE_WIRES {
+            if !def
+                .wires
+                .iter()
+                .any(|w| w.to_node == fill && w.to_port == port)
+            {
+                added.push(EffectGraphWire {
+                    from_node: domain,
+                    from_port: port.into(),
+                    to_node: fill,
+                    to_port: port.into(),
+                });
+            }
+        }
+    }
+    let changed = !added.is_empty();
+    def.wires.extend(added);
+    changed
+}
+
 /// Drop a saved surface's `node.redistance_lattice`, after flattening: every
 /// wire it fed takes its `levelset` source instead, the particles' splat
 /// (`node.particle_volume` keeps a solid's nodes at their depth in it, which
@@ -939,6 +990,15 @@ pub(crate) fn silver_bubbles(def: &mut EffectGraphDef) -> bool {
         changed = true;
     }
     changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "wire_shaped_fill",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 420,
+        apply: wire_shaped_fill,
+    }
 }
 
 inventory::submit! {

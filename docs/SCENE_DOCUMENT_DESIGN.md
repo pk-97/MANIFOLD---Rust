@@ -236,7 +236,7 @@ What every new scene holds, as Blender's startup file and Unity's default scene 
 ### 7.10 Water, Water Source, Ocean
 
 - **Water** is a kind: Domain (its Transform is the box: Position and Size on the card, moved and resized by its gizmo), Resolution, Simulation dials, Surface, Whitewater (section 7.18); its sources as children. The water family template in `manifold-nodes-water` is the emitter.
-- **Water Source** is a child item with Role Fill, Inflow or Drain; Shape Box or Sphere; Transform; Inflow speed. The role is shown in the header. There is no Collider role (section 7.8).
+- **Water Source** is a child item with Role Fill, Inflow or Drain; Shape Box, Sphere or Model; Transform; Inflow speed. A Model takes a scene Object's mesh where the Object stands, so it has no Transform of its own. A shaped Fill (FLIP only) seeds the start sites inside its shape's distance lattice. The role is shown in the header. There is no Collider role (section 7.8).
 - **Ocean** is an Object Shape, built by L16. Its rows (the surface dials) appear on the Object card when Shape is Ocean. It is not offered until it draws.
 - BUG-fbwu6 (Initial Fill refusal is not named by the domain setup warning) is fixed by design: Fill on a source that cannot fill is disabled with its reason.
 
@@ -297,7 +297,7 @@ The water end game ([GPU_FLIP_END_GAME_DESIGN.md](GPU_FLIP_END_GAME_DESIGN.md)) 
 - **Colliders in water:** water reads items whose bounds touch its domain (its box, its active tiles later). `CollisionShape` hands water a distance sampler cropped to the domain plus reach, never a lattice over a whole mesh. Past 255 coupled items (`MAX_LIQUID_BODIES`, `fluid_domain.rs`) the card says how many are not coupled.
 - **Physics View** is a Render menu mode that draws the particle dots instead of the water surface, plus the hidden things: open and closed faces, colliders as the water sees them, sources and drains. It is not a card row.
 - **Surface:** the Water emitter owns the whole surface path behind the Surface rows. When the end game draws the level set directly, it swaps the emitter's output in one lane and keeps the row ids.
-- **Water Source** Role and Shape are open lists in the Water Source table, so mesh-shaped fills, an absorb zone and ocean-fed faces are added there later.
+- **Water Source** Role and Shape are open lists in the Water Source table, so an absorb zone and ocean-fed faces are added there later.
 - **Setup check:** `scene_vm/setup_check.rs` and `manifold-app/src/setup_check.rs` (the problem list, red outline and card warning) run on `scene_of`. A setup warning (what the solver clipped) is a notice with a red outline on the item, not a refusal.
 
 ### 7.19 Modifiers

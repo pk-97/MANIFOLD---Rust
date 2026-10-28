@@ -543,10 +543,12 @@ pub enum WaterDraw {
 pub struct WaterSourceFields {
     pub role: SourceRole,
     pub shape: SourceShape,
+    /// The Object a Model source takes its mesh and place from; none leaves
+    /// a Model source off.
+    pub model: Option<ItemId>,
 }
 
-/// An open list: mesh-shaped fills and absorb zones join here later
-/// (section 7.18).
+/// An open list: absorb zones join here later (section 7.18).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SourceRole {
@@ -562,6 +564,9 @@ pub enum SourceShape {
     #[default]
     Box,
     Sphere,
+    /// A scene Object's mesh where the Object stands: a model or a
+    /// photoscan.
+    Model,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

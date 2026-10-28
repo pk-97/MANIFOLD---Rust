@@ -171,14 +171,14 @@ struct FillUniforms {
     bounds_hi_x: f32,
     bounds_hi_y: f32,
     bounds_hi_z: f32,
+    fill_region: i32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 manifold_node_engine::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two, and count is the filled sites, the slots a liquid starts with. Every slot past them starts dead and is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. With fill_region at or above 0 the box is a shaped fill's: a site outside region row fill_region of regions (its shape in shapes and atlas, its pose at the epoch's start) is left dead too, so the fill takes the shape. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two, and count is the filled sites, the slots a liquid starts with. Every slot past them starts dead and is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
         fill_min_x: ScalarF32 optional, fill_min_y: ScalarF32 optional, fill_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -190,6 +190,8 @@ manifold_node_engine::primitive! {
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
+        regions: Array(LiquidBody) optional,
+        fill_region: ScalarF32 optional,
         body_count: ScalarF32 optional,
         epoch: ScalarF32 optional,
         particle_capacity: ScalarF32 optional,
@@ -228,6 +230,7 @@ manifold_node_engine::primitive! {
         float_param!("bounds_hi_x", "Bounds Max X", 0.0, -1.0e4, 1.0e4),
         float_param!("bounds_hi_y", "Bounds Max Y", 0.0, -1.0e4, 1.0e4),
         float_param!("bounds_hi_z", "Bounds Max Z", 0.0, -1.0e4, 1.0e4),
+        int_param!("fill_region", "Fill Region", -1.0, -1.0, 16_777_215.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Feeds node.liquid_state's seed; count is the filled sites that state starts its live slots from. The pool and box sites, the fill's box (fill_min, fill_cells, cell_size), the Bounds box and Wall faces, bodies, shapes, atlas, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
@@ -239,11 +242,11 @@ manifold_node_engine::primitive! {
     aliases: ["seed liquid", "initial water", "dam break fill", "pool"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/liquid_fill_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
     wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
-        filled: Option<([u32; 26], usize)> = None,
+        filled: Option<([u32; 27], usize)> = None,
     },
 }
 
@@ -299,8 +302,14 @@ impl Primitive for LiquidFill {
         let (pool, sites) = fill_of(|name, default| ctx.scalar_or_param(name, default));
         let seed = int("seed", 0.0);
         let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
-        // With colliders the sites depend on their pose at the epoch's start.
-        let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
+        let fill_region = ctx.scalar_or_param("fill_region", -1.0).round();
+        // With colliders or a shaped fill the sites depend on their pose at
+        // the epoch's start.
+        let epoch = if body_count > 0 || fill_region >= 0.0 {
+            int("epoch", 0.0)
+        } else {
+            0
+        };
         let requested = ctx.scalar_or_param("particle_capacity", 0.0);
         if !requested.is_finite() || requested < 0.0 {
             ctx.error("Liquid Fill: particle_capacity must be 0 or a positive count".to_string());
@@ -338,6 +347,7 @@ impl Primitive for LiquidFill {
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
         );
+        let regions = ctx.inputs.array("regions");
         let gpu = ctx.gpu_encoder();
         let buffer = self.buffer.as_ref().expect("fill storage prepared");
         // Without all three collider arrays no body is read; the particle
@@ -350,6 +360,19 @@ impl Primitive for LiquidFill {
             }
             _ => (buffer, buffer, buffer, 0),
         };
+        // A shaped fill's region row, read from the regions beside the
+        // collider shapes; without them the fill is its whole box.
+        let (regions, fill_region) = match (regions, colliders.1) {
+            (Some(regions), Some(_))
+                if fill_region >= 0.0
+                    && (fill_region as u64)
+                        < regions.size / std::mem::size_of::<LiquidBody>() as u64 =>
+            {
+                (regions, fill_region as i32)
+            }
+            _ => (buffer, -1),
+        };
+
         let key = [
             min[0].to_bits(),
             min[1].to_bits(),
@@ -377,6 +400,7 @@ impl Primitive for LiquidFill {
             bounds[3].to_bits(),
             bounds[4].to_bits(),
             bounds[5].to_bits(),
+            fill_region as u32,
         ];
         if self.filled == Some((key, buffer.identity_key())) {
             return;
@@ -410,8 +434,8 @@ impl Primitive for LiquidFill {
             bounds_hi_x: bounds[3],
             bounds_hi_y: bounds[4],
             bounds_hi_z: bounds[5],
+            fill_region,
             dispatch_count: capacity,
-            _pad0: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -437,6 +461,11 @@ impl Primitive for LiquidFill {
                 },
                 GpuBinding::Buffer {
                     binding: 4,
+                    buffer: regions,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
                     buffer,
                     offset: 0,
                 },

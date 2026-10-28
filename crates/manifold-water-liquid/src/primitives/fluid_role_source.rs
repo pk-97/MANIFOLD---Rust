@@ -14,7 +14,7 @@ use std::sync::{Arc, mpsc};
 
 use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use geometry::{prepare_geometry, prepare_wired_geometry};
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
@@ -368,12 +368,12 @@ impl Primitive for FluidRoleSource {
             Err(error) => return self.fail(ctx, error),
         };
 
-        // An Initial Fill is the box its transform places. It prepares no
-        // geometry, so the water seeds on the frame the fill is wired.
-        if role == FluidRoleKind::InitialFill {
-            if let Err(error) = initial_fill_is_a_box(ctx) {
-                return self.fail(ctx, error);
-            }
+        // An Initial Fill without a mesh is the box its transform places. It
+        // prepares no geometry, so the water seeds on the frame the fill is
+        // wired; one with a mesh is prepared as any role is.
+        if role == FluidRoleKind::InitialFill
+            && !has_mesh(ctx.params, |port| ctx.inputs.slot(port).is_some())
+        {
             ctx.outputs.set_cpu_value(
                 "role",
                 FluidRole {
@@ -779,18 +779,12 @@ fn no_geometry() -> &'static Arc<PreparedFluidGeometry> {
     EMPTY.get_or_init(|| Arc::new(PreparedFluidGeometry::default()))
 }
 
-/// The liquids fill an Initial Fill's transform box, so a mesh or another
-/// shape is refused by name rather than filled as a box.
-fn initial_fill_is_a_box(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> {
-    let path = matches!(ctx.params.get("path"), Some(ParamValue::String(path)) if !path.is_empty());
-    if path
-        || MESH_PORTS
-            .iter()
-            .any(|port| ctx.inputs.slot(port).is_some())
-    {
-        return Err("An Initial Fill fills a box; a mesh cannot be filled yet".into());
-    }
-    Ok(())
+/// Whether the source has a mesh to prepare: a model file, or a wired mesh
+/// port (`wired`). Without one a role is the unit cube, and an Initial Fill
+/// is the box its transform places.
+fn has_mesh(params: &ParamValues, wired: impl Fn(&str) -> bool) -> bool {
+    matches!(params.get("path"), Some(ParamValue::String(path)) if !path.is_empty())
+        || MESH_PORTS.iter().any(|port| wired(port))
 }
 
 /// The role this source plays, from the `role` wire or param. The node and

@@ -40,9 +40,7 @@ impl FluidRoleKind {
 /// The box a water's Initial Fill places, from its Initial Fill roles in
 /// slot order, each `None` while switched off. A water takes one Initial
 /// Fill; a second one switched on is refused by name.
-pub fn initial_fill(
-    fills: impl IntoIterator<Item = Option<Transform>>,
-) -> Result<Option<Transform>, String> {
+pub fn initial_fill<T>(fills: impl IntoIterator<Item = Option<T>>) -> Result<Option<T>, String> {
     let mut on = fills.into_iter().flatten();
     let fill = on.next();
     if on.next().is_some() {
@@ -51,25 +49,87 @@ pub fn initial_fill(
     Ok(fill)
 }
 
+/// A water's Initial Fill as its liquid seeds it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InitialFill {
+    /// The box the fill's sites span: a box fill's transform, or the world box
+    /// round a shaped fill's mesh at its pose, axis-aligned.
+    pub column: Transform,
+    /// A shaped fill's slot in the roles, where it stays so the liquid builds
+    /// its shape's distance lattice; None for a box.
+    pub shape: Option<usize>,
+}
+
 /// Takes the Initial Fill roles out of `roles`, since a liquid seeds them
-/// rather than simulating them, and returns the box they place
-/// ([`initial_fill`]).
-pub fn take_initial_fill(roles: &mut [Option<FluidRole>]) -> Result<Option<Transform>, String> {
+/// rather than simulating them, and returns the one that is on
+/// ([`initial_fill`]). A fill with a mesh is shaped: it stays in `roles` and
+/// its column is the world box round the mesh.
+pub fn take_initial_fill(roles: &mut [Option<FluidRole>]) -> Result<Option<InitialFill>, String> {
     let is_fill = |role: &Option<FluidRole>| {
         role.as_ref()
             .is_some_and(|role| role.kind == FluidRoleKind::InitialFill)
     };
-    let fill = initial_fill(
+    let slot = initial_fill(
         roles
             .iter()
-            .filter(|role| is_fill(role))
-            .flatten()
-            .map(|role| role.enabled.then_some(role.transform)),
-    );
-    for role in roles.iter_mut().filter(|role| is_fill(role)) {
-        *role = None;
+            .enumerate()
+            .filter(|(_, role)| is_fill(role))
+            .map(|(slot, role)| role.as_ref().filter(|role| role.enabled).map(|_| slot)),
+    )?;
+    let fill = match slot {
+        Some(slot) => {
+            let role = roles[slot].as_ref().expect("a fill's slot holds it");
+            Some(if role.geometry.meshes.is_empty() {
+                InitialFill {
+                    column: role.transform,
+                    shape: None,
+                }
+            } else {
+                InitialFill {
+                    column: posed_column(role.geometry.bounds(), role.transform)
+                        .ok_or("the Fill's mesh has no finite bounds")?,
+                    shape: Some(slot),
+                }
+            })
+        }
+        None => None,
+    };
+    let shaped = fill.and_then(|fill| fill.shape);
+    for (slot, role) in roles.iter_mut().enumerate() {
+        if is_fill(role) && shaped != Some(slot) {
+            *role = None;
+        }
     }
-    fill
+    Ok(fill)
+}
+
+/// The axis-aligned box round the local box `bounds` (min then max) that
+/// `transform` places, turned and scaled as the solver poses a role, as a
+/// transform: its centre and size, unturned. None unless finite.
+pub fn posed_column(bounds: [[f32; 3]; 2], transform: Transform) -> Option<Transform> {
+    let [lo, hi] = bounds;
+    let scale = transform.scale;
+    let rotation = manifold_water_rigid::physics::pose_from_transform(transform).rotation;
+    let centre = crate::bodies::rotate(
+        rotation,
+        std::array::from_fn(|i| 0.5 * (lo[i] + hi[i]) * scale[i]),
+    );
+    let [min, max] = crate::bodies::posed_box(
+        std::array::from_fn(|i| transform.pos[i] + centre[i]),
+        std::array::from_fn(|i| 0.5 * (hi[i] - lo[i]) * scale[i]),
+        rotation,
+    );
+    let column = Transform {
+        pos: std::array::from_fn(|i| 0.5 * (min[i] + max[i])),
+        scale: std::array::from_fn(|i| max[i] - min[i]),
+        ..Transform::default()
+    };
+    column
+        .pos
+        .iter()
+        .chain(&column.scale)
+        .all(|v| v.is_finite())
+        .then_some(column)
 }
 
 pub use manifold_physics::collision_shape::{
@@ -86,6 +146,9 @@ pub struct PreparedFluidGeometry {
     /// Derived from the meshes, never serialized.
     #[serde(skip)]
     open_parts: OnceLock<bool>,
+    /// The meshes' local box, min then max. Derived, never serialized.
+    #[serde(skip)]
+    bounds: OnceLock<[[f32; 3]; 2]>,
     /// A static collider's exact mesh: it never moves in the simulation, so
     /// each water crops its lattice to its own domain. Set where the
     /// coupling builds it, never serialized.
@@ -103,6 +166,7 @@ impl PreparedFluidGeometry {
         Self {
             meshes,
             open_parts: OnceLock::new(),
+            bounds: OnceLock::new(),
             fixed: false,
             body: None,
         }
@@ -139,6 +203,21 @@ impl PreparedFluidGeometry {
             self.meshes
                 .iter()
                 .any(|mesh| closed_triangles(mesh).is_ok_and(|closed| closed.contains(&false)))
+        })
+    }
+
+    /// The meshes' local box, min then max (infinite without a vertex).
+    /// Computed once.
+    pub fn bounds(&self) -> [[f32; 3]; 2] {
+        *self.bounds.get_or_init(|| {
+            let mut bounds = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
+            for vertex in self.meshes.iter().flat_map(|mesh| &mesh.vertices) {
+                for i in 0..3 {
+                    bounds[0][i] = bounds[0][i].min(vertex[i]);
+                    bounds[1][i] = bounds[1][i].max(vertex[i]);
+                }
+            }
+            bounds
         })
     }
 
@@ -219,6 +298,7 @@ mod tests {
     fn a_liquid_takes_one_initial_fill_out_of_its_roles() {
         let fill = |x: f32, enabled: bool| {
             Some(FluidRole {
+                geometry: Arc::new(PreparedFluidGeometry::default()),
                 kind: FluidRoleKind::InitialFill,
                 transform: Transform {
                     pos: [x, 0.0, 0.0],
@@ -230,13 +310,15 @@ mod tests {
         };
         let mut roles = vec![Some(role()), fill(1.0, true), None, fill(2.0, false)];
         assert_eq!(
-            take_initial_fill(&mut roles).unwrap().map(|t| t.pos[0]),
-            Some(1.0)
+            take_initial_fill(&mut roles)
+                .unwrap()
+                .map(|f| (f.column.pos[0], f.shape)),
+            Some((1.0, None))
         );
         assert!(roles[0].is_some(), "the inflow stays");
         assert!(
             roles[1..].iter().all(Option::is_none),
-            "the bodies never see a fill"
+            "the bodies never see a box fill"
         );
 
         let mut none = vec![Some(role()), fill(2.0, false)];
@@ -251,6 +333,47 @@ mod tests {
             take_initial_fill(&mut two)
                 .unwrap_err()
                 .contains("one Initial Fill")
+        );
+    }
+
+    /// A fill with a mesh stays among the roles, and its column is the world
+    /// box round the mesh at its pose: a 1 x 2 x 1 block scaled 2 and turned
+    /// 90 degrees about Z spans 4 along X and 2 along Y.
+    #[test]
+    fn a_shaped_fill_stays_and_spans_its_posed_mesh() {
+        let block = TriangleMesh {
+            vertices: vec![[0.0, 0.0, -0.5], [1.0, 2.0, 0.5], [0.0, 2.0, 0.5]],
+            triangles: vec![[0, 1, 2]],
+        };
+        let shaped = FluidRole {
+            geometry: Arc::new(PreparedFluidGeometry::new(vec![block])),
+            kind: FluidRoleKind::InitialFill,
+            transform: Transform {
+                pos: [10.0, 0.0, 0.0],
+                rot_euler: [0.0, 0.0, std::f32::consts::FRAC_PI_2],
+                scale: [2.0; 3],
+                ..Transform::default()
+            },
+            ..role()
+        };
+        let mut roles = vec![Some(role()), Some(shaped)];
+        let fill = take_initial_fill(&mut roles).unwrap().expect("a fill");
+        assert_eq!(fill.shape, Some(1));
+        assert!(roles[1].is_some(), "the shaped fill stays for its lattice");
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4);
+        assert!(
+            near(fill.column.scale, [4.0, 2.0, 2.0]),
+            "{:?}",
+            fill.column.scale
+        );
+        assert!(
+            near(fill.column.pos, [8.0, 1.0, 0.0]),
+            "{:?}",
+            fill.column.pos
+        );
+        assert_eq!(
+            fill.column.rot_euler, [0.0; 3],
+            "the column is axis-aligned"
         );
     }
 

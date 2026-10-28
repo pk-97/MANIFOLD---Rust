@@ -319,6 +319,9 @@ impl Controls {
 /// Region codes in a region row's `angular_velocity.w`.
 pub const REGION_INFLOW: f32 = 2.0;
 pub const REGION_OUTFLOW: f32 = 3.0;
+/// A shaped Initial Fill: only the fill reads it, to seed inside the shape;
+/// the step's region tests match 2 and 3 only.
+pub const REGION_FILL: f32 = 4.0;
 
 /// Every role slot's controls at one tick's start.
 type Poses = Vec<Controls>;
@@ -661,9 +664,14 @@ impl LiquidBodies {
         self.coupled.len()
     }
 
-    /// Inflow and Outflow roles: the region rows per tick.
+    /// Inflow, Outflow and shaped fill roles: the region rows per tick.
     pub fn region_count(&self) -> usize {
         self.roles.len()
+    }
+
+    /// The region row, within a tick, of the role in slot `slot`.
+    pub fn region_of(&self, slot: usize) -> Option<usize> {
+        self.roles.iter().position(|role| role.slot == slot)
     }
 
     /// The region rows the last [`Self::rows`] call produced.
@@ -686,8 +694,8 @@ impl LiquidBodies {
 
     /// Take this frame's roles and coupled bodies' hulls (body-local, about
     /// the centre of mass, unscaled). Inflows and drains are regions where
-    /// the liquid takes them; anything else is refused rather than ignored
-    /// (a fill is seeded, never simulated). A new geometry,
+    /// the liquid takes them, and so is a shaped Initial Fill, whose lattice
+    /// the fill seeds inside; anything else is refused rather than ignored. A new geometry,
     /// scale or distance lattice rebuilds the shapes and the atlas. Each
     /// geometry's lattice is built on a worker to the plan `cell_size` and
     /// the role's scale ask for ([`PreparedFluidGeometry::lattice_plan`]).
@@ -720,12 +728,17 @@ impl LiquidBodies {
         let mut count = 0;
         for (slot, role) in roles.iter().enumerate() {
             let Some(role) = role else { continue };
-            let region = matches!(role.kind, FluidRoleKind::Inflow | FluidRoleKind::Outflow);
+            // A shaped Initial Fill is a region for its lattice; a box fill
+            // never reaches the bodies.
+            let region = matches!(
+                role.kind,
+                FluidRoleKind::Inflow | FluidRoleKind::Outflow | FluidRoleKind::InitialFill
+            );
             if !(region && self.accepts_regions) {
                 let takes = if self.accepts_regions {
-                    "Inflow and Outflow roles only"
+                    "Inflow, Outflow and shaped Initial Fill roles only"
                 } else {
-                    "no Inflow or Outflow roles"
+                    "no Inflow, Outflow or Initial Fill roles"
                 };
                 return Err(format!(
                     "Liquid: role {slot} is {:?}; this liquid takes {takes}",
@@ -870,7 +883,7 @@ impl LiquidBodies {
                 scale_min: [scale[0], scale[1], scale[2], smallest],
                 ..base
             });
-            self.bounds.push(mesh_bounds(geometry));
+            self.bounds.push(geometry.bounds());
             let thinnest = thinnest(plan, scale);
             if slot.is_none()
                 && (plan.capped || thinnest < THIN_COLLIDER_CELLS * cell_size)
@@ -1108,10 +1121,12 @@ impl LiquidBodies {
                 },
             )
         });
+        // A shaped fill draws as the fill's column, from the domain.
         let regions = self
             .region_rows
             .iter()
             .take(self.region_count())
+            .filter(|row| row.angular_velocity[3] != REGION_FILL)
             .map(|row| {
                 (
                     row,
@@ -1213,17 +1228,6 @@ pub fn posed_box(center: [f32; 3], half: [f32; 3], rotation: [f32; 4]) -> [[f32;
     ]
 }
 
-fn mesh_bounds(geometry: &PreparedFluidGeometry) -> [[f32; 3]; 2] {
-    let mut bounds = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
-    for vertex in geometry.meshes.iter().flat_map(|mesh| &mesh.vertices) {
-        for i in 0..3 {
-            bounds[0][i] = bounds[0][i].min(vertex[i]);
-            bounds[1][i] = bounds[1][i].max(vertex[i]);
-        }
-    }
-    bounds
-}
-
 /// `v` turned by the unit quaternion `q` (xyzw).
 pub fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     let cross = |a: [f32; 3], b: [f32; 3]| {
@@ -1295,10 +1299,10 @@ fn coupled_row(row: &LiquidBody, offset: f32) -> LiquidBody {
 /// `angular_velocity.w`, and the emitted velocity (m/s, world) with the
 /// share of the region's own motion added to it in `inv_inertia_x`.
 fn region_row(row: LiquidBody, kind: FluidRoleKind, controls: Controls) -> LiquidBody {
-    let code = if kind == FluidRoleKind::Inflow {
-        REGION_INFLOW
-    } else {
-        REGION_OUTFLOW
+    let code = match kind {
+        FluidRoleKind::Inflow => REGION_INFLOW,
+        FluidRoleKind::Outflow => REGION_OUTFLOW,
+        FluidRoleKind::InitialFill => REGION_FILL,
     };
     let v = controls.velocity;
     LiquidBody {
@@ -2016,18 +2020,15 @@ mod tests {
             no_regions
                 .prepare(&roles, &[], &[], None, 0.0625, false)
                 .unwrap_err()
-                .contains("no Inflow or Outflow")
+                .contains("no Inflow, Outflow or Initial Fill")
         );
+        // A shaped Initial Fill is a region, for the lattice its fill seeds in.
         roles[1] = Some(FluidRole {
             kind: FluidRoleKind::InitialFill,
             ..roles[0].clone().unwrap()
         });
-        assert!(
-            bodies
-                .prepare(&roles, &[], &[], None, 0.0625, false)
-                .unwrap_err()
-                .contains("Inflow and Outflow roles only")
-        );
+        ready(&mut bodies, &roles);
+        assert!(bodies.region_of(1).is_some());
     }
 
     /// Inflow and Outflow roles become region rows, not body rows: the code,

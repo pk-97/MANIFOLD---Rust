@@ -53,7 +53,7 @@ use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
     DomainWalls, LiquidRigidOwner, PendingTick, SharedSolids, SharesSolids, takes_reaction,
 };
-use manifold_water_liquid::fluid_role::{FluidRole, take_initial_fill};
+use manifold_water_liquid::fluid_role::{FluidRole, InitialFill, take_initial_fill};
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
@@ -756,8 +756,17 @@ impl Primitive for MatterDomain {
         }
         let role_pending = self.role_ports.read(&ctx.inputs);
         let mut roles = self.role_ports.take();
-        // The Initial Fill seeds the water; the bodies never see it.
-        let fill = take_initial_fill(&mut roles);
+        // The Initial Fill seeds the water; the bodies never see it. Matter
+        // fills a box, so a shaped fill is refused by name.
+        let fill = match take_initial_fill(&mut roles) {
+            Ok(Some(InitialFill {
+                shape: Some(slot), ..
+            })) => {
+                roles[slot] = None;
+                Err("MPM fills a box; set the Fill's Shape to Box".to_owned())
+            }
+            fill => fill.map(|fill| fill.map(|fill| fill.column)),
+        };
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
