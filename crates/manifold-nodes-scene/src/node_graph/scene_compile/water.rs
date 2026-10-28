@@ -96,16 +96,12 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
         );
     }
 
-    // Speed is the Water's own times the World's.
-    let speed = b.add(owner, "speed", "node.math");
-    b.wire(speed, "out", domain, "speed");
+    // Every water runs at the World's Speed, as the bodies do: one clock for
+    // everything that touches. A per-region speed would feed the domain's
+    // `speed` input here.
     for (control, role) in WORLD_INPUTS.iter().zip(WORLD_FOLLOWS) {
         let value = b.add(owner, role, "node.value");
-        if control.input == "speed" {
-            b.wire(value, "out", speed, "a");
-        } else {
-            b.wire(value, "out", domain, control.input);
-        }
+        b.wire(value, "out", domain, control.input);
     }
 
     let sources: Vec<&Item> = item

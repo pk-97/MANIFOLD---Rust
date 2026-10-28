@@ -11,7 +11,7 @@
 //! template node keeps the template's tuned value (Coarse Solve, Max
 //! Iterations, Sheet Fill Rate and the rest are automatic), except the ones a
 //! row below names. The card is the rows of section 8: the domain box, the
-//! Cell Size, Speed, the solver's dials, the Surface dials and the
+//! Cell Size, the solver's dials, the Surface dials and the
 //! whitewater Amount.
 
 use std::sync::Arc;
@@ -151,7 +151,6 @@ pub const WORLD_FOLLOWS: [&str; 6] = [
 
 const T: Reach = Reach::Own("transform");
 const DOMAIN: Reach = Reach::Own(DOMAIN_ROLE);
-const SPEED: Reach = Reach::Own("speed");
 const CELL_SIZE: Reach = Reach::Own("cell_size");
 const DETAIL: Reach = Reach::Own("surface_detail");
 const PARTICLE_SCALE: Reach = Reach::Own("liquid_particle_scale");
@@ -204,7 +203,7 @@ fn flip_surface(fields: &ItemFields) -> bool {
     flip(fields) && surface(fields)
 }
 
-pub static WATER_ROWS: [PropertyRow; 50] = [
+pub static WATER_ROWS: [PropertyRow; 47] = [
     row("pos_x", T, Domain, setup())
         .unit(Unit::Metres)
         .limit(HardLimit::Unlimited),
@@ -272,26 +271,6 @@ pub static WATER_ROWS: [PropertyRow; 50] = [
         .unit(Unit::Metres)
         .default(DEFAULT_CELL_SIZE)
         .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1)),
-    row("speed", SPEED, Simulation, perform(CardBand::Scene, 0))
-        .param("b")
-        .name("Speed")
-        .tip("How fast the water moves against the clip: 1 is real time, 0 holds it still")
-        .default(1.0)
-        .limit(HardLimit::Between(0.0, 4.0)),
-    row(
-        "speed_world",
-        SPEED,
-        Simulation,
-        Exposure::Automatic("the World's Speed, through its value node"),
-    )
-    .param("a"),
-    row(
-        "speed_op",
-        SPEED,
-        Simulation,
-        Exposure::Automatic("Speed times the World's Speed"),
-    )
-    .param("op"),
     // MPM's dials, as main's Matter scenes showed them.
     row("stiffness", DOMAIN, Simulation, perform(CardBand::Scene, 2))
         .name("Stiffness")
@@ -478,7 +457,7 @@ pub static WATER_ROWS: [PropertyRow; 50] = [
 pub fn template_roles() -> impl Iterator<Item = &'static str> {
     WATER_ROWS.iter().filter_map(|row| match row.reach {
         Reach::Own(role)
-            if !matches!(role, "transform" | "speed" | "cell_size" | "surface_detail")
+            if !matches!(role, "transform" | "cell_size" | "surface_detail")
                 && !WORLD_FOLLOWS.contains(&role) =>
         {
             Some(role)
