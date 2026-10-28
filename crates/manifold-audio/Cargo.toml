@@ -25,6 +25,10 @@ block2 = "0.6"
 # CFString/CFArray/CFDictionary for the device directory + aggregate-device descriptions.
 core-foundation = "0.10"
 
+# System-audio capture: cpal's PipeWire host opens the default sink's monitor.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.18", features = ["pipewire"] }
+
 [dev-dependencies]
 # mod_harness example only: file decode (WAV/AIFF/MP3/FLAC via symphonia) and
 # PNG output for the offline feature-grading harness. Dev-only — the crate's

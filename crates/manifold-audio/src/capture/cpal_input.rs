@@ -96,7 +96,13 @@ impl AudioCaptureDevice {
             host.default_input_device()
                 .ok_or_else(|| "No default audio input device".to_string())?
         };
+        Self::from_device(device)
+    }
 
+    /// Open `device` as an input at its default configuration. Capture
+    /// starts at [`start()`](Self::start).
+    pub(crate) fn from_device(device: cpal::Device) -> Result<Self, String> {
+        manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::AudioInput);
         let name = device_name(&device).unwrap_or_else(|| "Unknown".into());
         log::info!("[AudioCapture] Using device: {name}");
 

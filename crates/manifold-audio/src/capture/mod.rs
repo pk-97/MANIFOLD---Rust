@@ -13,8 +13,8 @@
 //!   an audio interface, the built-in mic) via `cpal`. See [`cpal_input`].
 //! * **Output taps** — the system-wide mix, or one application's audio, captured
 //!   without any cable or loopback driver. macOS uses CoreAudio process taps
-//!   (14.4+); other platforms have native equivalents (WASAPI loopback,
-//!   PipeWire monitors) and are stubbed until implemented. See [`tap`].
+//!   (14.4+); Linux opens the default PipeWire sink's monitor (the system mix
+//!   only). See [`tap`].
 //!
 //! The runtime resolves a persisted `AudioDeviceRef` to a [`CaptureSource`] and
 //! calls [`open`]; nothing above this module knows which backend it got.
@@ -23,7 +23,7 @@ mod clock;
 mod cpal_input;
 
 #[cfg_attr(target_os = "macos", path = "process_tap.rs")]
-#[cfg_attr(not(target_os = "macos"), path = "unsupported_tap.rs")]
+#[cfg_attr(not(target_os = "macos"), path = "pipewire_tap.rs")]
 mod tap;
 
 pub(crate) use cpal_input::device_name;

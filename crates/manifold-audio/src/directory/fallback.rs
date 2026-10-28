@@ -1,7 +1,7 @@
 //! Cross-platform fallback [`AudioDeviceDirectory`] built on cpal.
 //!
-//! Used on every non-macOS platform until a native backend (PipeWire/JACK on
-//! Linux, WASAPI on Windows) lands. cpal only knows device names and channel
+//! Used off the Mac. On Linux cpal picks its PipeWire host when a PipeWire
+//! session runs, else ALSA. cpal only knows device names and channel
 //! counts, so this backend fills what it can and leans on the graceful
 //! degradation the trait is designed around: the UID is the device name (the
 //! only stable handle cpal offers), channels are unnamed (→ "Channel N"),
@@ -14,7 +14,7 @@
 
 use cpal::traits::{DeviceTrait, HostTrait};
 
-use super::{AudioDeviceDirectory, ChannelInfo, DeviceInfo, Subscription};
+use super::{AudioDeviceDirectory, ChannelInfo, DeviceInfo, Subscription, TapCapabilities};
 
 pub struct CpalDirectory;
 
@@ -59,6 +59,13 @@ impl AudioDeviceDirectory for CpalDirectory {
                 })
             })
             .collect()
+    }
+
+    fn tap_capabilities(&self) -> TapCapabilities {
+        TapCapabilities {
+            system_audio: crate::capture::tap_supported(),
+            app_audio: false,
+        }
     }
 
     fn subscribe(&self, _on_change: Box<dyn Fn() + Send + Sync>) -> Subscription {
