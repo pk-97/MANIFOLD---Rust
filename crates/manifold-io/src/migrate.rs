@@ -114,6 +114,12 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.24.0".to_string());
     }
 
+    // Motion Blur reads scene depth; stored graphs get the depth wire.
+    if is_version_less_than(&version, "1.25.0") {
+        crate::migrations::motion_blur_depth_v1250::migrate(&mut root);
+        root["projectVersion"] = Value::String("1.25.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

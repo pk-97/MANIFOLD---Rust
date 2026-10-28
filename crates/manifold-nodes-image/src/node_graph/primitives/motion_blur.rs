@@ -1,98 +1,131 @@
-//! `node.motion_blur` — velocity-directed gather motion blur from a scene's
-//! velocity buffer + a Camera's shutter angle.
-//! The tail of DoF v1's `CinematicScene` chain — this atom does ONLY
-//! the per-pixel smear gather, no CoC/SSAO composition (the no-fused-
-//! monolith rule: motion blur is one dispatch, not folded into the DoF or
-//! SSAO chains it sits after).
+//! `node.motion_blur` — shutter motion blur from a scene's velocity and depth.
 //!
-//! Exact formula, no substitution:
-//! ```text
-//! smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle / 360)   // clamped to +/- max_blur_px
-//! out      = average of 8 equal-weight taps of `in`, evenly spaced
-//!            (inclusive) from uv - smear_uv/2 to uv + smear_uv/2
-//! ```
-//! `shutter_angle = 0` (pinhole default) collapses every tap onto the same
-//! texel, so the average equals that texel unchanged — an unlensed shutter
-//! produces a bit-clean pass-through (invariant I2, the D4 twin of D1's
-//! pinhole CoC invariant).
+//! Three passes (Jimenez 2014, the tile/neighbour reconstruction filter):
+//! 1. `motion_blur_tiles.wgsl`: the longest smear in each 16 px tile.
+//! 2. `motion_blur_neighbors.wgsl`: the longest smear reaching each tile from
+//!    tiles within the longest possible smear, so pixels beside a moving
+//!    object blur past its edge.
+//! 3. `motion_blur.wgsl`: per-pixel taps along that smear, weighted by depth
+//!    so a moving foreground covers the background and turns see-through at
+//!    its own edges, and the background never bleeds over the foreground.
 //!
-//! `enabled = false` skips the node entirely — `skip_passthrough` aliases
-//! `in` onto `out` (zero GPU work). `shutter_angle = 0` short-circuits
-//! `run()` as a host-side texture copy: the kernel's taps already collapse
-//! at shutter 0, so the copy just skips the dispatch launch cost.
-//!
-//! `velocity` is GBUFFER's `node.render_scene` `velocity` output — Rg16Float
-//! NDC-space `(dx, dy) = (ndc_now - ndc_prev)`, camera + rigid-object motion
-//! only (the documented v1 limitation: a re-scattered
-//! instance array contributes no per-instance velocity). Read as
-//! `CoincidentTexel` (own-texel, exact — a directional vector must never be
-//! blended with a neighbour's). `in` (the color to smear) is read as
-//! `Gather`: the tap coordinate is body-computed from the velocity-derived
-//! smear vector, so the codegen can't pre-sample it into a register — the
-//! body samples it itself via the stencil-fetch `fetch_in(uv)` free function
-//! (same mechanism `node.variable_blur` uses for its own Gather inputs),
-//! which additionally lets a fusable upstream pointwise producer (e.g. the
-//! DoF/SSAO composited color immediately upstream in `CinematicScene`)
-//! virtually chain into this dispatch instead of materializing first.
-//!
-//! `camera` reads ONLY `lens.shutter_angle` (the Camera's lens block,
-//! written upstream by `node.camera_lens` — "one lens, every consumer
-//! reads it") entirely via the one
-//! `derived_uniforms` field below, never as a GPU binding (P0/D7). This
-//! atom declares NO port-shadowed scalar of its own for `shutter_angle` —
-//! `node.camera_lens` already exposes `shutter_angle` as a port-shadowed
-//! param (its own composition_notes name exactly this: "a drop macro into
-//! shutter_angle for a motion-blur smear"), and combining a port-shadow
-//! override WITH a derived-uniforms Camera-fallback on the SAME field in
-//! ONE atom is a composition that doesn't exist anywhere in this codebase
-//! (verified: `node.coc_from_depth`'s `focus_distance`/`f_stop` and
-//! `node.ssao_from_depth`'s `radius`/`intensity`/`bias` both read/declare
-//! their P1/P2-era Camera-derived or plain-param fields with zero such
-//! combination, and their landing reports both name the missing "wire
-//! overrides camera-derived fallback" composition explicitly as unbuilt
-//! compiler machinery). Building that composition here would be new
-//! compiler work inside an atom-authoring phase — forbidden by this
-//! phase's brief; the zero-new-mechanism, already-shipped resolution is
-//! this atom reading the lens purely via derived_uniforms and the preset's
-//! `shutter_angle` card binding directly to `node.camera_lens`, exactly
-//! mirroring P1/P2's `focus_distance`/`f_stop`/`exposure_ev` cards. Flagged
-//! here for Peter, same as P1/P2's equivalent calls.
+//! A pixel's smear is `velocity_ndc * 0.5 * viewport * (shutter_angle / 360)`,
+//! centred on the pixel, its length capped at `max_blur_px`. `velocity` is
+//! `render_scene`'s NDC move since last frame and `depth` its raw reversed-Z
+//! depth, both read at each pixel's spot in their own grid. `camera` supplies
+//! the shutter angle and near/far. Tiles where nothing moves copy the source
+//! and skip the taps; a closed shutter copies the whole frame.
 
 use std::borrow::Cow;
 
-use manifold_gpu::GpuSamplerDesc;
+use manifold_gpu::{
+    GpuBinding, GpuComputePipeline, GpuDevice, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
+    GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{
-    dispatch_standalone_2d, standalone_pipeline,
-};
 use manifold_node_engine::scene::camera::Camera;
 
-/// Generated-codegen uniform layout: the `max_blur_px` param (f32, PARAMS
-/// order), the `enabled` param (Bool → u32), then the one DERIVED field
-/// (`shutter_angle`), padded to a 16-byte (4-word) multiple (3 real words
-/// plus 1 pad). The shader also reads `enabled` so a fused WgslCompute kernel
-/// preserves the host skip passthrough when the original node is folded into a
-/// region. Mirrors
-/// `coc_from_depth.rs`/`ssao_from_depth.rs`'s layout-note convention.
+const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
+const COMMON: &str = include_str!("shaders/motion_blur_common.wgsl");
+
+/// Tile edge in output pixels; `TILE` in motion_blur_common.wgsl matches.
+const TILE: u32 = 16;
+
+/// `Uniforms` in motion_blur_common.wgsl, shared by all three passes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MotionBlurUniforms {
+    dims: [f32; 2],
+    shutter_scale: f32,
     max_blur_px: f32,
-    enabled: u32,
+    near: f32,
+    far: f32,
+    reach_tiles: u32,
+    _pad: u32,
+}
+
+#[derive(Clone, Copy)]
+struct MotionBlurSettings {
     shutter_angle: f32,
-    _pad0: f32,
+    max_blur_px: f32,
+    near: f32,
+    far: f32,
+}
+
+pub struct MotionBlurPipelines {
+    tiles: GpuComputePipeline,
+    neighbors: GpuComputePipeline,
+    gather: GpuComputePipeline,
+}
+
+impl MotionBlurPipelines {
+    fn new(device: &GpuDevice) -> Self {
+        let make = |pass: &str, label| {
+            let source = format!("{DEPTH_COMMON}\n{COMMON}\n{pass}");
+            device.create_compute_pipeline(&source, "cs_main", label)
+        };
+        Self {
+            tiles: make(
+                include_str!("shaders/motion_blur_tiles.wgsl"),
+                "motion blur tiles",
+            ),
+            neighbors: make(
+                include_str!("shaders/motion_blur_neighbors.wgsl"),
+                "motion blur neighbours",
+            ),
+            gather: make(
+                include_str!("shaders/motion_blur.wgsl"),
+                "motion blur gather",
+            ),
+        }
+    }
+}
+
+pub struct MotionBlurTiles {
+    tiles: GpuTexture,
+    neighbors: GpuTexture,
+}
+
+impl MotionBlurTiles {
+    fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+        let make = |label| {
+            device.create_texture(&GpuTextureDesc {
+                width,
+                height,
+                depth: 1,
+                format: GpuTextureFormat::Rgba16Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+                label,
+                mip_levels: 1,
+            })
+        };
+        Self {
+            tiles: make("motion blur tiles"),
+            neighbors: make("motion blur neighbours"),
+        }
+    }
+}
+
+/// Tiles a smear can cross: half the longest smear, plus the adjacent tile,
+/// never more than the tile grid itself.
+fn reach_tiles(max_blur_px: f32, tile_dims: (u32, u32)) -> u32 {
+    let reach = (max_blur_px * 0.5 / TILE as f32).ceil() as u32 + 1;
+    reach.min(tile_dims.0.max(tile_dims.1))
 }
 
 manifold_node_engine::primitive! {
     name: MotionBlur,
     type_id: "node.motion_blur",
-    purpose: "Velocity-directed gather motion blur (thin-shutter model): smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), clamped to +/- max_blur_px; output is the average of 8 equal-weight taps of `in`, evenly spaced from uv - smear_uv/2 to uv + smear_uv/2. shutter_angle = 0 (pinhole default) collapses every tap onto the same texel, an exact pass-through. `velocity` expects render_scene's Rg16Float NDC-delta `velocity` output (own-texel read, never filtered). `camera` reads only the wired Camera's lens.shutter_angle (written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding, and this atom declares no port-shadowed scalar of its own (wire an LFO/beat envelope into node.camera_lens's own shutter_angle port for live control). `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work); `shutter_angle = 0` short-circuits to a host-side texture copy (the kernel's taps already collapse at shutter 0, so the copy just skips the dispatch launch cost).",
+    purpose: "Shutter motion blur (tile/neighbour reconstruction filter). smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), centred on the pixel, length capped at max_blur_px. Each pixel samples along the longest smear among nearby 16 px tiles, weighting taps by depth: a nearer tap counts where its own smear reaches the pixel, a farther tap where the pixel's smear reaches it, so moving objects blur past their edges and the background never bleeds over them. `velocity` expects render_scene's Rg16Float NDC-delta output and `depth` its raw reversed-Z depth, both from the same render_scene. `camera` supplies lens.shutter_angle (written by node.camera_lens) and near/far. Tiles with no visible motion copy the source; shutter_angle = 0 copies the frame; `enabled = false` aliases `in` to `out` with no GPU work.",
     inputs: {
         in: Texture2D required,
         velocity: Texture2D required,
+        depth: Texture2D required,
         camera: Camera required,
     },
     outputs: {
@@ -111,8 +144,7 @@ manifold_node_engine::primitive! {
             name: Cow::Borrowed("enabled"),
             // "Motion Blur", not "Enabled": this param is stamped onto the
             // scene panel's Camera card next to bokeh_gather's own toggle,
-            // and two rows both labeled "Enabled" are indistinguishable
-            // (Peter 2026-08-27).
+            // and two rows both labeled "Enabled" are indistinguishable.
             label: "Motion Blur",
             ty: ParamType::Bool,
             default: ParamValue::Bool(true),
@@ -121,38 +153,147 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Warp,
-    composition_notes: "Wire render_scene's `velocity` output straight into `velocity` (requires GBUFFER's emit_velocity path — lazy, costs nothing unless wired) and the Camera used for `node.camera_lens` into `camera` so the shutter reads the same lens exposure/DoF use. `samples` is a fixed WGSL const (8), not a runtime param — D4 commits the tap count. `max_blur_px` is a safety clamp on the smear distance in pixels, independent of `node.variable_blur`'s own `max_radius` (no shared-units contract with the DoF chain the way coc_from_depth has with variable_blur — motion blur and DoF are independent smears in this preset). Sits at the END of the CinematicScene chain, after the DoF+SSAO composited color, so its Gather `in` read can virtually stencil-fetch-chain that upstream pointwise work instead of materializing an extra intermediate.",
+    composition_notes: "Wire one render_scene's `velocity` and `depth` outputs into `velocity` and `depth` (both lazy, free unless wired), and the Camera used for `node.camera_lens` into `camera` so the shutter matches the lens exposure and DoF use. Drive the shutter from node.camera_lens's own `shutter_angle` port. `max_blur_px` caps the smear length in pixels. Sits at the end of the cinematic chain, after DoF and before tone mapping, so highlights streak in HDR.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "Motion Blur", category: Atom },
-    summary: "Smears each pixel along its own screen-space motion, scaled by the camera's shutter angle — the classic filmic motion-blur look, driven by real per-object movement instead of a post-process approximation.",
+    summary: "Smears moving things along their screen motion for the camera's shutter angle, past their own edges and in front of what they pass, driven by real per-object movement.",
     category: BlurAndSharpen,
     role: Filter,
     aliases: ["motion blur", "shutter blur", "velocity blur", "smear"],
-    fusion_kind: MultiInputCoincident,
-    wgsl_body: include_str!("shaders/motion_blur_body.wgsl"),
-    input_access: [Gather, CoincidentTexel],
-    stencil_fetch: true,
-    derived_uniforms: ["shutter_angle"],
+    boundary_reason: BarrieredReduction,
+    extra_fields: {
+        pipelines: Option<MotionBlurPipelines> = None,
+        tiles: Option<MotionBlurTiles> = None,
+    },
 }
 
-// Per-frame recompute for a FUSED
-// region's `shutter_angle` field — reads the region's routed Camera
-// external, matching `run()`'s own `cam.lens.shutter_angle` read below
-// exactly (both are the single source of truth; there is no shared helper
-// fn to factor out, unlike coc_from_depth/ssao_from_depth's multi-field
-// `derive_*_scalars`, because this atom reads exactly one field).
-inventory::submit! {
-    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
-        type_id: "node.motion_blur",
-        array_ports: &[],
-        recompute: |ctx| ctx.camera.map(|c| vec![c.lens.shutter_angle]),
+impl MotionBlur {
+    pub fn prewarm_pipelines(device: &GpuDevice) {
+        let _ = MotionBlurPipelines::new(device);
+    }
+
+    fn encode(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        src: &GpuTexture,
+        velocity: &GpuTexture,
+        depth: &GpuTexture,
+        out: &GpuTexture,
+        s: MotionBlurSettings,
+    ) {
+        let (w, h) = (out.width, out.height);
+        if w == 0 || h == 0 {
+            return;
+        }
+        if s.shutter_angle <= 0.0 || s.max_blur_px <= 0.0 {
+            gpu.copy_texture_to_texture(src, out, w, h);
+            return;
+        }
+        let (tw, th) = (w.div_ceil(TILE), h.div_ceil(TILE));
+        if self
+            .tiles
+            .as_ref()
+            .is_none_or(|t| t.tiles.width != tw || t.tiles.height != th)
+        {
+            self.tiles = Some(MotionBlurTiles::new(gpu.device, tw, th));
+        }
+        let t = self.tiles.as_ref().expect("motion blur tiles allocated");
+        let p = self
+            .pipelines
+            .get_or_insert_with(|| MotionBlurPipelines::new(gpu.device));
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+        let uniforms = MotionBlurUniforms {
+            dims: [w as f32, h as f32],
+            shutter_scale: s.shutter_angle / 360.0,
+            max_blur_px: s.max_blur_px,
+            near: s.near,
+            far: s.far,
+            reach_tiles: reach_tiles(s.max_blur_px, (tw, th)),
+            _pad: 0,
+        };
+        let u = bytemuck::bytes_of(&uniforms);
+        let tile_grid = [tw.div_ceil(8), th.div_ceil(8), 1];
+        gpu.native_enc.dispatch_compute(
+            &p.tiles,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: u,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: velocity,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &t.tiles,
+                },
+            ],
+            tile_grid,
+            "motion blur tiles",
+        );
+        gpu.native_enc.dispatch_compute(
+            &p.neighbors,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: u,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: &t.tiles,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &t.neighbors,
+                },
+            ],
+            tile_grid,
+            "motion blur neighbours",
+        );
+        gpu.native_enc.dispatch_compute(
+            &p.gather,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: u,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: src,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: velocity,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: depth,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: &t.neighbors,
+                },
+                GpuBinding::Sampler {
+                    binding: 5,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: out,
+                },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "motion blur gather",
+        );
     }
 }
 
 impl Primitive for MotionBlur {
-    /// Param-driven no-op: `enabled = false`, or `max_blur_px <= 0` (the
-    /// smear clamps to zero and motion_blur_body.wgsl returns `fetch_in(uv)`
-    /// before its taps), aliases `in` onto `out` — zero GPU work.
+    /// `enabled = false`, or an unwired `max_blur_px <= 0`, aliases `in`
+    /// onto `out` with no GPU work.
     fn skip_passthrough(
         &self,
         params: &ParamValues,
@@ -176,652 +317,162 @@ impl Primitive for MotionBlur {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let max_blur_px = ctx.param_f32("max_blur_px", 32.0);
-
         let cam = ctx
             .inputs
             .camera("camera")
             .unwrap_or_else(Camera::default_perspective);
-        let shutter_angle = cam.lens.shutter_angle;
-
         let Some(src) = ctx.inputs.texture_2d("in") else {
             return;
         };
-        let Some(velocity_tex) = ctx.inputs.texture_2d("velocity") else {
+        let Some(velocity) = ctx.inputs.texture_2d("velocity") else {
             return;
         };
-        let Some(out_tex) = ctx.outputs.texture_2d("out") else {
+        let Some(depth) = ctx.inputs.texture_2d("depth") else {
             return;
         };
-        let (w, h) = (out_tex.width, out_tex.height);
-        if w == 0 || h == 0 {
+        let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
-        }
-
-        let gpu = ctx.gpu_encoder();
-        // shutter_angle == 0 collapses the gather taps onto the same texel, so
-        // the kernel's output is already a bit-clean copy — skip the dispatch
-        // and just blit. The skip_passthrough hook can't see the Camera, so
-        // this zero-cost pass-through lives in run().
-        if shutter_angle == 0.0 {
-            gpu.copy_texture_to_texture(src, out_tex, w, h);
-            return;
-        }
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
-
-        let uniforms = MotionBlurUniforms {
+        };
+        let settings = MotionBlurSettings {
+            shutter_angle: cam.lens.shutter_angle,
             max_blur_px,
-            // run() only executes when the node is enabled (skip_passthrough
-            // aliases `in` → `out` when `enabled = false`), so the standalone
-            // codegen ABI receives 1 here. Fused WgslCompute kernels receive
-            // the live Bool field and the body handles the disabled path.
-            enabled: 1,
-            shutter_angle,
-            _pad0: 0.0,
+            near: cam.near,
+            far: cam.far,
         };
-
-        dispatch_standalone_2d(
-            gpu,
-            pipeline,
-            bytemuck::bytes_of(&uniforms),
-            &[src, velocity_tex],
-            Some(sampler),
-            out_tex,
-            "node.motion_blur",
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use manifold_node_engine::exec::effect_node::EffectNode;
-
-    #[test]
-    fn skip_passthrough_aliases_in_to_out_only_when_enabled_false() {
-        let prim = MotionBlur::new();
-        let node: &dyn EffectNode = &prim;
-        // Absent or true → no skip (the node runs).
-        let mut params = ParamValues::default();
-        assert_eq!(node.skip_passthrough(&params, &[]), None);
-        params.insert(Cow::Borrowed("enabled"), ParamValue::Bool(true));
-        assert_eq!(node.skip_passthrough(&params, &[]), None);
-        // Explicit false → alias `in` onto `out` (zero GPU work).
-        params.insert(Cow::Borrowed("enabled"), ParamValue::Bool(false));
-        assert_eq!(node.skip_passthrough(&params, &[]), Some(("in", "out")));
-    }
-
-    #[test]
-    fn zero_max_blur_px_aliases_in_to_out_unless_wired() {
-        let prim = MotionBlur::new();
-        let node: &dyn EffectNode = &prim;
-        let mut params = ParamValues::default();
-        params.insert(Cow::Borrowed("max_blur_px"), ParamValue::Float(0.0));
-        assert_eq!(node.skip_passthrough(&params, &[]), Some(("in", "out")));
-        params.insert(Cow::Borrowed("max_blur_px"), ParamValue::Float(0.25));
-        assert_eq!(node.skip_passthrough(&params, &[]), None);
-        params.insert(Cow::Borrowed("max_blur_px"), ParamValue::Float(0.0));
-        assert_eq!(node.skip_passthrough(&params, &["max_blur_px"]), None);
-    }
-}
-
-/// **CPU reference** on a synthetic velocity ramp (I1) — a plain-Rust
-/// implementation of the D4 algorithm, independent of the WGSL body, used
-/// by the I1 GPU-vs-CPU synthetic-ramp parity gpu_test further down.
-#[cfg(test)]
-pub(crate) mod cpu_reference {
-    const MOTION_BLUR_SAMPLES: usize = 8;
-
-    /// A synthetic RGBA color buffer, bilinear-sampled with CLAMP-TO-EDGE
-    /// addressing (matching `textureSampleLevel`'s default sampler mode,
-    /// `GpuSamplerDesc::default()`).
-    pub struct ColorBuffer<'a> {
-        pub w: i32,
-        pub h: i32,
-        pub rgba: &'a [[f32; 4]],
-    }
-
-    impl ColorBuffer<'_> {
-        fn texel(&self, x: i32, y: i32) -> [f32; 4] {
-            let cx = x.clamp(0, self.w - 1);
-            let cy = y.clamp(0, self.h - 1);
-            self.rgba[(cy * self.w + cx) as usize]
-        }
-
-        /// Bilinear sample at a UV coordinate, clamp-to-edge.
-        fn sample(&self, u: f32, v: f32) -> [f32; 4] {
-            let px = u * self.w as f32 - 0.5;
-            let py = v * self.h as f32 - 0.5;
-            let x0 = px.floor();
-            let y0 = py.floor();
-            let fx = px - x0;
-            let fy = py - y0;
-            let x0i = x0 as i32;
-            let y0i = y0 as i32;
-            let c00 = self.texel(x0i, y0i);
-            let c10 = self.texel(x0i + 1, y0i);
-            let c01 = self.texel(x0i, y0i + 1);
-            let c11 = self.texel(x0i + 1, y0i + 1);
-            let mut out = [0.0f32; 4];
-            for c in 0..4 {
-                let top = c00[c] * (1.0 - fx) + c10[c] * fx;
-                let bot = c01[c] * (1.0 - fx) + c11[c] * fx;
-                out[c] = top * (1.0 - fy) + bot * fy;
-            }
-            out
-        }
-    }
-
-    /// The D4 algorithm, transcribed exactly (independent of the WGSL
-    /// body) — one texel's motion-blurred output, `[r,g,b,a]`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn motion_blur_texel(
-        color: &ColorBuffer<'_>,
-        velocity_ndc: [f32; 2],
-        cx: i32,
-        cy: i32,
-        max_blur_px: f32,
-        shutter_angle: f32,
-    ) -> [f32; 4] {
-        let dims = [color.w as f32, color.h as f32];
-        let uv = [(cx as f32 + 0.5) / dims[0], (cy as f32 + 0.5) / dims[1]];
-
-        if shutter_angle <= 0.0 {
-            return color.sample(uv[0], uv[1]);
-        }
-        let smear_px_raw = [
-            velocity_ndc[0] * 0.5 * dims[0] * (shutter_angle / 360.0),
-            velocity_ndc[1] * 0.5 * dims[1] * (shutter_angle / 360.0),
-        ];
-        let smear_px = [
-            smear_px_raw[0].clamp(-max_blur_px, max_blur_px),
-            smear_px_raw[1].clamp(-max_blur_px, max_blur_px),
-        ];
-        if smear_px[0] * smear_px[0] + smear_px[1] * smear_px[1] < 1e-4 {
-            return color.sample(uv[0], uv[1]);
-        }
-        let smear_uv = [smear_px[0] / dims[0], smear_px[1] / dims[1]];
-
-        let mut acc = [0.0f32; 4];
-        for i in 0..MOTION_BLUR_SAMPLES {
-            let t = i as f32 / (MOTION_BLUR_SAMPLES - 1) as f32 - 0.5;
-            let tap_u = uv[0] + smear_uv[0] * t;
-            let tap_v = uv[1] + smear_uv[1] * t;
-            let s = color.sample(tap_u, tap_v);
-            for c in 0..4 {
-                acc[c] += s[c];
-            }
-        }
-        for c in acc.iter_mut() {
-            *c /= MOTION_BLUR_SAMPLES as f32;
-        }
-        acc
-    }
-}
-
-/// **Analytic sanity** (pure CPU, no GPU device — mirrors
-/// `coc_from_depth.rs`'s `hand_computed_coc` / `ssao_from_depth.rs`'s
-/// `analytic_sanity` "CPU-only formula check" pattern): `shutter_angle = 0`
-/// must collapse every one of the 8 taps onto the exact same UV, so
-/// `cpu_reference::motion_blur_texel`'s output equals that texel's own
-/// color unchanged — the CPU-side proof of I2, independent of the GPU
-/// kernel (`gpu_tests::zero_shutter_angle_is_bit_clean_passthrough` proves
-/// the same invariant on the shipping kernel).
-#[cfg(test)]
-mod analytic_sanity {
-    use super::cpu_reference::{ColorBuffer, motion_blur_texel};
-
-    #[test]
-    fn zero_shutter_angle_collapses_every_tap_to_the_center_texel() {
-        let (w, h) = (8i32, 8i32);
-        let mut rgba = vec![[0.0f32; 4]; (w * h) as usize];
-        for y in 0..h {
-            for x in 0..w {
-                let i = (y * w + x) as usize;
-                rgba[i] = [x as f32 / w as f32, y as f32 / h as f32, 0.5, 1.0];
-            }
-        }
-        let color = ColorBuffer { w, h, rgba: &rgba };
-
-        for y in 0..h {
-            for x in 0..w {
-                let expected = rgba[(y * w + x) as usize];
-                // A large, non-degenerate velocity — if shutter_angle=0
-                // didn't zero the smear term, this would visibly blur.
-                let got = motion_blur_texel(&color, [0.3, -0.25], x, y, 32.0, 0.0);
-                for c in 0..4 {
-                    assert!(
-                        (got[c] - expected[c]).abs() < 1e-5,
-                        "texel ({x},{y}) channel {c}: shutter=0 must reproduce the center texel exactly, expected={} got={}",
-                        expected[c],
-                        got[c]
-                    );
-                }
-            }
-        }
+        let gpu = ctx.gpu_encoder();
+        self.encode(gpu, src, velocity, depth, out, settings);
     }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! **I1** (`docs/ADDING_PRIMITIVES.md` "The codegen path is mandatory"): the generated
-    //! standalone kernel (built via `standalone_for_spec::<MotionBlur>()`,
-    //! the one that ships) must reproduce BOTH `cpu_reference::motion_blur_texel`
-    //! (the plain-Rust reference, I1) and the hand-authored `motion_blur.wgsl`
-    //! oracle (the codegen-path proof) texel-for-texel on a synthetic
-    //! non-uniform velocity ramp.
-    //!
-    //! **I2**: `shutter_angle = 0` must be an exact pass-through of `in`
-    //! (I2a, direct on the generated kernel) — mirrors
-    //! `coc_from_depth.rs`'s `pinhole_dof_chain_is_bit_clean_passthrough`
-    //! pattern, one dispatch instead of a 3-node chain since motion_blur has
-    //! no downstream stage to chain through.
-    //!
-    //! **I5**: preset load-smoke lives in a separate integration test file
-    //! (`tests/`), per the doc's `gpu_proofs` binary convention, not here.
     use half::f16;
-
-    use manifold_gpu::{
-        GpuBinding, GpuComputePipeline, GpuDevice, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
-        GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
-    };
-
-    use super::cpu_reference::{ColorBuffer, motion_blur_texel};
-    use super::{MotionBlur, MotionBlurUniforms};
+    use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension};
+    use manifold_gpu::{GpuTextureFormat, GpuTextureUsage};
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
-    fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
-        assert_eq!(px.len(), (w * h * 4) as usize);
+    use super::{MotionBlur, MotionBlurSettings};
+
+    fn upload(
+        device: &GpuDevice,
+        w: u32,
+        h: u32,
+        format: GpuTextureFormat,
+        bytes: &[u8],
+    ) -> GpuTexture {
         let tex = device.create_texture(&GpuTextureDesc {
             width: w,
             height: h,
             depth: 1,
-            format: GpuTextureFormat::Rgba16Float,
+            format,
             dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::CPU_UPLOAD
-                | GpuTextureUsage::SHADER_READ
-                | GpuTextureUsage::COPY_SRC,
-            label,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "motion-blur-test-input",
             mip_levels: 1,
         });
-        let bytes = unsafe {
-            std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px))
-        };
         device.upload_texture(&tex, bytes);
         tex
     }
 
-    /// Synthetic velocity ramp: NDC delta varies smoothly in x AND y (both
-    /// components non-zero and non-uniform, up to +/-0.2 NDC units — a
-    /// visible but not extreme per-frame motion) so a per-texel or
-    /// per-axis bug can't hide behind a flat/degenerate fixture.
-    fn velocity_ramp(w: u32, h: u32) -> Vec<[f32; 2]> {
-        let mut v = vec![[0.0f32, 0.0f32]; (w * h) as usize];
-        for y in 0..h {
-            for x in 0..w {
-                let fx = x as f32 / (w.saturating_sub(1).max(1)) as f32;
-                let fy = y as f32 / (h.saturating_sub(1).max(1)) as f32;
-                v[(y * w + x) as usize] = [(fx - 0.5) * 0.4, (fy - 0.5) * 0.4];
-            }
-        }
-        v
+    fn rgba16(px: &[[f32; 4]]) -> Vec<u8> {
+        px.iter()
+            .flatten()
+            .flat_map(|v| f16::from_f32(*v).to_bits().to_le_bytes())
+            .collect()
     }
 
-    fn upload_velocity(device: &GpuDevice, w: u32, h: u32, v: &[[f32; 2]]) -> GpuTexture {
-        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
-        for (i, vv) in v.iter().enumerate() {
-            px[i * 4] = f16::from_f32(vv[0]);
-            px[i * 4 + 1] = f16::from_f32(vv[1]);
-            px[i * 4 + 2] = f16::from_f32(0.0);
-            px[i * 4 + 3] = f16::from_f32(1.0);
-        }
-        upload_rgba16f(device, w, h, "motion-blur-velocity-ramp", &px)
-    }
-
-    /// A non-uniform RGBA gradient — the color input every test dispatches
-    /// motion_blur against.
-    fn color_gradient(device: &GpuDevice, w: u32, h: u32) -> (GpuTexture, Vec<[f32; 4]>) {
-        let mut rgba = vec![[0.0f32; 4]; (w * h) as usize];
-        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
-        for y in 0..h {
-            for x in 0..w {
-                let i = (y * w + x) as usize;
-                let r = x as f32 / w as f32;
-                let g = y as f32 / h as f32;
-                let b = 0.5;
-                let a = 1.0;
-                rgba[i] = [r, g, b, a];
-                px[i * 4] = f16::from_f32(r);
-                px[i * 4 + 1] = f16::from_f32(g);
-                px[i * 4 + 2] = f16::from_f32(b);
-                px[i * 4 + 3] = f16::from_f32(a);
-            }
-        }
-        (
-            upload_rgba16f(device, w, h, "motion-blur-color-gradient", &px),
-            rgba,
-        )
-    }
-
-    fn readback_rgba(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
+    fn readback(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<f32> {
         let bytes_per_row = w * 8;
-        let total = u64::from(h * bytes_per_row);
-        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
+        let readback = device.create_buffer(
+            u64::from(h * bytes_per_row),
+            manifold_gpu::BufferUse::Readback,
+        );
         let mut enc = device.create_encoder("motion-blur-readback");
         enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
         enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-        (0..(w * h) as usize)
-            .map(|i| {
-                let o = i * 4;
-                [
-                    f16::from_bits(halves[o]).to_f32(),
-                    f16::from_bits(halves[o + 1]).to_f32(),
-                    f16::from_bits(halves[o + 2]).to_f32(),
-                    f16::from_bits(halves[o + 3]).to_f32(),
-                ]
-            })
+        halves
+            .chunks(4)
+            .map(|c| f16::from_bits(c[0]).to_f32())
             .collect()
     }
 
-    fn mb_uniforms(max_blur_px: f32, shutter_angle: f32) -> MotionBlurUniforms {
-        MotionBlurUniforms {
-            max_blur_px,
-            enabled: 1,
-            shutter_angle,
-            _pad0: 0.0,
+    /// A white square moving right over a still black sky. With a 360°
+    /// shutter its 16 px smear reaches 8 px past each side: the sky beside
+    /// it picks up white, the square's own edge turns see-through, and sky
+    /// beyond the smear or above the square stays black.
+    #[test]
+    fn moving_square_smears_past_its_edges() {
+        let device = manifold_gpu::testkit::test_device();
+        let (w, h) = (64u32, 32u32);
+        let inside = |x: u32, y: u32| (24..40).contains(&x) && (8..24).contains(&y);
+        let mut color = Vec::new();
+        let mut velocity = Vec::new();
+        let mut depth = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let sq = inside(x, y);
+                let c = if sq { 1.0 } else { 0.0 };
+                color.push([c, c, c, 1.0]);
+                // 16 px smear = ndc * 0.5 * 64.
+                velocity.push([if sq { 0.5 } else { 0.0 }, 0.0, 0.0, 1.0]);
+                // Reversed-Z: the square sits near, empty sky is 0.
+                depth.extend_from_slice(&(if sq { 0.5f32 } else { 0.0 }).to_le_bytes());
+            }
         }
-    }
-
-    fn dispatch(
-        device: &GpuDevice,
-        pipeline: &GpuComputePipeline,
-        sampler: &manifold_gpu::GpuSampler,
-        color: &GpuTexture,
-        velocity: &GpuTexture,
-        w: u32,
-        h: u32,
-        uniform_bytes: &[u8],
-    ) -> Vec<[f32; 4]> {
+        let src = upload(
+            &device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            &rgba16(&color),
+        );
+        let vel = upload(
+            &device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            &rgba16(&velocity),
+        );
+        let dep = upload(&device, w, h, GpuTextureFormat::R32Float, &depth);
         let out = RenderTarget::new(
-            device,
+            &device,
             w,
             h,
             GpuTextureFormat::Rgba16Float,
             "motion-blur-out",
         );
-        let mut enc = device.create_encoder("motion-blur-dispatch");
-        enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: uniform_bytes,
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: color,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: velocity,
-                },
-                GpuBinding::Sampler {
-                    binding: 3,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: &out.texture,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
-            "motion-blur-dispatch",
-        );
-        enc.commit_and_wait().expect("GPU work completes");
-        readback_rgba(device, &out.texture, w, h)
-    }
 
-    /// **I1a**: generated kernel vs CPU-Rust reference on the synthetic
-    /// velocity ramp — the doc's house pattern (implemented twice from the
-    /// same committed spec, compared pixel-for-pixel).
-    #[test]
-    fn generated_motion_blur_matches_cpu_reference_on_synthetic_ramp() {
-        let device = manifold_gpu::testkit::test_device();
-        let (w, h) = (24u32, 16u32);
-        let velocity = velocity_ramp(w, h);
-        let velocity_tex = upload_velocity(&device, w, h, &velocity);
-        let (color_tex, color_rgba) = color_gradient(&device, w, h);
-
-        let (max_blur_px, shutter_angle) = (32.0f32, 180.0f32);
-        let uniforms = mb_uniforms(max_blur_px, shutter_angle);
-        let bytes = bytemuck::bytes_of(&uniforms);
-
-        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MotionBlur>()
-            .expect("node.motion_blur standalone codegen");
-        let pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            manifold_node_engine::freeze::codegen::ENTRY,
-            "motion-blur-generated",
-        );
-        let sampler = device.create_sampler(&GpuSamplerDesc::default());
-        let gen_out = dispatch(
-            &device,
-            &pipeline,
-            &sampler,
-            &color_tex,
-            &velocity_tex,
-            w,
-            h,
-            bytes,
-        );
-
-        let color_buf = ColorBuffer {
-            w: w as i32,
-            h: h as i32,
-            rgba: &color_rgba,
+        let mut blur = MotionBlur::new();
+        let mut native = device.create_encoder("motion-blur-test");
+        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
+        let settings = MotionBlurSettings {
+            shutter_angle: 360.0,
+            max_blur_px: 32.0,
+            near: 0.1,
+            far: 100.0,
         };
-        for y in 0..h as i32 {
-            for x in 0..w as i32 {
-                let idx = (y as u32 * w + x as u32) as usize;
-                let vel = velocity[idx];
-                let cpu = motion_blur_texel(&color_buf, vel, x, y, max_blur_px, shutter_angle);
-                let gpu = gen_out[idx];
-                for c in 0..4 {
-                    assert!(
-                        (cpu[c] - gpu[c]).abs() < 2e-3,
-                        "texel ({x},{y}) channel {c}: cpu={} gpu={}",
-                        cpu[c],
-                        gpu[c]
-                    );
-                }
-            }
-        }
-    }
+        blur.encode(&mut gpu, &src, &vel, &dep, &out.texture, settings);
+        drop(gpu);
+        native.commit_and_wait().expect("GPU work completes");
+        let r = readback(&device, &out.texture, w, h);
+        let at = |x: u32, y: u32| r[(y * w + x) as usize];
 
-    /// **I2**: `shutter_angle = 0` is an exact pass-through of `in` — every
-    /// tap collapses onto the center texel regardless of the velocity
-    /// buffer underneath it (a non-uniform velocity ramp, so this isn't
-    /// hiding behind an all-zero fixture).
-    #[test]
-    fn zero_shutter_angle_is_bit_clean_passthrough() {
-        let device = manifold_gpu::testkit::test_device();
-        let (w, h) = (16u32, 16u32);
-        let velocity = velocity_ramp(w, h);
-        let velocity_tex = upload_velocity(&device, w, h, &velocity);
-        let (color_tex, _color_rgba) = color_gradient(&device, w, h);
-
-        let uniforms = mb_uniforms(32.0, 0.0);
-        let bytes = bytemuck::bytes_of(&uniforms);
-        let sampler = device.create_sampler(&GpuSamplerDesc::default());
-
-        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MotionBlur>()
-            .expect("node.motion_blur standalone codegen");
-        let pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            manifold_node_engine::freeze::codegen::ENTRY,
-            "motion-blur-zero-shutter",
-        );
-        let got = dispatch(
-            &device,
-            &pipeline,
-            &sampler,
-            &color_tex,
-            &velocity_tex,
-            w,
-            h,
-            bytes,
-        );
-        let expected = readback_rgba(&device, &color_tex, w, h);
-
-        assert_eq!(expected.len(), got.len());
-        for (i, (e, g)) in expected.iter().zip(got.iter()).enumerate() {
-            for c in 0..4 {
-                assert!(
-                    (e[c] - g[c]).abs() < 1e-3,
-                    "texel {i} channel {c}: shutter=0 must pass through bit-clean, expected={} got={}",
-                    e[c],
-                    g[c]
-                );
-            }
-        }
-    }
-
-    /// A velocity buffer smaller than the colour (temporal upscale renders it
-    /// at 2/3) is read where the pixel is: the blur equals the one made from
-    /// the same buffer stretched to the colour's size by nearest texel. Sizes
-    /// are picked so no output pixel centre lands on a texel boundary of the
-    /// smaller buffer.
-    #[test]
-    fn smaller_velocity_buffer_is_read_where_the_pixel_is() {
-        let device = manifold_gpu::testkit::test_device();
-        let (w, h) = (24u32, 18u32);
-        let (vw, vh) = (15u32, 11u32);
-        let small = velocity_ramp(vw, vh);
-        let mut stretched = vec![[0.0f32; 2]; (w * h) as usize];
-        for y in 0..h {
-            for x in 0..w {
-                let sx = (2 * x + 1) * vw / (2 * w);
-                let sy = (2 * y + 1) * vh / (2 * h);
-                stretched[(y * w + x) as usize] = small[(sy * vw + sx) as usize];
-            }
-        }
-        let small_tex = upload_velocity(&device, vw, vh, &small);
-        let stretched_tex = upload_velocity(&device, w, h, &stretched);
-        // A per-pixel checker: a linear gradient would average back to itself
-        // under any symmetric smear and hide a wrong velocity read.
-        let mut checker = vec![f16::from_f32(0.0); (w * h * 4) as usize];
-        for y in 0..h {
-            for x in 0..w {
-                let i = ((y * w + x) * 4) as usize;
-                checker[i] = f16::from_f32(((x + y) % 2) as f32);
-                checker[i + 1] = f16::from_f32((x % 3) as f32 * 0.5);
-                checker[i + 2] = f16::from_f32((y % 2) as f32);
-                checker[i + 3] = f16::from_f32(1.0);
-            }
-        }
-        let color_tex = upload_rgba16f(&device, w, h, "motion-blur-checker", &checker);
-
-        let uniforms = mb_uniforms(32.0, 180.0);
-        let bytes = bytemuck::bytes_of(&uniforms);
-        let sampler = device.create_sampler(&GpuSamplerDesc::default());
-        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MotionBlur>()
-            .expect("node.motion_blur standalone codegen");
-        let pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            manifold_node_engine::freeze::codegen::ENTRY,
-            "motion-blur-small-velocity",
-        );
-        let from_small = dispatch(
-            &device,
-            &pipeline,
-            &sampler,
-            &color_tex,
-            &small_tex,
-            w,
-            h,
-            bytes,
-        );
-        let from_stretched = dispatch(
-            &device,
-            &pipeline,
-            &sampler,
-            &color_tex,
-            &stretched_tex,
-            w,
-            h,
-            bytes,
-        );
-        let unblurred = readback_rgba(&device, &color_tex, w, h);
-
-        let mut blurred_texels = 0;
-        for (i, (a, b)) in from_small.iter().zip(from_stretched.iter()).enumerate() {
-            for c in 0..4 {
-                assert!(
-                    (a[c] - b[c]).abs() < 1e-3,
-                    "texel {i} channel {c}: a smaller velocity buffer must read like its \
-                     nearest-texel stretch, small={} stretched={}",
-                    a[c],
-                    b[c]
-                );
-            }
-            if (0..4).any(|c| (a[c] - unblurred[i][c]).abs() > 1e-3) {
-                blurred_texels += 1;
-            }
-        }
         assert!(
-            blurred_texels > 0,
-            "the fixture must actually blur, or the comparison proves nothing"
+            at(42, 16) > 0.1,
+            "sky 2 px right of the square: {}",
+            at(42, 16)
         );
-    }
-
-    /// A fused kernel retains the host node's disabled passthrough even though
-    /// `skip_passthrough` is only available before the graph is fused.
-    #[test]
-    fn disabled_bool_is_shader_passthrough() {
-        let device = manifold_gpu::testkit::test_device();
-        let (w, h) = (16u32, 16u32);
-        let velocity = velocity_ramp(w, h);
-        let velocity_tex = upload_velocity(&device, w, h, &velocity);
-        let (color_tex, _color_rgba) = color_gradient(&device, w, h);
-
-        let mut uniforms = mb_uniforms(32.0, 180.0);
-        uniforms.enabled = 0;
-        let bytes = bytemuck::bytes_of(&uniforms);
-        let sampler = device.create_sampler(&GpuSamplerDesc::default());
-        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MotionBlur>()
-            .expect("node.motion_blur standalone codegen");
-        let pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            manifold_node_engine::freeze::codegen::ENTRY,
-            "motion-blur-disabled",
+        assert!(
+            at(21, 16) > 0.1,
+            "sky 3 px left of the square: {}",
+            at(21, 16)
         );
-        let got = dispatch(
-            &device,
-            &pipeline,
-            &sampler,
-            &color_tex,
-            &velocity_tex,
-            w,
-            h,
-            bytes,
-        );
-        let expected = readback_rgba(&device, &color_tex, w, h);
-
-        for (i, (e, g)) in expected.iter().zip(got.iter()).enumerate() {
-            for c in 0..4 {
-                assert!(
-                    (e[c] - g[c]).abs() < 1e-3,
-                    "texel {i} channel {c}: disabled motion blur must pass through, expected={} got={}",
-                    e[c],
-                    g[c]
-                );
-            }
-        }
+        assert!(at(38, 16) < 0.95, "square's own right edge: {}", at(38, 16));
+        assert!(at(54, 16) < 0.01, "sky beyond the smear: {}", at(54, 16));
+        assert!(at(30, 3) < 0.01, "sky above the square: {}", at(30, 3));
     }
 }
 

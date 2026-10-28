@@ -8,8 +8,8 @@
 //! `beat_ramp` driving `transform_3d.pos_y` — a rigid-object velocity
 //! source with an exactly-known moving frame), plus `node.camera_lens`
 //! (shutter_angle = 180) feeding BOTH `render_scene.camera` and
-//! `motion_blur.camera`, and `render_scene.color/velocity` feeding
-//! `motion_blur.in/.velocity`. `motion_blur.out` is the sole final output.
+//! `motion_blur.camera`, and `render_scene.color/velocity/depth` feeding
+//! `motion_blur.in/.velocity/.depth`. `motion_blur.out` is the sole final output.
 //!
 //! Assertions, per route (raw def, and the fused view when the freeze
 //! compiler accepts the chain):
@@ -52,7 +52,8 @@ fn quad_size() -> f32 {
 
 /// grid → tris → render_scene; orbit_camera → camera_lens → scene.camera
 /// and → motion_blur.camera; scene.color → motion_blur.in; scene.velocity
-/// → motion_blur.velocity; motion_blur.out → invert → final.
+/// → motion_blur.velocity; scene.depth → motion_blur.depth;
+/// motion_blur.out → invert → final.
 fn scene_json(shutter_angle: f32) -> String {
     scene_json_with_enabled(shutter_angle, true)
 }
@@ -115,6 +116,7 @@ fn scene_json_with_enabled(shutter_angle: f32, enabled: bool) -> String {
         {{"fromNode":5,"fromPort":"transform","toNode":20,"toPort":"transform_0"}},
         {{"fromNode":20,"fromPort":"color","toNode":30,"toPort":"in"}},
         {{"fromNode":20,"fromPort":"velocity","toNode":30,"toPort":"velocity"}},
+        {{"fromNode":20,"fromPort":"depth","toNode":30,"toPort":"depth"}},
         {{"fromNode":30,"fromPort":"out","toNode":31,"toPort":"in"}},
         {{"fromNode":31,"fromPort":"out","toNode":99,"toPort":"in"}}
         ],"presetMetadata":{{

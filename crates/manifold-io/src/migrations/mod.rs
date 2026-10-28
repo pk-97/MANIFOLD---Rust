@@ -6,6 +6,7 @@ use std::cell::RefCell;
 
 pub mod contacts_wire_v1200;
 pub mod enum_names_v1230;
+pub mod motion_blur_depth_v1250;
 pub mod pressure_cap_card_v1190;
 pub mod reversed_depth_v1160;
 pub mod rigid_body_density_v1170;

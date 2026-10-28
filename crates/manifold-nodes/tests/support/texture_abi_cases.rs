@@ -454,13 +454,6 @@ pub const CASES: &[TextureAbiCase] = &[
         aliases: &[],
     },
     TextureAbiCase {
-        source: "motion_blur.rs",
-        rust_struct: "MotionBlurUniforms",
-        type_id: "node.motion_blur",
-        shader_struct: "Params",
-        aliases: &[],
-    },
-    TextureAbiCase {
         source: "noise.rs",
         rust_struct: "NoiseUniforms",
         type_id: "node.noise",

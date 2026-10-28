@@ -181,6 +181,7 @@ fn tail(b: &mut Builder<'_>, camera: &ItemId, lens: u32) -> u32 {
     b.wire(render, "color", dof, "color");
     b.wire(dof, "out", blur, "in");
     b.wire(render, "velocity", blur, "velocity");
+    b.wire(render, "depth", blur, "depth");
     b.wire(lens, "out", blur, "camera");
     blur
 }

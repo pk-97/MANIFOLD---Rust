@@ -128,7 +128,7 @@ mod lut1d;
 mod magnitude_db;
 mod matcap_two_tone;
 pub(crate) mod math;
-mod motion_blur;
+pub mod motion_blur;
 pub mod multi_blend;
 mod mux_array;
 mod mux_scalar;

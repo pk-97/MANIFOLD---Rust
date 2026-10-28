@@ -3508,6 +3508,12 @@
       "toPort": "velocity"
     },
     {
+      "fromNode": 463,
+      "fromPort": "depth",
+      "toNode": 523,
+      "toPort": "depth"
+    },
+    {
       "fromNode": 519,
       "fromPort": "out",
       "toNode": 523,

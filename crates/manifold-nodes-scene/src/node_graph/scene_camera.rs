@@ -290,6 +290,7 @@ pub fn prepare_camera_effects(def: &mut EffectGraphDef) -> Result<bool, String> 
         wire(lens_id, "out", dof, "camera"),
         wire(dof, "out", motion, "in"),
         wire(render_id, "velocity", motion, "velocity"),
+        wire(render_id, "depth", motion, "depth"),
         wire(lens_id, "out", motion, "camera"),
     ]);
     def.nodes.extend(additions);

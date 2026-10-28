@@ -67,11 +67,13 @@ mod tests {
                 }]}
             }]}
         });
-        let after: Value = serde_json::from_str(
-            &crate::migrate::migrate_if_needed(&before.to_string()).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(after["projectVersion"], "1.24.0");
+        let after: Value =
+            serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap())
+                .unwrap();
+        assert_eq!(
+            after["projectVersion"],
+            manifold_core::project::CURRENT_PROJECT_VERSION
+        );
         let modifier = &after["settings"]["masterEffects"][0]["graph"]["sceneModifiers"][0];
         assert_eq!(modifier["scene"], "scene");
         assert_eq!(modifier["targets"]["explicit"]["objects"][0], "obj");
@@ -87,10 +89,9 @@ mod tests {
                 "graph": {"sceneModifiers": [{"id": "m", "scene": "scene"}]}
             }]}
         });
-        let after: Value = serde_json::from_str(
-            &crate::migrate::migrate_if_needed(&before.to_string()).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(after, before);
+        let after: Value =
+            serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap())
+                .unwrap();
+        assert_eq!(after["settings"], before["settings"]);
     }
 }

@@ -194,6 +194,7 @@ fn restore(def: &mut EffectGraphDef) -> Result<(), String> {
     }
     set_input(&mut def.wires, lens, "out", motion, "camera")?;
     set_input(&mut def.wires, scene_id, "velocity", motion, "velocity")?;
+    set_input(&mut def.wires, scene_id, "depth", motion, "depth")?;
     let index = manifold_core::scene_index::FlatSceneIndex::build(def)
         .map_err(|error| error.to_string())?;
     if camera_effect_controls(&index, &scene_ref).len() != 2 {

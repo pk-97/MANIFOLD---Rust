@@ -67,7 +67,7 @@ impl EmbeddedPreset {
 /// The schema version this build writes and is the newest it can open. Bumped
 /// by every migration step that changes on-disk field shape; the migrate chain's
 /// final target and the forward-compat guard both read it. Single source of truth.
-pub const CURRENT_PROJECT_VERSION: &str = "1.24.0";
+pub const CURRENT_PROJECT_VERSION: &str = "1.25.0";
 
 /// The oldest schema version this build opens. Older files are refused with
 /// one error; the build on branch [`LEGACY_LOADER_BRANCH`] still opens and
@@ -99,7 +99,7 @@ pub struct Project {
         skip_serializing_if = "crate::audio_setup::AudioSetup::is_empty"
     )]
     pub audio_setup: crate::audio_setup::AudioSetup,
-    #[serde(default = "ProjectSettings::legacy")]
+    #[serde(default)]
     pub settings: ProjectSettings,
     #[serde(default)]
     pub tempo_map: TempoMap,

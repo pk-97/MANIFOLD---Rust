@@ -399,7 +399,10 @@ mod tests {
     fn numbers_become_the_variants_the_old_tables_named() {
         let p = load(&project_json(true));
         assert_variants(&p);
-        assert_eq!(p.project_version, "1.24.0");
+        assert_eq!(
+            p.project_version,
+            manifold_core::project::CURRENT_PROJECT_VERSION
+        );
     }
 
     #[test]
@@ -408,10 +411,13 @@ mod tests {
         let mut after: Value =
             serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap())
                 .unwrap();
-        assert_eq!(after["projectVersion"], "1.24.0");
+        assert_eq!(
+            after["projectVersion"],
+            manifold_core::project::CURRENT_PROJECT_VERSION
+        );
         let mut expected = before;
-        expected["projectVersion"] = json!("1.24.0");
-        after["projectVersion"] = json!("1.24.0");
+        expected["projectVersion"] = json!(manifold_core::project::CURRENT_PROJECT_VERSION);
+        after["projectVersion"] = json!(manifold_core::project::CURRENT_PROJECT_VERSION);
         assert_eq!(after, expected);
         assert_variants(&load(&project_json(false)));
     }
@@ -469,9 +475,15 @@ mod tests {
         let on_disk: Value = serde_json::from_str(&json).unwrap();
         let reloaded = load(&on_disk);
         assert_variants(&reloaded);
-        assert_eq!(reloaded.project_version, "1.24.0");
+        assert_eq!(
+            reloaded.project_version,
+            manifold_core::project::CURRENT_PROJECT_VERSION
+        );
         let v = on_disk;
-        assert_eq!(v["projectVersion"], "1.24.0");
+        assert_eq!(
+            v["projectVersion"],
+            manifold_core::project::CURRENT_PROJECT_VERSION
+        );
         assert_eq!(v["settings"]["clockAuthority"], "MidiClock");
         assert_eq!(v["timeline"]["layers"][0]["layerType"], "Audio");
     }
