@@ -28,10 +28,11 @@ const SHADER_BODY: &str = include_str!("shaders/gpu_flip_sheet_distance.wgsl");
 fn shader() -> String {
     format!("{READ_SIDE}\n{SHADER_BODY}")
 }
-/// Bytes per fine cell of the two pooled distance fields.
-pub(crate) const POOLED_BYTES_PER_CELL: u64 = 2 * 4;
+/// Bytes per fine cell of the two pooled distance fields and the sheeter's
+/// source with its solids as water (`SheetDistance::default` only).
+pub(crate) const POOLED_BYTES_PER_CELL: u64 = 3 * 4;
 
-const ENTRIES: [&str; 2] = ["seed", "sweep"];
+const ENTRIES: [&str; 3] = ["seed", "sweep", "through_solids"];
 
 /// Jacobi sweeps for a distance true to `cells` deep: a sweep carries the
 /// distance one cell along an axis, and a diagonal path to that depth crosses
@@ -73,6 +74,10 @@ pub(crate) struct SheetDistance {
     pipelines: Vec<GpuComputePipeline>,
     /// The two ping-pong fields, pooled cell fields of `pool_len` elements.
     buffers: Option<[GpuBuffer; 2]>,
+    /// The source with its solids as water (`through_solids`), held by the
+    /// sheeter's distance only.
+    wet: Option<GpuBuffer>,
+    through_solids: bool,
     pool_tiles: u32,
     /// The depth the distance is true to, in cells.
     cells: f64,
@@ -81,7 +86,10 @@ pub(crate) struct SheetDistance {
 /// The sheeter's distance.
 impl Default for SheetDistance {
     fn default() -> Self {
-        Self::to_depth(SHEET_DISTANCE_CELLS)
+        Self {
+            through_solids: true,
+            ..Self::to_depth(SHEET_DISTANCE_CELLS)
+        }
     }
 }
 
@@ -91,8 +99,10 @@ impl SheetDistance {
         Self {
             pipelines: Vec::new(),
             buffers: None,
+            wet: None,
             pool_tiles: 0,
             cells,
+            through_solids: false,
         }
     }
 
@@ -118,13 +128,18 @@ impl SheetDistance {
         let bytes = pool_len(pool_tiles) * 4;
         manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(),
-            pool_len(pool_tiles) * POOLED_BYTES_PER_CELL,
+            (2 + u64::from(self.through_solids)) * bytes,
         )
         .map_err(|e| e.to_string())?;
         self.buffers = Some([
             device.try_create_buffer(bytes)?,
             device.try_create_buffer(bytes)?,
         ]);
+        self.wet = if self.through_solids {
+            Some(device.try_create_buffer(bytes)?)
+        } else {
+            None
+        };
         self.pool_tiles = pool_tiles;
         Ok(())
     }
@@ -137,12 +152,15 @@ impl SheetDistance {
 
     /// Builds the distance of `source` (the liquid level set, a pooled cell
     /// field) over every cell of the held slots of `tiles` and returns the
-    /// pooled buffer holding it. Gated by the FLIP clock plan: an inactive
-    /// substep slot (live clock, zero step) changes nothing.
+    /// pooled buffer holding it. With `solid` (the solid's corner distances)
+    /// a cell inside a solid reads as water (`through_solids`), for the
+    /// sheeter. Gated by the FLIP clock plan: an inactive substep slot (live
+    /// clock, zero step) changes nothing.
     pub(crate) fn encode_gated(
         &self,
         enc: &mut GpuEncoder,
         source: &GpuBuffer,
+        solid: Option<&GpuBuffer>,
         h: f32,
         plan: &GpuBuffer,
         tiles: &WorldTiles,
@@ -160,7 +178,11 @@ impl SheetDistance {
             entries: tiles.table_entries(),
         };
         let held = allocated_args_offset(tiles.reach().ring_max);
-        let mut pass = |entry: usize, from: &GpuBuffer, to: &GpuBuffer, label: &'static str| {
+        let mut pass = |entry: usize,
+                        source: &GpuBuffer,
+                        from: &GpuBuffer,
+                        to: &GpuBuffer,
+                        label: &'static str| {
             enc.dispatch_compute_indirect(
                 &self.pipelines[entry],
                 &[
@@ -198,6 +220,11 @@ impl SheetDistance {
                         buffer: &tiles.lists().by_rank,
                         offset: 0,
                     },
+                    GpuBinding::Buffer {
+                        binding: 7,
+                        buffer: solid.unwrap_or(source),
+                        offset: 0,
+                    },
                 ],
                 tiles.args(),
                 held,
@@ -205,12 +232,19 @@ impl SheetDistance {
             );
             enc.compute_memory_barrier_buffers();
         };
-        pass(0, b, a, "gpu_flip.sheet_distance.seed");
+        let source = match (solid, self.wet.as_ref()) {
+            (Some(_), Some(wet)) => {
+                pass(2, source, a, wet, "gpu_flip.sheet_distance.through_solids");
+                wet
+            }
+            _ => source,
+        };
+        pass(0, source, b, a, "gpu_flip.sheet_distance.seed");
         for sweep in 0..sweeps_for(self.cells) {
             if sweep % 2 == 0 {
-                pass(1, a, b, "gpu_flip.sheet_distance.sweep");
+                pass(1, source, a, b, "gpu_flip.sheet_distance.sweep");
             } else {
-                pass(1, b, a, "gpu_flip.sheet_distance.sweep");
+                pass(1, source, b, a, "gpu_flip.sheet_distance.sweep");
             }
         }
         a
@@ -311,7 +345,7 @@ mod gpu_tests {
         let pooled = world.to_pool(phi, 3.0 * H);
         let source = shared(device, bytemuck::cast_slice(&pooled));
         let mut enc = device.create_encoder("sheet distance");
-        let out = stage.encode_gated(&mut enc, &source, H, plan, &world.tiles);
+        let out = stage.encode_gated(&mut enc, &source, None, H, plan, &world.tiles);
         enc.commit_and_wait_completed();
         let out: Vec<f32> = copy_out(device, out)
             .into_iter()

@@ -1158,10 +1158,13 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_cell: bool) {
         for (stage, particles, identity, cache) in &mut lanes {
             // Same sorted input on every encode isolates this stage from later
             // solver passes; the stage's own scratch/stats retain their history.
+            // No removal pass runs here, so the births owed (stats word 4)
+            // are cleared too and the water budget never throttles the draw.
             // SAFETY: sized shared buffers, no GPU work in flight.
             unsafe {
                 particles.write(0, bytemuck::cast_slice(&initial));
                 identity.write(0, bytemuck::cast_slice(&identity_words));
+                stage.stats().write(16, bytemuck::cast_slice(&[0u32]));
             }
             let inputs = SheetInputs {
                 particles,

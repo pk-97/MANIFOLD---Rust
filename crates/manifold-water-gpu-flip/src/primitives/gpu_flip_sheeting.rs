@@ -174,6 +174,8 @@ const NUMBER: [usize; 2] = [PLACE, TALLY];
 const WRITE_BIRTHS: [usize; 2] = [WRITE, TALLY];
 /// gpu_flip_step/common.wgsl `ClockPlan`.
 const PLAN_BYTES: u64 = 48;
+/// The stats words (`stats`).
+const STATS_BYTES: u64 = 32;
 /// A particle is a sheet candidate only within this many cells of the
 /// surface (particlesheeter.h:131-133 `_maxDepth`).
 const MAX_SHEET_DEPTH_CELLS: f64 = 2.0;
@@ -257,7 +259,7 @@ pub(crate) fn scratch_bytes(capacity: u32, pool_tiles: u32) -> u64 {
         + 16
         + PLAN_BYTES
         + scan
-        + 16
+        + STATS_BYTES
 }
 
 fn words(x: f64) -> [u32; 2] {
@@ -396,8 +398,15 @@ impl GpuSheeting {
         let n = pool_len(pool_tiles);
         let plan = device.try_create_buffer_shared(PLAN_BYTES)?;
         plan.zero_fill();
-        let stats = device.try_create_buffer_shared(16)?;
-        stats.zero_fill();
+        // The stats carry over a resize: the water still owes its births.
+        let stats = match self.buffers.take() {
+            Some([.., stats]) => stats,
+            None => {
+                let stats = device.try_create_buffer_shared(STATS_BYTES)?;
+                stats.zero_fill();
+                stats
+            }
+        };
         self.buffers = Some([
             device.try_create_buffer(4 * n)?,
             device.try_create_buffer(4 * n)?,
@@ -487,9 +496,11 @@ impl GpuSheeting {
         self.pool_tiles
     }
 
-    /// Four words: the last active substep's requested and written births,
-    /// then both summed over every substep since the stage was reserved.
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    /// Eight words: the last active substep's requested and written births,
+    /// then both summed over every substep since the stage was first
+    /// reserved, then
+    /// the water budget the step's `remove_owed_markers` keeps (the births
+    /// owed, the cells owing this substep and the particles given back).
     pub(crate) fn stats(&self) -> &GpuBuffer {
         &self.buffers.as_ref().expect("sheeting reserved")[10]
     }

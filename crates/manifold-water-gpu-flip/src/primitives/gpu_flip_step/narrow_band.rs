@@ -244,9 +244,14 @@ impl NarrowBand {
             "gpu_flip.step.narrow_band.union",
         );
         Band {
-            distance: self
-                .distance
-                .encode_gated(enc, phi, base.cell_size, step.clock_plan, tiles),
+            distance: self.distance.encode_gated(
+                enc,
+                phi,
+                None,
+                base.cell_size,
+                step.clock_plan,
+                tiles,
+            ),
         }
     }
 

@@ -604,28 +604,44 @@ impl StepState {
         // engine's own marker update for this substep and before the FLIP
         // update: births join the move, so they take this substep's velocity
         // change and advection. Off (rate 0), nothing here is encoded.
+        let mut sheet_depth = None;
         if sheeting {
             enc.set_profile_tag("gpu_flip.stage.sheeting");
+            // The water budget's count starts over (marker_removal.wgsl).
+            enc.dispatch_compute(
+                &pipes.owed[0],
+                &[
+                    uniform(&base),
+                    buffer(46, step.clock_plan),
+                    buffer(71, self.sheeting.stats()),
+                ],
+                [1, 1, 1],
+                "gpu_flip.step.owed_clear",
+            );
             let ranges = self
                 .sorter
                 .ranges()
                 .ok_or("the cell ranges were not reserved")?;
             let order = sheet_order.ok_or("sheet seeding storage was not reserved")?;
-            let plan = self
-                .sheeting
-                .encode_gate(
-                    enc,
-                    step.clock_plan,
-                    ranges,
-                    base.particles,
-                    (step.capped, step.tally),
-                );
+            let plan = self.sheeting.encode_gate(
+                enc,
+                step.clock_plan,
+                ranges,
+                base.particles,
+                (step.capped, step.tally),
+            );
             enc.compute_memory_barrier_buffers();
             // The sheeter's own distance, true to SHEET_DISTANCE_CELLS deep,
             // from the liquid level set the pressure solve read.
-            let phi = self
-                .sheet_distance
-                .encode_gated(enc, &l.phi, p.cell_size, plan, tiles);
+            let phi = self.sheet_distance.encode_gated(
+                enc,
+                &l.phi,
+                Some(&l.corners),
+                p.cell_size,
+                plan,
+                tiles,
+            );
+            sheet_depth = Some(phi);
             enc.compute_memory_barrier_buffers();
             let inputs = super::super::gpu_flip_sheeting::SheetInputs {
                 particles: sorted,
@@ -740,6 +756,32 @@ impl StepState {
             c,
             "gpu_flip.step.remove_crowded",
         );
+        // The births the sheets drew, given back from crowded cells deep in
+        // the water, so seeding keeps the water's amount.
+        if let Some(depth) = sheet_depth {
+            for (pipe, label) in [
+                (&pipes.owed[1], "gpu_flip.step.owed_count"),
+                (&pipes.owed[2], "gpu_flip.step.remove_owed"),
+            ] {
+                enc.compute_memory_barrier_buffers();
+                enc.dispatch_compute_indirect(
+                    pipe,
+                    &[
+                        uniform(&base),
+                        buffer(1, ranges),
+                        buffer(7, depth),
+                        buffer(29, by_rank),
+                        buffer(38, sorted),
+                        buffer(46, step.clock_plan),
+                        buffer(51, table),
+                        buffer(71, self.sheeting.stats()),
+                    ],
+                    tiles.args(),
+                    c,
+                    label,
+                );
+            }
+        }
         if let Some(band) = &band {
             enc.compute_memory_barrier_buffers();
             self.narrow_band.encode_reseed(

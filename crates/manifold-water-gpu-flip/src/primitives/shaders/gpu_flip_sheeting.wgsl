@@ -65,7 +65,8 @@ struct ClockPlan {
 @group(0) @binding(16) var<storage, read> old: array<FaceSample>;
 // liquid_state's birth identity: next, epoch, reserved base, reset request.
 @group(0) @binding(17) var<storage, read> birth_identity: array<u32>;
-// The last active substep's requested and written births, then both summed.
+// The last active substep's requested and written births, then both summed,
+// then the water budget's words (gpu_flip_step/marker_removal.wgsl `ledger`).
 @group(0) @binding(18) var<storage, read_write> stats: array<u32>;
 // In the step only. The step's solver words (bound at their offset), where the
 // tick's refused births are summed at SHEET_REFUSED_TAIL (zeroed per tick by
@@ -585,6 +586,7 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = pass_cell(gid.x);
     let claimants = (atomicLoad(&flags[idx]) >> 8u) & 255u;
+    let keep = substep_keep() * owed_room();
     var kept = 0u;
     for (var o = 0u; o < 8u; o = o + 1u) {
         if ((claimants >> o) & 1u) == 0u { continue; }
@@ -594,9 +596,10 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
         if e.state < 2u {
             atomicAdd(&birth_count[1], 1u);
         }
-        // The engine keeps a seed unless its draw is over the rate; standalone
-        // runs at rate 1, which keeps every one (the draw is under 1).
-        if e.state == 2u && u.rate > 0.0 && fill_draw(e.key) <= u.rate {
+        // A seed is kept unless its draw is over the substep's share of the
+        // rate; standalone runs at rate 1, which keeps every one (the draw is
+        // under 1).
+        if e.state == 2u && u.rate > 0.0 && fill_draw(e.key) <= keep {
             kept = kept | (1u << o);
         }
     }
@@ -668,6 +671,33 @@ fn pcg(v: u32) -> u32 {
 fn fill_draw(key: u32) -> f32 {
     let h = pcg(key ^ pcg(u.tick ^ pcg(u.substep ^ 0x5eedf111u)));
     return f32(h >> 8u) * (1.0 / 16777216.0);
+}
+
+// The fill rate is the chance a seed is kept over FILL_RATE_SECONDS; a
+// substep of step_dt keeps it with the chance that gives the same over that
+// time, so sheets fill as fast at every Sim Rate and substep count.
+const FILL_RATE_SECONDS: f32 = 1.0 / 30.0;
+
+fn substep_keep() -> f32 {
+    let dt = clock_plan[0].step_dt;
+    if u.rate >= 1.0 || !(dt > 0.0) {
+        return u.rate;
+    }
+    return 1.0 - pow(1.0 - u.rate, dt / FILL_RATE_SECONDS);
+}
+
+// What the water budget leaves of the rate: all of it while nothing is owed,
+// nothing once the births not yet given back (stats word 4,
+// gpu_flip_step/marker_removal.wgsl) reach a 64th of the live particles, so
+// seeding never grows the water by more than that.
+const OWED_SHARE: u32 = 64u;
+
+fn owed_room() -> f32 {
+    if u.in_step == 0u { return 1.0; }
+    let owed = f32(max(bitcast<i32>(stats[4]), 0));
+    let last = ranges[ts_pool_len() - 1u];
+    let cap = f32(max((last.start + last.count) / OWED_SHARE, 1u));
+    return clamp(1.0 - owed / cap, 0.0, 1.0);
 }
 
 fn finite3(v: vec3<f32>) -> bool {
@@ -780,7 +810,8 @@ fn write(
 }
 
 // One thread, last: the true birth total, and in the step the tick's
-// bookkeeping. Runs on empty water too.
+// bookkeeping, the births owed back to the water among it (word 4,
+// gpu_flip_step/marker_removal.wgsl). Runs on empty water too.
 @compute @workgroup_size(1)
 fn tally() {
     if !clock_active() { return; }
@@ -795,5 +826,6 @@ fn tally() {
     stats[1] = granted;
     stats[2] = stats[2] + requested;
     stats[3] = stats[3] + granted;
+    stats[4] = stats[4] + granted;
     capped[SHEET_REFUSED_TAIL] += requested - granted;
 }

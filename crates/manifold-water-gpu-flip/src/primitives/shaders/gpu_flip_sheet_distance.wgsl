@@ -22,6 +22,9 @@ struct ClockPlan {
 @group(0) @binding(5) var<storage, read> ts_table: array<u32>;
 // The held slots the dispatch covers.
 @group(0) @binding(6) var<storage, read> slots: array<u32>;
+// The solid's distance at the cell corners (gpu_flip_step `solid`), read by
+// `through_solids` only.
+@group(0) @binding(7) var<storage, read> solid: array<f32>;
 
 fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
@@ -56,6 +59,29 @@ fn crossing(c: vec3<i32>, p: f32) -> f32 {
         }
     }
     return best;
+}
+
+// The sheeter's source: the level set with every cell whose centre is inside
+// a solid at most -h/2, so a solid reads as water. Water lying on a floor or
+// against a wall is then as deep as the solid behind it, and only water with
+// air on both sides is thin; with the solid as air one cell in, every pool
+// shallower than the depth walk read as one sheet and seeded everywhere.
+@compute @workgroup_size(256)
+fn through_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let i = ts_list_cell(slots[gid.x >> 9u], gid.x);
+    ts_home(i);
+    let c = ts_cell_coord(i);
+    var sum = 0.0;
+    for (var k = 0; k < 8; k = k + 1) {
+        sum = sum + solid[ts_cell_at(c + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1))];
+    }
+    var p = source[i];
+    // gpu_flip_step/solids.wgsl centre_in_solid.
+    if 0.125 * sum < 1e-3 * u.h {
+        p = min(p, -0.5 * u.h);
+    }
+    field_out[i] = p;
 }
 
 @compute @workgroup_size(256)

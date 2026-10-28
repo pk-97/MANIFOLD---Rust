@@ -37,6 +37,7 @@ pub(super) struct Pipelines {
     /// labels moved to the level.
     pub(super) pocket_coarse: [GpuComputePipeline; 3],
     pub(super) remove_crowded: GpuComputePipeline,
+    pub(super) owed: [GpuComputePipeline; 3],
     pub(super) pose_bodies: GpuComputePipeline,
     pub(super) emit_flags: GpuComputePipeline,
     pub(super) emit_write: GpuComputePipeline,
@@ -137,6 +138,11 @@ impl Pipelines {
                 pipe("pocket_relabel"),
             ],
             remove_crowded: pipe("remove_crowded_markers"),
+            owed: [
+                pipe("owed_clear"),
+                pipe("owed_count"),
+                pipe("remove_owed_markers"),
+            ],
             emit_flags: pipe("emit_flags"),
             emit_write: pipe("emit_write"),
             emit_tally: pipe("emit_tally"),
