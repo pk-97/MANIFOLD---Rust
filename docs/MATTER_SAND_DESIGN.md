@@ -1,0 +1,125 @@
+# Matter sand and soil
+
+<!-- index: Sand and soil on the Matter (MLS-MPM) solver: a Sand scene item, a per-particle material stage with a 3×3 SVD, Drucker-Prager sand with volume correction, soil as sand with cohesion that weakens as it shears, wall friction, an opaque grain look. Matter's water path is deleted. Later: the World's shared grid and two-way coupling with GPU FLIP water through its solid faces, kept open for a unified solver. -->
+
+**Status:** designed 29 Oct 2026, not started. Steps 1–4 are the MVP and start once the Matter mesh-collider work (uncommitted in `manifold-water-gpu-mpm`) lands. Steps 5–6 wait for WATER_SHARED_GRID_DESIGN.md phase 4.
+
+**Peter's calls (29 Oct):** Matter is never water; water is GPU FLIP only. Sand meets water with separate velocities on one grid, built simple but kept open for a later unified solver. Tests serve the end state: two maths checks, the rest is stills looked at by eye.
+
+## What the performer gets
+
+A **Sand** item in the Add menu. It fills a box, a sphere or any Object's shape (a hill model filled with soil), rests on colliders and the Bounds floor, pushes Box3D bodies and is pushed back (boulders ride a slide), and takes the scene's forces and impulses (a quake on the drop). Card dials:
+
+| Dial | Default | What it does |
+|---|---|---|
+| Friction Angle | 35° | How steep a pile holds. Sand flows below it and stops at it. |
+| Cohesion | 0 kPa | Soil. About half a metre of vertical cliff per kPa. Dropping it live brings a held slope down. |
+| Density | 1600 kg/m³ | Bulk dry sand. Sets how bodies sink and float on it. |
+| Stiffness | 1 | Scales the elastic stiffness. Higher costs more steps per frame; the card says when it is limited. |
+| Cell Size, Bounds, Gravity, Speed, Reset | as Matter today | |
+
+## 1. Sand item
+
+Sand is its own item kind, not a Water setting. A Water item is GPU FLIP only.
+
+- **Kind:** `ItemKind::Sand` (`manifold-foundation/src/scene_surface.rs`, `ALL` becomes 12) with `SandFields { draw, material, bounds }` in `scene_doc.rs`. Sand holds Water Source items (Fill only) and a Material (`tree.rs` `can_hold`); a Water Source sits in a Water or a Sand. Every `match` on the kind gains its arm; Swarm's sites are the list (icons, native text, clipboard, group command, projection, setup checks, transform, compile order).
+- **Card:** `SAND_ROWS` in a new `scene_schema/sand.rs`, taking Water's Matter rows (Stiffness, points per cell, Seed) and its shared rows (Cell Size, Bounds and faces, Gravity, Speed, Reset), plus Friction Angle, Cohesion and Density. FLIP Ratio goes: sand runs pure APIC, so G2P's FLIP blend and the grid node's saved pre-force velocity are deleted, and the clamped-node count moves into the stats words.
+- **Water loses:** `WaterSolver`, `WaterFields.solver`, the `SOLVERS` choice, every `.when(mpm)` row and the switch-to-MPM refusal (`scene_schema/water.rs`). `WaterTemplate` is keyed by item kind and draw instead of solver; the two Matter templates in `scene_family.rs` register for Sand.
+- **Old projects:** every saved Water writes `"solver"` (Peter's waterTestV2, waterTestV3 and waterBoxTests do), and `WaterFields` denies unknown keys, so a `manifold-io` migration drops the key. No project saves MPM water, so nothing converts to Sand.
+- **Add menu:** a Sand entry. `app/src/scene_edit.rs` gives a new Sand its own box Fill and its own opaque sand Material, as it does for Water.
+- **Compile:** `scene_compile/water.rs` splices Sand the way it splices Water (same adopt, transform, cell size, bounds, world controls and source wiring), from the Matter family.
+- **Fill shapes:** a Sand Fill is a box, a sphere or an Object's shape. `liquid_fill_in_shape` (BVH or distance lattice, today in the FLIP crate's `liquid_fill_body.wgsl`) moves to a shared include in `manifold-water-liquid`, and `matter_fill_body.wgsl` keeps only sites inside the shape. `node.matter_domain` takes the shape and its region the way the FLIP domain does (`take_initial_fill`, `fill_region`) and loses its "MPM fills a box" refusal. Inflow and Drain stay refused for Sand ("Sand fills only"); pouring sand is later work.
+
+## 2. Material stage
+
+Every particle carries its elastic deformation F (3×3, starts as identity) and the stress it produces. The point record grows from 80 to 160 bytes and stays one record, so the substep region still carries one state array and the sort still permutes indices, never records (D9 of the old design: storage is id order).
+
+```
+struct MatterPoint {            // 160 B
+  position: vec3, id: u32,
+  velocity: vec3, volume_ratio: f32,   // J = det F, for the frame and stats
+  affine_x: vec4,   // C row 0; w = v_c, log volume gained while pulled apart
+  affine_y: vec4,   // C row 1; w = V0, rest volume
+  affine_z: vec4,   // C row 2; w = material index (0 = sand), kept by every pass
+  f_x, f_y, f_z: vec4,   // F rows; f_x.w = q, accumulated plastic strain; y.w, z.w spare
+  stress_diag: vec4,     // Kirchhoff τ xx, yy, zz
+  stress_off: vec4,      // τ xy, xz, yz
+}
+```
+
+One new binding-free include, `shaders/matter_material.wgsl`, holds all material maths. It sees one particle's F, its velocity gradient and the material constants, and returns the new F, plastic state and stress. It never reads the grid, a binding or a record. This is the seam the unified solver needs: the maths moves unchanged, only the transfer is rewritten.
+
+- **SVD** (McAdams et al. 2011, "Computing the SVD of 3×3 matrices with minimal branching"): F = U Σ Vᵀ with U and V proper rotations. Four Jacobi sweeps with quaternion Givens rotations, then a Givens QR. Fixed cost, no branches that diverge. This is what sand's friction rule runs on: it only makes sense on Σ, the three stretches.
+- **Order inside `node.grid_to_matter`**, after it forms C (whose rows are the velocity gradient): F ← (I + dt·C)·F, SVD, return map (section 3), rebuild F = U Σ' Vᵀ, J = det Σ', then τ = U·diag(2μ·ε + λ·tr ε)·Uᵀ with ε = log Σ'. Write F, τ, v_c and q. One SVD per particle per substep.
+- **`node.matter_to_grid`** reads τ from the record: affine rows become m·C − (dt·V0·4/dx²)·τ, the full matrix instead of today's scalar pressure. It no longer needs λ or Cohesion.
+- **`node.matter_stats`** computes elastic energy V0·(μ‖ε‖² + ½λ(tr ε)²) with its own SVD, once a tick.
+- **`node.matter_fill`** writes F = I, τ = 0, v_c = 0, q = 0, material 0.
+- **`matter_remove_nonfinite`** also checks F and τ.
+
+The constants reach the passes as scalars from `node.matter_domain` (μ, λ, α, cohesion, softening, density), as λ, cohesion and density do today.
+
+## 3. Sand and soil
+
+**Elasticity:** Hencky strain, St. Venant–Kirchhoff (Klár et al. 2016, "Drucker-Prager Elastoplasticity for Sand Animation"). Starting constants E = 3.537·10⁵ Pa, ν = 0.3 (the values Tampubolon et al. 2017 used), so μ = 136 kPa and λ = 204 kPa. These are starting points, tuned on stills: sand's look comes from plasticity, and stiffness only has to be high enough not to bounce.
+
+**Return map** on ε = log|Σ| (each σ clamped to at least 10⁻⁴), with β the cohesion as a tensile log-strain and α = √(2/3)·2 sin φ / (3 − sin φ) from the Friction Angle φ (α = 0.386 at 35°):
+
+1. tr = Σε + v_c (the volume correction, Tampubolon et al. 2017: volume gained while grains were apart is paid back before pressure builds).
+2. **Pulled apart** (tr ≥ β): Σ' = exp(β/3)·I, v_c ← tr − β, δq = ‖ε − β/3‖.
+3. Otherwise v_c ← 0, ε̂ = ε − (tr/3)·1, δγ = ‖ε̂‖ + α·(3λ + 2μ)/(2μ)·(tr − β).
+4. **Holding** (δγ ≤ 0): Σ' = Σ.
+5. **Sliding** (δγ > 0): Σ' = exp(ε − δγ·ε̂/‖ε̂‖), δq = δγ.
+6. q ← q + δq.
+
+With β = 0 this is Klár's cone and taichi_elements' `sand_projection` (engine/mpm_solver.py), the reference transcription. β > 0 shifts the cone's tip into tension: the material carries some pull and gains shear strength α·(3λ + 2μ)·β, which is Drucker-Prager with cohesion.
+
+**Soil:** β = β₀·exp(−q / q_s). β₀ comes from the Cohesion dial in kPa, divided by α·(3λ + 2μ) so the dial means the same at any Stiffness or Friction Angle. Intact soil holds; where it shears, q grows, cohesion fades and it breaks into clumps and loose sand. q_s starts at 0.05 and is tuned on stills. Friction hardening (Klár's h₀–h₃) is left out: one Friction Angle dial reads better on stage, and q is already stored if it is wanted later.
+
+**Walls and colliders:** sand needs grip or it skates. `matter_wall_stop` gains Coulomb friction: when a wall stops a node's inward speed v_n, the tangential speed shrinks by μ_b·|v_n|, never past zero, with μ_b = tan φ (the sand's own friction; one source). Colliders already pass each body's friction to `liquid_collider_project` and the mesh path in `matter_tree.wgsl`.
+
+**Steps per frame:** the wave speed becomes √((λ + 2μ)/ρ), 17.3 m/s for the defaults (water's was about 34). Today's water-only `water_lambda` (stiffness scaled by the box size, taichi_elements' rule) goes. On paper, from the acoustic CFL with a 4 m fall: 21 steps per 1/60 s at 6.25 cm cells, 11 at 12.5 cm, 6 at 25 cm. The Stiffness fit to `MAX_SUBSTEPS` is wired (it is stubbed today, BUG-5hq2l) so the card shows when Stiffness is limited.
+
+**Scale:** a 20 × 20 m slope 2 m deep is about 26 million particles at 6.25 cm cells and about 400 thousand at 25 cm. Big slides use coarse cells; on the shared grid that becomes soil on its own level (step 5).
+
+## 4. Look
+
+Sand draws through the normal opaque scene path, not the water renderer. The water renderer is glass only: `fs_water` has no diffuse body, refracts the scene behind, and a field casts no shadows.
+
+- **Mesh:** the Sand object draws `tile_surface_mesh`, the marching-cubes mesh already built every frame on the display tiles (FLIP uses it only for first-hit depth), as its `vertices`, with no `field` wires. This is not the old water mesh chain the decision log retired; it is today's tile mesh, and drawing it through the plain material path was measured on 28 Oct (Dam Break 36.0 ms against the field march's 38.5). On this path sand casts and receives shadows, gets AO and RT reflections, and binds any Material. The mesh's UV is world xz, so a sand texture tiles across the ground.
+- **Material:** a new Sand gets an opaque PBR Material (transmission 0, roughness about 0.9, sand albedo), tuned on stills. Ripples, caustics, mist and foam are not built for Sand.
+- **Motion blur:** the mesh's triangles change every frame, so the previous-position history (`render_scene/prev_positions.rs`, same triangles only) cannot serve it. `tile_surface_mesh` also writes each vertex's previous position (its position minus the surface velocity times the frame time, from the surface group's `velocity` output) into a second buffer, and `node.scene_object` takes it as an optional `prev_positions` input that the velocity pass reads in place of the history. Any generated mesh can use the same port later.
+- **Smoothing:** the surface group's smoothing rounds ridges; Sand starts with less than water and is tuned on stills.
+- **Particles draw:** the existing Particles choice draws each particle as a small instanced rock with the sand Material, an opaque gravel look, on the same path.
+- Later: grain texture on steep faces (triplanar), sparkle, the wet tint (step 6), dust.
+
+## Deleted with this work
+
+Matter's water: the λJ(J − 1) pressure and its Cohesion, `water_lambda`, `COHESIVE_J_MAX`, `j_max`, `WATER_DENSITY` in Matter, FLIP Ratio, and the Water Solver choice. Also:
+
+- `matter/look.rs` (the A1–A6 water look metrics), `tests/gpu_proofs/matter_look.rs`, and the look-metrics mode in `examples/fluid_capture.rs`.
+- `matter/reference.rs` (the f64 water oracle) and the oracle comparisons in `tests/gpu_proofs/matter_transfer.rs`. Any check there that holds for every material stays.
+- The Matter row of `LIQUID_SOLVERS` (`testkit/liquid_conformance_fixtures.rs`): Matter is not a liquid.
+- The fixture presets `WaterDamBreakMatter`, `WaterFloatingBoxMatter` and `WaterStillPoolMatter`. One `SandColumn` preset replaces them wherever a test or a primitive's `examples:` list needs a Matter graph (about 40 references: `engine_scenes.rs`, `testkit/assets.rs`, catalog tests, `encode_replay`, `gpu_flip_export_demo.rs`, `retired_cpu_flip.rs`). `matter_scene.rs` and `matter_bodies.rs` test the solver, not water, and move to it.
+
+## Build order
+
+One batch per step, in step order, each built, checked and committed before the next. Step 1 first so every still after it is a real scene. Step 1 is mostly mechanical match arms across separate files (lane workers); steps 2 and 3 are the lead's or one sonnet worker given the formulas above; step 4 touches the render crate's velocity pass.
+
+## Checks
+
+- **One GPU maths proof** for `matter_material.wgsl`, on a few thousand random F including nearly flat and inverted ones: the SVD rebuilds F, U and V are rotations, Σ is sorted; the return map lands on or inside the cone, the pulled-apart case lands on the tip, and the plastic step never raises the elastic energy.
+- **Stills by eye** (`--profile stills`): a sand column slumps into a cone and stops near the Friction Angle; a soil block holds a vertical face, then fails into clumps when Cohesion drops; a box dropped on sand sinks a little and stops; sand poured on a sloped collider runs off and piles.
+- One `--release` frame-time number for a Sand scene at the end.
+
+## Later: steps 5 and 6
+
+**5. Shared grid.** Matter's arrays move onto the World's one tile table and budget (WATER_SHARED_GRID_DESIGN.md D1, D2). Matter's corner nodes and FLIP's cells share tile keys already (both use `world_tiles`, TILE = 8). Two Matter rules: the table grows between Matter's own substeps without moving any water tile, since sand outruns a one-tile ring within a frame; and at the budget, new sand is refused, never existing sand deleted (each particle carries F and q). Soil may sit on a coarser level than water.
+
+**6. Sand meets water.** FLIP's pressure solve already takes, per cell face, an open fraction and a solid velocity, which coupled bodies fill today (`solids.wgsl`, `divergence.wgsl`, `projection.wgsl`). Sand fills them too: the face is open by the sand's porosity where sand sits (about 0.4 packed), and the solid velocity is the sand's grid velocity. Water pushes back on sand nodes with its pressure gradient (buoyancy) and a drag on the velocity difference, added in `node.matter_grid_update`. They exchange once per FLIP step with sand's own substeps in between, as coupled bodies do. Wet sand: cohesion and a darker tint where water has touched. References: Tampubolon et al. 2017 ("Multi-species simulation of porous sand and water mixtures") and Gao et al. 2018 ("Animating fluid sediment mixture in particle-laden flows").
+
+## Kept open for the unified solver
+
+- Material maths never reads the grid (section 2), so it moves onto FLIP's face grid unchanged; only the particle-to-grid transfer is rewritten.
+- Every particle carries a material index (`affine_z.w`), so a mixed domain needs no record change.
+- Material particles are never deleted for crowding or depth, only by Open faces, the kill height or a drain, because they carry F and q. FLIP's own deletion passes must key on water, never on every particle.
+- The published frame stays the 32-byte `FluidParticle`; F and τ stay in Matter's record.
