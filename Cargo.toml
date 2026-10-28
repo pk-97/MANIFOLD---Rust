@@ -132,6 +132,8 @@ opt-level = 3
 # 16 codegen units instead of 1: parallel codegen for a far faster release
 # build at ~1-2% runtime cost. Re-set to 1 only for a final shipped build.
 codegen-units = 16
-strip = "symbols"
+# Keep the symbol table so crash reports, panic backtraces and profilers name
+# MANIFOLD's functions. It costs file size only, never runtime.
+strip = "debuginfo"
 panic = "abort"
 split-debuginfo = "unpacked"
