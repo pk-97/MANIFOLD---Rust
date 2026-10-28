@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build BlobDetector native plugin as a macOS bundle for Unity
-# Embeds OpenCV dylibs so the bundle is self-contained (no Homebrew dependency at runtime)
-# Requires: brew install opencv
+# Build the BlobDetector native plugin. macOS: a bundle that embeds its OpenCV
+# dylibs so it needs no Homebrew at runtime (requires: brew install opencv).
+# Linux: libBlobDetector.so against the system OpenCV (requires: libopencv-dev).
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -12,6 +12,19 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 LIBS_DIR="$CONTENTS_DIR/Frameworks"
 
 echo "Building $BUNDLE_NAME..."
+
+# Linux: a shared object against the system OpenCV (libopencv-dev), found by
+# the loader as assets/plugins/lib<name>.so. OUT_DIR overrides the folder.
+if [ "$(uname)" = "Linux" ]; then
+    OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/..}"
+    g++ -shared -fPIC -std=c++17 -O2 \
+        $(pkg-config --cflags opencv4) \
+        -o "$OUT_DIR/lib$BUNDLE_NAME.so" \
+        "$SCRIPT_DIR/BlobDetectorPlugin.cpp" \
+        $(pkg-config --libs-only-L opencv4) -lopencv_core -lopencv_imgproc
+    echo "Built: $OUT_DIR/lib$BUNDLE_NAME.so"
+    exit 0
+fi
 
 # Get OpenCV paths from Homebrew
 OPENCV_PREFIX=$(brew --prefix opencv)

@@ -4,7 +4,21 @@ pub mod region_ffi;
 
 use std::path::{Path, PathBuf};
 
-/// Resolve the path to a native plugin bundle.
+/// A plugin's library under `assets/plugins`: the Mach-O inside its bundle
+/// on macOS, `lib<name>.so` on Linux.
+fn plugin_library(name: &str) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from(format!("{name}.bundle/Contents/MacOS/{name}"))
+    } else {
+        PathBuf::from(format!(
+            "{}{name}{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        ))
+    }
+}
+
+/// Resolve the path to a native plugin library.
 ///
 /// Search order: explicit `MANIFOLD_{NAME}_PLUGIN`, executable-relative
 /// assets, development executable root, current-directory assets, then the
@@ -21,30 +35,21 @@ pub fn resolve_bundle_path(name: &str) -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && let Some(exe_dir) = exe.parent()
     {
-        let candidate = exe_dir
-            .join("assets/plugins")
-            .join(format!("{}.bundle", name))
-            .join("Contents/MacOS")
-            .join(name);
+        let candidate = exe_dir.join("assets/plugins").join(plugin_library(name));
         if candidate.exists() {
             return Some(candidate);
         }
         if let Some(project_dir) = exe_dir.parent().and_then(|p| p.parent()) {
             let candidate = project_dir
                 .join("assets/plugins")
-                .join(format!("{}.bundle", name))
-                .join("Contents/MacOS")
-                .join(name);
+                .join(plugin_library(name));
             if candidate.exists() {
                 return Some(candidate);
             }
         }
     }
 
-    let cwd_candidate = Path::new("assets/plugins")
-        .join(format!("{}.bundle", name))
-        .join("Contents/MacOS")
-        .join(name);
+    let cwd_candidate = Path::new("assets/plugins").join(plugin_library(name));
     if cwd_candidate.exists() {
         return Some(cwd_candidate);
     }
@@ -53,7 +58,7 @@ pub fn resolve_bundle_path(name: &str) -> Option<PathBuf> {
     {
         let development_candidate = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/plugins")
-            .join(format!("{name}.bundle/Contents/MacOS/{name}"));
+            .join(plugin_library(name));
         if development_candidate.exists() {
             return Some(development_candidate);
         }

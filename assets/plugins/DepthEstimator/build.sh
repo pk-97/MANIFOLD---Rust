@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build DepthEstimator native plugin as a macOS bundle for Unity.
-# Embeds OpenCV dylibs so the bundle is self-contained.
-# Requires: brew install opencv
+# Build the DepthEstimator native plugin. macOS: a bundle that embeds its OpenCV
+# dylibs so it needs no Homebrew at runtime (requires: brew install opencv).
+# Linux: libDepthEstimator.so against the system OpenCV (requires: libopencv-dev).
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -12,6 +12,19 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 LIBS_DIR="$CONTENTS_DIR/Frameworks"
 
 echo "Building $BUNDLE_NAME..."
+
+# Linux: a shared object against the system OpenCV (libopencv-dev), found by
+# the loader as assets/plugins/lib<name>.so. OUT_DIR overrides the folder.
+if [ "$(uname)" = "Linux" ]; then
+    OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/..}"
+    g++ -shared -fPIC -std=c++17 -O2 \
+        $(pkg-config --cflags opencv4) \
+        -o "$OUT_DIR/lib$BUNDLE_NAME.so" \
+        "$SCRIPT_DIR/DepthEstimatorPlugin.cpp" \
+        $(pkg-config --libs-only-L opencv4) -lopencv_core -lopencv_imgproc -lopencv_dnn -lopencv_video -lopencv_calib3d
+    echo "Built: $OUT_DIR/lib$BUNDLE_NAME.so"
+    exit 0
+fi
 
 OPENCV_PREFIX=$(brew --prefix opencv)
 OPENCV_INCLUDE="$OPENCV_PREFIX/include/opencv4"

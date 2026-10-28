@@ -2234,6 +2234,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "arboard",
+ "ashpd",
  "bytemuck",
  "core-foundation 0.10.1",
  "crossbeam-channel",
@@ -2275,6 +2276,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "png",
+ "pollster",
  "raw-window-handle",
  "rfd",
  "serde",

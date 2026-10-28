@@ -366,6 +366,8 @@ fn main() {
     // --- IOPMAssertion — prevent display sleep (10.2) ---
     #[cfg(target_os = "macos")]
     let _iopm_id = create_iopm_assertion();
+    #[cfg(target_os = "linux")]
+    let _idle_inhibit = inhibit_idle();
 
     // --- App Nap suppression (10.3) ---
     #[cfg(target_os = "macos")]
@@ -659,6 +661,30 @@ fn acquire_instance_lock() -> std::fs::File {
 // ---------------------------------------------------------------------------
 // Platform-specific helpers (macOS)
 // ---------------------------------------------------------------------------
+
+/// Keep the display awake for the session through the XDG portal's idle
+/// inhibit, the Linux counterpart of the IOPMAssertion below. The inhibit
+/// holds while the returned request and the process's bus connection live.
+#[cfg(target_os = "linux")]
+fn inhibit_idle() -> Option<ashpd::desktop::Request<()>> {
+    use ashpd::desktop::inhibit::{InhibitFlags, InhibitProxy};
+    let result = pollster::block_on(async {
+        InhibitProxy::new()
+            .await?
+            .inhibit(None, InhibitFlags::Idle.into(), "MANIFOLD live performance")
+            .await
+    });
+    match result {
+        Ok(request) => {
+            log::info!("Idle inhibit held: display sleep prevented");
+            Some(request)
+        }
+        Err(err) => {
+            log::warn!("Idle inhibit failed, the display may sleep: {err}");
+            None
+        }
+    }
+}
 
 /// Create an IOPMAssertion to prevent the display from sleeping.
 /// Returns the assertion ID (kept alive for the process lifetime).

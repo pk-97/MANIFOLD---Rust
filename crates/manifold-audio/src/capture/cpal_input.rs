@@ -34,6 +34,29 @@ pub struct AudioCaptureConfig {
     pub device_name: Option<String>,
 }
 
+/// Input buffer the kick detector is tuned for, in frames (5.3 ms at 48 kHz).
+const INPUT_BUFFER_FRAMES: u32 = 256;
+
+/// CoreAudio's default input buffer is already small. ALSA's (25 ms periods,
+/// a 100 ms buffer) is too slow for the kick detector, so elsewhere ask for
+/// [`INPUT_BUFFER_FRAMES`] within the device's supported range.
+fn input_buffer_size(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
+    if cfg!(target_os = "macos") {
+        return cpal::BufferSize::Default;
+    }
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            let frames = INPUT_BUFFER_FRAMES.clamp(*min, *max);
+            log::info!("[AudioCapture] Input buffer: {frames} frames");
+            cpal::BufferSize::Fixed(frames)
+        }
+        cpal::SupportedBufferSize::Unknown => {
+            log::warn!("[AudioCapture] Device reports no buffer range; using its default buffer");
+            cpal::BufferSize::Default
+        }
+    }
+}
+
 /// Captures audio from a system input device into a lock-free ring buffer.
 pub struct AudioCaptureDevice {
     stream: Stream,
@@ -85,7 +108,7 @@ impl AudioCaptureDevice {
         let stream_config = StreamConfig {
             channels,
             sample_rate: cpal::SampleRate(sample_rate),
-            buffer_size: cpal::BufferSize::Default,
+            buffer_size: input_buffer_size(default_config.buffer_size()),
         };
 
         // Ring buffer: ~2 seconds of audio, but bounded so an exotic

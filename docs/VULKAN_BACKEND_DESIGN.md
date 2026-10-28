@@ -120,7 +120,7 @@ On Metal, GPU FLIP runs its pressure solve from indirect command buffers. One ro
 | Export | AVFoundation encoder plugin (670 lines) | FFmpeg encode: NVENC on NVIDIA, x264/x265 otherwise. `audio_muxer.rs` already shells out to ffmpeg | Medium |
 | Live recording | AVAssetWriter plugin (839 lines), ProRes Proxy or HEVC Main10 | FFmpeg encode on the recording thread | Medium |
 | System-audio capture | CoreAudio process tap (`process_tap.rs`), behind `CaptureBackend` | cpal 0.18's PipeWire host opens a sink as an input for monitor capture. cpal 0.15 → 0.18 everywhere, which includes upgrading kira (0.9.6 pins cpal 0.15) | Small-medium |
-| Audio input latency | CoreAudio, small buffers | `cpal_input.rs:88` asks for `BufferSize::Default`, which on ALSA under cpal 0.15 means 25 ms periods and a 100 ms buffer. Request a small fixed buffer from the device's supported range; the kick detector depends on it | Small |
+| Audio input latency | CoreAudio, small buffers | Off macOS `cpal_input.rs` asks for a 256-frame buffer within the device's range (ALSA's default is 25 ms periods and a 100 ms buffer); measure the kick detector on it | Small |
 | Audio device list | CoreAudio directory | cpal fallback already exists (`fallback.rs`) | None |
 | Frame pacing | CVDisplayLink + `mach_wait_until` | Present-driven with `VK_KHR_present_wait`, `clock_nanosleep(TIMER_ABSTIME)` + short spin. The deadline fallback in `frame_timer.rs:266` already runs off-Mac | Small-medium |
 | Output window and displays | Window placed with `with_position` (`app_lifecycle.rs:1356-1371`), fullscreen toggle via `set_outer_position` (`window_input.rs:631-644`), displays matched by ID (`breadcrumb.rs:247`) | On Wayland, winit cannot position windows and `primary_monitor()` is `None`, and off the Mac display matching returns `None`, so output falls back to the largest monitor. Present with `Fullscreen::Borderless(Some(monitor))`; match displays by name and size. XWayland (winit's X11 backend inside a Wayland session) is the fallback | Medium. Show-critical |
@@ -132,7 +132,7 @@ On Metal, GPU FLIP runs its pressure solve from indirect command buffers. One ro
 | Instance lock | `flock`, Mac-gated (`main.rs:358-360`) | `flock` is POSIX: remove the gate, or two instances fight over OSC, MIDI and Art-Net | Trivial |
 | Paths | `~/Library/...` in three folder names | `manifold_foundation::AppDirs` with XDG on Linux. The Mac paths stay byte-identical, pinned by a unit test | Done |
 | ML plugins | OpenCV `.bundle` Mach-O plugins via libloading (`manifold-native/src/ffi/mod.rs:12`) | Same plugins built as `.so` against `libopencv-dev`; names from `std::env::consts::DLL_PREFIX`/`DLL_SUFFIX` | Small |
-| Keep-awake, thread priority | IOPMAssertion; Mac thread policy | Idle inhibit through the XDG portal or `systemd-inhibit`; real-time priority through rtkit or rtprio limits | Small, P4 |
+| Keep-awake, thread priority | IOPMAssertion; Mac thread policy | Keep-awake is the XDG portal's idle inhibit (`main.rs`); real-time priority through rtkit or rtprio limits | Small, P4 |
 | HDR output | EDR on CAMetalLayer | SDR first | Later |
 
 The Linux compile breaks, file by file, are in `LINUX_VULKAN_PORT_MAP.md` sections 2, 6 and 7.

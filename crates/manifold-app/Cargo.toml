@@ -76,6 +76,12 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 muda = "0.19.3"
 
 # macOS platform dependencies
+# Keep-awake through the XDG portal's idle inhibit. The same ashpd build the
+# file dialog already uses.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
+pollster = "0.4"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 raw-window-handle = "0.6"
