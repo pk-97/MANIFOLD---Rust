@@ -569,6 +569,11 @@ fn parity_profiler_spans_follow_tags_submits_and_kinds() {
     let sampler = device
         .create_timestamp_sampler(8)
         .expect("the test devices write timestamps");
+    // A request past the driver's pool limit still gets a sampler.
+    let large = device
+        .create_timestamp_sampler(4096)
+        .expect("a large sampler shrinks to fit");
+    assert!(large.max_spans() >= 64);
     const BUMP: &str = r#"
 @group(0) @binding(0) var<storage, read_write> counter: array<u32>;
 @compute @workgroup_size(1) fn main() { counter[0] = counter[0] + 1u; }

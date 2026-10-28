@@ -324,13 +324,12 @@ fn parent_pid(pid: u32) -> Option<u32> {
     #[cfg(target_os = "linux")]
     {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        return stat
-            .rsplit_once(')')?
+        stat.rsplit_once(')')?
             .1
             .split_whitespace()
             .nth(1)?
             .parse()
-            .ok();
+            .ok()
     }
     #[cfg(not(target_os = "linux"))]
     None

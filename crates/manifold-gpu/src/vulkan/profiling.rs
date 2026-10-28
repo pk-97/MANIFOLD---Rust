@@ -41,26 +41,39 @@ impl GpuTimestampSampler {
 }
 
 /// A sampler for `max_spans` spans, or `None` when the queue writes no
-/// timestamps.
+/// timestamps. A driver that refuses a pool that large (KosmicKrisp holds
+/// 4096 queries) gets half as many spans, down to 64; spans past the
+/// capacity count as overflow.
 pub(crate) fn create_sampler(core: &Arc<Core>, max_spans: usize) -> Option<GpuTimestampSampler> {
     core.timestamps?;
-    let capacity = u32::try_from(max_spans.max(64) * 2).ok()?;
-    let raw = unsafe {
-        core.device.create_query_pool(
-            &vk::QueryPoolCreateInfo::default()
-                .query_type(vk::QueryType::TIMESTAMP)
-                .query_count(capacity),
-            None,
-        )
-    }
-    .map_err(|e| log::warn!("[Vulkan] timestamp query pool of {capacity}: {e}"))
-    .ok()?;
+    let mut spans = u32::try_from(max_spans.max(64)).ok()?;
+    let raw = loop {
+        let created = unsafe {
+            core.device.create_query_pool(
+                &vk::QueryPoolCreateInfo::default()
+                    .query_type(vk::QueryType::TIMESTAMP)
+                    .query_count(spans * 2),
+                None,
+            )
+        };
+        match created {
+            Ok(raw) => break raw,
+            Err(_) if spans > 64 => spans /= 2,
+            Err(e) => {
+                log::warn!(
+                    "[Vulkan] timestamp query pool of {} queries: {e}",
+                    spans * 2
+                );
+                return None;
+            }
+        }
+    };
     Some(GpuTimestampSampler {
         pool: Arc::new(QueryPool {
             core: core.clone(),
             raw,
         }),
-        capacity,
+        capacity: spans * 2,
     })
 }
 
