@@ -113,10 +113,11 @@ pub const DOMAIN_ROLE: &str = "domain";
 /// The template's Physics View switches: the field's inputs (its level set,
 /// its velocity lattice and its node counts, which come from the surface's
 /// volume), the water's visibility, the dots' visibility, the dots' two
-/// inputs, the water's foam cover, its mist, its wetness and its surface mesh.
+/// inputs, the water's mist, its wetness and its surface mesh. The foam needs
+/// none: it draws only on the field, which Physics View takes away.
 /// Each follows the World's Render Mode, on only in Physics View, so the side
 /// that is off is never computed.
-pub const PHYSICS_VIEW_SWITCHES: [&str; 12] = [
+pub const PHYSICS_VIEW_SWITCHES: [&str; 11] = [
     "water_field_switch",
     "water_velocity_switch",
     "water_tiles_switch",
@@ -125,7 +126,6 @@ pub const PHYSICS_VIEW_SWITCHES: [&str; 12] = [
     "dots_visible",
     "dots_instances_switch",
     "dots_mesh_switch",
-    "water_foam_switch",
     "water_mist_switch",
     "water_wet_switch",
     "water_vertices_switch",
@@ -158,7 +158,6 @@ const PARTICLE_SCALE: Reach = Reach::Own("liquid_particle_scale");
 const SMOOTHNESS: Reach = Reach::Own("liquid_smoothness");
 const CLOSE_GAPS: Reach = Reach::Own("liquid_close_gaps");
 const RIPPLES: Reach = Reach::Own("water_ripple_detail");
-const FOAM: Reach = Reach::Own("water_foam_cover");
 const MIST: Reach = Reach::Own("water_mist");
 const WETNESS: Reach = Reach::Own("water_wetness");
 const LOOKS: Reach = Reach::Own(WATER_OBJECT_ROLE);
@@ -384,8 +383,8 @@ pub static WATER_ROWS: [PropertyRow; 50] = [
         .default(1.0)
         .when(flip_surface),
     // Times the foam's area: 1 is the foam the particles make, 0 none.
-    row("surface_foam", FOAM, Surface, setup())
-        .param("strength")
+    row("surface_foam", LOOKS, Surface, setup())
+        .param("foam_coverage")
         .name("Foam Coverage")
         .tip("How much of the surface the foam covers, times what the simulation makes")
         .gate(Gate::Fold(Feature::Foam))

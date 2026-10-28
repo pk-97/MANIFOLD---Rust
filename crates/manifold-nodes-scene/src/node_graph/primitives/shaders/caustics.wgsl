@@ -242,7 +242,8 @@ fn cs_splat(@builtin(global_invocation_id) gid: vec3<u32>) {
         n = -n;
     }
     // The ripples at one texel's size (`ripple.time.zw` is 1, 0).
-    n = look_ripple_detail(p, n, texel_metres);
+    // The foam mask is the camera's; the sun's view has no foam.
+    n = look_ripple_detail(p, n, texel_metres, 0.0);
     let cos_in = dot(n, sun);
     if cos_in <= 0.0 {
         return;

@@ -84,6 +84,7 @@ mod water_cover;
 mod water_march;
 use water_march::{FieldDraw, FieldView};
 mod caustics;
+mod foam_pass;
 mod ripple_detail;
 mod water_shade;
 mod wet_pass;
@@ -114,7 +115,7 @@ static RENDER_SCENE_WGSL: std::sync::LazyLock<String> = std::sync::LazyLock::new
         include_str!("shaders/instance_transform.wgsl"),
         include_str!("shaders/scene_shading.wgsl"),
         include_str!("shaders/look_ripple_detail.wgsl"),
-        include_str!("shaders/foam_field.wgsl"),
+        include_str!("shaders/foam_mask.wgsl"),
         include_str!("shaders/look_foam.wgsl"),
         include_str!("shaders/look_mist.wgsl"),
         include_str!("shaders/look_thin_water_light.wgsl"),
@@ -1414,6 +1415,7 @@ pub struct RenderScene {
     opaque_depth_snapshot_height: u32,
     volume_optics: volume_optics::VolumeOptics,
     wet_pass: wet_pass::WetPass,
+    foam_pass: foam_pass::FoamPass,
     caustics: caustics::Caustics,
     water_march: water_march::WaterMarch,
     water_shade: water_shade::WaterShade,

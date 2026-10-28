@@ -16,8 +16,10 @@ pub(super) struct FieldObject<'ctx> {
     pub slot: u32,
     pub levelset: &'ctx manifold_gpu::GpuBuffer,
     pub velocity: Option<&'ctx manifold_gpu::GpuBuffer>,
-    /// Foam coverage per node, 0 to 1.
+    /// The displayed foam particles (`FluidParticle`), not a pooled field.
     pub foam: Option<&'ctx manifold_gpu::GpuBuffer>,
+    /// Times the foam particles' area (`FieldSurface::foam_coverage`).
+    pub foam_coverage: f32,
     /// Mist extinction per node, per metre.
     pub mist: Option<&'ctx manifold_gpu::GpuBuffer>,
     /// The water's wet map (`wet_map` layout), not a pooled field.
@@ -325,7 +327,8 @@ impl RenderScene {
         let velocity =
             Self::optional_field_array(ctx, n, field.velocity, "field_velocity", 3 * elements)
                 .ok()?;
-        let foam = Self::optional_field_array(ctx, n, field.foam, "field_foam", elements).ok()?;
+        // Any number of particle slots, so no length to check.
+        let foam = Self::optional_field_array(ctx, n, field.foam, "field_foam", 0).ok()?;
         let mist = Self::optional_field_array(ctx, n, field.mist, "field_mist", elements).ok()?;
         let wet_map =
             Self::optional_field_array(ctx, n, field.wet_map, "wet_map", map_words()).ok()?;
@@ -377,6 +380,7 @@ impl RenderScene {
             levelset,
             velocity,
             foam,
+            foam_coverage: field.foam_coverage,
             mist,
             wet_map,
             tiles,

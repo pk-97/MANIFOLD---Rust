@@ -328,7 +328,7 @@ mod tests {
 
     const LOOK_WGSL: &str = concat!(
         include_str!("../shaders/look_ripple_detail.wgsl"),
-        include_str!("../shaders/foam_field.wgsl"),
+        include_str!("../shaders/foam_mask.wgsl"),
     );
 
     /// The look's `ripple_flow_strength`, in Rust.
@@ -411,7 +411,3 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "ripple_detail_gpu_tests.rs"]
 mod gpu_tests;
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "foam_gpu_tests.rs"]
-mod foam_gpu_tests;

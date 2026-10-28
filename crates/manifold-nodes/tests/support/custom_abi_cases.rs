@@ -495,6 +495,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "field_close.rs",
+        rust_struct: "Uniforms",
+        shader: "shaders/field_close.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "particle_volume.rs",
         rust_struct: "Uniforms",
         shader: "shaders/particle_volume.wgsl",
@@ -519,13 +526,6 @@ pub const CASES: &[CustomAbiCase] = &[
         source: "wet_map.rs",
         rust_struct: "WetMapUniforms",
         shader: "shaders/wet_map.wgsl",
-        shader_struct: "Params",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "foam_cover.rs",
-        rust_struct: "CoverUniforms",
-        shader: "shaders/foam_cover.wgsl",
         shader_struct: "Params",
         aliases: &[],
     },

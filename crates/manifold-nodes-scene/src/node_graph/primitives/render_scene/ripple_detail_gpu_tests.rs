@@ -118,6 +118,7 @@ pub(super) fn field(lattices: &Lattices) -> FieldObject<'_> {
         levelset: &lattices.levelset,
         velocity: Some(&lattices.velocity),
         foam: None,
+        foam_coverage: 1.0,
         mist: None,
         wet_map: None,
         tiles: &lattices.tiles,
@@ -202,25 +203,22 @@ fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
     let i = id.x;\n\
     if i >= arrayLength(&probe_out) { return; }\n\
     let p = vec3<f32>(f32(i % 64u) * 0.0155 + 0.05, 0.0, f32(i / 64u) * 0.0145 + 0.03);\n\
-    probe_out[i] = vec4<f32>(look_ripple_detail(p, vec3<f32>(0.0, 1.0, 0.0), distance(u.camera_pos.xyz, p)), 0.0);\n\
+    probe_out[i] = vec4<f32>(look_ripple_detail(p, vec3<f32>(0.0, 1.0, 0.0), distance(u.camera_pos.xyz, p), 0.0), 0.0);\n\
 }\n";
 
 pub(super) const PROBES: usize = 4096;
 
-/// The look's normals at the probe points at each of `times`, with the foam
-/// field `foam` bound when there is one.
+/// The look's normals at the probe points at each of `times`.
 pub(super) fn probe_normals(
     device: &GpuDevice,
     ripples: &RippleDetail,
     field: &FieldObject,
-    foam: Option<&GpuBuffer>,
     times: &[f32],
 ) -> Vec<Vec<[f32; 3]>> {
     let velocity = field.velocity.expect("the field has a velocity array");
     let wgsl = format!(
-        "{READ_SIDE}{FIELD_TILES_WGSL}{PROBE_STUB}{}{}{PROBE_KERNEL}",
+        "{READ_SIDE}{FIELD_TILES_WGSL}{PROBE_STUB}{}{PROBE_KERNEL}",
         include_str!("../shaders/look_ripple_detail.wgsl"),
-        include_str!("../shaders/foam_field.wgsl"),
     );
     let pipeline = device.create_compute_pipeline(&wgsl, "cs_probe", "ripple probe");
     let tile = ripples.tile(field.slot).expect("the field has a tile");
@@ -232,14 +230,8 @@ pub(super) fn probe_normals(
     let mut enc = device.create_encoder("ripple probe");
     for (&time, out) in times.iter().zip(&outs) {
         // A pixel is far smaller than a texel, so the finest mip is read.
-        let uniforms = ripple_uniforms(
-            field,
-            Some(tile.tile_metres),
-            foam.is_some(),
-            time,
-            [0.001, 0.0],
-        )
-        .expect("a real model inverts");
+        let uniforms = ripple_uniforms(field, Some(tile.tile_metres), false, time, [0.001, 0.0])
+            .expect("a real model inverts");
         enc.dispatch_compute(
             &pipeline,
             &[
@@ -262,15 +254,6 @@ pub(super) fn probe_normals(
                 GpuBinding::Buffer {
                     binding: 65,
                     buffer: velocity,
-                    offset: 0,
-                },
-                // Without a foam field the stand-in is never read.
-                GpuBinding::Buffer {
-                    binding: 66,
-                    buffer: match foam {
-                        Some(foam) => foam,
-                        None => velocity,
-                    },
                     offset: 0,
                 },
                 GpuBinding::Buffer {
@@ -336,7 +319,7 @@ fn the_crossfade_swap_is_not_seen() {
         .iter()
         .flat_map(|t| [t - dt / 2.0, t + dt / 2.0])
         .collect();
-    let normals = probe_normals(&device, &ripples, &field, None, &times);
+    let normals = probe_normals(&device, &ripples, &field, &times);
 
     let change = |i: usize| mean_change(&normals[2 * i], &normals[2 * i + 1]);
     let swap = (change(0) + change(1)) / 2.0;

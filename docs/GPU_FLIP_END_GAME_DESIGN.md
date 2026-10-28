@@ -122,7 +122,7 @@ Paper estimates, give or take 2x, Dam Break with whitewater at 1080p, full stack
 
 Write the implementation spec for the overnight work:
 - D2 under D15: the raster march, the field build above, the mesh chain deleted for FLIP and MPM water, the item-id and motion outputs, modifiers on the field, and the Water Material binding;
-- the raster look items: detail normals, the foam field and mist (D13);
+- the raster look items: detail normals, foam drawn per pixel from its particles, and mist (D13);
 - wet surfaces;
 - sparse storage, then the infinite domain (D4).
 

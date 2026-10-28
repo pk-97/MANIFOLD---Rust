@@ -1,6 +1,6 @@
 // Look hook: surface foam. Called from the water shading with the shaded
 // surface colour at the hit. Foam is a matte white scatterer lying on the
-// water, covering a fraction `c` of each surface patch (`foam_field.wgsl`).
+// water, covering a fraction `c` of the surface at the pixel (`foam_mask.wgsl`).
 // Where it covers it hides the water's reflection and the light through it, so
 // the colour is `mix(water, foam_lit, c)`, returned with `c` so the caller
 // can count the foam as opaque. Foam also damps the small capillary
@@ -21,7 +21,7 @@ fn look_foam(
     normal: vec3<f32>,
     rgb: vec3<f32>,
 ) -> vec4<f32> {
-    let c = foam_coverage_at(world_pos);
+    let c = foam_cover_at(frag_xy);
     if c <= 0.0 {
         return vec4<f32>(rgb, 0.0);
     }

@@ -31,6 +31,7 @@ use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::{InstanceTransform, MeshVertex, Vec4Vertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::scene_object::{FieldSurface, InstanceSpace, SceneObject};
 
@@ -45,7 +46,7 @@ manifold_node_engine::primitive! {
         topology: Array(Vec4Vertex) optional,
         field: Array(f32) optional,
         field_velocity: Array(f32) optional,
-        field_foam: Array(f32) optional,
+        field_foam: Array(FluidParticle) optional,
         field_mist: Array(f32) optional,
         wet_map: Array(u32) optional,
         field_tiles: Array(u32) optional,
@@ -127,6 +128,15 @@ manifold_node_engine::primitive! {
             default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),
             enum_values: &["Off", "On"],
+        },
+        // Times the foam particles' area: 1 is the foam they make, 0 none.
+        ParamDef {
+            name: Cow::Borrowed("foam_coverage"),
+            label: "Foam Coverage",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
         },
         ParamDef {
             name: Cow::Borrowed("mist"),
@@ -364,6 +374,7 @@ fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<
         return None;
     }
     let on = |ctx: &EffectNodeContext<'_, '_>, look: &str| ctx.scalar_or_param(look, 1.0) > 0.5;
+    let foam_coverage = ctx.scalar_or_param("foam_coverage", 1.0);
     let caustics = if on(ctx, "caustics") {
         ctx.scalar_or_param("caustic_intensity", 1.0).max(0.0)
     } else {
@@ -372,7 +383,11 @@ fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<
     Some(FieldSurface {
         levelset,
         velocity: ctx.inputs.slot_of("field_velocity"),
-        foam: ctx.inputs.slot_of("field_foam").filter(|_| on(ctx, "foam")),
+        foam: ctx
+            .inputs
+            .slot_of("field_foam")
+            .filter(|_| on(ctx, "foam") && foam_coverage > 0.0),
+        foam_coverage,
         mist: ctx.inputs.slot_of("field_mist").filter(|_| on(ctx, "mist")),
         wet_map: ctx
             .inputs
@@ -707,6 +722,7 @@ mod tests {
                 levelset,
                 velocity: Some(velocity),
                 foam: Some(foam),
+                foam_coverage: 1.0,
                 mist: Some(mist),
                 wet_map: Some(wet_map),
                 tiles,

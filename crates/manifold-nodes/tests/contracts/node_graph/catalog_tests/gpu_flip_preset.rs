@@ -704,6 +704,8 @@ fn gpu_flip_physics_view_skips_the_surface() {
         &mut surface_nodes,
     );
     assert!(surface_nodes.len() > 5, "{surface_nodes:?}");
+    // Close Gaps starts off, so its closing runs in neither view.
+    surface_nodes.retain(|name| name != "liquid_close");
     let card: Vec<_> = def
         .preset_metadata
         .as_ref()

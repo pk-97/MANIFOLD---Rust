@@ -16,14 +16,12 @@ use super::ripple_detail::RippleDetail;
 use super::water_shade::ripple_uniforms;
 use super::{FIELD_TILES_WGSL, FieldObject, mat4_inverse, mat4_mul};
 
-/// The field's table reads, the ripple detail and the foam cover it fades
-/// by, then the pass.
+/// The field's table reads and the ripple detail, then the pass.
 static SHADER: LazyLock<String> = LazyLock::new(|| {
     [
         manifold_node_engine::scene::world_tiles::READ_SIDE,
         FIELD_TILES_WGSL,
         include_str!("../shaders/look_ripple_detail.wgsl"),
-        include_str!("../shaders/foam_field.wgsl"),
         include_str!("../shaders/caustics.wgsl"),
     ]
     .concat()
@@ -203,7 +201,7 @@ impl Caustics {
         let ripple = ripple_uniforms(
             water,
             tile.map(|tile| tile.tile_metres),
-            water.foam.is_some(),
+            false,
             seconds,
             [1.0, 0.0],
         )?;
@@ -229,11 +227,6 @@ impl Caustics {
             GpuBinding::Buffer {
                 binding: 65,
                 buffer: water.velocity.unwrap_or(ripples.dummy_velocity()),
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 66,
-                buffer: water.foam.unwrap_or(ripples.dummy_velocity()),
                 offset: 0,
             },
             GpuBinding::Buffer {

@@ -12,7 +12,8 @@
 // averages its ripples out instead of shimmering.
 //
 // Foam damps the small capillary ripples, so the strength is also scaled by
-// one minus the foam cover (`foam_field.wgsl`, included right after this file).
+// one minus `foam`, the foam cover at the point (`foam_mask.wgsl`; 0 where the
+// caller has none).
 //
 // The flow is the water's velocity, a pooled field under the water's
 // world-tile table (`field_tiles.wgsl`); a position over a tile the table does
@@ -89,7 +90,7 @@ fn ripple_plane_slope(q: vec2<f32>, f: vec2<f32>, lod: f32) -> vec2<f32> {
 // `eye_distance` is the viewer's distance to the point, which sets the
 // ripples' level with `ripple.time.z`; a viewer with no distance (the sun's
 // caustics) sets that 0 and its flat footprint in `ripple.time.w`.
-fn look_ripple_detail(world_pos: vec3<f32>, normal: vec3<f32>, eye_distance: f32) -> vec3<f32> {
+fn look_ripple_detail(world_pos: vec3<f32>, normal: vec3<f32>, eye_distance: f32, foam: f32) -> vec3<f32> {
     let tile = ripple.field.y;
     if tile <= 0.0 {
         return normal;
@@ -97,7 +98,7 @@ fn look_ripple_detail(world_pos: vec3<f32>, normal: vec3<f32>, eye_distance: f32
 
     let local = (ripple.world_to_local * vec4<f32>(world_pos, 1.0)).xyz;
     let v = (ripple.local_to_world * vec4<f32>(ripple_velocity_at(local), 0.0)).xyz;
-    let strength = ripple.field.z * ripple_flow_strength(length(v)) * (1.0 - foam_coverage_at(world_pos));
+    let strength = ripple.field.z * ripple_flow_strength(length(v)) * (1.0 - foam);
     if strength <= 0.0 {
         return normal;
     }

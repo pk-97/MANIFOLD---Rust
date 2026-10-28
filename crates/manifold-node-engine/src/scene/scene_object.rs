@@ -143,9 +143,12 @@ pub struct FieldSurface {
     /// motion vectors and the ripple detail's flow. `None` draws the field
     /// as still.
     pub velocity: Option<Slot>,
-    /// Optional `Array<f32>`: foam coverage per node, the fraction of the
-    /// surface foam covers, 0 to 1. `None` draws no foam.
+    /// Optional `Array<FluidParticle>`: the displayed foam particles, each
+    /// one's w its fade (0 an empty slot), which the renderer draws onto the
+    /// surface at pixel resolution. Not a pooled field. `None` draws no foam.
     pub foam: Option<Slot>,
+    /// Times the foam particles' area: 1 is the foam they make, above 0.
+    pub foam_coverage: f32,
     /// Optional `Array<f32>`: mist extinction per node, per metre: the spray
     /// droplets in the air, which the march integrates under Beer-Lambert.
     /// `None` draws no mist.

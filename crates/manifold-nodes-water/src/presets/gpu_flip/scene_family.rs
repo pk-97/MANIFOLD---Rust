@@ -39,7 +39,6 @@ pub(super) fn particles_draw(b: &mut Builder) {
         "dots_copies",
         "dots_object",
         "water_ripple_detail",
-        "water_foam_cover",
         "foam_blend",
         "water_mist",
         "water_wetness",

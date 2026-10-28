@@ -52,7 +52,7 @@ const PARTIAL_SHADERS: &[&str] = &[
     "instance_transform.wgsl",
     "scene_shading.wgsl",
     "look_ripple_detail.wgsl",
-    "foam_field.wgsl",
+    "foam_mask.wgsl",
     "look_foam.wgsl",
     "look_mist.wgsl",
     "look_thin_water_light.wgsl",
@@ -80,8 +80,8 @@ const SCENE_SHADING: &str =
 const LOOK_RIPPLE_DETAIL: &str = include_str!(
     "../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_ripple_detail.wgsl"
 );
-const FOAM_FIELD: &str =
-    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/foam_field.wgsl");
+const FOAM_MASK: &str =
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/foam_mask.wgsl");
 const LOOK_FOAM: &str =
     include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_foam.wgsl");
 const LOOK_MIST: &str =
@@ -133,7 +133,6 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             manifold_node_engine::scene::world_tiles::READ_SIDE,
             FIELD_TILES,
             LOOK_RIPPLE_DETAIL,
-            FOAM_FIELD,
         ]
         .join("\n"),
     ));
@@ -142,6 +141,8 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
         "wet_pass.wgsl",
         manifold_node_engine::scene::wet_map::layout(),
     ));
+    // The foam pass reads the march's hit records.
+    composed.push(("foam_pass.wgsl", WATER_FIELD_COMMON.to_owned()));
     // `render_scene`'s composed shader (`RENDER_SCENE_WGSL`): the field's
     // world-tile reads, the instance transforms, the scene shading and the
     // five look hooks, then the mesh shader. The per-copy cull and the water
@@ -155,7 +156,7 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             INSTANCE_TRANSFORM,
             SCENE_SHADING,
             LOOK_RIPPLE_DETAIL,
-            FOAM_FIELD,
+            FOAM_MASK,
             LOOK_FOAM,
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,
@@ -189,7 +190,7 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             FIELD_TILES,
             SCENE_SHADING,
             LOOK_RIPPLE_DETAIL,
-            FOAM_FIELD,
+            FOAM_MASK,
             LOOK_FOAM,
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,

@@ -540,8 +540,8 @@
         "defaultValue": 1.0,
         "target": {
           "kind": "node",
-          "nodeId": "water_foam_cover",
-          "param": "strength"
+          "nodeId": "water_object",
+          "param": "foam_coverage"
         },
         "convert": {
           "type": "Float"
@@ -809,19 +809,6 @@
         "target": {
           "kind": "node",
           "nodeId": "dots_mesh_switch",
-          "param": "selector"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "physics_view",
-        "label": "Physics View",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "water_foam_switch",
           "param": "selector"
         },
         "convert": {
@@ -2367,29 +2354,6 @@
             "id": 30,
             "nodeId": "foam_blend",
             "typeId": "node.interpolate_particle_frames"
-          },
-          {
-            "id": 31,
-            "nodeId": "water_foam_cover",
-            "typeId": "node.foam_cover",
-            "handle": "Foam Cover",
-            "params": {
-              "strength": {
-                "type": "Float",
-                "value": 1.0
-              }
-            }
-          },
-          {
-            "id": 32,
-            "nodeId": "water_foam_switch",
-            "typeId": "node.switch_array",
-            "params": {
-              "selector": {
-                "type": "Float",
-                "value": 0.0
-              }
-            }
           },
           {
             "id": 33,
@@ -3980,36 +3944,6 @@
           },
           {
             "fromNode": 30,
-            "fromPort": "out",
-            "toNode": 31,
-            "toPort": "particles"
-          },
-          {
-            "fromNode": 8,
-            "fromPort": "tiles",
-            "toNode": 31,
-            "toPort": "tiles"
-          },
-          {
-            "fromNode": 8,
-            "fromPort": "pool_tiles",
-            "toNode": 31,
-            "toPort": "pool_tiles"
-          },
-          {
-            "fromNode": 8,
-            "fromPort": "cell_size",
-            "toNode": 31,
-            "toPort": "cell_size"
-          },
-          {
-            "fromNode": 31,
-            "fromPort": "cover",
-            "toNode": 32,
-            "toPort": "in_0"
-          },
-          {
-            "fromNode": 32,
             "fromPort": "out",
             "toNode": 17,
             "toPort": "field_foam"

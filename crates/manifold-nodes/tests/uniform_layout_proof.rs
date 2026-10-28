@@ -603,11 +603,12 @@ const NON_STANDALONE: &[&str] = &[
     // restart over one hand shader beside its fused atoms, its HandParams and
     // RestartParams reflected in uniform_layout_extended.
     "node.whitewater_step",
-    // The field build's splat and smoothing steps (one workgroup a tile), its
-    // surface weights (counts, then weights and velocity) and its carry into
-    // drawn solids: their Uniforms, WeightUniforms and CarryUniforms are
-    // reflected in uniform_layout_extended.
+    // The field build's splat, closing and smoothing steps (one workgroup a
+    // tile), its surface weights (counts, then weights and velocity) and its
+    // carry into drawn solids: their Uniforms, WeightUniforms and
+    // CarryUniforms are reflected in uniform_layout_extended.
     "node.particle_volume",
+    "node.field_close",
     "node.field_smooth_blend",
     "node.surface_weights",
     "node.carry_liquid_into_solids",
@@ -615,12 +616,11 @@ const NON_STANDALONE: &[&str] = &[
     // MeshUniforms and FillUniforms are reflected in uniform_layout_extended.
     "node.tile_surface_mesh",
     "node.interior_fill",
-    // The display table's hand build, the wet map and the whitewater
-    // splats (foam cover, spray mist): TileUniforms, WetMapUniforms,
-    // CoverUniforms and MistUniforms are reflected in uniform_layout_extended.
+    // The display table's hand build, the wet map and the spray mist splat:
+    // TileUniforms, WetMapUniforms and MistUniforms are reflected in
+    // uniform_layout_extended.
     "node.surface_tiles",
     "node.wet_map",
-    "node.foam_cover",
     "node.spray_mist",
     // The whitewater emitter packer, proven above.
     "node.whitewater_influence",

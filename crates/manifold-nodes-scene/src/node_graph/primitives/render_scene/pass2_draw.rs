@@ -1072,6 +1072,21 @@ impl RenderScene {
                             [0.0, 2.0 * half_height / height as f32]
                         }
                     };
+                    // The foam over the hits, before any water shades.
+                    if let Err(error) = self.foam_pass.encode(
+                        gpu.device,
+                        gpu.native_enc,
+                        fields,
+                        &foam_pass::FoamView {
+                            view_proj: pre.view_proj,
+                            width,
+                            height,
+                            hits,
+                            footprint,
+                        },
+                    ) {
+                        failure = fields.first().map(|field| (field.slot, error));
+                    }
                     // The ripple uniforms of the mist field, for the mist draw's
                     // unread look bindings.
                     let mut mist_ripple: Option<RippleUniforms> = None;
@@ -1087,7 +1102,7 @@ impl RenderScene {
                         let ripple_data = match ripple_uniforms(
                             field,
                             tile.map(|tile| tile.tile_metres),
-                            field.foam.is_some(),
+                            field.foam.is_some() && self.foam_pass.mask().is_some(),
                             seconds,
                             footprint,
                         ) {
@@ -1112,9 +1127,9 @@ impl RenderScene {
                                 Some(velocity) => velocity,
                                 None => self.ripple_detail.dummy_velocity(),
                             },
-                            foam: match field.foam {
-                                Some(foam) => foam,
-                                None => self.ripple_detail.dummy_velocity(),
+                            foam: match self.foam_pass.mask() {
+                                Some(mask) => mask,
+                                None => self.ripple_detail.dummy_slopes(),
                             },
                             tiles: field.tiles,
                         };
@@ -1147,7 +1162,7 @@ impl RenderScene {
                                     slopes: self.ripple_detail.dummy_slopes(),
                                     sampler: self.ripple_detail.sampler(),
                                     velocity: self.ripple_detail.dummy_velocity(),
-                                    foam: self.ripple_detail.dummy_velocity(),
+                                    foam: self.ripple_detail.dummy_slopes(),
                                     tiles: field.tiles,
                                 };
                                 #[cfg(feature = "fluid-perf-proofs")]

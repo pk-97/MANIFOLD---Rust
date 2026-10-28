@@ -1694,18 +1694,6 @@
       "typeId": "node.value"
     },
     {
-      "handle": "Foam Cover",
-      "id": 526,
-      "nodeId": "water_foam_cover",
-      "params": {
-        "strength": {
-          "type": "Float",
-          "value": 1.0
-        }
-      },
-      "typeId": "node.foam_cover"
-    },
-    {
       "handle": "Mist",
       "id": 527,
       "nodeId": "water_mist",
@@ -1931,8 +1919,8 @@
         "label": "Foam",
         "target": {
           "kind": "node",
-          "nodeId": "water_foam_cover",
-          "param": "strength"
+          "nodeId": "water_object",
+          "param": "foam_coverage"
         }
       },
       {
@@ -3558,12 +3546,6 @@
     {
       "fromNode": 510,
       "fromPort": "out",
-      "toNode": 526,
-      "toPort": "particles"
-    },
-    {
-      "fromNode": 526,
-      "fromPort": "cover",
       "toNode": 442,
       "toPort": "field_foam"
     },
@@ -4027,24 +4009,6 @@
       "fromNode": 529,
       "fromPort": "cell_size",
       "toNode": 508,
-      "toPort": "cell_size"
-    },
-    {
-      "fromNode": 529,
-      "fromPort": "tiles",
-      "toNode": 526,
-      "toPort": "tiles"
-    },
-    {
-      "fromNode": 529,
-      "fromPort": "pool_tiles",
-      "toNode": 526,
-      "toPort": "pool_tiles"
-    },
-    {
-      "fromNode": 529,
-      "fromPort": "cell_size",
-      "toNode": 526,
       "toPort": "cell_size"
     },
     {

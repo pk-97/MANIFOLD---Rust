@@ -645,6 +645,94 @@ pub(crate) fn retire_redistance(def: &mut EffectGraphDef) -> bool {
     !retired.is_empty()
 }
 
+/// Drop a saved water's `node.foam_cover` and the f32 switch it fed, after
+/// flattening: what the switch fed (the water object's `field_foam`) takes
+/// the cover's `particles` source instead, the foam particles the renderer
+/// now draws at pixel resolution. A binding on the cover's strength moves to
+/// that object's `foam_coverage`, and one on the switch goes with it.
+/// Idempotent.
+pub(crate) fn retire_foam_cover(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::BindingTarget;
+    const RETIRED: &str = "node.foam_cover";
+    let retired: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == RETIRED)
+        .map(|n| n.id)
+        .collect();
+    let node_id = |def: &EffectGraphDef, id: u32| {
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.node_id.clone())
+    };
+    let mut gone = retired.clone();
+    // (the cover's node id, the object its foam reached).
+    let mut moved = Vec::new();
+    for &id in &retired {
+        let source = def
+            .wires
+            .iter()
+            .find(|w| w.to_node == id && w.to_port == "particles")
+            .map(|w| (w.from_node, w.from_port.clone()));
+        // The switches the cover fed go too: they switch f32 arrays.
+        let switches: Vec<u32> = def
+            .wires
+            .iter()
+            .filter(|w| w.from_node == id)
+            .map(|w| w.to_node)
+            .filter(|&to| {
+                def.nodes
+                    .iter()
+                    .any(|n| n.id == to && n.type_id == "node.switch_array")
+            })
+            .collect();
+        if let (Some(cover), Some(object)) = (
+            node_id(def, id),
+            def.wires
+                .iter()
+                .find(|w| {
+                    (w.from_node == id || switches.contains(&w.from_node))
+                        && w.to_port == "field_foam"
+                })
+                .and_then(|w| node_id(def, w.to_node)),
+        ) {
+            moved.push((cover, object));
+        }
+        def.wires
+            .retain(|w| w.to_node != id && !switches.contains(&w.to_node));
+        for w in def.wires.iter_mut() {
+            if w.from_node == id || switches.contains(&w.from_node) {
+                match &source {
+                    Some((node, port)) => {
+                        w.from_node = *node;
+                        w.from_port.clone_from(port);
+                    }
+                    None => w.from_node = id,
+                }
+            }
+        }
+        def.wires.retain(|w| w.from_node != id);
+        gone.extend(switches);
+    }
+    let gone_ids: Vec<_> = gone.iter().filter_map(|&id| node_id(def, id)).collect();
+    def.nodes.retain(|n| !gone.contains(&n.id));
+    if let Some(meta) = def.preset_metadata.as_mut() {
+        for binding in &mut meta.bindings {
+            if let BindingTarget::Node { node_id, param } = &mut binding.target
+                && let Some((_, object)) = moved.iter().find(|(cover, _)| cover == node_id)
+            {
+                *node_id = object.clone();
+                *param = "foam_coverage".into();
+            }
+        }
+        meta.bindings.retain(|binding| {
+            !matches!(&binding.target, BindingTarget::Node { node_id, .. } if gone_ids.contains(node_id))
+        });
+    }
+    !retired.is_empty()
+}
+
 /// Drop a saved surface's `node.smooth_lattice` passes, after flattening:
 /// each `node.field_smooth_blend` smooths its own prior along x, y and z, so
 /// the three axis passes before it and the wire into its old `smoothed` go
@@ -882,6 +970,15 @@ inventory::submit! {
 
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
+        name: "retire_foam_cover",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 395,
+        apply: retire_foam_cover,
+    }
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
         name: "fold_smoothing_into_blend",
         stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
         order: 380,
@@ -1051,6 +1148,49 @@ mod tests {
         );
         let migrated = def.clone();
         assert!(!retire_redistance(&mut def));
+        assert_eq!(def, migrated);
+    }
+
+    /// A saved water's foam cover and the switch it fed go, and the water
+    /// object takes the foam particles; a second run changes nothing.
+    #[test]
+    fn saved_foam_switch_reads_the_particles_without_the_cover() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from,
+            from_port: output.into(),
+            to_node: to,
+            to_port: input.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                bare_node(1, "node.interpolate_particle_frames"),
+                bare_node(2, "node.foam_cover"),
+                bare_node(3, "node.switch_array"),
+                bare_node(4, "node.surface_tiles"),
+                bare_node(5, "node.scene_object"),
+            ],
+            wires: vec![
+                wire(1, "out", 4, "foam"),
+                wire(1, "out", 2, "particles"),
+                wire(4, "tiles", 2, "tiles"),
+                wire(2, "cover", 3, "in_0"),
+                wire(3, "out", 5, "field_foam"),
+            ],
+        };
+        assert!(retire_foam_cover(&mut def));
+        assert!(def.nodes.iter().all(|n| n.id != 2 && n.id != 3));
+        assert_eq!(
+            def.wires,
+            [wire(1, "out", 4, "foam"), wire(1, "out", 5, "field_foam")]
+        );
+        let migrated = def.clone();
+        assert!(!retire_foam_cover(&mut def));
         assert_eq!(def, migrated);
     }
 

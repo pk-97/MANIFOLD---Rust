@@ -736,10 +736,9 @@ const WATER_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[4];
 const DOTS_VISIBLE: &str = PHYSICS_VIEW_SWITCHES[5];
 const DOTS_INSTANCES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[6];
 const DOTS_MESH_SWITCH: &str = PHYSICS_VIEW_SWITCHES[7];
-const FOAM_SWITCH: &str = PHYSICS_VIEW_SWITCHES[8];
-const MIST_SWITCH: &str = PHYSICS_VIEW_SWITCHES[9];
-const WETNESS_SWITCH: &str = PHYSICS_VIEW_SWITCHES[10];
-const VERTICES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[11];
+const MIST_SWITCH: &str = PHYSICS_VIEW_SWITCHES[8];
+const WETNESS_SWITCH: &str = PHYSICS_VIEW_SWITCHES[9];
+const VERTICES_SWITCH: &str = PHYSICS_VIEW_SWITCHES[10];
 /// The display's world tiles and the solid on them, shared by every drawn
 /// field (`SURFACE_DETAIL_NODES` names the table).
 const DISPLAY_TILES: &str = manifold_core::scene_schema::SURFACE_DETAIL_NODES[0];
@@ -957,7 +956,6 @@ impl WaterScene {
                 "bubble_mesh" => Some("Bubble Mesh"),
                 "bubble_material" => Some("Bubble Material"),
                 "bubble_copies" => Some("Bubble Copies"),
-                "water_foam_cover" => Some("Foam Cover"),
                 "water_mist" => Some("Mist"),
                 "water_wetness" => Some("Wetness"),
                 "dots_object" => Some("Physics Dots"),
@@ -1661,29 +1659,16 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
 }
 
 /// The water's foam: the foam particles' display blend, which also holds its
-/// tiles in the display table, the cover field made from them on that table,
-/// and the switch that feeds it to the water object (off in Physics View,
-/// which hides the water).
+/// tiles in the display table, fed to the water object, which draws them at
+/// pixel resolution on its field (none in Physics View, which takes the field
+/// away).
 fn display_foam(b: &mut Builder, frame: usize, water: usize) {
     let tiles = b.id(DISPLAY_TILES);
     let blend = b.node("foam_blend", "node.interpolate_particle_frames", json!({}));
     b.wire((frame, "foam_b"), blend, "particles_b");
     b.wires(frame, blend, &["blend", "span"]);
     b.wire((blend, "out"), tiles, "foam");
-    let cover = b.node(
-        "water_foam_cover",
-        "node.foam_cover",
-        json!({"strength": float(1.0)}),
-    );
-    b.wire((blend, "out"), cover, "particles");
-    on_display_tiles(b, tiles, cover);
-    let switch = b.node(
-        FOAM_SWITCH,
-        "node.switch_array",
-        json!({"selector": float(0.0)}),
-    );
-    b.wire((cover, "cover"), switch, "in_0");
-    b.wire((switch, "out"), water, "field_foam");
+    b.wire((blend, "out"), water, "field_foam");
 }
 
 /// The water's mist and wet map: the spray's extinction (the spray's tiles

@@ -18,7 +18,7 @@ pub(super) static WATER_SHADE_WGSL: LazyLock<String> = LazyLock::new(|| {
         FIELD_TILES_WGSL,
         include_str!("../shaders/scene_shading.wgsl"),
         include_str!("../shaders/look_ripple_detail.wgsl"),
-        include_str!("../shaders/foam_field.wgsl"),
+        include_str!("../shaders/foam_mask.wgsl"),
         include_str!("../shaders/look_foam.wgsl"),
         include_str!("../shaders/look_mist.wgsl"),
         include_str!("../shaders/look_thin_water_light.wgsl"),
@@ -63,7 +63,7 @@ pub(super) fn shade_uniforms(
 pub(super) struct RippleUniforms {
     world_to_local: [[f32; 4]; 4],
     local_to_world: [[f32; 4]; 4],
-    /// x pool tiles, y table entries, z 1 when a foam field is bound.
+    /// x pool tiles, y table entries, z 1 when a foam mask is bound.
     tiles: [u32; 4],
     /// x display cell size in metres, y tile side in metres (0: no ripples),
     /// z strength override.
@@ -75,7 +75,7 @@ pub(super) struct RippleUniforms {
 /// side in metres, `None` for a field without ripples. `footprint` is the
 /// size of a pixel on the water: metres per pixel per metre of distance, then
 /// metres per pixel flat (perspective and orthographic cameras). `has_foam` is
-/// whether a foam field is bound, which the foam sampling reads from `tiles.z`.
+/// whether a foam mask is bound, which the foam reading takes from `tiles.z`.
 pub(super) fn ripple_uniforms(
     field: &FieldObject,
     tile: Option<f32>,
@@ -114,7 +114,8 @@ pub(super) struct LookBindings<'a> {
     pub slopes: &'a GpuTexture,
     pub sampler: &'a GpuSampler,
     pub velocity: &'a GpuBuffer,
-    pub foam: &'a GpuBuffer,
+    /// The foam pass's mask (`foam_pass.rs`), or a stand-in never read.
+    pub foam: &'a GpuTexture,
     /// The field's world-tile table.
     pub tiles: &'a GpuBuffer,
 }
@@ -238,10 +239,9 @@ impl WaterShade {
                 buffer: look.velocity,
                 offset: 0,
             },
-            GpuBinding::Buffer {
+            GpuBinding::Texture {
                 binding: 66,
-                buffer: look.foam,
-                offset: 0,
+                texture: look.foam,
             },
             GpuBinding::Buffer {
                 binding: 70,
@@ -321,10 +321,9 @@ impl WaterShade {
                 buffer: look.velocity,
                 offset: 0,
             },
-            GpuBinding::Buffer {
+            GpuBinding::Texture {
                 binding: 66,
-                buffer: look.foam,
-                offset: 0,
+                texture: look.foam,
             },
             GpuBinding::Buffer {
                 binding: 67,
