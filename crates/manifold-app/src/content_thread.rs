@@ -282,7 +282,6 @@ pub(crate) fn playback_engine(
             Arc::clone(device),
             w,
             h,
-            format,
             8,
         )),
         #[cfg(not(target_os = "macos"))]

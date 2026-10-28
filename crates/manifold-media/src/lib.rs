@@ -23,3 +23,5 @@ mod metal_ffi;
 pub mod still_exporter;
 #[cfg(target_os = "macos")]
 pub mod video_renderer;
+#[cfg(target_os = "macos")]
+mod videotoolbox;

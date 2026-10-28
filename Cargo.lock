@@ -2758,6 +2758,7 @@ dependencies = [
  "ahash",
  "cc",
  "crossbeam-channel",
+ "half",
  "image",
  "log",
  "manifold-core",

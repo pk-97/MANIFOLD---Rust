@@ -18,7 +18,7 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[".mp4", ".mov", ".webm", ".avi"];
 /// Fast (~1ms per file), thread-safe: creates a local AVAsset, reads properties, releases.
 #[cfg(target_os = "macos")]
 pub fn probe_video_metadata(path: &str) -> Option<ProbeResult> {
-    let meta = crate::decoder::DecoderPool::probe_metadata(path)?;
+    let meta = crate::decoder::probe_metadata(path)?;
     Some(ProbeResult {
         duration: meta.duration,
         width: meta.width,

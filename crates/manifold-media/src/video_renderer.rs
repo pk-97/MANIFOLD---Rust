@@ -1,16 +1,14 @@
-//! VideoRenderer — ClipRenderer implementation for native video decode.
+//! VideoRenderer — ClipRenderer implementation for video clips.
 //!
-//! Replaces the StubRenderer::new_video() placeholder with real hardware-accelerated
-//! video decode via AVAssetReader + VideoToolbox. Uses a decode thread pool for
-//! async decode and Metal compute for NV12→Rgba16Float conversion.
+//! Decodes on a thread pool through the platform's `DecoderBackend`
+//! (`decoder.rs`) and copies each frame into a per-clip texture.
 //!
-//! Frame copy mechanism: When a decode worker completes a frame, it sends the result
-//! with the raw DecoderHandle pointer. The content thread (in pre_render) calls the
-//! native CopyFrameToTexture directly using pool_handle + decoder_handle + dest_texture.
-//! This is safe because no decode jobs are in-flight for the clip at that point.
+//! Frame copy mechanism: when a decode worker completes a frame, its result
+//! carries the decoder as a `FrameSource`. The content thread (in
+//! pre_render) copies the frame into the clip's texture through it. This is
+//! safe because no decode jobs are in flight for the clip at that point.
 
 use std::any::Any;
-use std::ffi::c_void;
 use std::sync::Arc;
 
 use ahash::AHashMap;
@@ -26,10 +24,9 @@ use manifold_gpu::{
 use manifold_playback::renderer::ClipRenderer;
 
 use crate::decode_scheduler::{DecodeJob, DecodeResultStatus, DecodeScheduler};
-use crate::decoder::DecoderPool;
-use crate::decoder_ffi;
+use crate::decoder::FrameSource;
 
-/// A native Metal texture for video output.
+/// A clip's video texture.
 struct VideoRenderTarget {
     texture: GpuTexture,
 }
@@ -40,6 +37,7 @@ impl VideoRenderTarget {
         width: u32,
         height: u32,
         format: GpuTextureFormat,
+        usage: GpuTextureUsage,
         index: usize,
     ) -> Self {
         let label = format!("VideoRT_{index:02}");
@@ -49,7 +47,7 @@ impl VideoRenderTarget {
             depth: 1,
             format,
             dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            usage,
             label: &label,
             mip_levels: 1,
         });
@@ -88,7 +86,7 @@ struct FilmstripState {
     bar: u32,
 }
 
-/// Native video renderer implementing the ClipRenderer trait.
+/// Video renderer implementing the ClipRenderer trait.
 pub struct VideoRenderer {
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc` clone
     /// instead of a cached raw pointer means the device's backing allocation
@@ -98,7 +96,9 @@ pub struct VideoRenderer {
     device: Arc<GpuDevice>,
     width: u32,
     height: u32,
+    /// The backend's texture format and usage for clip textures.
     format: GpuTextureFormat,
+    usage: GpuTextureUsage,
     active_clips: AHashMap<ClipId, ActiveVideoClip>,
     /// section 24 5c P2b video posters: PARKED video clips decoded one-shot for a timeline
     /// thumbnail. Reuses `ActiveVideoClip` but is NEVER advanced by `update` and
@@ -120,16 +120,12 @@ pub struct VideoRenderer {
 }
 
 impl VideoRenderer {
-    pub fn new(
-        device: Arc<GpuDevice>,
-        width: u32,
-        height: u32,
-        format: GpuTextureFormat,
-        _pool_size: usize,
-    ) -> Self {
-        let decoder_pool =
-            Arc::new(DecoderPool::new().expect("Failed to create video decoder pool"));
-        let scheduler = DecodeScheduler::new(decoder_pool);
+    pub fn new(device: Arc<GpuDevice>, width: u32, height: u32, _pool_size: usize) -> Self {
+        let backend =
+            crate::decoder::platform_backend().expect("Failed to create the video decoder");
+        let format = backend.target_format();
+        let usage = backend.target_usage();
+        let scheduler = DecodeScheduler::new(backend);
 
         // Lazy allocation: start empty, grow on demand as clips start.
         // Avoids pre-allocating large textures that may never be used.
@@ -140,6 +136,7 @@ impl VideoRenderer {
             width,
             height,
             format,
+            usage,
             active_clips: AHashMap::new(),
             poster_clips: AHashMap::new(),
             poster_filmstrip: AHashMap::new(),
@@ -254,6 +251,8 @@ impl VideoRenderer {
         self.scheduler.submit(DecodeJob::Open {
             clip_id: key.clone(),
             path,
+            width: self.width,
+            height: self.height,
         });
         self.scheduler.submit(DecodeJob::Prepare { clip_id: key });
         true
@@ -371,6 +370,8 @@ impl VideoRenderer {
             self.scheduler.submit(DecodeJob::WarmOpen {
                 video_clip_id: video_clip_id.clone(),
                 path: candidate.file_path.clone(),
+                width: self.width,
+                height: self.height,
             });
         }
     }
@@ -382,7 +383,14 @@ impl VideoRenderer {
             let idx = self.rt_counter;
             self.rt_counter += 1;
             log::debug!("[VideoRenderer] Pool exhausted, creating RT_{idx:02}");
-            VideoRenderTarget::new(self.device(), self.width, self.height, self.format, idx)
+            VideoRenderTarget::new(
+                self.device(),
+                self.width,
+                self.height,
+                self.format,
+                self.usage,
+                idx,
+            )
         }
     }
 
@@ -390,45 +398,29 @@ impl VideoRenderer {
         self.available_rts.push(rt);
     }
 
-    /// Copy the decoded frame from the native decoder to the Metal render target.
+    /// Copy a decoded frame into a clip's texture; `true` when it landed.
     /// Called on the content thread when a FrameReady/Prepared/Seeked result arrives.
     ///
     /// # Safety
-    /// `handle_ptr` must be a valid native DecoderHandle pointer.
     /// No decode jobs may be in-flight for this clip (decode_pending must be false).
-    #[cfg(target_os = "macos")]
     unsafe fn copy_frame_to_rt(
-        pool: &DecoderPool,
-        handle_ptr: *mut c_void,
+        device: &GpuDevice,
+        frame: FrameSource,
         render_target: &VideoRenderTarget,
     ) -> bool {
-        let dest_ptr = render_target.texture.raw_ptr();
-
-        let result = unsafe {
-            decoder_ffi::VideoDecoder_CopyFrameToTexture(pool.raw_handle(), handle_ptr, dest_ptr)
-        };
-
-        if result != 0 {
-            log::warn!("[VideoRenderer] CopyFrameToTexture failed (code={result})");
-            return false;
+        match unsafe { frame.copy_to(device, &render_target.texture) } {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("[VideoRenderer] frame copy failed: {e}");
+                false
+            }
         }
-
-        true
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    unsafe fn copy_frame_to_rt(
-        _pool: &DecoderPool,
-        _handle_ptr: *mut c_void,
-        _render_target: &VideoRenderTarget,
-    ) -> bool {
-        false
     }
 
     /// Process a batch of decode results — shared by `pre_render` and
     /// `flush_pending_decodes` to avoid duplicating the match arms.
     fn process_decode_results(&mut self, results: Vec<crate::decode_scheduler::DecodeResult>) {
-        let pool = Arc::clone(self.scheduler.pool());
+        let device = Arc::clone(&self.device);
         for result in results {
             let clip_id = result.clip_id;
             match result.status {
@@ -442,25 +434,20 @@ impl VideoRenderer {
                         clip.frame_rate = frame_rate.max(1.0);
                     }
                 }
-                DecodeResultStatus::Prepared { handle_ptr } => {
+                DecodeResultStatus::Prepared { frame } => {
                     if let Some(clip) = self.clip_state_mut(clip_id.as_str()) {
                         clip.ready = true;
                         clip.decode_pending = false;
-                        if unsafe { Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target) }
-                        {
+                        if unsafe { Self::copy_frame_to_rt(&device, frame, &clip.render_target) } {
                             clip.has_frame = true;
                         }
                     }
                 }
-                DecodeResultStatus::FrameReady {
-                    frame_time,
-                    handle_ptr,
-                } => {
+                DecodeResultStatus::FrameReady { frame_time, frame } => {
                     if let Some(clip) = self.clip_state_mut(clip_id.as_str()) {
                         clip.playback_time = frame_time;
                         clip.decode_pending = false;
-                        if unsafe { Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target) }
-                        {
+                        if unsafe { Self::copy_frame_to_rt(&device, frame, &clip.render_target) } {
                             clip.has_frame = true;
                         }
                     }
@@ -479,16 +466,12 @@ impl VideoRenderer {
                         }
                     }
                 }
-                DecodeResultStatus::Seeked {
-                    frame_time,
-                    handle_ptr,
-                } => {
+                DecodeResultStatus::Seeked { frame_time, frame } => {
                     if let Some(clip) = self.clip_state_mut(clip_id.as_str()) {
                         clip.playback_time = frame_time;
                         clip.decode_pending = false;
                         clip.time_accumulator = 0.0;
-                        if unsafe { Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target) }
-                        {
+                        if unsafe { Self::copy_frame_to_rt(&device, frame, &clip.render_target) } {
                             clip.has_frame = true;
                         }
                     }
@@ -574,6 +557,8 @@ impl ClipRenderer for VideoRenderer {
         self.scheduler.submit(DecodeJob::Open {
             clip_id: clip_id_str.clone(),
             path,
+            width: self.width,
+            height: self.height,
         });
         self.scheduler.submit(DecodeJob::Prepare {
             clip_id: clip_id_str,
@@ -782,7 +767,7 @@ impl ClipRenderer for VideoRenderer {
         // so the loop below can still take `&mut self.active_clips`.
         let device = Arc::clone(&self.device);
         let device = &*device;
-        let fmt = self.format;
+        let (fmt, usage) = (self.format, self.usage);
 
         // Drop old pool RTs (wrong size), start fresh. New RTs will be
         // allocated on demand as clips start.
@@ -790,7 +775,7 @@ impl ClipRenderer for VideoRenderer {
         self.rt_counter = 0;
 
         for clip in self.active_clips.values_mut() {
-            clip.render_target = VideoRenderTarget::new(device, w, h, fmt, self.rt_counter);
+            clip.render_target = VideoRenderTarget::new(device, w, h, fmt, usage, self.rt_counter);
             self.rt_counter += 1;
             clip.has_frame = false;
         }

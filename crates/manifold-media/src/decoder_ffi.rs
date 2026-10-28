@@ -1,7 +1,7 @@
 //! Raw FFI bindings to the native Metal video decoder plugin.
 //!
 //! These map 1:1 to the C functions exported by `native/MetalVideoDecoderPlugin.m`.
-//! Use `DecoderPool` / `DecoderHandle` in `decoder.rs` for the safe Rust wrapper.
+//! `videotoolbox.rs` wraps them behind the `decoder.rs` traits.
 
 use std::ffi::c_void;
 use std::os::raw::c_char;

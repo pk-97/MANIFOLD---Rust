@@ -1,15 +1,15 @@
-//! Safe Rust wrapper around the native Metal video decoder FFI.
-//!
-//! Provides `DecoderPool` (shared Metal state) and `DecoderHandle` (per-file decoder)
-//! for hardware-accelerated video decode via AVAssetReader + VideoToolbox.
+//! The video decoder seam. A `DecoderBackend` opens files into
+//! `VideoDecoder`s, which live on the decode workers; the content thread
+//! copies each decoded frame into a clip's texture. The Mac decodes through
+//! VideoToolbox (`videotoolbox.rs`); everything else through FFmpeg on the
+//! CPU (`ffmpeg_decoder.rs`).
 
-use std::ffi::{CString, c_void};
 use std::fmt;
+use std::sync::Arc;
 
-use crate::decoder_ffi;
+use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, GpuTextureUsage};
 
-/// Error codes from the native video decoder.
-/// Matches VD_ERR_* defines in MetalVideoDecoderPlugin.m.
+/// Why a decoder call failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderError {
     Generic,
@@ -25,24 +25,6 @@ pub enum DecoderError {
     Unavailable,
 }
 
-impl DecoderError {
-    pub(crate) fn from_code(code: i32) -> Self {
-        match code {
-            -1 => Self::Generic,
-            -2 => Self::NullHandle,
-            -3 => Self::OpenFailed,
-            -4 => Self::NoVideoTrack,
-            -5 => Self::ReaderFailed,
-            -6 => Self::DecodeFailed,
-            -7 => Self::ComputeFailed,
-            -8 => Self::NullTexture,
-            -9 => Self::NullPool,
-            -10 => Self::SeekFailed,
-            _ => Self::Generic,
-        }
-    }
-}
-
 impl fmt::Display for DecoderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -50,9 +32,9 @@ impl fmt::Display for DecoderError {
             Self::NullHandle => write!(f, "decoder handle is null"),
             Self::OpenFailed => write!(f, "failed to open video file"),
             Self::NoVideoTrack => write!(f, "no video track found"),
-            Self::ReaderFailed => write!(f, "AVAssetReader creation failed"),
+            Self::ReaderFailed => write!(f, "the file reader failed"),
             Self::DecodeFailed => write!(f, "frame decode failed"),
-            Self::ComputeFailed => write!(f, "GPU compute conversion failed"),
+            Self::ComputeFailed => write!(f, "GPU frame conversion failed"),
             Self::NullTexture => write!(f, "texture pointer is null"),
             Self::NullPool => write!(f, "decoder pool is null"),
             Self::SeekFailed => write!(f, "seek failed"),
@@ -78,183 +60,85 @@ pub struct VideoMetadata {
     pub height: i32,
 }
 
-/// Shared decoder pool state.
-///
-/// Owns the MTLDevice, CVMetalTextureCache, and NV12→Rgba16Float compute pipeline.
-/// Created once, shared across all decoder handles (thread-safe for the compute path
-/// since each CopyFrameToTexture call creates its own command buffer).
-pub struct DecoderPool {
-    pool_handle: *mut c_void,
+/// One open video file. Each lives on one decode worker; the content thread
+/// only calls `copy_frame_to`, and only while no job for it is in flight.
+pub trait VideoDecoder: Send {
+    /// Start reading and decode the first frame.
+    fn prepare(&mut self) -> Result<(), DecoderError>;
+    /// Seek to `seconds` and decode the frame there.
+    fn seek_to(&mut self, seconds: f32) -> Result<(), DecoderError>;
+    /// Decode the next frame in sequence.
+    fn decode_next_frame(&mut self) -> Result<DecodeStatus, DecoderError>;
+    /// Presentation time of the current frame, in seconds.
+    fn frame_time(&self) -> f32;
+    /// Media duration in seconds.
+    fn duration(&self) -> f32;
+    /// Native video width in pixels.
+    fn width(&self) -> i32;
+    /// Native video height in pixels.
+    fn height(&self) -> i32;
+    /// Frame rate in frames per second.
+    fn frame_rate(&self) -> f32;
+    /// Copy the current frame into `target`, fitted inside it with
+    /// transparent padding. `target` was made with the backend's
+    /// `target_format` and `target_usage`.
+    fn copy_frame_to(&self, device: &GpuDevice, target: &GpuTexture) -> Result<(), DecoderError>;
 }
 
-// The pool handle points to heap-allocated Obj-C state.
-// CopyFrameToTexture creates per-call command buffers, safe from multiple threads.
-// CVMetalTextureCache calls (in DecodeOneFrame) happen on worker threads — each
-// worker operates on its own DecoderHandle, so no concurrent cache access.
-unsafe impl Send for DecoderPool {}
-unsafe impl Sync for DecoderPool {}
+/// Opens video files for the decode workers.
+pub trait DecoderBackend: Send + Sync {
+    /// Open `path` for frames copied into `width × height` targets.
+    fn open(
+        &self,
+        path: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<Box<dyn VideoDecoder>, DecoderError>;
+    /// The format clip textures are made in.
+    fn target_format(&self) -> GpuTextureFormat;
+    /// The usage clip textures are made with.
+    fn target_usage(&self) -> GpuTextureUsage;
+}
 
-impl DecoderPool {
-    /// Create a new shared decoder pool.
-    pub fn new() -> Result<Self, DecoderError> {
-        let handle = unsafe { decoder_ffi::VideoDecoder_CreatePool() };
-        if handle.is_null() {
-            return Err(DecoderError::Unavailable);
-        }
-        Ok(Self {
-            pool_handle: handle,
-        })
+/// A worker's decoder whose current frame the content thread copies.
+#[derive(Clone, Copy)]
+pub struct FrameSource(*const dyn VideoDecoder);
+
+// The worker hands a decoder over only between jobs: the content thread's
+// `decode_pending` flag keeps the next job for the clip from being
+// submitted until the copy is done.
+unsafe impl Send for FrameSource {}
+
+impl FrameSource {
+    pub(crate) fn new(decoder: &(dyn VideoDecoder + 'static)) -> Self {
+        Self(decoder as *const dyn VideoDecoder)
     }
 
-    /// Open a video file and return a decoder handle.
-    pub fn open(&self, path: &str) -> Result<DecoderHandle, DecoderError> {
-        let c_path = CString::new(path).map_err(|_| DecoderError::OpenFailed)?;
-        let handle = unsafe { decoder_ffi::VideoDecoder_Open(self.pool_handle, c_path.as_ptr()) };
-        if handle.is_null() {
-            return Err(DecoderError::OpenFailed);
-        }
-        Ok(DecoderHandle { handle })
-    }
-
-    /// Run the NV12→Rgba16Float compute shader, copying the decoded frame
-    /// into the destination Metal texture.
+    /// Copy the decoder's current frame into `target`.
     ///
     /// # Safety
-    /// `dest_metal_texture` must be a valid `id<MTLTexture>` cast to `*mut c_void`.
-    /// The decoder handle must have a current decoded frame.
-    pub unsafe fn copy_frame_to_texture(
-        &self,
-        decoder: &DecoderHandle,
-        dest_metal_texture: *mut c_void,
+    /// The decoder is still open and no job for it is in flight.
+    pub(crate) unsafe fn copy_to(
+        self,
+        device: &GpuDevice,
+        target: &GpuTexture,
     ) -> Result<(), DecoderError> {
-        let result = unsafe {
-            decoder_ffi::VideoDecoder_CopyFrameToTexture(
-                self.pool_handle,
-                decoder.handle,
-                dest_metal_texture,
-            )
-        };
-        if result != 0 {
-            return Err(DecoderError::from_code(result));
-        }
-        Ok(())
-    }
-
-    /// Raw pool handle for FFI calls from worker threads.
-    pub(crate) fn raw_handle(&self) -> *mut c_void {
-        self.pool_handle
-    }
-
-    /// Quick metadata probe without full decoder setup.
-    pub fn probe_metadata(path: &str) -> Option<VideoMetadata> {
-        let c_path = CString::new(path).ok()?;
-        let mut duration: f32 = 0.0;
-        let mut width: i32 = 0;
-        let mut height: i32 = 0;
-        let result = unsafe {
-            decoder_ffi::VideoDecoder_ProbeMetadata(
-                c_path.as_ptr(),
-                &mut duration,
-                &mut width,
-                &mut height,
-            )
-        };
-        if result != 0 {
-            return None;
-        }
-        Some(VideoMetadata {
-            duration,
-            width,
-            height,
-        })
+        unsafe { (*self.0).copy_frame_to(device, target) }
     }
 }
 
-impl Drop for DecoderPool {
-    fn drop(&mut self) {
-        if !self.pool_handle.is_null() {
-            unsafe { decoder_ffi::VideoDecoder_DestroyPool(self.pool_handle) };
-        }
-    }
+/// This platform's decoder.
+pub fn platform_backend() -> Result<Arc<dyn DecoderBackend>, DecoderError> {
+    #[cfg(target_os = "macos")]
+    return Ok(Arc::new(crate::videotoolbox::VtBackend::new()?));
+    #[cfg(not(target_os = "macos"))]
+    return Ok(Arc::new(crate::ffmpeg_decoder::FfmpegBackend::new()?));
 }
 
-/// Per-file decoder handle.
-///
-/// Owns an AVAsset + AVAssetReader + current decoded CVPixelBuffer.
-/// Not thread-safe — each handle must be used from a single thread.
-pub struct DecoderHandle {
-    handle: *mut c_void,
-}
-
-// Handle is moved to a worker thread and used exclusively there.
-unsafe impl Send for DecoderHandle {}
-
-impl DecoderHandle {
-    /// Create AVAssetReader, start reading, and decode the first frame.
-    pub fn prepare(&mut self) -> Result<(), DecoderError> {
-        let result = unsafe { decoder_ffi::VideoDecoder_Prepare(self.handle) };
-        if result != 0 {
-            return Err(DecoderError::from_code(result));
-        }
-        Ok(())
-    }
-
-    /// Seek to a specific time (seconds). Recreates the AVAssetReader and
-    /// decodes one frame at the target position.
-    pub fn seek_to(&mut self, seconds: f32) -> Result<(), DecoderError> {
-        let result = unsafe { decoder_ffi::VideoDecoder_SeekTo(self.handle, seconds) };
-        if result != 0 {
-            return Err(DecoderError::from_code(result));
-        }
-        Ok(())
-    }
-
-    /// Decode the next frame in sequence.
-    pub fn decode_next_frame(&mut self) -> Result<DecodeStatus, DecoderError> {
-        let result = unsafe { decoder_ffi::VideoDecoder_DecodeNextFrame(self.handle) };
-        match result {
-            0 => Ok(DecodeStatus::FrameReady),
-            1 => Ok(DecodeStatus::EndOfFile),
-            code => Err(DecoderError::from_code(code)),
-        }
-    }
-
-    /// Presentation timestamp of the current decoded frame (seconds).
-    pub fn frame_time(&self) -> f32 {
-        unsafe { decoder_ffi::VideoDecoder_GetFrameTime(self.handle) }
-    }
-
-    /// Media duration in seconds.
-    pub fn duration(&self) -> f32 {
-        unsafe { decoder_ffi::VideoDecoder_GetDuration(self.handle) }
-    }
-
-    /// Native video width in pixels.
-    pub fn width(&self) -> i32 {
-        unsafe { decoder_ffi::VideoDecoder_GetWidth(self.handle) }
-    }
-
-    /// Native video height in pixels.
-    pub fn height(&self) -> i32 {
-        unsafe { decoder_ffi::VideoDecoder_GetHeight(self.handle) }
-    }
-
-    /// Detected frame rate (fps).
-    pub fn frame_rate(&self) -> f32 {
-        unsafe { decoder_ffi::VideoDecoder_GetFrameRate(self.handle) }
-    }
-
-    /// Raw handle for FFI calls.
-    pub(crate) fn raw_handle(&self) -> *mut c_void {
-        self.handle
-    }
-}
-
-impl Drop for DecoderHandle {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe { decoder_ffi::VideoDecoder_Close(self.handle) };
-            self.handle = std::ptr::null_mut();
-        }
-    }
+/// Duration and size of the video at `path` without opening a decoder.
+pub fn probe_metadata(path: &str) -> Option<VideoMetadata> {
+    #[cfg(target_os = "macos")]
+    return crate::videotoolbox::probe_metadata(path);
+    #[cfg(not(target_os = "macos"))]
+    return crate::ffmpeg_decoder::probe_metadata(path);
 }
