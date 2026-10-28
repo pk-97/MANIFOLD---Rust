@@ -437,8 +437,11 @@ impl Primitive for GpuFlipStep {
             .saturating_mul(size_of::<LiquidBody>() as u64);
         // The history holds the most substeps the clock can schedule. Export
         // encodes them all; live encodes the numerical steps the newest
-        // retired tick's speed asks for (live_steps), and the hits. The plan
-        // gates the slots the clock leaves no time for on the GPU.
+        // retired tick's speed asks for (live_steps), and the hits. A tick
+        // with a hit takes every numerical step: the retired speed is from
+        // before the hit, and too few slots would stretch the last step over
+        // the rest of the tick. The plan gates the slots the clock leaves no
+        // time for on the GPU.
         let rule = history_slots(live_hit_count);
         let history_slots = encoded_slots(rule);
         let frame_clock = ctx
@@ -449,7 +452,11 @@ impl Primitive for GpuFlipStep {
         let numerical_steps = match &frame_clock {
             Some(clock) if history_slots == rule => {
                 let speed = self.state.poll_plans(clock);
-                live_steps(speed, interval_duration as f32, h, steps as u32)
+                if live_hit_count > 0 {
+                    manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS
+                } else {
+                    live_steps(speed, interval_duration as f32, h, steps as u32)
+                }
             }
             _ => manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS,
         };
