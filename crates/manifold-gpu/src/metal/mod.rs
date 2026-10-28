@@ -20,20 +20,17 @@ mod device;
 mod encoder;
 pub mod firmware_reports;
 mod format;
-mod frame_fence;
 pub mod gpu_fault;
 mod msl_cache;
 mod profiling;
 pub mod raytrace;
 mod replay;
 mod residency;
-mod retire;
 mod shader_compiler;
 mod span_timer;
 mod spirv_msl_fixup;
 pub mod surface;
 mod template;
-mod texture_pool;
 mod types;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -49,21 +46,21 @@ mod workgroup_zeroing_tests;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
+pub(crate) use device::PoolAllocator;
+pub(crate) use gpu_fault::submissions_ignored;
+pub(crate) use types::RetiredResource;
 pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, DrawCount, GpuEncoder};
 pub use fft::{FftKind, GpuFft};
-pub use frame_fence::FrameFence;
 pub use profiling::{
     GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind, ProfileGranularity,
 };
 pub use replay::GpuReplayCache;
 pub use residency::{GpuResidencyManager, GpuResidencyStats};
-pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
 pub use span_timer::GpuSpanTimer;
 pub use surface::{GpuDrawable, GpuSurface, set_presented_observer};
 pub use template::{
     GatedRecorder, GpuTemplateStats, GpuTemplateStore, TemplateRanges, TemplateTicket,
 };
-pub use texture_pool::TexturePool;
 pub use types::{
     GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter,
     GpuRenderPipeline, GpuSampler, GpuTexture,

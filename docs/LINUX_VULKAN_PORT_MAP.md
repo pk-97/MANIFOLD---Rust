@@ -82,9 +82,6 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Metal-only, stay Metal | `raw_device`, `raw_device_ptr`, `raw_cmd_buf`, `raw_ptr`, `mtl4_bridge`, `metalfx`, `metalfx_m4`, `defer_drop`, `dispatch_compute_with_accel` | never |
 
 **Hoist before porting.** These live in `metal/` but are backend-neutral logic that touches Metal in a handful of lines. Move them to shared modules with small backend hooks, so Vulkan does not copy them:
-- `frame_fence.rs` (249 lines, no Metal calls)
-- `retire.rs` (486, 7 Metal lines)
-- `texture_pool.rs` (499, keeps a retained `MTLDevice`)
 - the ray-tracing data types in `raytrace/params.rs` (1,005) and `raytrace/emissive.rs` (692), plus the error, update and debug-ray types callers name (section 4)
 
 `span_timer.rs` is not hoisted: it goes with the GPU-timing consolidation (section 11).

@@ -36,24 +36,8 @@
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLResource, MTLTexture};
-
-use super::defer_drop::{self, SendBuffer, SendTexture};
-use super::types::GpuEvent;
-
-/// A dropped GPU resource waiting for its stamp to signal.
-enum RetireResource {
-    Tex(
-        SendTexture,
-        Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
-    ),
-    Buf(
-        SendBuffer,
-        Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
-    ),
-}
+use crate::GpuEvent;
+use crate::backend::RetiredResource;
 
 /// One resource drop waiting for its stamp to signal on the GPU timeline.
 struct RetireItem {
@@ -61,7 +45,7 @@ struct RetireItem {
     stamp: u64,
     /// The clock the stamp is expressed in (second handle; shared per device).
     event: GpuEvent,
-    resource: RetireResource,
+    resource: RetiredResource,
     /// Drains survived since enqueue. Diagnostic only (MANIFOLD_RETIRE_MIN_DRAINS):
     /// a fixed lag on top of the fence gate — discriminates "completion-gated
     /// is enough" from "the driver needs N frames of quiescence" (BUG-jddy
@@ -101,7 +85,9 @@ impl RetireMark {
         std::sync::Arc::new(Self { event, sender })
     }
 
-    fn enqueue(&self, resource: RetireResource) {
+    /// Stamp a dropped resource and enqueue it for fence retirement. Called
+    /// from the backend's texture and buffer drops; never blocks.
+    pub(crate) fn retire(&self, resource: RetiredResource) {
         let item = RetireItem {
             stamp: self.event.current_value().saturating_add(1),
             event: self.event.second_handle(),
@@ -112,41 +98,6 @@ impl RetireMark {
         // (waiting out every commit the device will ever make), so the
         // returned item can release immediately — `SendError` drops it.
         let _ = self.sender.tx.send(item);
-    }
-
-    /// Consume a texture drop: stamp and enqueue for fence retirement.
-    /// Called from `GpuTexture::drop` — takes the raw handle (clone) and
-    /// never blocks.
-    pub(crate) fn retire_texture(
-        &self,
-        raw: &Retained<ProtocolObject<dyn MTLTexture>>,
-        residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
-    ) {
-        if defer_drop::backtrace_enabled() {
-            let label = unsafe { raw.label() }
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "(unlabeled)".into());
-            eprintln!("[retire] enqueue texture {label} (fence-stamped retirement)");
-        }
-        self.enqueue(RetireResource::Tex(SendTexture(raw.clone()), residency));
-    }
-
-    /// Consume a buffer drop. Same contract as [`Self::retire_texture`];
-    /// called from `GpuBuffer::drop`.
-    pub(crate) fn retire_buffer(
-        &self,
-        raw: &Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-        residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
-    ) {
-        if defer_drop::backtrace_enabled() {
-            let label = unsafe { raw.label() }
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "(unlabeled)".into());
-            eprintln!("[retire] enqueue buffer {label} (fence-stamped retirement)");
-        }
-        self.enqueue(RetireResource::Buf(SendBuffer(raw.clone()), residency));
     }
 }
 
@@ -255,9 +206,7 @@ impl RetireQueue {
         }
         for item in self.pending.drain(..) {
             if item.event.signaled_value() >= item.stamp && item.age >= min_drains() {
-                // Actual release — funnels through the defer-drop probe so
-                // the env-gated harness stays composable with retirement on.
-                release(item.resource);
+                item.resource.release();
             } else {
                 self.keep.push(RetireItem {
                     age: item.age.saturating_add(1),
@@ -280,35 +229,20 @@ impl RetireQueue {
         // A blacklisted queue never signals again (BUG-665r — the driver
         // ignores submissions after a GPU error): no wait can complete, and
         // the process is already on its way out. Release without waiting.
-        if !super::gpu_fault::submissions_ignored() {
+        if !crate::backend::submissions_ignored() {
             for item in &self.pending {
                 let target = item.stamp.min(item.event.current_value());
                 item.event.wait_until_done(target);
             }
         }
         for item in self.pending.drain(..) {
-            release(item.resource);
+            item.resource.release();
         }
     }
 
     /// Entries still waiting for their stamp (post-drain). Diagnostic/tests.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
-    }
-}
-
-/// Release a retired resource — funnels through the defer-drop probe so the
-/// env-gated harness stays composable with retirement on.
-fn release(resource: RetireResource) {
-    match resource {
-        RetireResource::Tex(t, residency) => {
-            defer_drop::drop_texture(t.0);
-            drop(residency);
-        }
-        RetireResource::Buf(b, residency) => {
-            defer_drop::drop_buffer(b.0);
-            drop(residency);
-        }
     }
 }
 
@@ -323,7 +257,7 @@ impl Drop for RetireQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::GpuTexture;
+    use crate::GpuTexture;
     use super::*;
     use crate::GpuDevice;
 

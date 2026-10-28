@@ -11,7 +11,7 @@ use objc2_metal::MTLSharedEvent;
 use super::*;
 use crate::{
     GpuBinding, GpuReplayStats, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
-    GpuTextureUsage,
+    GpuTextureUsage, RetireMark, RetireQueue,
 };
 
 const N: usize = 4096;

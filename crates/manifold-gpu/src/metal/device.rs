@@ -194,7 +194,7 @@ pub struct GpuDevice {
     /// (BUG-l7t4 class fix). Set once at pipeline init via `set_retirement`;
     /// every texture this device allocates afterwards carries the mark.
     /// `OnceLock` — set-once config, read on the allocation path.
-    retirement: std::sync::OnceLock<Arc<super::retire::RetireMark>>,
+    retirement: std::sync::OnceLock<Arc<crate::RetireMark>>,
     /// One content-thread-owned residency manager endpoint per device.
     residency_sender: std::sync::OnceLock<Option<super::residency::ResidencySender>>,
 }
@@ -2015,7 +2015,7 @@ impl GpuDevice {
     /// releasing while a command buffer may still reference it. Later calls
     /// are ignored (the first wiring wins) — mirrors `TexturePool`'s
     /// set-once event discipline.
-    pub fn set_retirement(&self, mark: Arc<super::retire::RetireMark>) {
+    pub fn set_retirement(&self, mark: Arc<crate::RetireMark>) {
         if self.retirement.set(mark).is_err() {
             log::warn!("GpuDevice::set_retirement called twice — keeping the first mark");
         }
@@ -2024,13 +2024,13 @@ impl GpuDevice {
     /// The content frame-completion clock, when retirement is wired. None
     /// only on harness devices without a content pipeline; they commit and
     /// wait every frame.
-    pub fn frame_clock(&self) -> Option<super::retire::FrameClock> {
+    pub fn frame_clock(&self) -> Option<crate::FrameClock> {
         self.retirement.get().map(|mark| mark.frame_clock())
     }
 
     /// The retirement mark, if wired. Allocation paths stamp new textures
     /// with a clone of this `Arc`.
-    fn retirement_mark(&self) -> Option<Arc<super::retire::RetireMark>> {
+    fn retirement_mark(&self) -> Option<Arc<crate::RetireMark>> {
         self.retirement.get().map(Arc::clone)
     }
 
@@ -2147,11 +2147,6 @@ impl GpuDevice {
             retire: self.retirement_mark(),
             residency: self.residency_texture_lease(&raw),
         }
-    }
-
-    /// Create a texture pool with frame-stamped recycling.
-    pub fn create_texture_pool(&self, frames_in_flight: u64) -> TexturePool {
-        TexturePool::new(self, frames_in_flight)
     }
 
     /// Create a freestanding BGRA8888 IOSurface of the given size.
@@ -2370,4 +2365,45 @@ pub(crate) fn retire_on_queue<T: 'static>(
         cb.addCompletedHandler(block2::RcBlock::as_ptr(&block));
     }
     cb.commit();
+}
+
+/// The texture pool's handle for fresh allocations: the Metal device it
+/// allocates from and the residency set new textures join.
+pub(crate) struct PoolAllocator {
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
+    residency_sender: Option<super::residency::ResidencySender>,
+}
+
+impl PoolAllocator {
+    pub(crate) fn new(device: &GpuDevice) -> Self {
+        Self {
+            device: device.device.clone(),
+            residency_sender: device.residency_sender(),
+        }
+    }
+
+    pub(crate) fn allocate(
+        &self,
+        desc: &GpuTextureDesc,
+        retire: Option<Arc<crate::RetireMark>>,
+    ) -> GpuTexture {
+        let mtl_desc = GpuDevice::build_mtl_texture_desc(desc);
+        let raw = self
+            .device
+            .newTextureWithDescriptor(&mtl_desc)
+            .expect("Metal: TexturePool allocation failed — GPU memory exhausted");
+        let residency = self
+            .residency_sender
+            .as_ref()
+            .map(|sender| super::residency::lease_for_texture(sender, &raw));
+        GpuTexture {
+            raw,
+            width: desc.width,
+            height: desc.height,
+            depth: 1,
+            format: desc.format,
+            retire,
+            residency,
+        }
+    }
 }

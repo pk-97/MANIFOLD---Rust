@@ -10,6 +10,66 @@ use objc2_metal::{
 use super::*;
 use crate::types::*;
 
+// ─── Retirement ───────────────────────────────────────────────────────
+
+/// A dropped texture or buffer waiting in the shared retire queue for the
+/// frame that last used it to finish on the GPU.
+pub(crate) enum RetiredResource {
+    Texture(
+        super::defer_drop::SendTexture,
+        Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
+    ),
+    Buffer(
+        super::defer_drop::SendBuffer,
+        Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
+    ),
+}
+
+impl RetiredResource {
+    fn texture(
+        raw: &Retained<ProtocolObject<dyn MTLTexture>>,
+        residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
+    ) -> Self {
+        if super::defer_drop::backtrace_enabled() {
+            log_retire("texture", unsafe { objc2_metal::MTLResource::label(&**raw) });
+        }
+        Self::Texture(super::defer_drop::SendTexture(raw.clone()), residency)
+    }
+
+    fn buffer(
+        raw: &Retained<ProtocolObject<dyn MTLBuffer>>,
+        residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
+    ) -> Self {
+        if super::defer_drop::backtrace_enabled() {
+            log_retire("buffer", unsafe { objc2_metal::MTLResource::label(&**raw) });
+        }
+        Self::Buffer(super::defer_drop::SendBuffer(raw.clone()), residency)
+    }
+
+    /// Release through the defer-drop probe, so the env-gated harness stays
+    /// composable with retirement on.
+    pub(crate) fn release(self) {
+        match self {
+            Self::Texture(texture, residency) => {
+                super::defer_drop::drop_texture(texture.0);
+                drop(residency);
+            }
+            Self::Buffer(buffer, residency) => {
+                super::defer_drop::drop_buffer(buffer.0);
+                drop(residency);
+            }
+        }
+    }
+}
+
+fn log_retire(kind: &str, label: Option<Retained<objc2_foundation::NSString>>) {
+    let label = label
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(unlabeled)".into());
+    eprintln!("[retire] enqueue {kind} {label} (fence-stamped retirement)");
+}
+
 // ─── GpuTexture ───────────────────────────────────────────────────────
 
 /// GPU texture backed by a native Metal texture.
@@ -32,7 +92,7 @@ pub struct GpuTexture {
     /// reference them. `None` for textures whose owner manages lifetime
     /// (CAMetalLayer drawable wraps, mip views of a marked parent) — those
     /// release immediately, as before.
-    pub(crate) retire: Option<std::sync::Arc<super::retire::RetireMark>>,
+    pub(crate) retire: Option<std::sync::Arc<crate::RetireMark>>,
     pub(crate) residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
 }
 
@@ -42,7 +102,7 @@ unsafe impl Sync for GpuTexture {}
 impl Drop for GpuTexture {
     fn drop(&mut self) {
         if let Some(mark) = &self.retire {
-            mark.retire_texture(&self.raw, self.residency.take());
+            mark.retire(RetiredResource::texture(&self.raw, self.residency.take()));
         }
         // TEMP (BUG-l7t4 diagnosis probe, defer_drop.rs): env-gated deferred
         // destruction. Disabled unless MANIFOLD_DEFER_DROP_FRAMES is set —
@@ -236,7 +296,7 @@ pub struct GpuBuffer {
     /// `GpuTexture::retire`: `Some` for manifold-gpu-allocated buffers,
     /// stamped and retired through the completion fence on drop; `None`
     /// for external wraps, which release immediately.
-    pub(crate) retire: Option<std::sync::Arc<super::retire::RetireMark>>,
+    pub(crate) retire: Option<std::sync::Arc<crate::RetireMark>>,
     pub(crate) residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
 }
 
@@ -246,7 +306,7 @@ unsafe impl Sync for GpuBuffer {}
 impl Drop for GpuBuffer {
     fn drop(&mut self) {
         if let Some(mark) = &self.retire {
-            mark.retire_buffer(&self.raw, self.residency.take());
+            mark.retire(RetiredResource::buffer(&self.raw, self.residency.take()));
         }
         // TEMP (BUG-l7t4 diagnosis probe, defer_drop.rs): see the GpuTexture
         // Drop impl above.

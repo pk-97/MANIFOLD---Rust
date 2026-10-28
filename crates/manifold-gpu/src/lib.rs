@@ -65,9 +65,23 @@ mod workgroup_zeroing;
 #[cfg(not(feature = "vulkan"))]
 mod metal;
 #[cfg(not(feature = "vulkan"))]
+use metal as backend;
+#[cfg(not(feature = "vulkan"))]
 pub use metal::*;
 
 #[cfg(feature = "vulkan")]
 mod vulkan;
 #[cfg(feature = "vulkan")]
+use vulkan as backend;
+#[cfg(feature = "vulkan")]
 pub use vulkan::*;
+
+// Backend-neutral frame lifetime: the frame fence, fence-stamped drop
+// retirement and the texture pool. Each backend supplies small hooks
+// (`RetiredResource`, `PoolAllocator`, `submissions_ignored`).
+mod frame_fence;
+pub use frame_fence::FrameFence;
+mod retire;
+pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
+mod texture_pool;
+pub use texture_pool::TexturePool;

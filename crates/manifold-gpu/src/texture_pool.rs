@@ -28,12 +28,15 @@
 //! Entries released BEFORE an event is attached keep `release_signal: None`
 //! and stay on the frame-counter rule — the setter is safe to call any time.
 
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_metal::MTLDevice;
-
-use super::*;
 use crate::types::*;
+use crate::{GpuDevice, GpuEvent, GpuTexture, RetireMark};
+
+impl GpuDevice {
+    /// Create a texture pool with frame-stamped recycling.
+    pub fn create_texture_pool(&self, frames_in_flight: u64) -> TexturePool {
+        TexturePool::new(self, frames_in_flight)
+    }
+}
 
 /// Frame-stamped texture recycling pool.
 pub struct TexturePool {
@@ -57,8 +60,8 @@ struct PoolEntry {
 
 struct TexturePoolInner {
     available: std::collections::HashMap<PoolKey, Vec<PoolEntry>>,
-    /// Retained Metal device handle for allocation.
-    device: Retained<ProtocolObject<dyn MTLDevice>>,
+    /// The backend's handle for fresh allocations.
+    allocator: crate::backend::PoolAllocator,
     /// Current frame number, incremented by begin_frame().
     current_frame: u64,
     /// Number of frames that can execute concurrently on the GPU.
@@ -73,8 +76,7 @@ struct TexturePoolInner {
     /// releasing while an in-flight command buffer references them. Entries
     /// acquired before this is set keep `None` (immediate release), the same
     /// pre-attach discipline as `completion_event`.
-    retire: Option<std::sync::Arc<crate::metal::retire::RetireMark>>,
-    residency_sender: Option<crate::metal::residency::ResidencySender>,
+    retire: Option<std::sync::Arc<RetireMark>>,
     /// New allocations via device.create_texture().
     stats_allocated: u64,
     /// Textures recycled from pool (avoided allocation).
@@ -87,9 +89,6 @@ unsafe impl Send for TexturePool {}
 impl TexturePool {
     /// Create a new texture pool with frame-stamped recycling.
     pub fn new(device: &GpuDevice, frames_in_flight: u64) -> Self {
-        let dev_ptr = device.raw_device() as *const _ as *mut ProtocolObject<dyn MTLDevice>;
-        let mtl_device =
-            unsafe { Retained::retain(dev_ptr) }.expect("MTLDevice retain returned nil");
         log::info!(
             "TexturePool: frame-stamped recycling, {} frames in flight",
             frames_in_flight,
@@ -97,12 +96,11 @@ impl TexturePool {
         Self {
             inner: std::cell::UnsafeCell::new(TexturePoolInner {
                 available: std::collections::HashMap::new(),
-                device: mtl_device,
+                allocator: crate::backend::PoolAllocator::new(device),
                 current_frame: 0,
                 frames_in_flight,
                 completion_event: None,
                 retire: None,
-                residency_sender: device.residency_sender(),
                 stats_allocated: 0,
                 stats_recycled: 0,
             }),
@@ -124,7 +122,7 @@ impl TexturePool {
     /// fence-stamped retirement instead of releasing immediately. Entries
     /// already in the pool keep unmarked textures (immediate release) —
     /// set this at pipeline init, before any rendering.
-    pub fn set_retire_mark(&self, mark: std::sync::Arc<crate::metal::retire::RetireMark>) {
+    pub fn set_retire_mark(&self, mark: std::sync::Arc<RetireMark>) {
         let inner = unsafe { &mut *self.inner.get() };
         inner.retire = Some(mark);
         log::info!("TexturePool: fence-stamped drop retirement attached");
@@ -194,24 +192,7 @@ impl TexturePool {
             label: _label,
             mip_levels: 1,
         };
-        let mtl_desc = GpuDevice::build_mtl_texture_desc(&desc);
-        let raw = inner
-            .device
-            .newTextureWithDescriptor(&mtl_desc)
-            .expect("Metal: TexturePool allocation failed — GPU memory exhausted");
-        let residency = inner
-            .residency_sender
-            .as_ref()
-            .map(|sender| super::residency::lease_for_texture(sender, &raw));
-        GpuTexture {
-            raw,
-            width,
-            height,
-            depth: 1,
-            format,
-            retire: inner.retire.clone(),
-            residency,
-        }
+        inner.allocator.allocate(&desc, inner.retire.clone())
     }
 
     /// Return a texture to the pool for future reuse.

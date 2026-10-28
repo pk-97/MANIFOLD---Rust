@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use super::device::GpuDevice;
+use crate::GpuDevice;
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_micros(500);
 const WAIT_TIMEOUT: Duration = Duration::from_millis(50);
