@@ -1,5 +1,7 @@
-//! GPU proof for `node.wet_map`: a contact close to a decal facing its way
-//! wets that decal again, and a contact on another face starts its own.
+//! GPU proof for `node.wet_map`: a contact in a decal's merge cell facing its
+//! way wets that decal again, a contact in the next cell or on another face
+//! starts its own, and once the half is full a new decal overwrites the
+//! oldest.
 
 use super::*;
 use manifold_node_engine::bindings::Slot;
@@ -10,7 +12,7 @@ use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::testkit::world_box::table_words_of;
 
 /// The display cell, and the water's: decals 60 mm across in radius, merged
-/// within 40 mm.
+/// in 40 mm cells.
 const H: f32 = 0.1;
 const SIM_CELL: f32 = 0.04;
 const POOL: u32 = 4;
@@ -132,7 +134,7 @@ impl Rig {
         let header = map[..HEADER_WORDS as usize].to_vec();
         let half = u64::from(header[6]);
         let first = HEADER_WORDS + HASH_SLOTS + half * u64::from(CAPACITY) * DECAL_WORDS;
-        let decals = (0..u64::from(header[1]))
+        let decals = (0..u64::from(header[0] / 3))
             .map(|i| {
                 let word = &map[(first + i * DECAL_WORDS) as usize..];
                 Decal {
@@ -153,40 +155,62 @@ fn assert_near(got: [f32; 3], want: [f32; 3], tolerance: f32, what: &str) {
 }
 
 #[test]
-fn a_close_contact_facing_the_same_way_wets_its_decal_and_a_wall_contact_starts_its_own() {
+fn a_contact_wets_its_cells_decal_others_start_their_own_and_a_full_half_overwrites_the_oldest() {
     let mut rig = Rig::new();
-    // A centimetre above the floor, then 14 mm along it a second later, and
-    // 3 mm off the wall.
+    // A centimetre above the floor, then 14 mm along it in the same 40 mm
+    // cell a second later, beside it in the next cell, and 3 mm off the wall.
     let first = [1.003, 0.01, 2.004];
     let second = [1.013, 0.01, 2.014];
+    let next_cell = [1.045, 0.01, 2.014];
     let on_the_wall = [WALL_FACE + 0.003, 0.31, 0.404];
     rig.run(&[particle(first)], 1.0);
-    let (header, mut decals) = rig.run(&[particle(second), particle(on_the_wall)], 2.0);
-    assert_eq!(header[0], 6, "six vertices a decal");
+    let (header, decals) = rig.run(
+        &[particle(second), particle(next_cell), particle(on_the_wall)],
+        2.0,
+    );
+    assert_eq!(
+        (header[0], header[1]),
+        (9, 1),
+        "three vertices a decal, one instance"
+    );
     assert_eq!(f32::from_bits(header[4]), 2.0);
     assert_eq!(f32::from_bits(header[5]), 2.0);
     assert_eq!(f32::from_bits(header[9]), DECAL_RADIUS_CELLS * SIM_CELL);
     assert_eq!(f32::from_bits(header[10]), MERGE_CELLS * SIM_CELL);
-    decals.sort_by(|a, b| a.normal[0].total_cmp(&b.normal[0]));
-    let [floor, wall] = decals.as_slice() else {
-        panic!("{} decals, not 2", decals.len());
-    };
-    // The floor decal stays where it started, taking the second touch and a
-    // second quarter of water.
-    assert_near(
-        floor.position,
-        [first[0], 0.0, first[2]],
-        1e-5,
-        "floor centre",
-    );
+    // The first decal sits halfway from its contact to its cell's middle
+    // (1.02, 2.02) and takes the second touch and a second quarter of water.
+    let floor = &decals[0];
+    assert_near(floor.position, [1.0115, 0.0, 2.012], 1e-5, "floor centre");
     assert_near(floor.normal, [0.0, 1.0, 0.0], 1e-3, "floor normal");
     assert_eq!((floor.touch, floor.amount), (touch_key(2.0), 128));
-    assert_near(
-        wall.position,
-        [WALL_FACE, on_the_wall[1], on_the_wall[2]],
-        1e-5,
-        "wall centre",
-    );
+    let (walls, floors): (Vec<&Decal>, Vec<&Decal>) =
+        decals[1..].iter().partition(|d| d.normal[0] > 0.5);
+    let ([wall], [beside]) = (walls.as_slice(), floors.as_slice()) else {
+        panic!("{} decals, not 3", decals.len());
+    };
+    // The next cell's middle is (1.06, 2.02); the wall cell's (y, z) middle
+    // is (0.30, 0.42).
+    assert_near(beside.position, [1.0525, 0.0, 2.017], 1e-5, "next cell centre");
+    assert_eq!((beside.touch, beside.amount), (touch_key(2.0), 64));
+    assert_near(wall.position, [WALL_FACE, 0.305, 0.412], 1e-5, "wall centre");
     assert_near(wall.normal, [1.0, 0.0, 0.0], 1e-3, "wall normal");
     assert_eq!((wall.touch, wall.amount), (touch_key(2.0), 64));
+
+    // A full half: a contact in a fresh cell overwrites the oldest decal,
+    // the first, and the half stays full.
+    let map = rig.node.map.as_ref().expect("the map");
+    let ptr = map.mapped_ptr().expect("a shared map") as *mut u32;
+    // SAFETY: the run above was waited on, so the GPU no longer touches the
+    // map, and word 0 lies inside it.
+    unsafe { ptr.write(3 * CAPACITY) };
+    let (header, decals) = rig.run(&[particle([1.21, 0.01, 2.11])], 3.0);
+    assert_eq!(header[0], 3 * CAPACITY, "the half stays full");
+    assert_eq!(
+        (header[7], header[11]),
+        (1, 1),
+        "one overwritten, from the front"
+    );
+    assert_near(decals[0].position, [1.215, 0.0, 2.105], 1e-5, "the new decal");
+    assert_eq!((decals[0].touch, decals[0].amount), (touch_key(3.0), 64));
+    assert_eq!(decals[1].touch, touch_key(2.0), "the rest stay");
 }

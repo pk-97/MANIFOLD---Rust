@@ -1,7 +1,7 @@
 //! The wet pass: the water's wet marks (`node.wet_map`) drawn over the opaque
 //! depth into the per-pixel wet mask the surface shading reads
 //! (`look_wet_surface.wgsl`), after the depth prepass and before any colour.
-//! One quad per decal in the decal's own plane, counted on the GPU by the
+//! One triangle per decal in the decal's own plane, counted on the GPU by the
 //! map's own draw arguments; each pixel keeps the wettest decal over it. A
 //! scene with no wet map draws nothing and holds no mask.
 use std::sync::LazyLock;

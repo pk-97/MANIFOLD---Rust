@@ -29,8 +29,8 @@ WORLD_READ = C / "manifold-node-engine/src/scene/world_tiles_read.wgsl"
 WET_LAYOUT = C / "manifold-node-engine/src/scene/wet_map_layout.wgsl"
 # The constants `wet_map::layout()` writes ahead of the layout's helpers.
 WET_CONSTS = """const WD_HEADER_WORDS: u32 = 16u;
-const WD_HASH_SLOTS: u32 = 131072u;
-const WD_CAPACITY: u32 = 65536u;
+const WD_HASH_SLOTS: u32 = 262144u;
+const WD_CAPACITY: u32 = 131072u;
 const WD_DECAL_WORDS: u32 = 8u;
 const WD_DRY_SECONDS: f32 = 15.0;
 """

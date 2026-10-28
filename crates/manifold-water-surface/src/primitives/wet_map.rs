@@ -1,10 +1,11 @@
 //! `node.wet_map` — soft wet marks (decals) where the water touched a
 //! surface, kept between frames (the layout is
 //! `manifold_node_engine::scene::wet_map`). Each frame every liquid particle
-//! near a solid wets the decal at the surface point it touches, or starts
-//! one; the scene's wet pass draws the decals and dries them by the age of
-//! their last touch, so the marks cost one pass over the particles a frame,
-//! a compaction a second and nothing while the water is gone.
+//! near a solid wets the decal of the merge cell and facing it touches, or
+//! starts one, so a wetted surface holds one decal a cell; the scene's wet
+//! pass draws the decals and dries them by the age of their last touch, so
+//! the marks cost one pass over the particles a frame, a compaction a second
+//! and nothing while the water is gone.
 
 use std::borrow::Cow;
 use std::sync::LazyLock;
@@ -34,7 +35,8 @@ const THREADS: u32 = 64;
 /// leaves a cell apart overlap into one film.
 const DECAL_RADIUS_CELLS: f32 = 1.5;
 
-/// A contact within this many water cells of a decal wets it again.
+/// The side of a merge cell in water cells: the contacts in one cell on one
+/// facing wet one decal.
 const MERGE_CELLS: f32 = 1.0;
 
 /// Frames between compactions, which drop the decals that have dried.
@@ -94,7 +96,7 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 manifold_node_engine::primitive! {
     name: WetMap,
     type_id: "node.wet_map",
-    purpose: "Soft round wet marks (decals) where the water touched a surface, kept between frames. Each run every liquid particle within two radii of the solid (its trilinear distance on the display tiles) finds the surface point it touches (back along the solid's normal by that distance) and that surface's normal; a decal within a water cell of that point, facing within about 45 degrees, takes the touch (its time, and a quarter more water up to full), or else a new decal starts there. A decal is 1.5 water cells across in radius, with a soft edge, so the decals a spread leaves overlap into one film; the scene draws them over what it sees and a decal wets only the pixels facing its way, so a floor mark never wets the wall it meets. Its wetness is how much water hit it times exp(-age * drying / 15 s) since its last touch, so it dries without any pass over the decals. Once a second the decals dried to e^-5 are dropped. It holds 65536 decals; contacts beyond that are refused until some dry. It starts over, cleared, on its first run, when epoch changes, when the water's cell size changes and when time goes backwards.",
+    purpose: "Soft round wet marks (decals) where the water touched a surface, kept between frames. Each run every liquid particle within two radii of the solid (its trilinear distance on the display tiles) finds the surface point it touches (back along the solid's normal by that distance), that surface's normal and its facing (the axis the normal is nearest, either way). The decal of that facing and that water-cell square across its axis, its plane within a water cell and facing within about 45 degrees, takes the touch (its time, and a quarter more water up to full), or else a new decal starts halfway between the point and the square's middle. A decal is 1.5 water cells across in radius, with a soft edge, so the decals of a spread's cells overlap into one film; the scene draws them over what it sees and a decal wets only the pixels facing its way, so a floor mark never wets the wall it meets. Its wetness is how much water hit it times exp(-age * drying / 15 s) since its last touch, so it dries without any pass over the decals. Once a second the decals dried to e^-5 are dropped. It holds 131072 decals; past that a new decal overwrites the oldest. It starts over, cleared, on its first run, when epoch changes, when the water's cell size changes and when time goes backwards.",
     inputs: {
         particles: Array(FluidParticle) required,
         solid: Array(f32) required,

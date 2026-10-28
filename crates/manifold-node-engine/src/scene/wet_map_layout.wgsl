@@ -5,29 +5,37 @@
 // One array of u32 words: a header, a merge hash of WD_HASH_SLOTS slots, then
 // two halves of WD_CAPACITY decals of WD_DECAL_WORDS words; the header names
 // the half in use. The header's first four words are Metal's draw arguments
-// for the decals in use (six vertices, the count, 0, 0), so the wet pass
-// draws them with no count on the CPU. A hash slot holds a decal's index + 1,
-// 0 when empty, WD_CLAIMING while a contact writes the decal it claimed.
+// for the decals in use (WD_DECAL_VERTICES a decal times their count, one
+// instance, 0, 0), so the wet pass draws them with no count on the CPU and
+// the vertex count is the decal count's one record. A hash slot holds a
+// decal's index + 1, 0 when empty, WD_CLAIMING while a contact writes the
+// decal it claimed.
 //
-// A decal is a soft round wet mark where the water touched a surface: its
-// object-space centre (xyz), its surface normal (octahedral, two snorm16),
-// the display time of its last touch (touch key) and how much water hit it
-// (WD_HIT a contact, full at WD_FULL).
+// A decal is a soft round wet mark where the water touched a surface, one a
+// merge cell and facing: its object-space centre (xyz), its surface normal
+// (octahedral, two snorm16), the display time of its last touch (touch key),
+// how much water hit it (WD_HIT a contact, full at WD_FULL) and its facing
+// (the axis its normal is nearest, 0 to 2, plus 3 pointing down it).
 
 const WD_DRAW_VERTICES: u32 = 0u;
-const WD_COUNT: u32 = 1u;
+const WD_DRAW_INSTANCES: u32 = 1u;
 const WD_NOW: u32 = 4u;
 const WD_DRYING: u32 = 5u;
 const WD_ACTIVE: u32 = 6u;
-const WD_REFUSED: u32 = 7u;
+const WD_OVERWRITTEN: u32 = 7u;
 const WD_NEXT_COUNT: u32 = 8u;
 const WD_RADIUS: u32 = 9u;
 const WD_MERGE: u32 = 10u;
+const WD_FRONT: u32 = 11u;
+
+// One triangle round a decal's disc.
+const WD_DECAL_VERTICES: u32 = 3u;
 
 const WD_POSITION: u32 = 0u;
 const WD_NORMAL: u32 = 3u;
 const WD_TOUCH: u32 = 4u;
 const WD_AMOUNT: u32 = 5u;
+const WD_FACING: u32 = 6u;
 
 const WD_CLAIMING: u32 = 0xffffffffu;
 // One contact wets a decal a quarter; four make it full.
@@ -44,7 +52,8 @@ fn wd_decal_word(half: u32, index: u32) -> u32 {
     return WD_HEADER_WORDS + WD_HASH_SLOTS + (half * WD_CAPACITY + index) * WD_DECAL_WORDS;
 }
 
-// The hash slot a merge cell starts probing at (Teschner et al. 2003).
+// The hash slot a decal's key starts probing at (Teschner et al. 2003): its
+// merge cell across its facing's axis (xy) and its facing (z).
 fn wd_cell_slot(cell: vec3<i32>) -> u32 {
     let h = (u32(cell.x) * 73856093u) ^ (u32(cell.y) * 19349663u) ^ (u32(cell.z) * 83492791u);
     return h & (WD_HASH_SLOTS - 1u);
@@ -88,9 +97,9 @@ fn wd_strength(touch: u32, amount: u32, now: f32, drying: f32) -> f32 {
 }
 
 // A decal's soft edge: full out to half its radius, then a smoothstep to 0 at
-// its radius. Contacts leave decals at most about 0.7 merge distances from any
-// point of a wetted patch and the radius is 1.5 of them, so overlapping decals
-// read as one even film with a soft rim, not a lattice of dots.
+// its radius. A wetted merge cell's decal sits in the middle half of the cell
+// and the radius is 1.5 cells, so the decals of neighbouring wet cells
+// overlap into one even film with a soft rim, not a lattice of dots.
 fn wd_falloff(distance: f32, radius: f32) -> f32 {
     return 1.0 - smoothstep(0.5 * radius, radius, distance);
 }

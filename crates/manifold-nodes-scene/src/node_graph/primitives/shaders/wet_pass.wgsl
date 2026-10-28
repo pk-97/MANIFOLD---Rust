@@ -2,13 +2,18 @@
 // map's layout `manifold_node_engine::scene::wet_map::layout()`) drawn over
 // the opaque depth into the wet mask `look_wet_surface.wgsl` reads, at a
 // fraction of the render's size: wetness is soft, so a coarse mask read
-// bilinear loses nothing and costs a fraction of the pixels. One quad
-// per decal in the half in use, lying in the decal's own plane, the count
-// from the map's own draw arguments; each pixel of the surface the camera
-// sees takes the decal's wetness at its distance from the decal's centre,
-// and the mask keeps the wettest (blend max). A pixel off the decal's plane
-// by more than half its radius is another surface (the wall a floor mark
-// meets, the floor under a wall mark) and stays dry.
+// bilinear loses nothing and costs a fraction of the pixels. One triangle
+// per decal in the half in use, lying in the decal's own plane, in one
+// instance whose vertex count the map's own draw arguments hold; each pixel
+// of the surface the camera sees takes the decal's wetness at its distance
+// from the decal's centre, and the mask keeps the wettest (blend max). A
+// pixel off the decal's plane by more than half its radius is another
+// surface (the wall a floor mark meets, the floor under a wall mark) and
+// stays dry.
+//
+// A vertex hands on only its position and its decal's first word, and the
+// fragment reads the decal itself: on a floor of tens of thousands of
+// decals the pass is bound by what its vertices carry, not by its pixels.
 //
 // Decals, their normals and their radius live in the water's object space;
 // the pixel's surface point is taken there too.
@@ -37,53 +42,52 @@ const WP_MIN_STRENGTH: f32 = 1.0 / 255.0;
 
 struct DecalOut {
     @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) centre: vec3<f32>,
-    @location(1) @interpolate(flat) normal: vec3<f32>,
-    @location(2) @interpolate(flat) strength: f32,
-    @location(3) @interpolate(flat) radius: f32,
+    // The decal's first word in the map.
+    @location(0) @interpolate(flat) word: u32,
 };
 
-@vertex
-fn vs_decal(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> DecalOut {
-    var out: DecalOut;
-    // A quad at one point covers no pixel.
-    out.position = vec4<f32>(0.0);
-    out.centre = vec3<f32>(0.0);
-    out.normal = vec3<f32>(0.0);
-    out.strength = 0.0;
-    out.radius = 0.0;
-    let word = wd_decal_word(map[WD_ACTIVE], iid);
-    let strength = wd_strength(
-        map[word + WD_TOUCH], map[word + WD_AMOUNT],
-        bitcast<f32>(map[WD_NOW]), bitcast<f32>(map[WD_DRYING]),
-    );
-    if strength < WP_MIN_STRENGTH {
-        return out;
-    }
-    let centre = vec3<f32>(
+fn wp_centre(word: u32) -> vec3<f32> {
+    return vec3<f32>(
         bitcast<f32>(map[word + WD_POSITION]),
         bitcast<f32>(map[word + WD_POSITION + 1u]),
         bitcast<f32>(map[word + WD_POSITION + 2u]),
     );
+}
+
+fn wp_strength(word: u32) -> f32 {
+    return wd_strength(
+        map[word + WD_TOUCH], map[word + WD_AMOUNT],
+        bitcast<f32>(map[WD_NOW]), bitcast<f32>(map[WD_DRYING]),
+    );
+}
+
+@vertex
+fn vs_decal(@builtin(vertex_index) vid: u32) -> DecalOut {
+    var out: DecalOut;
+    let word = wd_decal_word(map[WD_ACTIVE], vid / WD_DECAL_VERTICES);
+    out.word = word;
+    // A triangle at one point covers no pixel.
+    out.position = vec4<f32>(0.0);
+    if wp_strength(word) < WP_MIN_STRENGTH {
+        return out;
+    }
+    let centre = wp_centre(word);
     let normal = wd_normal(map[word + WD_NORMAL]);
     let radius = bitcast<f32>(map[WD_RADIUS]);
     // Two axes in the decal's plane.
     let away = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(normal.y) > 0.9);
     let side = normalize(cross(normal, away));
     let along = cross(normal, side);
-    var corners = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
+    // The equilateral triangle round the decal's disc: its corners twice the
+    // radius out.
+    var corners = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 2.0), vec2<f32>(-1.7320508, -1.0), vec2<f32>(1.7320508, -1.0),
     );
-    let c = corners[vid] * radius;
+    let c = corners[vid % WD_DECAL_VERTICES] * radius;
     let corner = centre + c.x * side + c.y * along;
     // No depth test: the true clip position lets the rasteriser clip the
-    // quad at the camera.
+    // triangle at the camera.
     out.position = u.view_proj * (u.model * vec4<f32>(corner, 1.0));
-    out.centre = centre;
-    out.normal = normal;
-    out.strength = strength;
-    out.radius = radius;
     return out;
 }
 
@@ -97,14 +101,15 @@ fn fs_decal(in: DecalOut) -> @location(0) f32 {
     if depth <= 0.0 {
         discard;
     }
+    let radius = bitcast<f32>(map[WD_RADIUS]);
     let uv = (vec2<f32>(pixel) + vec2<f32>(0.5)) / vec2<f32>(size);
     let h = u.clip_to_local * vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), depth, 1.0);
-    let offset = h.xyz / h.w - in.centre;
+    let offset = h.xyz / h.w - wp_centre(in.word);
     let d = length(offset);
-    let height = abs(dot(offset, in.normal));
-    if d >= in.radius || height >= WP_PLANE_FAR * in.radius {
+    let height = abs(dot(offset, wd_normal(map[in.word + WD_NORMAL])));
+    if d >= radius || height >= WP_PLANE_FAR * radius {
         discard;
     }
-    let on_plane = 1.0 - smoothstep(WP_PLANE_NEAR * in.radius, WP_PLANE_FAR * in.radius, height);
-    return in.strength * wd_falloff(d, in.radius) * on_plane;
+    let on_plane = 1.0 - smoothstep(WP_PLANE_NEAR * radius, WP_PLANE_FAR * radius, height);
+    return wp_strength(in.word) * wd_falloff(d, radius) * on_plane;
 }

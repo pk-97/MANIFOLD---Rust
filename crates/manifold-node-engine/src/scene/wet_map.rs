@@ -4,19 +4,22 @@
 //! ([`layout`]), because the water crate that marks it and the scene renderer
 //! that draws it do not depend on each other.
 
-/// Header words: the decals' draw arguments (vertices, count, 0, 0), the
-/// display time of the last mark, the drying rate, the half in use, the
-/// contacts refused for want of room, the next half's count while compacting,
-/// the decal radius and the merge distance (both metres), five unused.
+/// Header words: the decals' draw arguments (three vertices a decal times
+/// the decal count, one instance, 0, 0), the display time of the last mark,
+/// the drying rate, the half in use, the decals overwritten for want of
+/// room, the next half's count while compacting, the decal radius and the
+/// merge distance (both metres), the slots overwritten since the last
+/// compaction (the ring's front), four unused.
 pub const HEADER_WORDS: u64 = 16;
 
 /// Slots of the merge hash a contact finds its decal through.
-pub const HASH_SLOTS: u64 = 1 << 17;
+pub const HASH_SLOTS: u64 = 1 << 18;
 
-/// Decals a half holds.
-pub const CAPACITY: u32 = 1 << 16;
+/// Decals a half holds; past that a new decal overwrites the oldest.
+pub const CAPACITY: u32 = 1 << 17;
 
-/// Words per decal: centre xyz, normal, touch key, amount, two unused.
+/// Words per decal: centre xyz, normal, touch key, amount, facing, one
+/// unused.
 pub const DECAL_WORDS: u64 = 8;
 
 /// Seconds a surface the water left takes to dry to 1/e at Drying 1, so a
@@ -61,7 +64,7 @@ mod tests {
 
     #[test]
     fn the_map_is_a_header_a_hash_and_two_halves_of_decals() {
-        assert_eq!(map_words() * 4, 64 + 4 * (1 << 17) + 2 * 32 * (1 << 16));
+        assert_eq!(map_words() * 4, 64 + 4 * (1 << 18) + 2 * 32 * (1 << 17));
         assert!(HASH_SLOTS.is_power_of_two());
     }
 }

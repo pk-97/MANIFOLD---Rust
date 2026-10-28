@@ -3,17 +3,26 @@
 // layout, `manifold_node_engine::scene::wet_map::layout()`).
 //
 // Passes, a barrier between each:
-//   cs_begin       one thread: the draw arguments, time, drying, radius and
+//   cs_begin       one thread: the draw's instance, time, drying, radius and
 //                  merge distance into the header
 //   cs_clear_hash  a thread a hash slot, before a compaction: every slot empty
-//   cs_compact     a thread a decal: a decal touched within `keep` seconds
-//                  moves to the other half and back into the hash
+//   cs_compact     a thread a decal, oldest first: a decal touched within
+//                  `keep` seconds moves to the other half and back into the
+//                  hash
 //   cs_finish      one thread: the other half becomes the one in use
 //   cs_mark        a thread a particle: a particle within two radii of a solid
-//                  finds the decal at the surface point it touches through the
-//                  hash and wets it again, or starts a new one
+//                  finds the decal of the merge cell and facing it touches
+//                  through the hash and wets it again, or starts a new one
 // Drying is computed where a decal is drawn, from the age of its last touch,
 // so nothing runs over the decals while the water is still.
+//
+// The decals in a half run oldest first. Once a half is full a new decal
+// overwrites the oldest, as the whitewater pool does its oldest particles:
+// the ring's front counts the slots overwritten since the last compaction,
+// from the half's first, and compaction moves those, the newest, behind the
+// rest. An overwritten decal's hash slot goes stale: a contact that finds it
+// sees another decal's key there and probes on, and compaction rebuilds the
+// hash.
 
 struct Params {
     // The display time and the drying rate, copied into the header.
@@ -61,7 +70,7 @@ const WET_MERGE_AGREE: f32 = 0.7;
 
 @compute @workgroup_size(1)
 fn cs_begin() {
-    atomicStore(&map[WD_DRAW_VERTICES], 6u);
+    atomicStore(&map[WD_DRAW_INSTANCES], 1u);
     atomicStore(&map[WD_NOW], bitcast<u32>(params.now));
     atomicStore(&map[WD_DRYING], bitcast<u32>(params.drying));
     atomicStore(&map[WD_RADIUS], bitcast<u32>(params.radius));
@@ -84,18 +93,82 @@ fn wet_position(word: u32) -> vec3<f32> {
     );
 }
 
-// The merge cell holding point x.
-fn wet_cell(x: vec3<f32>) -> vec3<i32> {
-    return vec3<i32>(floor(x / params.merge));
+// The decals in the half in use.
+fn wet_count() -> u32 {
+    return min(atomicLoad(&map[WD_DRAW_VERTICES]) / WD_DECAL_VERTICES, WD_CAPACITY);
+}
+
+// A surface's facing: the axis its normal is nearest, 0 x, 1 y, 2 z, plus 3
+// when the normal points down that axis.
+fn wet_facing(n: vec3<f32>) -> u32 {
+    let a = abs(n);
+    var axis = 2u;
+    if a.x >= a.y && a.x >= a.z {
+        axis = 0u;
+    } else if a.y >= a.z {
+        axis = 1u;
+    }
+    return axis + select(0u, 3u, n[axis] < 0.0);
+}
+
+// Point x's coordinates across facing's axis: the next axis, then the one
+// after.
+fn wet_across(x: vec3<f32>, facing: u32) -> vec2<f32> {
+    let axis = facing % 3u;
+    return vec2<f32>(x[(axis + 1u) % 3u], x[(axis + 2u) % 3u]);
+}
+
+// The merge cell holding point x across facing's axis.
+fn wet_cell(x: vec3<f32>, facing: u32) -> vec2<i32> {
+    return vec2<i32>(floor(wet_across(x, facing) / params.merge));
+}
+
+// The hash slot a decal's key starts probing at.
+fn wet_home(cell: vec2<i32>, facing: u32) -> u32 {
+    return wd_cell_slot(vec3<i32>(cell, i32(facing)));
+}
+
+// Where a decal starts for a contact at x on a surface of normal n: halfway
+// from x to the middle of its merge cell across facing's axis, on the
+// surface's plane through x. Every decal then sits in the middle half of its
+// cell, so a wetted patch reads as one even film, while a lone splash's mark
+// stays within a quarter cell of where it fell, off any grid.
+fn wet_site(x: vec3<f32>, n: vec3<f32>, facing: u32) -> vec3<f32> {
+    let axis = facing % 3u;
+    let a = (axis + 1u) % 3u;
+    let b = (axis + 2u) % 3u;
+    let middle = (vec2<f32>(wet_cell(x, facing)) + vec2<f32>(0.5)) * params.merge;
+    let shift = 0.5 * (middle - wet_across(x, facing));
+    var site = x;
+    site[a] = x[a] + shift.x;
+    site[b] = x[b] + shift.y;
+    site[axis] = x[axis] - (shift.x * n[a] + shift.y * n[b]) / n[axis];
+    return site;
+}
+
+// The slot of a new decal: the half's next free one, or once the half is full
+// its oldest decal, from the ring's front on.
+fn wet_new_slot() -> u32 {
+    let index = atomicAdd(&map[WD_DRAW_VERTICES], WD_DECAL_VERTICES) / WD_DECAL_VERTICES;
+    if index < WD_CAPACITY {
+        return index;
+    }
+    // Full: the count goes back to what the half holds.
+    atomicSub(&map[WD_DRAW_VERTICES], WD_DECAL_VERTICES);
+    atomicAdd(&map[WD_OVERWRITTEN], 1u);
+    return atomicAdd(&map[WD_FRONT], 1u) % WD_CAPACITY;
 }
 
 @compute @workgroup_size(64)
 fn cs_compact(@builtin(global_invocation_id) gid: vec3<u32>) {
     let half = atomicLoad(&map[WD_ACTIVE]);
-    let i = gid.x;
-    if i >= min(atomicLoad(&map[WD_COUNT]), WD_CAPACITY) {
+    let count = wet_count();
+    if gid.x >= count {
         return;
     }
+    // Oldest first: the ring's front slots hold the newest decals, so they
+    // go last.
+    let i = (gid.x + atomicLoad(&map[WD_FRONT]) % count) % count;
     let source = wd_decal_word(half, i);
     let touch = atomicLoad(&map[source + WD_TOUCH]);
     if touch == 0u || params.now - wd_touch_time(touch) > params.keep {
@@ -106,7 +179,8 @@ fn cs_compact(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var k = 0u; k < WD_DECAL_WORDS; k = k + 1u) {
         atomicStore(&map[to + k], atomicLoad(&map[source + k]));
     }
-    let home = wd_cell_slot(wet_cell(wet_position(source)));
+    let facing = atomicLoad(&map[source + WD_FACING]);
+    let home = wet_home(wet_cell(wet_position(source), facing), facing);
     for (var probe = 0u; probe < WET_PROBES; probe = probe + 1u) {
         let slot = wd_hash_word((home + probe) & (WD_HASH_SLOTS - 1u));
         if atomicCompareExchangeWeak(&map[slot], 0u, j + 1u).exchanged {
@@ -117,8 +191,9 @@ fn cs_compact(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 @compute @workgroup_size(1)
 fn cs_finish() {
-    atomicStore(&map[WD_COUNT], atomicLoad(&map[WD_NEXT_COUNT]));
+    atomicStore(&map[WD_DRAW_VERTICES], atomicLoad(&map[WD_NEXT_COUNT]) * WD_DECAL_VERTICES);
     atomicStore(&map[WD_NEXT_COUNT], 0u);
+    atomicStore(&map[WD_FRONT], 0u);
     atomicStore(&map[WD_ACTIVE], 1u - atomicLoad(&map[WD_ACTIVE]));
 }
 
@@ -169,9 +244,11 @@ fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
     // normal by its distance.
     let normal = near.gradient / steep;
     let contact = p.xyz - near.distance * normal;
+    let facing = wet_facing(normal);
+    let cell = wet_cell(contact, facing);
     let touch = wd_touch_key(params.now);
     let half = atomicLoad(&map[WD_ACTIVE]);
-    let home = wd_cell_slot(wet_cell(contact));
+    let home = wet_home(cell, facing);
     for (var probe = 0u; probe < WET_PROBES; probe = probe + 1u) {
         let slot = wd_hash_word((home + probe) & (WD_HASH_SLOTS - 1u));
         var held = atomicLoad(&map[slot]);
@@ -181,21 +258,16 @@ fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
             if !claim.exchanged {
                 held = claim.old_value;
             } else {
-                let index = atomicAdd(&map[WD_COUNT], 1u);
-                if index >= WD_CAPACITY {
-                    // Full: the count goes back to what the halves hold.
-                    atomicSub(&map[WD_COUNT], 1u);
-                    atomicAdd(&map[WD_REFUSED], 1u);
-                    atomicStore(&map[slot], 0u);
-                    return;
-                }
+                let index = wet_new_slot();
                 let word = wd_decal_word(half, index);
-                atomicStore(&map[word + WD_POSITION], bitcast<u32>(contact.x));
-                atomicStore(&map[word + WD_POSITION + 1u], bitcast<u32>(contact.y));
-                atomicStore(&map[word + WD_POSITION + 2u], bitcast<u32>(contact.z));
+                let site = wet_site(contact, normal, facing);
+                atomicStore(&map[word + WD_POSITION], bitcast<u32>(site.x));
+                atomicStore(&map[word + WD_POSITION + 1u], bitcast<u32>(site.y));
+                atomicStore(&map[word + WD_POSITION + 2u], bitcast<u32>(site.z));
                 atomicStore(&map[word + WD_NORMAL], wd_normal_word(normal));
                 atomicStore(&map[word + WD_TOUCH], touch);
                 atomicStore(&map[word + WD_AMOUNT], WD_HIT);
+                atomicStore(&map[word + WD_FACING], facing);
                 atomicStore(&map[slot], index + 1u);
                 return;
             }
@@ -205,10 +277,17 @@ fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
         if held == WD_CLAIMING {
             return;
         }
+        // The slot's decal takes the touch when it has this contact's key, its
+        // plane runs within a merge distance of the contact and it faces this
+        // contact's way within about 45 degrees.
         if held != 0u {
             let word = wd_decal_word(half, held - 1u);
-            let close = distance(wet_position(word), contact) < params.merge;
-            if close && dot(wd_normal(atomicLoad(&map[word + WD_NORMAL])), normal) > WET_MERGE_AGREE {
+            let centre = wet_position(word);
+            let same_key = atomicLoad(&map[word + WD_FACING]) == facing
+                && all(wet_cell(centre, facing) == cell);
+            let n = wd_normal(atomicLoad(&map[word + WD_NORMAL]));
+            let on_plane = abs(dot(contact - centre, n)) < params.merge;
+            if same_key && on_plane && dot(n, normal) > WET_MERGE_AGREE {
                 atomicMax(&map[word + WD_TOUCH], touch);
                 if atomicLoad(&map[word + WD_AMOUNT]) < WD_FULL {
                     atomicAdd(&map[word + WD_AMOUNT], WD_HIT);
