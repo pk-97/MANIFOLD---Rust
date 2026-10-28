@@ -1091,29 +1091,58 @@ impl Fields {
     }
 }
 
-/// Per liquid particle scratch, grown to the particle array.
+/// Per liquid particle scratch, grown to the particle array. The dust
+/// arrays exist only while dust emission is on.
 #[derive(Default)]
 struct ParticleScratch {
     slots: u32,
-    /// sampled, energy, unscaled, dust_energy, wavecrest_bits (76 bytes per slot).
-    buffers: Option<[GpuBuffer; 5]>,
+    /// sampled, energy (36 bytes per slot).
+    core: Option<[GpuBuffer; 2]>,
+    dust_slots: u32,
+    /// unscaled, dust_energy, wavecrest_bits (40 bytes per slot).
+    dust: Option<[GpuBuffer; 3]>,
+    /// Stands in for a dust array no pass reads or writes.
+    placeholder: Option<GpuBuffer>,
 }
 
 impl ParticleScratch {
-    fn reserve(&mut self, device: &GpuDevice, slots: u32) -> Result<&[GpuBuffer; 5], String> {
-        if self.buffers.is_none() || self.slots < slots {
-            let n = u64::from(slots);
-            let alloc = |bytes| allocate(device, bytes, false);
-            self.buffers = Some([
-                alloc(n * PARTICLE)?,
-                alloc(n * 4)?,
-                alloc(n * PARTICLE)?,
-                alloc(n * 4)?,
-                alloc(n * 4)?,
-            ]);
+    /// sampled, energy, unscaled, dust_energy, wavecrest_bits.
+    fn reserve(
+        &mut self,
+        device: &GpuDevice,
+        slots: u32,
+        dust: bool,
+    ) -> Result<[GpuBuffer; 5], String> {
+        let alloc = |bytes| allocate(device, bytes, false);
+        let n = u64::from(slots);
+        if self.core.is_none() || self.slots < slots {
+            self.core = Some([alloc(n * PARTICLE)?, alloc(n * 4)?]);
             self.slots = slots;
         }
-        Ok(self.buffers.as_ref().expect("particle scratch allocated"))
+        if dust {
+            if self.dust.is_none() || self.dust_slots < slots {
+                self.dust = Some([alloc(n * PARTICLE)?, alloc(n * 4)?, alloc(n * 4)?]);
+                self.dust_slots = slots;
+            }
+        } else {
+            self.dust = None;
+        }
+        if self.placeholder.is_none() {
+            self.placeholder = Some(alloc(16)?);
+        }
+        let [sampled, energy] = self.core.as_ref().expect("particle scratch allocated");
+        let placeholder = self.placeholder.as_ref().expect("placeholder allocated");
+        let [unscaled, dust_energy, wavecrest_bits] = match &self.dust {
+            Some([unscaled, dust_energy, wavecrest_bits]) => [unscaled, dust_energy, wavecrest_bits],
+            None => [placeholder; 3],
+        };
+        Ok([
+            sampled.clone(),
+            energy.clone(),
+            unscaled.clone(),
+            dust_energy.clone(),
+            wavecrest_bits.clone(),
+        ])
     }
 }
 
@@ -1156,6 +1185,11 @@ impl Outputs {
     }
 }
 
+struct IdlePool {
+    pool: GpuBuffer,
+    state: GpuBuffer,
+}
+
 manifold_core::testkit_visible! {
 /// The node's GPU side: pipelines, the pool and its fields, the outputs.
 #[derive(Default)]
@@ -1167,6 +1201,9 @@ pub(crate) struct Step {
     shape: Option<StepShape>,
     fields: Option<Fields>,
     particles: ParticleScratch,
+    /// The empty pool and zero state `pool_out` and `state_out` hand on while
+    /// the node is off and holds no fields.
+    idle: Option<IdlePool>,
     emission_scan: PrefixScan,
     slot_scan: PrefixScan,
     sort: ParticleSorter,
@@ -1246,33 +1283,62 @@ impl Step {
             self.emission_scan.prepare(gpu.device);
             self.slot_scan.prepare(gpu.device);
             self.sort.prepare_pooled(gpu.device);
+            self.current = 0;
+            if !enabled {
+                return self.idle_tick(gpu, &shape);
+            }
+            self.idle = None;
             self.reserve(gpu.device, shape, inputs.particles.size / PARTICLE)?;
             self.outputs.ensure(gpu.device, &shape)?;
-            self.current = 0;
             let enc = &mut *gpu.native_enc;
-            if enabled {
-                let f = self.fields();
-                enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
-                enc.copy_buffer_to_buffer(state, &f.state, STATE_WORDS * 4);
-                let slots = (inputs.particles.size / PARTICLE) as u32;
-                let scratch = self.particles.reserve(gpu.device, slots)?.clone();
-                let offsets = self.emission_scan.buffer(gpu.device, slots.max(1) as usize)?.clone();
-                let surface = self.emit(enc, frame, inputs, &scratch, &offsets);
-                self.tick(enc, gpu.device, frame, inputs, &surface)?;
-            } else {
-                self.influence_epoch = None;
-                self.seed(enc, &shape);
-            }
+            let f = self.fields();
+            enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
+            enc.copy_buffer_to_buffer(state, &f.state, STATE_WORDS * 4);
+            let slots = (inputs.particles.size / PARTICLE) as u32;
+            let scratch = self.particles.reserve(gpu.device, slots, frame.dust_emission)?;
+            let offsets = self.emission_scan.buffer(gpu.device, slots.max(1) as usize)?.clone();
+            let surface = self.emit(enc, frame, inputs, &scratch, &offsets);
+            self.tick(enc, gpu.device, frame, inputs, &surface)?;
             self.publish(enc, &shape, 0);
             Ok(())
         }
     }
 
+    /// An off tick holds no fields and scratch and records no passes. The
+    /// first one after the node was on drops them and the stale outputs;
+    /// the empty pool and zero state are seeded once per shape.
+    fn idle_tick(&mut self, gpu: &mut GpuEncoder<'_>, shape: &StepShape) -> Result<(), String> {
+        let stale_outputs = self
+            .outputs
+            .slots
+            .first()
+            .is_some_and(|slot| slot.buffers[0].size != shape.population_bytes());
+        if self.shape.is_some() || stale_outputs {
+            self.shape = None;
+            self.fields = None;
+            self.influence_epoch = None;
+            self.particles = ParticleScratch::default();
+            self.outputs = Outputs::default();
+        }
+        self.outputs.ensure(gpu.device, shape)?;
+        if self.idle.as_ref().is_none_or(|idle| idle.pool.size != shape.pool_bytes()) {
+            let idle = IdlePool {
+                pool: allocate(gpu.device, shape.pool_bytes(), false)?,
+                state: allocate(gpu.device, STATE_WORDS * 4, false)?,
+            };
+            self.seed(&mut *gpu.native_enc, shape, &idle);
+            self.idle = Some(idle);
+        }
+        Ok(())
+    }
+
     manifold_core::testkit_visible! {
         pub(crate) fn tick_output(&self, port: &str) -> Option<&GpuBuffer> {
             match port {
-                "pool_out" => self.fields.as_ref().map(|f| &f.pools[self.current]),
-                "state_out" => self.fields.as_ref().map(|f| &f.state),
+                "pool_out" => self.fields.as_ref().map(|f| &f.pools[self.current])
+                    .or(self.idle.as_ref().map(|idle| &idle.pool)),
+                "state_out" => self.fields.as_ref().map(|f| &f.state)
+                    .or(self.idle.as_ref().map(|idle| &idle.state)),
                 "counts_out" => self.outputs.slots.first().map(|s| &s.counts),
                 _ => OUTPUTS.iter().position(|&name| name == port)
                     .and_then(|i| self.outputs.slots.first().map(|s| &s.buffers[i])),
@@ -1333,15 +1399,17 @@ impl Step {
         ]
     }
 
-    fn seed(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape) {
-        let f = self.fields();
+    fn seed(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, idle: &IdlePool) {
         let params = HandParams {
             capacity: shape.capacity,
             spawn_slots: 0,
             count: shape.capacity.max(STATE_WORDS as u32),
             _pad: 0,
         };
-        let bound = self.bound(&f.pools[1], &f.pools[0], HandBuffers::default());
+        // Only the pool and the state are touched; the state fills the rest.
+        let mut bound = [&idle.state; 12];
+        bound[0] = &idle.pool;
+        bound[1] = &idle.pool;
         self.hand(enc, Hand::SeedPool, params, bound);
     }
 
