@@ -340,6 +340,28 @@ impl Default for StepParams {
     }
 }
 
+/// A zeroed buffer for [`fill_unbound`], as long as any record a pass reads.
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn zeros_for_unbound(device: &GpuDevice) -> GpuBuffer {
+    let zeros = device.create_buffer(4096, manifold_gpu::BufferUse::Upload);
+    zeros.zero_fill();
+    zeros
+}
+
+/// Binds `zeros` at every binding `pipeline` names that `bindings` leaves
+/// out (the clock plan, fields a pass never reads): Vulkan refuses a named
+/// binding left out.
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn fill_unbound<'a>(
+    pipeline: &GpuComputePipeline,
+    bindings: &mut Vec<GpuBinding<'a>>,
+    zeros: &'a GpuBuffer,
+) {
+    while let Some(missing) = pipeline.unbound_binding(bindings) {
+        bindings.push(buffer(missing, zeros));
+    }
+}
+
 /// One pass of the step's shader on its own, for the value proofs against
 /// the CPU references: `entry` over `threads` threads, `buffers` at their
 /// bindings, waited on.
@@ -354,11 +376,6 @@ pub fn dispatch_pass(
     let pipeline = device.create_compute_pipeline(&step_source(), entry, "node.gpu_flip_step");
     let mut bindings = vec![uniform(params)];
     bindings.extend(buffers.iter().map(|&(binding, b)| buffer(binding, b)));
-    let clock_plan = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
-    clock_plan.zero_fill();
-    if !buffers.iter().any(|&(binding, _)| binding == 46) {
-        bindings.push(buffer(46, &clock_plan));
-    }
     // The slots in use are the threads asked for, as a pass that dispatches
     // from the step's record would find them.
     let record = device.create_buffer(16, manifold_gpu::BufferUse::Upload);
@@ -368,6 +385,8 @@ pub fn dispatch_pass(
     if !buffers.iter().any(|&(binding, _)| binding == 42) {
         bindings.push(buffer(42, &record));
     }
+    let zeros = zeros_for_unbound(device);
+    fill_unbound(&pipeline, &mut bindings, &zeros);
     let mut enc = device.create_encoder("gpu_flip.step.pass");
     enc.dispatch_compute(&pipeline, &bindings, groups(threads), "gpu_flip.step.pass");
     enc.commit_and_wait().expect("GPU work completes");

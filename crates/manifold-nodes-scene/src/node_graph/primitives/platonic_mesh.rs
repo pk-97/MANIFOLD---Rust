@@ -184,6 +184,7 @@ mod gpu_tests {
             "cs_main",
             "node.platonic_solid_mesh.gpu-proof",
         );
+        let live_triangles = device.create_buffer(16, BufferUse::Gpu);
         for shape in 0..5u32 {
             let out = device.create_buffer(
                 (PLATONIC_MESH_CAPACITY * std::mem::size_of::<MeshVertex>()) as u64,
@@ -210,6 +211,11 @@ mod gpu_tests {
                     GpuBinding::Buffer {
                         binding: 2,
                         buffer: &out,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: &live_triangles,
                         offset: 0,
                     },
                 ],

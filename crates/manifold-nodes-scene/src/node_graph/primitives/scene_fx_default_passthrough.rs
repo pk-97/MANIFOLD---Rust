@@ -108,6 +108,8 @@ mod gpu_tests {
             manifold_gpu::BufferUse::Upload,
         );
 
+        let zeros = device.create_buffer(4096, manifold_gpu::BufferUse::Upload);
+        zeros.zero_fill();
         let uniform_bytes = bytemuck::cast_slice(uniforms);
         let mut bindings = vec![
             GpuBinding::Bytes {
@@ -126,6 +128,15 @@ mod gpu_tests {
             buffer: &dbuf,
             offset: 0,
         });
+        // A binding a deformer names that this harness has no data for reads
+        // zeros: Vulkan refuses a named binding left out.
+        while let Some(binding) = pipeline.unbound_binding(&bindings) {
+            bindings.push(GpuBinding::Buffer {
+                binding,
+                buffer: &zeros,
+                offset: 0,
+            });
+        }
 
         let mut enc = device.create_encoder("scene-fx-passthrough");
         enc.dispatch_compute(

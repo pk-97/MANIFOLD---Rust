@@ -774,6 +774,8 @@ mod tests {
             direction: [0.0, 1.0, 0.0],
             _pad2: 0.0,
         };
+        let live_count = device.create_buffer(4, BufferUse::Upload);
+        live_count.zero_fill();
         let pipeline = |entry, label| device.create_compute_pipeline(SHADER, entry, label);
         let clear = pipeline("clear_main", "cut-map-test-clear");
         let count = pipeline("count_main", "cut-map-test-count");
@@ -807,6 +809,11 @@ mod tests {
             GpuBinding::Buffer {
                 binding: 5,
                 buffer: &map,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: &live_count,
                 offset: 0,
             },
         ];

@@ -280,6 +280,7 @@ impl NarrowBand {
                 buffer(4, gathered),
                 buffer(9, corners),
                 buffer(47, step.identity),
+                buffer(65, &storage.grid),
                 buffer(66, &storage.grid_faces),
                 buffer(67, band.distance),
                 buffer(69, &storage.status),
@@ -304,6 +305,10 @@ impl NarrowBand {
         let held = allocated_args_offset(tiles.reach().ring_max);
         let bound = [
             buffer(3, faces),
+            // The face sampler names the saved and spread faces, which the
+            // band never reads; Vulkan refuses a named binding left out.
+            buffer(17, faces),
+            buffer(18, faces),
             buffer(47, step.identity),
             buffer(65, &storage.grid),
             buffer(66, &storage.grid_faces),
@@ -365,6 +370,7 @@ impl NarrowBand {
                     buffer(46, step.clock_plan),
                     buffer(51, table),
                     buffer(65, &storage.grid),
+                    buffer(67, band.distance),
                 ],
                 record,
                 0,
@@ -378,6 +384,9 @@ impl NarrowBand {
         let reseed = [
             buffer(1, ranges),
             buffer(3, faces),
+            // As in the advect: named by the face sampler, never read.
+            buffer(17, faces),
+            buffer(18, faces),
             buffer(9, corners),
             buffer(38, sorted),
             buffer(47, step.identity),

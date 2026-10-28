@@ -1111,6 +1111,10 @@ impl PressureSolver {
                         bytes(&Params { mode: if converged { REDUCE } else { 0 }, ghost: top.ghost, ..grad }),
                         buffer(1, top.water),
                         buffer(3, rhs),
+                        // The stencil names `aux` for the passes that read
+                        // it; warm never does, and Vulkan refuses a named
+                        // binding left out.
+                        buffer(4, rhs),
                         buffer(5, x),
                         buffer(6, &b.r),
                         buffer(11, &b.progress),

@@ -18,6 +18,8 @@ struct MorphUniforms {
     blend_frames: u32,
     weights_len: u32,
     dispatch_count: u32,
+    /// The live extent (off) and the struct's padding.
+    extent_and_pad: [u32; 4],
 }
 
 fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVertex {
@@ -48,7 +50,11 @@ fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVert
         blend_frames: 0,
         weights_len: 0,
         dispatch_count: 1,
+        extent_and_pad: [0; 4],
     };
+    // The kernel is live-anchored; its uniforms leave the extent off, so the
+    // counts are bound but never read.
+    let live_counts = h.device.create_buffer(4, BufferUse::Gpu);
     let bindings = [
         GpuBinding::Bytes {
             binding: 0,
@@ -72,6 +78,11 @@ fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVert
         GpuBinding::Buffer {
             binding: 4,
             buffer: &output_buf,
+            offset: 0,
+        },
+        GpuBinding::Buffer {
+            binding: 5,
+            buffer: &live_counts,
             offset: 0,
         },
     ];

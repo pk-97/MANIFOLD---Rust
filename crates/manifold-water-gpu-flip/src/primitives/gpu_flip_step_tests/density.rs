@@ -117,6 +117,7 @@ pub(super) fn gpu_flip_density_support_matches_original() {
                 rate: 4.0,
                 ..lattice()
             });
+            let zeros = zeros_for_unbound(&pass.device);
             let outputs =
                 pipelines.each_ref().map(|pipeline| {
                     let mut bindings = vec![GpuBinding::Bytes {
@@ -130,6 +131,7 @@ pub(super) fn gpu_flip_density_support_matches_original() {
                             offset: 0,
                         }
                     }));
+                    fill_unbound(pipeline, &mut bindings, &zeros);
                     let mut enc = pass.device.create_encoder("density support parity");
                     enc.dispatch_compute(
                         pipeline,

@@ -704,6 +704,9 @@ impl StepState {
                 buffer(51, table),
                 buffer(42, record),
                 buffer(67, band_distance),
+                // The band's interior, which the move's test never reads;
+                // Vulkan refuses a named binding left out.
+                buffer(65, band_distance),
             ],
             record,
             0,

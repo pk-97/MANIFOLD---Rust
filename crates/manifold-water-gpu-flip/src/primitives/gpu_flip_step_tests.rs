@@ -12,7 +12,9 @@
 use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice};
 
-use super::gpu_flip_step::{StepParams, dispatch_pass, pool_tiles};
+use super::gpu_flip_step::{
+    StepParams, dispatch_pass, fill_unbound, pool_tiles, zeros_for_unbound,
+};
 use super::liquid_fill::LiquidFill;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
