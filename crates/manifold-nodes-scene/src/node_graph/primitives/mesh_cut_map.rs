@@ -225,9 +225,9 @@ fn clear_invalid_output(
 }
 
 fn report_completed_status(ctx: &mut EffectNodeContext<'_, '_>, status: &GpuBuffer) {
-    let Some(ptr) = status.mapped_ptr() else {
-        return;
-    };
+    let ptr = status
+        .mapped_ptr()
+        .expect("node.cut_mesh_map: status must be CPU-visible");
     let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 4) };
     if words[3] != 0 {
         let reason = match words[3] {

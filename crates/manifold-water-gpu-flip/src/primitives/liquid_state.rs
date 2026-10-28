@@ -300,9 +300,9 @@ impl LiquidState {
                 .is_none_or(|buffer| buffer.size != pool_bytes)
         {
             let template = create_shared_buffer(device, pool_bytes.max(4))?;
-            let Some(ptr) = template.mapped_ptr() else {
-                return Err("whitewater pool's empty template is not CPU-mappable".to_string());
-            };
+            let ptr = template
+                .mapped_ptr()
+                .expect("whitewater pool template must be CPU-visible");
             let empty = WhitewaterParticle {
                 kind: WHITEWATER_EMPTY,
                 ..WhitewaterParticle::default()
@@ -338,9 +338,10 @@ impl LiquidState {
             if slot.epoch != epoch {
                 continue;
             }
-            let Some(ptr) = slot.buffer.mapped_ptr() else {
-                continue;
-            };
+            let ptr = slot
+                .buffer
+                .mapped_ptr()
+                .expect("liquid stats slot must be CPU-visible");
             // SAFETY: the frame that wrote this shared slot has retired.
             let words = unsafe {
                 std::slice::from_raw_parts(
@@ -349,24 +350,27 @@ impl LiquidState {
                 )
             };
             let stats = LiquidTickStats::from_words(words);
-            if let Some(ptr) = slot.identity.mapped_ptr() {
-                // SAFETY: identity metadata is copied under the same retired fence.
-                let identity = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), 4) };
-                self.identity_reset |= identity[3] != 0;
-            }
-            let status = slot.clock_status.mapped_ptr().map(|ptr| {
-                // SAFETY: this slot shares the retired fence with its stats.
-                unsafe { std::slice::from_raw_parts(ptr.cast::<u32>().cast_const(), 8) }
-            });
-            let cap_hit = status.is_some_and(|words| words[4] != 0);
-            let nonfinite = status.is_some_and(|words| words[5] != 0);
-            if let Some(status) = status {
-                log::debug!(target: "gpu_flip::schedule",
-                    "endpoint={} steps={} remaining={} maximum={} cap={cap_hit} nonfinite={nonfinite} live={} bad_particles={} kinetic={} pressure={} density={} unconverged={} pockets={} speed_capped={} push_refused={}",
-                    slot.endpoint, status[6], f32::from_bits(status[2]), stats.max_speed,
-                    stats.live, stats.nonfinite, stats.kinetic, stats.pressure_iterations, stats.density_iterations,
-                    stats.unconverged, stats.unresolved_pockets, stats.speed_capped, stats.push_refused);
-            }
+            let identity_ptr = slot
+                .identity
+                .mapped_ptr()
+                .expect("liquid identity slot must be CPU-visible");
+            // SAFETY: identity metadata is copied under the same retired fence.
+            let identity = unsafe { std::slice::from_raw_parts(identity_ptr.cast::<u32>(), 4) };
+            self.identity_reset |= identity[3] != 0;
+            let status_ptr = slot
+                .clock_status
+                .mapped_ptr()
+                .expect("liquid clock status slot must be CPU-visible");
+            // SAFETY: this slot shares the retired fence with its stats.
+            let status =
+                unsafe { std::slice::from_raw_parts(status_ptr.cast::<u32>().cast_const(), 8) };
+            let cap_hit = status[4] != 0;
+            let nonfinite = status[5] != 0;
+            log::debug!(target: "gpu_flip::schedule",
+                "endpoint={} steps={} remaining={} maximum={} cap={cap_hit} nonfinite={nonfinite} live={} bad_particles={} kinetic={} pressure={} density={} unconverged={} pockets={} speed_capped={} push_refused={}",
+                slot.endpoint, status[6], f32::from_bits(status[2]), stats.max_speed,
+                stats.live, stats.nonfinite, stats.kinetic, stats.pressure_iterations, stats.density_iterations,
+                stats.unconverged, stats.unresolved_pockets, stats.speed_capped, stats.push_refused);
             if newest.is_none_or(|(stamp, _, _, _, _)| slot.stamp >= stamp) {
                 newest = Some((slot.stamp, stats, slot.endpoint, cap_hit, nonfinite));
             }

@@ -536,7 +536,11 @@ fn schedule_intervals(
 /// The reaction words, once their last GPU writer has retired.
 fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
     let buffer = buffer?;
-    let words = buffer.mapped_ptr()?.cast::<i32>().cast_const();
+    let words = buffer
+        .mapped_ptr()
+        .expect("matter reaction words must be CPU-visible")
+        .cast::<i32>()
+        .cast_const();
     // SAFETY: shared, 4-byte aligned storage whose last GPU writer has
     // retired (the caller checked the frame clock or waited on the GPU).
     Some(unsafe { std::slice::from_raw_parts(words, (buffer.size / 4) as usize) })

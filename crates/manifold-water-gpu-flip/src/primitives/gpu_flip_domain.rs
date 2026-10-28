@@ -523,7 +523,11 @@ struct Exchange {
 /// The reaction's floats, once their last GPU writer has retired.
 fn reaction_floats(buffer: Option<&GpuBuffer>) -> Option<&[f32]> {
     let buffer = buffer?;
-    let floats = buffer.mapped_ptr()?.cast::<f32>().cast_const();
+    let floats = buffer
+        .mapped_ptr()
+        .expect("GPU FLIP reaction floats must be CPU-visible")
+        .cast::<f32>()
+        .cast_const();
     // SAFETY: shared, 4-byte aligned storage whose last GPU writer has
     // retired (the caller checked the frame clock or waited on the GPU).
     Some(unsafe { std::slice::from_raw_parts(floats, (buffer.size / 4) as usize) })

@@ -181,9 +181,10 @@ impl MatterState {
             if slot.epoch != epoch {
                 continue;
             }
-            let Some(ptr) = slot.buffer.mapped_ptr() else {
-                continue;
-            };
+            let ptr = slot
+                .buffer
+                .mapped_ptr()
+                .expect("matter stats slot must be CPU-visible");
             // SAFETY: the frame that wrote this shared slot has retired.
             let words = unsafe {
                 std::slice::from_raw_parts(ptr.cast::<u32>().cast_const(), STATS_WORDS as usize)

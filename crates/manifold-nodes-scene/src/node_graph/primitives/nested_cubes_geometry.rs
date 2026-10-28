@@ -184,7 +184,10 @@ impl Primitive for NestedCubesGeometry {
         // sources (cycle_table_row, scalar_array_accumulator) CPU-write,
         // so the same-frame read is safe.
         let mut target_angles = [0.0_f32; NESTED_CUBES_INSTANCE_COUNT as usize];
-        if let Some(ptr) = target_angles_buf.mapped_ptr() {
+        {
+            let ptr = target_angles_buf
+                .mapped_ptr()
+                .expect("node.nested_cubes_geometry: target angles must be CPU-visible");
             let f32_size = std::mem::size_of::<f32>();
             let available = (target_angles_buf.size as usize) / f32_size;
             let read_count = available.min(target_angles.len());

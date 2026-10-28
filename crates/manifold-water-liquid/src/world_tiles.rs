@@ -698,7 +698,11 @@ impl WorldTiles {
     /// empty ([`POOL_SHORT`]), read from the shared counts a frame or two
     /// late, without waiting on the GPU.
     pub fn late_held(&self) -> Option<(u32, bool)> {
-        let ptr = self.counts.mapped_ptr()?.cast::<u32>();
+        let ptr = self
+            .counts
+            .mapped_ptr()
+            .expect("world tile counts must be CPU-visible")
+            .cast::<u32>();
         let ring_max = self.reach.ring_max;
         // SAFETY: the counts are a shared buffer of `count_words(ring_max)`
         // u32 words; a word the GPU is writing reads as either value.

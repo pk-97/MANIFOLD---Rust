@@ -434,14 +434,14 @@ pub fn run(args: &[String]) -> ! {
                     let (read_bufs, read_retired) = (read_bufs.clone(), read_retired.clone());
                     enc.add_completed_handler(move || {
                         let buf = &read_bufs[rslot];
-                        let mut mismatch = 0u64;
-                        if let Some(ptr) = buf.mapped_ptr() {
-                            let px = unsafe {
-                                std::slice::from_raw_parts(ptr as *const u64, (W * H) as usize)
-                            };
-                            let first = px[0];
-                            mismatch = px.iter().filter(|&&p| p != first).count() as u64;
-                        }
+                        let ptr = buf
+                            .mapped_ptr()
+                            .expect("bridge-probe readback must be CPU-visible");
+                        let px = unsafe {
+                            std::slice::from_raw_parts(ptr as *const u64, (W * H) as usize)
+                        };
+                        let first = px[0];
+                        let mismatch = px.iter().filter(|&&p| p != first).count() as u64;
                         reads_done.fetch_add(1, Ordering::Relaxed);
                         if mismatch > 0 {
                             torn_reads.fetch_add(1, Ordering::Relaxed);
@@ -455,10 +455,7 @@ pub fn run(args: &[String]) -> ! {
                         // (slot's adjacent occupants, k and k+3) vs anything
                         // else (coherency, probe bug).
                         #[cfg(debug_assertions)]
-                        if mismatch > 0
-                            && std::env::var_os("MANIFOLD_PROBE_TORN").is_some()
-                            && let Some(ptr) = buf.mapped_ptr()
-                        {
+                        if mismatch > 0 && std::env::var_os("MANIFOLD_PROBE_TORN").is_some() {
                             let px = unsafe {
                                 std::slice::from_raw_parts(ptr as *const u16, (W * H) as usize * 4)
                             };

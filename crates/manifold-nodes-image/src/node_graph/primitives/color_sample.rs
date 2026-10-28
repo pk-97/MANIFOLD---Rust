@@ -85,9 +85,10 @@ manifold_node_engine::primitive! {
 
 impl Primitive for ColorSample {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if let Some(ref buf) = self.measure_buffer
-            && let Some(ptr) = buf.mapped_ptr()
-        {
+        if let Some(ref buf) = self.measure_buffer {
+            let ptr = buf
+                .mapped_ptr()
+                .expect("node.color_sample: measure buffer must be CPU-visible");
             // Four contiguous f32s: R, G, B, luma. Shader computes
             // luma once on the GPU side so the CPU emits both wires
             // off a single readback rather than re-deriving brightness

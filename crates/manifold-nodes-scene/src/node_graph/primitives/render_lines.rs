@@ -574,19 +574,13 @@ impl Primitive for RenderLines {
             // the producer's `run()` ran earlier in the executor's
             // sequential walk so the data is already visible to us.
             let edge_count = (edges_buf.size as usize) / std::mem::size_of::<EdgePair>();
-            let edges_slice: &[EdgePair] = match edges_buf.mapped_ptr() {
-                Some(ptr) => unsafe {
-                    let byte_slice =
-                        std::slice::from_raw_parts(ptr as *const u8, edges_buf.size as usize);
-                    bytemuck::cast_slice(byte_slice)
-                },
-                None => {
-                    log::warn!(
-                        "node.draw_lines: `edges` input buffer is not host-mapped — \
-                         expected a shared-memory Array<EdgePair> from the upstream producer.",
-                    );
-                    &[]
-                }
+            let ptr = edges_buf
+                .mapped_ptr()
+                .expect("node.draw_lines: `edges` must be a CPU-visible Array<EdgePair>");
+            let edges_slice: &[EdgePair] = unsafe {
+                let byte_slice =
+                    std::slice::from_raw_parts(ptr as *const u8, edges_buf.size as usize);
+                bytemuck::cast_slice(byte_slice)
             };
             let _ = edge_count; // sanity: equals edges_slice.len() by construction
             self.build_instances_from_edges(

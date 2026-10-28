@@ -590,7 +590,11 @@ impl FrameHistory<GpuBuffer> {
 
     /// The four metadata words of a completed slot.
     pub fn metadata(&self, slot: usize) -> Option<[u32; 4]> {
-        let ptr = self.buffers[slot].metadata.as_ref()?.mapped_ptr()?;
+        let ptr = self.buffers[slot]
+            .metadata
+            .as_ref()?
+            .mapped_ptr()
+            .expect("frame history metadata must be CPU-visible");
         // SAFETY: the caller only asks for slots whose writer completed; the
         // metadata buffer is shared and 16 bytes.
         let words = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), 4) };
@@ -601,7 +605,11 @@ impl FrameHistory<GpuBuffer> {
     pub fn retire(&mut self, complete: impl Fn(u64) -> bool) {
         let buffers = &self.buffers;
         self.core.retire(complete, |slot| {
-            let ptr = buffers[slot].metadata.as_ref()?.mapped_ptr()?;
+            let ptr = buffers[slot]
+                .metadata
+                .as_ref()?
+                .mapped_ptr()
+                .expect("frame history metadata must be CPU-visible");
             // SAFETY: as in `metadata`.
             let words = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), 4) };
             Some([words[0], words[1], words[2], words[3]])

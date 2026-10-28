@@ -44,9 +44,10 @@ manifold_node_engine::primitive! {
 
 impl Primitive for Peak {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if let Some(ref buf) = self.measure_buffer
-            && let Some(ptr) = buf.mapped_ptr()
-        {
+        if let Some(ref buf) = self.measure_buffer {
+            let ptr = buf
+                .mapped_ptr()
+                .expect("node.peak: measure buffer must be CPU-visible");
             let val = unsafe { std::ptr::read(ptr as *const f32) };
             if val.is_finite() && val >= 0.0 {
                 self.previous_value = val.clamp(0.0, 1.0);

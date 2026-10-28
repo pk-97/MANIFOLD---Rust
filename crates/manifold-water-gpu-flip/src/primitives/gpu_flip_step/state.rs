@@ -167,9 +167,10 @@ impl StepState {
                 continue;
             }
             slot.pending = false;
-            let Some(ptr) = slot.buffer.mapped_ptr() else {
-                continue;
-            };
+            let ptr = slot
+                .buffer
+                .mapped_ptr()
+                .expect("GPU FLIP speed slot must be CPU-visible");
             // SAFETY: the frame that wrote this shared slot has retired.
             let words = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), 4) };
             if newest.is_none_or(|(stamp, _)| slot.stamp >= stamp) {

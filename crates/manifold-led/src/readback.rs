@@ -92,7 +92,9 @@ impl ReadbackRequest {
         }
 
         let staging = self.staging_buffer.as_ref()?;
-        let ptr = staging.mapped_ptr()?;
+        let ptr = staging
+            .mapped_ptr()
+            .expect("LED readback staging must be CPU-visible");
 
         let row_bytes = (self.width * 4) as usize;
         let stride = self.bytes_per_row as usize;

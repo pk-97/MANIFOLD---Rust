@@ -634,7 +634,10 @@ impl Primitive for DetectRegions {
         }
         state.frame_counter += 1;
 
-        if let Some(ptr) = regions.mapped_ptr() {
+        {
+            let ptr = regions
+                .mapped_ptr()
+                .expect("node.detect_regions: region output must be CPU-visible");
             let capacity = (regions.size as usize / std::mem::size_of::<Region>()).min(MAX_REGIONS);
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -643,8 +646,6 @@ impl Primitive for DetectRegions {
                     capacity,
                 );
             }
-        } else {
-            log::error!("node.detect_regions requires shared-memory region output");
         }
         if let Some(labels) = labels {
             if state.label_texture.format == labels.format {

@@ -159,24 +159,26 @@ impl Primitive for CurveSolidSource {
                 caps: on("caps"),
             },
         };
-        let Some(curve) = ctx.inputs.array("curve").and_then(|buf| {
-            let ptr = buf.mapped_ptr()?;
+        let Some(curve) = ctx.inputs.array("curve").map(|buf| {
+            let ptr = buf
+                .mapped_ptr()
+                .expect("node.curve_solid_source: `curve` must be CPU-visible");
             let len = (buf.size / std::mem::size_of::<CurvePoint>() as u64) as usize;
             // Safety: shared-memory buffer the CPU curve atom upstream wrote
             // this frame; the executor runs one node at a time on the
             // content thread.
-            Some(unsafe { std::slice::from_raw_parts(ptr as *const [f32; 2], len) })
+            unsafe { std::slice::from_raw_parts(ptr as *const [f32; 2], len) }
         }) else {
             return;
         };
         let lift: &[f32] = match (&sweep, ctx.inputs.array("lift")) {
-            (Sweep::Tube { .. }, Some(buf)) => match buf.mapped_ptr() {
+            (Sweep::Tube { .. }, Some(buf)) => {
+                let ptr = buf
+                    .mapped_ptr()
+                    .expect("node.curve_solid_source: `lift` must be CPU-visible");
                 // Safety: as for `curve`.
-                Some(ptr) => unsafe {
-                    std::slice::from_raw_parts(ptr as *const f32, (buf.size / 4) as usize)
-                },
-                None => &[],
-            },
+                unsafe { std::slice::from_raw_parts(ptr as *const f32, (buf.size / 4) as usize) }
+            }
             _ => &[],
         };
         let unchanged = self

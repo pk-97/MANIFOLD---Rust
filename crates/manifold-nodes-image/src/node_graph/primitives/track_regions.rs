@@ -536,10 +536,9 @@ impl Primitive for TrackRegions {
                 (regions_buffer.size as usize / std::mem::size_of::<Region>()).min(MAX_REGIONS);
             let mut detections = [Detection::default(); MAX_REGIONS];
             let mut detection_count = 0usize;
-            let Some(ptr) = regions_buffer.mapped_ptr() else {
-                write_outputs(&self.state, tracks_buffer, boxes_buffer);
-                return;
-            };
+            let ptr = regions_buffer
+                .mapped_ptr()
+                .expect("node.track_regions: `regions` must be CPU-visible");
             let regions =
                 unsafe { std::slice::from_raw_parts(ptr as *const Region, region_capacity) };
             for &region in regions {
@@ -571,9 +570,10 @@ fn write_outputs(
     tracks_buffer: Option<&manifold_gpu::GpuBuffer>,
     boxes_buffer: Option<&manifold_gpu::GpuBuffer>,
 ) {
-    if let Some(tracks_buffer) = tracks_buffer
-        && let Some(ptr) = tracks_buffer.mapped_ptr()
-    {
+    if let Some(tracks_buffer) = tracks_buffer {
+        let ptr = tracks_buffer
+            .mapped_ptr()
+            .expect("node.track_regions: tracks output must be CPU-visible");
         let capacity =
             (tracks_buffer.size as usize / std::mem::size_of::<TrackRecord>()).min(MAX_REGIONS);
         let output = unsafe { std::slice::from_raw_parts_mut(ptr as *mut TrackRecord, capacity) };
@@ -582,9 +582,10 @@ fn write_outputs(
         }
     }
 
-    if let Some(boxes_buffer) = boxes_buffer
-        && let Some(ptr) = boxes_buffer.mapped_ptr()
-    {
+    if let Some(boxes_buffer) = boxes_buffer {
+        let ptr = boxes_buffer
+            .mapped_ptr()
+            .expect("node.track_regions: boxes output must be CPU-visible");
         let capacity =
             (boxes_buffer.size as usize / std::mem::size_of::<LegacyBox>()).min(MAX_REGIONS);
         let output = unsafe { std::slice::from_raw_parts_mut(ptr as *mut LegacyBox, capacity) };

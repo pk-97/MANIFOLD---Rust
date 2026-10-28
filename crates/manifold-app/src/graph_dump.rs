@@ -67,7 +67,9 @@ fn readback_rgba(device: &GpuDevice, tex: &GpuTexture) -> Option<Vec<[f32; 4]>> 
     enc.copy_texture_to_buffer(tex, &buf, tex.width, tex.height, aligned);
     enc.commit_and_wait_completed();
 
-    let ptr = buf.mapped_ptr()?;
+    let ptr = buf
+        .mapped_ptr()
+        .expect("graph dump readback must be CPU-visible");
     let bytes =
         unsafe { std::slice::from_raw_parts(ptr, (aligned as usize) * (tex.height as usize)) };
     let mut out = Vec::with_capacity((tex.width * tex.height) as usize);
@@ -219,9 +221,9 @@ fn dump_one_array(
     let mut enc = device.create_encoder("Array Dump Readback");
     enc.copy_buffer_to_buffer(a.buffer, &staging, size);
     enc.commit_and_wait_completed();
-    let Some(ptr) = staging.mapped_ptr() else {
-        return serde_json::json!({ "node": a.name, "port": a.port, "note": "readback failed" });
-    };
+    let ptr = staging
+        .mapped_ptr()
+        .expect("array dump readback must be CPU-visible");
     let bytes = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
 
     let rd_f32 =
