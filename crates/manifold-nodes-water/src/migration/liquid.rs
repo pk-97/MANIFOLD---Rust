@@ -823,36 +823,42 @@ pub(crate) fn wetness_onto_wet_map(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
-/// Give a saved water's spray object the pixel floor a new Water gets, after
-/// flattening. A spray object that already sets one keeps it. Idempotent.
-pub(crate) fn spray_pixel_floor(def: &mut EffectGraphDef) -> bool {
-    use crate::presets::gpu_flip::SPRAY_MIN_PIXEL_RADIUS;
+/// Make a saved water's bubbles the silvery mirrors a new Water draws, after
+/// flattening: a bubble material still at the old see-through look (0.35
+/// transmission) takes the mirror and drops its screen-space density, which
+/// nothing reads. Idempotent.
+pub(crate) fn silver_bubbles(def: &mut EffectGraphDef) -> bool {
+    use crate::presets::gpu_flip::SILVER_BUBBLE;
     use manifold_core::effect_graph_def::SerializedParamValue;
     let mut changed = false;
     for node in def
         .nodes
         .iter_mut()
-        .filter(|n| n.type_id == "node.scene_object" && n.node_id.as_str() == "spray_object")
+        .filter(|n| n.type_id == "node.pbr_material" && n.node_id.as_str() == "bubble_material")
     {
-        if !node.params.contains_key("min_pixel_radius") {
-            node.params.insert(
-                "min_pixel_radius".to_owned(),
-                SerializedParamValue::Float {
-                    value: SPRAY_MIN_PIXEL_RADIUS,
-                },
-            );
-            changed = true;
+        let see_through = matches!(
+            node.params.get("transmission"),
+            Some(SerializedParamValue::Float { value }) if (value - 0.35).abs() < 1e-3
+        );
+        if !see_through {
+            continue;
         }
+        node.params.remove("volume_particle_density");
+        for (name, value) in SILVER_BUBBLE {
+            node.params
+                .insert(name.to_owned(), SerializedParamValue::Float { value });
+        }
+        changed = true;
     }
     changed
 }
 
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
-        name: "spray_pixel_floor",
+        name: "silver_bubbles",
         stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
         order: 410,
-        apply: spray_pixel_floor,
+        apply: silver_bubbles,
     }
 }
 

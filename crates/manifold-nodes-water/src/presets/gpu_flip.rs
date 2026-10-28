@@ -74,10 +74,6 @@ manifold_core::testkit_visible! {
 pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
 }
 
-/// The smallest radius a spray bead draws at, in output pixels: far spray
-/// reads as fine white points instead of flickering out between pixels.
-pub(crate) const SPRAY_MIN_PIXEL_RADIUS: f32 = 1.5;
-
 /// The material a new Water draws with: clear water at stage scale, a look
 /// the user stylises from. Pure water absorbs about 0.26, 0.054 and 0.0098
 /// per metre at 615, 545 and 465 nm (Pope and Fry 1997), so a metre passes
@@ -713,6 +709,13 @@ fn surface_group() -> Value {
         .expect("the liquid surface group parses")
 }
 
+/// A bubble's material: a silvery mirror, drawn before the water.
+pub(crate) const SILVER_BUBBLE: [(&str, f32); 3] = [
+    ("metallic", 1.0),
+    ("roughness", 0.15),
+    ("transmission", 0.0),
+];
+
 /// Stage and capture populations, including the unrendered dust oracle.
 pub(super) const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];
 /// Child looks in family-output order. Dust has no display chain.
@@ -872,9 +875,17 @@ impl WaterScene {
         let output = b.node(LIQUID_BODY_OUTPUT, "system.group_output", json!({}));
         b.wire((water, "object"), output, FAMILY_OUTPUTS[0]);
         for (index, kind) in RENDERED_KINDS.into_iter().enumerate() {
-            let (radius, roughness, transmission) = match kind {
-                "spray" => (0.003, 0.12, 1.0),
-                "bubble" => (0.0035, 0.3, 0.35),
+            // Spray is clear drops. A bubble seen from the water is a bright
+            // silvery ball, light reflected whole off its inside, so it is a
+            // mirror drawn before the water and seen through it.
+            let (radius, roughness, transmission, metallic) = match kind {
+                "spray" => (0.003, 0.12, 1.0, 0.0),
+                "bubble" => (
+                    0.0035,
+                    f64::from(SILVER_BUBBLE[1].1),
+                    f64::from(SILVER_BUBBLE[2].1),
+                    f64::from(SILVER_BUBBLE[0].1),
+                ),
                 _ => unreachable!("rendered kind"),
             };
             let mesh = b.node(
@@ -882,24 +893,16 @@ impl WaterScene {
                 "node.platonic_solid_mesh",
                 json!({"radius": float(radius), "shape": {"type": "Enum", "value": 3}}),
             );
-            let mut params = json!({
+            let params = json!({
                 "color_r": float(0.95), "color_g": float(0.98), "color_b": float(1.0), "ior": float(1.333),
-                "metallic": float(0.0), "roughness": float(roughness), "transmission": float(transmission),
+                "metallic": float(metallic), "roughness": float(roughness), "transmission": float(transmission),
                 "volume_thickness": float(radius * 2.0),
             });
-            if kind == "bubble" {
-                params["volume_particle_density"] = float(70.0);
-            }
             let material = b.node(&format!("{kind}_material"), "node.pbr_material", params);
-            let object_params = if kind == "spray" {
-                json!({"cast_shadows": float(0.0), "min_pixel_radius": float(f64::from(SPRAY_MIN_PIXEL_RADIUS))})
-            } else {
-                json!({"cast_shadows": float(0.0)})
-            };
             let object = b.node(
                 &format!("{kind}_object"),
                 "node.scene_object",
-                object_params,
+                json!({"cast_shadows": float(0.0)}),
             );
             let copies = b.node(
                 &format!("{kind}_copies"),

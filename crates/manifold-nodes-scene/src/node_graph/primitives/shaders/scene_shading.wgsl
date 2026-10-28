@@ -199,10 +199,6 @@ struct Uniforms {
     // Identity in Object space; the object's own transform in Group space.
     instance_inner: mat4x4<f32>,
     prev_instance_inner: mat4x4<f32>,
-    // The copies' pixel floor: x = the smallest radius a copy draws at, in
-    // output pixels (0 = off), y = the mesh's radius about its origin, z = the
-    // output height in pixels.
-    pixel_floor: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

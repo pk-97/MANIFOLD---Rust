@@ -118,14 +118,6 @@ manifold_node_engine::primitive! {
             enum_values: &["Off", "On"],
         },
         ParamDef {
-            name: Cow::Borrowed("min_pixel_radius"),
-            label: "Min Pixel Radius",
-            ty: ParamType::Float,
-            default: ParamValue::Float(0.0),
-            range: Some((0.0, 8.0)),
-            enum_values: &[],
-        },
-        ParamDef {
             name: Cow::Borrowed("emission_strength"),
             label: "Emission Strength",
             ty: ParamType::Float,
@@ -176,7 +168,6 @@ impl Primitive for SceneObjectNode {
         let visible = ctx.scalar_or_param("visible", 1.0) > 0.5;
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
         let closed = matches!(ctx.params.get("closed"), Some(ParamValue::Bool(true)));
-        let min_pixel_radius = ctx.scalar_or_param("min_pixel_radius", 0.0).max(0.0);
         let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
         let gain = ctx.scalar_or_param("gain", 1.0);
         let mut transform = ctx.inputs.transform("transform").unwrap_or_default();
@@ -239,7 +230,6 @@ impl Primitive for SceneObjectNode {
             visible: visible && parent_visible,
             cast_shadows,
             closed,
-            min_pixel_radius,
             transform,
             parent_transform,
             material,

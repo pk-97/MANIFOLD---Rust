@@ -244,23 +244,6 @@ struct VsOut {
     @location(9) @interpolate(flat) instance_scale: f32,
 };
 
-// How much a copy grows about its centre so its mesh's radius covers at least
-// `pixel_floor.x` output pixels; 1 when the floor is off or the copy is large
-// enough. One pixel at the centre's clip depth w is 2 w / (P11 height) in
-// world units, P11 the length of view_proj's second row (a rigid view times a
-// projection that scales view y by P11, perspective or orthographic).
-fn pixel_floor_grow(pos_scale: vec4<f32>) -> f32 {
-    if u.pixel_floor.x <= 0.0 {
-        return 1.0;
-    }
-    let centre = u.model * vec4<f32>(pos_scale.xyz, 1.0);
-    let w = max((u.view_proj * centre).w, 1.0e-6);
-    let p11 = length(vec3<f32>(u.view_proj[0][1], u.view_proj[1][1], u.view_proj[2][1]));
-    let pixel = 2.0 * w / (p11 * u.pixel_floor.z);
-    let radius = u.pixel_floor.y * abs(pos_scale.w) * length(u.model[0].xyz);
-    return max(1.0, u.pixel_floor.x * pixel / max(radius, 1.0e-12));
-}
-
 // world = model · T_instance · instance_inner. Object space passes an
 // identity `instance_inner`, so the instance TRS applies first and the
 // object's `model` second (D11); Group space passes the part's own
@@ -298,8 +281,7 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     let local_pos = (inner * vec4<f32>(v.position, 1.0)).xyz;
     let local_normal = inner_cofactor * v.normal * inner_sign;
     let local_tangent = (inner * vec4<f32>(v.tangent.xyz, 0.0)).xyz;
-    let grow = pixel_floor_grow(inst.pos_scale);
-    let inst_pos = rot * ((local_pos * msign) * inst.pos_scale.w * grow) + inst.pos_scale.xyz;
+    let inst_pos = rot * ((local_pos * msign) * inst.pos_scale.w) + inst.pos_scale.xyz;
     // Read only by the velocity variant's GBUFFER_VS_VELOCITY_BODY. A vertex
     // of a deforming mesh starts from where it was last frame; any other
     // vertex has not moved in its own space.
@@ -319,7 +301,7 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
         prev_pos_scale = prev_inst.pos_scale;
     }
     let prev_local_pos = (u.prev_instance_inner * vec4<f32>(prev_vertex, 1.0)).xyz;
-    let prev_inst_pos = prev_rot * ((prev_local_pos * prev_msign) * prev_pos_scale.w * grow) + prev_pos_scale.xyz;
+    let prev_inst_pos = prev_rot * ((prev_local_pos * prev_msign) * prev_pos_scale.w) + prev_pos_scale.xyz;
     let scale_sign = select(1.0, -1.0, inst.pos_scale.w < 0.0);
     let inst_normal = rot * (local_normal * msign * scale_sign);
 

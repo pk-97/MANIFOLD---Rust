@@ -258,6 +258,9 @@ pub fn migrate_type_id(id: &str) -> &str {
 /// cards removed; an unlisted unknown param still fails the load, so a typo
 /// never disappears silently.
 pub static RETIRED_PARAMS: &[(&str, &str)] = &[
+    // Copies draw at their true size: a pixel floor grew far spray into
+    // bright dust.
+    ("node.scene_object", "min_pixel_radius"),
     // GPU FLIP matches the native engine's RK3, which never caps a stage.
     ("node.gpu_flip_step", "top_speed"),
     // The GPU FLIP pool sizes itself: the fill's count, plus room for an
