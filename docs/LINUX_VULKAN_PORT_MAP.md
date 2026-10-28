@@ -9,24 +9,30 @@
 
 - **GPU:** `manifold-gpu/src/vulkan/` is 514 lines of stubs against about 30,000 in `metal/`. `cargo check -p manifold-gpu --features vulkan` fails at `shadow_caster.rs:87` (`create_buffer_shared`), and that is only the first error, so `scripts/feature_matrix.py` is red on that row today.
 - **Linux:** the workspace has never been compiled for Linux. Off the Mac the app opens a window with no text, no preview and no content render (`manifold-app/src/content_pipeline.rs:1997` logs "Non-macOS render path not available").
-- **Tooling:** this Mac has no Vulkan SDK, MoltenVK, KosmicKrisp, Linux target or Linux VM. There is no CI.
+- **Tooling:** installed on 28 Oct (section 1). There is no CI.
 - **Already portable:** shaders (WGSL → SPIR-V is shared), the machine-wide GPU queue lock (`queue.rs` has a Linux branch), the audio device list through cpal, MIDI (midir), Ableton Link (rusty_link), OSC and Art-Net (std UDP), the prefs path (`user_prefs.rs:38` has an XDG arm), the content-thread deadline sleep (`frame_timer.rs:266`), all in-repo C and C++ (Box3D, the FLIP Fluids oracle, Signalsmith), the embedded Inter fonts, and every `include_str!`/`include_bytes!` path (case-clean). No Rust code is ARM-only apart from one test assert (`manifold-fluids/src/sheet_oracle.rs:257`).
 
 ---
 
 ## 1. Setup
 
-**Mac (dev box)**
-- LunarG Vulkan SDK for macOS: KosmicKrisp, MoltenVK, the validation layers and `vulkaninfo`. Pick a driver with `VK_DRIVER_FILES` (design D21).
-- `rustup target add x86_64-unknown-linux-gnu`, for `cargo check --target` on pure-Rust crates such as `manifold-foundation`. Crates with C or C++ build steps need the VM.
-- A Linux VM (UTM, Ubuntu arm64, Mesa's lavapipe software driver; Lima has no audio device, which the P4 boot check needs). It checks the Linux code paths: compile, window, audio, paths, packages. Clone the repo inside the VM: building on the Mac's case-insensitive disk hides case bugs. It is aarch64, so x86_64 details wait for the real machine.
-- `naga-cli` (for `scripts/wgsl_check.py`).
-- sccache through `RUSTC_WRAPPER=sccache` per machine, not in `.cargo/config.toml` (section 2).
+**Mac (dev box), installed**
+- LunarG Vulkan SDK 1.4.363.0 in `~/VulkanSDK/1.4.363.0`, with its system-global part in `/usr/local`, so the loader, both drivers and the validation layers are found with no environment variables. KosmicKrisp reports Vulkan 1.4.363 (conformant) and MoltenVK 1.4.2, both on the M4 Max. Both drivers enumerate, which shows one GPU as two devices: pick with `VK_DRIVER_FILES=/usr/local/share/vulkan/icd.d/libkosmickrisp_icd.json` (or `MoltenVK_icd.json`), and the backend's device choice is deliberate, never "first found" (design D21). The SDK also brings `slangc` for P7.
+- `x86_64-unknown-linux-gnu` Rust target, for `cargo check --target` on pure-Rust crates such as `manifold-foundation`. Crates with C or C++ build steps need the VM.
+- `naga` (for `scripts/wgsl_check.py`) and sccache were already there.
 
-**Packages, VM and 5080 machine (Debian names)**
-- Build: `build-essential cmake clang libclang-dev pkg-config libasound2-dev git-lfs libopencv-dev` (the last for the ML plugins). Add `libgtk-3-dev libxdo-dev` only while muda stays on Linux (section 10, item 3).
-- Vulkan: `mesa-vulkan-drivers vulkan-tools vulkan-validationlayers`. `ash` and `winit` load `libvulkan`, `libxkbcommon`, `libwayland-client` and the X11 libraries at run time, so they need no dev packages.
-- Runtime: xdg-desktop-portal plus a backend for file dialogs, `zenity` (rfd's message dialogs; without it the unsaved-changes prompt answers Cancel), rtkit or rtprio limits for real-time priority, PipeWire for system-audio capture (P4), FFmpeg libraries (P5).
+**Linux VM, installed**
+- Lima 2.2.1 instance `manifold`: Ubuntu 26.04.1 arm64, Apple virtualisation, 8 CPUs, 12 GiB, 150 GiB sparse disk. Mesa's lavapipe reports Vulkan 1.4.335, with the validation layer.
+- The Mac home folder is mounted read-only at the same path, so the VM builds the working tree as it is, uncommitted edits included, and can never write to it. Builds go to `~/manifold-target` inside the VM. `~/.profile` sets `CARGO_TARGET_DIR`, clears `RUSTC_WRAPPER` (the repo config still names the Mac's sccache path) and skips LFS downloads.
+- Rust 1.94.0, the same as the Mac, with clippy and cargo-nextest. `~/.cargo/config.toml` links with `mold`.
+- Run a check: `limactl shell manifold -- bash -lc 'source ~/.profile; cd "/Users/peterkiemann/MANIFOLD - Rust" && cargo check --locked <args>'`.
+- The mount inherits the Mac disk's case-insensitivity. Every `include_str!`/`include_bytes!` path is case-clean; for a case-sensitivity pass, clone into the VM's own disk. Lima has no audio device, so the P4 audio boot check runs in UTM or on the 5080. It is aarch64, so x86_64 details wait for the real machine.
+
+**Packages (installed in the VM; the same list for the 5080 machine)**
+- Build: `build-essential cmake clang libclang-dev pkg-config git git-lfs mold libasound2-dev libopencv-dev` (OpenCV for the ML plugins), and `libgtk-3-dev libxdo-dev` while muda stays on Linux (section 10, item 3).
+- Vulkan: `mesa-vulkan-drivers vulkan-tools vulkan-validationlayers libvulkan-dev`. `ash` and `winit` load `libvulkan`, `libxkbcommon`, `libwayland-client` and the X11 libraries at run time.
+- Later phases, installed now so nothing blocks: `libpipewire-0.3-dev` (P4 capture), `libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev ffmpeg` (P5), `xvfb` (headless windows), `zenity` (rfd's message dialogs; without it the unsaved-changes prompt answers Cancel).
+- On the 5080 machine only: xdg-desktop-portal with a backend for file dialogs, rtkit or rtprio limits for real-time priority, the NVIDIA driver.
 
 **The 5080 machine**
 - Distro and desktop session: open (section 10, item 1). It needs a kernel recent enough for the 9950X3D's cache-aware scheduling and NVIDIA's current driver with the open kernel modules, the only kind that supports 50-series cards.
@@ -44,8 +50,10 @@
 | `manifold-gpu/src/lib.rs:65-72` selects Vulkan only with `feature = "vulkan"`. On Linux without it the Metal module fails to compile | Linux selects Vulkan by target: `any(feature = "vulkan", not(target_os = "macos"))`, and `ash` becomes a non-Mac dependency. The feature then only means "Vulkan on the Mac", which covers `manifold-gpu` and the crates without Metal-only code (design section 3) |
 | `spirv-cross2` (MSL output) is an unconditional `manifold-gpu` dependency | Move it under the Mac target dependencies |
 | `.cargo/config.toml:15` sets `rustc-wrapper = "/opt/homebrew/bin/sccache"` for every OS | Delete it; each machine sets `RUSTC_WRAPPER=sccache` |
+| No `rust-toolchain.toml`: the Mac runs 1.94.0 and a fresh install gets the newest, whose new lints break `-D warnings` on one side only | `rust-toolchain.toml` pinning 1.94.0 with clippy, so the Mac, the VM and the 5080 build alike |
 | `manifold-media/build.rs:1-22` and `manifold-recording/build.rs:2-17` gate with `#[cfg(target_os)]`, which is the host OS | Read `CARGO_CFG_TARGET_OS` |
 | `manifold-fluids/native/flip_engine/pressuresolver.cpp:29-31,978-1075` includes `omp.h` and calls OpenMP when `!__APPLE__`. `build.rs` never passes `-fopenmp`, so expect a Linux link error. The Jacobi path is never used (`useJacobiSolve = false`, :928) | Take the Apple branch on every OS |
+| `manifold-playback/vendor/signalsmith/signalsmith-linear/fft.h:1074,1284` calls `std::memcpy` without including `<cstring>`. Apple's libc++ pulls it in by accident, GCC's libstdc++ does not, so the build script fails on Linux (found by the first VM build) | Add `#include <cstring>` to `fft.h` |
 | `manifold-media/src/lib.rs:24` builds `still_exporter` everywhere, but its `image` dependency is Mac-only (`Cargo.toml:14-18`) | Make `image` unconditional |
 | `muda` 0.19 pulls GTK 3 and `libxdo` (an unconditional `-lxdo`) on Linux, yet the Linux menu is never attached (`menu.rs:197`) | Mac-only dependency once the seven menu-only actions have in-app entries (P4, section 10 item 3) |
 | `manifold-nodes/Cargo.toml:75-79` lists Mac dev-dependencies (`core-text`, `core-graphics`, `core-foundation`, `objc2`) nothing uses | Delete |
@@ -226,7 +234,7 @@ One batch at a time, and both builds stay green before the next one starts (desi
 
 The overnight run does steps 2, 3, 4, 5 (the listed subset) and 7. It starts only from a clean tree with no other session working in this folder and MANIFOLD closed, commits each batch, and stops at a failure it cannot fix in a few tries, leaving a note.
 
-1. **Setup** (section 1). Peter installs the Vulkan SDK; the lead sets up the Linux VM. Not overnight.
+1. **Setup** (section 1). Done 28 Oct.
 2. **Build hygiene**, one batch: section 2 except backend selection and muda; the dead functions and the stem-separation device from section 11; the nodes-water `autoreleasepool` gate; the `shared_texture.rs:61` comment. Done when the Mac build and clippy are unchanged.
 3. **Folders and tools:** `manifold_foundation::app_dirs` and `find_tool`, std only, with the Mac paths byte-identical and pinned by one unit test (section 6). The scattered sites move onto them. The Linux arms are checked with `cargo check --target x86_64-unknown-linux-gnu -p manifold-foundation`. Keep-awake and real-time priority on Linux wait for P4.
 4. **Hoist neutral logic** out of `metal/` (section 3, "Hoist before porting"). Done when the build, clippy and `manifold-gpu`'s tests pass, plus one `perf-soak` on a heavy scene, where retire, fence and pool regressions show.
