@@ -25,8 +25,13 @@ impl Executor {
         for &(port, id) in &step.inputs {
             if let Some(PortType::Array(layout)) = plan.resource_type(id)
                 && let Some(slot) = self.backend.slot_for(id)
-                && let Some(buffer) = self.backend.array_buffer(slot)
             {
+                // A passthrough switch output that did not pass through this
+                // frame (held) has no storage to size from; its readers grow
+                // on the frame it is bound again.
+                let Some(buffer) = self.backend.array_buffer(slot) else {
+                    return Ok(());
+                };
                 let count = buffer.size / u64::from(layout.item_size);
                 let count =
                     u32::try_from(count).map_err(|_| "Array exceeds 32-bit GPU indexing")?;
