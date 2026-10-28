@@ -1,9 +1,9 @@
 use objc2_metal::MTLResidencySet;
 
-use crate::TexturePool;
 use super::super::device::GpuDevice;
-use crate::{RetireMark, RetireQueue};
+use crate::TexturePool;
 use crate::{GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+use crate::{RetireMark, RetireQueue};
 
 fn texture_desc(mip_levels: u32) -> GpuTextureDesc<'static> {
     GpuTextureDesc {

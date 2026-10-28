@@ -31,7 +31,9 @@ impl RetiredResource {
         residency: Option<std::sync::Arc<super::residency::GpuResidencyLease>>,
     ) -> Self {
         if super::defer_drop::backtrace_enabled() {
-            log_retire("texture", unsafe { objc2_metal::MTLResource::label(&**raw) });
+            log_retire("texture", unsafe {
+                objc2_metal::MTLResource::label(&**raw)
+            });
         }
         Self::Texture(super::defer_drop::SendTexture(raw.clone()), residency)
     }

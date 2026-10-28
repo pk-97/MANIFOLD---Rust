@@ -226,19 +226,22 @@ fn render_path_with_camera(
         "volume optics depth test",
     );
     let pipeline = device.create_render_pipeline(
-        SHADER,
-        "vs_main",
-        "fs_path",
-        GpuTextureFormat::R32Float,
-        Some(blend()),
-        "volume optics path proof",
+        &manifold_gpu::RenderPipelineDesc::new(
+            SHADER,
+            "vs_main",
+            "fs_path",
+            "volume optics path proof",
+        )
+        .color(GpuTextureFormat::R32Float, Some(blend())),
     );
-    let nearest = device.create_render_pipeline_depth_only(
-        SHADER,
-        "vs_main",
-        "fs_nearest",
-        GpuTextureFormat::Depth32Float,
-        "volume optics depth proof",
+    let nearest = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            SHADER,
+            "vs_main",
+            "fs_nearest",
+            "volume optics depth proof",
+        )
+        .depth(GpuTextureFormat::Depth32Float),
     );
     let depth_state = device.create_depth_stencil_state(&GpuDepthStencilDesc {
         compare: GpuCompareFunction::Greater,
@@ -339,12 +342,14 @@ fn render_nearest(device: &manifold_gpu::GpuDevice, vertices: &[MeshVertex]) -> 
         GpuTextureFormat::Depth32Float,
         "volume nearest proof",
     );
-    let nearest = device.create_render_pipeline_depth_only(
-        SHADER,
-        "vs_main",
-        "fs_nearest",
-        GpuTextureFormat::Depth32Float,
-        "volume nearest proof",
+    let nearest = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            SHADER,
+            "vs_main",
+            "fs_nearest",
+            "volume nearest proof",
+        )
+        .depth(GpuTextureFormat::Depth32Float),
     );
     let state = device.create_depth_stencil_state(&GpuDepthStencilDesc {
         compare: GpuCompareFunction::Greater,
@@ -400,19 +405,22 @@ fn render_nearest(device: &manifold_gpu::GpuDevice, vertices: &[MeshVertex]) -> 
 fn production_volume_optics_pipelines_compile() {
     let device = manifold_gpu::testkit::test_device();
     let _path = device.create_render_pipeline(
-        SHADER,
-        "vs_main",
-        "fs_path",
-        GpuTextureFormat::R32Float,
-        Some(blend()),
-        "volume optics compile path",
+        &manifold_gpu::RenderPipelineDesc::new(
+            SHADER,
+            "vs_main",
+            "fs_path",
+            "volume optics compile path",
+        )
+        .color(GpuTextureFormat::R32Float, Some(blend())),
     );
-    let _nearest = device.create_render_pipeline_depth_only(
-        SHADER,
-        "vs_main",
-        "fs_nearest",
-        GpuTextureFormat::Depth32Float,
-        "volume optics compile nearest",
+    let _nearest = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            SHADER,
+            "vs_main",
+            "fs_nearest",
+            "volume optics compile nearest",
+        )
+        .depth(GpuTextureFormat::Depth32Float),
     );
 }
 

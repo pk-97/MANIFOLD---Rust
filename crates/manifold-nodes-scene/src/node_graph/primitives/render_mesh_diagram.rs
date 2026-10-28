@@ -189,23 +189,15 @@ inventory::submit! {
 impl RenderMeshDiagram {
     /// Startup prewarm hook used by the native generator registry.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
-        device.create_render_pipeline_msaa(
-            SHADER,
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            Some(DIAGRAM_BLEND),
-            MSAA_SAMPLE_COUNT,
-            Self::TYPE_ID,
+        device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", Self::TYPE_ID)
+                .color(manifold_gpu::GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+                .samples(MSAA_SAMPLE_COUNT),
         );
-        device.create_render_pipeline_msaa(
-            SHADER,
-            "vs_main",
-            "fs_depth_color",
-            GpuTextureFormat::Rgba16Float,
-            Some(DIAGRAM_BLEND),
-            MSAA_SAMPLE_COUNT,
-            Self::TYPE_ID,
+        device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_depth_color", Self::TYPE_ID)
+                .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+                .samples(MSAA_SAMPLE_COUNT),
         );
         device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "math-view-history-capture");
     }
@@ -509,25 +501,17 @@ impl Primitive for RenderMeshDiagram {
         let instance_ring_counts = self.instance_counts.as_ref().unwrap_or(current);
 
         if color_out.is_some() && self.render_pipeline.is_none() {
-            self.render_pipeline = Some(gpu.device.create_render_pipeline_msaa(
-                SHADER,
-                "vs_main",
-                "fs_main",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                Some(DIAGRAM_BLEND),
-                MSAA_SAMPLE_COUNT,
-                Self::TYPE_ID,
+            self.render_pipeline = Some(gpu.device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", Self::TYPE_ID)
+                    .color(manifold_gpu::GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+                    .samples(MSAA_SAMPLE_COUNT),
             ));
         }
         if color_out.is_some() && uniforms.occlusion != 0 && self.depth_color_pipeline.is_none() {
-            self.depth_color_pipeline = Some(gpu.device.create_render_pipeline_msaa(
-                SHADER,
-                "vs_main",
-                "fs_depth_color",
-                GpuTextureFormat::Rgba16Float,
-                Some(DIAGRAM_BLEND),
-                MSAA_SAMPLE_COUNT,
-                Self::TYPE_ID,
+            self.depth_color_pipeline = Some(gpu.device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_depth_color", Self::TYPE_ID)
+                    .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+                    .samples(MSAA_SAMPLE_COUNT),
             ));
         }
         if color_out.is_some() && self.capture_pipeline.is_none() {

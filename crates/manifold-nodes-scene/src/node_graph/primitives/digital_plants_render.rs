@@ -217,15 +217,10 @@ impl Primitive for DigitalPlantsRender {
 
         // Lazy-init all the pipelines and textures.
         if self.shadow_pipeline.is_none() {
-            self.shadow_pipeline = Some(gpu.device.create_render_pipeline_depth(
-                include_str!("../../generators/shaders/digital_plants_shadow.wgsl"),
-                "vs_shadow",
-                "fs_shadow",
-                GpuTextureFormat::Rgba16Float,
-                GpuTextureFormat::Depth32Float,
-                None,
-                1,
-                "node.digital_plants_render shadow",
+            self.shadow_pipeline = Some(gpu.device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(include_str!("../../generators/shaders/digital_plants_shadow.wgsl"), "vs_shadow", "fs_shadow", "node.digital_plants_render shadow")
+                    .color(GpuTextureFormat::Rgba16Float, None)
+                    .depth(GpuTextureFormat::Depth32Float),
             ));
         }
         if self.shadow_depth_stencil.is_none() {
@@ -263,15 +258,10 @@ impl Primitive for DigitalPlantsRender {
                 }));
         }
         if self.render_pipeline.is_none() {
-            self.render_pipeline = Some(gpu.device.create_render_pipeline_depth(
-                include_str!("../../generators/shaders/digital_plants_render.wgsl"),
-                "vs_main",
-                "fs_main",
-                GpuTextureFormat::Rgba16Float,
-                GpuTextureFormat::Depth32Float,
-                None,
-                1,
-                "node.digital_plants_render main",
+            self.render_pipeline = Some(gpu.device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(include_str!("../../generators/shaders/digital_plants_render.wgsl"), "vs_main", "fs_main", "node.digital_plants_render main")
+                    .color(GpuTextureFormat::Rgba16Float, None)
+                    .depth(GpuTextureFormat::Depth32Float),
             ));
         }
         if self.render_depth_stencil.is_none() {

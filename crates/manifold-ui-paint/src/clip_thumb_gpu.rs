@@ -158,12 +158,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         ch = cell_h,
     );
     device.create_render_pipeline(
-        &shader,
-        "vs_main",
-        "fs_main",
-        format,
-        None,
-        "Clip Thumbnail Box Downsample",
+        &manifold_gpu::RenderPipelineDesc::new(
+            &shader,
+            "vs_main",
+            "fs_main",
+            "Clip Thumbnail Box Downsample",
+        )
+        .color(format, None),
     )
 }
 
@@ -225,14 +226,15 @@ impl ClipThumbGpu {
             alpha_operation: GpuBlendOp::Add,
         };
 
-        let pipeline = device.create_render_pipeline_with_vertex_layout(
-            THUMB_SHADER,
-            "vs_main",
-            "fs_main",
-            format,
-            Some(blend),
-            &vertex_layout,
-            "Clip Thumbnail Pipeline",
+        let pipeline = device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                THUMB_SHADER,
+                "vs_main",
+                "fs_main",
+                "Clip Thumbnail Pipeline",
+            )
+            .color(format, Some(blend))
+            .vertex_layout(&vertex_layout),
         );
 
         // Linear: a thumbnail is a downscaled image, so smooth sampling beats the

@@ -67,19 +67,23 @@ impl WetPass {
             mat4_inverse(view_proj).ok_or("Wet pass: singular camera matrix")?;
         let pipeline = self.pipeline.get_or_insert_with(|| {
             device.create_render_pipeline(
-                SHADER.as_str(),
-                "vs_decal",
-                "fs_decal",
-                GpuTextureFormat::R8Unorm,
-                Some(GpuBlendState {
-                    src_factor: GpuBlendFactor::One,
-                    dst_factor: GpuBlendFactor::One,
-                    operation: GpuBlendOp::Add,
-                    src_alpha_factor: GpuBlendFactor::One,
-                    dst_alpha_factor: GpuBlendFactor::One,
-                    alpha_operation: GpuBlendOp::Add,
-                }),
-                "wet pass",
+                &manifold_gpu::RenderPipelineDesc::new(
+                    SHADER.as_str(),
+                    "vs_decal",
+                    "fs_decal",
+                    "wet pass",
+                )
+                .color(
+                    GpuTextureFormat::R8Unorm,
+                    Some(GpuBlendState {
+                        src_factor: GpuBlendFactor::One,
+                        dst_factor: GpuBlendFactor::One,
+                        operation: GpuBlendOp::Add,
+                        src_alpha_factor: GpuBlendFactor::One,
+                        dst_alpha_factor: GpuBlendFactor::One,
+                        alpha_operation: GpuBlendOp::Add,
+                    }),
+                ),
             )
         });
         let (width, height) = (

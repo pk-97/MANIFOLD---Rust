@@ -74,19 +74,23 @@ impl FoamPass {
             mat4_inverse(view.view_proj).ok_or("Foam pass: singular camera matrix")?;
         let pipeline = self.pipeline.get_or_insert_with(|| {
             device.create_render_pipeline(
-                SHADER.as_str(),
-                "vs_foam",
-                "fs_foam",
-                MASK_FORMAT,
-                Some(GpuBlendState {
-                    src_factor: GpuBlendFactor::One,
-                    dst_factor: GpuBlendFactor::One,
-                    operation: GpuBlendOp::Add,
-                    src_alpha_factor: GpuBlendFactor::One,
-                    dst_alpha_factor: GpuBlendFactor::One,
-                    alpha_operation: GpuBlendOp::Add,
-                }),
-                "foam pass",
+                &manifold_gpu::RenderPipelineDesc::new(
+                    SHADER.as_str(),
+                    "vs_foam",
+                    "fs_foam",
+                    "foam pass",
+                )
+                .color(
+                    MASK_FORMAT,
+                    Some(GpuBlendState {
+                        src_factor: GpuBlendFactor::One,
+                        dst_factor: GpuBlendFactor::One,
+                        operation: GpuBlendOp::Add,
+                        src_alpha_factor: GpuBlendFactor::One,
+                        dst_alpha_factor: GpuBlendFactor::One,
+                        alpha_operation: GpuBlendOp::Add,
+                    }),
+                ),
             )
         });
         if self

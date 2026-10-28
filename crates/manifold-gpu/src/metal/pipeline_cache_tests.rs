@@ -146,20 +146,17 @@ fn assert_near(actual: [u8; 4], expected: [u8; 4], label: &str) {
 fn run_blend_order(min_first: bool) {
     let device = GpuDevice::new();
     let none = device.create_render_pipeline(
-        BLEND_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba8Unorm,
-        None,
-        "blend-none-first",
+        &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "blend-none-first")
+            .color(GpuTextureFormat::Rgba8Unorm, None),
     );
     let none_again = device.create_render_pipeline(
-        BLEND_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba8Unorm,
-        None,
-        "blend-none-second-label-is-ignored",
+        &crate::RenderPipelineDesc::new(
+            BLEND_WGSL,
+            "vs_main",
+            "fs_main",
+            "blend-none-second-label-is-ignored",
+        )
+        .color(GpuTextureFormat::Rgba8Unorm, None),
     );
     assert!(
         std::ptr::eq(none.raw_state(), none_again.raw_state()),
@@ -170,38 +167,22 @@ fn run_blend_order(min_first: bool) {
     let max = blend_state(GpuBlendOp::Max);
     let (min_pipeline, max_pipeline) = if min_first {
         let min_pipeline = device.create_render_pipeline(
-            BLEND_WGSL,
-            "vs_main",
-            "fs_main",
-            GpuTextureFormat::Rgba8Unorm,
-            Some(min),
-            "blend-min-first",
+            &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "blend-min-first")
+                .color(GpuTextureFormat::Rgba8Unorm, Some(min)),
         );
         let max_pipeline = device.create_render_pipeline(
-            BLEND_WGSL,
-            "vs_main",
-            "fs_main",
-            GpuTextureFormat::Rgba8Unorm,
-            Some(max),
-            "blend-max-second",
+            &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "blend-max-second")
+                .color(GpuTextureFormat::Rgba8Unorm, Some(max)),
         );
         (min_pipeline, max_pipeline)
     } else {
         let max_pipeline = device.create_render_pipeline(
-            BLEND_WGSL,
-            "vs_main",
-            "fs_main",
-            GpuTextureFormat::Rgba8Unorm,
-            Some(max),
-            "blend-max-first",
+            &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "blend-max-first")
+                .color(GpuTextureFormat::Rgba8Unorm, Some(max)),
         );
         let min_pipeline = device.create_render_pipeline(
-            BLEND_WGSL,
-            "vs_main",
-            "fs_main",
-            GpuTextureFormat::Rgba8Unorm,
-            Some(min),
-            "blend-min-second",
+            &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "blend-min-second")
+                .color(GpuTextureFormat::Rgba8Unorm, Some(min)),
         );
         (min_pipeline, max_pipeline)
     };
@@ -273,20 +254,12 @@ fn render_pipeline_cache_identity_and_readback() {
 
     let device = GpuDevice::new();
     let rgba = device.create_render_pipeline(
-        BLEND_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba8Unorm,
-        None,
-        "rgba-format",
+        &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "rgba-format")
+            .color(GpuTextureFormat::Rgba8Unorm, None),
     );
     let bgra = device.create_render_pipeline(
-        BLEND_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Bgra8Unorm,
-        None,
-        "bgra-format",
+        &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "bgra-format")
+            .color(GpuTextureFormat::Bgra8Unorm, None),
     );
     assert!(
         !std::ptr::eq(rgba.raw_state(), bgra.raw_state()),
@@ -323,23 +296,25 @@ fn render_pipeline_cache_identity_and_readback() {
             },
         ],
     };
-    let first_layout_pipeline = device.create_render_pipeline_with_vertex_layout(
-        VERTEX_LAYOUT_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba8Unorm,
-        None,
-        &first_layout,
-        "vertex-layout-first",
+    let first_layout_pipeline = device.create_render_pipeline(
+        &crate::RenderPipelineDesc::new(
+            VERTEX_LAYOUT_WGSL,
+            "vs_main",
+            "fs_main",
+            "vertex-layout-first",
+        )
+        .color(GpuTextureFormat::Rgba8Unorm, None)
+        .vertex_layout(&first_layout),
     );
-    let second_layout_pipeline = device.create_render_pipeline_with_vertex_layout(
-        VERTEX_LAYOUT_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba8Unorm,
-        None,
-        &second_layout,
-        "vertex-layout-second",
+    let second_layout_pipeline = device.create_render_pipeline(
+        &crate::RenderPipelineDesc::new(
+            VERTEX_LAYOUT_WGSL,
+            "vs_main",
+            "fs_main",
+            "vertex-layout-second",
+        )
+        .color(GpuTextureFormat::Rgba8Unorm, None)
+        .vertex_layout(&second_layout),
     );
     assert!(
         !std::ptr::eq(
@@ -349,25 +324,21 @@ fn render_pipeline_cache_identity_and_readback() {
         "same-stride vertex layouts with different offsets must not alias"
     );
 
-    let depth_min = device.create_render_pipeline_depth(
-        BLEND_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba8Unorm,
-        GpuTextureFormat::Depth32Float,
-        Some(blend_state(GpuBlendOp::Min)),
-        1,
-        "depth-min",
+    let depth_min = device.create_render_pipeline(
+        &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "depth-min")
+            .color(
+                GpuTextureFormat::Rgba8Unorm,
+                Some(blend_state(GpuBlendOp::Min)),
+            )
+            .depth(GpuTextureFormat::Depth32Float),
     );
-    let depth_max = device.create_render_pipeline_depth(
-        BLEND_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba8Unorm,
-        GpuTextureFormat::Depth32Float,
-        Some(blend_state(GpuBlendOp::Max)),
-        1,
-        "depth-max",
+    let depth_max = device.create_render_pipeline(
+        &crate::RenderPipelineDesc::new(BLEND_WGSL, "vs_main", "fs_main", "depth-max")
+            .color(
+                GpuTextureFormat::Rgba8Unorm,
+                Some(blend_state(GpuBlendOp::Max)),
+            )
+            .depth(GpuTextureFormat::Depth32Float),
     );
     assert!(
         !std::ptr::eq(depth_min.raw_state(), depth_max.raw_state()),

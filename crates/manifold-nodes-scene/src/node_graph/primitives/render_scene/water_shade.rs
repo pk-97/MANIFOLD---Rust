@@ -144,15 +144,15 @@ impl WaterShade {
     /// The shading pipeline for one colour format, through the device's
     /// shared render-pipeline cache.
     fn build_pipeline(device: &GpuDevice, color_format: GpuTextureFormat) -> GpuRenderPipeline {
-        device.create_render_pipeline_depth(
-            &WATER_SHADE_WGSL,
-            "vs_water",
-            "fs_water",
-            color_format,
-            GpuTextureFormat::Depth32Float,
-            None,
-            1,
-            "node.render_scene water shade",
+        device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                &WATER_SHADE_WGSL,
+                "vs_water",
+                "fs_water",
+                "node.render_scene water shade",
+            )
+            .color(color_format, None)
+            .depth(GpuTextureFormat::Depth32Float),
         )
     }
 
@@ -161,15 +161,15 @@ impl WaterShade {
         device: &GpuDevice,
         color_format: GpuTextureFormat,
     ) -> GpuRenderPipeline {
-        device.create_render_pipeline_depth(
-            &WATER_SHADE_WGSL,
-            "vs_water",
-            "fs_mist",
-            color_format,
-            GpuTextureFormat::Depth32Float,
-            Some(MIST_BLEND),
-            1,
-            "node.render_scene water mist",
+        device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                &WATER_SHADE_WGSL,
+                "vs_water",
+                "fs_mist",
+                "node.render_scene water mist",
+            )
+            .color(color_format, Some(MIST_BLEND))
+            .depth(GpuTextureFormat::Depth32Float),
         )
     }
 

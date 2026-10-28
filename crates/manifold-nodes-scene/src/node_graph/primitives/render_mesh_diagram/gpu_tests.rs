@@ -242,14 +242,10 @@ fn math_view_trails_render_recorded_copy_motion() {
     );
     let capture_pipeline =
         device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "copy-trails-proof");
-    let pipeline = device.create_render_pipeline_msaa(
-        SHADER,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba16Float,
-        Some(DIAGRAM_BLEND),
-        MSAA_SAMPLE_COUNT,
-        "copy-trails-proof",
+    let pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", "copy-trails-proof")
+            .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+            .samples(MSAA_SAMPLE_COUNT),
     );
     let history = device.create_buffer_shared(
         HISTORY_SAMPLES as u64 * MAX_VERTICES as u64 * std::mem::size_of::<[f32; 4]>() as u64,
@@ -568,14 +564,15 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
     let single = instance_buffer(&[identity]);
     let three = instance_buffer(&[identity, translated, rotated]);
     let with_hole = instance_buffer(&[identity, inactive, translated, rotated]);
-    let pipeline = device.create_render_pipeline_msaa(
-        SHADER,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba16Float,
-        Some(DIAGRAM_BLEND),
-        MSAA_SAMPLE_COUNT,
-        "instance-copies-proof",
+    let pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            SHADER,
+            "vs_main",
+            "fs_main",
+            "instance-copies-proof",
+        )
+        .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+        .samples(MSAA_SAMPLE_COUNT),
     );
     let camera = Camera::look_at(
         [0.0, 0.0, 5.0],
@@ -742,14 +739,10 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
     );
     let buffer = device.create_buffer_shared(3 * std::mem::size_of::<MeshVertex>() as u64);
     buffer.zero_fill();
-    let pipeline = device.create_render_pipeline_msaa(
-        SHADER,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba16Float,
-        Some(DIAGRAM_BLEND),
-        MSAA_SAMPLE_COUNT,
-        "world-grid-proof",
+    let pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", "world-grid-proof")
+            .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+            .samples(MSAA_SAMPLE_COUNT),
     );
     let camera = Camera::look_at(
         [8.0, 7.0, 10.0],

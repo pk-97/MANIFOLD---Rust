@@ -200,20 +200,24 @@ impl RenderScene {
         solid: bool,
     ) -> manifold_gpu::GpuRenderPipeline {
         if solid {
-            device.create_render_pipeline_depth_only(
-                &Self::solid_depth_source(),
-                "vs_main",
-                "fs_shadow",
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                "node.render_scene shadow depth solid",
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    &Self::solid_depth_source(),
+                    "vs_main",
+                    "fs_shadow",
+                    "node.render_scene shadow depth solid",
+                )
+                .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
             )
         } else {
-            device.create_render_pipeline_depth_only(
-                include_str!("../shaders/shadow_depth.wgsl"),
-                "vs_main",
-                "fs_shadow",
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                "node.render_scene shadow depth",
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    include_str!("../shaders/shadow_depth.wgsl"),
+                    "vs_main",
+                    "fs_shadow",
+                    "node.render_scene shadow depth",
+                )
+                .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
             )
         }
     }
@@ -373,17 +377,18 @@ impl RenderScene {
                     MSAA_SAMPLES,
                 ))
                 .or_insert_with(|| {
-                    device.create_render_pipeline_depth_msaa_point_size(
-                        RENDER_SCENE_WGSL.as_str(),
-                        "vs_points",
-                        "fs_unlit",
-                        7,
-                        manifold_gpu::GpuTextureFormat::Rgba16Float,
-                        manifold_gpu::GpuTextureFormat::Depth32Float,
-                        None,
-                        MSAA_SAMPLES,
-                        true,
-                        "node.render_scene points",
+                    device.create_render_pipeline(
+                        &manifold_gpu::RenderPipelineDesc::new(
+                            RENDER_SCENE_WGSL.as_str(),
+                            "vs_points",
+                            "fs_unlit",
+                            "node.render_scene points",
+                        )
+                        .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
+                        .depth(manifold_gpu::GpuTextureFormat::Depth32Float)
+                        .samples(MSAA_SAMPLES)
+                        .alpha_to_coverage(true)
+                        .point_size(7),
                     )
                 });
         }
@@ -442,16 +447,17 @@ impl RenderScene {
                 Some(aux) => aux,
                 None if opaque_fast => (&[][..], &[][..], "node.render_scene"),
                 None => {
-                    return device.create_render_pipeline_depth_msaa(
-                        RENDER_SCENE_WGSL.as_str(),
-                        "vs_main",
-                        fs_entry,
-                        manifold_gpu::GpuTextureFormat::Rgba16Float,
-                        manifold_gpu::GpuTextureFormat::Depth32Float,
-                        blend_state,
-                        MSAA_SAMPLES,
-                        alpha_to_coverage,
-                        "node.render_scene",
+                    return device.create_render_pipeline(
+                        &manifold_gpu::RenderPipelineDesc::new(
+                            RENDER_SCENE_WGSL.as_str(),
+                            "vs_main",
+                            fs_entry,
+                            "node.render_scene",
+                        )
+                        .color(manifold_gpu::GpuTextureFormat::Rgba16Float, blend_state)
+                        .depth(manifold_gpu::GpuTextureFormat::Depth32Float)
+                        .samples(MSAA_SAMPLES)
+                        .alpha_to_coverage(alpha_to_coverage),
                     );
                 }
             };
@@ -459,18 +465,19 @@ impl RenderScene {
         if opaque_fast {
             specs.extend_from_slice(Self::OPAQUE_FAST_SPECIALIZATIONS);
         }
-        device.create_specialized_render_pipeline_depth_msaa(
-            RENDER_SCENE_WGSL.as_str(),
-            "vs_main",
-            fs_entry,
-            &specs,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            manifold_gpu::GpuTextureFormat::Depth32Float,
-            blend_state,
-            MSAA_SAMPLES,
-            alpha_to_coverage,
-            aux_formats,
-            label,
+        device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                RENDER_SCENE_WGSL.as_str(),
+                "vs_main",
+                fs_entry,
+                label,
+            )
+            .color(manifold_gpu::GpuTextureFormat::Rgba16Float, blend_state)
+            .depth(manifold_gpu::GpuTextureFormat::Depth32Float)
+            .samples(MSAA_SAMPLES)
+            .alpha_to_coverage(alpha_to_coverage)
+            .aux_colors(aux_formats)
+            .specialize(&specs),
         )
     }
 
@@ -496,16 +503,18 @@ impl RenderScene {
             MaterialKind::Pbr => "fs_pbr",
             MaterialKind::Cel => "fs_cel",
         };
-        device.create_render_pipeline_depth_msaa(
-            RENDER_SCENE_WGSL.as_str(),
-            "vs_main",
-            fs_entry,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            manifold_gpu::GpuTextureFormat::Depth32Float,
-            Some(Self::blend_state()),
-            1,
-            false,
-            "node.render_scene transmissive pass",
+        device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                RENDER_SCENE_WGSL.as_str(),
+                "vs_main",
+                fs_entry,
+                "node.render_scene transmissive pass",
+            )
+            .color(
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                Some(Self::blend_state()),
+            )
+            .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
         )
     }
 
@@ -594,12 +603,16 @@ impl RenderScene {
             alpha_operation: manifold_gpu::GpuBlendOp::Add,
         };
         device.create_render_pipeline(
-            include_str!("../shaders/shaft_composite.wgsl"),
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            Some(shaft_composite_blend),
-            "node.render_scene shaft composite",
+            &manifold_gpu::RenderPipelineDesc::new(
+                include_str!("../shaders/shaft_composite.wgsl"),
+                "vs_main",
+                "fs_main",
+                "node.render_scene shaft composite",
+            )
+            .color(
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                Some(shaft_composite_blend),
+            ),
         );
 
         // SCENE_RENDER_MODE_DESIGN.md D8 (P3), same BUG-037 discipline: the
@@ -607,17 +620,18 @@ impl RenderScene {
         // fs_unlit, the `[[point_size]]` rebind) is asset-independent and
         // lazily compiled on the first Points frame without this. Warm it so
         // flipping a scene to Points mid-show is a cache hit, not a stall.
-        device.create_render_pipeline_depth_msaa_point_size(
-            RENDER_SCENE_WGSL.as_str(),
-            "vs_points",
-            "fs_unlit",
-            7,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            manifold_gpu::GpuTextureFormat::Depth32Float,
-            None,
-            MSAA_SAMPLES,
-            true,
-            "node.render_scene points",
+        device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                RENDER_SCENE_WGSL.as_str(),
+                "vs_points",
+                "fs_unlit",
+                "node.render_scene points",
+            )
+            .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
+            .depth(manifold_gpu::GpuTextureFormat::Depth32Float)
+            .samples(MSAA_SAMPLES)
+            .alpha_to_coverage(true)
+            .point_size(7),
         );
 
         // The water march and its shading pass, which draws in Pass B with

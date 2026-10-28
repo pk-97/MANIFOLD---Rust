@@ -87,12 +87,13 @@ impl RenderScene {
             .pipeline
             .get_or_insert_with(|| {
                 gpu.device.create_render_pipeline(
-                    include_str!("../shaders/shadow_depth.wgsl"),
-                    "vs_main",
-                    "fs_mask",
-                    manifold_gpu::GpuTextureFormat::R8Unorm,
-                    None,
-                    "node.render_scene selection mask",
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        include_str!("../shaders/shadow_depth.wgsl"),
+                        "vs_main",
+                        "fs_mask",
+                        "node.render_scene selection mask",
+                    )
+                    .color(manifold_gpu::GpuTextureFormat::R8Unorm, None),
                 )
             })
             .clone();
@@ -105,12 +106,13 @@ impl RenderScene {
                 .field_pipeline
                 .get_or_insert_with(|| {
                     gpu.device.create_render_pipeline(
-                        &water_cover::COVER_WGSL,
-                        "vs_cover",
-                        "fs_cover_mask",
-                        manifold_gpu::GpuTextureFormat::R8Unorm,
-                        None,
-                        "node.render_scene selection mask water",
+                        &manifold_gpu::RenderPipelineDesc::new(
+                            &water_cover::COVER_WGSL,
+                            "vs_cover",
+                            "fs_cover_mask",
+                            "node.render_scene selection mask water",
+                        )
+                        .color(manifold_gpu::GpuTextureFormat::R8Unorm, None),
                     )
                 })
                 .clone()

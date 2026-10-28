@@ -1123,12 +1123,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
         self.preview_pipeline = Some(device.create_render_pipeline(
-            preview_shader,
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            None,
-            "Workspace Preview Blit",
+            &manifold_gpu::RenderPipelineDesc::new(preview_shader, "vs_main", "fs_main", "Workspace Preview Blit")
+                .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         ));
         self.preview_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             min_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -1196,12 +1192,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 }}"
         );
         self.node_preview_scalar_pipeline = Some(device.create_render_pipeline(
-            &scalar_shader,
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            None,
-            "Node Preview Scalar Lift",
+            &manifold_gpu::RenderPipelineDesc::new(&scalar_shader, "vs_main", "fs_main", "Node Preview Scalar Lift")
+                .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         ));
 
         // Vector field: RG → 2D vector → optical-flow colour wheel
@@ -1226,12 +1218,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 }}"
         );
         self.node_preview_vector_pipeline = Some(device.create_render_pipeline(
-            &vector_shader,
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            None,
-            "Node Preview Vector Wheel",
+            &manifold_gpu::RenderPipelineDesc::new(&vector_shader, "vs_main", "fs_main", "Node Preview Vector Wheel")
+                .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         ));
 
         // Signed scalar: diverging ramp centred at 0. Negative → blue, 0 →
@@ -1254,12 +1242,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 }}"
         );
         self.node_preview_signed_pipeline = Some(device.create_render_pipeline(
-            &signed_shader,
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            None,
-            "Node Preview Signed Diverging",
+            &manifold_gpu::RenderPipelineDesc::new(&signed_shader, "vs_main", "fs_main", "Node Preview Signed Diverging")
+                .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         ));
 
         // Normal map: decode xyz from [-1,1] to the familiar blue-dominant RGB.
@@ -1280,12 +1264,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 }}"
         );
         self.node_preview_normal_pipeline = Some(device.create_render_pipeline(
-            &normal_shader,
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            None,
-            "Node Preview Normal Decode",
+            &manifold_gpu::RenderPipelineDesc::new(&normal_shader, "vs_main", "fs_main", "Node Preview Normal Decode")
+                .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         ));
 
         // Depth: a turbo-like near-far colour ramp. Depth is read from R; the
@@ -1313,12 +1293,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 }}"
         );
         self.node_preview_depth_pipeline = Some(device.create_render_pipeline(
-            &depth_shader,
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            None,
-            "Node Preview Depth Ramp",
+            &manifold_gpu::RenderPipelineDesc::new(&depth_shader, "vs_main", "fs_main", "Node Preview Depth Ramp")
+                .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         ));
 
         self.native_device = Some(device);

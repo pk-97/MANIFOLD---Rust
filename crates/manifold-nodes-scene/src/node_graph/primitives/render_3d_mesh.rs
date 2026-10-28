@@ -369,15 +369,10 @@ impl Primitive for Render3DMesh {
         ];
         if let Some(wp_target) = world_pos_target {
             if self.world_pos_pipeline.is_none() {
-                self.world_pos_pipeline = Some(gpu.device.create_render_pipeline_depth(
-                    include_str!("shaders/render_3d_mesh.wgsl"),
-                    "vs_main",
-                    "fs_world_pos",
-                    manifold_gpu::GpuTextureFormat::Rgba16Float,
-                    manifold_gpu::GpuTextureFormat::Depth32Float,
-                    None,
-                    1,
-                    "node.render_mesh.world_pos",
+                self.world_pos_pipeline = Some(gpu.device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(include_str!("shaders/render_3d_mesh.wgsl"), "vs_main", "fs_world_pos", "node.render_mesh.world_pos")
+                        .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
+                        .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
                 ));
             }
             let pipeline = self.world_pos_pipeline.as_ref().expect("just inserted");
@@ -395,15 +390,10 @@ impl Primitive for Render3DMesh {
         }
         if let Some(wn_target) = world_normal_target {
             if self.world_normal_pipeline.is_none() {
-                self.world_normal_pipeline = Some(gpu.device.create_render_pipeline_depth(
-                    include_str!("shaders/render_3d_mesh.wgsl"),
-                    "vs_main",
-                    "fs_world_normal",
-                    manifold_gpu::GpuTextureFormat::Rgba16Float,
-                    manifold_gpu::GpuTextureFormat::Depth32Float,
-                    None,
-                    1,
-                    "node.render_mesh.world_normal",
+                self.world_normal_pipeline = Some(gpu.device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(include_str!("shaders/render_3d_mesh.wgsl"), "vs_main", "fs_world_normal", "node.render_mesh.world_normal")
+                        .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
+                        .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
                 ));
             }
             let pipeline = self.world_normal_pipeline.as_ref().expect("just inserted");

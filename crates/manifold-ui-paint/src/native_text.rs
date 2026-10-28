@@ -1080,14 +1080,15 @@ impl NativeTextRenderer {
             alpha_operation: GpuBlendOp::Add,
         };
         let layout = text_vertex_layout();
-        let pipeline = device.create_render_pipeline_with_vertex_layout(
-            TEXT_SHADER,
-            "vs_main",
-            "fs_main",
-            format,
-            Some(blend),
-            &layout,
-            "TextRenderer",
+        let pipeline = device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                TEXT_SHADER,
+                "vs_main",
+                "fs_main",
+                "TextRenderer",
+            )
+            .color(format, Some(blend))
+            .vertex_layout(&layout),
         );
 
         let sampler = device.create_sampler(&GpuSamplerDesc {

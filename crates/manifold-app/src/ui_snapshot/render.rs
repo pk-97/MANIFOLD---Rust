@@ -980,12 +980,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
     device.create_render_pipeline(
-        shader,
-        "vs_main",
-        "fs_main",
-        format,
-        None,
-        "Source Fixture Gradient",
+        &manifold_gpu::RenderPipelineDesc::new(
+            shader,
+            "vs_main",
+            "fs_main",
+            "Source Fixture Gradient",
+        )
+        .color(format, None),
     )
 }
 

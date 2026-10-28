@@ -47,10 +47,9 @@ mod workgroup_zeroing_tests;
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
 pub(crate) use device::PoolAllocator;
-pub(crate) use gpu_fault::submissions_ignored;
-pub(crate) use types::RetiredResource;
 pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, DrawCount, GpuEncoder};
 pub use fft::{FftKind, GpuFft};
+pub(crate) use gpu_fault::submissions_ignored;
 pub use profiling::{
     GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind, ProfileGranularity,
 };
@@ -61,6 +60,7 @@ pub use surface::{GpuDrawable, GpuSurface, set_presented_observer};
 pub use template::{
     GatedRecorder, GpuTemplateStats, GpuTemplateStore, TemplateRanges, TemplateTicket,
 };
+pub(crate) use types::RetiredResource;
 pub use types::{
     GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter,
     GpuRenderPipeline, GpuSampler, GpuTexture,

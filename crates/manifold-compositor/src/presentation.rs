@@ -262,15 +262,16 @@ struct PresentationUniforms {
 impl PresentationPipeline {
     pub fn new(device: &GpuDevice) -> Self {
         let pipeline = device.create_render_pipeline(
-            concat!(
-                include_str!("effects/shaders/tonemap_common.wgsl"),
-                include_str!("effects/shaders/presentation.wgsl")
-            ),
-            "vs_main",
-            "fs_main",
-            UI_FORMAT,
-            None,
-            "Linear Display Presentation",
+            &manifold_gpu::RenderPipelineDesc::new(
+                concat!(
+                    include_str!("effects/shaders/tonemap_common.wgsl"),
+                    include_str!("effects/shaders/presentation.wgsl")
+                ),
+                "vs_main",
+                "fs_main",
+                "Linear Display Presentation",
+            )
+            .color(UI_FORMAT, None),
         );
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
         Self { pipeline, sampler }

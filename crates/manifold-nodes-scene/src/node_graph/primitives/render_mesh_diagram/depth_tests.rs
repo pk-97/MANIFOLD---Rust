@@ -232,23 +232,20 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         MSAA_SAMPLE_COUNT,
         "mesh-diagram-xray-msaa",
     );
-    let depth_pipeline = device.create_render_pipeline_msaa(
-        SHADER,
-        "vs_main",
-        "fs_depth_color",
-        GpuTextureFormat::Rgba16Float,
-        Some(DIAGRAM_BLEND),
-        MSAA_SAMPLE_COUNT,
-        "mesh-diagram-depth-colour",
+    let depth_pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            SHADER,
+            "vs_main",
+            "fs_depth_color",
+            "mesh-diagram-depth-colour",
+        )
+        .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+        .samples(MSAA_SAMPLE_COUNT),
     );
-    let xray_pipeline = device.create_render_pipeline_msaa(
-        SHADER,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba16Float,
-        Some(DIAGRAM_BLEND),
-        MSAA_SAMPLE_COUNT,
-        "mesh-diagram-xray",
+    let xray_pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", "mesh-diagram-xray")
+            .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+            .samples(MSAA_SAMPLE_COUNT),
     );
     let u_depth = uniforms(&camera, 1, 3, 1, 1.0);
     let u_xray = uniforms(&camera, 1, 3, 0, 1.0);
@@ -379,18 +376,19 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
         }
         let buffer = vertices_buffer(&device, &vertices);
         for occlusion in [0, 1] {
-            let pipeline = device.create_render_pipeline_msaa(
-                SHADER,
-                "vs_main",
-                if occlusion == 0 {
-                    "fs_main"
-                } else {
-                    "fs_depth_color"
-                },
-                GpuTextureFormat::Rgba16Float,
-                Some(DIAGRAM_BLEND),
-                MSAA_SAMPLE_COUNT,
-                "math-axes-proof",
+            let pipeline = device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    SHADER,
+                    "vs_main",
+                    if occlusion == 0 {
+                        "fs_main"
+                    } else {
+                        "fs_depth_color"
+                    },
+                    "math-axes-proof",
+                )
+                .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+                .samples(MSAA_SAMPLE_COUNT),
             );
             for axes in [1, 0] {
                 let mut u = uniforms(&camera, 9, 27, occlusion, 1.0);
@@ -491,14 +489,10 @@ fn math_view_marks_grow_small_faces_and_keep_big_ones() {
         MSAA_SAMPLE_COUNT,
         "math-mark-size",
     );
-    let pipeline = device.create_render_pipeline_msaa(
-        SHADER,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba16Float,
-        Some(DIAGRAM_BLEND),
-        MSAA_SAMPLE_COUNT,
-        "math-mark-size",
+    let pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", "math-mark-size")
+            .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+            .samples(MSAA_SAMPLE_COUNT),
     );
     let far = texture_f32(&device, 0.0, "math-mark-size-depth");
     let sampler = device.create_sampler(&GpuSamplerDesc::default());

@@ -1840,12 +1840,8 @@ impl RenderScene {
                 alpha_operation: manifold_gpu::GpuBlendOp::Add,
             };
             self.shaft_composite_pipeline = Some(device.create_render_pipeline(
-                include_str!("../shaders/shaft_composite.wgsl"),
-                "vs_main",
-                "fs_main",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                Some(blend),
-                "node.render_scene shaft composite",
+                &manifold_gpu::RenderPipelineDesc::new(include_str!("../shaders/shaft_composite.wgsl"), "vs_main", "fs_main", "node.render_scene shaft composite")
+                    .color(manifold_gpu::GpuTextureFormat::Rgba16Float, Some(blend)),
             ));
         }
     }

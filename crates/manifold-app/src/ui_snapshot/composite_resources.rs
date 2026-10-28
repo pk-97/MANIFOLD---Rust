@@ -58,12 +58,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
         let blit_pipeline = device.create_render_pipeline(
-            blit_shader,
-            "vs_main",
-            "fs_main",
-            UI_FORMAT,
-            None,
-            "Blit Pipeline",
+            &manifold_gpu::RenderPipelineDesc::new(
+                blit_shader,
+                "vs_main",
+                "fs_main",
+                "Blit Pipeline",
+            )
+            .color(UI_FORMAT, None),
         );
         let blit_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             min_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -80,12 +81,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             alpha_operation: manifold_gpu::GpuBlendOp::Add,
         };
         let atlas_pipeline = device.create_render_pipeline(
-            blit_shader,
-            "vs_main",
-            "fs_main",
-            UI_FORMAT,
-            Some(premultiplied_blend),
-            "Atlas Blit Pipeline",
+            &manifold_gpu::RenderPipelineDesc::new(
+                blit_shader,
+                "vs_main",
+                "fs_main",
+                "Atlas Blit Pipeline",
+            )
+            .color(UI_FORMAT, Some(premultiplied_blend)),
         );
         let atlas_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             min_filter: manifold_gpu::GpuFilterMode::Nearest,

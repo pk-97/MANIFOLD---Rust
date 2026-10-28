@@ -592,22 +592,24 @@ impl Primitive for RenderValueOverlay {
                 alpha_operation: GpuBlendOp::Add,
             };
             gpu.device.create_render_pipeline(
-                OVERLAY_SHADER,
-                "vs_main",
-                "fs_main",
-                GpuTextureFormat::Rgba16Float,
-                Some(blend),
-                "node.value_overlay",
+                &manifold_gpu::RenderPipelineDesc::new(
+                    OVERLAY_SHADER,
+                    "vs_main",
+                    "fs_main",
+                    "node.value_overlay",
+                )
+                .color(GpuTextureFormat::Rgba16Float, Some(blend)),
             )
         });
         let copy_pipeline = self.copy_pipeline.get_or_insert_with(|| {
             gpu.device.create_render_pipeline(
-                COPY_SHADER,
-                "vs_copy",
-                "fs_copy",
-                GpuTextureFormat::Rgba16Float,
-                None,
-                "node.value_overlay copy",
+                &manifold_gpu::RenderPipelineDesc::new(
+                    COPY_SHADER,
+                    "vs_copy",
+                    "fs_copy",
+                    "node.value_overlay copy",
+                )
+                .color(GpuTextureFormat::Rgba16Float, None),
             )
         });
         let index_buf = self.index_buf.get_or_insert_with(|| {

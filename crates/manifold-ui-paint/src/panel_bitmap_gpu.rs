@@ -172,14 +172,15 @@ impl PanelBitmapGpu {
             alpha_operation: GpuBlendOp::Add,
         };
 
-        let pipeline = device.create_render_pipeline_with_vertex_layout(
-            BITMAP_SHADER,
-            "vs_main",
-            "fs_main",
-            format,
-            Some(blend),
-            &vertex_layout,
-            "Bitmap Pipeline",
+        let pipeline = device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                BITMAP_SHADER,
+                "vs_main",
+                "fs_main",
+                "Bitmap Pipeline",
+            )
+            .color(format, Some(blend))
+            .vertex_layout(&vertex_layout),
         );
 
         // Nearest-neighbor sampler (matches Unity FilterMode.Point)

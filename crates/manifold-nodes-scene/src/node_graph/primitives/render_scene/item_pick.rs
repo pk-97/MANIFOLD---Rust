@@ -131,15 +131,15 @@ impl RenderScene {
             .pick
             .pipeline
             .get_or_insert_with(|| {
-                gpu.device.create_render_pipeline_depth(
-                    include_str!("../shaders/shadow_depth.wgsl"),
-                    "vs_main",
-                    "fs_id",
-                    manifold_gpu::GpuTextureFormat::R32Float,
-                    manifold_gpu::GpuTextureFormat::Depth32Float,
-                    None,
-                    1,
-                    "node.render_scene pick",
+                gpu.device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        include_str!("../shaders/shadow_depth.wgsl"),
+                        "vs_main",
+                        "fs_id",
+                        "node.render_scene pick",
+                    )
+                    .color(manifold_gpu::GpuTextureFormat::R32Float, None)
+                    .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
                 )
             })
             .clone();
@@ -147,15 +147,15 @@ impl RenderScene {
             self.pick
                 .field_pipeline
                 .get_or_insert_with(|| {
-                    gpu.device.create_render_pipeline_depth(
-                        &water_cover::COVER_WGSL,
-                        "vs_cover",
-                        "fs_cover_id",
-                        manifold_gpu::GpuTextureFormat::R32Float,
-                        manifold_gpu::GpuTextureFormat::Depth32Float,
-                        None,
-                        1,
-                        "node.render_scene pick water",
+                    gpu.device.create_render_pipeline(
+                        &manifold_gpu::RenderPipelineDesc::new(
+                            &water_cover::COVER_WGSL,
+                            "vs_cover",
+                            "fs_cover_id",
+                            "node.render_scene pick water",
+                        )
+                        .color(manifold_gpu::GpuTextureFormat::R32Float, None)
+                        .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
                     )
                 })
                 .clone()

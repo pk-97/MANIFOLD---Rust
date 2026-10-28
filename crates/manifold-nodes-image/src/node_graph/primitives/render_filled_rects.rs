@@ -184,12 +184,13 @@ impl Primitive for RenderFilledRects {
                 alpha_operation: GpuBlendOp::Add,
             };
             gpu.device.create_render_pipeline(
-                FILLED_RECTS_SHADER,
-                "vs_main",
-                "fs_main",
-                GpuTextureFormat::Rgba16Float,
-                Some(blend),
-                "node.draw_rectangles",
+                &manifold_gpu::RenderPipelineDesc::new(
+                    FILLED_RECTS_SHADER,
+                    "vs_main",
+                    "fs_main",
+                    "node.draw_rectangles",
+                )
+                .color(GpuTextureFormat::Rgba16Float, Some(blend)),
             )
         });
 

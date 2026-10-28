@@ -168,14 +168,15 @@ impl ClipContentGpu {
             alpha_operation: GpuBlendOp::Add,
         };
 
-        let pipeline = device.create_render_pipeline_with_vertex_layout(
-            CONTENT_SHADER,
-            "vs_main",
-            "fs_main",
-            format,
-            Some(blend),
-            &vertex_layout,
-            "Clip Content Pipeline",
+        let pipeline = device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                CONTENT_SHADER,
+                "vs_main",
+                "fs_main",
+                "Clip Content Pipeline",
+            )
+            .color(format, Some(blend))
+            .vertex_layout(&vertex_layout),
         );
 
         let sampler = device.create_sampler(&GpuSamplerDesc {

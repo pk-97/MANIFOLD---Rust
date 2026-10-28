@@ -3723,17 +3723,12 @@ mod tests {
                 return vec4<f32>(1.0, 0.0, 0.0, 1.0);
             }
         "#;
-        let pipeline = device.create_render_pipeline_depth_msaa_point_size(
-            wgsl,
-            "vs_main",
-            "fs_main",
-            0, // rebind @location(0) -> BuiltIn::PointSize
-            crate::GpuTextureFormat::Rgba8Unorm,
-            crate::GpuTextureFormat::Depth32Float,
-            None,
-            1,
-            false,
-            "test points pipeline",
+        let pipeline = device.create_render_pipeline(
+            &crate::RenderPipelineDesc::new(wgsl, "vs_main", "fs_main", "test points pipeline")
+                .color(crate::GpuTextureFormat::Rgba8Unorm, None)
+                .depth(crate::GpuTextureFormat::Depth32Float)
+                // rebind @location(0) -> BuiltIn::PointSize
+                .point_size(0),
         );
         let depth_stencil = device.create_depth_stencil_state(&crate::GpuDepthStencilDesc {
             compare: crate::GpuCompareFunction::LessEqual,
@@ -3938,16 +3933,15 @@ mod tests {
                 return vec4<f32>(1.0, 0.0, 0.0, 1.0);
             }
         "#;
-        let pipeline = device.create_render_pipeline_depth_msaa(
-            wgsl,
-            "vs_main",
-            "fs_main",
-            crate::GpuTextureFormat::Rgba8Unorm,
-            crate::GpuTextureFormat::Depth32Float,
-            None,
-            1,
-            false,
-            "test indirect draw pipeline",
+        let pipeline = device.create_render_pipeline(
+            &crate::RenderPipelineDesc::new(
+                wgsl,
+                "vs_main",
+                "fs_main",
+                "test indirect draw pipeline",
+            )
+            .color(crate::GpuTextureFormat::Rgba8Unorm, None)
+            .depth(crate::GpuTextureFormat::Depth32Float),
         );
         let depth_stencil = device.create_depth_stencil_state(&crate::GpuDepthStencilDesc {
             compare: crate::GpuCompareFunction::LessEqual,

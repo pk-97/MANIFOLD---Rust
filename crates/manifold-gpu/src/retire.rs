@@ -257,9 +257,9 @@ impl Drop for RetireQueue {
 
 #[cfg(test)]
 mod tests {
-    use crate::GpuTexture;
     use super::*;
     use crate::GpuDevice;
+    use crate::GpuTexture;
 
     const FORMAT: crate::GpuTextureFormat = crate::GpuTextureFormat::Rgba8Unorm;
 

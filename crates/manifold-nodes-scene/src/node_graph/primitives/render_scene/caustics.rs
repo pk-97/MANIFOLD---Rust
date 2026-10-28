@@ -280,12 +280,14 @@ impl Caustics {
 
         // The water's surface in the narrowed view.
         let surface_pipeline = self.surface.get_or_insert_with(|| {
-            device.create_render_pipeline_depth_only(
-                SHADER.as_str(),
-                "vs_surface",
-                "fs_surface",
-                GpuTextureFormat::Depth32Float,
-                "node.render_scene caustic surface",
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    SHADER.as_str(),
+                    "vs_surface",
+                    "fs_surface",
+                    "node.render_scene caustic surface",
+                )
+                .depth(GpuTextureFormat::Depth32Float),
             )
         });
         let surface_bindings = [

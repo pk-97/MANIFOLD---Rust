@@ -299,6 +299,97 @@ pub struct GpuVertexLayout {
     pub attributes: Vec<GpuVertexAttribute>,
 }
 
+// ─── Render pipelines ────────────────────────────────────────────────
+
+/// Everything a render pipeline is built from. Start from
+/// [`RenderPipelineDesc::new`] (no colour, no depth, one sample) and set what
+/// the pipeline needs; the backend panics on a combination it does not build.
+#[derive(Clone, Copy, Debug)]
+pub struct RenderPipelineDesc<'a> {
+    pub wgsl_source: &'a str,
+    pub vs_entry: &'a str,
+    pub fs_entry: &'a str,
+    pub label: &'a str,
+    /// `None` for a depth-only pipeline, whose fragment writes no colour.
+    pub color_format: Option<GpuTextureFormat>,
+    pub blend: Option<GpuBlendState>,
+    /// Extra colour attachments, indices 1.., for multiple render targets.
+    pub aux_color_formats: &'a [GpuTextureFormat],
+    pub depth_format: Option<GpuTextureFormat>,
+    pub sample_count: u32,
+    /// Turns fragment alpha, including a cutout `discard`, into per-sample
+    /// coverage so the MSAA resolve smooths cutout edges.
+    pub alpha_to_coverage: bool,
+    /// The `vs_entry` output `@location` rebound to the point size (WGSL has
+    /// no point-size builtin).
+    pub point_size_location: Option<u32>,
+    pub vertex_layout: Option<&'a GpuVertexLayout>,
+    /// Text substitutions applied to `wgsl_source` before compiling: one
+    /// WGSL template, several pipeline variants.
+    pub specializations: &'a [(&'a str, &'a str)],
+}
+
+impl<'a> RenderPipelineDesc<'a> {
+    pub fn new(wgsl_source: &'a str, vs_entry: &'a str, fs_entry: &'a str, label: &'a str) -> Self {
+        Self {
+            wgsl_source,
+            vs_entry,
+            fs_entry,
+            label,
+            color_format: None,
+            blend: None,
+            aux_color_formats: &[],
+            depth_format: None,
+            sample_count: 1,
+            alpha_to_coverage: false,
+            point_size_location: None,
+            vertex_layout: None,
+            specializations: &[],
+        }
+    }
+
+    pub fn color(mut self, format: GpuTextureFormat, blend: Option<GpuBlendState>) -> Self {
+        self.color_format = Some(format);
+        self.blend = blend;
+        self
+    }
+
+    pub fn depth(mut self, format: GpuTextureFormat) -> Self {
+        self.depth_format = Some(format);
+        self
+    }
+
+    pub fn samples(mut self, sample_count: u32) -> Self {
+        self.sample_count = sample_count;
+        self
+    }
+
+    pub fn alpha_to_coverage(mut self, enabled: bool) -> Self {
+        self.alpha_to_coverage = enabled;
+        self
+    }
+
+    pub fn point_size(mut self, location: u32) -> Self {
+        self.point_size_location = Some(location);
+        self
+    }
+
+    pub fn vertex_layout(mut self, layout: &'a GpuVertexLayout) -> Self {
+        self.vertex_layout = Some(layout);
+        self
+    }
+
+    pub fn aux_colors(mut self, formats: &'a [GpuTextureFormat]) -> Self {
+        self.aux_color_formats = formats;
+        self
+    }
+
+    pub fn specialize(mut self, specializations: &'a [(&'a str, &'a str)]) -> Self {
+        self.specializations = specializations;
+        self
+    }
+}
+
 // ─── Resource Bindings ───────────────────────────────────────────────
 
 /// Resource binding for dispatch/draw calls.

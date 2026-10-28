@@ -119,27 +119,17 @@ manifold_node_engine::primitive! {
 impl NestedCubesGeometry {
     fn ensure_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.fill_pipeline.is_none() {
-            self.fill_pipeline = Some(device.create_render_pipeline_depth(
-                include_str!("shaders/nested_cubes_geometry.wgsl"),
-                "vs_main",
-                "fs_main",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                None,
-                1,
-                "node.nested_cubes_geometry::fill",
+            self.fill_pipeline = Some(device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(include_str!("shaders/nested_cubes_geometry.wgsl"), "vs_main", "fs_main", "node.nested_cubes_geometry::fill")
+                    .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
+                    .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
             ));
         }
         if self.edge_pipeline.is_none() {
-            self.edge_pipeline = Some(device.create_render_pipeline_depth(
-                include_str!("shaders/nested_cubes_geometry.wgsl"),
-                "vs_edges",
-                "fs_main",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                None,
-                1,
-                "node.nested_cubes_geometry::edges",
+            self.edge_pipeline = Some(device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(include_str!("shaders/nested_cubes_geometry.wgsl"), "vs_edges", "fs_main", "node.nested_cubes_geometry::edges")
+                    .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
+                    .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
             ));
         }
         if self.depth_stencil_write.is_none() {

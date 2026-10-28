@@ -119,12 +119,8 @@ impl GizmoPass {
                 alpha_operation: GpuBlendOp::Add,
             };
             let pipeline = device.create_render_pipeline(
-                SHADER,
-                "vs_main",
-                "fs_main",
-                target.format,
-                Some(blend),
-                "gizmo lines",
+                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", "gizmo lines")
+                    .color(target.format, Some(blend)),
             );
             self.pipelines.push((target.format, pipeline));
         }

@@ -462,14 +462,10 @@ mod tests {
             }
         "#;
 
-        let pipeline = device.create_render_pipeline_with_vertex_layout(
-            wgsl,
-            "vs_main",
-            "fs_main",
-            GpuTextureFormat::Rgba8Unorm,
-            None,
-            &layout,
-            "test pipeline",
+        let pipeline = device.create_render_pipeline(
+            &crate::RenderPipelineDesc::new(wgsl, "vs_main", "fs_main", "test pipeline")
+                .color(GpuTextureFormat::Rgba8Unorm, None)
+                .vertex_layout(&layout),
         );
 
         #[repr(C)]

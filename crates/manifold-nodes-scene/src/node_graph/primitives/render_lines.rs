@@ -645,15 +645,18 @@ impl Primitive for RenderLines {
                 dst_alpha_factor: manifold_gpu::GpuBlendFactor::One,
                 alpha_operation: manifold_gpu::GpuBlendOp::Max,
             };
-            self.render_pipeline = Some(gpu.device.create_render_pipeline_msaa(
-                include_str!("shaders/render_lines.wgsl"),
-                "vs_main",
-                "fs_main",
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                Some(blend),
-                MSAA_SAMPLE_COUNT,
-                "node.draw_lines",
-            ));
+            self.render_pipeline = Some(
+                gpu.device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        include_str!("shaders/render_lines.wgsl"),
+                        "vs_main",
+                        "fs_main",
+                        "node.draw_lines",
+                    )
+                    .color(manifold_gpu::GpuTextureFormat::Rgba16Float, Some(blend))
+                    .samples(MSAA_SAMPLE_COUNT),
+                ),
+            );
         }
         self.ensure_msaa_texture(gpu.device, width, height);
         self.ensure_instances_buf(gpu.device, total_instances as u64);

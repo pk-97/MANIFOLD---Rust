@@ -151,12 +151,8 @@ impl Spectrogram {
             })
             .collect();
         let pipeline = device.create_render_pipeline(
-            SHADER,
-            "vs_main",
-            "fs_main",
-            color_format,
-            None,
-            "Spectrogram",
+            &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", "Spectrogram")
+                .color(color_format, None),
         );
         Self {
             num_bins,

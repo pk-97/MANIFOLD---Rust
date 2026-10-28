@@ -132,12 +132,8 @@ impl SelectionOutline {
         };
         Self {
             pipeline: device.create_render_pipeline(
-                OUTLINE_WGSL,
-                "vs_main",
-                "fs_main",
-                manifold_compositor::presentation::UI_FORMAT,
-                Some(premultiplied),
-                "Selection Outline",
+                &manifold_gpu::RenderPipelineDesc::new(OUTLINE_WGSL, "vs_main", "fs_main", "Selection Outline")
+                    .color(manifold_compositor::presentation::UI_FORMAT, Some(premultiplied)),
             ),
             sampler: device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                 min_filter: manifold_gpu::GpuFilterMode::Linear,

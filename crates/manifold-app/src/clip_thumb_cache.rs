@@ -174,7 +174,11 @@ impl Drop for ClipThumbCache {
 
 /// The filmstrip store, inside the app's cache folder.
 fn cache_dir() -> Option<PathBuf> {
-    Some(manifold_foundation::AppDirs::current()?.cache.join("clip_thumbs"))
+    Some(
+        manifold_foundation::AppDirs::current()?
+            .cache
+            .join("clip_thumbs"),
+    )
 }
 
 fn strip_path(dir: &std::path::Path, hash: u64) -> PathBuf {

@@ -87,19 +87,12 @@ impl VolumeOptics {
                 alpha_operation: GpuBlendOp::Add,
             };
             self.pipeline = Some(device.create_render_pipeline(
-                SHADER,
-                "vs_main",
-                "fs_path",
-                GpuTextureFormat::R32Float,
-                Some(blend),
-                "volume signed path",
+                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_path", "volume signed path")
+                    .color(GpuTextureFormat::R32Float, Some(blend)),
             ));
-            self.nearest_pipeline = Some(device.create_render_pipeline_depth_only(
-                SHADER,
-                "vs_main",
-                "fs_nearest",
-                GpuTextureFormat::Depth32Float,
-                "volume nearest surface",
+            self.nearest_pipeline = Some(device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_nearest", "volume nearest surface")
+                    .depth(GpuTextureFormat::Depth32Float),
             ));
             self.depth_state = Some(device.create_depth_stencil_state(&GpuDepthStencilDesc {
                 compare: GpuCompareFunction::Greater,

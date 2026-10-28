@@ -448,12 +448,14 @@ fn shaft_march_matches_cpu_reference() {
         compare: GpuCompareFunction::Less,
         write_enabled: true,
     });
-    let shadow_pipeline = device.create_render_pipeline_depth_only(
-        include_str!("../shaders/shadow_depth.wgsl"),
-        "vs_main",
-        "fs_shadow",
-        GpuTextureFormat::Depth32Float,
-        "shaft-test-shadow-pipeline",
+    let shadow_pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            include_str!("../shaders/shadow_depth.wgsl"),
+            "vs_main",
+            "fs_shadow",
+            "shaft-test-shadow-pipeline",
+        )
+        .depth(GpuTextureFormat::Depth32Float),
     );
     let quad_y = 20.0f32;
     let ext = 80.0f32;
@@ -753,12 +755,14 @@ fn appearance_weights_discard_zero_triangle_in_shadow_depth() {
         all_visible_buf.write(0, bytemuck::cast_slice(&all_visible));
         left_hidden_buf.write(0, bytemuck::cast_slice(&left_hidden));
     }
-    let pipeline = device.create_render_pipeline_depth_only(
-        include_str!("../shaders/shadow_depth.wgsl"),
-        "vs_main",
-        "fs_shadow",
-        GpuTextureFormat::Depth32Float,
-        "appearance-weight-shadow-proof",
+    let pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            include_str!("../shaders/shadow_depth.wgsl"),
+            "vs_main",
+            "fs_shadow",
+            "appearance-weight-shadow-proof",
+        )
+        .depth(GpuTextureFormat::Depth32Float),
     );
     let depth_state = device.create_depth_stencil_state(&GpuDepthStencilDesc {
         compare: GpuCompareFunction::Less,
@@ -892,12 +896,14 @@ fn shadow_alpha_mask_preserves_uv_selection_transform_factor_and_mirror() {
         min_filter: manifold_gpu::GpuFilterMode::Nearest,
         ..Default::default()
     });
-    let pipeline = device.create_render_pipeline_depth_only(
-        include_str!("../shaders/shadow_depth.wgsl"),
-        "vs_main",
-        "fs_shadow",
-        GpuTextureFormat::Depth32Float,
-        "cutout-depth-proof",
+    let pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            include_str!("../shaders/shadow_depth.wgsl"),
+            "vs_main",
+            "fs_shadow",
+            "cutout-depth-proof",
+        )
+        .depth(GpuTextureFormat::Depth32Float),
     );
     let depth_state = device.create_depth_stencil_state(&GpuDepthStencilDesc {
         compare: GpuCompareFunction::Less,
@@ -1088,12 +1094,13 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
 "#;
     let shader = format!("{}\n{}", RENDER_SCENE_WGSL.as_str(), PROBE);
     let pipeline = device.create_render_pipeline(
-        &shader,
-        "vs_main",
-        "fs_vertex_color_probe",
-        GpuTextureFormat::Rgba16Float,
-        None,
-        "vertex-color-albedo-proof",
+        &manifold_gpu::RenderPipelineDesc::new(
+            &shader,
+            "vs_main",
+            "fs_vertex_color_probe",
+            "vertex-color-albedo-proof",
+        )
+        .color(GpuTextureFormat::Rgba16Float, None),
     );
     let bindings = [
         GpuBinding::Bytes {
@@ -1299,12 +1306,13 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
 "#;
     let shader = format!("{}\n{}", RENDER_SCENE_WGSL.as_str(), PROBE);
     let pipeline = device.create_render_pipeline(
-        &shader,
-        "vs_main",
-        "fs_extension_map_probe",
-        GpuTextureFormat::Rgba16Float,
-        None,
-        "extension-map-proof-pipeline",
+        &manifold_gpu::RenderPipelineDesc::new(
+            &shader,
+            "vs_main",
+            "fs_extension_map_probe",
+            "extension-map-proof-pipeline",
+        )
+        .color(GpuTextureFormat::Rgba16Float, None),
     );
     let bindings = [
         GpuBinding::Bytes {
@@ -1536,12 +1544,13 @@ fn extension_map_mip_filters_follow_authored_choice() {
 "#
     );
     let pipeline = device.create_render_pipeline(
-        &shader,
-        "vs_mip_probe",
-        "fs_mip_probe",
-        GpuTextureFormat::Rgba16Float,
-        None,
-        "material-mip-proof",
+        &manifold_gpu::RenderPipelineDesc::new(
+            &shader,
+            "vs_mip_probe",
+            "fs_mip_probe",
+            "material-mip-proof",
+        )
+        .color(GpuTextureFormat::Rgba16Float, None),
     );
     let output = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -2565,14 +2574,15 @@ fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
                 return select(low, hot, distance(p, vec2<f32>(4.5, 4.5)) < 0.75);
             }
         "#;
-    let msaa_pipeline = device.create_render_pipeline_msaa(
-        MSAA_WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba16Float,
-        None,
-        4,
-        "rt-firefly-msaa-pipeline",
+    let msaa_pipeline = device.create_render_pipeline(
+        &manifold_gpu::RenderPipelineDesc::new(
+            MSAA_WGSL,
+            "vs_main",
+            "fs_main",
+            "rt-firefly-msaa-pipeline",
+        )
+        .color(GpuTextureFormat::Rgba16Float, None)
+        .samples(4),
     );
 
     let readback_size = u64::from(W * H * 8);

@@ -596,14 +596,10 @@ impl UIRenderer {
                 },
             ],
         };
-        let pipeline = device.create_render_pipeline_with_vertex_layout(
-            UI_SHADER,
-            "vs_main",
-            "fs_main",
-            format,
-            Some(blend),
-            &layout,
-            "UI Pipeline",
+        let pipeline = device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(UI_SHADER, "vs_main", "fs_main", "UI Pipeline")
+                .color(format, Some(blend))
+                .vertex_layout(&layout),
         );
 
         #[cfg(target_os = "macos")]
@@ -638,14 +634,15 @@ impl UIRenderer {
                 },
             ],
         };
-        let image_pipeline = device.create_render_pipeline_with_vertex_layout(
-            IMAGE_SHADER,
-            "vs_main",
-            "fs_main",
-            format,
-            Some(blend),
-            &image_layout,
-            "UI Image Pipeline",
+        let image_pipeline = device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                IMAGE_SHADER,
+                "vs_main",
+                "fs_main",
+                "UI Image Pipeline",
+            )
+            .color(format, Some(blend))
+            .vertex_layout(&image_layout),
         );
         let image_sampler = device.create_sampler(&GpuSamplerDesc {
             min_filter: GpuFilterMode::Linear,

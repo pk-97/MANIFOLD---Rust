@@ -129,7 +129,11 @@ fn now_secs() -> u64 {
 fn cache_root() -> Option<PathBuf> {
     // Tests can point the cache elsewhere by calling the `_with_root`
     // variants; production always uses the canonical user cache directory.
-    Some(manifold_foundation::AppDirs::current()?.cache.join("decode_cache"))
+    Some(
+        manifold_foundation::AppDirs::current()?
+            .cache
+            .join("decode_cache"),
+    )
 }
 
 fn namespace_dir(root: &Path, namespace: &str) -> PathBuf {

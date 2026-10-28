@@ -1255,12 +1255,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
             self.blit_pipeline = Some(native_device.create_render_pipeline(
-                blit_shader,
-                "vs_main",
-                "fs_main",
-                manifold_compositor::presentation::UI_FORMAT,
-                None,
-                "Blit Pipeline",
+                &manifold_gpu::RenderPipelineDesc::new(blit_shader, "vs_main", "fs_main", "Blit Pipeline")
+                    .color(manifold_compositor::presentation::UI_FORMAT, None),
             ));
             self.blit_sampler = Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                 min_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -1302,12 +1298,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 alpha_operation: manifold_gpu::GpuBlendOp::Add,
             };
             self.atlas_pipeline = Some(native_device.create_render_pipeline(
-                atlas_shader,
-                "vs_main",
-                "fs_main",
-                manifold_compositor::presentation::UI_FORMAT,
-                Some(premultiplied_blend),
-                "Atlas Blit Pipeline",
+                &manifold_gpu::RenderPipelineDesc::new(atlas_shader, "vs_main", "fs_main", "Atlas Blit Pipeline")
+                    .color(manifold_compositor::presentation::UI_FORMAT, Some(premultiplied_blend)),
             ));
             self.atlas_sampler =
                 Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
@@ -1344,12 +1336,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
             self.node_thumb_pipeline = Some(native_device.create_render_pipeline(
-                thumb_shader,
-                "vs_main",
-                "fs_main",
-                manifold_compositor::presentation::UI_FORMAT,
-                None,
-                "Node Thumbnail Pipeline",
+                &manifold_gpu::RenderPipelineDesc::new(thumb_shader, "vs_main", "fs_main", "Node Thumbnail Pipeline")
+                    .color(manifold_compositor::presentation::UI_FORMAT, None),
             ));
             self.thumb_sampler =
                 Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {

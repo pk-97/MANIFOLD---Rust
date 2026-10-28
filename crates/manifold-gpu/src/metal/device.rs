@@ -898,51 +898,91 @@ impl GpuDevice {
         }
     }
 
-    /// Create a render pipeline from WGSL source (fullscreen triangle pattern).
-    pub fn create_render_pipeline(
-        &self,
-        wgsl_source: &str,
-        vs_entry: &str,
-        fs_entry: &str,
-        color_format: GpuTextureFormat,
-        blend: Option<GpuBlendState>,
-        label: &str,
-    ) -> GpuRenderPipeline {
-        self.create_render_pipeline_inner(
-            wgsl_source,
-            vs_entry,
-            fs_entry,
+    /// Create (or fetch from the cache) a render pipeline. A combination
+    /// this backend does not build panics with the reason.
+    pub fn create_render_pipeline(&self, desc: &RenderPipelineDesc) -> GpuRenderPipeline {
+        let label = desc.label;
+        let Some(color_format) = desc.color_format else {
+            assert!(
+                desc.blend.is_none()
+                    && desc.aux_color_formats.is_empty()
+                    && desc.sample_count == 1
+                    && !desc.alpha_to_coverage
+                    && desc.point_size_location.is_none()
+                    && desc.vertex_layout.is_none()
+                    && desc.specializations.is_empty(),
+                "{label}: a depth-only pipeline takes only a depth format"
+            );
+            let depth_format = desc
+                .depth_format
+                .unwrap_or_else(|| panic!("{label}: a pipeline needs a colour or a depth format"));
+            return self.render_pipeline_depth_only(
+                desc.wgsl_source,
+                desc.vs_entry,
+                desc.fs_entry,
+                depth_format,
+                label,
+            );
+        };
+        if let Some(layout) = desc.vertex_layout {
+            assert!(
+                desc.depth_format.is_none()
+                    && desc.aux_color_formats.is_empty()
+                    && desc.sample_count == 1
+                    && !desc.alpha_to_coverage
+                    && desc.point_size_location.is_none()
+                    && desc.specializations.is_empty(),
+                "{label}: a vertex-layout pipeline is single-sample colour only"
+            );
+            return self.render_pipeline_vertex_layout(
+                desc.wgsl_source,
+                desc.vs_entry,
+                desc.fs_entry,
+                color_format,
+                desc.blend,
+                layout,
+                label,
+            );
+        }
+        if let Some(depth_format) = desc.depth_format {
+            let mut source = desc.wgsl_source.to_string();
+            for &(pattern, replacement) in desc.specializations {
+                source = source.replace(pattern, replacement);
+            }
+            return self.create_render_pipeline_depth_inner(
+                &source,
+                desc.vs_entry,
+                desc.fs_entry,
+                color_format,
+                depth_format,
+                desc.blend,
+                desc.sample_count,
+                desc.alpha_to_coverage,
+                desc.aux_color_formats,
+                desc.point_size_location,
+                label,
+            );
+        }
+        assert!(
+            desc.aux_color_formats.is_empty()
+                && !desc.alpha_to_coverage
+                && desc.point_size_location.is_none()
+                && desc.specializations.is_empty(),
+            "{label}: multiple targets, alpha to coverage, point size and specialisation need a depth format"
+        );
+        self.render_pipeline_color(
+            desc.wgsl_source,
+            desc.vs_entry,
+            desc.fs_entry,
             color_format,
-            blend,
-            1,
-            label,
-        )
-    }
-
-    /// Create a render pipeline with MSAA (sample_count > 1).
-    pub fn create_render_pipeline_msaa(
-        &self,
-        wgsl_source: &str,
-        vs_entry: &str,
-        fs_entry: &str,
-        color_format: GpuTextureFormat,
-        blend: Option<GpuBlendState>,
-        sample_count: u32,
-        label: &str,
-    ) -> GpuRenderPipeline {
-        self.create_render_pipeline_inner(
-            wgsl_source,
-            vs_entry,
-            fs_entry,
-            color_format,
-            blend,
-            sample_count,
+            desc.blend,
+            desc.sample_count,
             label,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn create_render_pipeline_inner(
+    fn render_pipeline_color(
         &self,
         wgsl_source: &str,
         vs_entry: &str,
@@ -1126,9 +1166,8 @@ impl GpuDevice {
         pipeline
     }
 
-    /// Create a render pipeline from WGSL source with a vertex buffer layout.
     #[allow(clippy::too_many_arguments)]
-    pub fn create_render_pipeline_with_vertex_layout(
+    fn render_pipeline_vertex_layout(
         &self,
         wgsl_source: &str,
         vs_entry: &str,
@@ -1480,150 +1519,6 @@ impl GpuDevice {
         }
     }
 
-    /// Create a render pipeline configured for depth testing.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_render_pipeline_depth(
-        &self,
-        wgsl_source: &str,
-        vs_entry: &str,
-        fs_entry: &str,
-        color_format: GpuTextureFormat,
-        depth_format: GpuTextureFormat,
-        blend: Option<GpuBlendState>,
-        sample_count: u32,
-        label: &str,
-    ) -> GpuRenderPipeline {
-        self.create_render_pipeline_depth_inner(
-            wgsl_source,
-            vs_entry,
-            fs_entry,
-            color_format,
-            depth_format,
-            blend,
-            sample_count,
-            false,
-            &[],
-            None,
-            label,
-        )
-    }
-
-    /// Create an MSAA depth-tested render pipeline with optional
-    /// alpha-to-coverage. `alpha_to_coverage` converts the fragment
-    /// shader's alpha (including a cutout `discard`'s pass/fail) into
-    /// per-sample coverage, so the multisample resolve antialiases the
-    /// cutout edge — not just the triangle silhouette. Only meaningful
-    /// when `sample_count > 1`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_render_pipeline_depth_msaa(
-        &self,
-        wgsl_source: &str,
-        vs_entry: &str,
-        fs_entry: &str,
-        color_format: GpuTextureFormat,
-        depth_format: GpuTextureFormat,
-        blend: Option<GpuBlendState>,
-        sample_count: u32,
-        alpha_to_coverage: bool,
-        label: &str,
-    ) -> GpuRenderPipeline {
-        self.create_render_pipeline_depth_inner(
-            wgsl_source,
-            vs_entry,
-            fs_entry,
-            color_format,
-            depth_format,
-            blend,
-            sample_count,
-            alpha_to_coverage,
-            &[],
-            None,
-            label,
-        )
-    }
-
-    /// [`Self::create_render_pipeline_depth_msaa`] with a `[[point_size]]`
-    /// vertex output — the Points render-mode pipeline
-    /// (SCENE_RENDER_MODE_DESIGN.md D8). `point_size_location` names the
-    /// `vs_entry` output struct member the shader wrote as a plain
-    /// `@location(N) f32`; it is rebound to `BuiltIn::PointSize` before
-    /// SPIR-V emission (WGSL has no `point_size` builtin — see
-    /// `crate::shader_common::rebind_vertex_output_as_point_size`). Pair with
-    /// draws built via `GpuEncoder::depth_msaa_draw_points`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_render_pipeline_depth_msaa_point_size(
-        &self,
-        wgsl_source: &str,
-        vs_entry: &str,
-        fs_entry: &str,
-        point_size_location: u32,
-        color_format: GpuTextureFormat,
-        depth_format: GpuTextureFormat,
-        blend: Option<GpuBlendState>,
-        sample_count: u32,
-        alpha_to_coverage: bool,
-        label: &str,
-    ) -> GpuRenderPipeline {
-        self.create_render_pipeline_depth_inner(
-            wgsl_source,
-            vs_entry,
-            fs_entry,
-            color_format,
-            depth_format,
-            blend,
-            sample_count,
-            alpha_to_coverage,
-            &[],
-            Some(point_size_location),
-            label,
-        )
-    }
-
-    /// [`Self::create_render_pipeline_depth_msaa`]'s specialized-plus-MRT
-    /// superset: text-substitutes
-    /// `specializations` into `wgsl_source` before compiling (the same
-    /// "function constant" mechanism as [`Self::create_specialized_compute_pipeline`]
-    /// — a single WGSL template compiled into distinct pipeline variants,
-    /// never a second shader file), and declares one extra color attachment
-    /// (indices 1..) per entry in `aux_color_formats` so the fragment can
-    /// write extra MRT outputs (velocity, ao_mask — RAYTRACING_DESIGN.md
-    /// section 12 AM1). An empty slice reproduces exactly
-    /// [`Self::create_render_pipeline_depth_msaa`]'s single-attachment
-    /// pipeline, just from substituted source.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_specialized_render_pipeline_depth_msaa(
-        &self,
-        wgsl_source: &str,
-        vs_entry: &str,
-        fs_entry: &str,
-        specializations: &[(&str, &str)],
-        color_format: GpuTextureFormat,
-        depth_format: GpuTextureFormat,
-        blend: Option<GpuBlendState>,
-        sample_count: u32,
-        alpha_to_coverage: bool,
-        aux_color_formats: &[GpuTextureFormat],
-        label: &str,
-    ) -> GpuRenderPipeline {
-        let mut source = wgsl_source.to_string();
-        for &(pattern, replacement) in specializations {
-            source = source.replace(pattern, replacement);
-        }
-        self.create_render_pipeline_depth_inner(
-            &source,
-            vs_entry,
-            fs_entry,
-            color_format,
-            depth_format,
-            blend,
-            sample_count,
-            alpha_to_coverage,
-            aux_color_formats,
-            None,
-            label,
-        )
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn create_render_pipeline_depth_inner(
         &self,
@@ -1835,13 +1730,12 @@ impl GpuDevice {
         pipeline
     }
 
-    /// Create a **depth-only** render pipeline — no colour attachment. For the
+    /// A **depth-only** render pipeline — no colour attachment. For the
     /// shadow-map depth pass: geometry is rasterised only to fill a depth
     /// buffer, so the WGSL's `fs_entry` must be a void `@fragment` (writes no
     /// colour) and no colour attachment pixel format is set. Single-sample
-    /// (shadow maps are never MSAA). Pair with
-    /// [`GpuEncoder::draw_instanced_depth_only`].
-    pub fn create_render_pipeline_depth_only(
+    /// (shadow maps are never MSAA).
+    fn render_pipeline_depth_only(
         &self,
         wgsl_source: &str,
         vs_entry: &str,

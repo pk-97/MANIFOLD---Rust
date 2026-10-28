@@ -47,12 +47,8 @@ fn fragment_reads_storage_buffer_via_bytes_binding() {
     let (w, hgt) = (4u32, 1u32);
 
     let pipeline = device.create_render_pipeline(
-        WGSL,
-        "vs_main",
-        "fs_main",
-        GpuTextureFormat::Rgba16Float,
-        None,
-        "frag-storage-proof",
+        &manifold_gpu::RenderPipelineDesc::new(WGSL, "vs_main", "fs_main", "frag-storage-proof")
+            .color(GpuTextureFormat::Rgba16Float, None),
     );
     let target = RenderTarget::new(device, w, hgt, GpuTextureFormat::Rgba16Float, "fsp-target");
 

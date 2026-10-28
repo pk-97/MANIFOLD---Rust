@@ -142,12 +142,13 @@ pub fn run(args: &[String]) -> ! {
 
     if args.iter().any(|a| a == "--selftest") {
         let fill = writer_dev.create_render_pipeline(
-            &fill_wgsl(),
-            "vs_main",
-            "fs_main",
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            None,
-            "selftest-fill",
+            &manifold_gpu::RenderPipelineDesc::new(
+                &fill_wgsl(),
+                "vs_main",
+                "fs_main",
+                "selftest-fill",
+            )
+            .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         );
         let tex = unsafe { bridge.import_texture_native(&writer_dev, 0) };
         let params_buf = writer_dev.create_buffer_shared(24);
@@ -192,20 +193,17 @@ pub fn run(args: &[String]) -> ! {
     }
 
     let fill_pipeline = writer_dev.create_render_pipeline(
-        &fill_wgsl(),
-        "vs_main",
-        "fs_main",
-        manifold_gpu::GpuTextureFormat::Rgba16Float,
-        None,
-        "probe-fill",
+        &manifold_gpu::RenderPipelineDesc::new(&fill_wgsl(), "vs_main", "fs_main", "probe-fill")
+            .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
     );
     let sample_pipeline = reader_dev.create_render_pipeline(
-        &sample_wgsl(),
-        "vs_main",
-        "fs_main",
-        manifold_gpu::GpuTextureFormat::Rgba16Float,
-        None,
-        "probe-sample",
+        &manifold_gpu::RenderPipelineDesc::new(
+            &sample_wgsl(),
+            "vs_main",
+            "fs_main",
+            "probe-sample",
+        )
+        .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
     );
     let writer_heavy = writer_dev.create_compute_pipeline(HEAVY_WGSL, "heavy", "probe-heavy-w");
 
