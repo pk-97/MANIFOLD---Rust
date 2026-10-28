@@ -21,8 +21,6 @@ fn surface_tiles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     let layout = Layout {
         particles: slots("particles")?,
-        foam: slots("foam")?,
-        spray: slots("spray")?,
         pool_tiles: pool,
         interior: x
             .items("interior")

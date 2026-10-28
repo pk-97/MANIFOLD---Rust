@@ -1671,21 +1671,18 @@ fn display_head(b: &mut Builder, frame: usize, surface: usize) -> usize {
     water
 }
 
-/// The water's foam: the foam particles' display blend, which also holds its
-/// tiles in the display table, fed to the water object, which draws them at
-/// pixel resolution on its field (none in Physics View, which takes the field
-/// away).
+/// The water's foam: the foam particles' display blend fed to the water
+/// object, which draws them at pixel resolution on its field (none in Physics
+/// View, which takes the field away).
 fn display_foam(b: &mut Builder, frame: usize, water: usize) {
-    let tiles = b.id(DISPLAY_TILES);
     let blend = b.node("foam_blend", "node.interpolate_particle_frames", json!({}));
     b.wire((frame, "foam_b"), blend, "particles_b");
     b.wires(frame, blend, &["blend", "span"]);
-    b.wire((blend, "out"), tiles, "foam");
     b.wire((blend, "out"), water, "field_foam");
 }
 
-/// The water's mist and wet map: the spray's extinction (the spray's tiles
-/// held in the display table) and the map of where the drawn water touched
+/// The water's mist and wet map: the spray's extinction on the liquid's
+/// display tiles (spray holds none of its own) and the map of where the drawn water touched
 /// the solids, each behind the switch that feeds it to the water object (off
 /// in Physics View, which hides the water).
 fn display_mist_and_wetness(b: &mut Builder, water: usize) {
@@ -1702,7 +1699,6 @@ fn display_mist_and_wetness(b: &mut Builder, water: usize) {
         "node.wet_map",
         json!({"drying": float(1.0)}),
     );
-    b.wire((spray, "out"), tiles, "spray");
     b.wire((spray, "out"), mist, "particles");
     b.wire((drawn, "out"), wet_map, "particles");
     b.wire((solid, "solid"), wet_map, "solid");

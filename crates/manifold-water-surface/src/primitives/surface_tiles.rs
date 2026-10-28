@@ -1,11 +1,13 @@
 //! `node.surface_tiles` — the display's world tiles. Every drawn water field
-//! (level set, velocity, foam, mist, solid) lives on the table this
-//! node builds each frame from the displayed particles, foam and spray, at the
-//! display cell size. A tile is held while this frame's particles, foam, spray
-//! or grid interior touch it, and let go once they leave, so it costs the
-//! surface passes only while water is on it.
-//! The pool follows the water: it starts at [`START_POOL_TILES`] and grows
-//! ahead of the tiles the table holds, read a frame or two late. With GPU
+//! (level set, velocity, mist, wet map, solid) lives on the table this node
+//! builds each frame from the displayed liquid particles, at the display cell
+//! size. A tile is held while this frame's particles or grid interior touch
+//! it, and let go once they leave, so it costs the surface passes only while
+//! water is on it. Foam, spray and bubbles hold no tiles: they draw as
+//! particles, and mist only where the liquid holds tiles.
+//! The pool follows the water: it starts at [`START_POOL_TILES`], grows
+//! ahead of the tiles the table holds, read a frame or two late, and shrinks
+//! once they stay under a third of it for [`SHRINK_HOLD`]. With GPU
 //! FLIP Narrow Band on, the deep water has no particles: the step's grid
 //! interior holds the tiles it fills, so `node.interior_fill` has tiles to
 //! draw it on.
@@ -13,6 +15,7 @@
 use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
@@ -22,7 +25,7 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, TILE, lattice_origin};
 use manifold_water_liquid::primitives::prefix_scan::open_gate;
-use manifold_water_liquid::tile_pool::grown_pool;
+use manifold_water_liquid::tile_pool::{grown_pool, shrunk_pool};
 use manifold_water_liquid::world_tiles::{
     Allocation, LIQUID_POINTS, PointCount, Reach, WorldTiles,
 };
@@ -59,8 +62,13 @@ pub(crate) const REACH: Reach = Reach {
 /// The most the display subdivides a simulation cell per axis.
 pub(crate) const MAX_RESOLUTION_SCALE: f32 = 4.0;
 
-/// The first pool, in tiles; it grows by [`grown_pool`].
+/// The first pool, in tiles; it grows by [`grown_pool`] and shrinks by
+/// [`shrunk_pool`], never below this.
 pub(crate) const START_POOL_TILES: u32 = 1024;
+
+/// How long the held tiles stay under a third of the pool before it shrinks,
+/// so water that sloshes back does not rebuild the table every frame.
+const SHRINK_HOLD: Duration = Duration::from_secs(2);
 
 /// Field order identical to the shader's `Params`; three 16-byte rows.
 #[repr(C)]
@@ -99,8 +107,6 @@ pub(crate) fn display_cell_size(sim_cell_size: f32, resolution_scale: f32) -> Re
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Layout {
     pub particles: u32,
-    pub foam: u32,
-    pub spray: u32,
     pub pool_tiles: u32,
     /// Records for the water's grid interior: one an octant of each of its
     /// slots (8 · its pool), 0 without one.
@@ -108,17 +114,14 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
-    /// The records the build bins: the frame's points, then the interior's.
+    /// The records the build bins: the frame's particles, then the interior's.
     fn records(self) -> u64 {
-        u64::from(self.particles)
-            + u64::from(self.foam)
-            + u64::from(self.spray)
-            + u64::from(self.interior)
+        u64::from(self.particles) + u64::from(self.interior)
     }
 
-    /// The interior's first record: the frame's points come before it.
+    /// The interior's first record: the frame's particles come before it.
     fn head(self) -> u32 {
-        self.particles + self.foam + self.spray
+        self.particles
     }
 
     /// Bytes of the node's own buffers (the world tiles hold theirs).
@@ -147,8 +150,8 @@ impl Layout {
 pub(crate) struct Held {
     layout: Layout,
     tiles: WorldTiles,
-    /// The records the build bins: particles, foam and spray copied end to
-    /// end, then the interior's records.
+    /// The records the build bins: the particles copied in, then the
+    /// interior's records.
     points: GpuBuffer,
     /// `[groups, 1, 1, n]` over `points`: the build's point passes.
     record: GpuBuffer,
@@ -163,8 +166,6 @@ pub(crate) struct Held {
 /// One frame's inputs.
 struct Frame<'a> {
     particles: &'a GpuBuffer,
-    foam: Option<&'a GpuBuffer>,
-    spray: Option<&'a GpuBuffer>,
     /// The step's grid interior and its table, while Narrow Band runs.
     interior: Option<(&'a GpuBuffer, &'a GpuBuffer)>,
     /// The water's cell size.
@@ -224,6 +225,13 @@ impl Held {
         grown_pool(self.layout.pool_tiles, held, short)
     }
 
+    /// The pool this table's last finished build could shrink to, `None`
+    /// while the held tiles fill a third of it or more.
+    fn shrunk(&self) -> Option<u32> {
+        let (held, short) = self.tiles.late_held()?;
+        shrunk_pool(self.layout.pool_tiles, held, START_POOL_TILES).filter(|_| !short)
+    }
+
     fn encode(&mut self, enc: &mut GpuEncoder, kernels: &Kernels, frame: &Frame<'_>) {
         let layout = self.layout;
         let pool = layout.pool_tiles;
@@ -255,17 +263,9 @@ impl Held {
             enc.compute_memory_barrier_buffers();
         };
         let per_slot = [pool.div_ceil(THREADS), 1, 1];
-        let mut at = 0;
-        for (source, slots) in [
-            (Some(frame.particles), layout.particles),
-            (frame.foam, layout.foam),
-            (frame.spray, layout.spray),
-        ] {
-            let bytes = u64::from(slots) * PARTICLE;
-            if let Some(source) = source.filter(|_| slots > 0) {
-                enc.copy_buffer_range(source, 0, &self.points, at, bytes);
-            }
-            at += bytes;
+        if layout.particles > 0 {
+            let bytes = u64::from(layout.particles) * PARTICLE;
+            enc.copy_buffer_range(frame.particles, 0, &self.points, 0, bytes);
         }
         if let Some((interior, interior_tiles)) = frame.interior.filter(|_| layout.interior > 0) {
             let mut bound = [bindings[0]; 7];
@@ -329,11 +329,9 @@ impl Kernels {
 manifold_node_engine::primitive! {
     name: SurfaceTiles,
     type_id: "node.surface_tiles",
-    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed particles, foam and spray at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile is held, in the same slot, while this frame's particles, foam, spray or grid interior touch it and let go once they leave, so a tile costs the surface passes only while water is on it. The pool starts at 1024 tiles and follows the water: once the held tiles fill two thirds of it, or a tile finds no free slot, it grows to twice the tiles held in grains of 256, read a frame or two late, and the table starts over at the new size. It only grows. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
+    purpose: "The display's world tiles: the table every drawn water field is stored through, built each frame from the displayed liquid particles at the display cell size (sim_cell_size over resolution_scale). A particle's tile and the ring of tiles round it join the table. A tile is held, in the same slot, while this frame's particles or grid interior touch it and let go once they leave, so a tile costs the surface passes only while water is on it. The pool starts at 1024 tiles and follows the water: once the held tiles fill two thirds of it, or a tile finds no free slot, it grows to twice the tiles held in grains of 256, read a frame or two late, and the table starts over at the new size. Once the held tiles stay under a third of it for two seconds it shrinks to twice them, never below 1024. tiles is the table, pool_tiles and cell_size say how to read it, and extent is the held tiles' node bounds in metres (min xyz, 0, max xyz, 0; min above max with none).",
     inputs: {
         particles: Array(FluidParticle) required,
-        foam: Array(FluidParticle) optional,
-        spray: Array(FluidParticle) optional,
         interior: Array(f32) optional,
         interior_tiles: Array(u32) optional,
         sim_cell_size: ScalarF32 optional,
@@ -349,7 +347,7 @@ manifold_node_engine::primitive! {
         float_param!("sim_cell_size", "Water Cell Size", 0.0625, 0.0001, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire particles from the liquid frame's blended particles, foam and spray from the displayed whitewater, interior and interior_tiles from node.liquid_state's (GPU FLIP Narrow Band's grid water: every water tile with a grid cell under water joins the table) and sim_cell_size from the water step. Every display atom takes tiles, pool_tiles and cell_size from here; extent feeds the water object's field_extent.",
+    composition_notes: "Wire particles from the liquid frame's particles, interior and interior_tiles from node.liquid_state's (GPU FLIP Narrow Band's grid water: every water tile with a grid cell under water joins the table) and sim_cell_size from the water step. Every display atom takes tiles, pool_tiles and cell_size from here; extent feeds the water object's field_extent.",
     examples: [],
     picker: { label: "Surface Tiles", category: Atom },
     summary: "Builds the tiles the drawn water lives in, following the displayed water and letting go of tiles it has left.",
@@ -360,7 +358,35 @@ manifold_node_engine::primitive! {
     extra_fields: {
         held: Option<Held> = None,
         kernels: Option<Kernels> = None,
+        // When the held tiles last dropped under a third of the pool.
+        shrink_since: Option<Instant> = None,
     },
+}
+
+impl SurfaceTiles {
+    /// The pool for this frame, from what the last builds held: grown at
+    /// once, shrunk once the tiles have stayed under a third of it for
+    /// [`SHRINK_HOLD`].
+    fn next_pool(&mut self) -> u32 {
+        let Some(held) = self.held.as_ref() else {
+            return START_POOL_TILES;
+        };
+        let pool = held.layout.pool_tiles;
+        if let Some(grown) = held.grown() {
+            self.shrink_since = None;
+            return grown;
+        }
+        let Some(shrunk) = held.shrunk() else {
+            self.shrink_since = None;
+            return pool;
+        };
+        let since = *self.shrink_since.get_or_insert_with(Instant::now);
+        if since.elapsed() < SHRINK_HOLD {
+            return pool;
+        }
+        self.shrink_since = None;
+        shrunk
+    }
 }
 
 impl Primitive for SurfaceTiles {
@@ -410,8 +436,6 @@ impl Primitive for SurfaceTiles {
                 return;
             }
         };
-        let foam = ctx.inputs.array("foam");
-        let spray = ctx.inputs.array("spray");
         let interior = ctx
             .inputs
             .array("interior")
@@ -420,17 +444,10 @@ impl Primitive for SurfaceTiles {
             .and_then(|(interior, _)| super::interior_fill::interior_pool(interior.size))
             .unwrap_or(0);
         // A count past a u32 saturates, and the layout refuses it by name.
-        let slots = |buffer: Option<&GpuBuffer>| {
-            u32::try_from(buffer.map_or(0, |buffer| buffer.size / PARTICLE)).unwrap_or(u32::MAX)
-        };
-        // The pool only grows, from what the last builds held.
-        let pool_tiles = self.held.as_ref().map_or(START_POOL_TILES, |held| {
-            held.grown().unwrap_or(held.layout.pool_tiles)
-        });
+        let slots = u32::try_from(particles.size / PARTICLE).unwrap_or(u32::MAX);
+        let pool_tiles = self.next_pool();
         let layout = Layout {
-            particles: slots(Some(particles)),
-            foam: slots(foam),
-            spray: slots(spray),
+            particles: slots,
             pool_tiles,
             interior: interior_pool.saturating_mul(8),
         };
@@ -454,8 +471,6 @@ impl Primitive for SurfaceTiles {
             .set_scalar("cell_size", ParamValue::Float(cell_size));
         let frame = Frame {
             particles,
-            foam,
-            spray,
             interior,
             sim_cell,
             cell_size,
@@ -506,9 +521,7 @@ mod tests {
     #[test]
     fn the_layout_counts_every_buffer() {
         let layout = Layout {
-            particles: 1000,
-            foam: 200,
-            spray: 0,
+            particles: 1200,
             pool_tiles: 40,
             interior: 24,
         };

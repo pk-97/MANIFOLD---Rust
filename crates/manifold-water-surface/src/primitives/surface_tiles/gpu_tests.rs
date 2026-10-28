@@ -89,23 +89,20 @@ impl Rig {
 
     /// One frame over `points`.
     fn run(&mut self, points: &[[f32; 3]]) -> Built {
-        self.run_with(points, &[], H, None)
+        self.run_with(points, H, None)
     }
 
-    /// [`Self::run`] with `spray`, for water of `sim_cell` metres at the
+    /// [`Self::run`] for water of `sim_cell` metres at the
     /// display cell `H`, with a grid `interior` (its pool values, then its
     /// table words).
     fn run_with(
         &mut self,
         points: &[[f32; 3]],
-        spray: &[[f32; 3]],
         sim_cell: f32,
         interior: Option<(&[f32], &[u32])>,
     ) -> Built {
         let records: Vec<FluidParticle> = points.iter().map(|&p| particle(p)).collect();
         let (particles, _) = self.harness.array(&records, CAPACITY);
-        let spray: Vec<FluidParticle> = spray.iter().map(|&p| particle(p)).collect();
-        let (spray, _) = self.harness.array(&spray, CAPACITY);
         let interior = interior.map(|(values, words)| {
             (
                 self.harness.array(values, values.len()).0,
@@ -116,7 +113,7 @@ impl Rig {
             ("sim_cell_size", sim_cell),
             ("resolution_scale", (sim_cell / H).round()),
         ]);
-        let mut inputs = vec![("particles", particles), ("spray", spray)];
+        let mut inputs = vec![("particles", particles)];
         if let Some((values, words)) = interior {
             inputs.extend([("interior", values), ("interior_tiles", words)]);
         }
@@ -220,7 +217,7 @@ fn the_grid_interior_holds_the_display_tiles_over_its_water() {
         .collect();
     let values = water.to_pool(&dense, 3.0 * sim_cell);
     let mut rig = Rig::new();
-    let built = rig.run_with(&[], &[], sim_cell, Some((&values, &water.words)));
+    let built = rig.run_with(&[], sim_cell, Some((&values, &water.words)));
     let middle = [-2.5, 1.5, 1.5].map(|c: f32| c * sim_cell);
     assert_eq!(built.tiles(), ring(&[tile_of(middle)]));
     // Water cell c spans (c ± 1/2)·h_water; every display cell centred in the
@@ -251,21 +248,6 @@ fn no_points_hold_no_tiles_and_an_empty_extent() {
     assert!(built.extent[..3].iter().all(|&v| v > 0.0));
     assert!(built.extent[4..7].iter().all(|&v| v < 0.0));
     assert!((0..3).all(|a| built.extent[a] > built.extent[4 + a]));
-}
-
-/// Spray holds its tiles while it is there; the frame after, with no spray and
-/// no water there, holds none of them.
-#[test]
-fn spray_holds_its_tiles_only_while_it_is_there() {
-    let (water, spray) = ([0.1, 0.1, 0.1], [10.1, 0.1, 0.1]);
-    let mut rig = Rig::new();
-    let first = rig.run_with(&[water], &[spray], H, None);
-    assert_eq!(first.tiles(), ring(&[tile_of(water), tile_of(spray)]));
-    let later = rig.run(&[water]);
-    assert_eq!(later.tiles(), ring(&[tile_of(water)]));
-    for tile in ring(&[tile_of(spray)]).difference(&ring(&[tile_of(water)])) {
-        assert!(!later.held.contains_key(tile), "tile {tile:?} is held");
-    }
 }
 
 /// Water that moves on leaves nothing behind: the next frame holds its own

@@ -992,6 +992,31 @@ pub(crate) fn silver_bubbles(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Unwire foam and spray from a saved water's display table: they draw as
+/// particles and hold no display tiles. Idempotent.
+pub(crate) fn whitewater_off_display_tiles(def: &mut EffectGraphDef) -> bool {
+    let tiles: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.surface_tiles")
+        .map(|n| n.id)
+        .collect();
+    let before = def.wires.len();
+    def.wires.retain(|w| {
+        !(tiles.contains(&w.to_node) && matches!(w.to_port.as_str(), "foam" | "spray"))
+    });
+    def.wires.len() != before
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "whitewater_off_display_tiles",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 430,
+        apply: whitewater_off_display_tiles,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "wire_shaped_fill",

@@ -85,6 +85,8 @@ const POOL_GRAIN: u32 = 256;
 /// times them: they are read a frame or two late.
 const GROW_AT: f64 = 2.0 / 3.0;
 const POOL_HEADROOM: u32 = 2;
+/// It shrinks once the held tiles are under this share of it.
+const SHRINK_UNDER: f64 = 1.0 / 3.0;
 
 /// The pool that fits `held` tiles: `POOL_HEADROOM` times them in whole
 /// grains, at most what a wire counts.
@@ -105,6 +107,16 @@ pub fn grown_pool(pool: u32, held: u32, short: bool) -> Option<u32> {
     }
     let wanted = fitted_pool(held.max(if short { pool } else { 0 }));
     Some(wanted.max(pool)).filter(|&grown| grown > pool)
+}
+
+/// The pool to shrink to from a table of `pool` tiles that held `held` of
+/// them: [`fitted_pool`] of them, never below `floor`, and `None` while they
+/// fill a third of it or more.
+pub fn shrunk_pool(pool: u32, held: u32, floor: u32) -> Option<u32> {
+    if f64::from(held) >= f64::from(pool) * SHRINK_UNDER {
+        return None;
+    }
+    Some(fitted_pool(held).max(floor)).filter(|&shrunk| shrunk < pool)
 }
 
 /// Bytes the pooled faces and the world-tile table must hold for a pool of
@@ -147,5 +159,19 @@ mod tests {
         assert_eq!(fitted_pool(640), 1280);
         assert_eq!(fitted_pool(1632), 3328);
         assert_eq!(fitted_pool(u32::MAX), MAX_POOL_TILES);
+    }
+
+    #[test]
+    fn the_pool_shrinks_to_twice_the_held_tiles_once_under_a_third() {
+        // A third full or more: it stays.
+        assert_eq!(shrunk_pool(30_000, 10_000, 1024), None);
+        // Under a third: twice the held tiles in grains, and the shrunk pool
+        // does not grow again at once (half full is under two thirds).
+        assert_eq!(shrunk_pool(30_000, 9_999, 1024), Some(20_224));
+        assert_eq!(grown_pool(20_224, 9_999, false), None);
+        assert_eq!(shrunk_pool(12_288, 700, 1024), Some(1536));
+        // Never below the floor, and never "shrinks" to the same size.
+        assert_eq!(shrunk_pool(4096, 0, 1024), Some(1024));
+        assert_eq!(shrunk_pool(1024, 0, 1024), None);
     }
 }
