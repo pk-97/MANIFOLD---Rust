@@ -327,7 +327,9 @@ impl GpuBuffer {
     ///
     /// # Safety
     /// Caller must ensure offset + data.len() <= buffer size,
-    /// and no GPU reads overlap this write.
+    /// and no GPU reads overlap this write. A buffer that isn't shared
+    /// panics at the caller's line.
+    #[track_caller]
     pub unsafe fn write(&self, offset: u64, data: &[u8]) {
         let ptr = self
             .mapped_ptr
