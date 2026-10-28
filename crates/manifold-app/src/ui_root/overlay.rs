@@ -229,7 +229,7 @@ impl UIRoot {
         self.overlay_rects = rects;
     }
 
-        /// Explicit-size entry point onto `build_overlays` for
+    /// Explicit-size entry point onto `build_overlays` for
     /// windows that never call `build()`. The graph editor's `Workspace::
     /// ui_root` is built via plain `UIRoot::new()` (`workspace.rs`) and never
     /// `.build()` — that method clears the tree and lays out the WHOLE

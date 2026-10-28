@@ -480,13 +480,8 @@ fn warmup_inv3_acquire_clip_hits_installed_generator() {
 #[test]
 fn edit_time_generator_assignment_warms_when_stopped() {
     let device = manifold_gpu::testkit::test_device();
-    let mut renderer = GeneratorRenderer::new_unwarmed(
-        device.arc(),
-        64,
-        64,
-        GpuTextureFormat::Rgba16Float,
-        0,
-    );
+    let mut renderer =
+        GeneratorRenderer::new_unwarmed(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float, 0);
     let mut layer = Layer::new("Edit".to_string(), LayerType::Generator, 0);
     // TrivialPassthrough moved to test fixtures (PRESET_BROWSER_AUDITION
     // P1, D8) — prewarm resolves through the live registry, so this uses

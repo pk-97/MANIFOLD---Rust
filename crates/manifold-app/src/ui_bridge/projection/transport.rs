@@ -1,7 +1,6 @@
 //! Transport projection: the per-frame transport display cache and the
 //! playhead auto-scroll check. Moved from state_sync.rs (P-P,
 
-
 use crate::ui_root::UIRoot;
 
 /// Cached transport display strings — avoids per-frame `format!` allocations
