@@ -583,15 +583,6 @@ impl GpuEncoder {
         })
     }
 
-    /// `data` in this submit's ring: the block and the offset.
-    pub(super) fn ring_upload(&mut self, data: &[u8]) -> (GpuBuffer, u64) {
-        let res = self.res.as_mut().expect(OPEN);
-        let (block, offset) = res.ring_alloc(&self.core, (data.len() as u64).max(4));
-        // Safety: the ring range is fresh and at least `data.len()` long.
-        unsafe { block.write(offset, data) };
-        (block, offset)
-    }
-
     /// Signal `semaphore` at `value` once everything recorded so far is done.
     fn signal(&mut self, semaphore: vk::Semaphore, value: u64) {
         if !self.dirty
@@ -709,6 +700,81 @@ impl GpuEncoder {
                 .device
                 .cmd_dispatch_indirect(cmd, args.inner.raw, offset)
         };
+    }
+
+    /// Record `round`, gated dispatches as `(pipeline, bindings, gate,
+    /// gate offset)`, once into a secondary command buffer, and run it once
+    /// per round of each chunk of `chunks` rounds, one profiled span per
+    /// chunk. Each dispatch in the round waits for every earlier write, and
+    /// everything after the rounds sees all of theirs.
+    pub(super) fn execute_rounds(
+        &mut self,
+        round: &[(&GpuComputePipeline, &[GpuBinding], &GpuBuffer, u64)],
+        chunks: &[u32],
+        label: &str,
+    ) -> Result<(), String> {
+        let mut recorded = Vec::with_capacity(round.len());
+        for &(pipeline, bindings, gate, gate_offset) in round {
+            let inner = &pipeline.inner;
+            let set =
+                self.descriptor_set(&inner.layouts, &pipeline.label, bindings, S::COMPUTE_SHADER)?;
+            self.keep(Keep::Pipeline(inner.clone()));
+            let key = self.keep_buffer(gate);
+            self.tracker.read(key, S::DRAW_INDIRECT);
+            recorded.push((
+                inner.raw,
+                inner.layouts.layout,
+                set,
+                gate.inner.raw,
+                gate_offset,
+            ));
+        }
+        let cmd = self.record();
+
+        let device = &self.core.device;
+        let secondary = self.res.as_mut().expect(OPEN).begin_secondary(&self.core);
+        let round_barrier = [vk::MemoryBarrier2::default()
+            .src_stage_mask(S::COMPUTE_SHADER)
+            .src_access_mask(A::MEMORY_WRITE)
+            .dst_stage_mask(S::COMPUTE_SHADER | S::DRAW_INDIRECT)
+            .dst_access_mask(A::MEMORY_READ | A::MEMORY_WRITE)];
+        for (pipeline, layout, set, gate, gate_offset) in recorded {
+            unsafe {
+                device.cmd_pipeline_barrier2(
+                    secondary,
+                    &vk::DependencyInfo::default().memory_barriers(&round_barrier),
+                );
+                device.cmd_bind_pipeline(secondary, vk::PipelineBindPoint::COMPUTE, pipeline);
+                if let Some(set) = set {
+                    device.cmd_bind_descriptor_sets(
+                        secondary,
+                        vk::PipelineBindPoint::COMPUTE,
+                        layout,
+                        0,
+                        &[set],
+                        &[],
+                    );
+                }
+                device.cmd_dispatch_indirect(secondary, gate, gate_offset);
+            }
+        }
+        unsafe { device.end_command_buffer(secondary) }.expect("Vulkan: end command buffer");
+
+        let most = chunks.iter().copied().max().unwrap_or(0);
+        let copies = vec![secondary; most as usize];
+        for &rounds in chunks {
+            self.profile_begin(label, GpuWorkKind::Compute);
+            unsafe {
+                self.core
+                    .device
+                    .cmd_execute_commands(cmd, &copies[..rounds as usize])
+            };
+        }
+        self.core.global_barrier(cmd);
+        self.tracker.reset();
+        self.bound_pipeline = vk::Pipeline::null();
+        self.bound_set = vk::DescriptorSet::null();
+        Ok(())
     }
 
     /// Insert a buffer-scope memory barrier on the active compute encoder.

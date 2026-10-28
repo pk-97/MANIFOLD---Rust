@@ -43,6 +43,8 @@ pub(crate) struct FrameResources {
     pool: vk::CommandPool,
     cmds: Vec<vk::CommandBuffer>,
     used_cmds: usize,
+    secondaries: Vec<vk::CommandBuffer>,
+    used_secondaries: usize,
     descriptor_pools: Vec<vk::DescriptorPool>,
     current_pool: usize,
     ring: Vec<super::GpuBuffer>,
@@ -79,6 +81,8 @@ impl FrameResources {
             pool,
             cmds: Vec::new(),
             used_cmds: 0,
+            secondaries: Vec::new(),
+            used_secondaries: 0,
             descriptor_pools: Vec::new(),
             current_pool: 0,
             ring: Vec::new(),
@@ -120,6 +124,36 @@ impl FrameResources {
                 cmd,
                 &vk::CommandBufferBeginInfo::default()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+        }
+        .expect("Vulkan: begin command buffer");
+        cmd
+    }
+
+    /// The next secondary command buffer, begun outside any render pass for
+    /// a primary to execute many times over.
+    pub(crate) fn begin_secondary(&mut self, core: &Core) -> vk::CommandBuffer {
+        if self.used_secondaries == self.secondaries.len() {
+            let cmd = unsafe {
+                core.device.allocate_command_buffers(
+                    &vk::CommandBufferAllocateInfo::default()
+                        .command_pool(self.pool)
+                        .level(vk::CommandBufferLevel::SECONDARY)
+                        .command_buffer_count(1),
+                )
+            }
+            .expect("Vulkan: command buffer")[0];
+            self.secondaries.push(cmd);
+        }
+        let cmd = self.secondaries[self.used_secondaries];
+        self.used_secondaries += 1;
+        let inheritance = vk::CommandBufferInheritanceInfo::default();
+        unsafe {
+            core.device.begin_command_buffer(
+                cmd,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE)
+                    .inheritance_info(&inheritance),
             )
         }
         .expect("Vulkan: begin command buffer");
@@ -225,6 +259,7 @@ impl FrameResources {
             }
         }
         self.used_cmds = 0;
+        self.used_secondaries = 0;
         self.current_pool = 0;
         self.ring_block = 0;
         self.ring_offset = 0;

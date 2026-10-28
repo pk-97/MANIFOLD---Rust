@@ -1,7 +1,11 @@
-//! Gated templates (design section 7). P1 keeps the round a template's body
-//! walks and encodes it `copies` times as plain indirect dispatches, each
-//! reading its own gate, so the CPU encodes every round; the kernels guard
-//! rounds after the GPU decided to stop. P6 records the round once.
+//! Gated templates (design section 7). The round a template's body walks is
+//! recorded once per execute into a secondary command buffer, each dispatch
+//! an indirect dispatch from its own gate, and the primary runs it once per
+//! round, so the CPU encodes one round, not every round. Every round runs;
+//! the kernels guard the rounds after the GPU decided to stop.
+//! Conditional rendering could skip those on the GPU, but on KosmicKrisp it
+//! multiplied the solve's GPU time by four; it waits for a measurement on
+//! NVIDIA.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -27,6 +31,34 @@ enum OwnedBinding {
         binding: u32,
         data: Vec<u8>,
     },
+}
+
+impl OwnedBinding {
+    fn binding(&self) -> GpuBinding<'_> {
+        match self {
+            Self::Buffer {
+                binding,
+                buffer,
+                offset,
+            } => GpuBinding::Buffer {
+                binding: *binding,
+                buffer,
+                offset: *offset,
+            },
+            Self::Texture { binding, texture } => GpuBinding::Texture {
+                binding: *binding,
+                texture,
+            },
+            Self::Sampler { binding, sampler } => GpuBinding::Sampler {
+                binding: *binding,
+                sampler,
+            },
+            Self::Bytes { binding, data } => GpuBinding::Bytes {
+                binding: *binding,
+                data,
+            },
+        }
+    }
 }
 
 impl OwnedBinding {
@@ -75,6 +107,8 @@ pub struct TemplateTicket {
     copies: u32,
     /// Chunks of rounds, as `template_chunks` cuts them on every backend.
     executes: u32,
+    chunk: u32,
+    singles: u32,
 }
 
 pub struct GpuTemplateStore {
@@ -142,10 +176,10 @@ impl GpuEncoder {
         result
     }
 
-    /// Encode a prepared template's `copies` rounds here, each dispatch an
-    /// indirect dispatch from its gate. Bytes upload once per execute, so
-    /// every round binds the same descriptor set. `Err`, encoding nothing,
-    /// for a ticket from another store.
+    /// Encode a prepared template's `copies` rounds here, recorded once
+    /// and run as `template_chunks` cuts them. `Err`,
+    /// encoding nothing, for a ticket from another store or bindings that do
+    /// not fit a shader.
     pub fn execute_template(
         &mut self,
         store: &mut GpuTemplateStore,
@@ -154,75 +188,30 @@ impl GpuEncoder {
         if ticket.store != store.id {
             return Err("gated template: the ticket belongs to another store".into());
         }
-        store.stats.executes += u64::from(ticket.executes);
-        store.stats.command_writes += ticket.round.len() as u64 * u64::from(ticket.copies);
-        let uploads: Vec<Vec<Option<(GpuBuffer, u64)>>> = ticket
-            .round
-            .iter()
-            .map(|command| {
-                command
-                    .bindings
-                    .iter()
-                    .map(|binding| match binding {
-                        OwnedBinding::Bytes { data, .. } => Some(self.ring_upload(data)),
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .collect();
         let bindings: Vec<Vec<GpuBinding>> = ticket
             .round
             .iter()
-            .zip(&uploads)
-            .map(|(command, uploads)| {
-                command
-                    .bindings
-                    .iter()
-                    .zip(uploads)
-                    .map(|(binding, upload)| match (binding, upload) {
-                        (
-                            OwnedBinding::Buffer {
-                                binding,
-                                buffer,
-                                offset,
-                            },
-                            _,
-                        ) => GpuBinding::Buffer {
-                            binding: *binding,
-                            buffer,
-                            offset: *offset,
-                        },
-                        (OwnedBinding::Texture { binding, texture }, _) => GpuBinding::Texture {
-                            binding: *binding,
-                            texture,
-                        },
-                        (OwnedBinding::Sampler { binding, sampler }, _) => GpuBinding::Sampler {
-                            binding: *binding,
-                            sampler,
-                        },
-                        (OwnedBinding::Bytes { binding, .. }, Some((buffer, offset))) => {
-                            GpuBinding::Buffer {
-                                binding: *binding,
-                                buffer,
-                                offset: *offset,
-                            }
-                        }
-                        (OwnedBinding::Bytes { .. }, None) => unreachable!("bytes uploaded above"),
-                    })
-                    .collect()
-            })
+            .map(|command| command.bindings.iter().map(OwnedBinding::binding).collect())
             .collect();
-        for _ in 0..ticket.copies {
-            for (command, bindings) in ticket.round.iter().zip(&bindings) {
-                self.dispatch_compute_indirect(
+        let round: Vec<_> = ticket
+            .round
+            .iter()
+            .zip(&bindings)
+            .map(|(command, bindings)| {
+                (
                     &command.pipeline,
-                    bindings,
+                    bindings.as_slice(),
                     &command.gate,
                     command.gate_offset,
-                    "template round",
-                );
-            }
-        }
+                )
+            })
+            .collect();
+        let chunks: Vec<u32> = crate::template_chunks(ticket.copies, ticket.chunk, ticket.singles)
+            .map(|(_, rounds)| rounds)
+            .collect();
+        self.execute_rounds(&round, &chunks, "pressure rounds")?;
+        store.stats.executes += u64::from(ticket.executes);
+        store.stats.command_writes += ticket.round.len() as u64 * u64::from(ticket.copies);
         Ok(())
     }
 }
@@ -234,7 +223,8 @@ fn prepare(
     copies: u32,
     body: impl FnOnce(&mut GatedRecorder<'_>) -> Result<(), String>,
 ) -> Result<TemplateTicket, String> {
-    // Vulkan encodes rounds as dispatches, so no command buffer caps an execute.
+    // A round is one secondary command buffer, so no command count caps an
+    // execute.
     let executes = crate::replay::template_executes(&at, commands, copies, u32::MAX)?;
     store.stats.walks += 1;
     let mut round = Vec::with_capacity(commands as usize);
@@ -250,5 +240,7 @@ fn prepare(
         round,
         copies,
         executes,
+        chunk: at.chunk,
+        singles: at.singles,
     })
 }
