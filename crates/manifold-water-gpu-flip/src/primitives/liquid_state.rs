@@ -226,6 +226,8 @@ manifold_node_engine::primitive! {
     aliases: ["liquid state", "tick loop", "particle state"],
     boundary_reason: CrossFrameState,
     extra_fields: {
+        // The clock's dropped total the card last saw.
+        dropped_shown: f64 = 0.0,
         identity: Option<GpuBuffer> = None,
         identity_ops: ParticleIdentity = ParticleIdentity::default(),
         record_copy: Option<RecordCopy> = None,
@@ -725,9 +727,48 @@ impl Primitive for LiquidState {
         if let Some(error) = refused {
             ctx.error(error);
         }
-        // A speed-capped move, a refused push and a capped solve are the
-        // solver's limits, not faults: the water keeps moving, and the stats
-        // words (speed_capped, push_refused, unconverged) report them.
+        // Solver limits are not faults: the water keeps moving, and each one
+        // that holds shows as one card line.
+        // The clock's dropped time is a total since the epoch began: the line
+        // holds only while it grows, so one late frame does not stay on the
+        // card.
+        let dropped_now = dropped_seconds - self.dropped_shown;
+        self.dropped_shown = dropped_seconds;
+        if dropped_now > 0.0 {
+            ctx.error(format!(
+                "Water: the machine is behind; the water plays in slow motion ({:.0} ms dropped)",
+                dropped_now * 1000.0
+            ));
+        }
+        if self.cap_hit {
+            ctx.error("Water: a fast tick stretched its last substep".to_string());
+        }
+        if let Some(stats) = self.last_stats {
+            if stats.unconverged > 0 {
+                ctx.error(format!(
+                    "Water: the pressure solve did not converge on {} solves last tick",
+                    stats.unconverged
+                ));
+            }
+            if stats.speed_capped > 0 {
+                ctx.error(format!(
+                    "Water: {} particles hit the speed cap last tick",
+                    stats.speed_capped
+                ));
+            }
+            if stats.push_refused > 0 {
+                ctx.error(format!(
+                    "Water: {} particles could not be pushed out of a solid last tick",
+                    stats.push_refused
+                ));
+            }
+            if stats.reseed_refused > 0 {
+                ctx.error(format!(
+                    "Water: the pool is full; {} narrow band reseeds went without particles last tick",
+                    stats.reseed_refused
+                ));
+            }
+        }
         if let Some(stats) = self.last_stats.filter(|s| s.unresolved_pockets > 0) {
             ctx.error(format!(
                 "Liquid State: {} steps last tick could not tell which water a solid seals off from air: the spread reached its cap, one round per cell of the lattice's longest side, unfinished",
