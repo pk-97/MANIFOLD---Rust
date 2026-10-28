@@ -61,7 +61,7 @@ impl ReadbackRequest {
             .as_ref()
             .is_none_or(|b| b.size() < buffer_size);
         if needs_new {
-            self.staging_buffer = Some(device.create_buffer(buffer_size, BufferUse::Upload));
+            self.staging_buffer = Some(device.create_buffer(buffer_size, BufferUse::Readback));
         }
 
         let staging = self.staging_buffer.as_ref().unwrap();

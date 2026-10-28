@@ -918,7 +918,7 @@ impl Executor {
                 size,
             )
             .map_err(|error| error.to_string())
-            .and_then(|()| gpu.device.try_create_buffer(size, BufferUse::Upload));
+            .and_then(|()| gpu.device.try_create_buffer(size, BufferUse::Readback));
             match admitted {
                 Ok(buffer) => {
                     self.dump_array_snapshots.insert(res, buffer);

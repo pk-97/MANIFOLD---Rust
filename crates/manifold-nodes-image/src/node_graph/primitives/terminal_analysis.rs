@@ -70,7 +70,7 @@ impl TerminalAnalysis {
         }
         if self.slots.is_none() {
             self.slots = Some(std::array::from_fn(|_| ReadbackSlot {
-                buffer: device.create_buffer(READBACK_BYTES, BufferUse::Upload),
+                buffer: device.create_buffer(READBACK_BYTES, BufferUse::Readback),
                 event: device.create_event(),
                 signal: 0,
                 generation: 0,

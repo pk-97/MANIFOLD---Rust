@@ -449,7 +449,7 @@ impl Primitive for MatterState {
                 self.readback.push(ReadbackSlot {
                     buffer: gpu
                         .device
-                        .create_buffer(u64::from(STATS_WORDS) * 4, BufferUse::Upload),
+                        .create_buffer(u64::from(STATS_WORDS) * 4, BufferUse::Readback),
                     stamp: 0,
                     epoch,
                     pending: false,

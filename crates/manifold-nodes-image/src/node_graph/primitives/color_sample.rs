@@ -128,7 +128,7 @@ impl Primitive for ColorSample {
         // aligned storage region.
         let measure_buffer = self
             .measure_buffer
-            .get_or_insert_with(|| gpu.device.create_buffer(16, BufferUse::Upload));
+            .get_or_insert_with(|| gpu.device.create_buffer(16, BufferUse::Readback));
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/color_sample.wgsl"),
