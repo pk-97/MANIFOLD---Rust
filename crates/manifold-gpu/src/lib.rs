@@ -29,8 +29,8 @@ pub use trace_planner::*;
 #[cfg_attr(vulkan_backend, allow(dead_code))]
 mod replay;
 pub use replay::{
-    GATED_RANGE_BYTES, GpuReplayStats, GpuTemplateStats, REPLAY_RING, TemplateRanges,
-    chunk_rounds, template_chunks,
+    GATED_RANGE_BYTES, GpuReplayStats, GpuTemplateStats, REPLAY_RING, TemplateRanges, chunk_rounds,
+    template_chunks,
 };
 
 /// Point-in-time device memory values used by resource admission. The
@@ -45,8 +45,8 @@ pub struct GpuMemorySnapshot {
 // Backend-neutral shader compilation pipeline (WGSL → naga → SPIR-V).
 // Compiled on every platform; each backend's shader compiler consumes the
 // optimised SPIR-V and emits platform-specific shader modules.
-mod shader_common;
 mod alloc_counts;
+mod shader_common;
 mod workgroup_zeroing;
 
 // ─── Backend selection ────────────────────────────────────────────────

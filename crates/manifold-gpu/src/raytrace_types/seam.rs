@@ -308,4 +308,3 @@ pub trait ShadowRayTracer {
         label: &str,
     );
 }
-

@@ -24,8 +24,7 @@ use super::*;
 use crate::types::*;
 
 use crate::alloc_counts::{
-    ACCEL_ALLOCATION, BUFFER_ALLOCATION, TEXTURE_ALLOCATION, alloc_log_backtrace,
-    alloc_log_enabled,
+    ACCEL_ALLOCATION, BUFFER_ALLOCATION, TEXTURE_ALLOCATION, alloc_log_backtrace, alloc_log_enabled,
 };
 
 /// Env-gated log for every pipeline cache miss that becomes a cold touch.
