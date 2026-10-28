@@ -2,11 +2,12 @@
 //!It holds the particles across
 //! frames and has the executor run its region once per liquid tick the
 //! domain's clock is due. The region body is one whole tick. A non-finite
-//! tick (read back through a fenced ring) reports an error and reseeds water
-//! without stopping its clock.
+//! tick (read back through a fenced ring) reports an error and removes only
+//! the particles with a non-finite value; the rest of the water and its
+//! clock carry on.
 
 use manifold_gpu::BufferUse;
-use manifold_gpu::{GpuBuffer, GpuDevice};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::exec::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
@@ -14,7 +15,9 @@ use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
-use manifold_water_liquid::primitives::particle_identity::{IDENTITY_BYTES, ParticleIdentity};
+use manifold_water_liquid::primitives::particle_identity::{
+    COUNT_OFFSET, IDENTITY_BYTES, ParticleIdentity,
+};
 use manifold_water_liquid::whitewater::{
     DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY,
 };
@@ -22,6 +25,8 @@ use manifold_water_liquid::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 
 use record_copy::RecordCopy;
+
+const REMOVE_NONFINITE_SHADER: &str = include_str!("shaders/liquid_state_remove.wgsl");
 
 const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts {
@@ -224,6 +229,7 @@ manifold_node_engine::primitive! {
         identity: Option<GpuBuffer> = None,
         identity_ops: ParticleIdentity = ParticleIdentity::default(),
         record_copy: Option<RecordCopy> = None,
+        remove_nonfinite: Option<GpuComputePipeline> = None,
         identity_reset: bool = false,
         epoch: Option<u32> = None,
         pending: u32 = 0,
@@ -420,6 +426,13 @@ impl Primitive for LiquidState {
         self.identity_ops.prepare(device);
         if self.record_copy.is_none() {
             self.record_copy = Some(RecordCopy::new(device));
+        }
+        if self.remove_nonfinite.is_none() {
+            self.remove_nonfinite = Some(device.create_compute_pipeline(
+                REMOVE_NONFINITE_SHADER,
+                "remove_nonfinite",
+                "node.liquid_state.remove_nonfinite",
+            ));
         }
     }
 
@@ -643,22 +656,33 @@ impl Primitive for LiquidState {
                 gpu.native_enc.clear_buffer(buffer);
             }
         }
-        if recover {
-            // Replace poisoned state in encoder order without reanchoring time.
-            // A numerical fault must not latch a show stop until manual Reset.
-            if let (Some(seed), Some(out)) = (seed, out) {
-                let bytes = (u64::from(count) * size_of::<FluidParticle>() as u64)
-                    .min(seed.size)
-                    .min(out.size);
-                gpu.native_enc.copy_buffer_to_buffer(seed, out, bytes);
-                self.identity_ops.seed(
-                    gpu.native_enc,
-                    out,
-                    identity,
-                    count.min((out.size / 32) as u32),
-                    seed_identity_epoch,
-                );
-            }
+        if recover && let Some(out) = out {
+            // Only the broken particles go, in encoder order and without
+            // reanchoring time; a numerical fault must not latch a show stop
+            // or send the whole water back to its fill.
+            let pipeline = self
+                .remove_nonfinite
+                .as_ref()
+                .expect("liquid state pipelines built by prepare_pipelines at install");
+            gpu.native_enc.dispatch_compute_indirect(
+                pipeline,
+                &[
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: identity,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: out,
+                        offset: 0,
+                    },
+                ],
+                identity,
+                COUNT_OFFSET,
+                "node.liquid_state.remove_nonfinite",
+            );
+            gpu.native_enc.compute_memory_barrier_buffers();
         }
         self.identity_reset = false;
         if let Some(target) = target_time {
@@ -685,11 +709,17 @@ impl Primitive for LiquidState {
             "fault",
             ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }),
         );
-        if self.faulted && self.last_stats.is_some_and(|s| s.nonfinite > 0) {
+        if self.faulted
+            && let Some(stats) = self.last_stats.filter(|s| s.nonfinite > 0)
+        {
             ctx.error(if live_recovery {
-                "Liquid State: non-finite values detected; reseeding water while the show continues"
+                format!(
+                    "Liquid State: removed {} particles with non-finite values; the rest of the water continues",
+                    stats.nonfinite
+                )
             } else {
                 "Liquid State: a tick produced non-finite values; the liquid is halted until Reset"
+                    .to_string()
             });
         }
         if let Some(error) = refused {

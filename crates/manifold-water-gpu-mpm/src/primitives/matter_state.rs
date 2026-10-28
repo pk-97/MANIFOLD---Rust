@@ -6,7 +6,7 @@
 //! the solver with a node error until the domain's epoch changes (Reset).
 
 use manifold_gpu::BufferUse;
-use manifold_gpu::GpuBuffer;
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::matter::{
     MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes,
@@ -25,6 +25,8 @@ use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 /// node.grid_to_matter) into the region, so the coupling sum runs every
 /// substep; the words themselves live in the domain's reaction slot, which
 /// the domain reads back.
+const REMOVE_NONFINITE_SHADER: &str = include_str!("shaders/matter_remove_nonfinite.wgsl");
+
 const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts {
         capture: "stats_in",
@@ -135,6 +137,7 @@ manifold_node_engine::primitive! {
         submitted_cap: bool = false,
         completed_cap: bool = false,
         last_stats: Option<MatterTickStats> = None,
+        remove_nonfinite: Option<GpuComputePipeline> = None,
     },
 }
 
@@ -205,6 +208,16 @@ impl MatterState {
 }
 
 impl Primitive for MatterState {
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.remove_nonfinite.is_none() {
+            self.remove_nonfinite = Some(device.create_compute_pipeline(
+                REMOVE_NONFINITE_SHADER,
+                "remove_nonfinite",
+                "node.matter_state.remove_nonfinite",
+            ));
+        }
+    }
+
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
         &["in", "stats_in", "reaction_in"]
     }
@@ -328,12 +341,29 @@ impl Primitive for MatterState {
             }
         }
         self.poll_readbacks(clock.as_ref(), live_mode);
-        if live_mode
-            && self.faulted
-            && let (Some(seed), Some(out)) = (seed, out)
-        {
-            gpu.native_enc
-                .copy_buffer_to_buffer(seed, out, seed.size.min(out.size));
+        if live_mode && self.faulted && count > 0 && let Some(out) = out {
+            // Only the broken points go; the rest of the water keeps flowing.
+            let pipeline = self
+                .remove_nonfinite
+                .as_ref()
+                .expect("matter state pipeline prepared at install");
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&[count, 0u32, 0, 0]),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: out,
+                        offset: 0,
+                    },
+                ],
+                [count.div_ceil(256), 1, 1],
+                "node.matter_state.remove_nonfinite",
+            );
+            gpu.native_enc.compute_memory_barrier_buffers();
         }
         let dropped_time = &mut self.dropped_time;
         ctx.sim_metrics.record(|metrics| {
@@ -368,9 +398,13 @@ impl Primitive for MatterState {
             ctx.error(error);
         } else if self.faulted {
             ctx.error(if live_mode {
-                "Matter: non-finite values detected; reseeding while the show continues"
+                format!(
+                    "Matter: removed points with non-finite values ({} flagged); the rest of the water continues",
+                    self.last_stats.map_or(0, |s| s.nonfinite)
+                )
             } else {
                 "Matter: a tick produced non-finite values; the liquid is halted until Reset"
+                    .to_string()
             });
         }
     }
