@@ -1,6 +1,6 @@
 # Water fine blocks: a finer surface where the water is thin
 
-**Status:** design, not started. Needs Peter's go-ahead: about two to three days of work.
+**Status:** design, not started. Needs Peter's go-ahead: about two to three days of work. [WATER_SHARED_GRID_DESIGN.md](WATER_SHARED_GRID_DESIGN.md) D2 makes the fine table below a fine level of the water's one table, not a second `node.surface_tiles`.
 
 ## Why
 
