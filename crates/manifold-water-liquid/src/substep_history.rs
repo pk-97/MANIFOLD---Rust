@@ -80,11 +80,15 @@ fn capture_table(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // The step's faces as row `row`: a face without weight reads 0, as the
-// whitewater atoms read it (lf_face_velocity).
+// whitewater atoms read it (lf_face_velocity). A slot the step's table does
+// not hold is left as it was: the remap reads a row's element only through a
+// tile the row's table holds, or the canonical element (past the slots).
 @compute @workgroup_size(256)
 fn capture_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let e = gid.x;
     if e >= params.pool_len { return; }
+    let slot = e >> 9u;
+    if slot < params.pool_tiles && live_table[2u * params.entries + 4u * slot + 3u] == WT_NONE { return; }
     let s = faces[e];
     let at = (params.row * params.pool_len + e) * 4u;
     history[at] = select(0.0, s.face_velocity.x, s.face_weight.x > 0.0);
@@ -330,6 +334,11 @@ impl SubstepHistory {
                 GpuBinding::Buffer {
                     binding: 4,
                     buffer: pooled.faces,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: pooled.table,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
