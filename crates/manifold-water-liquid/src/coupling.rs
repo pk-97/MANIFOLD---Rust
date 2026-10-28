@@ -236,6 +236,9 @@ pub struct LiquidRigidOwner {
     frame: CoupledRigidFrame,
     rows: Vec<LiquidBody>,
     contacts: Vec<BodySupports>,
+    /// The most support points one body touched at the last capture when
+    /// that passed what the water sees, else 0.
+    crowded: usize,
     impulses: Vec<BodyImpulse>,
     handover: HandoverError,
     pending: Option<PendingTick>,
@@ -304,6 +307,7 @@ impl LiquidRigidOwner {
             frame,
             rows: Vec::new(),
             contacts: Vec::new(),
+            crowded: 0,
             impulses: Vec::new(),
             handover: HandoverError::default(),
             pending: None,
@@ -312,7 +316,13 @@ impl LiquidRigidOwner {
         };
         set_friction(&mut owner.bodies, inputs);
         let world = owner.rigid.native_world().expect("prepared above");
-        capture_rows(world, &owner.bodies, &mut owner.rows, &mut owner.contacts)?;
+        capture_rows(
+            world,
+            &owner.bodies,
+            &mut owner.rows,
+            &mut owner.contacts,
+            &mut owner.crowded,
+        )?;
         Ok(owner)
     }
 
@@ -452,7 +462,13 @@ impl LiquidRigidOwner {
         self.layout.capture(world, &mut self.frame)?;
         self.frame.stamp = stamp;
         set_friction(&mut self.bodies, &self.walled);
-        capture_rows(world, &self.bodies, &mut self.rows, &mut self.contacts)?;
+        capture_rows(
+            world,
+            &self.bodies,
+            &mut self.rows,
+            &mut self.contacts,
+            &mut self.crowded,
+        )?;
         self.rebind = false;
         Ok(())
     }
@@ -478,6 +494,12 @@ impl LiquidRigidOwner {
     /// liquid tick, in row order.
     pub fn contacts(&self) -> &[BodySupports] {
         &self.contacts
+    }
+
+    /// The most support points one body touches when that passes the
+    /// [`MAX_SUPPORT_POINTS`] the water sees; 0 while every body fits.
+    pub fn crowded_support_points(&self) -> usize {
+        self.crowded
     }
 
     /// The last settled tick's handover error (D18).
@@ -547,7 +569,13 @@ impl LiquidRigidOwner {
             .native_world()
             .ok_or("Liquid coupling: reanchor lost the rigid world")?;
         self.layout.capture(world, &mut self.frame)?;
-        capture_rows(world, &self.bodies, &mut self.rows, &mut self.contacts)
+        capture_rows(
+            world,
+            &self.bodies,
+            &mut self.rows,
+            &mut self.contacts,
+            &mut self.crowded,
+        )
     }
 
     /// Finish a required tick boundary after the caller waits for the GPU.
@@ -610,6 +638,7 @@ impl LiquidRigidOwner {
             bodies: &self.bodies,
             rows: &mut self.rows,
             contacts: &mut self.contacts,
+            crowded: &mut self.crowded,
             impulses: &self.impulses,
             handover: &mut self.handover,
             begun: false,
@@ -811,21 +840,18 @@ fn capture_rows(
     bodies: &[Coupled],
     rows: &mut Vec<LiquidBody>,
     contacts: &mut Vec<BodySupports>,
+    crowded: &mut usize,
 ) -> Result<(), String> {
     rows.clear();
     contacts.clear();
+    *crowded = 0;
     for (index, body) in bodies.iter().enumerate() {
         let mut points = [SupportPoint::default(); MAX_SUPPORT_POINTS];
         let count = world
             .support_points(body.handle, &mut points)
             .map_err(|error| error.to_string())?;
         if !count.complete() {
-            log::warn!(
-                "Liquid coupling: body {index} touches {} support points ({} contacts unread); the liquid sees {}",
-                count.found,
-                count.unread,
-                count.kept
-            );
+            *crowded = (*crowded).max(count.found);
         }
         contacts.push(pack_supports(&points[..count.kept]));
         let d = world
@@ -870,6 +896,7 @@ pub struct LiquidCoupling<'a> {
     bodies: &'a [Coupled],
     rows: &'a mut Vec<LiquidBody>,
     contacts: &'a mut Vec<BodySupports>,
+    crowded: &'a mut usize,
     impulses: &'a [BodyImpulse],
     handover: &'a mut HandoverError,
     begun: bool,
@@ -943,7 +970,7 @@ impl SubstepExchange for &mut LiquidCoupling<'_> {
             tick: self.expected.tick + 1,
         };
         let before = std::mem::take(self.rows);
-        capture_rows(rigid, self.bodies, self.rows, self.contacts)?;
+        capture_rows(rigid, self.bodies, self.rows, self.contacts, self.crowded)?;
         if before.len() == self.rows.len() {
             let dt = self.duration.0 as f32;
             for ((body, before), now) in self.bodies.iter().zip(&before).zip(self.rows.iter_mut()) {

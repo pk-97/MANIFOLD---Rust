@@ -692,6 +692,9 @@ pub struct RigidSimulation {
     accepted_observation: Option<(f64, f64)>,
     held: HeldClock,
     dropped_time: super::physics_metrics::DroppedTimeTracker,
+    /// The last advance held its frame on a non-finite clock, speed, reset
+    /// or gravity.
+    held_non_finite: bool,
     /// Completion telemetry since the owner last drained it.
     metrics: manifold_node_engine::exec::sim_metrics::SimMetrics,
     worker_epoch: Option<u64>,
@@ -759,6 +762,7 @@ impl Default for RigidSimulation {
             clock: Default::default(),
             held: HeldClock::default(),
             dropped_time: Default::default(),
+            held_non_finite: false,
             metrics: Default::default(),
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
@@ -791,6 +795,12 @@ impl RigidSimulation {
 
     pub fn step(&self) -> SimStep {
         self.step
+    }
+
+    /// Whether the last advance held its frame because the clock, speed,
+    /// reset or gravity was not finite.
+    pub fn held_for_non_finite(&self) -> bool {
+        self.held_non_finite
     }
 
     /// The completion telemetry recorded since the last call; the owning
@@ -1023,12 +1033,14 @@ impl RigidSimulation {
         };
         // Speed clamps to its range and never stops the world.
         let speed = speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1);
+        self.held_non_finite = false;
         if !now.0.is_finite()
             || !speed.is_finite()
             || !reset_count.is_finite()
             || gravity.iter().any(|v| !v.is_finite())
         {
             if !self.step.offline() {
+                self.held_non_finite = true;
                 self.metrics
                     .record_simulation(self.authored_time, self.physics_time, false, true);
                 return Ok(());

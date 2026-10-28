@@ -658,6 +658,9 @@ impl EffectNode for PhysicsWorldNode {
         );
         self.sync_refusal_rows();
         ctx.sim_metrics.merge(&self.simulation.take_metrics());
+        if self.simulation.held_for_non_finite() {
+            ctx.error("Physics: the clock, speed or gravity is not a finite number; the world holds this frame");
+        }
         if result.is_ok()
             && self
                 .simulation

@@ -821,6 +821,15 @@ impl Primitive for MatterDomain {
             self.compute(ctx, &roles, fill)
         };
         self.role_ports.put_back(roles);
+        if let Some(owner) = self.coupled.owner.as_ref() {
+            let touching = owner.crowded_support_points();
+            if touching > 0 {
+                ctx.error(format!(
+                    "Matter: a body touches {touching} contact points; the water sees {}",
+                    manifold_physics::coupled_motion::MAX_SUPPORT_POINTS
+                ));
+            }
+        }
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
             held[TICKS] = 0.0;

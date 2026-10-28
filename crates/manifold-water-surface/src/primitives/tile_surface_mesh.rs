@@ -328,10 +328,14 @@ impl Primitive for TileSurfaceMesh {
             return;
         };
         // The first two frames on a buffer carry no late count of it.
-        let bound = if mesh.frames < 2 {
-            (3 * mesh.capacity) as u32
+        let (bound, dropped) = if mesh.frames < 2 {
+            ((3 * mesh.capacity) as u32, None)
         } else {
-            vertex_bound(mesh.late_asked(), mesh.capacity)
+            let asked = mesh.late_asked();
+            (
+                vertex_bound(asked, mesh.capacity),
+                (u64::from(asked) > mesh.capacity).then_some((asked, mesh.capacity)),
+            )
         };
         let uniforms = MeshUniforms {
             cell_size: pool.cell_size,
@@ -351,6 +355,11 @@ impl Primitive for TileSurfaceMesh {
                 bound,
             },
         );
+        if let Some((asked, capacity)) = dropped {
+            ctx.error(format!(
+                "Tile Surface Mesh: the surface asked for {asked} triangles and the mesh holds {capacity}; the rest are missing until it grows"
+            ));
+        }
     }
 }
 
