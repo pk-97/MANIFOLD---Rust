@@ -96,7 +96,7 @@ Each is a backend-neutral API with a capability check on `GpuDevice` (design 6.2
 - FFT: Inverse FFT 2D reports "no FFT" and water fields lose their ripples.
 - Faults, firmware, capture scopes and residency are empty on Vulkan.
 
-The remaining raw-handle users are Mac-gated and stay Metal: `manifold-media/src/video_renderer.rs:405` and `metal_encoder.rs`, `manifold-recording/src/session.rs:102`, `texture_pool.rs:23,109`, `recording_thread.rs:150`, `manifold-app/src/content_export.rs:1625` and `content_pipeline.rs:1394`. Because those gates are still true on the Mac, `manifold-app`, `manifold-media` and `manifold-recording` build against Vulkan on Linux only (design section 3). Their Linux replacements are P5.
+The remaining raw-handle users are Mac-gated and stay Metal: `manifold-media/src/videotoolbox.rs` and `metal_encoder.rs`, `manifold-recording/src/session.rs:102`, `texture_pool.rs:23,109`, `recording_thread.rs:150`, `manifold-app/src/content_export.rs:1625` and `content_pipeline.rs:1394`. Because those gates are still true on the Mac, `manifold-app`, `manifold-media` and `manifold-recording` build against Vulkan on Linux only (design section 3). Their Linux replacements are P5.
 
 ---
 
@@ -125,14 +125,14 @@ About 230 `target_os` lines in 36 files. Grouped by what they gate:
 
 | Group | Lines | Files | Linux needs | Phase |
 |---|---|---|---|---|
-| Export, still capture, recording and video | ~39 | `content_export.rs` (13), `content_thread.rs` (8), `content_commands.rs` (8), `app.rs` (4). Off-Mac video clips get `StubRenderer` (`content_thread.rs` `playback_engine`); image clips play everywhere. `export-repro` and the journey proofs wait with export | FFmpeg decode and encode, then drop the off-Mac `dead_code` allow at the top of `main.rs` | P5 |
+| Export, still capture and recording | ~60 | `content_export.rs` (31), `content_thread.rs` (8), `content_commands.rs` (8), `app.rs` (9), `content_pipeline.rs` (7). Video and image clips play everywhere. `export-repro` and the journey proofs wait with export | FFmpeg encode, then drop the off-Mac `dead_code` allow at the top of `main.rs` | P5 |
 | Clipboard and file paste | ~20 | `input_host.rs` (11), `card_edit.rs`, `ui_snapshot/script.rs`, `window_input.rs`, `app.rs`, `main.rs:111` | Text fields and copy actions use `text_clipboard.rs` (arboard) everywhere. Finder file paste stays Mac-only; winit 0.30 has no file drops on Wayland | P4 |
 | Menus | 2 | `menu.rs:187-197`; seven actions exist only in the menu (`app_render.rs:438-467`) | In-app entries for them, then section 10 item 3 | P4 |
 | Misc | 2 | `main.rs:379,732` (App Nap, nothing on Linux) | Gate stays | Build hygiene |
 
 **Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`, `percussion_backend.rs:210`) wait for Linux packaging (P4).
 
-**Gated until P4 or P5.** On Linux the app compiles with these off: the display link (P4 pacing), the video decoder and video prewarm, video and still export, and live recording (P5). The headless harness, its tests, `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `ui-snap` build everywhere.
+**Gated until P4 or P5.** On Linux the app compiles with these off: the display link (P4 pacing), video and still export, and live recording (P5). The headless harness, its tests, `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `ui-snap` build everywhere.
 
 ---
 
@@ -140,7 +140,7 @@ About 230 `target_os` lines in 36 files. Grouped by what they gate:
 
 | Crate | What breaks or is missing on Linux | Phase |
 |---|---|---|
-| manifold-media | Decode and export are Obj-C plugins on VideoToolbox and AVFoundation (`native/*.m`, 1,435 lines). `lib.rs:8-25` gates them. `DecoderPool`, `DecodeScheduler` and `MetalEncoder` are concrete types; the `ClipRenderer` trait (`manifold-playback/src/renderer.rs:10`) is the seam. `metadata.rs:19-29` returns `None` off-Mac. No FFmpeg crate in the graph today; only the `ffmpeg` CLI for audio muxing | P5 |
+| manifold-media | Decode sits behind `DecoderBackend` and `VideoDecoder` (`decoder.rs`): VideoToolbox on the Mac (`videotoolbox.rs`), FFmpeg on the CPU elsewhere (`ffmpeg_decoder.rs`, ffmpeg-next 8, which keeps the locked `cc`; 9 needs `cc` 1.10). Off the Mac a frame is swscaled to sRGB RGBA fitted in the canvas and uploaded into an `Rgba8UnormSrgb` texture; the Mac converts NV12 into `Rgba16Float` and does not expand video-range chroma, so saturated colours read about 12% weaker there. Export is still the AVFoundation plugin and `MetalEncoder`; the audio mux shells out to the `ffmpeg` CLI | P5 |
 | manifold-recording | AVAssetWriter plugin (`native/LiveRecordingPlugin.m`, 839 lines). Everything but `config` and `ffi` is gated (`lib.rs:24-39`). Default path is the Desktop (`config.rs:29-37`). `proofs.rs` expects `ffprobe` | P5 |
 | manifold-playback | Works as is: kira 0.12 and midir 0.11 on cpal 0.18, one ALSA library between them, rusty_link (needs cmake and libclang). kira takes volumes in decibels; `gain_db` converts the linear gain. Stem separation: the bundled demucs runtime exists only for macOS (`tools/audio_analysis/BundledRuntime/macOS`, `stage_runtime_mac.sh`); the device is `auto`, so CUDA is picked on Linux | P4 (runtime) |
 | manifold-native | The two ML plugins (BlobDetector, DepthEstimator) load `lib<name>.so` from `assets/plugins` on Linux; each `build.sh` builds it against `libopencv-dev`. `region_ffi.rs` tests that use `codesign` and `otool` stay Mac-only | P4: ship the `.so` files with the Linux package |

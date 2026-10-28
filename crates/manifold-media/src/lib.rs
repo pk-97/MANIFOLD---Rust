@@ -1,18 +1,18 @@
 //! Video encoding, decoding, and media pipeline for MANIFOLD.
 //!
 //! Provides native Metal GPU encoding (macOS) for offline video export,
-//! native VideoToolbox hardware decode for video playback,
+//! video decode (VideoToolbox on the Mac, FFmpeg elsewhere),
 //! FFmpeg-based audio muxing, and export session orchestration.
 
 pub mod audio_muxer;
-#[cfg(target_os = "macos")]
 pub mod decode_scheduler;
-#[cfg(target_os = "macos")]
 pub mod decoder;
 #[cfg(target_os = "macos")]
 mod decoder_ffi;
 pub mod export_config;
 pub mod export_session;
+#[cfg(not(target_os = "macos"))]
+mod ffmpeg_decoder;
 pub mod frame_rate;
 pub mod image_renderer;
 pub mod metadata;
@@ -21,7 +21,6 @@ pub mod metal_encoder;
 #[cfg(target_os = "macos")]
 mod metal_ffi;
 pub mod still_exporter;
-#[cfg(target_os = "macos")]
 pub mod video_renderer;
 #[cfg(target_os = "macos")]
 mod videotoolbox;

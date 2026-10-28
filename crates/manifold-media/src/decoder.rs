@@ -23,6 +23,8 @@ pub enum DecoderError {
     NullPool,
     SeekFailed,
     Unavailable,
+    /// The frame was converted for a texture of another size.
+    Resized,
 }
 
 impl fmt::Display for DecoderError {
@@ -39,6 +41,7 @@ impl fmt::Display for DecoderError {
             Self::NullPool => write!(f, "decoder pool is null"),
             Self::SeekFailed => write!(f, "seek failed"),
             Self::Unavailable => write!(f, "video decoder not available"),
+            Self::Resized => write!(f, "the frame was converted for another texture size"),
         }
     }
 }

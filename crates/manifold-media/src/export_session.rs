@@ -6,9 +6,14 @@
 
 use std::fmt;
 
+// Off the Mac the encoder is not built yet (P5 export), so its session
+// methods and these imports go unused there.
+#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 use manifold_core::tempo::{TempoMap, TempoMapConverter};
+#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 use manifold_core::units::{Beats, Bpm};
 
+#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 use crate::export_config::ExportConfig;
 
 #[cfg(target_os = "macos")]
@@ -75,6 +80,7 @@ impl From<EncoderError> for ExportError {
 /// Pulled out of `ExportSession::finalize` (which requires a real Metal
 /// encoder, macOS-only) so the rename-on-failure behavior is unit-testable
 /// on any host with nothing but plain files.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn preserve_video_and_fail(encoder_output: &str, output_path: &str, reason: String) -> ExportError {
     let preserved_path = format!("{output_path}.video-only-audio-mux-failed.mp4");
     match std::fs::rename(encoder_output, &preserved_path) {

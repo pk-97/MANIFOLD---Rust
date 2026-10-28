@@ -1,7 +1,7 @@
 //! Video file metadata extraction.
 //!
-//! Probes video files for duration, resolution, and codec information
-//! using native AVAsset (macOS) for fast, thread-safe metadata access.
+//! Probes video files for duration and resolution through the platform
+//! decoder.
 
 /// Video file metadata from a quick probe.
 #[derive(Debug, Clone)]
@@ -14,9 +14,8 @@ pub struct ProbeResult {
 /// Supported video file extensions.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[".mp4", ".mov", ".webm", ".avi"];
 
-/// Probe video file metadata using native AVAsset.
-/// Fast (~1ms per file), thread-safe: creates a local AVAsset, reads properties, releases.
-#[cfg(target_os = "macos")]
+/// Probe video file metadata through the platform decoder: AVAsset on the
+/// Mac (about 1 ms per file), FFmpeg elsewhere. Thread-safe.
 pub fn probe_video_metadata(path: &str) -> Option<ProbeResult> {
     let meta = crate::decoder::probe_metadata(path)?;
     Some(ProbeResult {
@@ -24,9 +23,4 @@ pub fn probe_video_metadata(path: &str) -> Option<ProbeResult> {
         width: meta.width,
         height: meta.height,
     })
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn probe_video_metadata(_path: &str) -> Option<ProbeResult> {
-    None
 }

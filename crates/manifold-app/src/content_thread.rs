@@ -266,9 +266,8 @@ pub struct ContentThread {
     pub profiler: Option<manifold_profiler::ProfileSession>,
 }
 
-/// The engine every content thread plays `project` with, at `w × h`: video
-/// (the Mac's decoder; a stand-in elsewhere until video decode lands), still
-/// images, and generators, with the live-clip sink installed.
+/// The engine every content thread plays `project` with, at `w × h`: video,
+/// still images and generators, with the live-clip sink installed.
 pub(crate) fn playback_engine(
     device: &Arc<manifold_gpu::GpuDevice>,
     project: manifold_core::project::Project,
@@ -277,15 +276,12 @@ pub(crate) fn playback_engine(
 ) -> PlaybackEngine {
     let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
     let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
-        #[cfg(target_os = "macos")]
         Box::new(manifold_media::video_renderer::VideoRenderer::new(
             Arc::clone(device),
             w,
             h,
             8,
         )),
-        #[cfg(not(target_os = "macos"))]
-        Box::new(manifold_playback::renderer::StubRenderer::new_video()),
         // Static-image clips. Claims clips with an `image_path`;
         // GeneratorRenderer explicitly excludes those so dispatch is
         // order-independent, but image stays ahead of it anyway.
@@ -916,7 +912,6 @@ impl ContentThread {
         //     so decoders are opened before clips become active (prevents
         //     black frames at clip start). Port of Unity WorkspaceController
         //     → VideoPlayerPool.WarmCache(candidates).
-        #[cfg(target_os = "macos")]
         if let Some(ref candidates) = tick_result.prewarm_candidates {
             for renderer in self.engine.renderers_mut() {
                 if let Some(vid) = renderer

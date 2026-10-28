@@ -2,7 +2,6 @@ mod clip_atlas;
 mod editing_chrome;
 mod scene_viewport_capture;
 mod trigger_targets;
-#[cfg(target_os = "macos")]
 use clip_atlas::find_parked_video_clip;
 use clip_atlas::retain_thumbnail_requests;
 use clip_atlas::{
@@ -26,7 +25,6 @@ use manifold_compositor::tonemap::{TonemapMode, TonemapSettings};
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::types::BlendMode;
 use manifold_core::{ClipId, EffectId, LayerId, NodeId};
-#[cfg(target_os = "macos")]
 use manifold_media::video_renderer::VideoRenderer;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
@@ -2434,7 +2432,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 {
                     return Some(t);
                 }
-                #[cfg(target_os = "macos")]
                 if let Some(vid_r) = r.as_any().downcast_ref::<VideoRenderer>()
                     && let Some(t) = vid_r.get_clip_texture(&entry.clip_id)
                 {
@@ -2741,7 +2738,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 // pass blits the settled frame into that bar's cell, after which the
                 // next frame here advances to the following bar. Bounded per frame so
                 // the decode scheduler is never flooded. Never composited.
-                #[cfg(target_os = "macos")]
                 if let Some(vid_r) = renderers
                     .iter_mut()
                     .find_map(|r| r.as_any_mut().downcast_mut::<VideoRenderer>())
@@ -2837,7 +2833,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                                 return Some(t);
                             }
                         }
-                        #[cfg(target_os = "macos")]
                         if let Some(v) = r.as_any().downcast_ref::<VideoRenderer>() {
                             if let Some(t) = v.get_clip_texture(cid_str) {
                                 return Some(t);
@@ -2867,9 +2862,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 // Per parked-video clip: the bar cell its *settled* poster frame
                 // represents, so the capture writes it into the right cell rather than
                 // the playhead-derived one. Active clips and generators have no override.
-                #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
                 let mut cell_override: AHashMap<&str, u32> = AHashMap::new();
-                #[cfg(target_os = "macos")]
                 if let Some(vid_r) = renderers
                     .iter()
                     .find_map(|r| r.as_any().downcast_ref::<VideoRenderer>())
