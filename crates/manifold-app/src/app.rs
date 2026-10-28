@@ -1381,9 +1381,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         };
 
-        // Create initial offscreen UI render target.
-        self.resize_ui_offscreen(size.width.max(1), size.height.max(1));
-
         // Spawn content thread with its OWN GPU device (separate queue for isolation).
         // Compositor output is shared via IOSurface — zero copy, GPU-to-GPU.
         {
@@ -1635,6 +1632,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
         self.gpu = Some(gpu);
+        // The first UI render target. A window that never reports a resize
+        // (X11) draws into this one.
+        self.resize_ui_offscreen(size.width.max(1), size.height.max(1));
 
         // Pass detected display resolutions to UI
         self.ws

@@ -119,6 +119,16 @@ fn unsupported(what: &str) {
     }
 }
 
+/// Log once why a swapchain could not be built; the caller skips the frame.
+fn swapchain_failed(why: &str) {
+    static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let mut logged = LOGGED.lock().expect("surface log poisoned");
+    if !logged.iter().any(|w| w == why) {
+        log::warn!("[Vulkan] no swapchain: {why}");
+        logged.push(why.to_string());
+    }
+}
+
 fn semaphore(core: &Core) -> vk::Semaphore {
     unsafe {
         core.device
@@ -281,6 +291,7 @@ impl GpuSurface {
                 .surface
                 .get_physical_device_surface_capabilities(physical, surface)
         }
+        .map_err(|e| swapchain_failed(&format!("surface capabilities: {e}")))
         .ok()?;
         // A window reports its size; Wayland leaves it to the swapchain.
         let extent = if caps.current_extent.width == u32::MAX {
@@ -303,6 +314,7 @@ impl GpuSurface {
                 .surface
                 .get_physical_device_surface_formats(physical, surface)
         }
+        .map_err(|e| swapchain_failed(&format!("surface formats: {e}")))
         .ok()?;
         // Targets hold linear light unless they are 8-bit, which callers
         // fill already encoded; the blit encodes into an sRGB image.
@@ -321,7 +333,11 @@ impl GpuSurface {
                 wanted.contains(&f.format) && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
             })
             .or(formats.first())
-            .copied()?;
+            .copied()
+            .or_else(|| {
+                swapchain_failed("the surface offers no formats");
+                None
+            })?;
         let modes = unsafe {
             present
                 .surface
