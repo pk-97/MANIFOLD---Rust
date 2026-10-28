@@ -1557,22 +1557,22 @@ mod alias_tests {
         let dst = b.acquire(ResourceId(1), PortType::Texture2D, None, (W, H));
 
         // Pre-alias, each slot has its own distinct texture. We compare
-        // raw MTLTexture pointers — each acquire allocates a fresh
-        // texture, so the pointers differ.
-        let pre_src_ptr = b.texture_2d(src).expect("src allocated").raw_ptr();
-        let pre_dst_ptr = b.texture_2d(dst).expect("dst allocated").raw_ptr();
+        // texture identities — each acquire allocates a fresh
+        // texture, so they differ.
+        let pre_src_ptr = b.texture_2d(src).expect("src allocated").identity_key();
+        let pre_dst_ptr = b.texture_2d(dst).expect("dst allocated").identity_key();
         assert_ne!(pre_src_ptr, pre_dst_ptr);
 
-        // After alias, dst reads what src reads — same raw pointer.
+        // After alias, dst reads what src reads — same identity.
         assert!(b.alias_2d(src, dst), "alias should succeed");
         assert_eq!(
-            b.texture_2d(dst).expect("dst still readable").raw_ptr(),
+            b.texture_2d(dst).expect("dst still readable").identity_key(),
             pre_src_ptr,
             "dst should now shadow src's texture",
         );
         // src is unaffected.
         assert_eq!(
-            b.texture_2d(src).expect("src untouched").raw_ptr(),
+            b.texture_2d(src).expect("src untouched").identity_key(),
             pre_src_ptr
         );
     }
@@ -1583,14 +1583,14 @@ mod alias_tests {
         let src = b.acquire(ResourceId(0), PortType::Texture2D, None, (W, H));
         let dst = b.acquire(ResourceId(1), PortType::Texture2D, None, (W, H));
 
-        let pre_dst_ptr = b.texture_2d(dst).expect("dst allocated").raw_ptr();
+        let pre_dst_ptr = b.texture_2d(dst).expect("dst allocated").identity_key();
         assert!(b.alias_2d(src, dst));
 
         // Now clear — dst should be back to its OWN texture, not the
         // alias.
         b.clear_skip_aliases();
         assert_eq!(
-            b.texture_2d(dst).expect("dst still readable").raw_ptr(),
+            b.texture_2d(dst).expect("dst still readable").identity_key(),
             pre_dst_ptr,
             "after clear, dst reads its owned texture again",
         );
@@ -1619,7 +1619,7 @@ mod alias_tests {
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "host-borrow",
         });
-        let host_ptr = host_tex.raw_ptr();
+        let host_ptr = host_tex.identity_key();
         assert!(b.replace_texture_2d(dst, host_tex));
 
         // alias_2d must refuse — host borrow takes priority.
@@ -1628,7 +1628,7 @@ mod alias_tests {
             "alias_2d must not clobber a host-installed borrow",
         );
         assert_eq!(
-            b.texture_2d(dst).expect("dst readable").raw_ptr(),
+            b.texture_2d(dst).expect("dst readable").identity_key(),
             host_ptr,
             "host borrow survives",
         );
@@ -1637,7 +1637,7 @@ mod alias_tests {
         // clear only wipes runtime-installed aliases.
         b.clear_skip_aliases();
         assert_eq!(
-            b.texture_2d(dst).expect("dst still readable").raw_ptr(),
+            b.texture_2d(dst).expect("dst still readable").identity_key(),
             host_ptr,
             "clear_skip_aliases leaves host borrows alone",
         );

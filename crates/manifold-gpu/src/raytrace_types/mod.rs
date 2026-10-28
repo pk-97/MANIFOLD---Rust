@@ -12,6 +12,14 @@ pub use params::*;
 mod seam;
 pub use seam::ShadowRayTracer;
 
+/// Candidates one ray's walk may test before it stops. Mirrors the
+/// shader's `RT_WALK_MAX_CANDIDATES` default; a unit test pins the two.
+pub const RT_WALK_MAX_CANDIDATES: u32 = 64;
+
+/// The emissive light table's triangle cap: the brightest triangles win.
+/// Mirrors the shader's `MAX_RT_EMISSIVE_TRIANGLES`.
+pub const MAX_RT_EMISSIVE_TRIANGLES: u32 = 4096;
+
 /// Fixed-capacity texture list returned by the normal-source table builder.
 /// The cap is part of the shader ABI, so this keeps the hot per-frame list on
 /// the stack while preserving the existing bounded-table degradation rules.

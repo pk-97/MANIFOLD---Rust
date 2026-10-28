@@ -233,6 +233,9 @@ fn dispatch_remap_weights(
         map_buf.write(0, bytemuck::cast_slice(maps));
     }
     let uniforms = [maps.len() as u32, 0, 0, 0];
+    // The kernel is live-anchored; its uniforms leave the extent off, so the
+    // counts are bound but never read.
+    let live_counts = device.create_buffer(4, BufferUse::Gpu);
     let mut encoder = device.create_encoder(label);
     encoder.dispatch_compute(
         &pipeline,
@@ -254,6 +257,11 @@ fn dispatch_remap_weights(
             GpuBinding::Buffer {
                 binding: 3,
                 buffer: &output_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &live_counts,
                 offset: 0,
             },
         ],
@@ -284,6 +292,9 @@ fn dispatch_remap_mesh(
         map_buf.write(0, bytemuck::cast_slice(maps));
     }
     let uniforms = [maps.len() as u32, 0, 0, 0];
+    // The kernel is live-anchored; its uniforms leave the extent off, so the
+    // counts are bound but never read.
+    let live_counts = device.create_buffer(4, BufferUse::Gpu);
     let mut encoder = device.create_encoder(label);
     encoder.dispatch_compute(
         &pipeline,
@@ -305,6 +316,11 @@ fn dispatch_remap_mesh(
             GpuBinding::Buffer {
                 binding: 3,
                 buffer: &output_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &live_counts,
                 offset: 0,
             },
         ],
@@ -335,7 +351,20 @@ fn dispatch_morph(
         target_buf.write(0, bytemuck::cast_slice(target));
         weights_buf.write(0, bytemuck::cast_slice(weights));
     }
-    let uniforms = [t.to_bits(), 1, weights.len() as u32, input.len() as u32];
+    // The trailing words are the live extent (off) and the struct padding.
+    let uniforms = [
+        t.to_bits(),
+        1,
+        weights.len() as u32,
+        input.len() as u32,
+        0,
+        0,
+        0,
+        0,
+    ];
+    // The kernel is live-anchored; its uniforms leave the extent off, so the
+    // counts are bound but never read.
+    let live_counts = device.create_buffer(4, BufferUse::Gpu);
     let mut encoder = device.create_encoder(label);
     encoder.dispatch_compute(
         &pipeline,
@@ -362,6 +391,11 @@ fn dispatch_morph(
             GpuBinding::Buffer {
                 binding: 4,
                 buffer: &output_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: &live_counts,
                 offset: 0,
             },
         ],

@@ -82,7 +82,7 @@
 //!    IS preserved: it's threaded in as `MainUiPassInputs::gpu_sink`
 //!    (`Option<(Arc<AtomicU64>, Arc<AtomicU64>)>`, fed by
 //!    `UiFrameProfile::gpu_sink()`; `None` headless — section 3 input presence) and
-//!    the seam attaches `encoder.add_gpu_time_handler(...)` before its
+//!    the seam attaches `encoder.tap_gpu_time(...)` before its
 //!    commit, so the "our GPU work vs. content-thread starvation" attribution
 //!    the frame-pacing investigations depend on is unchanged. What DID
 //!    coalesce is the fine per-pass CPU breakdown: the caller now wraps the
@@ -1415,13 +1415,14 @@ pub(crate) fn render_main_ui_passes(
     // headless (section 3 input presence). Precedent: `present_all_windows`
     // (pre-extraction) :4671-4676, which timed this same "Frame" encoder.
     if let Some((sink_us, sink_n)) = gpu_sink {
-        encoder.add_gpu_time_handler(move |secs| {
+        encoder.tap_gpu_time(std::sync::Arc::new(move |start, end| {
+            let secs = (end - start).max(0.0);
             sink_us.fetch_add(
                 (secs * 1_000_000.0) as u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
             sink_n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        });
+        }));
     }
     encoder.commit();
 

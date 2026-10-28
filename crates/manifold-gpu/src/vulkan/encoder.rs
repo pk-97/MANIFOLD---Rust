@@ -19,6 +19,7 @@ use ash::vk;
 use ash::vk::{AccessFlags2 as A, Handle, PipelineStageFlags2 as S};
 
 use super::core::Core;
+use super::span_timer::SpanSlot;
 use super::submit::{Batch, FrameResources, Keep, Queue, is_device_lost};
 use super::tracker::Tracker;
 use super::*;
@@ -51,7 +52,15 @@ pub struct GpuEncoder {
     key: Vec<u64>,
     /// The open encode-replay span's cache (`replay.rs`).
     pub(crate) replay: Option<super::replay::GpuReplayCache>,
+    /// Hears every submit's GPU start and end ([`Self::tap_gpu_time`]).
+    tap: Option<GpuTimeTap>,
+    /// The open [`GpuSpanTimer`] span every submit counts toward.
+    pub(crate) span: Option<Arc<SpanSlot>>,
+    /// The span the next submit ends.
+    pub(crate) span_closing: Option<Arc<SpanSlot>>,
 }
+
+type GpuTimeTap = Arc<dyn Fn(f64, f64) + Send + Sync>;
 
 /// One descriptor record: a `VkDescriptorBufferInfo` or
 /// `VkDescriptorImageInfo` as three words.
@@ -109,6 +118,9 @@ impl GpuEncoder {
             scopes: Vec::new(),
             key: Vec::new(),
             replay: None,
+            tap: None,
+            span: None,
+            span_closing: None,
         };
         encoder.open();
         encoder
@@ -317,8 +329,10 @@ impl GpuEncoder {
     }
 
     /// Close the open command buffer and submit every batch; the queue's
-    /// waiter runs the handlers and recycles the resources.
-    fn submit(&mut self) -> Result<u64, String> {
+    /// waiter runs the handlers and recycles the resources. `seconds`, when
+    /// given, receives the submit's GPU seconds as `f64` bits.
+    fn submit(&mut self, seconds: Option<Arc<AtomicU64>>) -> Result<u64, String> {
+        self.stamp(seconds);
         self.close(Vec::new());
         let mut handlers = std::mem::take(self.handlers.get_mut());
         handlers.push(self.fault_handler());
@@ -327,13 +341,93 @@ impl GpuEncoder {
             .queue
             .submit(&self.core.device, &self.batches, handlers, res);
         self.batches.clear();
+        if let Some(span) = self.span_closing.take() {
+            span.closed();
+        }
         result
     }
 
+    /// Bracket this submit with timestamps when anything reads its GPU time:
+    /// the tap, a span, or a wait returning it in `seconds`. The handler
+    /// reads them before the waiter recycles the query pool. A span hears
+    /// every submit, timed or not; one that failed counts as infinitely long.
+    fn stamp(&mut self, seconds: Option<Arc<AtomicU64>>) {
+        let tap = self.tap.clone();
+        let spans = [self.span.clone(), self.span_closing.clone()];
+        if tap.is_none() && seconds.is_none() && spans.iter().all(Option::is_none) {
+            return;
+        }
+        let res = self.res.as_mut().expect(OPEN);
+        let queries = res.queries;
+        let timestamps = self.core.timestamps;
+        if timestamps.is_some() {
+            let start = res.begin_cmd(&self.core);
+            let device = &self.core.device;
+            unsafe {
+                device.cmd_reset_query_pool(start, queries, 0, 2);
+                device.cmd_write_timestamp2(start, S::ALL_COMMANDS, queries, 0);
+                device.end_command_buffer(start)
+            }
+            .expect("Vulkan: end timestamp command buffer");
+            self.batches.insert(
+                0,
+                Batch {
+                    cmd: start,
+                    waits: Vec::new(),
+                    signals: Vec::new(),
+                },
+            );
+            unsafe { device.cmd_write_timestamp2(self.cmd, S::ALL_COMMANDS, queries, 1) };
+        }
+        for span in spans.iter().flatten() {
+            span.submitted();
+        }
+        let core = self.core.clone();
+        self.handlers.get_mut().push(Box::new(move || {
+            let times = timestamps.and_then(|(tick_ns, mask)| {
+                let mut stamps = [0u64; 2];
+                unsafe {
+                    core.device.get_query_pool_results(
+                        queries,
+                        0,
+                        &mut stamps,
+                        vk::QueryResultFlags::TYPE_64,
+                    )
+                }
+                .ok()?;
+                let to_seconds = |ticks: u64| (ticks & mask) as f64 * tick_ns * 1e-9;
+                let start = to_seconds(stamps[0]);
+                Some((start, start + to_seconds(stamps[1].wrapping_sub(stamps[0]))))
+            });
+            if let Some((start, end)) = times.filter(|_| !is_device_lost()) {
+                if let Some(tap) = &tap {
+                    tap(start, end);
+                }
+                if let Some(seconds) = &seconds {
+                    seconds.store((end - start).to_bits(), Ordering::Relaxed);
+                }
+            }
+            let failed = is_device_lost() || (timestamps.is_some() && times.is_none());
+            let span_seconds = match times {
+                _ if failed => f64::INFINITY,
+                Some((start, end)) => end - start,
+                None => 0.0,
+            };
+            for span in spans.iter().flatten() {
+                span.finished(span_seconds);
+            }
+        }));
+    }
+
     /// Submit, then block until the waiter has finished with the submit:
-    /// the GPU is done and every completion handler ran.
-    fn submit_and_wait(&mut self, context: &str) -> Result<(), String> {
-        let value = self.submit()?;
+    /// the GPU is done and every completion handler ran. `seconds` as in
+    /// [`Self::submit`].
+    fn submit_and_wait(
+        &mut self,
+        context: &str,
+        seconds: Option<Arc<AtomicU64>>,
+    ) -> Result<(), String> {
+        let value = self.submit(seconds)?;
         self.queue.wait_retired(value);
         if is_device_lost() {
             return Err(format!(
@@ -1057,13 +1151,6 @@ impl GpuEncoder {
         self.handlers.borrow_mut().push(Box::new(callback));
     }
 
-    /// Register a completed handler that reports this buffer's **true GPU
-    /// execution time** (`GPUEndTime - GPUStartTime`, seconds) once the GPU
-    /// finishes.
-    pub fn add_gpu_time_handler<F: Fn(f64) + Send + 'static>(&self, callback: F) {
-        todo!("vulkan P2")
-    }
-
     /// Register a diagnostic completed handler that logs GPU errors.
     pub fn add_completed_handler_with_status(&self, label: &str) {
         let label = label.to_string();
@@ -1086,15 +1173,16 @@ impl GpuEncoder {
     }
 
     /// Report the GPU start and end time (seconds, the device's clock) of
-    /// every command buffer this encoder commits to `tap`: the final one and
-    /// each chunk a `commit_and_continue` split off.
+    /// every submit this encoder makes to `tap`, however it commits: the
+    /// final one and each chunk a `commit_and_continue` split off. Each
+    /// tapped submit carries two timestamps.
     pub fn tap_gpu_time(&mut self, tap: std::sync::Arc<dyn Fn(f64, f64) + Send + Sync>) {
-        todo!("vulkan P2")
+        self.tap = Some(tap);
     }
 
     /// Commit the command buffer to the GPU queue.
     pub fn commit(mut self) {
-        if let Err(e) = self.submit() {
+        if let Err(e) = self.submit(None) {
             log::error!("{e}");
         }
     }
@@ -1102,7 +1190,7 @@ impl GpuEncoder {
     /// Commit the current command buffer to the GPU queue and continue
     /// encoding into a fresh command buffer from the same queue.
     pub fn commit_and_continue(&mut self, device: &GpuDevice) {
-        if let Err(e) = self.submit() {
+        if let Err(e) = self.submit(None) {
             log::error!("{e}");
         }
         self.restart();
@@ -1111,63 +1199,19 @@ impl GpuEncoder {
     /// [`Self::commit_and_continue`], then block until the GPU has completed
     /// everything committed so far.
     pub fn commit_wait_and_continue(&mut self, device: &GpuDevice) {
-        let result = self.submit_and_wait("commit_wait_and_continue");
+        let result = self.submit_and_wait("commit_wait_and_continue", None);
         self.restart();
         verify(result);
     }
 
     /// Commit and block until the GPU has completed the work and every
-    /// completion handler ran. `Err` on a lost device (D19): the caller skips
-    /// whatever needed the result.
-    pub fn commit_and_wait(mut self) -> Result<(), String> {
-        self.submit_and_wait("commit_and_wait")
-    }
-
-    /// Commit, block until completion, and return the **true GPU execution
-    /// time** of this command buffer in seconds (`GPUEndTime - GPUStartTime`).
-    pub fn commit_and_wait_completed_timed(mut self) -> f64 {
-        let Some((tick_ns, mask)) = self.core.timestamps else {
-            verify(self.commit_and_wait());
-            return 0.0;
-        };
-        let res = self.res.as_mut().expect(OPEN);
-        let queries = res.queries;
-        let start = res.begin_cmd(&self.core);
-        let device = &self.core.device;
-        unsafe {
-            device.cmd_reset_query_pool(start, queries, 0, 2);
-            device.cmd_write_timestamp2(start, S::ALL_COMMANDS, queries, 0);
-            device.end_command_buffer(start)
-        }
-        .expect("Vulkan: end timestamp command buffer");
-        self.batches.insert(
-            0,
-            Batch {
-                cmd: start,
-                waits: Vec::new(),
-                signals: Vec::new(),
-            },
-        );
-        unsafe { device.cmd_write_timestamp2(self.cmd, S::ALL_COMMANDS, queries, 1) };
-        // Read before the waiter recycles the query pool.
-        let ticks = Arc::new(AtomicU64::new(0));
-        let (core, out) = (self.core.clone(), ticks.clone());
-        self.handlers.get_mut().push(Box::new(move || {
-            let mut stamps = [0u64; 2];
-            let read = unsafe {
-                core.device.get_query_pool_results(
-                    queries,
-                    0,
-                    &mut stamps,
-                    vk::QueryResultFlags::TYPE_64,
-                )
-            };
-            if read.is_ok() {
-                out.store(stamps[1].wrapping_sub(stamps[0]) & mask, Ordering::Relaxed);
-            }
-        }));
-        verify(self.submit_and_wait("commit_and_wait_completed_timed"));
-        ticks.load(Ordering::Relaxed) as f64 * tick_ns * 1e-9
+    /// completion handler ran. `Ok` holds this submit's GPU seconds (0 when
+    /// the device has no timestamps). `Err` on a lost device (D19): the
+    /// caller skips whatever needed the result.
+    pub fn commit_and_wait(mut self) -> Result<f64, String> {
+        let seconds = Arc::new(AtomicU64::new(0));
+        self.submit_and_wait("commit_and_wait", Some(seconds.clone()))?;
+        Ok(f64::from_bits(seconds.load(Ordering::Relaxed)))
     }
 
     fn copy_buffer(

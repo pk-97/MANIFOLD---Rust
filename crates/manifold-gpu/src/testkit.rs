@@ -66,17 +66,14 @@ pub fn test_device() -> TestDevice {
     TestDevice { device, _lock }
 }
 
-/// Reuse app shader disk caches without populating live pipeline caches.
-#[cfg(not(vulkan_backend))]
+/// Reuse the app's shader disk caches without populating live pipeline
+/// caches. Each backend keeps its own files there: Metal a metallib archive
+/// and MSL, Vulkan a `VkPipelineCache` blob and SPIR-V.
 pub fn load_disk_shader_caches(device: &crate::GpuDevice) {
-    let cache = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-        .join("Library/Caches/com.latentspace.manifold");
+    let cache = manifold_foundation::AppDirs::current()
+        .expect("a home directory")
+        .cache;
     std::fs::create_dir_all(&cache).expect("shader cache directory");
     device.load_pipeline_archive(&cache.join("pipeline_cache.metallib"));
     device.load_msl_cache(&cache.join("msl_cache"));
 }
-
-/// The disk caches are Metal formats (a metallib archive and MSL source), which
-/// the Vulkan backend has no reader for, so its tests compile shaders cold.
-#[cfg(vulkan_backend)]
-pub fn load_disk_shader_caches(_device: &crate::GpuDevice) {}

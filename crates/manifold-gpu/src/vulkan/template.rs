@@ -73,6 +73,8 @@ pub struct TemplateTicket {
     store: u64,
     round: Vec<Command>,
     copies: u32,
+    /// Chunks of rounds, as `template_chunks` cuts them on every backend.
+    executes: u32,
 }
 
 pub struct GpuTemplateStore {
@@ -152,7 +154,7 @@ impl GpuEncoder {
         if ticket.store != store.id {
             return Err("gated template: the ticket belongs to another store".into());
         }
-        store.stats.executes += 1;
+        store.stats.executes += u64::from(ticket.executes);
         store.stats.command_writes += ticket.round.len() as u64 * u64::from(ticket.copies);
         let uploads: Vec<Vec<Option<(GpuBuffer, u64)>>> = ticket
             .round
@@ -233,7 +235,7 @@ fn prepare(
     body: impl FnOnce(&mut GatedRecorder<'_>) -> Result<(), String>,
 ) -> Result<TemplateTicket, String> {
     // Vulkan encodes rounds as dispatches, so no command buffer caps an execute.
-    crate::replay::template_executes(&at, commands, copies, u32::MAX)?;
+    let executes = crate::replay::template_executes(&at, commands, copies, u32::MAX)?;
     store.stats.walks += 1;
     let mut round = Vec::with_capacity(commands as usize);
     body(&mut GatedRecorder { round: &mut round })?;
@@ -247,5 +249,6 @@ fn prepare(
         store: store.id,
         round,
         copies,
+        executes,
     })
 }

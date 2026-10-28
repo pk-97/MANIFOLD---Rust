@@ -603,14 +603,9 @@ fn matches_port(
     };
     let mut times = Vec::new();
     for _ in 0..5 {
-        let (tx, rx) = std::sync::mpsc::channel();
         let mut enc = device.create_encoder("sheeting timing");
         stage.encode(&mut enc, &inputs, &world.tiles);
-        enc.add_gpu_time_handler(move |seconds| {
-            let _ = tx.send(seconds);
-        });
-        enc.commit_and_wait().expect("GPU work completes");
-        times.push(rx.recv().expect("GPU time"));
+        times.push(enc.commit_and_wait().expect("GPU work completes"));
     }
     times.sort_by(f64::total_cmp);
     eprintln!(

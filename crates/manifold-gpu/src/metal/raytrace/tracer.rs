@@ -36,10 +36,6 @@ use crate::types::{
     GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-/// Candidates one ray's walk may test before it stops (BUG-k1n2w). Mirrors
-/// the MSL `RT_WALK_MAX_CANDIDATES` default; a unit test pins the two.
-pub const RT_WALK_MAX_CANDIDATES: u32 = 64;
-
 // ─── Raw MSL kernels (shadow-only slice of rt_trace.metal) ────────────
 
 /// Shadow-only trim of the prototype's `TraceParams`/`trace_lighting` +

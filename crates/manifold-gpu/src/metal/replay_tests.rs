@@ -606,7 +606,7 @@ fn replay_cpu_cost_probe() {
             encode(&mut enc, rep);
             enc.end_current();
             direct_us.push(t.elapsed().as_secs_f64() * 1e6);
-            direct_gpu += enc.commit_and_wait_completed_timed() * 1e3;
+            direct_gpu += enc.commit_and_wait().expect("GPU work completes") * 1e3;
         }
         let mut cache = GpuReplayCache::default();
         let mut replay_us = Vec::with_capacity(REPS);
@@ -619,7 +619,7 @@ fn replay_cpu_cost_probe() {
             cache = enc.end_replay();
             enc.end_current();
             let us = t.elapsed().as_secs_f64() * 1e6;
-            let gpu = enc.commit_and_wait_completed_timed() * 1e3;
+            let gpu = enc.commit_and_wait().expect("GPU work completes") * 1e3;
             if rep >= 3 {
                 replay_us.push(us);
                 replay_gpu += gpu;
@@ -848,7 +848,7 @@ fn run_gated_frame(
     if enc.replay.is_some() {
         g.rig.cache = Some(enc.end_replay());
     }
-    enc.commit_and_wait_completed_timed() * 1e3
+    enc.commit_and_wait().expect("GPU work completes") * 1e3
 }
 
 /// Which segments run on frame `frame`: a pattern that changes every frame
@@ -1129,7 +1129,7 @@ fn replay_segment_dead_cost_probe() {
             if enc.replay.is_some() {
                 g.rig.cache = Some(enc.end_replay());
             }
-            let ms = enc.commit_and_wait_completed_timed() * 1e3;
+            let ms = enc.commit_and_wait().expect("GPU work completes") * 1e3;
             if rep == 2 && replay {
                 warm = g.rig.cache.as_ref().unwrap().stats();
             }

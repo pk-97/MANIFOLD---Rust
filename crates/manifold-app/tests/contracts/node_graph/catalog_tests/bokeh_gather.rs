@@ -1818,7 +1818,7 @@ fn bounded_gpu_benchmark_1080p_and_4k() {
             let mut gpu =
                 manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
             gather.encode(&mut gpu, &src, &width, &out, settings);
-            samples.push(native.commit_and_wait_completed_timed() * 1000.0);
+            samples.push(native.commit_and_wait().expect("GPU work completes") * 1000.0);
         }
         samples.sort_by(f64::total_cmp);
         let median = samples[samples.len() / 2];

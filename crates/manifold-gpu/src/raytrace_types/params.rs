@@ -967,3 +967,17 @@ pub(crate) fn atrous_post_params_bytes(params: &AtrousPostParams) -> &[u8] {
         )
     }
 }
+
+/// The emissive table's GPU-side stats: the trace kernel's light sampler and
+/// the firefly clamp read this 16-byte buffer directly. Mirrors the shader's
+/// `EmissiveTableStats` field for field.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EmissiveTableStats {
+    pub entry_count: u32,
+    pub entries_are_local: u32,
+    pub mean_power: f32,
+    pub total_area: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<EmissiveTableStats>() == 16);

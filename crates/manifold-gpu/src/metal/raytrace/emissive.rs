@@ -6,34 +6,17 @@
 //! deformed meshes reach the light table with no CPU geometry reads.
 
 use super::tracer::GpuShadowRayTracer;
-use super::{GiMaterial, RtAccel, RtAccelError, RtObjectGeometry, effective_instance_slots};
+use super::{
+    GiMaterial, MAX_RT_EMISSIVE_TRIANGLES, RtAccel, RtAccelError, RtObjectGeometry,
+    effective_instance_slots,
+};
 use crate::BufferUse;
 use crate::metal::encoder::GpuEncoder;
 use crate::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
-// RS-B (RAYTRACING_DESIGN.md section 15.3): per-triangle emissive light table
-// cap — power-rank truncated. Mirrors the embedded MSL `MAX_RT_EMISSIVE_TRIANGLES`
-// at the MSL source above (manual sync with the MSL constant).
-pub const MAX_RT_EMISSIVE_TRIANGLES: u32 = 4096;
-
 /// P4a radix-sort tile size — mirrors the MSL `EM_TILE` (same manual-sync
 /// discipline). One thread per tile per hist/scatter dispatch.
 const EM_TILE: u32 = 1024;
-
-/// §5.1: the table's GPU-side stats — the trace kernel's RIS sampler and the
-/// firefly clamp read this 16-byte buffer directly (buffer(9) / buffer(2)).
-/// Replaces the deleted `ShadowRayParams` CPU fields. Mirrors the MSL
-/// `EmissiveTableStats` field-for-field.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct EmissiveTableStats {
-    pub entry_count: u32,
-    pub entries_are_local: u32,
-    pub mean_power: f32,
-    pub total_area: f32,
-}
-
-const _: () = assert!(std::mem::size_of::<EmissiveTableStats>() == 16);
 
 /// CPU mirror of the MSL `EmissivePrepHeader` — CPU-written per refresh
 /// (shared buffer); `valid_count` is zeroed by the CPU at encode time and

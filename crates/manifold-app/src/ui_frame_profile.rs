@@ -105,7 +105,7 @@ impl UiFrameProfile {
     }
 
     /// Clones of the GPU-time accumulators to feed into a command-buffer
-    /// completion handler (see `GpuEncoder::add_gpu_time_handler`). Returns
+    /// GPU time tap (see `GpuEncoder::tap_gpu_time`). Returns
     /// `None` when disabled, so the caller skips the handler entirely.
     /// Threaded into `ui_frame::render_main_ui_passes` as
     /// `MainUiPassInputs::gpu_sink` (the live app passes `Some`; the harness,

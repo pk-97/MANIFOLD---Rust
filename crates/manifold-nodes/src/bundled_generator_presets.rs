@@ -255,7 +255,7 @@ mod tests {
                         failures.push(format!("{preset_id}: {frame} GPU failure: {e}"));
                         break;
                     }
-                    Ok(Ok(())) => {}
+                    Ok(Ok(_)) => {}
                 }
                 let bytes = match manifold_node_engine::gpu::headless_readback::readback_raw_halves(
                     &device,

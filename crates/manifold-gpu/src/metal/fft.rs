@@ -670,7 +670,7 @@ mod tests {
                 let mut enc = device.create_encoder("gpu-fft-cost");
                 forward.encode(&mut enc, &input, &spectrum);
                 inverse.encode(&mut enc, &spectrum, &back);
-                ms.push(enc.commit_and_wait_completed_timed() * 1000.0);
+                ms.push(enc.commit_and_wait().expect("GPU work completes") * 1000.0);
             }
             ms.sort_by(f64::total_cmp);
             eprintln!(

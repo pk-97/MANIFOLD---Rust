@@ -858,7 +858,7 @@ pub(crate) fn mesh_vertex_count(o: &RtObjectGeometry) -> u32 {
 fn emissive_peak_bytes(candidate_capacity: u32) -> u64 {
     // P4a: fixed table (triangles + aliases + stats + entry scratch + alias
     // stacks) plus the candidate/sort workspace sized over ALL objects.
-    let cap = u64::from(super::emissive::MAX_RT_EMISSIVE_TRIANGLES);
+    let cap = u64::from(crate::raytrace_types::MAX_RT_EMISSIVE_TRIANGLES);
     let table = cap * (96 + 8 + 8 + 2 * 4) + 16;
     table + super::emissive::EmissiveScratch::bytes_for(candidate_capacity)
 }

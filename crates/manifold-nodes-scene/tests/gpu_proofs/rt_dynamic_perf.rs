@@ -9,8 +9,8 @@
 use manifold_gpu::BufferUse;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
 
 use manifold_core::NodeId;
 use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
@@ -210,15 +210,8 @@ fn update_json(update: RtAccelUpdate) -> Value {
 }
 
 fn timed_commit(encoder: manifold_gpu::GpuEncoder) -> Option<f64> {
-    let (sender, receiver) = mpsc::channel();
-    encoder.add_gpu_time_handler(move |seconds| {
-        let _ = sender.send(seconds * 1000.0);
-    });
-    encoder.commit_and_wait().expect("GPU work completes");
-    receiver
-        .recv_timeout(Duration::from_secs(1))
-        .ok()
-        .filter(|millis| millis.is_finite() && *millis > 0.0)
+    let millis = encoder.commit_and_wait().expect("GPU work completes") * 1000.0;
+    (millis.is_finite() && millis > 0.0).then_some(millis)
 }
 
 fn run_configuration(device: &GpuDevice, configuration: Configuration) -> Value {

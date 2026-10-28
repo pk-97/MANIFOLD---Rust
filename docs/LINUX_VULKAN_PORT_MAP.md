@@ -69,21 +69,21 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Compute encoding | `dispatch_compute` (483), `dispatch_compute_indirect` (46), `compute_memory_barrier_buffers` (117), `pipeline_barrier` (no-op hint) | P1 |
 | Copies and clears | `clear_buffer` (25), `clear_texture` (120), `copy_buffer_to_buffer` (149), `copy_buffer_range` (14), `copy_texture_to_buffer` (159), `copy_texture_3d_to_buffer` (4), `copy_texture_to_texture` (51), `copy_depth_to_float` (1) | P1 |
 | Mipmaps | `generate_mipmaps` (20) | P2 |
-| Submission | `commit`, `commit_and_continue`, `commit_wait_and_continue`, `commit_and_wait` (a Result; device loss reports through it, D19), the timed and profiled forms, `add_completed_handler`, `add_completed_handler_with_status`, `add_gpu_time_handler`, `tap_gpu_time` | P1 (D8) |
+| Submission | `commit`, `commit_and_continue`, `commit_wait_and_continue`, `commit_and_wait` (a Result holding the submit's GPU seconds; device loss reports through it, D19), `add_completed_handler`, `add_completed_handler_with_status`, `tap_gpu_time` (every submit's GPU start and end), `GpuSpanTimer` | P1 (D8) |
 | Events and lanes | `create_event` (8); `GpuEvent` (`encoded_value`, the CPU counter, see D7; `signaled_value`, `is_done`, `wait_until_done`); `signal_event` (12), `signal_event_value`, `wait_event`; `use_async_lane`, `use_main_lane`, `finish_async_lane`, `wait_async_lane`; `GpuFenceWaiter` | P1 (D5, D7, D8) |
 | Frame lifetime | `frame_clock` (31), `FrameClock`, `RetireQueue`, `RetireMark`, `RetireSender`, `set_retirement`, `FrameFence`, `TexturePool` (`acquire`, `release`, `begin_frame`) | P1, after the hoist in section 9 step 4 |
 | Memory | `modifier_memory_snapshot` (44, D18), `allocation_counts`, `resource_scope_id` | P1 |
 | Water fast paths | `begin_replay`/`end_replay` (stubbed already), `begin_gated_segment`, `dispatch_compute_gated`, `end_gated_segments`, `GpuTemplateStore` (`prepare_template`, `execute_template`), `GatedRecorder`, `TemplateTicket`, `TemplateRanges` | P1 correct, P6 fast (design section 7) |
 | Render pipelines | `create_render_pipeline(&RenderPipelineDesc)`; `create_depth_stencil_state` (17), `GpuDepthStencilState` | P2 |
 | Draws | About 20 forms becoming one draw descriptor (section 11); `begin_render_pass`/`draw_in_render_pass`/`end_render_pass`, `set_scissor_rect` (7); types `DepthMsaaDraw`, `DepthMsaaPassDesc`, `AuxColorAttachment`, `DrawCount` | P2 |
-| Profiling | Whatever the GPU-timing consolidation leaves (section 11), on timestamp query pools | P2 (D17) |
+| Profiling | `commit_and_wait_profiled`, the per-dispatch profiler, on timestamp query pools | P2 (D17) |
 | Presentation | `GpuSurface` (`create_surface`, `next_drawable`, `present`, `resize`, `set_maximum_drawable_count`), `GpuDrawable`, `set_presented_observer`; `configure_edr`, window level, gravity and `set_presents_with_transaction` report "not supported" | P3 (D15) |
 | Device sharing | `sibling` (a second wrapper on the same native device with its own queue, D16) | P1 |
 | Metal-only, stay Metal | `raw_device`, `raw_device_ptr`, `raw_cmd_buf`, `raw_ptr`, `mtl4_bridge`, `metalfx`, `metalfx_m4`, `defer_drop`, `dispatch_compute_with_accel`; `create_io_surface_bgra8` and `create_texture_from_io_surface`, used only by the analyzer plugin and `tv-led-mirror` | never |
 
 **Shared already.** The frame fence, drop retirement, texture pool, fault registry (`gpu_fault`), firmware reports, profiled-frame records, draw descriptors and ray-tracing data types (`raytrace_types/`) live outside `metal/`; a backend supplies `RetiredResource` and `PoolAllocator`, and re-exports `raytrace_types` from its `raytrace` module.
 
-`span_timer.rs` is not hoisted: it goes with the GPU-timing consolidation (section 11).
+`span_timer.rs` stays per backend: Metal polls its command buffers, Vulkan reads the encoder's per-submit timestamps.
 
 ---
 
@@ -199,7 +199,6 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 
 **Attended, before P1 needs them**
 - **Buffer use** (section 11): the API landed 29 Oct with every former shared buffer as `Upload`; classification goes one subsystem at a time with that subsystem's proofs, then one full proof run.
-- **GPU timing** consolidation, with its own spec and a profiler session before and after. Before P2.
 
 **P1, one batch each, in this order**
 9. Done 28 Oct: one shared instance and device (`vulkan/core.rs`), gpu-allocator, buffers, textures and views, samplers, uploads, the memory snapshot and debug names. Private buffers are device-local and shared ones host-visible until the buffer-use API lands (D14). Textures go to `GENERAL` and uploads copy through staging in a submit the caller waits on; step 12 can make both asynchronous (D22).
@@ -251,10 +250,9 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 |---|---|---|---|
 | `create_buffer(size, BufferUse)` with every former shared buffer as `Upload`: GPU-only scratch, CPU-filled inputs and readbacks alike. It costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | Each buffer classified (D14) by evidence: a buffer whose mapping the CPU reads is `Readback`, one it only writes is `Upload` (write-only API), one it never maps is `Gpu`. On Metal, `Gpu` becomes Private. The callers that skip their write silently when `mapped_ptr()` is `None` (`detect_regions.rs:637`, `nested_cubes_geometry.rs:197`, `liquid_state.rs:341-357`, `track_regions.rs:539`, `mesh_cut_map.rs:228`) become hard errors first, so a wrong `Gpu` fails loudly instead of freezing geometry | Each subsystem's proofs, then one full proof run | One subsystem per batch. The biggest NVIDIA speed item in the port |
 | About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same | Overnight |
-| 5 ways to read GPU time: `tap_gpu_time`, `add_gpu_time_handler`, `commit_and_wait_completed_timed`, `commit_and_wait_profiled`, `GpuSpanTimer` (plus `raytrace/trace_timing.rs`) | One per-submit GPU time stream that the profiler, the span timer and the perf tools all read, plus the per-dispatch profiler. It redesigns the profiler, which proves every speed claim, so it gets its own spec | A profiler session before and after | Attended, before P2 |
 
 **Bigger cuts**
 - **Headless harness.** `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` boot through a Mac-only harness that duplicates app setup. After the bridge change they boot the normal content pipeline.
 - **One text engine.** The UI (2,172 lines) and the Text generator (689 lines) are two separate CoreText implementations. One cosmic-text module serves both.
 
-**Where the frame loop waits on the GPU:** only in coupled-liquid substeps (`commit_wait_and_continue`, `substep_region.rs:223`). The other production `commit_and_wait_completed` calls (about 35) sit in warmup, bakes, thumbnails and tools.
+**Where the frame loop waits on the GPU:** only in coupled-liquid substeps (`commit_wait_and_continue`, `substep_region.rs:223`). The other production `commit_and_wait` calls (about 35) sit in warmup, bakes, thumbnails and tools.

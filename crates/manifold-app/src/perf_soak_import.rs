@@ -298,7 +298,7 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
 /// frames — the honest sustained-load measurement (D7: real-time pacing's
 /// decode-readahead rationale doesn't apply, import graphs carry no
 /// wall-clock-coupled media). Reports min/p50/p95/max of true GPU time
-/// (`commit_and_wait_completed_timed`) and of CPU encode wall time.
+/// (`commit_and_wait`) and of CPU encode wall time.
 #[allow(clippy::too_many_arguments)]
 fn run_measured(
     runtime: &mut PresetRuntime,
@@ -323,7 +323,7 @@ fn run_measured(
         cpu_ms[i as usize] = t0.elapsed().as_secs_f64() * 1000.0;
         // No readback, no sleep here — the measured window is back-to-back
         // (D7 forbidden-moves list).
-        gpu_ms[i as usize] = enc.commit_and_wait_completed_timed() * 1000.0;
+        gpu_ms[i as usize] = enc.commit_and_wait()? * 1000.0;
     }
 
     let (g_min, g50, g95, gmax) = stats4(&gpu_ms);

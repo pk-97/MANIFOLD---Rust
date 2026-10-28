@@ -401,6 +401,7 @@ impl GpuEncoder {
         self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
+        self.register_gpu_time_tap();
         self.cmd_buf.commit();
         let total_ms = unsafe {
             self.cmd_buf.waitUntilCompleted();
@@ -3016,24 +3017,6 @@ impl GpuEncoder {
         }
     }
 
-    /// Register a completed handler that reports this buffer's **true GPU
-    /// execution time** (`GPUEndTime - GPUStartTime`, seconds) once the GPU
-    /// finishes. Non-blocking: the closure runs on a background thread at
-    /// completion. For profilers — feed the value into an atomic/channel, do
-    /// not block. Reports `0.0` if the driver has no timestamps for the buffer.
-    pub fn add_gpu_time_handler<F: Fn(f64) + Send + 'static>(&self, callback: F) {
-        use block2::RcBlock;
-        let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-            let cb = unsafe { buf.as_ref() };
-            let start = unsafe { cb.GPUStartTime() };
-            let end = unsafe { cb.GPUEndTime() };
-            callback((end - start).max(0.0));
-        });
-        unsafe {
-            self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
-        }
-    }
-
     /// Register a diagnostic completed handler that logs GPU errors.
     /// Kept for call sites that need the simple form; the universal
     /// handler with scope capture is registered at commit
@@ -3148,11 +3131,13 @@ impl GpuEncoder {
     }
 
     /// Report the GPU start and end time (seconds, the device's clock) of
-    /// every command buffer this encoder commits to `tap`: the final one and
-    /// each chunk a `commit_and_continue` split off. Chunks of one frame
-    /// overlap on the GPU, so a frame's true GPU time is the span of its
-    /// chunks, never the sum of their durations; a tap on the final buffer
-    /// alone misses every chunk before it.
+    /// every command buffer this encoder commits to `tap`, however it
+    /// commits: the final one and each chunk a `commit_and_continue` split
+    /// off. The closure runs on a completion thread, so it only stores or
+    /// sends the times. This is the one per-submit GPU time stream; the
+    /// per-dispatch profiler is [`Self::commit_and_wait_profiled`]. Chunks
+    /// of one frame overlap on the GPU, so a frame's true GPU time is the
+    /// span of its chunks, never the sum of their durations.
     pub fn tap_gpu_time(&mut self, tap: std::sync::Arc<dyn Fn(f64, f64) + Send + Sync>) {
         self.gpu_time_tap = Some(tap);
     }
@@ -3234,19 +3219,24 @@ impl GpuEncoder {
     /// Commit and block until the GPU has fully completed the work, with
     /// every completion handler run. Required for synchronous readback: a
     /// copy to a shared buffer is only readable once the GPU reports
-    /// completion. `Err` when the buffer did not reach `Completed` (a page
-    /// fault, a timeout, an invalid resource): the destination then holds
-    /// garbage, so the caller skips whatever needed the result. Tests
-    /// `.expect()` it; the live app logs and carries on.
-    pub fn commit_and_wait(mut self) -> Result<(), String> {
+    /// completion. `Ok` holds this buffer's GPU seconds (`GPUEndTime -
+    /// GPUStartTime`, 0 when the driver has no timestamps for it); chunks a
+    /// `commit_and_continue` split off report only to the tap. `Err` when
+    /// the buffer did not reach `Completed` (a page fault, a timeout, an
+    /// invalid resource): the destination then holds garbage, so the caller
+    /// skips whatever needed the result. Tests `.expect()` it; the live app
+    /// logs and carries on.
+    pub fn commit_and_wait(mut self) -> Result<f64, String> {
         self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
+        self.register_gpu_time_tap();
         self.cmd_buf.commit();
         unsafe { self.cmd_buf.waitUntilCompleted() };
         use objc2_metal::MTLCommandBufferStatus;
         if unsafe { self.cmd_buf.status() } == MTLCommandBufferStatus::Completed {
-            return Ok(());
+            let (start, end) = unsafe { (self.cmd_buf.GPUStartTime(), self.cmd_buf.GPUEndTime()) };
+            return Ok((end - start).max(0.0));
         }
         let (code, desc) = match unsafe { self.cmd_buf.error() } {
             None => (-1i64, String::from("(no error object)")),
@@ -3283,27 +3273,6 @@ impl GpuEncoder {
             panic!("{msg}");
         } else {
             log::error!("{msg}");
-        }
-    }
-
-    /// Commit, block until completion, and return the **true GPU execution
-    /// time** of this command buffer in seconds (`GPUEndTime - GPUStartTime`).
-    ///
-    /// This is actual GPU-side time as reported by the driver, NOT CPU
-    /// wall-clock around the submit — the correct source for profiling
-    /// (wall-clock includes encode + scheduling + wait latency). Returns
-    /// `0.0` if the driver reports no GPU timestamps for this buffer
-    /// (degenerate / no-GPU-work case). Use for benches/profilers only.
-    pub fn commit_and_wait_completed_timed(mut self) -> f64 {
-        self.debug_assert_lanes_closed();
-        self.end_current();
-        self.register_fault_handler();
-        self.cmd_buf.commit();
-        unsafe {
-            self.cmd_buf.waitUntilCompleted();
-            let start = self.cmd_buf.GPUStartTime();
-            let end = self.cmd_buf.GPUEndTime();
-            (end - start).max(0.0)
         }
     }
 }

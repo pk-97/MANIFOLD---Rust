@@ -34,8 +34,10 @@ pub struct EmissiveLightTable {
     _never: Infallible,
 }
 
+/// Boxed so dropping a plan frees something, as on Metal, where callers drop
+/// a plan to release it before planning again.
 pub struct RtAccelPlan {
-    never: Infallible,
+    never: Box<Infallible>,
 }
 
 impl GpuShadowRayTracer {
@@ -225,7 +227,7 @@ impl RtAccelPlan {
     /// holds — BLAS/TLAS storage, both scratch kinds, descriptor/instance
     /// tables, emissive workspaces, lifetime pins.
     pub fn additional_peak_bytes(&self) -> u64 {
-        match self.never {}
+        match *self.never {}
     }
 }
 
@@ -415,6 +417,15 @@ pub fn encode_inline_copy(
     dst_offset: u64,
     bytes: &[u8],
 ) {
+    panic!("ray tracing is unavailable until vulkan P7; check GpuDevice::supports_ray_tracing")
+}
+
+pub fn ensure_normal_sources<'a>(
+    slot: &mut Option<GpuBuffer>,
+    capacity: &mut usize,
+    device: &GpuDevice,
+    objects: &[RtObjectGeometry<'a>],
+) -> RtMaterialTextures<'a> {
     panic!("ray tracing is unavailable until vulkan P7; check GpuDevice::supports_ray_tracing")
 }
 

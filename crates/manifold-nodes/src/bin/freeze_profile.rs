@@ -229,7 +229,7 @@ fn main() {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                     exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
                 }
-                gpu_secs += enc.commit_and_wait_completed_timed();
+                gpu_secs += enc.commit_and_wait().expect("GPU work completes");
             }
             let ms_frame = gpu_secs * 1000.0 / f64::from(FRAMES);
             let ms_step = if steps > 0 {
@@ -342,7 +342,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                     };
                     exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
                 }
-                secs += enc.commit_and_wait_completed_timed();
+                secs += enc.commit_and_wait().expect("GPU work completes");
             }
             row[col] = secs * 1000.0 / 30.0;
         }
@@ -400,7 +400,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                     &params,
                 );
             }
-            secs += enc.commit_and_wait_completed_timed();
+            secs += enc.commit_and_wait().expect("GPU work completes");
         }
         println!(
             "PresetRuntime::render: {:.4} ms/frame",
@@ -488,7 +488,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
             }
-            secs += enc.commit_and_wait_completed_timed();
+            secs += enc.commit_and_wait().expect("GPU work completes");
         }
         Some(secs * 1000.0 / f64::from(PROF_FRAMES))
     };
@@ -662,7 +662,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
                     "syn-buf-step",
                 );
             }
-            sep_secs += enc.commit_and_wait_completed_timed();
+            sep_secs += enc.commit_and_wait().expect("GPU work completes");
         }
         let sep_ms = sep_secs * 1000.0 / f64::from(FRAMES);
 
@@ -696,7 +696,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
                 [groups, 1, 1],
                 "syn-buf-fused",
             );
-            fus_secs += enc.commit_and_wait_completed_timed();
+            fus_secs += enc.commit_and_wait().expect("GPU work completes");
         }
         let fus_ms = fus_secs * 1000.0 / f64::from(FRAMES);
 
@@ -726,7 +726,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
 ///
 /// Per frame we record the CPU wall time of `render()` (= full param apply +
 /// uniform rebuild + command encoding; commit excluded) and the real GPU
-/// time (`commit_and_wait_completed_timed`). Reports p50/p95/max for both
+/// time (`commit_and_wait`). Reports p50/p95/max for both
 /// arms plus a spike census, so a steady delta and a sawtooth read
 /// differently. Fresh runtime per arm (no state bleed).
 fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>, args: &[&str]) {
@@ -994,7 +994,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
                     );
                 }
                 cpu_ms[i] = t0.elapsed().as_secs_f64() * 1000.0;
-                gpu_ms[i] = enc.commit_and_wait_completed_timed() * 1000.0;
+                gpu_ms[i] = enc.commit_and_wait().expect("GPU work completes") * 1000.0;
             }
 
             let stats = |xs: &[f64]| {
@@ -1174,7 +1174,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
             }
-            secs += enc.commit_and_wait_completed_timed();
+            secs += enc.commit_and_wait().expect("GPU work completes");
         }
         Some(secs * 1000.0 / f64::from(FRAMES))
     };
@@ -1329,7 +1329,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
             }
-            un_secs += enc.commit_and_wait_completed_timed();
+            un_secs += enc.commit_and_wait().expect("GPU work completes");
         }
         let unfused_ms = un_secs * 1000.0 / f64::from(FRAMES);
 
@@ -1357,7 +1357,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
                 &output.texture,
                 &params,
             );
-            f_secs += enc.commit_and_wait_completed_timed();
+            f_secs += enc.commit_and_wait().expect("GPU work completes");
         }
         let fused_ms = f_secs * 1000.0 / f64::from(FRAMES);
 
@@ -1756,7 +1756,7 @@ fn profile_synthetic_pointwise(device: &std::sync::Arc<GpuDevice>) {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
             }
-            gpu_secs += enc.commit_and_wait_completed_timed();
+            gpu_secs += enc.commit_and_wait().expect("GPU work completes");
         }
         let ms = gpu_secs * 1000.0 / f64::from(FRAMES);
         let marginal = if n == 1 { ms } else { ms - prev };
@@ -1849,7 +1849,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                             &ParamManifest::default(),
                         );
                     }
-                    gpu_secs += enc.commit_and_wait_completed_timed();
+                    gpu_secs += enc.commit_and_wait().expect("GPU work completes");
                 }
                 Ok::<f64, String>(gpu_secs * 1000.0 / f64::from(GEN_FRAMES))
             }));
@@ -1991,7 +1991,7 @@ fn profile_fluidsim_particle_sweep(
                         &ParamManifest::default(),
                     );
                 }
-                gpu_secs += enc.commit_and_wait_completed_timed();
+                gpu_secs += enc.commit_and_wait().expect("GPU work completes");
             }
             Ok::<f64, String>(gpu_secs * 1000.0 / f64::from(GEN_FRAMES))
         }));

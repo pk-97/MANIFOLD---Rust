@@ -345,7 +345,7 @@ pub struct GpuTemplateStats {
     pub command_writes: u64,
     /// Slots appended because no idle slot was free.
     pub grown: u64,
-    /// Execute calls.
+    /// Chunks of rounds executed, as [`template_chunks`] cuts them.
     pub executes: u64,
     /// Prepares refused (`Err`), nothing touched.
     pub refused: u64,

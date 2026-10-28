@@ -632,7 +632,7 @@ fn parity_timed_waits_retirement_and_dropped_encoders() {
         affine(&mut enc, &pipeline, &a, &b, 1.0, 1.0, n);
         affine(&mut enc, &pipeline, &b, &a, 1.0, 1.0, n);
     }
-    let seconds = enc.commit_and_wait_completed_timed();
+    let seconds = enc.commit_and_wait().expect("GPU work completes");
     assert!((0.0..1.0).contains(&seconds), "{seconds}");
     if device.core.timestamps.is_some() {
         assert!(seconds > 0.0);
@@ -716,9 +716,10 @@ fn main() { atomicAdd(&counter[params.slot], 1u); }
     enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(read::<u32>(&counter, 4), [1, 0, 14, 0]);
     let stats = store.stats();
+    let chunks = crate::replay::template_chunks(7, 4, 2).count() as u64;
     assert_eq!(
         (stats.walks, stats.executes, stats.command_writes),
-        (1, 1, 14)
+        (1, chunks, 14)
     );
 
     // Refusals: a body that issues the wrong count, a shape past the range
@@ -745,5 +746,81 @@ fn main() { atomicAdd(&counter[params.slot], 1u); }
     assert!(enc.execute_template(&mut other, ticket).is_err());
     enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(read::<u32>(&counter, 4), [1, 0, 14, 0]);
+    assert_no_validation_errors();
+}
+
+/// A span reports its longest submit, never the sum nor the CPU pauses
+/// between submits; the tap hears every submit however it commits, and the
+/// wait returns its own submit's time.
+#[test]
+fn parity_span_timer_and_gpu_time_tap() {
+    let device = GpuDevice::new();
+    let pipeline = device.create_compute_pipeline(
+        "@group(0) @binding(0) var<storage, read_write> out: array<u32>;
+         struct Work { loops: u32 };
+         @group(0) @binding(1) var<uniform> work: Work;
+         @compute @workgroup_size(64) fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+             var acc = id.x;
+             for (var i = 0u; i < work.loops; i = i + 1u) { acc = acc * 1664525u + 1013904223u; }
+             if (acc == 0u) { out[0] = acc; }
+         }",
+        "cs_main",
+        "parity span",
+    );
+    let buffer = device.create_buffer(4, BufferUse::Gpu);
+    let dispatch = |encoder: &mut GpuEncoder, loops: u32| {
+        let work = loops.to_ne_bytes();
+        encoder.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Buffer {
+                    binding: 0,
+                    buffer: &buffer,
+                    offset: 0,
+                },
+                GpuBinding::Bytes {
+                    binding: 1,
+                    data: &work,
+                },
+            ],
+            [4096, 1, 1],
+            "span",
+        );
+    };
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let tap = heard.clone();
+    let mut timer = GpuSpanTimer::default();
+    let mut encoder = device.create_encoder("parity span");
+    encoder.tap_gpu_time(Arc::new(move |start, end| {
+        tap.lock().expect("tap").push(end - start)
+    }));
+    timer.begin(&mut encoder, 7, 3);
+    for loops in [200, 20_000, 200, 2_000] {
+        dispatch(&mut encoder, loops);
+        encoder.commit_and_continue(&device);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    dispatch(&mut encoder, 200);
+    timer.end(&mut encoder);
+    assert_eq!(timer.in_flight_frame(), Some(3), "the span is pending");
+    let last = encoder.commit_and_wait().expect("GPU work completes");
+
+    let each = heard.lock().expect("tap").clone();
+    let mut spans = Vec::new();
+    timer.poll(|key, frame, seconds| spans.push((key, frame, seconds)));
+    assert_eq!(timer.in_flight_frame(), None);
+    if device.core.timestamps.is_some() {
+        assert_eq!(each.len(), 5, "the tap hears every submit: {each:?}");
+        assert_eq!(each[4], last, "the wait returns its submit's time");
+        let longest = each.iter().copied().fold(0.0, f64::max);
+        assert_eq!(spans, [(7, 3, longest)], "the longest submit: {each:?}");
+        assert!(longest < each.iter().sum::<f64>(), "never the sum");
+        assert!(longest < 0.25, "the 400 ms of CPU pauses never count");
+    } else {
+        assert!(each.is_empty() && spans.is_empty() && last == 0.0);
+    }
+    let mut again = 0;
+    timer.poll(|_, _, _| again += 1);
+    assert_eq!(again, 0, "a span is read once");
     assert_no_validation_errors();
 }
