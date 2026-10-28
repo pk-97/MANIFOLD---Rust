@@ -1310,12 +1310,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.native_device.clone()
     }
 
-    /// Raw Metal device pointer for FFI interop (encoder sharing).
-    #[cfg(target_os = "macos")]
-    pub fn native_device_ptr(&self) -> Option<*mut std::ffi::c_void> {
-        self.native_device.as_ref().map(|d| d.raw_device_ptr())
-    }
-
     /// Duration the content thread blocked waiting for a GPU surface to become
     /// available (ms). Non-zero means the GPU was still processing a frame from
     /// 2 frames ago when the content thread woke up — a sign of GPU saturation.

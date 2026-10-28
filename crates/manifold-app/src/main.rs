@@ -151,7 +151,7 @@ mod rt_capture;
 // ── bridge-probe: headless SharedTextureBridge tear detector (BUG-xaw4) ──
 #[cfg(feature = "perf-soak")]
 mod bridge_probe;
-#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+#[cfg(feature = "perf-soak")]
 mod export_repro;
 #[cfg(all(feature = "ui-automation", unix))]
 mod live_ui;
@@ -223,7 +223,7 @@ fn main() {
     // flipping this back to `true` restores it. See `manifold_ui::anim`.
     manifold_ui::anim::set_motion_enabled(false);
 
-    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    #[cfg(feature = "perf-soak")]
     {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).map(String::as_str) == Some("export-repro") {

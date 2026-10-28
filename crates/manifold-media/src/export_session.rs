@@ -6,18 +6,12 @@
 
 use std::fmt;
 
-// Off the Mac the encoder is not built yet (P5 export), so its session
-// methods and these imports go unused there.
-#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 use manifold_core::tempo::{TempoMap, TempoMapConverter};
-#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 use manifold_core::units::{Beats, Bpm};
+use manifold_gpu::{GpuDevice, GpuTexture};
 
-#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
+use crate::encoder::{EncoderError, VideoEncoder};
 use crate::export_config::ExportConfig;
-
-#[cfg(target_os = "macos")]
-use crate::metal_encoder::{EncoderError, MetalEncoder};
 
 /// Result of a completed export.
 #[derive(Debug)]
@@ -34,18 +28,12 @@ pub enum ExportError {
     NoContent,
     /// Export range is invalid (start >= end).
     InvalidRange { start: f64, end: f64 },
-    /// Metal encoder error.
-    #[cfg(target_os = "macos")]
+    /// Video encoder error.
     Encoder(EncoderError),
     /// Audio mux error.
     AudioMux(String),
     /// Export was cancelled by user.
     Cancelled,
-    /// Platform not supported for native encoding.
-    // Unconstructed on every platform today — MetalEncoder is the only encoder
-    // this crate has; a non-macOS encoder path is unbuilt. Un-suppresses when that path returns this.
-    #[allow(dead_code)]
-    UnsupportedPlatform,
 }
 
 impl fmt::Display for ExportError {
@@ -55,16 +43,13 @@ impl fmt::Display for ExportError {
             Self::InvalidRange { start, end } => {
                 write!(f, "invalid export range: {start} >= {end}")
             }
-            #[cfg(target_os = "macos")]
             Self::Encoder(e) => write!(f, "encoder error: {e}"),
             Self::AudioMux(msg) => write!(f, "audio mux error: {msg}"),
             Self::Cancelled => write!(f, "export cancelled"),
-            Self::UnsupportedPlatform => write!(f, "native encoding not supported"),
         }
     }
 }
 
-#[cfg(target_os = "macos")]
 impl From<EncoderError> for ExportError {
     fn from(e: EncoderError) -> Self {
         Self::Encoder(e)
@@ -80,7 +65,6 @@ impl From<EncoderError> for ExportError {
 /// Pulled out of `ExportSession::finalize` (which requires a real Metal
 /// encoder, macOS-only) so the rename-on-failure behavior is unit-testable
 /// on any host with nothing but plain files.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn preserve_video_and_fail(encoder_output: &str, output_path: &str, reason: String) -> ExportError {
     let preserved_path = format!("{output_path}.video-only-audio-mux-failed.mp4");
     match std::fs::rename(encoder_output, &preserved_path) {
@@ -95,10 +79,9 @@ fn preserve_video_and_fail(encoder_output: &str, output_path: &str, reason: Stri
 ///
 /// Created with a config and tempo map, calculates frame counts and timing,
 /// wraps the native encoder, and tracks progress.
-#[cfg(target_os = "macos")]
 pub struct ExportSession {
     config: ExportConfig,
-    encoder: MetalEncoder,
+    encoder: VideoEncoder,
     total_frames: u32,
     start_seconds: f32,
     end_seconds: f32,
@@ -106,20 +89,21 @@ pub struct ExportSession {
     cancelled: bool,
 }
 
-#[cfg(target_os = "macos")]
 impl ExportSession {
     /// Create a new export session.
     ///
     /// Computes the export range in seconds, calculates total frame count,
-    /// and initializes the native Metal encoder.
+    /// and opens the platform's video encoder.
     ///
     /// - `config`: export parameters
     /// - `bpm`: project BPM (fallback for tempo map)
     /// - `tempo_map`: project tempo map for beat->seconds conversion
+    /// - `device`: the device the frames render on, shared with the encoder
     pub fn new(
         config: ExportConfig,
         bpm: f32,
         tempo_map: &mut TempoMap,
+        device: Option<&GpuDevice>,
     ) -> Result<Self, ExportError> {
         let fallback = Bpm(bpm);
         let start_seconds =
@@ -165,7 +149,14 @@ impl ExportSession {
             config.output_path.clone()
         };
 
-        let encoder = Self::create_encoder(&config, &encoder_output, None)?;
+        let encoder = VideoEncoder::new(
+            config.width,
+            config.height,
+            config.fps,
+            &encoder_output,
+            config.hdr,
+            device,
+        )?;
 
         log::info!(
             "[ExportSession] {} frames, {:.2}s, beats {:.1}-{:.1}, audio_offset={:.3}s",
@@ -187,122 +178,18 @@ impl ExportSession {
         })
     }
 
-    /// Encode a single frame. The caller provides the raw Metal texture pointer.
-    ///
-    /// # Safety
-    /// `metal_texture_ptr` must be a valid `id<MTLTexture>`.
-    pub unsafe fn encode_frame(
+    /// Encode `texture`, rendered on `device`, as the next frame. The GPU
+    /// work that wrote it has completed.
+    pub fn encode_frame(
         &mut self,
-        metal_texture_ptr: *mut std::ffi::c_void,
+        device: &GpuDevice,
+        texture: &GpuTexture,
     ) -> Result<(), ExportError> {
         if self.cancelled {
             return Err(ExportError::Cancelled);
         }
-        unsafe { self.encoder.encode_frame(metal_texture_ptr)? };
+        self.encoder.encode_frame(device, texture)?;
         Ok(())
-    }
-
-    /// Create an export session using the content pipeline's Metal device.
-    ///
-    /// Same as `new()` but shares the device to avoid cross-device GPU sync.
-    ///
-    /// # Safety
-    /// `device_ptr` must be a valid `id<MTLDevice>` that outlives the session.
-    pub unsafe fn new_with_device(
-        config: ExportConfig,
-        bpm: f32,
-        tempo_map: &mut TempoMap,
-        device_ptr: *mut std::ffi::c_void,
-    ) -> Result<Self, ExportError> {
-        let fallback = Bpm(bpm);
-        let start_seconds =
-            TempoMapConverter::beat_to_seconds(tempo_map, Beats(config.start_beat), fallback)
-                .as_f32();
-        let end_seconds =
-            TempoMapConverter::beat_to_seconds(tempo_map, Beats(config.end_beat), fallback)
-                .as_f32();
-
-        if end_seconds <= start_seconds {
-            return Err(ExportError::InvalidRange {
-                start: config.start_beat,
-                end: config.end_beat,
-            });
-        }
-
-        let duration = end_seconds - start_seconds;
-        let total_frames = (duration * config.fps).round() as u32;
-
-        if total_frames == 0 {
-            return Err(ExportError::NoContent);
-        }
-
-        let audio_offset_seconds = if config.has_audio() {
-            let audio_start_seconds = TempoMapConverter::beat_to_seconds(
-                tempo_map,
-                Beats(config.audio_start_beat),
-                fallback,
-            )
-            .as_f32();
-            audio_start_seconds - start_seconds - config.audio_encoder_delay
-        } else {
-            0.0
-        };
-
-        let encoder_output = if config.has_audio() {
-            format!("{}.video_only.mp4", config.output_path)
-        } else {
-            config.output_path.clone()
-        };
-
-        let encoder = Self::create_encoder(&config, &encoder_output, Some(device_ptr))?;
-
-        log::info!(
-            "[ExportSession] {} frames, {:.2}s, beats {:.1}-{:.1}, \
-             audio_offset={:.3}s (shared device)",
-            total_frames,
-            duration,
-            config.start_beat,
-            config.end_beat,
-            audio_offset_seconds,
-        );
-
-        Ok(Self {
-            config,
-            encoder,
-            total_frames,
-            start_seconds,
-            end_seconds,
-            audio_offset_seconds,
-            cancelled: false,
-        })
-    }
-
-    /// Create the Metal encoder, optionally sharing an external device.
-    fn create_encoder(
-        config: &ExportConfig,
-        encoder_output: &str,
-        device_ptr: Option<*mut std::ffi::c_void>,
-    ) -> Result<MetalEncoder, EncoderError> {
-        if let Some(ptr) = device_ptr {
-            unsafe {
-                MetalEncoder::new_with_device(
-                    config.width,
-                    config.height,
-                    config.fps,
-                    encoder_output,
-                    config.hdr,
-                    ptr,
-                )
-            }
-        } else {
-            MetalEncoder::new(
-                config.width,
-                config.height,
-                config.fps,
-                encoder_output,
-                config.hdr,
-            )
-        }
     }
 
     /// Export progress as a fraction (0.0..1.0).

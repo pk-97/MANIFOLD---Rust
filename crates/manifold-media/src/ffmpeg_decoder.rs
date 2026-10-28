@@ -17,13 +17,16 @@ use crate::decoder::{DecodeStatus, DecoderBackend, DecoderError, VideoDecoder, V
 /// Opens files through FFmpeg.
 pub struct FfmpegBackend;
 
+/// Register FFmpeg's formats and codecs, and keep its log to errors.
+pub(crate) fn init() -> Result<(), ffmpeg::Error> {
+    ffmpeg::init().inspect_err(|e| log::error!("[FFmpeg] init: {e}"))?;
+    ffmpeg::util::log::set_level(ffmpeg::util::log::Level::Error);
+    Ok(())
+}
+
 impl FfmpegBackend {
     pub fn new() -> Result<Self, DecoderError> {
-        ffmpeg::init().map_err(|e| {
-            log::error!("[FFmpeg] init: {e}");
-            DecoderError::Unavailable
-        })?;
-        ffmpeg::util::log::set_level(ffmpeg::util::log::Level::Error);
+        init().map_err(|_| DecoderError::Unavailable)?;
         Ok(Self)
     }
 }

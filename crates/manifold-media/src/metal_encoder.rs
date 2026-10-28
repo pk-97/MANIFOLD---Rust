@@ -4,68 +4,26 @@
 //! AVAssetWriter + VideoToolbox. Port of Unity MetalEncoderNative.cs.
 
 use std::ffi::{CString, c_void};
-use std::fmt;
 
+use manifold_gpu::{GpuDevice, GpuTexture};
+
+use crate::encoder::EncoderError;
 use crate::frame_rate::fps_to_rational;
 use crate::metal_ffi;
 
-/// Error codes returned by the native Metal encoder.
-/// Matches ME_ERR_* defines in MetalEncoderPlugin.m.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EncoderError {
-    /// Encoder handle is NULL.
-    NullHandle,
-    /// AVAssetWriter not in writing state or input not ready.
-    WriterNotReady,
-    /// Failed to create CVPixelBuffer from pool.
-    PixelBufferCreate,
-    /// Failed to create Metal texture from CVPixelBuffer.
-    TextureCreate,
-    /// GPU compute blit/copy failed.
-    BlitFailed,
-    /// Failed to append pixel buffer to AVAssetWriter.
-    AppendFailed,
-    /// AVAssetWriter finalization failed.
-    WriterFailed,
-    /// Source Metal texture pointer is NULL.
-    NullTexture,
-    /// Metal compute shader compilation failed.
-    ShaderFailed,
-    /// Metal encoder is not available on this system.
-    Unavailable,
-}
-
-impl EncoderError {
-    fn from_code(code: i32) -> Self {
-        match code {
-            1 => Self::NullHandle,
-            2 => Self::WriterNotReady,
-            3 => Self::PixelBufferCreate,
-            4 => Self::TextureCreate,
-            5 => Self::BlitFailed,
-            6 => Self::AppendFailed,
-            7 => Self::WriterFailed,
-            8 => Self::NullTexture,
-            9 => Self::ShaderFailed,
-            _ => Self::WriterFailed,
-        }
-    }
-}
-
-impl fmt::Display for EncoderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NullHandle => write!(f, "encoder handle is null"),
-            Self::WriterNotReady => write!(f, "AVAssetWriter not ready"),
-            Self::PixelBufferCreate => write!(f, "CVPixelBuffer creation failed"),
-            Self::TextureCreate => write!(f, "Metal texture creation failed"),
-            Self::BlitFailed => write!(f, "GPU compute blit failed"),
-            Self::AppendFailed => write!(f, "pixel buffer append failed"),
-            Self::WriterFailed => write!(f, "AVAssetWriter finalization failed"),
-            Self::NullTexture => write!(f, "source Metal texture is null"),
-            Self::ShaderFailed => write!(f, "Metal shader compilation failed"),
-            Self::Unavailable => write!(f, "Metal encoder not available"),
-        }
+/// The plugin's `ME_ERR_*` codes.
+fn error_from_code(code: i32) -> EncoderError {
+    match code {
+        1 => EncoderError::NullHandle,
+        2 => EncoderError::WriterNotReady,
+        3 => EncoderError::PixelBufferCreate,
+        4 => EncoderError::TextureCreate,
+        5 => EncoderError::BlitFailed,
+        6 => EncoderError::AppendFailed,
+        7 => EncoderError::WriterFailed,
+        8 => EncoderError::NullTexture,
+        9 => EncoderError::ShaderFailed,
+        _ => EncoderError::WriterFailed,
     }
 }
 
@@ -103,7 +61,34 @@ impl MetalEncoder {
     /// - `fps`: frame rate (rounded to nearest integer for CMTime)
     /// - `output_path`: file path for the output MP4
     /// - `hdr`: true for HEVC HDR, false for H.264 SDR
+    /// - `device`: the device the frames are rendered on; sharing it avoids
+    ///   cross-device GPU sync. `None` makes the plugin its own.
     pub fn new(
+        width: u32,
+        height: u32,
+        fps: f32,
+        output_path: &str,
+        hdr: bool,
+        device: Option<&GpuDevice>,
+    ) -> Result<Self, EncoderError> {
+        match device {
+            // Safety: the device outlives the export session that owns this
+            // encoder.
+            Some(device) => unsafe {
+                Self::new_with_device(
+                    width,
+                    height,
+                    fps,
+                    output_path,
+                    hdr,
+                    device.raw_device_ptr(),
+                )
+            },
+            None => Self::new_own_device(width, height, fps, output_path, hdr),
+        }
+    }
+
+    fn new_own_device(
         width: u32,
         height: u32,
         fps: f32,
@@ -170,7 +155,7 @@ impl MetalEncoder {
     ///
     /// # Safety
     /// `device_ptr` must be a valid `id<MTLDevice>` that outlives the encoder.
-    pub unsafe fn new_with_device(
+    unsafe fn new_with_device(
         width: u32,
         height: u32,
         fps: f32,
@@ -225,22 +210,17 @@ impl MetalEncoder {
         })
     }
 
-    /// Encode a single frame from a raw Metal texture pointer.
-    ///
-    /// The `metal_texture_ptr` must be a valid `id<MTLTexture>` cast to `*mut c_void`.
-    /// Obtained via `GpuTexture::raw_ptr()` or equivalent.
-    ///
-    /// # Safety
-    /// The caller must ensure `metal_texture_ptr` points to a valid Metal texture
-    /// that is not currently being written to by another GPU command.
-    pub unsafe fn encode_frame(
+    /// Encode `texture` as the next frame. The export loop has waited for
+    /// the GPU work that wrote it.
+    pub fn encode_frame(
         &mut self,
-        metal_texture_ptr: *mut c_void,
+        _device: &GpuDevice,
+        texture: &GpuTexture,
     ) -> Result<(), EncoderError> {
         let result = unsafe {
             metal_ffi::MetalEncoder_EncodeFrame(
                 self.handle,
-                metal_texture_ptr,
+                texture.raw_ptr(),
                 self.frames_encoded as i32,
             )
         };
@@ -249,9 +229,9 @@ impl MetalEncoder {
             log::error!(
                 "[MetalEncoder] encode_frame failed at frame {}: {:?}",
                 self.frames_encoded,
-                EncoderError::from_code(result),
+                error_from_code(result),
             );
-            return Err(EncoderError::from_code(result));
+            return Err(error_from_code(result));
         }
 
         self.frames_encoded += 1;
@@ -270,9 +250,9 @@ impl MetalEncoder {
         if result != 0 {
             log::error!(
                 "[MetalEncoder] end_session failed: {:?}",
-                EncoderError::from_code(result),
+                error_from_code(result),
             );
-            return Err(EncoderError::from_code(result));
+            return Err(error_from_code(result));
         }
 
         log::info!("[MetalEncoder] Session complete, {} frames encoded", frames);
@@ -568,15 +548,14 @@ mod fractional_fps_timebase_tests {
             mip_levels: 1,
         });
 
-        let mut encoder = MetalEncoder::new(64, 64, 29.97, output_path.to_str().unwrap(), false)
-            .expect("encoder creation should succeed with a real Metal device");
+        let mut encoder =
+            MetalEncoder::new(64, 64, 29.97, output_path.to_str().unwrap(), false, None)
+                .expect("encoder creation should succeed with a real Metal device");
 
         for _ in 0..5 {
-            unsafe {
-                encoder
-                    .encode_frame(texture.raw_ptr())
-                    .expect("encode_frame should succeed");
-            }
+            encoder
+                .encode_frame(&device, &texture)
+                .expect("encode_frame should succeed");
         }
         encoder.end_session().expect("end_session should succeed");
 

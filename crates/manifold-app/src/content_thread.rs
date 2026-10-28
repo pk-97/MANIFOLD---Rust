@@ -742,7 +742,6 @@ impl ContentThread {
         // Read back a still-frame export submitted on the previous tick (if any).
         // Runs before this frame's render so the GPU completion we wait on is the
         // capture's, not a newer frame's. The encode itself runs off-thread.
-        #[cfg(target_os = "macos")]
         self.poll_still_export(state_tx);
 
         // Discovery can block inside CoreMIDI. Only receive completed name
@@ -1044,7 +1043,6 @@ impl ContentThread {
 
         // Submit a pending still-frame readback now that the frame the user sees
         // is fully rendered. Read back next tick (see poll_still_export above).
-        #[cfg(target_os = "macos")]
         self.submit_still_export_if_pending();
 
         #[cfg(feature = "profiling")]

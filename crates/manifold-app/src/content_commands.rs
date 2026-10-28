@@ -1776,7 +1776,6 @@ impl ContentThread {
             ContentCommand::CancelExport => {
                 // No-op outside of export loop — cancel flag checked inside run_export.
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::CaptureStill => {
                 // Captured over the next two ticks by submit/poll_still_export,
                 // then held until ExportFrame names the destination.
@@ -1786,7 +1785,6 @@ impl ContentThread {
                     pixels: None,
                 });
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::ExportFrame { path, format } => {
                 // Writes the held capture if one is waiting for a destination;
                 // otherwise captures the next frame.
@@ -1801,7 +1799,6 @@ impl ContentThread {
                     }
                 }
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::DiscardStill => {
                 if self
                     .still_export
@@ -1810,12 +1807,6 @@ impl ContentThread {
                 {
                     self.still_export = None;
                 }
-            }
-            #[cfg(not(target_os = "macos"))]
-            ContentCommand::CaptureStill | ContentCommand::DiscardStill => {}
-            #[cfg(not(target_os = "macos"))]
-            ContentCommand::ExportFrame { .. } => {
-                log::warn!("[ContentThread] Frame export not supported on this platform");
             }
 
             // ── Live Recording ──────────────────────────────────────

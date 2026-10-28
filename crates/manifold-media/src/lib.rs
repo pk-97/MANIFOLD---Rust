@@ -9,10 +9,13 @@ pub mod decode_scheduler;
 pub mod decoder;
 #[cfg(target_os = "macos")]
 mod decoder_ffi;
+pub mod encoder;
 pub mod export_config;
 pub mod export_session;
 #[cfg(not(target_os = "macos"))]
 mod ffmpeg_decoder;
+#[cfg(not(target_os = "macos"))]
+mod ffmpeg_encoder;
 pub mod frame_rate;
 pub mod image_renderer;
 pub mod metadata;

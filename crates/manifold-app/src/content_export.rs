@@ -1,8 +1,6 @@
 //! Export functionality for ContentThread — extracted from content_thread.rs.
-//! Contains `run_export`, `export_one_frame`, `get_metal_texture_ptr`,
+//! Contains `run_export`, `export_one_frame`,
 //! `send_export_progress`, and `send_export_finished`.
-// Video export is Mac-only, so its imports go unused elsewhere.
-#![cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 
 use std::sync::Arc;
 
@@ -387,7 +385,6 @@ mod gpu_completion_tests {
 /// range). Returns empty when there are no relevant markers (no marker on
 /// `range_start`, none strictly inside) → the caller takes the single-export
 /// path.
-#[cfg(target_os = "macos")]
 fn derive_sections(
     timeline: &manifold_core::timeline::Timeline,
     range_start: Beats,
@@ -433,7 +430,6 @@ fn derive_sections(
 /// Sanitize a marker name into a filename-safe stem: every run of
 /// non-alphanumeric characters (whitespace, punctuation) collapses to a
 /// single `-`, with leading/trailing dashes trimmed. See D6.
-#[cfg(target_os = "macos")]
 fn sanitize_section_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut last_was_dash = true;
@@ -456,7 +452,6 @@ fn sanitize_section_name(name: &str) -> String {
 /// is sanitized (empty → `section-N` counting from 1); duplicate stems get
 /// `-2`, `-3`, … suffixes. The base file's directory and extension are
 /// preserved: `<base>--<stem>.<ext>`. See D6.
-#[cfg(target_os = "macos")]
 fn section_output_paths(base_output: &str, sections: &[(Beats, Beats, String)]) -> Vec<String> {
     let path = std::path::Path::new(base_output);
     let dir = path
@@ -495,7 +490,6 @@ fn section_output_paths(base_output: &str, sections: &[(Beats, Beats, String)]) 
 
 /// What an export does with a command that arrives while it renders
 /// (BUG-v2o9y: nothing may change during an export).
-#[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExportDisposition {
     /// Stop the export.
@@ -512,7 +506,6 @@ enum ExportDisposition {
 /// The one place every command is classified. No wildcard arm: a new
 /// `ContentCommand` does not compile until it is named here. When one is
 /// ambiguous it is Dropped if it can change what the show outputs, else Held.
-#[cfg(target_os = "macos")]
 fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
     use ExportDisposition::{Cancel, Drop, Hold, Quit};
     match cmd {
@@ -634,7 +627,6 @@ impl ContentThread {
     /// so it proceeds after the cancelled export unwinds. Every other command
     /// is classified by [`export_disposition`]: held to run after the export,
     /// or dropped, so the show cannot change while it renders (BUG-v2o9y).
-    #[cfg(target_os = "macos")]
     fn poll_export_cancel(&mut self, cmd_rx: &Receiver<ContentCommand>) -> bool {
         // A cancel or quit can already be held, sent during the warmup the
         // export was queued behind.
@@ -667,7 +659,7 @@ impl ContentThread {
     /// Run the offline video export loop.
     ///
     /// Temporarily replaces the normal content loop: ticks the engine with fixed
-    /// delta, renders each frame, and encodes via the native Metal encoder at
+    /// delta, renders each frame, and encodes via the platform's video encoder at
     /// maximum GPU speed (no frame pacing / sleep).
     ///
     /// With `split_at_markers`, this runs one full export per derived
@@ -675,7 +667,6 @@ impl ContentThread {
     /// failed section aborts the remaining sections.
     ///
     /// Port of Unity VideoExporter.ExportCoroutine() (offline / generator-only path).
-    #[cfg(target_os = "macos")]
     pub(crate) fn run_export(
         &mut self,
         config: manifold_media::export_config::ExportConfig,
@@ -684,6 +675,7 @@ impl ContentThread {
     ) {
         self.engine.clear_automation_previews();
         // Stop any active live recording before entering export.
+        #[cfg(target_os = "macos")]
         if let Some(session) = self.content_pipeline.recording_session.take() {
             log::warn!("[ContentThread] Stopping active recording before export");
             let _ = session.stop();
@@ -716,25 +708,6 @@ impl ContentThread {
         self.send_export_phase(state_tx, false, 1.0, "Export finished", true);
     }
 
-    /// Run the export body. The public wrapper owns the whole-run lifecycle
-    /// notifications, including the terminal pulse after playback restore.
-    /// Video export needs an encoder off macOS (P5): report it, render nothing.
-    #[cfg(not(target_os = "macos"))]
-    pub(crate) fn run_export(
-        &mut self,
-        config: manifold_media::export_config::ExportConfig,
-        _cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &StateTx,
-    ) {
-        self.send_export_finished(
-            state_tx,
-            false,
-            "Video export is not available on this platform yet".to_string(),
-            &config.output_path,
-        );
-    }
-
-    #[cfg(target_os = "macos")]
     fn run_export_inner(
         &mut self,
         config: manifold_media::export_config::ExportConfig,
@@ -878,7 +851,6 @@ impl ContentThread {
         self.engine.end_export_run(restore);
     }
 
-    #[cfg(target_os = "macos")]
     fn send_export_phase(
         &self,
         state_tx: &StateTx,
@@ -905,7 +877,6 @@ impl ContentThread {
     /// save/restore and the export-mode / resize lifecycle; this does the
     /// per-range work. Returns `true` when the pass aborted (cancelled or
     /// failed) so the caller stops any remaining sections.
-    #[cfg(target_os = "macos")]
     fn run_export_section(
         &mut self,
         mut export_config: manifold_media::export_config::ExportConfig,
@@ -1092,25 +1063,14 @@ impl ContentThread {
             );
         }
 
-        // 4. Create export session (initializes native Metal encoder).
-        //    Share the content pipeline's Metal device to avoid cross-device GPU sync.
-        let device_ptr = self.content_pipeline.native_device_ptr();
-        let session_result = if let Some(ptr) = device_ptr {
-            unsafe {
-                manifold_media::export_session::ExportSession::new_with_device(
-                    export_config.clone(),
-                    bpm.0,
-                    &mut tempo_map,
-                    ptr,
-                )
-            }
-        } else {
-            manifold_media::export_session::ExportSession::new(
-                export_config.clone(),
-                bpm.0,
-                &mut tempo_map,
-            )
-        };
+        // 4. Create export session (opens the platform's video encoder).
+        //    Share the content pipeline's device to avoid cross-device GPU sync.
+        let session_result = manifold_media::export_session::ExportSession::new(
+            export_config.clone(),
+            bpm.0,
+            &mut tempo_map,
+            self.content_pipeline.native_device(),
+        );
         let mut session = match session_result {
             Ok(s) => s,
             Err(e) => {
@@ -1307,7 +1267,6 @@ impl ContentThread {
         failed || finalize_failed
     }
 
-    #[cfg(target_os = "macos")]
     /// Render and encode a single export frame. Returns Some(error) on failure.
     fn export_one_frame(
         &mut self,
@@ -1380,7 +1339,7 @@ impl ContentThread {
         let mut sdr_mapped_rgba16f = None;
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
         let mut hdr_scene_rgba16f = None;
-        let mut tex_ptr;
+        let mut export_texture;
         loop {
             let fault_mark = manifold_gpu::gpu_fault::mark();
             #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1434,7 +1393,7 @@ impl ContentThread {
             let mut sdr_mapped_texture = None;
             #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
             let mut hdr_scene_texture = None;
-            tex_ptr = if export_config.hdr {
+            export_texture = if export_config.hdr {
                 let paper_white = 200.0f32;
                 let max_nits = 10000.0f32;
                 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1445,10 +1404,9 @@ impl ContentThread {
                     // borrow into ContentPipeline.
                     hdr_scene_texture = Some(self.content_pipeline.export_output_texture().clone());
                 }
-                let texture = self
-                    .content_pipeline
-                    .pq_encode_for_export(paper_white, max_nits);
-                Self::get_metal_texture_ptr(texture)
+                self.content_pipeline
+                    .pq_encode_for_export(paper_white, max_nits)
+                    .clone()
             } else {
                 let texture = self.content_pipeline.sdr_export_output_texture();
                 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1458,7 +1416,7 @@ impl ContentThread {
                     // a borrow into ContentPipeline across that wait.
                     sdr_mapped_texture = Some(texture.clone());
                 }
-                Self::get_metal_texture_ptr(texture)
+                texture.clone()
             };
 
             let completion = self.content_pipeline.wait_for_export_complete(&fault_mark);
@@ -1606,23 +1564,19 @@ impl ContentThread {
             }
         }
 
-        match tex_ptr {
-            Some(ptr) => {
-                if let Err(e) = unsafe { session.encode_frame(ptr) } {
-                    log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
-                    return Some(ExportFrameFailure {
-                        message: format!("Encode failed at frame {frame_idx}: {e}"),
-                        fatal: false,
-                    });
-                }
-            }
-            None => {
-                log::error!("[ContentThread] No Metal texture at frame {frame_idx}");
-                return Some(ExportFrameFailure {
-                    message: format!("No texture at frame {frame_idx}"),
-                    fatal: false,
-                });
-            }
+        let Some(device) = self.content_pipeline.native_device() else {
+            log::error!("[ContentThread] No GPU device at frame {frame_idx}");
+            return Some(ExportFrameFailure {
+                message: format!("No GPU device at frame {frame_idx}"),
+                fatal: false,
+            });
+        };
+        if let Err(e) = session.encode_frame(device, &export_texture) {
+            log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
+            return Some(ExportFrameFailure {
+                message: format!("Encode failed at frame {frame_idx}: {e}"),
+                fatal: false,
+            });
         }
 
         if !tick_result.stopped_clips.is_empty() {
@@ -1638,19 +1592,9 @@ impl ContentThread {
         None
     }
 
-    /// Extract the raw Metal texture pointer from a native GpuTexture.
-    /// Returns `id<MTLTexture>` as `*mut c_void` for the native encoder.
-    #[cfg(target_os = "macos")]
-    fn get_metal_texture_ptr(texture: &manifold_gpu::GpuTexture) -> Option<*mut std::ffi::c_void> {
-        Some(texture.raw_ptr())
-    }
-
     /// Send export progress to the UI thread.
     /// Consumed as notifications by the export modal (`ui_root/export.rs`),
     /// without replacing the full playback snapshot with default fields.
-    /// Consumed as notifications by the export modal (`ui_root/export.rs`),
-    /// without replacing the full playback snapshot with default fields.
-    #[cfg(target_os = "macos")]
     fn send_export_progress(
         &self,
         state_tx: &StateTx,
@@ -1676,7 +1620,6 @@ impl ContentThread {
     /// Submit a pending still-frame export's GPU readback, if one is waiting and
     /// hasn't been submitted yet. Called right after `render_content` so the blit
     /// reads a fully-rendered frame. Records the captured dimensions on the job.
-    #[cfg(target_os = "macos")]
     pub(crate) fn submit_still_export_if_pending(&mut self) {
         if let Some(job) = self.still_export.as_mut()
             && job.dims.is_none()
@@ -1694,7 +1637,6 @@ impl ContentThread {
     /// encoding, and PNG-ing a 4000×4000 frame is far too heavy for the content
     /// thread). The finished event is sent from that thread. No-op until the
     /// readback has been submitted (`dims` set) and the GPU copy is readable.
-    #[cfg(target_os = "macos")]
     pub(crate) fn poll_still_export(&mut self, state_tx: &StateTx) {
         let Some(job) = self.still_export.as_mut() else {
             return;
@@ -1968,12 +1910,10 @@ mod tests {
         assert!(old_project.settings.split_at_markers);
     }
 
-    #[cfg(target_os = "macos")]
     fn plain_marker(beat: f32, name: &str) -> manifold_core::marker::TimelineMarker {
         manifold_core::marker::TimelineMarker::new(Beats::from_f32(beat)).with_name(name)
     }
 
-    #[cfg(target_os = "macos")]
     fn timeline_with(
         markers: Vec<manifold_core::marker::TimelineMarker>,
     ) -> manifold_core::timeline::Timeline {
@@ -1984,7 +1924,6 @@ mod tests {
         t
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn derive_sections_returns_empty_without_in_range_markers() {
         // Invariant (b): setting on but no in-range markers → empty → the
@@ -1998,7 +1937,6 @@ mod tests {
         assert!(derive_sections(&t, Beats::from_f32(4.0), Beats::from_f32(16.0)).is_empty());
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn derive_sections_splits_chapter_style() {
         // D2: sections are [in, m₁), [m₁, m₂), …, [mₙ, out); each section named
@@ -2033,7 +1971,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn derive_sections_edge_cases() {
         // A marker exactly on `out` is excluded (outside the half-open range):
@@ -2082,7 +2019,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn derive_sections_names_first_section_from_marker_on_in() {
         // A marker exactly on `in` names the first section (doesn't cut), so
@@ -2143,7 +2079,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn derive_sections_sorts_unsorted_markers() {
         // `add_marker` keeps `markers` sorted, but `derive_sections` must not
@@ -2169,7 +2104,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn section_output_paths_sanitize_empty_and_collisions() {
         use std::path::Path;
@@ -2222,7 +2156,6 @@ mod tests {
     }
 
     /// The export's command poll, as the frame loop calls it.
-    #[cfg(target_os = "macos")]
     fn poll(thread: &mut ContentThread, cmd_rx: &Receiver<ContentCommand>) -> bool {
         thread.poll_export_cancel(cmd_rx)
     }
@@ -2231,7 +2164,6 @@ mod tests {
     /// sent meanwhile are thrown away; a preview resize, a graph watch and a view setting
     /// are held and run once it ends; Cancel and
     /// Quit still stop it, and the quit proceeds right after.
-    #[cfg(target_os = "macos")]
     #[test]
     fn commands_during_export_are_dropped_and_a_quit_cancels_it() {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -2345,7 +2277,6 @@ mod tests {
     /// BUG-v2o9y: edits sent during an export are dropped; when the export
     /// ends the content thread publishes its project again so the UI shows
     /// the new allocation and every panel re-projects from it.
-    #[cfg(target_os = "macos")]
     #[test]
     fn export_end_republishes_the_project_to_the_ui() {
         let mut thread = crate::headless_harness::headless_content_thread(
@@ -2402,7 +2333,6 @@ mod tests {
 
     /// Export then Cancel pressed while a show warms up are both held; the
     /// export that starts from the held queue must see its held cancel.
-    #[cfg(target_os = "macos")]
     #[test]
     fn a_cancel_held_behind_its_export_cancels_it() {
         let mut thread = crate::headless_harness::headless_content_thread(
@@ -2431,7 +2361,6 @@ mod tests {
     /// A live scene viewport (here the preview's navigation) sits out an
     /// export: no export frame renders or records a viewport frame, and the
     /// same request is back once the export ends.
-    #[cfg(target_os = "macos")]
     #[test]
     fn an_export_renders_no_scene_viewport_and_navigation_resumes_after() {
         use crate::scene_viewport::{SceneViewportNavigation, ViewportHost};
