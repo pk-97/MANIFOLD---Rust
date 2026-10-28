@@ -96,10 +96,14 @@ fn wd_strength(touch: u32, amount: u32, now: f32, drying: f32) -> f32 {
     return min(f32(amount) / f32(WD_FULL), 1.0) * exp(-age * drying / WD_DRY_SECONDS);
 }
 
-// A decal's soft edge: full out to half its radius, then a smoothstep to 0 at
-// its radius. A wetted merge cell's decal sits in the middle half of the cell
-// and the radius is 1.5 cells, so the decals of neighbouring wet cells
-// overlap into one even film with a soft rim, not a lattice of dots.
+// A decal's share of the wetness at `distance` from its centre: a smooth
+// bump, 1 at the centre and 0 at its radius, (1 - (d/r)^2)^2 (Wyvill et al.
+// 1986). The wet pass sums the shares of the decals over a pixel; a wetted
+// merge cell's decal sits in the middle half of the cell and the radius is
+// 1.5 cells, so between the decals of neighbouring wet cells the sum stays
+// past 1 and a spread reads as one film, not a lattice of dots.
 fn wd_falloff(distance: f32, radius: f32) -> f32 {
-    return 1.0 - smoothstep(0.5 * radius, radius, distance);
+    let x = min(distance / radius, 1.0);
+    let t = 1.0 - x * x;
+    return t * t;
 }

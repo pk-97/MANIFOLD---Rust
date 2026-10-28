@@ -450,7 +450,7 @@ pub static WATER_ROWS: [PropertyRow; 49] = [
         .toggle()
         .default(1.0)
         .when(flip),
-    row("bubbles_visible", Reach::Own("bubble_object"), Whitewater, setup())
+    row("bubble_visible", Reach::Own("bubble_object"), Whitewater, setup())
         .param("visible")
         .name("Bubbles")
         .tip("Draws the air bubbles carried under the surface, seen through the water")

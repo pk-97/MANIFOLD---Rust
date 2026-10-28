@@ -16,11 +16,20 @@
 // Binds 68 itself; the water shade includes this file but never calls the
 // hook, so the water does not bind it.
 
-// How wet the surface is, 0 to 1, at 1 / WET_MASK_SCALE of the render's size
-// (`wet_pass::MASK_SCALE`); the renderer's one black texel, which reads dry,
-// when no water has a wet map and for glass, which the mask is not about.
+// The wet marks' summed shares, held at 1, at 1 / WET_MASK_SCALE of the
+// render's size (`wet_pass::MASK_SCALE`); the renderer's one black texel,
+// which reads dry, when no water has a wet map and for glass, which the mask
+// is not about.
 @group(0) @binding(68) var wet_mask: texture_2d<f32>;
 const WET_MASK_SCALE: f32 = 2.0;
+
+// The film starts where the marks' sum passes WET_EDGE_LOW and is whole past
+// WET_EDGE_HIGH, so overlapping marks read as one patch with one soft edge,
+// a mark hit often as a small spot and a mark one stray drop touched once
+// (a quarter wet) as none. A drying patch's sum falls everywhere, so its
+// edge draws in as it dries.
+const WET_EDGE_LOW: f32 = 0.3;
+const WET_EDGE_HIGH: f32 = 0.6;
 
 struct WetSurface {
     albedo: vec3<f32>,
@@ -38,7 +47,8 @@ const WATER_INNER_REFLECTANCE: f32 = 1.0 - (1.0 - WATER_DIFFUSE_REFLECTANCE) / (
 // The smallest roughness `resolve_mr` hands the GGX terms, which divide by it.
 const WET_MIN_ROUGHNESS: f32 = 0.01;
 
-// The wetness at pixel `frag_xy`, 0 to 1, bilinear between the mask's texels.
+// How wet the surface is at pixel `frag_xy`, 0 to 1: the marks' sum,
+// bilinear between the mask's texels, through the film's edge.
 fn wetness_at(frag_xy: vec2<f32>) -> f32 {
     let last = vec2<i32>(textureDimensions(wet_mask)) - vec2<i32>(1);
     let p = frag_xy / WET_MASK_SCALE - vec2<f32>(0.5);
@@ -48,7 +58,7 @@ fn wetness_at(frag_xy: vec2<f32>) -> f32 {
     let b = clamp(vec2<i32>(low) + vec2<i32>(1), vec2<i32>(0), last);
     let top = mix(textureLoad(wet_mask, a, 0).r, textureLoad(wet_mask, vec2<i32>(b.x, a.y), 0).r, f.x);
     let bottom = mix(textureLoad(wet_mask, vec2<i32>(a.x, b.y), 0).r, textureLoad(wet_mask, b, 0).r, f.x);
-    return mix(top, bottom, f.y);
+    return smoothstep(WET_EDGE_LOW, WET_EDGE_HIGH, mix(top, bottom, f.y));
 }
 
 fn look_wet_surface(frag_xy: vec2<f32>, albedo: vec3<f32>, roughness: f32) -> WetSurface {

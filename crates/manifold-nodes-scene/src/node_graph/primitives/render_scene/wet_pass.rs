@@ -2,7 +2,7 @@
 //! depth into the per-pixel wet mask the surface shading reads
 //! (`look_wet_surface.wgsl`), after the depth prepass and before any colour.
 //! One triangle per decal in the decal's own plane, counted on the GPU by the
-//! map's own draw arguments; each pixel keeps the wettest decal over it. A
+//! map's own draw arguments; each pixel sums the decals over it, held at 1. A
 //! scene with no wet map draws nothing and holds no mask.
 use std::sync::LazyLock;
 
@@ -80,10 +80,10 @@ impl WetPass {
                 Some(GpuBlendState {
                     src_factor: GpuBlendFactor::One,
                     dst_factor: GpuBlendFactor::One,
-                    operation: GpuBlendOp::Max,
+                    operation: GpuBlendOp::Add,
                     src_alpha_factor: GpuBlendFactor::One,
                     dst_alpha_factor: GpuBlendFactor::One,
-                    alpha_operation: GpuBlendOp::Max,
+                    alpha_operation: GpuBlendOp::Add,
                 }),
                 "wet pass",
             )
