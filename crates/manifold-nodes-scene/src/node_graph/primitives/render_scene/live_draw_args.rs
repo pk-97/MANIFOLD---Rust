@@ -128,7 +128,7 @@ impl LiveDrawArgs {
             .as_ref()
             .is_none_or(|buffer| buffer.size < bytes)
         {
-            self.buffer = Some(device.create_buffer(bytes, BufferUse::Upload));
+            self.buffer = Some(device.create_buffer(bytes, BufferUse::Gpu));
         }
         self.buffer.clone().expect("arguments buffer allocated")
     }
@@ -352,8 +352,11 @@ mod tests {
             };
             writer.write(&mut encoder, 1, &extent, 18, 5);
             encoder.commit_and_wait().expect("GPU work completes");
-            let ptr = args.mapped_ptr().expect("shared arguments buffer");
-            let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 16) };
+            let bytes = manifold_gpu::testkit::read_bytes(&args, 64);
+            let words: Vec<u32> = bytes
+                .chunks_exact(4)
+                .map(bytemuck::pod_read_unaligned)
+                .collect();
             assert_eq!(
                 &words[8..13],
                 &[expected, 5, 0, 0, 0],
@@ -393,8 +396,11 @@ mod tests {
             encoder.compute_memory_barrier_buffers();
             writer.trim(&mut encoder, 1, &buffer, count);
             encoder.commit_and_wait().expect("GPU work completes");
-            let ptr = args.mapped_ptr().expect("shared arguments buffer");
-            let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 16) };
+            let bytes = manifold_gpu::testkit::read_bytes(&args, 64);
+            let words: Vec<u32> = bytes
+                .chunks_exact(4)
+                .map(bytemuck::pod_read_unaligned)
+                .collect();
             assert_eq!(
                 &words[8..13],
                 &[36, expected, 0, 0, 0],
@@ -494,9 +500,10 @@ mod tests {
                 },
             );
             encoder.commit_and_wait().expect("GPU work completes");
-            let words = unsafe {
-                std::slice::from_raw_parts(args.mapped_ptr().expect("shared") as *const u32, 16)
-            };
+            let words: Vec<u32> = manifold_gpu::testkit::read_bytes(&args, 64)
+                .chunks_exact(4)
+                .map(bytemuck::pod_read_unaligned)
+                .collect();
             assert_eq!(&words[0..5], &[36, 5, 0, 0, 0], "live block untouched");
             assert_eq!(
                 &words[8..13],

@@ -125,7 +125,7 @@ impl RenderScene {
             .readback
             .get_or_insert_with(|| {
                 gpu.device
-                    .create_buffer(u64::from(ROW_BYTES * PICK_REGION), BufferUse::Upload)
+                    .create_buffer(u64::from(ROW_BYTES * PICK_REGION), BufferUse::Readback)
             })
             .clone();
         let pipeline = self

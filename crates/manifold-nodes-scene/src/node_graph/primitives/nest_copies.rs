@@ -150,7 +150,7 @@ impl Primitive for NestCopies {
             if let Some(copies) = grown(self.storage_copies, wanted, fits) {
                 self.storage = Some(
                     gpu.device
-                        .create_buffer(copies * COPY_BYTES, BufferUse::Upload),
+                        .create_buffer(copies * COPY_BYTES, BufferUse::Gpu),
                 );
                 self.storage_copies = copies;
             } else {

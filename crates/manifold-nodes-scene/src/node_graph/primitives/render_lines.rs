@@ -656,7 +656,7 @@ impl Primitive for RenderLines {
         self.ensure_msaa_texture(gpu.device, width, height);
         self.ensure_instances_buf(gpu.device, total_instances as u64);
         if widths_input.is_none() && self.dummy_widths.is_none() {
-            self.dummy_widths = Some(gpu.device.create_buffer(4, BufferUse::Upload));
+            self.dummy_widths = Some(gpu.device.create_buffer(4, BufferUse::Gpu));
         }
 
         // Upload the CPU instance list into the shared GPU buffer.
