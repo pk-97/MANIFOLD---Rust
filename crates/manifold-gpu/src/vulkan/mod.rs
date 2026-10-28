@@ -37,6 +37,9 @@ mod types;
 
 #[cfg(test)]
 mod parity_tests;
+mod pipeline;
+mod submit;
+mod tracker;
 
 pub use device::GpuDevice;
 pub(crate) use device::PoolAllocator;

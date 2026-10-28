@@ -61,7 +61,7 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Device | `new`, `new_queued` (73), `device_name` (65), `create_encoder` (879), `async_queue`, `prepare_utility_pipelines` | P1 |
 | Buffers | `create_buffer` (57), `create_buffer_shared` (752), `try_create_buffer` (32), `try_create_buffer_shared` (36), becoming `create_buffer(size, use)` (section 11). `GpuBuffer`: `mapped_ptr` (409), `write`, `zero_fill` (66), `identity_key` (92), `ptr_eq` | P1 (D14) |
 | Textures | `create_texture` (269), `try_create_texture` (9), `mip_level_view`, `layer_view`, `mip_level_count`, `is_shader_readable`. `GpuTexture` also carries `depth` (the stub lacks it) | P1 |
-| Texture uploads | `device.upload_texture` and `enc.upload_texture` (127 together), merged into one (section 11) | P1 (D22) |
+| Texture uploads | `device.upload_texture` and `enc.upload_texture` (127 together); both forms stay | P1 (D22) |
 | MSAA and memoryless textures | `create_texture_msaa` (4), `create_texture_msaa_memoryless` (18) | P2 |
 | Samplers | `create_sampler` (180), `linear_sampler` (3); anisotropy (`types.rs` note in the stub) | P1 |
 | Compute pipelines | `create_compute_pipeline` (354), `create_specialized_compute_pipeline` (23, WGSL string substitution, ports verbatim), `compute_pipeline_cache_len`, `max_threads_per_threadgroup`, `unbound_binding` | P1 |
@@ -192,7 +192,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 2. **Build hygiene.** Done 28 Oct, except `UniformArena` (section 11).
 3. **Folders and tools.** Done 28 Oct (`manifold_foundation::AppDirs`, `find_tool`).
 4. **Hoist neutral logic.** Done 28 Oct.
-5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, commit forms, the upload merge, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
+5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, commit forms, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
 6. **Frame bridge on one device.** Done 28 Oct: the content device is the UI device's `sibling` and the bridge holds plain `GpuTexture`s. The headless subcommands booting the normal pipeline is still open (section 11).
 7. **Vulkan skeleton.** Done 28 Oct: `vulkan/` mirrors every Metal signature with `todo!` bodies naming their phase, the section 4 callers check capabilities, and `cargo clippy --features manifold-gpu/vulkan --all-targets -- -D warnings` passes for every crate except `manifold-app`, `manifold-media` and `manifold-recording`.
 8. **Linux compile.** Done 28 Oct: `manifold-gpu/build.rs` picks Vulkan on every target but macOS, and `cargo check --workspace --all-targets` passes in the VM. Text-field copy and paste moved to arboard on the way.
@@ -203,9 +203,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 
 **P1, one batch each, in this order**
 9. Done 28 Oct: one shared instance and device (`vulkan/core.rs`), gpu-allocator, buffers, textures and views, samplers, uploads, the memory snapshot and debug names. Private buffers are device-local and shared ones host-visible until the buffer-use API lands (D14). Textures go to `GENERAL` and uploads copy through staging in a submit the caller waits on; step 12 can make both asynchronous (D22).
-10. Compute pipelines from SPIR-V, descriptor sets with update templates and the set cache (D2), uniform ring (D3), pipeline and SPIR-V disk caches (D11).
-11. Encoder: dispatch, indirect dispatch, copies, clears, readbacks, and the hazard tracker (design section 5).
-12. Submission: command pools (D6), per-queue timelines, resource lifetime, the waiter thread and completion handlers (D7, D8), async lanes, device loss (D19), and the Vulkan hooks for the hoisted frame-lifetime types.
+10–12. Done 28 Oct: compute pipelines with update templates, the set cache, the ring and both disk caches (`vulkan/pipeline.rs`); the encoder with the hazard tracker (`encoder.rs`, `tracker.rs`); per-queue timelines, the waiter thread, recycled frame resources, events, the fence waiter and device loss (`submit.rs`). Still open: `use_async_lane` refuses, so all work runs on one queue; the encoder's `upload_texture` stages through the ring in-stream, the device's still waits.
 13. Water paths: replay spans, gated segments, templates as indirect dispatches (design section 7). Measure water encode time.
 
 Each P1 batch adds its parity-kit tests and runs them on KosmicKrisp with synchronization validation. P1 is done when the compute kit is clean and the one full proof run at phase end is within tolerance.
@@ -254,7 +252,6 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 | `create_buffer`, `create_buffer_shared`, `try_create_buffer`, `try_create_buffer_shared` (581 production calls). Shared memory is the default for GPU-only scratch, CPU-filled inputs and readbacks alike. It costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | One `create_buffer(size, use)` plus `try_`, where use is `Gpu`, `Upload` or `Readback` (D14). Classified by evidence: a buffer whose mapping the CPU reads is `Readback`, one it only writes is `Upload` (write-only API), one it never maps is `Gpu`. On Metal, `Gpu` becomes Private. The callers that skip their write silently when `mapped_ptr()` is `None` (`detect_regions.rs:637`, `nested_cubes_geometry.rs:197`, `liquid_state.rs:341-357`, `track_regions.rs:539`, `mesh_cut_map.rs:228`) become hard errors first, so a wrong `Gpu` fails loudly instead of freezing geometry | Each subsystem's proofs, then one full proof run | Attended, before P1 step 9. The biggest NVIDIA speed item in the port |
 | About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same | Overnight |
 | 7 commit forms | `commit`, `commit_and_continue`, `commit_wait_and_continue` (coupled liquids wait mid-graph, `substep_region.rs:223`), and `commit_and_wait` returning a Result | Compiler | Overnight |
-| Two upload forms, both immediate CPU writes | One (D22) | Compiler, one `ui-snap` | Overnight |
 | 5 ways to read GPU time: `tap_gpu_time`, `add_gpu_time_handler`, `commit_and_wait_completed_timed`, `commit_and_wait_profiled`, `GpuSpanTimer` (plus `raytrace/trace_timing.rs`) | One per-submit GPU time stream that the profiler, the span timer and the perf tools all read, plus the per-dispatch profiler. It redesigns the profiler, which proves every speed claim, so it gets its own spec | A profiler session before and after | Attended, before P2 |
 | Dead: `UniformArena` (`node-engine/gpu/uniform_arena.rs`: reset and flushed every frame, never written; plumbing in `generator_renderer.rs`, `gpu_encoder.rs`, `scene_viewport.rs`) | Delete | Build | Overnight |
 

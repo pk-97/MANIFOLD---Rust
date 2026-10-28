@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 
+use super::submit::{FrameResources, Queue};
 use crate::GpuTextureFormat;
 
 /// Queues asked for per wrapper role: content, UI and the async lane (D5).
@@ -27,12 +28,6 @@ static VALIDATION_ERRORS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 pub(crate) fn validation_error_count() -> u64 {
     VALIDATION_ERRORS.load(Ordering::Relaxed)
-}
-
-/// One `VkQueue`. Wrappers that outnumber the family's queues share one;
-/// the mutex serialises submission (D5).
-pub(crate) struct Queue {
-    pub(crate) raw: Mutex<vk::Queue>,
 }
 
 /// Records and runs a command buffer right away and waits for it: image
@@ -56,10 +51,13 @@ pub(crate) struct Core {
     pub(crate) device: ash::Device,
     pub(crate) limits: vk::PhysicalDeviceLimits,
     pub(crate) name: String,
-    // Command pools are created on this family (P1 step 12).
-    #[allow(dead_code)]
     pub(crate) queue_family: u32,
     queues: Vec<Arc<Queue>>,
+    /// Recycled per-submit resources, shared by every queue (D6).
+    pub(crate) frames: Arc<Mutex<Vec<FrameResources>>>,
+    /// Nanoseconds per timestamp tick and the mask of valid bits; `None`
+    /// when the queue family writes no timestamps.
+    pub(crate) timestamps: Option<(f64, u64)>,
     next_queue: AtomicUsize,
     pub(crate) allocator: ManuallyDrop<Mutex<Allocator>>,
     one_shot: Mutex<OneShot>,
@@ -139,6 +137,7 @@ struct Candidate {
     driver: String,
     family: u32,
     family_queues: u32,
+    timestamp_bits: u32,
     extensions: Vec<CString>,
     missing: Vec<&'static str>,
     optional: vk::PhysicalDeviceFeatures,
@@ -341,13 +340,24 @@ impl Core {
         let device = unsafe { instance.create_device(candidate.physical, &device_info, None) }
             .map_err(|e| format!("create device: {e}"))?;
 
+        let frames = Arc::new(Mutex::new(Vec::new()));
         let queues = (0..queue_count)
             .map(|index| {
-                Arc::new(Queue {
-                    raw: Mutex::new(unsafe { device.get_device_queue(candidate.family, index) }),
-                })
+                let raw = unsafe { device.get_device_queue(candidate.family, index) };
+                Arc::new(Queue::new(&device, raw, frames.clone(), index))
             })
             .collect();
+        let timestamps = (candidate.timestamp_bits > 0).then(|| {
+            let mask = if candidate.timestamp_bits >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << candidate.timestamp_bits) - 1
+            };
+            (
+                f64::from(candidate.properties.limits.timestamp_period),
+                mask,
+            )
+        });
 
         let allocator = Allocator::new(&AllocatorCreateDesc {
             instance: instance.clone(),
@@ -421,6 +431,8 @@ impl Core {
             name: candidate.name,
             queue_family: candidate.family,
             queues,
+            frames,
+            timestamps,
             next_queue: AtomicUsize::new(0),
             allocator: ManuallyDrop::new(Mutex::new(allocator)),
             one_shot: Mutex::new(OneShot { pool, cmd, fence }),
@@ -516,6 +528,7 @@ impl Core {
         }
         let family = family.unwrap_or(0);
         let family_queues = families.get(family).map_or(0, |f| f.queue_count);
+        let timestamp_bits = families.get(family).map_or(0, |f| f.timestamp_valid_bits);
 
         let extensions = unsafe { instance.enumerate_device_extension_properties(physical) }
             .unwrap_or_default()
@@ -530,6 +543,7 @@ impl Core {
             driver,
             family: family as u32,
             family_queues,
+            timestamp_bits,
             extensions,
             missing,
             optional,
@@ -622,9 +636,9 @@ impl Core {
                 .end_command_buffer(one_shot.cmd)
                 .expect("Vulkan: end one-shot");
             {
-                let raw = queue.raw.lock().expect("queue poisoned");
+                let state = queue.state.lock().expect("queue poisoned");
                 self.device
-                    .queue_submit2(*raw, &submit, one_shot.fence)
+                    .queue_submit2(state.raw, &submit, one_shot.fence)
                     .expect("Vulkan: submit one-shot");
             }
             self.device

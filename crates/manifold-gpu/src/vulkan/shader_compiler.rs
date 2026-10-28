@@ -8,10 +8,8 @@
 //! SPIRV-Cross translation step.
 //!
 //! This file builds the per-pipeline `SlotMap` used by descriptor set
-//! layout creation (Phase 1) and by `GpuEncoder` binding logic. The
-//! SlotMap construction is pure reflection on the naga module — no
-//! Vulkan calls needed — so it lives here in Phase 0 rather than waiting
-//! for Phase 1.
+//! layout creation and by `GpuEncoder` binding logic: pure reflection on
+//! the naga module.
 
 use super::{Slot, SlotKind, SlotMap};
 use crate::shader_common::{
@@ -22,11 +20,6 @@ use crate::shader_common::{
 /// Parse WGSL, introspect bindings, emit optimised SPIR-V for a compute
 /// entry point. Returns the slot map, SPIR-V words, and the workgroup
 /// size declared in the shader.
-///
-/// Unused in Phase 0 (no consumer yet — `vulkan::device::GpuDevice` calls
-/// this in Phase 1 when building `VkComputePipeline`s). Kept here so the
-/// shader-side logic lives in one place.
-#[allow(dead_code)]
 pub(super) fn compile_wgsl_to_spirv_compute(
     wgsl_source: &str,
     entry_point: &str,
@@ -51,8 +44,7 @@ pub(super) fn compile_wgsl_to_spirv_compute(
 /// SPIR-V module; Vulkan selects the entry point at `VkPipeline` creation
 /// time via `VkPipelineShaderStageCreateInfo::pName`.
 ///
-/// Unused in Phase 0. Lands on the hot path when `GpuDevice::create_render_pipeline`
-/// is implemented.
+// Render pipelines arrive in P2.
 #[allow(dead_code)]
 pub(super) fn compile_wgsl_to_spirv_render(
     wgsl_source: &str,

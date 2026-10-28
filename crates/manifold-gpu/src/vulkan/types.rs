@@ -1,7 +1,7 @@
 //! Vulkan resource types. Buffers, textures and samplers hold their handles
 //! behind an `Arc`, so clones are cheap and an encoder keeps what it touched
-//! alive until its submit completes (D8). Pipelines arrive in P1 step 10 and
-//! P2, events in step 12.
+//! alive until its submit completes (D8). Events are timeline semaphores
+//! (D7). Render pipelines and depth states arrive in P2.
 
 // Stub bodies name the phase that builds them (design section 9); their
 // parameters are unused until then.
@@ -10,6 +10,7 @@
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
 use gpu_allocator::vulkan::Allocation;
@@ -144,8 +145,6 @@ pub(crate) struct ViewCore {
     pub(crate) base_mip: u32,
     pub(crate) mip_count: u32,
     pub(crate) base_layer: u32,
-    // The encoder's barriers read the range (P1 step 11).
-    #[allow(dead_code)]
     pub(crate) layer_count: u32,
 }
 
@@ -183,7 +182,6 @@ impl ViewCore {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn range(&self) -> vk::ImageSubresourceRange {
         vk::ImageSubresourceRange {
             aspect_mask: self.image.aspect,
@@ -243,17 +241,17 @@ impl Drop for SamplerCore {
 
 #[derive(Clone)]
 pub struct GpuSampler {
-    // Descriptor writes read the handle (P1 step 10).
-    #[allow(dead_code)]
     pub(crate) inner: Arc<SamplerCore>,
 }
 
-/// Compute pipeline: SPIR-V module, `VkPipeline`, layout and slot map.
+/// Compute pipeline: `VkPipeline`, its layouts and update template, and
+/// the slot map they were built from.
 #[derive(Clone)]
 pub struct GpuComputePipeline {
     pub slot_map: SlotMap,
     pub label: String,
     pub workgroup_size: [u32; 3],
+    pub(crate) inner: Arc<super::pipeline::PipelineCore>,
 }
 
 /// Render pipeline. Vertex and fragment stages share one slot map, as on
@@ -269,13 +267,143 @@ pub struct GpuDepthStencilState {
     _reserved: (),
 }
 
-/// A timeline semaphore and its CPU counter (D7).
-pub struct GpuEvent {
-    _reserved: (),
+/// A timeline semaphore, destroyed when the last handle drops.
+pub(crate) struct EventCore {
+    core: Arc<Core>,
+    pub(crate) semaphore: vk::Semaphore,
+    /// The value the last encoded auto-increment signal reaches.
+    pub(crate) counter: AtomicU64,
 }
 
+impl EventCore {
+    pub(crate) fn new(core: Arc<Core>) -> Self {
+        let mut timeline = vk::SemaphoreTypeCreateInfo::default()
+            .semaphore_type(vk::SemaphoreType::TIMELINE)
+            .initial_value(0);
+        let semaphore = unsafe {
+            core.device.create_semaphore(
+                &vk::SemaphoreCreateInfo::default().push_next(&mut timeline),
+                None,
+            )
+        }
+        .expect("Vulkan: event semaphore");
+        Self {
+            core,
+            semaphore,
+            counter: AtomicU64::new(0),
+        }
+    }
+
+    /// The GPU's value. A lost device reports every value reached, so no CPU
+    /// wait hangs on work that will never finish; the fault is recorded.
+    fn value(&self) -> u64 {
+        match unsafe { self.core.device.get_semaphore_counter_value(self.semaphore) } {
+            Ok(value) => value,
+            Err(e) => {
+                super::submit::device_lost(&format!("event read: {e}"));
+                u64::MAX
+            }
+        }
+    }
+
+    /// Block until the GPU reaches `value` or `timeout_ns` passes.
+    fn wait(&self, value: u64, timeout_ns: u64) -> bool {
+        let semaphores = [self.semaphore];
+        let values = [value];
+        let info = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        match unsafe { self.core.device.wait_semaphores(&info, timeout_ns) } {
+            Ok(()) => true,
+            Err(vk::Result::TIMEOUT) => false,
+            Err(e) => {
+                super::submit::device_lost(&format!("event wait: {e}"));
+                true
+            }
+        }
+    }
+}
+
+impl Drop for EventCore {
+    fn drop(&mut self) {
+        unsafe { self.core.device.destroy_semaphore(self.semaphore, None) };
+    }
+}
+
+/// A timeline semaphore and its CPU counter (D7).
+pub struct GpuEvent {
+    pub(crate) inner: Arc<EventCore>,
+}
+
+/// Wakes callers when events reach values, from one thread that waits on
+/// every pending event at once.
 pub struct GpuFenceWaiter {
-    _reserved: (),
+    sender: Option<std::sync::mpsc::Sender<FenceWait>>,
+    /// Signalled from the host to wake the thread for a new registration.
+    kick: Arc<EventCore>,
+    /// The last kick value; host signals must rise, so one at a time.
+    kicks: std::sync::Mutex<u64>,
+}
+
+struct FenceWait {
+    event: Arc<EventCore>,
+    value: u64,
+    wake: Box<dyn FnOnce() + Send>,
+}
+
+fn run_fence_waiter(kick: Arc<EventCore>, waits: std::sync::mpsc::Receiver<FenceWait>) {
+    use std::sync::mpsc::TryRecvError;
+    let device = &kick.core.device;
+    let mut pending: Vec<FenceWait> = Vec::new();
+    let mut kicked = 0;
+    let mut open = true;
+    loop {
+        loop {
+            match waits.try_recv() {
+                Ok(wait) => pending.push(wait),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    open = false;
+                    break;
+                }
+            }
+        }
+        let mut i = 0;
+        while i < pending.len() {
+            if pending[i].event.value() >= pending[i].value {
+                (pending.swap_remove(i).wake)();
+            } else {
+                i += 1;
+            }
+        }
+        if !open && pending.is_empty() {
+            return;
+        }
+        let mut semaphores = vec![kick.semaphore];
+        let mut values = vec![kicked + 1];
+        if !open {
+            semaphores.clear();
+            values.clear();
+        }
+        for wait in &pending {
+            semaphores.push(wait.event.semaphore);
+            values.push(wait.value);
+        }
+        let info = vk::SemaphoreWaitInfo::default()
+            .flags(vk::SemaphoreWaitFlags::ANY)
+            .semaphores(&semaphores)
+            .values(&values);
+        match unsafe { device.wait_semaphores(&info, u64::MAX) } {
+            Ok(()) | Err(vk::Result::TIMEOUT) => {}
+            Err(e) => {
+                super::submit::device_lost(&format!("fence waiter: {e}"));
+                for wait in pending.drain(..) {
+                    (wait.wake)();
+                }
+            }
+        }
+        kicked = kick.value().max(kicked);
+    }
 }
 
 impl Default for GpuFenceWaiter {
@@ -427,7 +555,7 @@ impl GpuBuffer {
 impl GpuComputePipeline {
     /// Legal threadgroup maximum reported by the backend, not an occupancy metric.
     pub fn max_threads_per_threadgroup(&self) -> Option<u32> {
-        todo!("vulkan P1")
+        Some(self.inner.max_invocations())
     }
 
     /// The first binding the entry point references that `bindings` leaves
@@ -442,40 +570,60 @@ impl GpuComputePipeline {
 impl GpuEvent {
     /// Second handle to the SAME underlying shared event and host counter.
     pub fn second_handle(&self) -> Self {
-        todo!("vulkan P1")
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 
     /// Check if the GPU has completed work signaled at `value`.
     pub fn is_done(&self, value: u64) -> bool {
-        todo!("vulkan P1")
+        self.inner.value() >= value
     }
 
     /// The value the last encoded signal will reach once its command buffer
     /// completes: a CPU counter bumped at encode time, not a GPU reading.
     pub fn encoded_value(&self) -> u64 {
-        todo!("vulkan P1")
+        self.inner.counter.load(Ordering::Relaxed)
     }
 
     /// Read the GPU-side signaled value directly.
     pub fn signaled_value(&self) -> u64 {
-        todo!("vulkan P1")
+        self.inner.value()
     }
 
-    /// Block the calling thread until the GPU has signaled `value`, with a timeout.
+    /// Block the calling thread until the GPU has signaled `value`, with a
+    /// timeout. Returns `true` if the event was signaled.
     pub fn wait_until_done_timeout(&self, value: u64, timeout_ms: u64) -> bool {
-        todo!("vulkan P1")
+        self.inner.wait(value, timeout_ms.saturating_mul(1_000_000))
     }
 
     /// Block the calling thread until the GPU has signaled `value`.
+    /// Times out after 5 seconds and logs an error if the GPU appears hung.
     pub fn wait_until_done(&self, value: u64) {
-        todo!("vulkan P1")
+        if !self.wait_until_done_timeout(value, 5000) {
+            log::error!(
+                "GpuEvent::wait_until_done timed out after 5s (waiting for value={value}, signaled={})",
+                self.signaled_value(),
+            );
+        }
     }
 }
 
 impl GpuFenceWaiter {
     /// Create a new fence waiter.
     pub fn new() -> Self {
-        todo!("vulkan P1")
+        let kick = Arc::new(EventCore::new(Core::shared()));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let thread_kick = kick.clone();
+        std::thread::Builder::new()
+            .name("vk-fence-waiter".into())
+            .spawn(move || run_fence_waiter(thread_kick, receiver))
+            .expect("spawn fence waiter");
+        Self {
+            sender: Some(sender),
+            kick,
+            kicks: std::sync::Mutex::new(0),
+        }
     }
 
     /// Register a notification for when the GPU event reaches `target_value`.
@@ -483,6 +631,34 @@ impl GpuFenceWaiter {
     where
         F: FnOnce() + Send + 'static,
     {
-        todo!("vulkan P1")
+        let wait = FenceWait {
+            event: event.inner.clone(),
+            value: target_value,
+            wake: Box::new(wake),
+        };
+        if let Some(sender) = &self.sender
+            && sender.send(wait).is_ok()
+        {
+            self.kick_thread();
+        }
+    }
+
+    fn kick_thread(&self) {
+        let mut value = self.kicks.lock().expect("fence waiter kicks poisoned");
+        *value += 1;
+        let info = vk::SemaphoreSignalInfo::default()
+            .semaphore(self.kick.semaphore)
+            .value(*value);
+        if let Err(e) = unsafe { self.kick.core.device.signal_semaphore(&info) } {
+            super::submit::device_lost(&format!("fence waiter kick: {e}"));
+        }
+    }
+}
+
+impl Drop for GpuFenceWaiter {
+    fn drop(&mut self) {
+        // The thread sees the channel close, finishes what is pending, exits.
+        self.sender = None;
+        self.kick_thread();
     }
 }

@@ -6,14 +6,19 @@
 // parameters are unused until then.
 #![allow(unused_variables)]
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ash::vk;
 use gpu_allocator::MemoryLocation;
 use gpu_allocator::vulkan::{AllocationCreateDesc, AllocationScheme};
 
-use super::core::{Core, Queue, vk_format};
-use super::types::{BufferCore, ImageCore, SamplerCore, ViewCore};
+use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
+
+use super::core::{Core, vk_format};
+use super::pipeline::{DiskPipelineCache, SpirvCache, compute_hash, create_compute};
+use super::submit::Queue;
+use super::types::{BufferCore, EventCore, ImageCore, SamplerCore, ViewCore};
 use super::*;
 use crate::alloc_counts::{
     BUFFER_ALLOCATION, TEXTURE_ALLOCATION, alloc_log_backtrace, alloc_log_enabled,
@@ -25,6 +30,10 @@ pub struct GpuDevice {
     pub(crate) queue: Arc<Queue>,
     resource_scope_id: u64,
     linear_sampler: OnceLock<GpuSampler>,
+    /// Compute pipelines by shader translation identity, as on Metal.
+    compute_cache: Mutex<HashMap<u64, GpuComputePipeline>>,
+    pipeline_cache: Mutex<Option<DiskPipelineCache>>,
+    spirv_cache: Mutex<Option<SpirvCache>>,
     /// Fence-stamped drop retirement, set once at pipeline init; every
     /// texture and buffer allocated afterwards carries the mark.
     retirement: OnceLock<Arc<crate::RetireMark>>,
@@ -292,6 +301,9 @@ impl GpuDevice {
             core,
             resource_scope_id: crate::alloc_counts::next_resource_scope_id(),
             linear_sampler: OnceLock::new(),
+            compute_cache: Mutex::new(HashMap::new()),
+            pipeline_cache: Mutex::new(None),
+            spirv_cache: Mutex::new(None),
             retirement: OnceLock::new(),
         }
     }
@@ -304,50 +316,61 @@ impl GpuDevice {
         if alloc_log_enabled() {
             eprintln!("[gpu-alloc] buf {size} {location:?}");
         }
-        let core = &self.core;
-        // Vulkan buffers cannot be empty; Metal's can.
-        let info = vk::BufferCreateInfo::default()
-            .size(size.max(4))
-            .usage(BUFFER_USAGE)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let buffer = unsafe { core.device.create_buffer(&info, None) }
-            .map_err(|e| format!("buffer ({size} bytes): {e}"))?;
-        let requirements = unsafe { core.device.get_buffer_memory_requirements(buffer) };
-        let allocation =
-            core.allocator
-                .lock()
-                .expect("allocator poisoned")
-                .allocate(&AllocationCreateDesc {
-                    name: "buffer",
-                    requirements,
-                    location,
-                    linear: true,
-                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-                });
-        let allocation = match allocation {
-            Ok(a) => a,
-            Err(e) => {
-                unsafe { core.device.destroy_buffer(buffer, None) };
-                return Err(format!("buffer memory ({size} bytes): {e}"));
-            }
-        };
-        unsafe {
-            core.device
-                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-        }
-        .map_err(|e| format!("bind buffer memory: {e}"))?;
+        let mut buffer = create_buffer_on(&self.core, size, location)?;
         crate::alloc_counts::record_allocation(self.resource_scope_id, BUFFER_ALLOCATION);
-        Ok(GpuBuffer {
-            size,
-            inner: Arc::new(BufferCore::new(
-                core.clone(),
-                buffer,
-                allocation,
-                location != MemoryLocation::GpuOnly,
-            )),
-            retire: self.retirement_mark(),
-        })
+        buffer.retire = self.retirement_mark();
+        Ok(buffer)
     }
+}
+
+/// A buffer with every Metal use, `GpuOnly` ones unmapped. No retirement
+/// mark and no allocation count: the wrapper adds those.
+pub(crate) fn create_buffer_on(
+    core: &Arc<Core>,
+    size: u64,
+    location: MemoryLocation,
+) -> Result<GpuBuffer, String> {
+    // Vulkan buffers cannot be empty; Metal's can.
+    let info = vk::BufferCreateInfo::default()
+        .size(size.max(4))
+        .usage(BUFFER_USAGE)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let buffer = unsafe { core.device.create_buffer(&info, None) }
+        .map_err(|e| format!("buffer ({size} bytes): {e}"))?;
+    let requirements = unsafe { core.device.get_buffer_memory_requirements(buffer) };
+    let allocation =
+        core.allocator
+            .lock()
+            .expect("allocator poisoned")
+            .allocate(&AllocationCreateDesc {
+                name: "buffer",
+                requirements,
+                location,
+                linear: true,
+                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            });
+    let allocation = match allocation {
+        Ok(a) => a,
+        Err(e) => {
+            unsafe { core.device.destroy_buffer(buffer, None) };
+            return Err(format!("buffer memory ({size} bytes): {e}"));
+        }
+    };
+    unsafe {
+        core.device
+            .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+    }
+    .map_err(|e| format!("bind buffer memory: {e}"))?;
+    Ok(GpuBuffer {
+        size,
+        inner: Arc::new(BufferCore::new(
+            core.clone(),
+            buffer,
+            allocation,
+            location != MemoryLocation::GpuOnly,
+        )),
+        retire: None,
+    })
 }
 
 impl GpuDevice {
@@ -445,8 +468,14 @@ impl GpuDevice {
     }
 
     /// Deterministic retirement for GPU-referenced objects (BUG-84fv class).
-    pub fn retire_after_queue<T: 'static>(&self, obj: T, label: &'static str) {
-        todo!("vulkan P1")
+    pub fn retire_after_queue<T: 'static>(&self, obj: T, _label: &'static str) {
+        struct Pin<T>(T);
+        // Safety: the waiter thread only DROPS the pinned object. Callers
+        // pass GPU handles (their drops are thread-safe) or plain data, as
+        // on Metal.
+        unsafe impl<T> Send for Pin<T> {}
+        let pin = Pin(obj);
+        self.queue.after_submitted(Box::new(move || drop(pin)));
     }
 
     /// Successful Metal buffer, texture and RT acceleration-structure
@@ -569,7 +598,10 @@ impl GpuDevice {
     /// Number of distinct compute pipelines currently cached (keyed by
     /// shader hash, shared across every caller).
     pub fn compute_pipeline_cache_len(&self) -> usize {
-        todo!("vulkan P1")
+        self.compute_cache
+            .lock()
+            .expect("compute cache poisoned")
+            .len()
     }
 
     /// Sibling of [`Self::compute_pipeline_cache_len`] for render pipelines
@@ -585,7 +617,59 @@ impl GpuDevice {
         entry_point: &str,
         label: &str,
     ) -> GpuComputePipeline {
-        todo!("vulkan P1")
+        let hash = compute_hash(wgsl_source, entry_point);
+        if let Some(cached) = self
+            .compute_cache
+            .lock()
+            .expect("compute cache poisoned")
+            .get(&hash)
+        {
+            return cached.clone();
+        }
+        record_cold_touch(ColdTouchKind::PipelineCompile);
+        let cached = self
+            .spirv_cache
+            .lock()
+            .expect("SPIR-V cache poisoned")
+            .as_ref()
+            .and_then(|cache| cache.get(hash));
+        let (slot_map, spirv, workgroup_size) = cached.unwrap_or_else(|| {
+            let compiled = super::shader_compiler::compile_wgsl_to_spirv_compute(
+                wgsl_source,
+                entry_point,
+                label,
+            );
+            if let Some(cache) = self
+                .spirv_cache
+                .lock()
+                .expect("SPIR-V cache poisoned")
+                .as_ref()
+            {
+                cache.put(hash, &compiled.0, &compiled.1, compiled.2);
+            }
+            compiled
+        });
+        let disk = self.pipeline_cache.lock().expect("pipeline cache poisoned");
+        let inner = create_compute(
+            &self.core,
+            disk.as_ref().map_or(vk::PipelineCache::null(), |c| c.raw),
+            &slot_map,
+            &spirv,
+            entry_point,
+            label,
+        );
+        drop(disk);
+        let pipeline = GpuComputePipeline {
+            slot_map,
+            label: label.to_string(),
+            workgroup_size,
+            inner,
+        };
+        self.compute_cache
+            .lock()
+            .expect("compute cache poisoned")
+            .insert(hash, pipeline.clone());
+        pipeline
     }
 
     /// Create a specialized compute pipeline by substituting constants in the WGSL
@@ -597,27 +681,46 @@ impl GpuDevice {
         specializations: &[(&str, &str)],
         label: &str,
     ) -> GpuComputePipeline {
-        todo!("vulkan P1")
+        let mut source = wgsl_source.to_string();
+        for &(pattern, replacement) in specializations {
+            source = source.replace(pattern, replacement);
+        }
+        self.create_compute_pipeline(&source, entry_point, label)
     }
 
     /// Load or create a pipeline binary archive at the given path.
     pub fn load_pipeline_archive(&self, path: &std::path::Path) {
-        todo!("vulkan P1")
+        *self.pipeline_cache.lock().expect("pipeline cache poisoned") =
+            Some(DiskPipelineCache::load(&self.core, path));
     }
 
     /// Save the pipeline binary archive to disk (if loaded and modified).
     pub fn save_pipeline_archive(&self) {
-        todo!("vulkan P1")
+        if let Some(cache) = self
+            .pipeline_cache
+            .lock()
+            .expect("pipeline cache poisoned")
+            .as_ref()
+        {
+            cache.save(&self.core);
+        }
     }
 
     /// Load or create an MSL shader cache at the given directory.
     pub fn load_msl_cache(&self, cache_dir: &std::path::Path) {
-        todo!("vulkan P1")
+        *self.spirv_cache.lock().expect("SPIR-V cache poisoned") = Some(SpirvCache::new(cache_dir));
     }
 
     /// Log MSL cache hit/miss statistics.
     pub fn log_msl_cache_stats(&self) {
-        todo!("vulkan P1")
+        if let Some(cache) = self
+            .spirv_cache
+            .lock()
+            .expect("SPIR-V cache poisoned")
+            .as_ref()
+        {
+            cache.log_stats();
+        }
     }
 
     /// Create (or fetch from the cache) a render pipeline.
@@ -628,12 +731,13 @@ impl GpuDevice {
     /// Prepare device-global pipelines for texture clears and depth-to-float
     /// conversion before encoding work.
     pub fn prepare_utility_pipelines(&self) {
-        todo!("vulkan P1")
+        // Clears record vkCmdClearColorImage, so there is nothing to compile;
+        // depth-to-float arrives with render passes (P2).
     }
 
     /// Create a new command encoder for one frame's GPU work.
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
-        todo!("vulkan P1")
+        GpuEncoder::new(self.core.clone(), self.queue.clone(), label)
     }
 
     /// Create a compiled depth-stencil state object.
@@ -643,7 +747,9 @@ impl GpuDevice {
 
     /// Create a shared event for CPU↔GPU synchronization.
     pub fn create_event(&self) -> GpuEvent {
-        todo!("vulkan P1")
+        GpuEvent {
+            inner: Arc::new(EventCore::new(self.core.clone())),
+        }
     }
 
     /// Attach fence-stamped drop retirement to this device (BUG-l7t4 class
