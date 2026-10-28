@@ -1160,8 +1160,9 @@ mod tests {
     }
 
     #[test]
-    fn frame_history_coupled_exact_one_two_tick_rejection_reset() {
-        // Coupled water presents exactly at the completed time: r = t_B.
+    fn frame_history_at_the_newest_time_one_two_tick_rejection_reset() {
+        // Presented at the newest retired time, the history shows that
+        // endpoint whole: r = t_B.
         for ticks_per_frame in [1u32, 2] {
             let mut model = Model::new(2);
             let mut t = 0.0;
@@ -1176,7 +1177,7 @@ mod tests {
                 }
                 // The completed time is at or past every retired endpoint.
                 if let Some(p) = model.live_frame(layout(epoch), t, true, t) {
-                    assert!(p.blend == 1.0, "coupled presents its newest endpoint whole");
+                    assert!(p.blend == 1.0, "the newest endpoint is shown whole");
                     assert!(!model.rejected.contains(&p.t_b));
                 }
             }

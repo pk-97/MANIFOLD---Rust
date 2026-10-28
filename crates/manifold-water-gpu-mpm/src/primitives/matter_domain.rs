@@ -56,7 +56,7 @@ use manifold_water_liquid::coupling::{
 };
 use manifold_water_liquid::fluid_role::{FluidRole, InitialFill, take_initial_fill};
 use manifold_water_liquid::gizmos::SetupReport;
-use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
+use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs, RigidPresentation};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
@@ -455,6 +455,9 @@ pub struct Coupling {
     exchange: Option<Exchange>,
     /// A host step failed; the next frame reports it and restarts the pair.
     host_error: Option<String>,
+    /// The bodies as drawn: blended between the two newest settled ticks
+    /// at the liquid's display time.
+    presented: RigidPresentation,
 }
 
 /// A frame of several coupled ticks: the region syncs at each later
@@ -986,7 +989,8 @@ impl PhysicsNode for MatterDomain {
         {
             return None;
         }
-        coupled.owner.as_ref().map(LiquidRigidOwner::frame)
+        let frame = coupled.owner.as_ref().map(LiquidRigidOwner::frame)?;
+        Some(coupled.presented.shown(frame))
     }
 
     fn physics_impulse_epoch(&self) -> Option<u64> {
@@ -1385,10 +1389,14 @@ impl MatterDomain {
                     self.coupled.exchange = Some(Exchange { pending, scale });
                 }
             }
-            // The liquid is shown at the tick Box3D has settled, with the
-            // bodies' accepted frame, which the scene takes before the region
-            // runs this frame's ticks.
-            display_time = owner.completed_time().0;
+            // The liquid and the bodies are shown at the clock's display
+            // time, one tick behind, never past the tick Box3D has settled:
+            // the scene takes the bodies' frame before the region runs this
+            // frame's ticks.
+            display_time = display_time.min(owner.completed_time().0);
+            self.coupled
+                .presented
+                .present(owner.completed_time().0, owner.frame(), display_time);
         }
         self.coupled.transport = Some(ctx.played());
         let field = self.fields.prepare(

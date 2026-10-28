@@ -67,7 +67,7 @@ use manifold_water_liquid::fluid_role::{
 };
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_liquid::{PARTICLE_RADIUS_CELLS, RolePorts, WATER_DENSITY};
-use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
+use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs, RigidPresentation};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
@@ -497,9 +497,13 @@ pub struct Coupling {
     exchange: Option<Exchange>,
     /// A host step failed; the next frame reports it and restarts the pair.
     host_error: Option<String>,
+    /// The bodies as drawn: blended between the two newest settled ticks
+    /// at the water's display time.
+    presented: RigidPresentation,
 }
 
 impl Coupling {
+
     fn reset(&mut self) {
         let (mode, epochs) = (self.mode, self.epochs);
         *self = Self {
@@ -1052,7 +1056,8 @@ impl PhysicsNode for GpuFlipDomain {
         {
             return None;
         }
-        coupled.owner.as_ref().map(LiquidRigidOwner::frame)
+        let frame = coupled.owner.as_ref().map(LiquidRigidOwner::frame)?;
+        Some(coupled.presented.shown(frame))
     }
 
     fn physics_impulse_epoch(&self) -> Option<u64> {
@@ -1434,10 +1439,14 @@ impl GpuFlipDomain {
                     });
                 }
             }
-            // The water is shown at the tick Box3D has settled, with the
-            // bodies' accepted frame, which the scene takes before the region
-            // runs this frame's ticks.
-            display_time = owner.completed_time().0;
+            // The water and the bodies are shown at the clock's display time,
+            // one tick behind, never past the tick Box3D has settled: the
+            // scene takes the bodies' frame before the region runs this
+            // frame's ticks.
+            display_time = display_time.min(owner.completed_time().0);
+            self.coupled
+                .presented
+                .present(owner.completed_time().0, owner.frame(), display_time);
         }
         self.fields.split_live_hits();
         let field = self.fields.prepare(

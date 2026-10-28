@@ -81,6 +81,24 @@ impl Clone for CoupledRigidFrame {
 }
 
 impl CoupledRigidFrame {
+    /// `a` and `b` blended at `t` (0 is `a`, 1 is `b`): each pose moves
+    /// along the straight line between them and turns the short way round.
+    /// Frames that hold different bodies or copies take `b` whole.
+    pub fn blend_from(&mut self, a: &Self, b: &Self, t: f32) {
+        self.clone_from(b);
+        if a.poses.len() != b.poses.len() || a.group_copies != b.group_copies {
+            return;
+        }
+        for (shown, (a, b)) in self
+            .poses
+            .iter_mut()
+            .chain(self.copies.iter_mut())
+            .zip(a.poses.iter().chain(&a.copies).zip(b.poses.iter().chain(&b.copies)))
+        {
+            *shown = blend_pose(a, b, t);
+        }
+    }
+
     /// Copy group `group`'s copies.
     pub fn group(&self, group: usize) -> &[Transform] {
         let Some(&count) = self.group_copies.get(group) else {
@@ -89,6 +107,97 @@ impl CoupledRigidFrame {
         let start: usize = self.group_copies[..group].iter().sum();
         self.copies.get(start..start + count).unwrap_or(&[])
     }
+}
+
+/// A coupled rigid world's bodies as drawn: the frames of its two newest
+/// settled ticks with their times, older first, and the frame shown, blended
+/// between them at the liquid's display time so the bodies and the liquid
+/// they touch move together between ticks.
+#[derive(Default)]
+pub struct RigidPresentation {
+    settled: [Option<(f64, CoupledRigidFrame)>; 2],
+    shown: CoupledRigidFrame,
+}
+
+impl RigidPresentation {
+    /// Take `frame`, settled at `time`, and draw the bodies at
+    /// `display_time`: between the two newest settled ticks, or the newest
+    /// whole once the display time reaches it. A new epoch, or time that
+    /// went back, starts the pair over.
+    pub fn present(&mut self, time: f64, frame: &CoupledRigidFrame, display_time: f64) {
+        let [older, newer] = &mut self.settled;
+        if let Some((_, newest)) = newer.as_mut().filter(|(t, _)| *t == time) {
+            // The same tick: bodies may have joined since, so take it again.
+            newest.clone_from(frame);
+        } else {
+            let follows = newer.as_ref().is_some_and(|(t, newest)| {
+                newest.stamp.epoch == frame.stamp.epoch && *t < time
+            });
+            std::mem::swap(older, newer);
+            if !follows {
+                *older = None;
+            }
+            // The older pair's storage takes the new tick.
+            match newer {
+                Some((t, newest)) => {
+                    *t = time;
+                    newest.clone_from(frame);
+                }
+                None => *newer = Some((time, frame.clone())),
+            }
+        }
+        match (older.as_ref(), newer.as_ref()) {
+            (Some((ta, a)), Some((tb, b))) => {
+                let t = ((display_time - ta) / (tb - ta)).clamp(0.0, 1.0);
+                self.shown.blend_from(a, b, t as f32);
+            }
+            (_, Some((_, b))) => self.shown.clone_from(b),
+            _ => {}
+        }
+    }
+
+    /// The frame to draw for the owner's settled `frame`: the blended one
+    /// once it holds the same tick and bodies, else `frame` whole.
+    pub fn shown<'a>(&'a self, frame: &'a CoupledRigidFrame) -> &'a CoupledRigidFrame {
+        let current = self.settled[1]
+            .as_ref()
+            .is_some_and(|(_, newest)| newest.stamp == frame.stamp)
+            && self.shown.poses.len() == frame.poses.len()
+            && self.shown.group_copies == frame.group_copies;
+        if current { &self.shown } else { frame }
+    }
+}
+
+/// `b` with its position and turn blended from `a` at `t`.
+fn blend_pose(a: &Transform, b: &Transform, t: f32) -> Transform {
+    let (qa, mut qb) = (
+        render_scene_euler_to_quat(a.rot_euler),
+        render_scene_euler_to_quat(b.rot_euler),
+    );
+    if (0..4).map(|i| qa[i] * qb[i]).sum::<f32>() < 0.0 {
+        qb = qb.map(|v| -v);
+    }
+    let q: [f32; 4] = std::array::from_fn(|i| qa[i] + (qb[i] - qa[i]) * t);
+    let length = q.iter().map(|v| v * v).sum::<f32>().sqrt();
+    Transform {
+        pos: std::array::from_fn(|i| a.pos[i] + (b.pos[i] - a.pos[i]) * t),
+        rot_euler: quat_to_render_scene_euler(q.map(|v| v / length)),
+        ..*b
+    }
+}
+
+/// The quaternion `[x, y, z, w]` of the render scene's Euler triple, the
+/// rotation `Rz(z) · Ry(y) · Rx(x)` that [`quat_to_render_scene_euler`]
+/// reads back.
+fn render_scene_euler_to_quat(e: [f32; 3]) -> [f32; 4] {
+    let half = |angle: f32| ((0.5 * angle).sin(), (0.5 * angle).cos());
+    let ((sx, cx), (sy, cy), (sz, cz)) = (half(e[0]), half(e[1]), half(e[2]));
+    [
+        cz * cy * sx - sz * sy * cx,
+        cz * sy * cx + sz * cy * sx,
+        sz * cy * cx - cz * sy * sx,
+        cz * cy * cx + sz * sy * sx,
+    ]
 }
 
 /// How a prepared rigid world's bodies map onto a [`CoupledRigidFrame`]:
@@ -198,5 +307,93 @@ impl CoupledRigidLayout {
             next += count;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pose(pos: [f32; 3], rot_euler: [f32; 3]) -> Transform {
+        Transform {
+            pos,
+            rot_euler,
+            ..Transform::default()
+        }
+    }
+
+    #[test]
+    fn the_euler_quaternion_reads_back_through_the_render_scene() {
+        for e in [[0.3, -0.7, 1.9], [-2.5, 1.2, -0.4], [0.0, 0.0, 3.1]] {
+            let back = quat_to_render_scene_euler(render_scene_euler_to_quat(e));
+            for axis in 0..3 {
+                assert!((back[axis] - e[axis]).abs() < 1e-4, "{e:?} read back {back:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_blended_pose_moves_straight_and_turns_the_short_way() {
+        let (a, b) = (pose([0.0, 1.0, 2.0], [0.0, 0.0, 3.0]), pose([2.0, 1.0, -2.0], [0.0, 0.0, -3.0]));
+        let half = blend_pose(&a, &b, 0.5);
+        assert_eq!(half.pos, [1.0, 1.0, 0.0]);
+        // 3 rad and -3 rad about z are 0.28 rad apart through pi, not 6 rad
+        // apart through 0.
+        let z = half.rot_euler[2];
+        assert!((z.abs() - std::f32::consts::PI).abs() < 1e-3, "turned through {z}");
+        let quarter = blend_pose(&a, &b, 0.25).rot_euler[2];
+        assert!((quarter - (3.0 + 0.25 * (2.0 * std::f32::consts::PI - 6.0))).abs() < 1e-3, "{quarter}");
+        let end = blend_pose(&a, &b, 1.0);
+        assert_eq!(end.pos, b.pos);
+        assert!((end.rot_euler[2] - b.rot_euler[2]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_presentation_blends_the_two_newest_ticks_and_restarts_on_a_new_epoch() {
+        let frame = |epoch, tick, x: f32| CoupledRigidFrame {
+            stamp: TickStamp { epoch, tick },
+            poses: vec![pose([x, 0.0, 0.0], [0.0; 3])],
+            ..CoupledRigidFrame::default()
+        };
+        let mut shown = RigidPresentation::default();
+        let first = frame(1, 1, 0.0);
+        shown.present(1.0 / 30.0, &first, 0.0);
+        assert_eq!(shown.shown(&first).poses[0].pos[0], 0.0);
+        // Two ticks a thirtieth apart, drawn a quarter and then all the way
+        // between them.
+        let second = frame(1, 2, 3.0);
+        shown.present(2.0 / 30.0, &second, 1.25 / 30.0);
+        assert!((shown.shown(&second).poses[0].pos[0] - 0.75).abs() < 1e-4);
+        shown.present(2.0 / 30.0, &second, 3.0 / 30.0);
+        assert_eq!(shown.shown(&second).poses[0].pos[0], 3.0);
+        // A frame the presentation has not taken is drawn whole.
+        let unseen = frame(1, 3, 9.0);
+        assert_eq!(shown.shown(&unseen).poses[0].pos[0], 9.0);
+        // A new epoch never blends with the old one.
+        let restarted = frame(2, 1, 5.0);
+        shown.present(1.0 / 30.0, &restarted, 0.0);
+        assert_eq!(shown.shown(&restarted).poses[0].pos[0], 5.0);
+    }
+
+    #[test]
+    fn frames_that_hold_different_bodies_show_the_newest_whole() {
+        let a = CoupledRigidFrame {
+            poses: vec![pose([0.0; 3], [0.0; 3])],
+            ..CoupledRigidFrame::default()
+        };
+        let b = CoupledRigidFrame {
+            poses: vec![pose([1.0; 3], [0.0; 3]), pose([5.0; 3], [0.0; 3])],
+            ..CoupledRigidFrame::default()
+        };
+        let mut shown = CoupledRigidFrame::default();
+        shown.blend_from(&a, &b, 0.5);
+        assert_eq!(shown.poses, b.poses);
+        let c = CoupledRigidFrame {
+            poses: vec![pose([3.0; 3], [0.0; 3]), pose([7.0; 3], [0.0; 3])],
+            ..CoupledRigidFrame::default()
+        };
+        shown.blend_from(&b, &c, 0.5);
+        assert_eq!(shown.poses[0].pos, [2.0; 3]);
+        assert_eq!(shown.poses[1].pos, [6.0; 3]);
     }
 }
