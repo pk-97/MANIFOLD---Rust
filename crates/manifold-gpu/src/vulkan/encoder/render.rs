@@ -319,6 +319,7 @@ impl GpuEncoder {
         if let Some(depth) = &depth {
             info = info.depth_attachment(depth);
         }
+        self.profile_begin(label, GpuWorkKind::Render);
         let cmd = self.record();
         let viewport = pass
             .viewport
@@ -366,6 +367,7 @@ impl GpuEncoder {
         label: &str,
     ) {
         self.track_color_target(target, None);
+        self.profile_begin(label, GpuWorkKind::Render);
         let cmd = self.record();
         let extent = (target.width, target.height);
         self.begin_ui_rendering(target.view.raw, extent, load_action);

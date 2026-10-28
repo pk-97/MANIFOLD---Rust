@@ -562,3 +562,88 @@ fn parity_generate_mipmaps_averages_each_level() {
     assert_eq!(red(&levels[1], 1), [30]);
     assert_clean();
 }
+
+#[test]
+fn parity_profiler_spans_follow_tags_submits_and_kinds() {
+    let device = GpuDevice::new();
+    let sampler = device
+        .create_timestamp_sampler(8)
+        .expect("the test devices write timestamps");
+    const BUMP: &str = r#"
+@group(0) @binding(0) var<storage, read_write> counter: array<u32>;
+@compute @workgroup_size(1) fn main() { counter[0] = counter[0] + 1u; }
+"#;
+    let pipeline = device.create_compute_pipeline(BUMP, "main", "profile parity bump");
+    let counter = device.create_buffer(4, BufferUse::Gpu);
+    let readback = device.create_buffer(4, BufferUse::Readback);
+    let out = target(&device, GpuTextureFormat::Rgba8Unorm, "profile parity pass");
+    let bind = [GpuBinding::Buffer {
+        binding: 0,
+        buffer: &counter,
+        offset: 0,
+    }];
+    // The same sampler serves both frames, so the second proves the reset.
+    for (granularity, expected) in [
+        (
+            ProfileGranularity::Tag,
+            &[
+                ("", "clear_buffer", GpuWorkKind::Blit),
+                ("a", "a1", GpuWorkKind::Compute),
+                ("b", "b1", GpuWorkKind::Compute),
+                ("b", "ui", GpuWorkKind::Render),
+                ("b", "copy_buffer_to_buffer", GpuWorkKind::Blit),
+            ][..],
+        ),
+        (
+            ProfileGranularity::Dispatch,
+            &[
+                ("", "clear_buffer", GpuWorkKind::Blit),
+                ("a", "a1", GpuWorkKind::Compute),
+                ("a", "a2", GpuWorkKind::Compute),
+                ("b", "b1", GpuWorkKind::Compute),
+                ("b", "ui", GpuWorkKind::Render),
+                ("b", "copy_buffer_to_buffer", GpuWorkKind::Blit),
+            ][..],
+        ),
+    ] {
+        let mut enc = device.create_encoder("profile parity");
+        enc.enable_profiling_at(sampler.clone(), &device, granularity);
+        enc.clear_buffer(&counter);
+        enc.set_profile_tag("a");
+        enc.dispatch_compute(&pipeline, &bind, [1, 1, 1], "a1");
+        enc.dispatch_compute(&pipeline, &bind, [1, 1, 1], "a2");
+        // Spans and the total carry across a mid-frame submit.
+        enc.commit_and_continue(&device);
+        enc.set_profile_tag("b");
+        enc.dispatch_compute(&pipeline, &bind, [1, 1, 1], "b1");
+        enc.begin_render_pass(&out, GpuLoadAction::Clear, "ui");
+        enc.end_render_pass();
+        enc.copy_buffer_to_buffer(&counter, &readback, 4);
+        let profile = enc.commit_and_wait_profiled(&device);
+        let spans: Vec<_> = profile
+            .spans
+            .iter()
+            .map(|s| (s.tag.as_str(), s.label.as_str(), s.kind))
+            .collect();
+        assert_eq!(spans, expected, "{granularity:?} spans");
+        assert_eq!(
+            (
+                profile.overflow,
+                profile.invalid,
+                profile.failed_command_buffers
+            ),
+            (0, 0, 0),
+            "{granularity:?}"
+        );
+        assert!(profile.total_ms > 0.0, "{granularity:?} total");
+        for span in &profile.spans {
+            assert!(
+                span.millis >= 0.0 && span.start_ms >= 0.0 && span.millis <= profile.total_ms * 2.0,
+                "{granularity:?} span {span:?}"
+            );
+        }
+        let ptr = readback.mapped_ptr().expect("readback buffers map");
+        assert_eq!(unsafe { *ptr.cast::<u32>() }, 3, "every dispatch ran");
+    }
+    assert_clean();
+}

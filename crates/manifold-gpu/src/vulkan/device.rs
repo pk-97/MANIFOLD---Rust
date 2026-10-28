@@ -441,13 +441,13 @@ impl GpuDevice {
     /// Whether this device supports per-dispatch GPU timestamp profiling
     /// (timestamp counter set + stage-boundary sampling).
     pub fn supports_dispatch_profiling(&self) -> bool {
-        todo!("vulkan P2")
+        self.core.timestamps.is_some()
     }
 
     /// Create a reusable timestamp sampler with capacity for `max_spans`
     /// profiled dispatches per frame.
     pub fn create_timestamp_sampler(&self, max_spans: usize) -> Option<GpuTimestampSampler> {
-        todo!("vulkan P2")
+        super::profiling::create_sampler(&self.core, max_spans)
     }
 
     /// Shared linear (bilinear) sampler with clamp-to-edge addressing,

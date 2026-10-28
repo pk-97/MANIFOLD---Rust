@@ -208,7 +208,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 Each P1 batch adds its parity-kit tests and runs them on KosmicKrisp with synchronization validation. P1 is done when the compute kit is clean and the one full proof run at phase end is within tolerance.
 
 **After P1:**
-- P2: render done 29 Oct: pipelines on dynamic rendering, one `VkPipeline` per topology and fill mode with depth and cull state dynamic, MSAA, mipmaps, the long UI pass and the depth copy (`vulkan/pipeline.rs`, `vulkan/encoder/render.rs`); `render_parity_tests.rs` runs on both backends. Vulkan stills against Metal: DigitalPlants, Lissajous, NestedCubes and Wireframe identical, Scene within 1/255, MetallicGlass's fine moiré differs (shader math precision). Still open: the per-dispatch profiler.
+- P2 done 29 Oct. Render: pipelines on dynamic rendering, one `VkPipeline` per topology and fill mode with depth and cull state dynamic, MSAA, mipmaps, the long UI pass and the depth copy (`vulkan/pipeline.rs`, `vulkan/encoder/render.rs`); `render_parity_tests.rs` runs on both backends. Vulkan stills against Metal: DigitalPlants, Lissajous, NestedCubes and Wireframe identical, Scene within 1/255, MetallicGlass's fine moiré differs (shader math precision). The per-dispatch profiler writes timestamp queries into one reused pool (`vulkan/profiling.rs`); Vulkan spans report no workgroup memory.
 - P3: shared textures, the surface, and un-gating the app's native render and headless harness.
 - P4: Linux services (text, pacing, output placement, shortcuts, menu-only actions, clipboard, audio buffer and capture, keep-awake, thread priority, plugins as `.so`).
 - P5: video.

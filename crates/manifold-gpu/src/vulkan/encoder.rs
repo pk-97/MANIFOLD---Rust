@@ -4,8 +4,8 @@
 //! section 5). Event waits and signals split the recording into batches that
 //! one `vkQueueSubmit2` sends together; the last batch signals the queue's
 //! timeline, whose waiter runs the completion handlers and recycles the
-//! resources (D6, D8). Render passes are in `render.rs`; profiling names the
-//! phase that builds it.
+//! resources (D6, D8). Render passes are in `render.rs`, per-dispatch
+//! timestamps in `profiling.rs`.
 
 // Stub bodies name the phase that builds them (design section 9); their
 // parameters are unused until then.
@@ -20,6 +20,7 @@ use ash::vk::{AccessFlags2 as A, Handle, PipelineStageFlags2 as S};
 
 use super::core::Core;
 use super::pipeline::Layouts;
+use super::profiling::ProfileState;
 use super::span_timer::SpanSlot;
 use super::submit::{Batch, FrameResources, Keep, Queue, is_device_lost};
 use super::tracker::Tracker;
@@ -67,6 +68,8 @@ pub struct GpuEncoder {
     /// The open long-lived pass (`begin_render_pass`).
     ui_pass: Option<render::UiPass>,
     depth_to_float: Arc<GpuComputePipeline>,
+    /// Per-dispatch timestamps while this frame is profiled.
+    profile: Option<ProfileState>,
 }
 
 type GpuTimeTap = Arc<dyn Fn(f64, f64) + Send + Sync>;
@@ -153,6 +156,7 @@ impl GpuEncoder {
             draw_sets: Vec::new(),
             ui_pass: None,
             depth_to_float,
+            profile: None,
         };
         encoder.open();
         encoder
@@ -174,6 +178,9 @@ impl GpuEncoder {
     /// writes become visible to the host once a signal is seen.
     fn close(&mut self, signals: Vec<(vk::Semaphore, u64)>) {
         self.end_render_pass();
+        if let Some(profile) = &mut self.profile {
+            profile.end(&self.core.device, self.cmd);
+        }
         let barrier = [vk::MemoryBarrier2::default()
             .src_stage_mask(S::ALL_COMMANDS)
             .src_access_mask(A::MEMORY_WRITE)
@@ -197,6 +204,13 @@ impl GpuEncoder {
 
     fn keep(&mut self, keep: Keep) {
         self.res.as_mut().expect(OPEN).keep.push(keep);
+    }
+
+    /// A profiled span for the work about to be recorded, when profiling.
+    fn profile_begin(&mut self, label: &str, kind: GpuWorkKind) {
+        if let Some(profile) = &mut self.profile {
+            profile.begin(&self.core.device, self.cmd, label, kind);
+        }
     }
 
     /// The tracker's pending barrier, then the open command buffer for one
@@ -389,9 +403,14 @@ impl GpuEncoder {
     }
 
     /// Close the open command buffer and submit every batch; the queue's
-    /// waiter runs the handlers and recycles the resources. `seconds`, when
-    /// given, receives the submit's GPU seconds as `f64` bits.
+    /// waiter runs the handlers and recycles the resources. `seconds`, or
+    /// the profile's total while profiled, gains the submit's GPU seconds
+    /// (an `f64` as bits).
     fn submit(&mut self, seconds: Option<Arc<AtomicU64>>) -> Result<u64, String> {
+        let seconds = seconds.or_else(|| self.profile.as_ref().map(|p| p.gpu_seconds.clone()));
+        if let Some(profile) = &mut self.profile {
+            profile.end(&self.core.device, self.cmd);
+        }
         self.stamp(seconds);
         self.close(Vec::new());
         let mut handlers = std::mem::take(self.handlers.get_mut());
@@ -408,7 +427,7 @@ impl GpuEncoder {
     }
 
     /// Bracket this submit with timestamps when anything reads its GPU time:
-    /// the tap, a span, or a wait returning it in `seconds`. The handler
+    /// the tap, a span, or a total gaining it in `seconds`. The handler
     /// reads them before the waiter recycles the query pool. A span hears
     /// every submit, timed or not; one that failed counts as infinitely long.
     fn stamp(&mut self, seconds: Option<Arc<AtomicU64>>) {
@@ -464,7 +483,8 @@ impl GpuEncoder {
                     tap(start, end);
                 }
                 if let Some(seconds) = &seconds {
-                    seconds.store((end - start).to_bits(), Ordering::Relaxed);
+                    let add = |bits| Some((f64::from_bits(bits) + (end - start)).to_bits());
+                    let _ = seconds.fetch_update(Ordering::Relaxed, Ordering::Relaxed, add);
                 }
             }
             let failed = is_device_lost() || (timestamps.is_some() && times.is_none());
@@ -548,7 +568,7 @@ impl GpuEncoder {
     /// Enable per-dispatch GPU timestamp profiling for this frame's command
     /// buffer.
     pub fn enable_dispatch_profiling(&mut self, sampler: GpuTimestampSampler, device: &GpuDevice) {
-        todo!("vulkan P2")
+        self.enable_profiling_at(sampler, device, ProfileGranularity::Dispatch);
     }
 
     /// [`Self::enable_dispatch_profiling`] at a chosen [`ProfileGranularity`].
@@ -558,23 +578,56 @@ impl GpuEncoder {
         device: &GpuDevice,
         granularity: ProfileGranularity,
     ) {
-        todo!("vulkan P2")
+        let cmd = self.record();
+        self.profile = Some(ProfileState::new(
+            &self.core.device,
+            cmd,
+            sampler,
+            granularity,
+        ));
     }
 
     /// Name the next profiled encoder's existing boundary samples.
     #[cfg(feature = "gpu-proofs")]
     pub fn profile_next_encoder(&mut self, label: &'static str) {
-        todo!("vulkan P2")
+        if let Some(profile) = &mut self.profile {
+            assert!(
+                profile.next_label.is_none(),
+                "previous encoder label was not consumed"
+            );
+            profile.next_label = Some(label);
+        }
     }
 
     /// Set the attribution tag stamped onto subsequently profiled spans.
     pub fn set_profile_tag(&mut self, tag: &str) {
-        todo!("vulkan P2")
+        if let Some(profile) = &mut self.profile {
+            profile.tag.clear();
+            profile.tag.push_str(tag);
+        }
     }
 
     /// Commit, wait for completion, and resolve the frame's profiled spans.
-    pub fn commit_and_wait_profiled(self, device: &GpuDevice) -> GpuFrameProfile {
-        todo!("vulkan P2")
+    /// Works on an unprofiled encoder too (empty span list, total only). A
+    /// lost device (D19) counts as one failed command buffer.
+    pub fn commit_and_wait_profiled(mut self, device: &GpuDevice) -> GpuFrameProfile {
+        let seconds = self
+            .profile
+            .as_ref()
+            .map_or_else(|| Arc::new(AtomicU64::new(0)), |p| p.gpu_seconds.clone());
+        let failed = self
+            .submit_and_wait("commit_and_wait_profiled", Some(seconds.clone()))
+            .is_err();
+        let total_ms = f64::from_bits(seconds.load(Ordering::Relaxed)) * 1e3;
+        let mut profile = match self.profile.take() {
+            Some(state) => state.resolve(&self.core, total_ms),
+            None => GpuFrameProfile {
+                total_ms,
+                ..Default::default()
+            },
+        };
+        profile.failed_command_buffers = usize::from(failed);
+        profile
     }
 
     /// Dispatch a compute shader.
@@ -588,6 +641,7 @@ impl GpuEncoder {
         if !self.bind_compute(pipeline, bindings) {
             return;
         }
+        self.profile_begin(label, GpuWorkKind::Compute);
         let cmd = self.record();
         let [x, y, z] = workgroups;
         unsafe { self.core.device.cmd_dispatch(cmd, x, y, z) };
@@ -607,6 +661,7 @@ impl GpuEncoder {
         if !self.bind_compute(pipeline, bindings) {
             return;
         }
+        self.profile_begin(label, GpuWorkKind::Compute);
         let key = self.keep_buffer(args);
         self.tracker.read(key, S::DRAW_INDIRECT);
         let cmd = self.record();
@@ -637,6 +692,7 @@ impl GpuEncoder {
     /// Clear a texture to a solid color.
     pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {
         let key = self.keep_texture(texture);
+        self.profile_begin("clear_texture", GpuWorkKind::Blit);
         let cmd = self.transfer(&[], &[key]);
         let view = &texture.view;
         let device = &self.core.device;
@@ -702,6 +758,7 @@ impl GpuEncoder {
     /// Fill a buffer with zeros via blit encoder.
     pub fn clear_buffer(&mut self, buffer: &GpuBuffer) {
         let key = self.keep_buffer(buffer);
+        self.profile_begin("clear_buffer", GpuWorkKind::Blit);
         let cmd = self.transfer(&[], &[key]);
         unsafe {
             self.core
@@ -741,6 +798,7 @@ impl GpuEncoder {
             base_array_layer: view.base_layer,
             layer_count: view.layer_count,
         };
+        self.profile_begin("generate_mipmaps", GpuWorkKind::Blit);
         for level in 1..view.mip_count {
             let cmd = self.transfer(&[key], &[key]);
             let region = vk::ImageBlit {
@@ -794,6 +852,7 @@ impl GpuEncoder {
         );
         let src_key = self.keep_texture(src);
         let dst_key = self.keep_texture(dst);
+        self.profile_begin("copy_texture_to_texture", GpuWorkKind::Blit);
         let cmd = self.transfer(&[src_key], &[dst_key]);
         let region = [vk::ImageCopy::default()
             .src_subresource(subresource(src))
@@ -824,6 +883,7 @@ impl GpuEncoder {
             "copy_buffer_to_buffer: copy size {size} exceeds destination buffer ({} bytes)",
             dst.size,
         );
+        self.profile_begin("copy_buffer_to_buffer", GpuWorkKind::Blit);
         self.copy_buffer(src, 0, dst, 0, size);
     }
 
@@ -852,6 +912,7 @@ impl GpuEncoder {
             "copy_buffer_range: {size} bytes at {dst_offset} exceed destination buffer ({} bytes)",
             dst.size,
         );
+        self.profile_begin("copy_buffer_range", GpuWorkKind::Blit);
         self.copy_buffer(src, src_offset, dst, dst_offset, size);
     }
 
@@ -871,6 +932,7 @@ impl GpuEncoder {
             src.height,
             src.format,
         );
+        self.profile_begin("copy_texture_to_buffer", GpuWorkKind::Blit);
         self.copy_image_to_buffer(src, dst, [width, height, 1], bytes_per_row);
     }
 
@@ -892,6 +954,7 @@ impl GpuEncoder {
             src.depth,
             src.format,
         );
+        self.profile_begin("copy_texture_3d_to_buffer", GpuWorkKind::Blit);
         self.copy_image_to_buffer(src, dst, [width, height, depth], bytes_per_row);
     }
 
@@ -930,6 +993,7 @@ impl GpuEncoder {
         // Safety: the ring range is fresh and `bytes` long.
         unsafe { staging.write(offset, &data[..bytes as usize]) };
         let key = self.keep_texture(texture);
+        self.profile_begin("upload_texture", GpuWorkKind::Blit);
         let cmd = self.transfer(&[], &[key]);
         let region = [vk::BufferImageCopy::default()
             .buffer_offset(offset)
