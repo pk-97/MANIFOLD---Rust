@@ -7,7 +7,6 @@
 
 use super::RtObjectGeometry;
 use bytemuck::{Pod, Zeroable};
-use objc2_metal::MTLAccelerationStructureInstanceDescriptor;
 
 /// CPU mirror of the MSL `SubsurfaceMaterial` row.  The renderer keeps rows in
 /// canonical object order; the committed instance id selects the normal-source
@@ -586,41 +585,6 @@ const _: () = assert!(std::mem::offset_of!(RtNormalSource, _pad_row) == 1056);
 /// its own copy is 32); the descriptor-build kernel addresses slots as
 /// `instances_addr + slot * 32`.
 pub(crate) const RT_INSTANCE_TRANSFORM_BYTES: usize = 32;
-
-/// Rust mirror of the embedded-MSL
-/// `RtAsInstanceDescriptor` — itself the field-for-field mirror of
-/// `MTLAccelerationStructureInstanceDescriptor` the descriptor-build kernel
-/// writes. The CPU never authors descriptors in instanced mode (the buffer
-/// is GPU-private), so this struct exists ONLY to tie the two layouts
-/// together at compile time: its size/offsets must equal the objc2
-/// binding's, and the MSL mirror must equal this. Do NOT hardcode 64 —
-/// assert against the binding (per the design's P0 brief) so an
-/// objc2-metal layout change fails loudly here instead of mis-striding the
-/// GPU writes.
-#[repr(C)]
-struct RtAsInstanceDescriptorMirror {
-    transformation_matrix: [[f32; 3]; 4],
-    options: u32,
-    mask: u32,
-    intersection_function_table_offset: u32,
-    acceleration_structure_index: u32,
-}
-
-const _: () = assert!(
-    std::mem::size_of::<RtAsInstanceDescriptorMirror>()
-        == std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>()
-);
-const _: () = assert!(
-    std::mem::offset_of!(RtAsInstanceDescriptorMirror, mask)
-        == std::mem::offset_of!(MTLAccelerationStructureInstanceDescriptor, mask)
-);
-const _: () = assert!(
-    std::mem::offset_of!(RtAsInstanceDescriptorMirror, acceleration_structure_index)
-        == std::mem::offset_of!(
-            MTLAccelerationStructureInstanceDescriptor,
-            accelerationStructureIndex
-        )
-);
 
 /// Rust mirror of the embedded-MSL
 /// `RtInstanceBuildObj` — one entry per object, rewritten every instanced

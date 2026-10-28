@@ -3,6 +3,7 @@
 //! atrous/accumulate dispatch implementations plus their tests. Split out
 //! of `raytrace.rs` (BUG-xmsx driver split); see that file for the map.
 
+use crate::raytrace_types::*;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -630,45 +631,8 @@ impl TracePass {
     }
 }
 
-/// One caller-supplied world-space ray
-/// for [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
-/// `DebugRayQueryRay` (packed_float3 pairs + two scalars).
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct DebugRayQueryRay {
-    pub origin: [f32; 3],
-    pub direction: [f32; 3],
-    pub min_distance: f32,
-    pub max_distance: f32,
-}
 const _: () = assert!(std::mem::size_of::<DebugRayQueryRay>() == 32);
 
-/// ID sentinel written for a miss (MSL `DEBUG_RAY_INVALID`).
-pub const DEBUG_RAY_INVALID: u32 = u32::MAX;
-
-/// One committed-hit record from
-/// [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
-/// `DebugRayQueryHit` exactly. P4b (§5.2): `coverage`/`brightness` report
-/// the accepted hit's appearance evaluation (`clamp(gain*weight, 0, 1)` /
-/// `max(gain*weight, 1)` — render_scene.wgsl:889's `apply_appearance`);
-/// both 1.0 when the object has no appearance wired, both 0 on a miss.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DebugRayQueryHit {
-    pub hit: u32,
-    pub object_id: u32,
-    pub instance_id: u32,
-    pub primitive_id: u32,
-    pub distance: f32,
-    pub bary: [f32; 2],
-    pub coverage: f32,
-    pub brightness: f32,
-    pub normal: [f32; 3],
-    /// Candidates the walk tested, at most [`RT_WALK_MAX_CANDIDATES`].
-    pub candidates: u32,
-    pub uv: [f32; 2],
-    pub pad2: [f32; 2],
-}
 const _: () = assert!(std::mem::size_of::<DebugRayQueryHit>() == 68);
 
 pub struct MetalShadowRayTracer {

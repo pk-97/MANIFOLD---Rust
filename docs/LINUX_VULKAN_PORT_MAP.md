@@ -81,8 +81,7 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Shared textures | `create_io_surface_bgra8`, `create_texture_from_io_surface` go away with the bridge change (section 11) | Before P3 |
 | Metal-only, stay Metal | `raw_device`, `raw_device_ptr`, `raw_cmd_buf`, `raw_ptr`, `mtl4_bridge`, `metalfx`, `metalfx_m4`, `defer_drop`, `dispatch_compute_with_accel` | never |
 
-**Hoist before porting.** These live in `metal/` but are backend-neutral logic that touches Metal in a handful of lines. Move them to shared modules with small backend hooks, so Vulkan does not copy them:
-- the ray-tracing data types in `raytrace/params.rs` (1,005) and `raytrace/emissive.rs` (692), plus the error, update and debug-ray types callers name (section 4)
+**Shared already.** The frame fence, drop retirement, texture pool and ray-tracing data types (`raytrace_types/`) live outside `metal/`; a backend supplies `RetiredResource`, `PoolAllocator` and `submissions_ignored`, and re-exports `raytrace_types` from its `raytrace` module.
 
 `span_timer.rs` is not hoisted: it goes with the GPU-timing consolidation (section 11).
 
@@ -211,7 +210,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then the P4 pi
 1. **Setup** (section 1). Done 28 Oct.
 2. **Build hygiene.** Done 28 Oct, except `UniformArena` (section 11).
 3. **Folders and tools.** Done 28 Oct (`manifold_foundation::AppDirs`, `find_tool`).
-4. **Hoist neutral logic** out of `metal/` (section 3, "Hoist before porting"). Done when the build, clippy and `manifold-gpu`'s tests pass, plus one `perf-soak` on a heavy scene, where retire, fence and pool regressions show.
+4. **Hoist neutral logic.** Done 28 Oct.
 5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, commit forms, the upload merge, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
 6. **Frame bridge on one device** (section 11), proven with `bridge-probe`; the headless subcommands then boot the normal pipeline. Daytime, with the live app run after it.
 7. **Vulkan skeleton.**

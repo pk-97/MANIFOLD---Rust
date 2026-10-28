@@ -75,56 +75,6 @@ struct EmissiveObjParams {
 
 const _: () = assert!(std::mem::size_of::<EmissiveObjParams>() == 56);
 
-/// RS-B: GPU-side emissive triangle entry — world-space positions of the
-/// three vertices plus per-vertex UVs and the owning object index for
-/// gi_materials/normal_sources lookups (RS-C). `packed_float3` discipline:
-/// `[f32; 3]` + explicit pad (P0 section 5.1 kernel lesson). P4a: written by
-/// the `emissive_gather` kernel, never by the CPU. P4b (§5.2): grew the
-/// per-corner APPEARANCE WEIGHTS (`w0/w1/w2`, 1.0 when unwired) — explicit
-/// emitter samples have not passed the hit test, so the trace kernel
-/// multiplies `coverage * brightness` at the sampled barycentrics from
-/// these corners and the normal-source row's current gain.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct EmissiveTriangleGpu {
-    pub v0: [f32; 3],
-    _pad0: f32,
-    pub v1: [f32; 3],
-    _pad1: f32,
-    pub v2: [f32; 3],
-    _pad2: f32,
-    pub uv0: [f32; 2],
-    pub uv1: [f32; 2],
-    pub uv2: [f32; 2],
-    pub object_index: u32,
-    /// The TLAS descriptor slot of THIS entry's
-    /// copy. In instanced mode the entries stay LOCAL-space and the kernel
-    /// composes world positions from `emissive_descriptors[descriptor_index]`;
-    /// the D7 fast path sets this to the object index (descriptor_index ==
-    /// object_index there) and never reads it.
-    pub descriptor_index: u32,
-    /// P4b: per-corner appearance weights (vertex-order, post index
-    /// resolution), 1.0 when the object has no weights wired.
-    pub w0: f32,
-    pub w1: f32,
-    pub w2: f32,
-    _pad3: f32,
-}
-
-const _: () = assert!(std::mem::size_of::<EmissiveTriangleGpu>() == 96);
-
-/// RS-B: GPU-side alias-table entry — `prob` is the probability of selecting
-/// the entry's own triangle; when the draw fails the self-probability, `alias`
-/// names the alternative entry index.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct EmissiveAliasEntry {
-    pub prob: f32,
-    pub alias: u32,
-}
-
-const _: () = assert!(std::mem::size_of::<EmissiveAliasEntry>() == 8);
-
 /// §5.1: the resident emissive-geometry light table — GPU buffers written by
 /// the preparation kernels. Fixed-size (the 4096-entry cap), allocated at
 /// preparation so an emission zero→positive transition needs no new

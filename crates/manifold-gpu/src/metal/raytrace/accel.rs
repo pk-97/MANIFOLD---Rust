@@ -4,10 +4,10 @@
 //! normal-source/material texture tables. Split out of `raytrace.rs`
 //! (BUG-xmsx driver split); see that file for the module map.
 
+use crate::raytrace_types::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use arrayvec::ArrayVec;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -31,11 +31,6 @@ use super::{
     RT_INSTANCE_TRANSFORM_BYTES, RT_MATERIAL_TEX_INDEX_NONE, RtInstanceBuildObj, RtNormalSource,
     SHADOW_WORKGROUP, effective_instance_slots, write_instance_obj_params,
 };
-
-/// Fixed-capacity texture list returned by the normal-source table builder.
-/// The cap is part of the shader ABI, so this keeps the hot per-frame list on
-/// the stack while preserving the existing bounded-table degradation rules.
-pub type RtMaterialTextures<'a> = ArrayVec<&'a GpuTexture, MAX_RT_MATERIAL_TEXTURES>;
 
 // ─── Acceleration structure: per-object BLAS + one instance TLAS ───────
 //
@@ -384,183 +379,6 @@ impl Drop for RtAccel {
 unsafe impl Send for RtAccel {}
 unsafe impl Sync for RtAccel {}
 
-/// One object's geometry + world transform for [`ShadowRayTracer::plan_accel`]/
-/// `prepare_accel`/`encode_accel_update`. `transform` is manifold's own
-/// column-major `[[f32; 4]; 4]` convention (matches `render_scene.rs`'s
-/// `model_matrix`) — the same layout `render_scene.wgsl`'s `Uniforms.model`
-/// already uses. `vertex_buffer`/`vertex_stride`/`vertex_offset` read
-/// straight from an existing interleaved vertex buffer (e.g.
-/// `render_scene.rs`'s `MeshVertex`, stride 80, position at offset 0) —
-/// no position-only repack. `index_buffer: None` means a flat,
-/// non-indexed triangle list (every 3 consecutive vertices = 1 triangle
-/// — `render_scene.rs`'s own draw convention), matching Metal's
-/// triangle-geometry descriptor, which supports either.
-pub struct RtObjectGeometry<'a> {
-    pub vertex_buffer: &'a GpuBuffer,
-    pub vertex_stride: u32,
-    pub vertex_offset: u32,
-    pub index_buffer: Option<&'a GpuBuffer>,
-    pub triangle_count: u32,
-    pub transform: [[f32; 4]; 4],
-    /// The renderer's instance space: every slot's world matrix is
-    /// `transform · T_instance · instance_inner` (an unwired object's T is
-    /// the identity). [`RtObjectGeometry::NO_INNER`] in Object space.
-    pub instance_inner: [[f32; 4]; 4],
-    /// RT-T1-B: byte offset of the per-vertex NORMAL field within one
-    /// `vertex_stride`-sized vertex record in `vertex_buffer` — no separate
-    /// normal allocation; `MeshVertex` (render_scene.rs's production vertex
-    /// layout) already interleaves position/normal/uv, so this just names
-    /// where the normal lives (offset 16 for `MeshVertex`). Consumed by
-    /// [`build_normal_sources`] to build the per-object bindless indirection
-    /// table `trace_shadow_rays` reads at ray-hit time (real interpolated
-    /// vertex normals, replacing the depth finite-difference reconstruction
-    /// — RAYTRACING_DESIGN.md section 8 Tier-1 item 2). A fixture whose geometry
-    /// carries no normal data at all (e.g. `rt_p1_shadow.rs`'s
-    /// position-only `PackedVertex`) may set this to any value AS LONG AS
-    /// `ao_spp`/`gi_spp` stay 0 — the only two consumers of the fetched
-    /// normal.
-    pub normal_offset: u32,
-    /// RT-T2-A (RAYTRACING_DESIGN.md section 8.2 Tier-2 item 4): byte offset of the
-    /// per-vertex UV field within one `vertex_stride`-sized vertex record —
-    /// same "name where it lives, no separate allocation" convention as
-    /// `normal_offset`. Only read when `alpha_mask` is set; a fixture with
-    /// no UV data may set this to any value as long as `alpha_mask` stays
-    /// `false`.
-    pub uv_offset: u32,
-    /// RT-T2-A: this object's material is `AlphaMode::Mask` (cutout) —
-    /// intersections against it run the per-candidate alpha test (a UV
-    /// fetch and `base_color_texture` sample against `alpha_cutoff`)
-    /// instead of the opaque fast path. `false` keeps the BLAS geometry
-    /// `setOpaque(true)` (see `encode_blas_build`) and every ray against
-    /// this object short-circuits at the hardware level, same cost as
-    /// before this feature.
-    pub alpha_mask: bool,
-    /// RT-TL-B (RAYTRACING_DESIGN.md section 16 TL6): this object's material
-    /// carries a nonzero `translucency` factor — it must ALSO leave the
-    /// hardware opaque fast path, or the kernel's `walk_with_transmission`
-    /// never sees solid-but-thin surfaces as candidates. Read fresh at every
-    /// BLAS build and folded into the topo dirty key (render_scene.rs), so a
-    /// live 0→nonzero card flip triggers a bounded async rebuild — the same
-    /// D17 gesture as toggling RT itself.
-    pub translucent: bool,
-    /// RT-T2-A: cutout threshold in `[0, 1]` — mirrors `Material::
-    /// alpha_cutoff`. Unused when `alpha_mask` is `false`.
-    pub alpha_cutoff: f32,
-    /// RT-T2-A: this object's base-color texture, sampled (alpha channel
-    /// only) at the candidate hit's interpolated UV when `alpha_mask` is
-    /// set. `None` degrades to "always pass" (documented at
-    /// `ensure_normal_sources`'s call site) — an alpha-masked object with no
-    /// texture wired is a material-authoring gap, not a crash.
-    pub base_color_texture: Option<&'a GpuTexture>,
-    /// Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): this object's
-    /// metallic-roughness texture, sampled (G=roughness, B=metallic — glTF
-    /// packing) at the reflection ray's primary-hit interpolated UV.
-    /// `None` degrades to the flat `GiMaterial::metallic_roughness` factor
-    /// (documented at `ensure_normal_sources`'s call site) — an object with
-    /// no map wired renders exactly as before this feature. The product is
-    /// consumed at primary and secondary reflection-hit shading sites.
-    pub mr_texture: Option<&'a GpuTexture>,
-    /// BUG-wytp (rt-reflections-are-normal-map-blind): this object's tangent-
-    /// space normal map (glTF packing: R/G = tangent-space X/Y, B = Z),
-    /// sampled at the PRIMARY hit's interpolated UV to perturb the shading
-    /// normal feeding the reflection lobe's R and the AO/GI cosine-hemisphere
-    /// gather. `None` degrades to the barycentric vertex normal (pre-BUG-wytp
-    /// behavior). Applied at primary and secondary hit shading sites.
-    pub normal_texture: Option<&'a GpuTexture>,
-    /// BUG-1gqt: this object's emissive texture, sampled at the ray hit's
-    /// interpolated UV (with `emissive_uv_m/t` applied) and multiplied by
-    /// the flat `GiMaterial::emissive` factor — the trace-path mirror of
-    /// the raster's `resolve_emissive`. `None` = factor alone
-    /// (pre-feature behavior). Consumed at every emissive-hit shading
-    /// site (the GI gather's emissive term and the reflection hit's).
-    pub emissive_texture: Option<&'a GpuTexture>,
-    /// Extension material textures in the 15-map ABI order. The first three
-    /// retain anisotropy/specular-weight/specular-color order; the remaining
-    /// eleven follow raster map indices 5, 6, 7, 8, 10, 11, 12, 15, 16, 17,
-    /// and 18, followed by AO's canonical raster index 3. They share the
-    /// bounded deduplicated table used by the core maps and are indexed in
-    /// `RtNormalSource::extra_tex_indices`.
-    pub extra_material_textures: [Option<&'a GpuTexture>; 15],
-    /// BUG-1gqt: KHR_texture_transform fold for the emissive map, in the
-    /// raster's `apply_uv_transform` convention:
-    /// `uv' = (m[0]*u + m[1]*v + t[0], m[2]*u + m[3]*v + t[1])`.
-    /// Identity when the material declares no transform.
-    pub emissive_uv_m: [f32; 4],
-    pub emissive_uv_t: [f32; 2],
-    /// Per-object shadow-cast toggle (`node.scene_object`'s `cast_shadows`
-    /// param, threaded through `render_scene.rs`'s `ObjectDraw`). `false`
-    /// clears `RT_MASK_SHADOW_CASTER` from this instance's mask (see
-    /// [`build_instance_buffer`]) — it still carries `RT_MASK_VISIBLE`, so
-    /// it stays hit by every query EXCEPT the shadow/sun-bounce rays that
-    /// mask against `RT_MASK_SHADOW_CASTER` alone.
-    pub cast_shadows: bool,
-    /// Bindless GPU address of this object's
-    /// `Array<InstanceTransform>` wire (mesh_common.rs's 32-byte
-    /// `InstanceTransform` layout), or 0 when unwired. Wired with
-    /// wired with `instance_slots > 1` puts the accel on the GPU
-    /// descriptor-build path (one TLAS slot per instance slot, composed
-    /// `model · T_instance` in-kernel per D4; P1.5: any WIRED capacity, 1
-    /// included — a wired 1-capacity buffer's TRS lives GPU-side, which
-    /// the CPU identity-descriptor path can never represent); 0 keeps the
-    /// object at a single identity-slot descriptor, exactly as before this
-    /// field existed.
-    pub instances_addr: u64,
-    /// The buffer backing `instances_addr` — the
-    /// BUG-84fv lifetime handle. The descriptor-build kernel reads instance
-    /// values through the raw address, which no binding declares, so the
-    /// build/refit pins this handle through its async completion exactly
-    /// like `vertex_buffer` above. `Some` iff `instances_addr != 0`;
-    /// `instances_addr` must be this buffer's `gpu_address()`.
-    pub instances_buffer: Option<&'a GpuBuffer>,
-    /// Per-object instance-slot CAPACITY
-    /// (rigid topology — a change rebuilds the accel). 0 or 1 = unwired /
-    /// identity (the D7 fast path). The raster's live count is in-band
-    /// (`pos_scale.w == 0` = dead slot), so capacity is all the CPU needs.
-    pub instance_slots: u32,
-    /// Per-vertex appearance-weight
-    /// buffer (`f32` per vertex, vertex-index addressed — indexed meshes
-    /// included), `None` = unwired (weight 1). The checked weight count is
-    /// the mesh vertex count: a wired buffer with fewer floats than
-    /// `(vertex_buffer.size - vertex_offset) / vertex_stride` is a
-    /// structured `RtAccelError::InvalidGeometry` at plan/encode. Read
-    /// bindless by the trace/emissive kernels through
-    /// `RtNormalSource::appearance_weights_addr`; pinned in the accel's
-    /// geometry set exactly like `vertex_buffer`. Buffer identity is
-    /// topology (same discipline as `index_buffer`).
-    pub appearance_weights: Option<&'a GpuBuffer>,
-    /// P4b: per-object appearance gain — the raster's `u.appearance.x`.
-    /// `!= 1.0` (with or without weights) puts the object in the
-    /// descriptor-nonopaque class so the candidate walkers can apply the
-    /// coverage test; a fractional-to-fractional gain change rewrites only
-    /// the normal-source table row (rebuilt every RT-ready frame).
-    pub appearance_gain: f32,
-    /// KHR_texture_transform fold for the base-color map, in the raster's
-    /// `apply_uv_transform` convention: `(m00, m01, m10, m11, tx, ty)`.
-    pub base_color_uv_transform: [f32; 6],
-    /// KHR_texture_transform fold for the metallic-roughness map.
-    pub mr_uv_transform: [f32; 6],
-    /// KHR_texture_transform fold for the tangent-space normal map.
-    pub normal_uv_transform: [f32; 6],
-    /// Raster normal-map scale applied to the decoded tangent-space XY.
-    pub normal_scale: f32,
-    /// Base-color alpha factor used by alpha-mask candidate tests.
-    pub base_color_alpha: f32,
-    /// Byte offset of the per-vertex tangent (`float4`, xyz + authored
-    /// handedness). `u32::MAX` means the mesh has no authored tangent.
-    pub tangent_offset: u32,
-    pub material_attributes: super::params::RtMaterialAttributes,
-}
-
-impl RtObjectGeometry<'_> {
-    /// The Object-space `instance_inner`: the identity.
-    pub const NO_INNER: [[f32; 4]; 4] = [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ];
-}
-
 /// Column-major `a · b`.
 fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let mut out = [[0.0f32; 4]; 4];
@@ -831,51 +649,6 @@ pub fn encode_inline_copy(
             "RT inline table copy",
         );
     }
-}
-
-/// Per-object geometry change class for [`encode_accel_update`] — the
-/// caller's dirty decision from its revision metadata (§4.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RtGeometryChange {
-    /// No geometry or descriptor change — no BLAS work.
-    Reuse,
-    /// Normals/UVs/appearance-only change — tables/history refresh, no
-    /// BLAS work while the descriptor opacity class holds.
-    Attributes,
-    /// Positions moved, topology stable. Refits the existing BLAS in place.
-    Refit,
-    /// Topology/cut/alpha-class change — rebuild the affected BLAS.
-    Rebuild,
-}
-
-/// What one [`encode_accel_update`] call actually encoded (§4.1) — the
-/// acceptance counters (`rt_dynamic_selective_updates_and_idle`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RtAccelUpdate {
-    pub blas_builds: u32,
-    pub blas_refits: u32,
-    pub tlas_builds: u32,
-    pub tlas_refits: u32,
-    pub emissive_refreshes: u32,
-}
-
-/// Structured accel lifecycle failure (§4.1) — no partial publication:
-/// every variant is returned BEFORE any GPU work is encoded.
-#[derive(Debug)]
-pub enum RtAccelError {
-    InvalidGeometry {
-        object: usize,
-        reason: String,
-    },
-    /// The resident set cannot express the requested change — the caller
-    /// must run plan/prepare first (object count, capacity, or a Rebuild
-    /// whose new shape exceeds the resident storage).
-    NeedsPreparation,
-    Allocation {
-        bytes: u64,
-        resource: &'static str,
-    },
-    Encode(&'static str),
 }
 
 /// Immutable resident-handle pin set for one prepared `RtAccel` resource
@@ -2264,6 +2037,41 @@ pub fn ensure_normal_sources_snapshot<'a>(
     );
     textures
 }
+
+/// Rust mirror of the embedded-MSL
+/// `RtAsInstanceDescriptor` — itself the field-for-field mirror of
+/// `MTLAccelerationStructureInstanceDescriptor` the descriptor-build kernel
+/// writes. The CPU never authors descriptors in instanced mode (the buffer
+/// is GPU-private), so this struct exists ONLY to tie the two layouts
+/// together at compile time: its size/offsets must equal the objc2
+/// binding's, and the MSL mirror must equal this. Do NOT hardcode 64 —
+/// assert against the binding (per the design's P0 brief) so an
+/// objc2-metal layout change fails loudly here instead of mis-striding the
+/// GPU writes.
+#[repr(C)]
+struct RtAsInstanceDescriptorMirror {
+    transformation_matrix: [[f32; 3]; 4],
+    options: u32,
+    mask: u32,
+    intersection_function_table_offset: u32,
+    acceleration_structure_index: u32,
+}
+
+const _: () = assert!(
+    std::mem::size_of::<RtAsInstanceDescriptorMirror>()
+        == std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>()
+);
+const _: () = assert!(
+    std::mem::offset_of!(RtAsInstanceDescriptorMirror, mask)
+        == std::mem::offset_of!(MTLAccelerationStructureInstanceDescriptor, mask)
+);
+const _: () = assert!(
+    std::mem::offset_of!(RtAsInstanceDescriptorMirror, acceleration_structure_index)
+        == std::mem::offset_of!(
+            MTLAccelerationStructureInstanceDescriptor,
+            accelerationStructureIndex
+        )
+);
 
 #[cfg(test)]
 mod tests {

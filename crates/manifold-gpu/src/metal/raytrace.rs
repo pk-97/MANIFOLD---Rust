@@ -41,9 +41,8 @@
 mod accel;
 pub use accel::*;
 mod emissive;
-mod params;
+pub use crate::raytrace_types::*;
 pub use emissive::*;
-pub use params::*;
 mod tracer;
 pub use tracer::*;
 mod trace_timing;

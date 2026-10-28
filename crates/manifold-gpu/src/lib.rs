@@ -85,3 +85,5 @@ mod retire;
 pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
 mod texture_pool;
 pub use texture_pool::TexturePool;
+// Ray-tracing data types; each backend re-exports them from its `raytrace`.
+mod raytrace_types;
