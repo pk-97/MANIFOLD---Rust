@@ -1,4 +1,5 @@
 manifold_core::testkit_visible! { pub(crate) mod carry_liquid_into_solids; }
+mod field_close;
 mod interior_fill;
 pub mod liquid_frame;
 manifold_core::testkit_visible! { pub(crate) mod particle_volume; }

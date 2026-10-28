@@ -141,6 +141,24 @@
         "id": 51,
         "nodeId": "liquid_blend_3",
         "typeId": "node.field_smooth_blend"
+      },
+      {
+        "handle": "Liquid Close",
+        "id": 60,
+        "nodeId": "liquid_close",
+        "typeId": "node.field_close"
+      },
+      {
+        "handle": "Close Gaps",
+        "id": 61,
+        "nodeId": "liquid_close_gaps",
+        "typeId": "node.switch_array",
+        "params": {
+          "selector": {
+            "type": "Float",
+            "value": 0.0
+          }
+        }
       }
     ],
     "wires": [
@@ -247,8 +265,8 @@
         "toPort": "cell_ranges"
       },
       {
-        "fromNode": 7,
-        "fromPort": "levelset",
+        "fromNode": 61,
+        "fromPort": "out",
         "toNode": 33,
         "toPort": "reference"
       },
@@ -277,8 +295,8 @@
         "toPort": "cell_size"
       },
       {
-        "fromNode": 7,
-        "fromPort": "levelset",
+        "fromNode": 61,
+        "fromPort": "out",
         "toNode": 43,
         "toPort": "prior"
       },
@@ -289,8 +307,8 @@
         "toPort": "weights"
       },
       {
-        "fromNode": 7,
-        "fromPort": "levelset",
+        "fromNode": 61,
+        "fromPort": "out",
         "toNode": 43,
         "toPort": "reference"
       },
@@ -331,8 +349,8 @@
         "toPort": "weights"
       },
       {
-        "fromNode": 7,
-        "fromPort": "levelset",
+        "fromNode": 61,
+        "fromPort": "out",
         "toNode": 47,
         "toPort": "reference"
       },
@@ -373,8 +391,8 @@
         "toPort": "weights"
       },
       {
-        "fromNode": 7,
-        "fromPort": "levelset",
+        "fromNode": 61,
+        "fromPort": "out",
         "toNode": 51,
         "toPort": "reference"
       },
@@ -443,6 +461,42 @@
         "fromPort": "velocity",
         "toNode": 11,
         "toPort": "velocity"
+      },
+      {
+        "fromNode": 7,
+        "fromPort": "levelset",
+        "toNode": 60,
+        "toPort": "levelset"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "tiles",
+        "toNode": 60,
+        "toPort": "tiles"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "pool_tiles",
+        "toNode": 60,
+        "toPort": "pool_tiles"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "cell_size",
+        "toNode": 60,
+        "toPort": "cell_size"
+      },
+      {
+        "fromNode": 7,
+        "fromPort": "levelset",
+        "toNode": 61,
+        "toPort": "in_0"
+      },
+      {
+        "fromNode": 60,
+        "fromPort": "field",
+        "toNode": 61,
+        "toPort": "in_1"
       }
     ]
   },

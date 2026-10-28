@@ -156,6 +156,7 @@ const CELL_SIZE: Reach = Reach::Own("cell_size");
 const DETAIL: Reach = Reach::Own("surface_detail");
 const PARTICLE_SCALE: Reach = Reach::Own("liquid_particle_scale");
 const SMOOTHNESS: Reach = Reach::Own("liquid_smoothness");
+const CLOSE_GAPS: Reach = Reach::Own("liquid_close_gaps");
 const RIPPLES: Reach = Reach::Own("water_ripple_detail");
 const FOAM: Reach = Reach::Own("water_foam_cover");
 const MIST: Reach = Reach::Own("water_mist");
@@ -204,7 +205,7 @@ fn flip_surface(fields: &ItemFields) -> bool {
     flip(fields) && surface(fields)
 }
 
-pub static WATER_ROWS: [PropertyRow; 49] = [
+pub static WATER_ROWS: [PropertyRow; 50] = [
     row("pos_x", T, Domain, setup())
         .unit(Unit::Metres)
         .limit(HardLimit::Unlimited),
@@ -346,6 +347,14 @@ pub static WATER_ROWS: [PropertyRow; 49] = [
         .tip("How much the surface is smoothed between particles: 0 shows each particle's bumps, 2 is the smoothest")
         .default(1.0)
         .range(0.0, 2.0)
+        .when(surface),
+    // The surface group's switch between the raw level set and its closing.
+    row("surface_close_gaps", CLOSE_GAPS, Surface, setup())
+        .param("selector")
+        .name("Close Gaps")
+        .tip("Closes holes and gaps in the surface up to two surface cells across, so a thin sheet of water holds together instead of breaking into beads. Droplets closer than that join up")
+        .toggle()
+        .default(0.0)
         .when(surface),
     // Each optional look is a switch on the water object, which leaves the
     // look and its passes out while off, with its tuning row folded under it.
