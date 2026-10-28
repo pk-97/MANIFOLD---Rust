@@ -37,6 +37,15 @@ pub struct AudioCaptureConfig {
 /// Input buffer the kick detector is tuned for, in frames (5.3 ms at 48 kHz).
 const INPUT_BUFFER_FRAMES: u32 = 256;
 
+/// The device's human-readable name, the handle saved projects and the
+/// device list match inputs by.
+pub(crate) fn device_name(device: &cpal::Device) -> Option<String> {
+    device
+        .description()
+        .ok()
+        .map(|description| description.name().to_string())
+}
+
 /// CoreAudio's default input buffer is already small. ALSA's (25 ms periods,
 /// a 100 ms buffer) is too slow for the kick detector, so elsewhere ask for
 /// [`INPUT_BUFFER_FRAMES`] within the device's supported range.
@@ -81,15 +90,15 @@ impl AudioCaptureDevice {
         let device = if let Some(ref name) = config.device_name {
             host.input_devices()
                 .map_err(|e| format!("Failed to enumerate input devices: {e}"))?
-                .find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                .find(|d| device_name(d).as_deref() == Some(name.as_str()))
                 .ok_or_else(|| format!("Audio input device not found: {name}"))?
         } else {
             host.default_input_device()
                 .ok_or_else(|| "No default audio input device".to_string())?
         };
 
-        let device_name = device.name().unwrap_or_else(|_| "Unknown".into());
-        log::info!("[AudioCapture] Using device: {device_name}");
+        let name = device_name(&device).unwrap_or_else(|| "Unknown".into());
+        log::info!("[AudioCapture] Using device: {name}");
 
         // Query the device's default input config — use its native sample rate
         // and channel count to avoid format conversion issues.
@@ -97,7 +106,7 @@ impl AudioCaptureDevice {
             .default_input_config()
             .map_err(|e| format!("Failed to get default input config: {e}"))?;
 
-        let sample_rate = default_config.sample_rate().0;
+        let sample_rate = default_config.sample_rate();
         let channels = default_config.channels();
 
         log::info!(
@@ -107,7 +116,7 @@ impl AudioCaptureDevice {
 
         let stream_config = StreamConfig {
             channels,
-            sample_rate: cpal::SampleRate(sample_rate),
+            sample_rate,
             buffer_size: input_buffer_size(default_config.buffer_size()),
         };
 
@@ -142,7 +151,7 @@ impl AudioCaptureDevice {
         // RULES: no alloc, no lock, no log, no panic. Only ring buffer writes.
         let stream = device
             .build_input_stream(
-                &stream_config,
+                stream_config,
                 move |data: &[f32], info: &cpal::InputCallbackInfo| {
                     if !running_cb.load(Ordering::Relaxed) {
                         return;
@@ -154,7 +163,7 @@ impl AudioCaptureDevice {
                         timestamp.callback,
                         timestamp.capture,
                         std::time::Instant::now(),
-                        |later, earlier| later.duration_since(&earlier),
+                        |later, earlier| later.checked_duration_since(earlier),
                     );
                     let written = producer.push_interleaved_at(data, source_time);
                     if written < data.len() {
@@ -226,12 +235,12 @@ impl AudioCaptureDevice {
     /// Enumerate available audio input devices.
     pub fn list_devices() -> Vec<AudioDeviceInfo> {
         let host = cpal::default_host();
-        let default_name = host.default_input_device().and_then(|d| d.name().ok());
+        let default_name = host.default_input_device().and_then(|d| device_name(&d));
 
         let mut devices = Vec::new();
         if let Ok(inputs) = host.input_devices() {
             for device in inputs {
-                if let Ok(name) = device.name() {
+                if let Some(name) = device_name(&device) {
                     let is_default = default_name.as_deref() == Some(&name);
                     devices.push(AudioDeviceInfo { name, is_default });
                 }

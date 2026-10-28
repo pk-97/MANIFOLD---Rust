@@ -13,7 +13,7 @@ kira = { workspace = true }
 symphonia = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-midir = "0.9"
+midir = "0.11"
 rosc = "0.10"
 rusty_link = "0.4"
 parking_lot = { workspace = true }

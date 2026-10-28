@@ -27,7 +27,9 @@ impl CpalDirectory {
 impl AudioDeviceDirectory for CpalDirectory {
     fn list_input_devices(&self) -> Vec<DeviceInfo> {
         let host = cpal::default_host();
-        let default_name = host.default_input_device().and_then(|d| d.name().ok());
+        let default_name = host
+            .default_input_device()
+            .and_then(|d| crate::capture::device_name(&d));
 
         let Ok(inputs) = host.input_devices() else {
             return Vec::new();
@@ -35,7 +37,7 @@ impl AudioDeviceDirectory for CpalDirectory {
 
         inputs
             .filter_map(|device| {
-                let name = device.name().ok()?;
+                let name = crate::capture::device_name(&device)?;
                 let channel_count = device
                     .default_input_config()
                     .map(|c| c.channels())

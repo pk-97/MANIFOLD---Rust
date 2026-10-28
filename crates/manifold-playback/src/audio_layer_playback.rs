@@ -24,20 +24,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use ahash::AHashMap;
-use kira::clock::clock_info::ClockInfoProvider;
+use kira::backend::Backend;
 use kira::effect::{Effect, EffectBuilder};
-use kira::modulator::value_provider::ModulatorValueProvider;
+use kira::info::Info;
+use kira::sound::PlaybackState as KiraPlaybackState;
+use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::track::{TrackBuilder, TrackHandle};
-use kira::{
-    Frame,
-    manager::{
-        AudioManager, AudioManagerSettings,
-        backend::{Backend, DefaultBackend},
-    },
-    sound::PlaybackState as KiraPlaybackState,
-    sound::static_sound::{StaticSoundData, StaticSoundHandle},
-    tween::Tween,
-};
+use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Frame, Tween};
 use manifold_core::audio_stream::{
     AudioStreamConsumer, AudioStreamProducer, AudioStreamRead, audio_stream,
 };
@@ -45,7 +38,6 @@ use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::PlaybackState;
 use manifold_core::{Beats, Seconds};
-use parking_lot::Mutex;
 
 use crate::audio_sync::preload_audio;
 use crate::engine::PlaybackEngine;
@@ -68,6 +60,21 @@ const TAP_BLOCK_CAPACITY: usize = 512;
 /// Small fixed staging buffer used to amortize descriptor publication on the
 /// realtime thread. A partial buffer is flushed before a sample-rate change.
 const TAP_STAGING_CAPACITY: usize = 64;
+
+/// kira takes volumes in decibels; the playback math here is linear gain.
+/// Zero and below are silence.
+fn gain_db(amplitude: f64) -> Decibels {
+    Decibels(((20.0 * amplitude.log10()) as f32).max(Decibels::SILENCE.0))
+}
+
+/// Playing for the transport's purposes: kira reports a resume's fade-in as
+/// `Resuming`, which already renders audio.
+fn is_playing(handle: &StaticSoundHandle) -> bool {
+    matches!(
+        handle.state(),
+        KiraPlaybackState::Playing | KiraPlaybackState::Resuming
+    )
+}
 
 /// A short volume/transport tween that declicks an edge (start, stop, seek-jump).
 fn declick() -> Tween {
@@ -123,13 +130,8 @@ fn local_bpm_at_beat(beat: Beats, project: &Project, engine: &PlaybackEngine) ->
 /// signal into the layer's lock-free ring and returns the frame untouched, so it
 /// reads the same audio that reaches the speakers (warp + gain already applied).
 /// Lives on the kira audio thread — never allocates.
-///
-/// kira requires `Effect: Send + Sync`, but the ring producer is `Send`-only (it
-/// caches an index in a `Cell`). The producer is wrapped in a `Mutex` purely to
-/// satisfy that bound. Effect callbacks own `&mut self`, so `get_mut` accesses
-/// the producer exclusively without acquiring the mutex on the audio thread.
 struct LayerTap {
-    prod: Mutex<AudioStreamProducer>,
+    prod: AudioStreamProducer,
     /// Renderer sample rate, learned from [`Effect::init`] and read by the
     /// content thread to build the matching analyzer. 0 until the first init.
     sample_rate: Arc<AtomicU32>,
@@ -138,7 +140,7 @@ struct LayerTap {
 }
 
 impl Effect for LayerTap {
-    fn init(&mut self, sample_rate: u32) {
+    fn init(&mut self, sample_rate: u32, _internal_buffer_size: usize) {
         self.request_sample_rate(sample_rate);
     }
 
@@ -146,16 +148,10 @@ impl Effect for LayerTap {
         self.request_sample_rate(sample_rate);
     }
 
-    fn process(
-        &mut self,
-        input: Frame,
-        _dt: f64,
-        _clock: &ClockInfoProvider,
-        _mods: &ModulatorValueProvider,
-    ) -> Frame {
-        // Mono downmix of the stereo bus. The frame is returned untouched so
-        // this effect remains a true pass-through tap.
-        self.enqueue_frame(input)
+    fn process(&mut self, input: &mut [Frame], _dt: f64, _info: &Info) {
+        // Mono downmix of the stereo bus. The frames stay untouched so this
+        // effect remains a true pass-through tap.
+        self.enqueue_frames(input);
     }
 }
 
@@ -164,16 +160,17 @@ impl LayerTap {
     /// before changing the producer so every descriptor has one rate stamp.
     fn request_sample_rate(&mut self, sample_rate: u32) {
         self.flush_staging();
-        self.prod.get_mut().set_sample_rate(sample_rate);
+        self.prod.set_sample_rate(sample_rate);
         self.sample_rate.store(sample_rate, Ordering::Relaxed);
     }
 
-    /// Add one mono source frame to the fixed staging buffer. The buffer is
-    /// flushed as a whole so the stream publishes one bounded descriptor rather
-    /// than one descriptor per audio frame.
-    fn enqueue_frame(&mut self, input: Frame) -> Frame {
-        self.enqueue_mono((input.left + input.right) * 0.5);
-        input
+    /// Add each frame's mono downmix to the fixed staging buffer. The buffer
+    /// is flushed as a whole so the stream publishes one bounded descriptor
+    /// rather than one descriptor per audio frame.
+    fn enqueue_frames(&mut self, input: &[Frame]) {
+        for frame in input {
+            self.enqueue_mono((frame.left + frame.right) * 0.5);
+        }
     }
 
     fn enqueue_mono(&mut self, mono: f32) {
@@ -189,10 +186,8 @@ impl LayerTap {
             return;
         }
         // Capacity loss is reported by the stream at the original source frame
-        // positions. The existing mutex holder is accessed without locking.
-        self.prod
-            .get_mut()
-            .push_interleaved(&self.staging[..self.staging_len]);
+        // positions.
+        self.prod.push_interleaved(&self.staging[..self.staging_len]);
         self.staging_len = 0;
     }
 }
@@ -210,7 +205,7 @@ impl EffectBuilder for LayerTapBuilder {
     fn build(self) -> (Box<dyn Effect>, Self::Handle) {
         (
             Box::new(LayerTap {
-                prod: Mutex::new(self.prod),
+                prod: self.prod,
                 sample_rate: self.sample_rate,
                 staging: [0.0; TAP_STAGING_CAPACITY],
                 staging_len: 0,
@@ -223,7 +218,7 @@ impl EffectBuilder for LayerTapBuilder {
 /// One audio layer's kira sub-track plus the read end of its post-fader tap.
 struct LayerTrack {
     /// Kept alive to keep the kira track alive (dropping the handle removes it).
-    /// Clip voices route here via [`StaticSoundData::output_destination`].
+    /// Clip voices play on it ([`TrackHandle::play`]).
     track: TrackHandle,
     /// Read end of the tap stream — drained on the content thread each tick and fed
     /// to the send's `StreamingSendAnalyzer` (the analysis runs inline, no worker
@@ -250,20 +245,19 @@ struct Voice {
 /// Play retained sound data on a layer track with the requested initial state.
 /// The zero initial volume prevents a newly created voice from rendering before
 /// its transport sync applies the clip's gain.
-fn play_routed_data<B: Backend>(
-    manager: &mut AudioManager<B>,
+fn play_routed_data(
     data: &StaticSoundData,
-    track: &TrackHandle,
+    track: &mut TrackHandle,
     position: f64,
     volume: f64,
     ratio: f32,
     paused: bool,
 ) -> Result<StaticSoundHandle, ()> {
-    let mut handle = manager
-        .play(data.output_destination(track).volume(0.0_f64))
+    let mut handle = track
+        .play(data.volume(Decibels::SILENCE))
         .map_err(|_| ())?;
     handle.seek_to(position);
-    handle.set_volume(volume, Tween::default());
+    handle.set_volume(gain_db(volume), Tween::default());
     handle.set_playback_rate(ratio as f64, Tween::default());
     if paused {
         handle.pause(Tween::default());
@@ -274,9 +268,8 @@ fn play_routed_data<B: Backend>(
 /// Build a fresh voice for `path` routed to `track` (decode + start paused at 0).
 /// `None` on a decode/play failure (logged) — a genuine "no audio," not a silent
 /// stand-in.
-fn make_voice<B: Backend>(
-    manager: &mut AudioManager<B>,
-    track: &TrackHandle,
+fn make_voice(
+    track: &mut TrackHandle,
     destination: &LayerId,
     path: &str,
 ) -> Option<Voice> {
@@ -291,7 +284,7 @@ fn make_voice<B: Backend>(
     // (rather than played-then-paused) so kira's default 10ms pause fade-out never renders
     // the file's first samples audibly — see BUG-081.
     let data = pre.sound_data;
-    let handle = match play_routed_data(manager, &data, track, 0.0, 0.0, 1.0, true) {
+    let handle = match play_routed_data(&data, track, 0.0, 0.0, 1.0, true) {
         Ok(h) => h,
         Err(()) => {
             log::warn!("[AudioLayerPlayback] play failed for '{path}'");
@@ -374,7 +367,14 @@ impl<B: Backend> AudioLayerPlayback<B> {
             // send still sees signal even when the sub-track is muted to master.
             if let Some(lt) = self.layer_tracks.get_mut(&layer.layer_id) {
                 lt.track
-                    .set_volume(if master_hot { 1.0_f64 } else { 0.0_f64 }, declick());
+                    .set_volume(
+                        if master_hot {
+                            Decibels::IDENTITY
+                        } else {
+                            Decibels::SILENCE
+                        },
+                        declick(),
+                    );
             }
 
             // Tap gate: per-voice volume. The tap sits in the sub-track chain after
@@ -400,15 +400,14 @@ impl<B: Backend> AudioLayerPlayback<B> {
             } else {
                 1.0
             };
-            // Disjoint field borrows: the track (read) vs the manager + voices
-            // (write) are distinct fields of `self`, so this type-checks without a
-            // self method that would borrow all of `self`.
-            let Some(lt) = self.layer_tracks.get(&layer.layer_id) else {
+            // Disjoint field borrows: the track and the voices are distinct
+            // fields of `self`, so this type-checks without a self method that
+            // would borrow all of `self`.
+            let Some(lt) = self.layer_tracks.get_mut(&layer.layer_id) else {
                 continue;
             };
-            let track = &lt.track;
+            let track = &mut lt.track;
             AudioLayerPlayback::sync_clip(
-                &mut self.manager,
                 &mut self.voices,
                 track,
                 &layer.layer_id,
@@ -423,7 +422,7 @@ impl<B: Backend> AudioLayerPlayback<B> {
 
         // Pause voices whose clip isn't active this tick (declicked).
         for (id, voice) in self.voices.iter_mut() {
-            if !active.contains(id) && voice.handle.state() == KiraPlaybackState::Playing {
+            if !active.contains(id) && is_playing(&voice.handle) {
                 voice.handle.pause(declick());
             }
         }
@@ -467,14 +466,12 @@ impl<B: Backend> AudioLayerPlayback<B> {
 impl AudioLayerPlayback {
     /// Sync a single clip's voice to the transport-expected position + volume,
     /// routed to its layer's `track`. The voice is removed from the map for the
-    /// duration so the manager and the voice can be borrowed independently, then
-    /// reinserted. Associated (not `&mut self`) so the caller can hold a borrow of
-    /// the layer track concurrently with the manager + voice map.
+    /// duration, then reinserted. Associated (not `&mut self`) so the caller
+    /// can hold a borrow of the layer track concurrently with the voice map.
     #[allow(clippy::too_many_arguments)]
-    fn sync_clip<B: Backend>(
-        manager: &mut AudioManager<B>,
+    fn sync_clip(
         voices: &mut AHashMap<ClipId, Voice>,
-        track: &TrackHandle,
+        track: &mut TrackHandle,
         destination: &LayerId,
         id: &ClipId,
         path: &str,
@@ -485,15 +482,14 @@ impl AudioLayerPlayback {
     ) {
         // Take the existing voice if its file still matches; otherwise (re)build.
         // Moving a clip between layers replaces only the Kira handle: the retained
-        // decoded samples are cloned with the new output destination.
+        // decoded samples play again on the new layer's track.
         let mut voice = match voices.remove(id) {
             Some(mut v) if v.path == path => {
                 if v.destination != *destination {
                     let position = v.handle.position();
-                    let was_playing = v.handle.state() == KiraPlaybackState::Playing;
+                    let was_playing = is_playing(&v.handle);
                     v.handle.stop(Tween::default());
                     v.handle = match play_routed_data(
-                        manager,
                         &v.data,
                         track,
                         position,
@@ -518,14 +514,14 @@ impl AudioLayerPlayback {
                 if path.is_empty() {
                     return;
                 }
-                match make_voice(manager, track, destination, path) {
+                match make_voice(track, destination, path) {
                     Some(v) => v,
                     None => return,
                 }
             }
         };
 
-        voice.handle.set_volume(volume, declick());
+        voice.handle.set_volume(gain_db(volume), declick());
         // Varispeed warp: play the source faster/slower so its recorded tempo
         // locks to the project. Pitch moves with rate (Signalsmith replaces this
         // for pitch-preserving stretch in the next P4 step). Declicked so a
@@ -537,7 +533,7 @@ impl AudioLayerPlayback {
             Seconds::ZERO,
             (duration - Seconds(0.001)).max(Seconds::ZERO),
         );
-        let playing = voice.handle.state() == KiraPlaybackState::Playing;
+        let playing = is_playing(&voice.handle);
 
         match state {
             PlaybackState::Playing => {
@@ -550,7 +546,6 @@ impl AudioLayerPlayback {
                         // Kira stops a handle at the natural end; replay for a
                         // fresh one seeked to the expected position.
                         match play_routed_data(
-                            manager,
                             &voice.data,
                             track,
                             target.0,
@@ -717,12 +712,41 @@ impl<B: Backend> AudioLayerPlayback<B> {
 /// content thread through [`AudioLayerPlayback::drain_layer_tap`] — the exact
 /// signal the send analyzer consumes. Runs on kira's mock backend, so no output
 /// device is opened.
+/// Render at least `frames` samples through kira's mock backend, one
+/// internal buffer per call.
+#[cfg(test)]
+fn render_frames(manager: &mut AudioManager<kira::backend::mock::MockBackend>, frames: usize) {
+    let block = AudioManagerSettings::<kira::backend::mock::MockBackend>::default()
+        .internal_buffer_size;
+    for _ in 0..frames.div_ceil(block) {
+        manager.backend_mut().on_start_processing();
+        manager.backend_mut().process();
+    }
+}
+
+#[cfg(test)]
+mod gain_tests {
+    use super::*;
+
+    #[test]
+    fn linear_gain_maps_to_decibels_and_back() {
+        assert_eq!(gain_db(1.0), Decibels::IDENTITY);
+        assert_eq!(gain_db(0.0), Decibels::SILENCE);
+        assert_eq!(gain_db(-1.0), Decibels::SILENCE);
+        assert!((gain_db(0.5).0 + 6.0206).abs() < 1e-3);
+        for amplitude in [0.01, 0.25, 0.8, 1.5] {
+            let back = gain_db(amplitude).as_amplitude() as f64;
+            assert!((back - amplitude).abs() < 1e-5, "{amplitude} -> {back}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod layer_tap_tests {
     use std::sync::Arc;
 
     use kira::Frame;
-    use kira::manager::backend::mock::{MockBackend, MockBackendSettings};
+    use kira::backend::mock::{MockBackend, MockBackendSettings};
     use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings};
 
     use super::*;
@@ -738,14 +762,9 @@ mod layer_tap_tests {
         AudioLayerPlayback::with_manager(manager)
     }
 
-    /// Render `frames` samples through the mock backend in 64-frame blocks.
+    /// Render at least `frames` samples through the mock backend.
     fn render(playback: &mut AudioLayerPlayback<MockBackend>, frames: usize) {
-        for i in 0..frames {
-            if i % 64 == 0 {
-                playback.manager.backend_mut().on_start_processing();
-            }
-            let _ = playback.manager.backend_mut().process();
-        }
+        render_frames(&mut playback.manager, frames);
     }
 
     #[test]
@@ -755,9 +774,9 @@ mod layer_tap_tests {
 
         // Create the layer's sub-track + tap, then route a tone to it.
         playback.ensure_layer_track(&layer_id);
-        let track = &playback
+        let track = &mut playback
             .layer_tracks
-            .get(&layer_id)
+            .get_mut(&layer_id)
             .expect("layer track")
             .track;
 
@@ -773,12 +792,8 @@ mod layer_tap_tests {
             frames,
             settings: StaticSoundSettings::default(),
             slice: None,
-        }
-        .output_destination(track);
-        let _handle = playback
-            .manager
-            .play(data)
-            .expect("play tone on layer track");
+        };
+        let _handle = track.play(data).expect("play tone on layer track");
 
         render(&mut playback, 7_200);
 
@@ -819,11 +834,11 @@ mod layer_tap_tests {
             .get_mut(&layer_id)
             .expect("layer track")
             .track
-            .set_volume(0.0_f64, Tween::default());
+            .set_volume(Decibels::SILENCE, Tween::default());
 
-        let track = &playback
+        let track = &mut playback
             .layer_tracks
-            .get(&layer_id)
+            .get_mut(&layer_id)
             .expect("layer track")
             .track;
         let sr = 48_000u32;
@@ -838,12 +853,8 @@ mod layer_tap_tests {
             frames,
             settings: StaticSoundSettings::default(),
             slice: None,
-        }
-        .output_destination(track);
-        let _handle = playback
-            .manager
-            .play(data)
-            .expect("play tone on layer track");
+        };
+        let _handle = track.play(data).expect("play tone on layer track");
 
         render(&mut playback, 7_200);
 
@@ -861,7 +872,7 @@ mod layer_tap_tests {
 
 #[cfg(test)]
 mod routed_voice_tests {
-    use kira::manager::backend::mock::{MockBackend, MockBackendSettings};
+    use kira::backend::mock::{MockBackend, MockBackendSettings};
 
     use super::*;
 
@@ -901,8 +912,8 @@ mod routed_voice_tests {
             ..Default::default()
         })
         .expect("mock audio manager");
-        let (track_a, mut tap_a) = mock_track(&mut manager);
-        let (track_b, mut tap_b) = mock_track(&mut manager);
+        let (mut track_a, mut tap_a) = mock_track(&mut manager);
+        let (mut track_b, mut tap_b) = mock_track(&mut manager);
         let layer_a = LayerId::new("layer-a");
         let layer_b = LayerId::new("layer-b");
         let clip_id = ClipId::new("clip");
@@ -921,21 +932,15 @@ mod routed_voice_tests {
 
         let source_position = 64.0 / 48_000.0;
         let old_handle = play_routed_data(
-            &mut manager,
             &data,
-            &track_a,
+            &mut track_a,
             source_position,
             1.0,
             1.0,
             false,
         )
         .expect("initial routed voice");
-        for i in 0..512 {
-            if i % 64 == 0 {
-                manager.backend_mut().on_start_processing();
-            }
-            let _ = manager.backend_mut().process();
-        }
+        render_frames(&mut manager, 512);
         assert!(
             tap_peak(&mut tap_a) > 0.09,
             "initial track should receive signal"
@@ -954,9 +959,8 @@ mod routed_voice_tests {
             },
         );
         AudioLayerPlayback::sync_clip(
-            &mut manager,
             &mut voices,
-            &track_b,
+            &mut track_b,
             &layer_b,
             &clip_id,
             "retained.wav",
@@ -966,20 +970,10 @@ mod routed_voice_tests {
             1.0,
         );
         // Let the existing declick envelopes settle, then measure fresh blocks.
-        for i in 0..512 {
-            if i % 64 == 0 {
-                manager.backend_mut().on_start_processing();
-            }
-            let _ = manager.backend_mut().process();
-        }
+        render_frames(&mut manager, 512);
         tap_peak(&mut tap_a);
         tap_peak(&mut tap_b);
-        for i in 0..128 {
-            if i % 64 == 0 {
-                manager.backend_mut().on_start_processing();
-            }
-            let _ = manager.backend_mut().process();
-        }
+        render_frames(&mut manager, 128);
 
         assert_eq!(voices[&clip_id].destination, layer_b);
         assert_eq!(
@@ -1007,7 +1001,7 @@ mod layer_tap_stream_tests {
         let sample_rate = Arc::new(AtomicU32::new(sample_rate));
         (
             LayerTap {
-                prod: Mutex::new(prod),
+                prod,
                 sample_rate,
                 staging: [0.0; TAP_STAGING_CAPACITY],
                 staging_len: 0,
@@ -1017,12 +1011,9 @@ mod layer_tap_stream_tests {
     }
 
     #[test]
-    fn staging_downmixes_mean_and_preserves_input_frame() {
+    fn staging_downmixes_mean() {
         let (mut tap, mut reader) = test_tap(128, 4, 48_000);
-        let input = Frame::new(0.2, 0.6);
-        let returned = tap.enqueue_frame(input);
-        assert_eq!(returned.left, input.left);
-        assert_eq!(returned.right, input.right);
+        tap.enqueue_frames(&[Frame::new(0.2, 0.6)]);
 
         tap.flush_staging();
         let mut output = [0.0; 4];

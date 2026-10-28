@@ -26,6 +26,7 @@ mod cpal_input;
 #[cfg_attr(not(target_os = "macos"), path = "unsupported_tap.rs")]
 mod tap;
 
+pub(crate) use cpal_input::device_name;
 pub use cpal_input::{AudioCaptureConfig, AudioCaptureDevice, AudioDeviceInfo};
 
 use crate::directory::TapHandle;

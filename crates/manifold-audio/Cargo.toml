@@ -10,7 +10,7 @@ manifold-core = { path = "../manifold-core" }
 # GPU renderer (and manifold-gpu) out of this crate's standalone build.
 manifold-spectral = { path = "../manifold-spectral", default-features = false }
 log = { workspace = true }
-cpal = "0.15"
+cpal = "0.18"
 rustfft = "6"
 # Lock-free SPSC rings between the content thread and the detector workers.
 ringbuf = "0.4"
