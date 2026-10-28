@@ -515,7 +515,6 @@ impl ContentThread {
             }
             // Keep each prepared layer's memory requested while later layers
             // warm, instead of paying for its first GPU use during playback.
-            #[cfg(target_os = "macos")]
             self.content_pipeline.finish_warmup_gpu_resources();
             any_budget_exhausted |= run.exhausted(std::time::Instant::now(), 0).is_some();
             report.layers.push(WarmupLayerReport {
@@ -547,7 +546,6 @@ impl ContentThread {
         // layers to LEDs, so the first LED-enabled frame doesn't allocate on stage.
         // LED output may not be initialized yet; default grid size is enough to
         // construct the resources that don't depend on the live controller.
-        #[cfg(target_os = "macos")]
         if let Some(p) = self.engine.project()
             && run.exhausted(std::time::Instant::now(), 0).is_none()
         {
@@ -698,7 +696,6 @@ impl ContentThread {
             }
         }
 
-        #[cfg(target_os = "macos")]
         if let Some(stats) = self.content_pipeline.finish_warmup_gpu_resources() {
             log::info!(
                 "[ContentThread] Warmup memory: {} allocations, {} bytes / {} budget, residency requested={}",
@@ -1030,19 +1027,13 @@ impl ContentThread {
             ContentCommand::PickSceneItem(pick) => {
                 self.content_pipeline.push_scene_pick(pick);
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::SetSelectionOutline { output, viewport } => {
                 self.content_pipeline
                     .set_selection_outline(output, viewport);
             }
-            #[cfg(not(target_os = "macos"))]
-            ContentCommand::SetSelectionOutline { .. } => {}
-            #[cfg(target_os = "macos")]
             ContentCommand::SetGizmoOverlay(overlay) => {
                 self.content_pipeline.set_gizmo_overlay(*overlay);
             }
-            #[cfg(not(target_os = "macos"))]
-            ContentCommand::SetGizmoOverlay(_) => {}
             ContentCommand::SetNodePreviewNormalize(on) => {
                 self.node_preview_normalize = on;
             }
@@ -1497,13 +1488,9 @@ impl ContentThread {
                     self.report_graph_edit_rejection(format!("Content resize rejected: {message}"));
                 }
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::ResizeWorkspacePreview(w, h) => {
                 self.content_pipeline.resize_workspace_preview(w, h);
             }
-            // The workspace preview bridge is Mac-only until P3.
-            #[cfg(not(target_os = "macos"))]
-            ContentCommand::ResizeWorkspacePreview(..) => {}
 
             // ── Transport/sync ─────────────────────────────────────
             ContentCommand::ToggleLink => {
@@ -1690,19 +1677,15 @@ impl ContentThread {
             }
 
             // ── Output surface (direct present) ────────────────────
-            #[cfg(target_os = "macos")]
             ContentCommand::SetOutputSurface(surface) => {
                 self.content_pipeline.set_output_surface(surface);
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::ClearOutputSurface => {
                 self.content_pipeline.clear_output_surface();
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::ResizeOutputSurface(w, h) => {
                 self.content_pipeline.resize_output_surface(w, h);
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::SetOutputPresentSuspended(suspended) => {
                 self.content_pipeline
                     .set_output_present_suspended(suspended);
@@ -2176,7 +2159,6 @@ mod warmup_tests {
 
     /// Census bug 11 (opening a project shuffles queued commands): commands
     /// that arrive while a show opens run after it, in arrival order.
-    #[cfg(target_os = "macos")]
     #[test]
     fn commands_queued_during_warmup_keep_arrival_order() {
         use crate::content_command::ContentCommand;
@@ -2212,7 +2194,6 @@ mod warmup_tests {
 
     /// A quit already held (behind the show being opened) stops the warmup
     /// at once instead of waiting for every layer.
-    #[cfg(target_os = "macos")]
     #[test]
     fn a_held_quit_interrupts_warmup() {
         use crate::content_command::ContentCommand;
@@ -2239,7 +2220,7 @@ mod warmup_tests {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod scene_viewport_host_tests {
     use crate::content_command::ContentCommand::{
         SetGraphPreviewNode, SetSceneViewport, WatchGraphTarget,

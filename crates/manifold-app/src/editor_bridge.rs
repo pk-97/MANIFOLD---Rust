@@ -1894,10 +1894,8 @@ impl Application {
             .unwrap_or(false);
         let mut show_image = self.last_preview_node.is_some() && preview_has_image;
 
-        #[cfg(target_os = "macos")]
         let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
         // The leased viewport frame's selection mask, for the outline (D-102).
-        #[cfg(target_os = "macos")]
         let mut viewport_mask: Option<manifold_gpu::GpuTexture> = None;
         let viewport_scale = scale as f32;
         let viewport_tex_w = ((preview_w * viewport_scale).round() as u32).clamp(64, 4096);
@@ -1952,7 +1950,6 @@ impl Application {
                 ws.viewport_request_sent = Some(request.clone());
             }
             session.displayed = None;
-            #[cfg(target_os = "macos")]
             if let Some(pane) = self.scene_viewport_pane.as_mut()
                 && let Some((frame, texture, slot)) = crate::scene_viewport::lease_frame(
                     pane,
@@ -2132,7 +2129,6 @@ impl Application {
         // Node previews change with every content frame, so the canvas draws
         // each frame while any shows (D17).
         let mut previews_visible = false;
-        #[cfg(target_os = "macos")]
         {
             let atlas_handle =
                 manifold_ui::node::texture_handle_for_key("__manifold_graph_node_atlas__");
@@ -2255,16 +2251,19 @@ impl Application {
                 &self.frame_timer,
                 offscreen,
                 scale,
-                ws.viewport_session.as_ref().and_then(|session| session.displayed.as_ref())
+                ws.viewport_session
+                    .as_ref()
+                    .and_then(|session| session.displayed.as_ref())
                     .filter(|frame| frame.has_image())
                     .zip(ws.viewport_rect)
                     .map(|(_, rect)| crate::scene_viewport::SceneViewportPaint {
                         rect,
-                        #[cfg(target_os = "macos")]
                         // Gated on this frame's selection, recomputed above.
-                        outline: self.selection_outline.as_ref().zip(viewport_mask.as_ref().filter(|_| !ws.viewport_outline.is_empty())),
-                        #[cfg(not(target_os = "macos"))]
-                        outline: None,
+                        outline: self.selection_outline.as_ref().zip(
+                            viewport_mask
+                                .as_ref()
+                                .filter(|_| !ws.viewport_outline.is_empty()),
+                        ),
                     }),
             );
             ws.offscreen_dirty = false;
@@ -2274,7 +2273,6 @@ impl Application {
         // may still be reconfiguring.
         if ws.surface_resized_this_frame {
             ws.surface_resized_this_frame = false;
-            #[cfg(target_os = "macos")]
             crate::shared_texture::retire_leases_via_marker(
                 &gpu.device,
                 self.content_tx.clone(),
@@ -2285,7 +2283,6 @@ impl Application {
 
         // ── Late drawable acquisition + blit ──
         let Some(drawable) = surface.next_drawable() else {
-            #[cfg(target_os = "macos")]
             crate::shared_texture::retire_leases_via_marker(
                 &gpu.device,
                 self.content_tx.clone(),
@@ -2295,7 +2292,6 @@ impl Application {
         };
         let drawable_tex = drawable.gpu_texture(manifold_compositor::presentation::UI_FORMAT);
         let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) else {
-            #[cfg(target_os = "macos")]
             crate::shared_texture::retire_leases_via_marker(
                 &gpu.device,
                 self.content_tx.clone(),
@@ -2329,7 +2325,6 @@ impl Application {
         // Only when the IOSurface front buffer is available. The blit pipeline
         // targets the drawable's float presentation format, so these draw into the
         // drawable (Load) rather than the Rgba16Float offscreen.
-        #[cfg(target_os = "macos")]
         {
             let scale = scale as f32;
             let w = preview_w * scale;
@@ -2413,7 +2408,6 @@ impl Application {
         // BUG-xaw4: every bridge lease taken for this frame retires when the
         // present encoder completes — it is ordered after the offscreen
         // passes that sampled the bridges (same queue).
-        #[cfg(target_os = "macos")]
         crate::shared_texture::attach_lease_retire(
             &present_enc,
             self.content_tx.clone(),

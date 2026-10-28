@@ -672,7 +672,6 @@ impl Application {
                         crate::edr_surface::set_window_level(&ws.window, 0);
                     }
 
-                    #[cfg(target_os = "macos")]
                     {
                         let new_size = ws.window.inner_size();
                         self.send_content_cmd(ContentCommand::ResizeOutputSurface(

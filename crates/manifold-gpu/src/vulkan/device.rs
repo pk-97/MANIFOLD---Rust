@@ -132,7 +132,7 @@ fn image_usage(core: &Core, desc: &GpuTextureDesc) -> vk::ImageUsageFlags {
 
 /// Allocate, name and initialise an image to `GENERAL` (design section 5),
 /// and view all of it.
-fn create_texture_on(
+pub(super) fn create_texture_on(
     core: &Arc<Core>,
     queue: &Queue,
     desc: &GpuTextureDesc,

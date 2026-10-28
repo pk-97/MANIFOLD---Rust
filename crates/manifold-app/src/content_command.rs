@@ -267,16 +267,12 @@ pub enum ContentCommand {
 
     // ── Output surface (direct present from content thread) ─────
     /// Attach an output surface for direct-to-drawable presentation.
-    #[cfg(target_os = "macos")]
     SetOutputSurface(manifold_gpu::GpuSurface),
     /// Detach the output surface (output window closed).
-    #[cfg(target_os = "macos")]
     ClearOutputSurface,
     /// Resize the output surface drawable (fullscreen toggle).
-    #[cfg(target_os = "macos")]
     ResizeOutputSurface(u32, u32),
     /// Suspend/resume direct present during display retarget.
-    #[cfg(target_os = "macos")]
     SetOutputPresentSuspended(bool),
 
     // ── Export ────────────────────────────────────────────────────

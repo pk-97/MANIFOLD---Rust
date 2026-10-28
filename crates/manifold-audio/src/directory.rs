@@ -134,6 +134,7 @@ impl Subscription {
     }
 
     /// Wrap a teardown closure run on drop.
+    #[cfg(target_os = "macos")]
     pub(crate) fn new(cancel: impl FnOnce() + Send + 'static) -> Self {
         Self {
             cancel: Some(Box::new(cancel)),

@@ -512,7 +512,6 @@ impl ContentThread {
                 Ok(cmd @ ContentCommand::SeekTo(_)) | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
                     pending_seek = Some(cmd);
                 }
-                #[cfg(target_os = "macos")]
                 Ok(ContentCommand::SurfaceReady) => {}
                 Ok(ContentCommand::FramePresented { drawable_id, at }) => {
                     self.frame_presented(drawable_id, at)
@@ -567,7 +566,6 @@ impl ContentThread {
         // finished the surface from 2 frames ago long before now.
         // Under heavy GPU load, keeps processing transport/MIDI/parameter
         // commands instead of busy-spinning. Zero CPU during the wait.
-        #[cfg(target_os = "macos")]
         {
             let fence_start = std::time::Instant::now();
             if self.wait_for_surface_draining_commands(cmd_tx, cmd_rx, state_tx) {
@@ -598,7 +596,6 @@ impl ContentThread {
     /// alive instead of busy-spinning — zero CPU while waiting.
     ///
     /// Returns `true` if a shutdown command was received during the wait.
-    #[cfg(target_os = "macos")]
     fn wait_for_surface_draining_commands(
         &mut self,
         cmd_tx: &crossbeam_channel::Sender<ContentCommand>,
@@ -1015,7 +1012,7 @@ impl ContentThread {
 
         // ── Live RT capture (env MANIFOLD_RT_CAPTURE, requires perf-soak) ──
         // Arms RT_CAPTURE_ARM flags before render, drains queue + logs stats after.
-        #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+        #[cfg(feature = "perf-soak")]
         if std::env::var_os("MANIFOLD_RT_CAPTURE").is_some() && self.frame_count > 30 {
             let sample_tick = self.frame_count.is_multiple_of(30);
             let png_dump_tick = self.frame_count.is_multiple_of(300);
@@ -2579,5 +2576,5 @@ impl DetectionWrite {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests;

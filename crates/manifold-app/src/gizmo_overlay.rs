@@ -152,10 +152,8 @@ impl SceneLines {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) use capture::GizmoCapture;
 
-#[cfg(target_os = "macos")]
 mod capture {
     use manifold_compositor::generator_renderer::GeneratorRenderer;
     use manifold_core::change::PartStamps;

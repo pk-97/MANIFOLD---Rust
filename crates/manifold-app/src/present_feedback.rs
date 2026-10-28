@@ -13,11 +13,10 @@ static TX: OnceLock<Sender<ContentCommand>> = OnceLock::new();
 
 /// Once, before the content thread starts.
 pub fn install(tx: &Sender<ContentCommand>) {
-    if TX.set(tx.clone()).is_err() {
-        return;
+    if TX.set(tx.clone()).is_ok() {
+        #[cfg(target_os = "macos")]
+        manifold_gpu::set_presented_observer(on_presented);
     }
-    #[cfg(target_os = "macos")]
-    manifold_gpu::set_presented_observer(on_presented);
 }
 
 #[cfg(target_os = "macos")]

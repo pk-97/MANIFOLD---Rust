@@ -22,16 +22,13 @@ use crate::scene_viewport::{
 pub(crate) struct SceneViewportCapture {
     pub request: Option<Arc<SceneViewportRequest>>,
     pub observations: SceneViewportObservations,
-    #[cfg(target_os = "macos")]
     pub textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
-    #[cfg(target_os = "macos")]
     pub bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
 }
 
 /// One frame's copy into the viewport bridge: the rendered view (`None`
 /// clears the surface), the bridge surface it lands on, and the host that
 /// shows it.
-#[cfg(target_os = "macos")]
 pub(super) struct ViewportCopy {
     source: Option<manifold_gpu::GpuTexture>,
     target: manifold_gpu::GpuTexture,
@@ -45,7 +42,6 @@ pub(super) struct ViewportCopy {
     frame: crate::scene_viewport::SceneViewportFrame,
 }
 
-#[cfg(target_os = "macos")]
 impl ViewportCopy {
     /// Build this frame's gizmo lines from the project the frame rendered,
     /// before the copy draws them. `output` is the output surface's frame,
@@ -71,7 +67,6 @@ impl SceneViewportCapture {
     }
 
     /// The selection mask of this frame's generator viewport (D-102).
-    #[cfg(target_os = "macos")]
     pub(super) fn generator_mask<'g>(
         &self,
         generators: Option<&'g GeneratorRenderer>,
@@ -81,7 +76,6 @@ impl SceneViewportCapture {
 
     /// Record a generator scene's frame for surface `slot`; what to copy
     /// when this frame has a request for one.
-    #[cfg(target_os = "macos")]
     pub(super) fn observe_generator(
         &mut self,
         generators: Option<&GeneratorRenderer>,
@@ -109,7 +103,6 @@ impl SceneViewportCapture {
     }
 
     /// The effect-scene counterpart of [`Self::observe_generator`].
-    #[cfg(target_os = "macos")]
     pub(super) fn observe_effect(
         &mut self,
         compositor: &dyn manifold_compositor::compositor::Compositor,
@@ -131,7 +124,6 @@ impl SceneViewportCapture {
         )
     }
 
-    #[cfg(target_os = "macos")]
     fn record(
         &mut self,
         request: Arc<SceneViewportRequest>,
@@ -158,7 +150,6 @@ impl SceneViewportCapture {
 
     /// The bridge takes the owning host's view size (D7a). Both sides
     /// re-import on the generation bump.
-    #[cfg(target_os = "macos")]
     fn fit(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         let Some(bridge) = self.bridge.as_ref() else {
             return;
@@ -175,7 +166,6 @@ impl SceneViewportCapture {
 
 impl ContentPipeline {
     /// Install the textures + bridge the viewport's frames travel through.
-    #[cfg(target_os = "macos")]
     pub fn set_scene_viewport_textures(
         &mut self,
         textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
@@ -189,7 +179,6 @@ impl ContentPipeline {
         if request.is_none() {
             self.scene_viewport.observations.frames.fill(None);
         }
-        #[cfg(target_os = "macos")]
         if let (Some(request), Some(device)) = (request.as_ref(), self.native_device.as_ref()) {
             self.scene_viewport
                 .fit(device, request.config.width, request.config.height);
@@ -220,7 +209,6 @@ impl ContentPipeline {
     /// the host that shows it: the output preview maps like the workspace
     /// preview it sits in (its headroom, the SDR preview toggle), the graph
     /// editor like the graph editor window.
-    #[cfg(target_os = "macos")]
     pub(super) fn copy_scene_viewport(
         &self,
         enc: &mut manifold_gpu::GpuEncoder,

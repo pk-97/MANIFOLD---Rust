@@ -159,7 +159,6 @@ impl SceneViewportNavigation {
 /// otherwise the lease retires at once. The surface slot comes back too, for
 /// the selection mask beside it. `None` when the surface holds no frame of
 /// this request.
-#[cfg(target_os = "macos")]
 pub(crate) fn lease_frame(
     pane: &mut crate::texture_pane::TexturePane,
     frames: &SceneViewportFrames,

@@ -169,49 +169,33 @@ impl Application {
         // content thread's reuse gate (`is_reusable`) until the sampling encoder's GPU
         // work retires — the handler is attached to the present encoder
         // below (or a marker encoder on the resize early-return).
-        #[cfg(target_os = "macos")]
         let preview_lease = self
             .preview_texture_bridge
             .as_ref()
             .map(|b| b.acquire_read());
-        #[cfg(not(target_os = "macos"))]
-        let preview_lease: Option<()> = None;
-        #[cfg(target_os = "macos")]
         let preview_slot = preview_lease.map_or(front_index, |l| l.slot());
-        #[cfg(not(target_os = "macos"))]
-        let preview_slot = front_index;
         // Every lease this present samples under: the output's, and the
         // navigated view's while the preview navigates (A2). The navigated
         // view replaces the output on the preview only; the output is
         // untouched (D9).
-        #[cfg(target_os = "macos")]
         let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = preview_lease
             .zip(self.preview_texture_bridge.clone())
             .map(|(lease, bridge)| (bridge, lease))
             .into_iter()
             .collect();
-        #[cfg(target_os = "macos")]
         let navigated = crate::preview_navigation::lease_navigated_frame(
             &mut self.ws.preview_navigation,
             self.scene_viewport_pane.as_mut(),
             &self.content_state.scene_viewport_frames,
             &mut bridge_leases,
         );
-        #[cfg(target_os = "macos")]
         let navigated_tex = navigated.as_ref().map(|(texture, _, _)| texture);
-        #[cfg(target_os = "macos")]
         let navigated_view = navigated_tex.and_then(|_| self.ws.preview_navigation.view());
-        #[cfg(not(target_os = "macos"))]
-        let navigated_view = None;
-        #[cfg(target_os = "macos")]
         let compositor_tex = navigated_tex.or(self.ui_preview_textures[preview_slot].as_ref());
-        #[cfg(not(target_os = "macos"))]
-        let compositor_tex: Option<&manifold_gpu::GpuTexture> = None;
         let video_source_dims = self.video_source_dims();
         // The Scene panel's scene as rendered, only for the exact frame being
         // shown, with Show gizmos on or off. The preview host remembers it, so
         // input picks against what the eye sees.
-        #[cfg(target_os = "macos")]
         let gizmo_frame = preview_lease
             .zip(self.preview_texture_bridge.as_ref())
             .and_then(|(lease, bridge)| bridge.leased_frame(lease))
@@ -221,11 +205,8 @@ impl Application {
                     .as_ref()
                     .filter(|frame| frame.matches(layer, published))
             });
-        #[cfg(not(target_os = "macos"))]
-        let gizmo_frame: Option<&crate::physics_overlay::PhysicsOverlayFrame> = None;
         // The selected object's mask beside the picture on screen, under
         // that picture's lease: the navigated view's or the output's (D-102).
-        #[cfg(target_os = "macos")]
         let outline_mask = if self.ws.preview_gizmo.outline().is_empty() {
             None
         } else {
@@ -242,8 +223,6 @@ impl Application {
                 ),
             }
         };
-        #[cfg(not(target_os = "macos"))]
-        let outline_mask: Option<manifold_gpu::GpuTexture> = None;
         self.ws.preview_gizmo.show(
             gizmo_frame,
             (video_source_dims.0 as u32, video_source_dims.1 as u32),
@@ -491,7 +470,6 @@ impl Application {
         // takes `&self` (whole struct) and cannot run once `thumb_pass`
         // below is holding a `&mut self.clip_thumb_gpu` borrow alive through
         // to the seam call.
-        #[cfg(target_os = "macos")]
         let mut vqt_state = {
             let scope_cursor_y = self.scope_hover_uv().map_or(-1.0, |(_, uy, _)| uy);
             Some(crate::ui_frame::VqtPassState {
@@ -510,8 +488,6 @@ impl Application {
                 band_dim: self.ws.ui_root.open_fire_mode_drawer_band(),
             })
         };
-        #[cfg(not(target_os = "macos"))]
-        let mut vqt_state: Option<crate::ui_frame::VqtPassState> = None;
 
         // Pass 4b″ input: Clip thumbnails (section 24 5c) — resolve each visible
         // generator/video clip's atlas cell (published by the content
@@ -520,11 +496,7 @@ impl Application {
         // below as `MainUiPassInputs::thumb` — this block only builds the
         // input; `thumb_pass` stays `None` (skips the pass, section 3) whenever the
         // atlas/bridge isn't resolved, quads end up empty, or off-macOS.
-        #[cfg(target_os = "macos")]
         let mut thumb_pass: Option<crate::ui_frame::ThumbPass> = None;
-        #[cfg(not(target_os = "macos"))]
-        let thumb_pass: Option<crate::ui_frame::ThumbPass> = None;
-        #[cfg(target_os = "macos")]
         if !self.clip_rect_scratch.is_empty() && !self.content_state.clip_atlas_layout.is_empty() {
             // Single shared surface (BUG-119) — no front-buffer index to resolve;
             // the imported texture always reflects the content thread's latest
@@ -768,7 +740,6 @@ impl Application {
             // BUG-xaw4: no present encoder this frame, but the composite's
             // sampling encoder IS in flight — retire the bridge lease on a
             // marker buffer committed after it (same queue, so ordered).
-            #[cfg(target_os = "macos")]
             crate::shared_texture::retire_leases_via_marker(
                 &gpu.device,
                 self.content_tx.clone(),
@@ -830,7 +801,6 @@ impl Application {
         // same queue as the composite's sampling encoder, so its completion
         // implies the sample has retired. The SurfaceReady wake is what the
         // content thread's surface wait sleeps on.
-        #[cfg(target_os = "macos")]
         crate::shared_texture::attach_lease_retire(
             &present_enc,
             self.content_tx.clone(),

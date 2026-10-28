@@ -1,6 +1,8 @@
 //! Export functionality for ContentThread — extracted from content_thread.rs.
 //! Contains `run_export`, `export_one_frame`, `get_metal_texture_ptr`,
 //! `send_export_progress`, and `send_export_finished`.
+// Video export is Mac-only, so its imports go unused elsewhere.
+#![cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 
 use std::sync::Arc;
 

@@ -239,7 +239,6 @@ impl PreviewNavigation {
 /// viewport surface's texture when this host's frame has an image. The
 /// lease joins `leases` and retires with the present's sampling work. With
 /// it come its surface slot and selection mask generation, for the outline.
-#[cfg(target_os = "macos")]
 pub(crate) fn lease_navigated_frame(
     nav: &mut PreviewNavigation,
     pane: Option<&mut crate::texture_pane::TexturePane>,
@@ -264,13 +263,7 @@ pub(crate) fn lease_navigated_frame(
 impl crate::app::Application {
     /// The size the navigated view renders at: the preview's own pixels.
     fn preview_navigation_size(&self) -> (u32, u32) {
-        #[cfg(target_os = "macos")]
-        return self.workspace_preview_size;
-        #[cfg(not(target_os = "macos"))]
-        {
-            let (w, h) = self.video_source_dims();
-            (w as u32, h as u32)
-        }
+        self.workspace_preview_size
     }
 
     /// The pointer is over the picture, the Scene panel's gizmos are on and

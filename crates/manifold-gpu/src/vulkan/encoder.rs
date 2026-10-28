@@ -70,6 +70,8 @@ pub struct GpuEncoder {
     depth_to_float: Arc<GpuComputePipeline>,
     /// Per-dispatch timestamps while this frame is profiled.
     profile: Option<ProfileState>,
+    /// Drawables to present right after the next submit.
+    presents: Vec<super::surface::PendingPresent>,
 }
 
 type GpuTimeTap = Arc<dyn Fn(f64, f64) + Send + Sync>;
@@ -157,6 +159,7 @@ impl GpuEncoder {
             ui_pass: None,
             depth_to_float,
             profile: None,
+            presents: Vec::new(),
         };
         encoder.open();
         encoder
@@ -204,6 +207,38 @@ impl GpuEncoder {
 
     fn keep(&mut self, keep: Keep) {
         self.res.as_mut().expect(OPEN).keep.push(keep);
+    }
+
+    pub(crate) fn core(&self) -> &Arc<Core> {
+        &self.core
+    }
+
+    /// Keep `target` and `keep` alive until this submit retires.
+    pub(crate) fn keep_for_present(&mut self, target: &GpuTexture, keep: Keep) {
+        self.keep_texture(target);
+        self.keep(keep);
+    }
+
+    /// End the open command buffer as a batch and open the next, which
+    /// waits for `waits`; returns it with nothing recorded yet.
+    pub(crate) fn split_batch(&mut self, waits: Vec<(vk::Semaphore, u64)>) -> vk::CommandBuffer {
+        self.close(Vec::new());
+        self.open();
+        self.waits = waits;
+        self.dirty = true;
+        self.cmd
+    }
+
+    /// End the open command buffer as a batch signalling `signals`, and
+    /// open the next.
+    pub(crate) fn end_batch(&mut self, signals: Vec<(vk::Semaphore, u64)>) {
+        self.close(signals);
+        self.open();
+    }
+
+    /// Present after the next submit.
+    pub(crate) fn queue_present(&mut self, present: super::surface::PendingPresent) {
+        self.presents.push(present);
     }
 
     /// A profiled span for the work about to be recorded, when profiling.
@@ -416,9 +451,13 @@ impl GpuEncoder {
         let mut handlers = std::mem::take(self.handlers.get_mut());
         handlers.push(self.fault_handler());
         let res = self.res.take().expect(OPEN);
+        let presents = std::mem::take(&mut self.presents);
+        let core = self.core.clone();
         let result = self
             .queue
-            .submit(&self.core.device, &self.batches, handlers, res);
+            .submit(&self.core.device, &self.batches, handlers, res, |queue| {
+                super::surface::present_all(&core, queue, &presents)
+            });
         self.batches.clear();
         if let Some(span) = self.span_closing.take() {
             span.closed();

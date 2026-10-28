@@ -2195,7 +2195,6 @@ impl Application {
             },
         );
 
-        #[cfg(target_os = "macos")]
         self.sync_workspace_preview_size();
 
         self.ui_profile.add("rebuild_tree", seg.elapsed());
@@ -2397,7 +2396,6 @@ impl Application {
         }
 
         // Workspace preview through the bridge (one device, zero GPU copy).
-        #[cfg(target_os = "macos")]
         {
             // Detect preview bridge resize (generation changed) and take the fresh surfaces.
             if let Some(ref bridge) = self.preview_texture_bridge {
@@ -2448,18 +2446,6 @@ impl Application {
                 fence.commit_frame(&gpu.device);
             }
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.ui_profile.add("update_repaint_upload", seg.elapsed());
-            self.present_all_windows(0);
-            let g0 = std::time::Instant::now();
-            self.present_graph_editor_window(dt as f32);
-            self.ui_profile.add("present_graph_editor", g0.elapsed());
-            // Frame-fence sentinel: see the macos branch comment above.
-            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
-                fence.commit_frame(&gpu.device);
-            }
-        }
 
         #[cfg(target_os = "macos")]
         let display_hz = self
@@ -2467,7 +2453,7 @@ impl Application {
             .ui_display_link
             .as_ref()
             .map_or(0.0, |dl| dl.actual_refresh_hz());
-        // No display link off macOS until P3 paces frames there.
+        // No display link off macOS, so no refresh rate to report.
         #[cfg(not(target_os = "macos"))]
         let display_hz = 0.0;
         self.ui_profile.frame_end(

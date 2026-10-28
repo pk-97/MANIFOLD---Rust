@@ -1,3 +1,7 @@
+// Video export, live recording, still export and the display link run only on
+// the Mac until the FFmpeg path lands; their helpers sit unused elsewhere.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 #[cfg(not(feature = "work-trace"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -100,7 +104,7 @@ mod setup_check;
 // with only `journey-proofs` on doesn't compile a module with zero callers
 // (dead_code) — `perf-soak` always wants it; tests and `journey-proofs`
 // want it under `cfg(test)`.
-#[cfg(all(target_os = "macos", any(feature = "perf-soak", test)))]
+#[cfg(any(feature = "perf-soak", test))]
 pub(crate) mod headless_harness;
 mod import_placement_verify;
 mod import_responsiveness_verify;
@@ -110,10 +114,10 @@ mod input_handler;
 mod input_host;
 #[cfg(target_os = "macos")]
 mod macos_pasteboard;
-mod text_clipboard;
 mod menu;
 mod offline_audio_mod;
 mod scene_import;
+mod text_clipboard;
 // Release-journey harness:
 // headless end-to-end export proofs. Feature-gated, macOS-only (same
 // constraint as `run_export` itself — native Metal, no wgpu).
@@ -131,22 +135,21 @@ mod bug219_verify;
 mod perform_mode;
 // `cargo xtask perf-soak <project> --seconds N [--start <beats>]
 // [--update-baseline]` — headless, real-time
-// paced content-thread soak of a real project + baseline gate. macOS-only
-// (native Metal `ContentThread`, same constraint as `journey-proofs`).
-#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+// paced content-thread soak of a real project + baseline gate.
+#[cfg(feature = "perf-soak")]
 mod perf_soak;
 // `manifold frame-time <project> --frames N [--resolution R]`: the whole
 // frame of a real project with per-pass GPU timestamps, calm vs splash.
-#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+#[cfg(feature = "perf-soak")]
 mod frame_time;
 // Sibling frame loop for bare-glb/gltf input. Same feature gate as `perf_soak` (dispatched from inside its `run()`).
-#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+#[cfg(feature = "perf-soak")]
 mod perf_soak_import;
 // ── RT washout probe (temporary, env-gated) ─────────────────────
-#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+#[cfg(feature = "perf-soak")]
 mod rt_capture;
 // ── bridge-probe: headless SharedTextureBridge tear detector (BUG-xaw4) ──
-#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+#[cfg(feature = "perf-soak")]
 mod bridge_probe;
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod export_repro;
@@ -179,17 +182,17 @@ mod viewport_input;
 mod viewport_selection;
 mod window_input;
 // P2 hot-mute acceptance demo — headless pixel probe (BUG-bk1s).
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod mute_visibility_probe;
 // Self-contained gap-start rendering regression through the real content pipeline.
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod gap_start_probe;
 // Frame-exact transport determinism through the real content thread (opens
 // the test GPU device: one queued GPU run).
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod frame_exact_app;
 // The count gate's content half.
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod content_reaction_budget;
 // D8.4 acceptance — deliberate native GPU journey with external reference projects.
 #[cfg(all(
@@ -242,7 +245,7 @@ fn main() {
     // Headless perf-soak subcommand (feature `perf-soak`): headless,
     // real-time-paced content-thread soak of a real project against the
     // frame-budget gate.
-    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    #[cfg(feature = "perf-soak")]
     {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).map(String::as_str) == Some("perf-soak") {
@@ -250,7 +253,7 @@ fn main() {
         }
     }
 
-    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    #[cfg(feature = "perf-soak")]
     {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).map(String::as_str) == Some("frame-time") {
@@ -260,7 +263,7 @@ fn main() {
 
     // --- `rt-capture` (headless RT channel verification) ---
     // cargo run --features perf-soak --bin manifold -- rt-capture <project> [--frames N]
-    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    #[cfg(feature = "perf-soak")]
     {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).map(String::as_str) == Some("rt-capture") {
@@ -268,7 +271,7 @@ fn main() {
         }
     }
     // --- `bridge-probe` (headless SharedTextureBridge tear detector) ---
-    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    #[cfg(feature = "perf-soak")]
     {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).map(String::as_str) == Some("bridge-probe") {
@@ -288,7 +291,7 @@ fn main() {
             eprintln!(
                 "manifold: unrecognized argument {:?} — refusing to launch the GUI.\n\
                  Headless subcommands: ui-snap (feature ui-snapshot), perf-soak / rt-capture / bridge-probe \
-                 (feature perf-soak, macOS). GUI: no args, or --resume <breadcrumb-path>.",
+                 (feature perf-soak). GUI: no args, or --resume <breadcrumb-path>.",
                 args[1]
             );
             std::process::exit(2);

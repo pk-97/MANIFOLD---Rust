@@ -2,13 +2,13 @@ mod clip_atlas;
 mod editing_chrome;
 mod scene_viewport_capture;
 mod trigger_targets;
-use clip_atlas::retain_thumbnail_requests;
 #[cfg(target_os = "macos")]
+use clip_atlas::find_parked_video_clip;
+use clip_atlas::retain_thumbnail_requests;
 use clip_atlas::{
-    fill_clip_atlas, find_parked_generator_clip, find_parked_video_clip, restore_clip_atlas,
-    thumb_source_shader_readable,
+    fill_clip_atlas, find_parked_generator_clip, restore_clip_atlas, thumb_source_shader_readable,
 };
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod trigger_lane_force_tests;
 
 use parking_lot::RwLock;
@@ -409,17 +409,14 @@ pub struct ContentPipeline {
     /// Reusable GPU→CPU readback for single-frame (still image) export.
     /// Holds the in-flight blit between `submit_still_readback` (one tick) and
     /// `take_still_readback` (the next). Idle except during a still capture.
-    #[cfg(target_os = "macos")]
     still_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
     /// MetalFX Spatial full-frame upscaler. Present only when render_scale < 1.0
     /// and MetalFX is supported (macOS 13+, Apple Silicon). Preferred over FSR.
-    #[cfg(target_os = "macos")]
     metalfx: Option<manifold_compositor::metalfx_upscaler::MetalFxFullFrameUpscaler>,
     /// FSR 1.0 spatial upscaler. Present only when render_scale < 1.0
     /// AND MetalFX is not available. Fallback for older hardware.
-    #[cfg(target_os = "macos")]
     fsr1: Option<manifold_compositor::fsr1::Fsr1Upscaler>,
     /// Full output dimensions (what the drawable and UI see).
     /// May differ from compositor dimensions when FSR is active.
@@ -428,25 +425,19 @@ pub struct ContentPipeline {
     /// Direct-present output surface (CAMetalLayer on the output window).
     /// Content thread acquires drawables and presents in its own command buffer.
     /// None when no output window is open.
-    #[cfg(target_os = "macos")]
     output_surface: Option<manifold_gpu::GpuSurface>,
     /// When true, skip next_drawable() during display retarget to avoid
     /// blocking the content thread for up to 1s on a transitioning display.
-    #[cfg(target_os = "macos")]
     output_present_suspended: bool,
     /// One mapper shared by output and workspace preview; plans are per destination.
     presentation_pipeline: Option<PresentationPipeline>,
     /// Triple-buffered IOSurface textures for the workspace preview.
-    #[cfg(target_os = "macos")]
     preview_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// Which preview surface we're writing to THIS frame (0, 1, or 2).
-    #[cfg(target_os = "macos")]
     write_surface_index: usize,
     /// IOSurface bridge for the workspace preview path.
-    #[cfg(target_os = "macos")]
     preview_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// Last seen preview bridge generation.
-    #[cfg(target_os = "macos")]
     preview_generation: u64,
     /// Authoring-time node-output preview request `(watched effect, selected
     /// node)`, forwarded to the compositor each frame. `None` = no effect
@@ -465,10 +456,8 @@ pub struct ContentPipeline {
     /// Triple-buffered IOSurface textures for the node-output preview (the
     /// captured node texture, downscaled). Separate bridge from the workspace
     /// preview so the editor reads the node output independently.
-    #[cfg(target_os = "macos")]
     node_preview_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// IOSurface bridge for the node-output preview path.
-    #[cfg(target_os = "macos")]
     node_preview_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// The nodes the editor canvas can currently show — captured into the
     /// thumbnail atlas this frame. Set by the UI only while the graph editor is
@@ -479,10 +468,8 @@ pub struct ContentPipeline {
     /// Triple-buffered IOSurface textures for the per-node thumbnail atlas — one
     /// big texture packed as an `ATLAS_GRID`×`ATLAS_GRID` cell grid, each cell a
     /// node's downscaled output. The canvas samples one cell per node.
-    #[cfg(target_os = "macos")]
     node_atlas_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// IOSurface bridge for the thumbnail atlas path.
-    #[cfg(target_os = "macos")]
     node_atlas_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// Published `(node_id, cell_index)` layout from the last atlas capture, so
     /// the UI knows which atlas cell holds each node's thumbnail. Empty when the
@@ -500,7 +487,6 @@ pub struct ContentPipeline {
     /// The single shared clip-atlas texture, populated by
     /// `set_clip_atlas_texture` at content-thread init — already cleared once
     /// (transparent) by the caller before this is set; never cleared again.
-    #[cfg(target_os = "macos")]
     clip_atlas_persistent: Option<manifold_gpu::GpuTexture>,
     /// (ClipId, filmstrip cell) → atlas cell allocation + whole-clip LRU eviction.
     clip_atlas_cache: crate::clip_atlas::ClipAtlasCache,
@@ -537,7 +523,6 @@ pub struct ContentPipeline {
     /// cache dir is available. All disk IO is on its own worker thread.
     clip_thumb_cache: Option<crate::clip_thumb_cache::ClipThumbCache>,
     /// Async RGBA8 readback of the persistent atlas for the debounced disk save.
-    #[cfg(target_os = "macos")]
     clip_atlas_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest,
     /// Fill-frame at which a debounced save should fire (0 = none scheduled).
     clip_atlas_persist_due: u64,
@@ -546,7 +531,6 @@ pub struct ContentPipeline {
     clip_atlas_persist_pending: Option<ClipAtlasPersistSnapshot>,
     /// Reused cell-sized RGBA8 staging texture for uploading cached cells back into
     /// the persistent atlas on restore. Lazily created.
-    #[cfg(target_os = "macos")]
     clip_atlas_restore_staging: Option<manifold_gpu::GpuTexture>,
     /// Loaded strips waiting to be uploaded (keyed by content hash), kept until
     /// every cell is restored or the owning clips leave the visible set.
@@ -555,7 +539,6 @@ pub struct ContentPipeline {
     /// Per-surface signal values — tracks the GpuEvent signal value from the last
     /// frame that wrote to each surface. Before writing to surface S, we wait for
     /// surface_signal_values[S] to complete (the frame that last used it).
-    #[cfg(target_os = "macos")]
     surface_signal_values: [u64; crate::shared_texture::SURFACE_COUNT],
     /// Duration of the last GPU fence wait in milliseconds.
     /// Non-zero means the GPU was still working when the content thread woke up.
@@ -593,46 +576,37 @@ pub struct ContentPipeline {
     /// Kernel-notified GPU fence waiter — replaces busy-spin polling.
     /// Registered before each frame to wake the content thread via condvar
     /// when the GPU finishes with the target surface.
-    #[cfg(target_os = "macos")]
     fence_waiter: Option<manifold_gpu::GpuFenceWaiter>,
     /// Signal value from the native event.
     native_signal_value: u64,
     /// Texture pool backed by MTLHeap for zero-kernel-call allocation.
     texture_pool: Option<manifold_gpu::TexturePool>,
     /// Downscale blit used for the workspace preview texture.
-    #[cfg(target_os = "macos")]
     preview_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// section 24 5c-2 P5: 4×4 box-filter downsample blit for clip-thumbnail capture.
     /// A full-res clip output (e.g. 3456px) into a 128px cell is a ~27× downscale;
     /// a single bilinear tap aliases badly, so the capture averages a tap grid.
-    #[cfg(target_os = "macos")]
     clip_downsample_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// Linear sampler for preview downscaling.
-    #[cfg(target_os = "macos")]
     preview_sampler: Option<manifold_gpu::GpuSampler>,
     /// Scalar-field blit for the node-output preview: a fixed per-channel
     /// black-floor asinh lift (0 stays black, dark values raised), with no
     /// per-frame statistics so it never flickers. Used for density / mask /
     /// depth and as the safe default. The workspace preview keeps the plain
     /// `preview_pipeline`; only node previews use these.
-    #[cfg(target_os = "macos")]
     node_preview_scalar_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// Vector-field blit: the RG channels are read as a 2D vector and shown as
     /// the standard optical-flow colour wheel (direction → hue, magnitude →
     /// brightness). Used for force fields, flow, gradients, displacement.
-    #[cfg(target_os = "macos")]
     node_preview_vector_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// Signed-scalar blit: a diverging blue → black → red ramp centred at 0, so
     /// the sign reads at a glance. Used for SDFs, divergence, signed height.
-    #[cfg(target_os = "macos")]
     node_preview_signed_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// Normal-map blit: xyz in `[-1,1]` decoded to the familiar blue-dominant
     /// RGB. Used for surface normals / bump output.
-    #[cfg(target_os = "macos")]
     node_preview_normal_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// Depth blit: a perceptual near-far colour ramp (turbo-like) so subtle
     /// distance gradients read instead of washing to flat grey.
-    #[cfg(target_os = "macos")]
     node_preview_depth_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// Live node-output preview info from the most recent render — the
     /// previewed node's id, whether it produced an image, and its scalar I/O.
@@ -649,10 +623,8 @@ pub struct ContentPipeline {
     /// Clicks on a scene picture waiting for the item drawn there.
     scene_picks: crate::scene_pick::ScenePicks,
     /// The selection outline's requests and mask bridges (D-102).
-    #[cfg(target_os = "macos")]
     outline: crate::selection_outline::OutlineCapture,
     /// The gizmo overlay's lines, draw mode and pass (BUG-b36b8 gizmo draw modes).
-    #[cfg(target_os = "macos")]
     gizmos: crate::gizmo_overlay::GizmoCapture,
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. Pulled into
@@ -730,11 +702,10 @@ pub struct ContentPipeline {
     /// profiling first turns on, or when this device cannot sample. Kept
     /// while profiling is off, so a run that profiles every other frame
     /// reuses one sampler.
-    #[cfg(target_os = "macos")]
     profiling_sampler: Option<manifold_gpu::GpuTimestampSampler>,
     /// The span count `profiling_sampler` was requested with; the device may
     /// have granted fewer.
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     profiling_sampler_request: usize,
     /// Whether `--profile` mode is on this run. Switches both command-buffer
     /// commits to the `_profiled` variant. Off by default — zero cost on the
@@ -744,18 +715,16 @@ pub struct ContentPipeline {
     profiling_enabled: bool,
     /// How finely a profiled frame is cut: per dispatch (the default) or per
     /// profile tag, i.e. per graph step. See [`manifold_gpu::ProfileGranularity`].
-    #[cfg(target_os = "macos")]
     profiling_granularity: manifold_gpu::ProfileGranularity,
     /// Resolved [`manifold_gpu::GpuFrameProfile`]s from the last profiled
     /// frame: `(command_buffer_label, profile)` — `"Generators"` and
     /// `"Compositor"`. Drained by [`Self::take_gpu_profiles`].
-    #[cfg(target_os = "macos")]
     last_gpu_profiles: Vec<(&'static str, manifold_gpu::GpuFrameProfile)>,
     /// `frame-time` probe: GPU start and end time of every unprofiled
     /// command buffer, chunk splits included, reported from its completion
     /// handler as `(label, start, end)`. Profiled frames serialise the
     /// encoders, so only the plain frames carry the number the show pays.
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     gpu_time_tap: Option<crossbeam_channel::Sender<(&'static str, f64, f64)>>,
     /// Fence-stamped drop-retirement queue (BUG-l7t4 class fix). Drained once
     /// per frame in `render_content_native`; its `Drop` flushes at teardown.
@@ -763,11 +732,9 @@ pub struct ContentPipeline {
     /// fields (compositor, texture_pool) enqueue their
     /// marked-texture teardown onto it on the way out, and the queue's own
     /// `Drop` waits out the GPU before releasing those late entries.
-    #[cfg(target_os = "macos")]
     retire_queue: Option<manifold_gpu::RetireQueue>,
     /// Content-thread owner of residency requests. Drops after retirement so
     /// memory stays requested until the last fence-protected resource releases.
-    #[cfg(target_os = "macos")]
     residency: Option<manifold_gpu::GpuResidencyManager>,
 }
 
@@ -775,7 +742,6 @@ pub struct ContentPipeline {
 /// preview blit takes a single argument instead of one `Option<&pipeline>` per
 /// [`PreviewEncoding`](manifold_nodes::node_graph::PreviewEncoding). `raw`
 /// is the plain blit used for `Color` and smart-off.
-#[cfg(target_os = "macos")]
 struct PreviewPipelines<'a> {
     scalar_lift: Option<&'a manifold_gpu::GpuRenderPipeline>,
     scalar_signed: Option<&'a manifold_gpu::GpuRenderPipeline>,
@@ -798,27 +764,18 @@ impl ContentPipeline {
             sdr_preview: false,
             sdr_output: None,
             pq_encoder: None,
-            #[cfg(target_os = "macos")]
             still_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest::new(),
             shared_output: shared,
-            #[cfg(target_os = "macos")]
             metalfx: None,
-            #[cfg(target_os = "macos")]
             fsr1: None,
             output_w: 1920,
             output_h: 1080,
-            #[cfg(target_os = "macos")]
             output_surface: None,
-            #[cfg(target_os = "macos")]
             output_present_suspended: false,
             presentation_pipeline: None,
-            #[cfg(target_os = "macos")]
             preview_textures: [None, None, None],
-            #[cfg(target_os = "macos")]
             write_surface_index: 0,
-            #[cfg(target_os = "macos")]
             preview_bridge: None,
-            #[cfg(target_os = "macos")]
             preview_generation: 0,
             node_preview_request: None,
             node_preview_generator: None,
@@ -830,9 +787,7 @@ impl ContentPipeline {
             setup_fits: Default::default(),
             layer_notices: Default::default(),
             scene_picks: Default::default(),
-            #[cfg(target_os = "macos")]
             outline: Default::default(),
-            #[cfg(target_os = "macos")]
             gizmos: Default::default(),
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
@@ -847,18 +802,13 @@ impl ContentPipeline {
             master_trigger_count: 0,
             trigger_targets: Default::default(),
             pending_graph_dump: None,
-            #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
-            #[cfg(target_os = "macos")]
             node_preview_bridge: None,
             node_atlas_visible: Vec::new(),
-            #[cfg(target_os = "macos")]
             node_atlas_textures: [None, None, None],
-            #[cfg(target_os = "macos")]
             node_atlas_bridge: None,
             last_node_atlas_layout: Vec::new(),
             clip_atlas_visible: Vec::new(),
-            #[cfg(target_os = "macos")]
             clip_atlas_persistent: None,
             clip_atlas_cache: crate::clip_atlas::ClipAtlasCache::new(CLIP_ATLAS_CELLS as u32),
             clip_atlas_last_snapshot: AHashMap::new(),
@@ -869,14 +819,11 @@ impl ContentPipeline {
                 CLIP_ATLAS_CELL_W,
                 CLIP_ATLAS_CELL_H,
             ),
-            #[cfg(target_os = "macos")]
             clip_atlas_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest::new(),
             clip_atlas_persist_due: 0,
             clip_atlas_persist_pending: None,
-            #[cfg(target_os = "macos")]
             clip_atlas_restore_staging: None,
             clip_atlas_pending_loads: AHashMap::new(),
-            #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
             last_render_work_ms: 0.0,
@@ -891,25 +838,16 @@ impl ContentPipeline {
             gpu_poll_ms: 0.0,
             native_device: None,
             native_event: None,
-            #[cfg(target_os = "macos")]
             fence_waiter: None,
             native_signal_value: 0,
             texture_pool: None,
-            #[cfg(target_os = "macos")]
             preview_pipeline: None,
-            #[cfg(target_os = "macos")]
             clip_downsample_pipeline: None,
-            #[cfg(target_os = "macos")]
             preview_sampler: None,
-            #[cfg(target_os = "macos")]
             node_preview_scalar_pipeline: None,
-            #[cfg(target_os = "macos")]
             node_preview_vector_pipeline: None,
-            #[cfg(target_os = "macos")]
             node_preview_signed_pipeline: None,
-            #[cfg(target_os = "macos")]
             node_preview_normal_pipeline: None,
-            #[cfg(target_os = "macos")]
             node_preview_depth_pipeline: None,
             node_preview_normalize: false,
             #[cfg(target_os = "macos")]
@@ -918,20 +856,15 @@ impl ContentPipeline {
                 manifold_led::DEFAULT_STRIP_COUNT,
                 manifold_led::DEFAULT_LEDS_PER_STRIP,
             ),
-            #[cfg(target_os = "macos")]
             profiling_sampler: None,
-            #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+            #[cfg(feature = "perf-soak")]
             profiling_sampler_request: 0,
             profiling_enabled: false,
-            #[cfg(target_os = "macos")]
             profiling_granularity: manifold_gpu::ProfileGranularity::Dispatch,
-            #[cfg(target_os = "macos")]
             last_gpu_profiles: Vec::new(),
-            #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+            #[cfg(feature = "perf-soak")]
             gpu_time_tap: None,
-            #[cfg(target_os = "macos")]
             retire_queue: None,
-            #[cfg(target_os = "macos")]
             residency: None,
         }
     }
@@ -943,7 +876,7 @@ impl ContentPipeline {
     /// count and reports overflow rather than silently truncating (D6's
     /// capacity check). Fans profiling out to every effect chain + generator
     /// via `Compositor::set_profiling` / `GeneratorRenderer::set_profiling`.
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     pub fn set_profiling(&mut self, on: bool, max_spans: usize) {
         self.profiling_enabled = on;
         self.compositor.set_profiling(on);
@@ -962,7 +895,7 @@ impl ContentPipeline {
 
     /// Choose how finely profiled frames are cut. Takes effect on the next
     /// profiled frame.
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     pub fn set_profiling_granularity(&mut self, granularity: manifold_gpu::ProfileGranularity) {
         self.profiling_granularity = granularity;
     }
@@ -971,7 +904,7 @@ impl ContentPipeline {
     /// created — `false` means the device didn't support counter sampling at
     /// all (never silently downgrades to unprofiled; the caller must report
     /// this, not proceed as if profiling were on).
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     pub fn profiling_sampler_ready(&self) -> bool {
         self.profiling_sampler.is_some()
     }
@@ -979,7 +912,7 @@ impl ContentPipeline {
     /// This run's sampler capacity in spans (two samples per span) — the D6
     /// capacity check compares this against the fixture's actual per-frame
     /// span count. `None` if profiling isn't on / the sampler wasn't created.
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     pub fn profiling_sampler_capacity(&self) -> Option<usize> {
         self.profiling_sampler.as_ref().map(|s| s.max_spans())
     }
@@ -987,7 +920,7 @@ impl ContentPipeline {
     /// Drain the last profiled frame's resolved GPU command-buffer profiles
     /// (`"Generators"`, `"Compositor"`) — empty when profiling is off or no
     /// frame has run yet.
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     pub fn take_gpu_profiles(&mut self) -> Vec<(&'static str, manifold_gpu::GpuFrameProfile)> {
         std::mem::take(&mut self.last_gpu_profiles)
     }
@@ -996,7 +929,7 @@ impl ContentPipeline {
     /// (`"Generators"` / `"Compositor"`, start, end) into `tap` from its
     /// completion handler. Buffers complete in submission order, so the
     /// receiver groups them into plain frames by order.
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     pub fn set_gpu_time_tap(
         &mut self,
         tap: Option<crossbeam_channel::Sender<(&'static str, f64, f64)>>,
@@ -1006,7 +939,6 @@ impl ContentPipeline {
 
     /// Report every command buffer `enc` commits (chunk splits included) to
     /// the frame-time tap, when one is set.
-    #[cfg(target_os = "macos")]
     fn tap_gpu_time(&self, enc: &mut manifold_gpu::GpuEncoder, label: &'static str) {
         #[cfg(feature = "perf-soak")]
         if let Some(tap) = self.gpu_time_tap.clone() {
@@ -1041,16 +973,14 @@ impl ContentPipeline {
 
     /// Initialize the native Metal GPU device, event, and texture pool.
     /// Called once at startup after the content pipeline is created.
-    #[cfg(target_os = "macos")]
     /// Test-only access to the native device the pipeline renders on
     /// (BUG-l7t4 diagnosis harness: queue-drain probes must wait on the
     /// SAME command queue the pipeline submits to).
-    #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+    #[cfg(all(test, feature = "journey-proofs"))]
     pub(crate) fn native_gpu_for_tests(&self) -> Option<&std::sync::Arc<manifold_gpu::GpuDevice>> {
         self.native_device.as_ref()
     }
 
-    #[cfg(target_os = "macos")]
     /// Set a pre-created native GPU device (transfers ownership).
     /// Used when the device must exist before the content pipeline (e.g. for
     /// compositor native pipeline creation).
@@ -1338,7 +1268,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Free pool payload only; excludes live targets and Metal alignment.
-    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    #[cfg(feature = "perf-soak")]
     pub(crate) fn cached_texture_memory(&self) -> Option<(usize, u64)> {
         self.texture_pool
             .as_ref()
@@ -1348,7 +1278,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// Prepare newly allocated memory during loading and release requests for
     /// resources whose retirement fence has completed. The request is advisory:
     /// Metal can still postpone residency under system memory pressure.
-    #[cfg(target_os = "macos")]
     pub(crate) fn prepare_gpu_residency(&mut self) -> Option<manifold_gpu::GpuResidencyStats> {
         if let Some(queue) = self.retire_queue.as_mut() {
             queue.drain();
@@ -1362,7 +1291,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// frame loop. Advance its retirement clock after that work has completed,
     /// so replaced warmup images do not remain alive until the first play frame.
     /// Only call at a loading boundary with no outstanding unsubmitted encoder.
-    #[cfg(target_os = "macos")]
     pub(crate) fn finish_warmup_gpu_resources(
         &mut self,
     ) -> Option<manifold_gpu::GpuResidencyStats> {
@@ -1379,7 +1307,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Clone the content device handle for the frame-time probe's readback.
-    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    #[cfg(feature = "perf-soak")]
     pub fn native_device_handle(&self) -> Option<std::sync::Arc<manifold_gpu::GpuDevice>> {
         self.native_device.clone()
     }
@@ -1443,7 +1371,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// Still load-bearing for the ring slots themselves; the texture pool
     /// no longer depends on it — recycling is fence-aware off the native
     /// event (texture_pool.rs SAFETY CONTRACT), correct at any encode depth.
-    #[cfg(target_os = "macos")]
     pub fn is_surface_ready(&self, frame: u64) -> bool {
         let pending = self.surface_signal_values[self.write_surface_index];
         let write_done = pending == 0
@@ -1475,7 +1402,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     ///
     /// Returns `true` if a wait is needed (notification registered),
     /// `false` if the surface is already ready.
-    #[cfg(target_os = "macos")]
     pub fn register_surface_notify(
         &self,
         cmd_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
@@ -1499,7 +1425,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Handle GPU timeout — clear stale signal to prevent infinite blocking.
-    #[cfg(target_os = "macos")]
     pub fn handle_surface_timeout(&mut self) {
         // BUG-665r: a blacklisted queue never advances the shared event —
         // without this check the timeout clears the slot, the next commit
@@ -1587,7 +1512,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
     /// Attach an output surface for direct-to-drawable presentation.
     /// Creates the blit pipeline and sampler lazily.
-    #[cfg(target_os = "macos")]
     pub fn set_output_surface(&mut self, surface: manifold_gpu::GpuSurface) {
         surface.configure_edr();
         surface.set_contents_gravity_resize_aspect();
@@ -1599,7 +1523,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Resize the output surface drawable (fullscreen toggle).
-    #[cfg(target_os = "macos")]
     pub fn resize_output_surface(&mut self, width: u32, height: u32) {
         if let Some(ref mut surface) = self.output_surface {
             surface.resize(width, height);
@@ -1607,19 +1530,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Suspend or resume direct present to the output drawable.
-    #[cfg(target_os = "macos")]
     pub fn set_output_present_suspended(&mut self, suspended: bool) {
         self.output_present_suspended = suspended;
     }
 
     /// Detach the output surface (output window closed).
-    #[cfg(target_os = "macos")]
     pub fn clear_output_surface(&mut self) {
         self.output_surface = None;
         self.presentation.remove(DisplayDestination::Output);
     }
 
-    #[cfg(target_os = "macos")]
     pub fn set_preview_textures(
         &mut self,
         textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
@@ -1632,7 +1552,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// Install the IOSurface textures + bridge for the node-output preview.
     /// Mirrors [`Self::set_preview_textures`] but feeds the graph editor's
     /// per-node preview pane instead of the workspace view.
-    #[cfg(target_os = "macos")]
     pub fn set_node_preview_textures(
         &mut self,
         textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
@@ -1650,7 +1569,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Install the IOSurface textures + bridge for the per-node thumbnail atlas.
-    #[cfg(target_os = "macos")]
     pub fn set_node_atlas_textures(
         &mut self,
         textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
@@ -1676,7 +1594,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// directly (section 24 5c, BUG-119). The caller must
     /// have already cleared `texture` once (Metal doesn't zero-init) — this
     /// is the atlas's ONE lifetime clear; every later write is `LoadAction::Load`.
-    #[cfg(target_os = "macos")]
     pub fn set_clip_atlas_texture(&mut self, texture: manifold_gpu::GpuTexture) {
         self.clip_atlas_persistent = Some(texture);
     }
@@ -1955,7 +1872,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
 
         // === NATIVE METAL PATH ===
-        #[cfg(target_os = "macos")]
         if self.native_device.is_some() {
             self.render_content_native(
                 gpu,
@@ -1974,26 +1890,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
 
         // Non-macOS: not yet supported (native Metal path required).
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = (
-                gpu,
-                engine,
-                tick_result,
-                dt,
-                frame_count,
-                time_f64,
-                beat_f64,
-            );
-            log::warn!("[ContentPipeline] Non-macOS render path not available");
-        }
     }
 
     /// Native Metal render path.
     ///
     /// Uses manifold_gpu::GpuDevice + GpuEncoder for ALL encoding.
     /// Generators/effects dispatch through the native encoder via GpuEncoder wrapper.
-    #[cfg(target_os = "macos")]
     #[allow(clippy::too_many_arguments)]
     fn render_content_native(
         &mut self,
@@ -2269,13 +2171,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                                 .and_then(|request| request.modifier.clone()),
                         );
                         self.scene_picks.send(gen_renderer);
-                        #[cfg(target_os = "macos")]
                         self.outline.apply(
                             gen_renderer,
                             self.physics_overlay.layer(),
                             self.scene_viewport.generator_layer(),
                         );
-                        #[cfg(target_os = "macos")]
                         self.gizmos.apply(
                             gen_renderer,
                             self.physics_overlay.layer(),
@@ -2314,10 +2214,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     generators?.write_physics_overlay(layer, domains, lights, gizmos)
                 },
             );
-            #[cfg(target_os = "macos")]
             self.gizmos
                 .take_frame_depth(generators, self.physics_overlay.layer());
-            #[cfg(target_os = "macos")]
             self.gizmos.compose_output(
                 project,
                 &stamps,
@@ -2331,7 +2229,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         .for_each(|g| g.each_rendered_setup(domains, not_made, refused, &mut *each))
                 });
             // Selection masks and a generator viewport frame, beside the pictures (D9).
-            #[cfg(target_os = "macos")]
             if let Some(copy) = self.outline.capture_generator(
                 native_device,
                 &mut gen_enc,
@@ -2352,7 +2249,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // Capture: downscale the watched generator's node output into the
             // node-preview surface (raw encoder, after the wrapper is dropped),
             // or clear to black when nothing was captured (non-texture node).
-            #[cfg(target_os = "macos")]
             if let Some((layer_id, node_id_opt)) = &self.node_preview_generator {
                 let gen_ref = renderers
                     .iter()
@@ -2395,7 +2291,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // Mirror of the effect-side atlas capture below, on the generator's
             // dump. Same cell packing; unifies the editor's behaviour across
             // effect and generator graphs.
-            #[cfg(target_os = "macos")]
             {
                 let mut gen_layout: Option<Vec<(NodeId, u32)>> = None;
                 if !self.node_atlas_visible.is_empty()
@@ -2721,7 +2616,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // only the latter can ever satisfy `is_done`, so promotion never races
         // ahead of the blit it describes. Runs every tick, independent of
         // export/visibility — bookkeeping only, no GPU work.
-        #[cfg(target_os = "macos")]
         if let Some((_, sig)) = self.clip_atlas_pending_layout.as_ref()
             && *sig != CLIP_ATLAS_LAYOUT_UNSTAMPED
             && self.native_event.as_ref().is_some_and(|e| e.is_done(*sig))
@@ -2738,7 +2632,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // (= `&self.native_device`) binding. Single-clip-layer clips use the
         // compositor's post-fx output; everything else uses the raw clip texture
         // (`clip_descs`). Skipped in export / when no timeline thumbnails are shown.
-        #[cfg(target_os = "macos")]
         if !export_mode && !self.clip_atlas_visible.is_empty() {
             // Pressure gate (BUG-119 item 4): non-zero means the content thread
             // blocked on the GPU fence last frame — the show is behind. Thumbnails
@@ -2756,6 +2649,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 .map(|p| p.settings.time_signature_numerator as f64)
                 .unwrap_or(4.0)
                 .max(1.0);
+            #[cfg(target_os = "macos")]
             let secs_per_beat = project
                 .map(|p| p.settings.seconds_per_beat() as f64)
                 .unwrap_or(0.5)
@@ -2848,6 +2742,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 // pass blits the settled frame into that bar's cell, after which the
                 // next frame here advances to the following bar. Bounded per frame so
                 // the decode scheduler is never flooded. Never composited.
+                #[cfg(target_os = "macos")]
                 if let Some(vid_r) = renderers
                     .iter_mut()
                     .find_map(|r| r.as_any_mut().downcast_mut::<VideoRenderer>())
@@ -2974,7 +2869,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 // Per parked-video clip: the bar cell its *settled* poster frame
                 // represents, so the capture writes it into the right cell rather than
                 // the playhead-derived one. Active clips and generators have no override.
+                #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
                 let mut cell_override: AHashMap<&str, u32> = AHashMap::new();
+                #[cfg(target_os = "macos")]
                 if let Some(vid_r) = renderers
                     .iter()
                     .find_map(|r| r.as_any().downcast_ref::<VideoRenderer>())
@@ -3267,7 +3164,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // same atlas + layout in the generator block above, and the
             // compositor render runs later — so without this guard the empty
             // effect dump would clobber the generator's layout.
-            #[cfg(target_os = "macos")]
             {
                 let mut eff_layout: Option<Vec<(NodeId, u32)>> = None;
                 if !self.node_atlas_visible.is_empty()
@@ -3332,7 +3228,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Format-convert the upscaled output (Rgba16Float → sRGB Bgra8Unorm)
         // into a recording pool texture. Compute dispatch in the SAME command
         // buffer — the recording thread has zero GPU work.
+        #[cfg(target_os = "macos")]
         let sdr_recording_plan = self.sdr_presentation_plan();
+        #[cfg(target_os = "macos")]
         let recording_fence = if !export_mode {
             if let Some(ref mut session) = self.recording_session {
                 if let Some((tex_idx, pool_slot, fence)) = session.acquire_texture() {
@@ -3441,6 +3339,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     b.publish_front(write_idx, frame_count);
                 }
                 // Signal recording thread that the GPU blit is complete.
+                #[cfg(target_os = "macos")]
                 if let Some(ref fence) = recording_fence {
                     fence.signal();
                 }
@@ -3458,7 +3357,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // therefore this frame's real signal value — existed. Stamp it now; the
         // promotion check at the top of the next tick's snapshot block only
         // promotes once `is_done(sig)`, i.e. once these blits actually landed.
-        #[cfg(target_os = "macos")]
         if let Some((_, sig)) = self.clip_atlas_pending_layout.as_mut()
             && *sig == CLIP_ATLAS_LAYOUT_UNSTAMPED
         {
@@ -3589,7 +3487,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Prepare every owner first. No fallible work may follow the commit boundary.
-    #[cfg(target_os = "macos")]
     pub fn resize_renderers(
         &mut self,
         renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
@@ -3661,6 +3558,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.output_h = height;
         // Image resizing schedules a CPU re-fit; its old texture stays visible
         // until the asynchronous replacement is ready.
+        #[cfg(target_os = "macos")]
         for renderer in renderers {
             if let Some(image) = renderer
                 .as_any_mut()
@@ -3680,18 +3578,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn resize_renderers(
-        &mut self,
-        _renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
-        _width: u32,
-        _height: u32,
-        _render_scale: f32,
-    ) -> Result<(), String> {
-        Err("Transactional GPU resize is unavailable on this backend".into())
-    }
-
-    #[cfg(target_os = "macos")]
     pub fn resize_workspace_preview(&mut self, width: u32, height: u32) {
         let width = width.max(1);
         let height = height.max(1);
@@ -3718,7 +3604,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         (self.output_w, self.output_h)
     }
 
-    #[cfg(target_os = "macos")]
     fn update_workspace_preview(
         native_enc: &mut manifold_gpu::GpuEncoder,
         source: &manifold_gpu::GpuTexture,
@@ -3765,12 +3650,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// so dark/signed intermediates are legible without flicker. When off, it's
     /// the same raw blit the workspace preview uses. Only the node preview pane
     /// goes through here; the live render and workspace preview are untouched.
-    #[cfg(target_os = "macos")]
     #[allow(clippy::too_many_arguments)]
     /// Borrow the semantic node-preview pipelines as one bundle, so the preview
     /// blit takes a single argument instead of one `Option<&pipeline>` per
     /// encoding. `None` on a platform / state where a pipeline wasn't built.
-    #[cfg(target_os = "macos")]
     fn preview_pipelines(&self) -> PreviewPipelines<'_> {
         PreviewPipelines {
             scalar_lift: self.node_preview_scalar_pipeline.as_ref(),
@@ -3784,7 +3667,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
     }
 
-    #[cfg(target_os = "macos")]
     fn update_node_preview(
         enc: &mut manifold_gpu::GpuEncoder,
         source: &manifold_gpu::GpuTexture,
@@ -3994,7 +3876,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     ///
     /// Uses the fence waiter's kernel notification when available (zero CPU),
     /// falling back to the polling path if the fence waiter isn't initialized.
-    #[cfg(target_os = "macos")]
     pub fn wait_for_render_complete(&self) {
         if let Some(ref event) = self.native_event {
             if event.is_done(self.native_signal_value) {
@@ -4015,7 +3896,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Export must never encode an unfinished or GPU-failed render target.
-    #[cfg(target_os = "macos")]
     pub fn wait_for_export_complete(
         &self,
         since: &manifold_gpu::gpu_fault::FaultMark,
@@ -4215,7 +4095,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// copy. Must be called *after* `render_content` so the blit reads a fully
     /// written frame; pair with `take_still_readback` on the next tick.
     /// Mirrors the LED readback pattern (separate encoder, post-render texture).
-    #[cfg(target_os = "macos")]
     pub fn submit_still_readback(&mut self) -> (u32, u32) {
         let native_device = self
             .native_device
@@ -4244,7 +4123,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// value, not the live compositor. The caller applies the colour pipeline
     /// (rolloff + sRGB) in float off-thread; see
     /// `manifold_media::still_exporter::linear_f16_rgba_to_srgb8`.
-    #[cfg(target_os = "macos")]
     pub fn take_still_readback(&mut self) -> Option<Vec<u8>> {
         if !self.still_readback.is_pending() {
             return None;

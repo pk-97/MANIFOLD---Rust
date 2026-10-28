@@ -37,7 +37,6 @@ pub(super) fn retain_thumbnail_requests(
 /// section 24 5c cold-start: locate a PARKED generator clip by id — its layer (must be a
 /// generator), clip index, and clip-start `(time, beat)` for a thumbnail render.
 /// `None` if not found or the layer isn't a generator (video posters are separate).
-#[cfg(target_os = "macos")]
 pub(super) fn find_parked_generator_clip<'a>(
     layers: &'a [manifold_core::layer::Layer],
     clip_id: &str,
@@ -58,7 +57,6 @@ pub(super) fn find_parked_generator_clip<'a>(
 /// section 24 5c P2b: locate a PARKED video clip by id — returns its `video_clip_id`
 /// (the file reference), for a one-shot poster decode. `None` if not found or not
 /// a video clip.
-#[cfg(target_os = "macos")]
 pub(super) fn find_parked_video_clip<'a>(
     layers: &'a [manifold_core::layer::Layer],
     clip_id: &str,
@@ -83,7 +81,6 @@ pub(super) fn find_parked_video_clip<'a>(
 /// Logs the offending label once per process so the producer can be fixed to
 /// create its output with `SHADER_READ`. The dedup set is a process-local
 /// diagnostic, not shared app state.
-#[cfg(target_os = "macos")]
 pub(super) fn thumb_source_shader_readable(label: &str, tex: &manifold_gpu::GpuTexture) -> bool {
     if tex.is_shader_readable() {
         return true;
@@ -128,7 +125,6 @@ pub(super) fn thumb_source_shader_readable(label: &str, tex: &manifold_gpu::GpuT
 /// A free function (not a `&mut self` method) so the caller can pass the
 /// persistent atlas / cache / layout as disjoint field borrows alongside the
 /// `&self.native_device` binding that `render()` holds for the whole frame.
-#[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fill_clip_atlas(
     enc: &mut manifold_gpu::GpuEncoder,
@@ -283,7 +279,6 @@ pub(super) fn fill_clip_atlas(
 /// `fill_clip_atlas`, and a newly allocated cell's layout goes through the
 /// same UNSTAMPED → post-commit-stamped → promote-on-completion path (see
 /// `render_content`), not straight to `last_clip_atlas_layout`.
-#[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn restore_clip_atlas(
     native_device: &manifold_gpu::GpuDevice,

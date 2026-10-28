@@ -118,9 +118,7 @@ impl Application {
         // centered. Reads the latest frame from the preview bridge
         // (same source the workspace viewport uses). Zero extra GPU work —
         // the frame is already rendered by the content thread.
-        #[cfg(target_os = "macos")]
         let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
-        #[cfg(target_os = "macos")]
         if let (Some(bridge), Some(blit_pipeline), Some(blit_sampler)) = (
             &self.preview_texture_bridge,
             &self.blit_pipeline,
@@ -186,7 +184,6 @@ impl Application {
             let ws = match self.window_registry.get_mut(&window_id) {
                 Some(ws) => ws,
                 None => {
-                    #[cfg(target_os = "macos")]
                     crate::shared_texture::retire_leases_via_marker(
                         &gpu.device,
                         self.content_tx.clone(),
@@ -198,7 +195,6 @@ impl Application {
             let surface = match ws.surface.as_ref() {
                 Some(s) => s,
                 None => {
-                    #[cfg(target_os = "macos")]
                     crate::shared_texture::retire_leases_via_marker(
                         &gpu.device,
                         self.content_tx.clone(),
@@ -210,7 +206,6 @@ impl Application {
             match surface.next_drawable() {
                 Some(d) => d,
                 None => {
-                    #[cfg(target_os = "macos")]
                     crate::shared_texture::retire_leases_via_marker(
                         &gpu.device,
                         self.content_tx.clone(),
@@ -224,7 +219,6 @@ impl Application {
         let blit_pipeline = match &self.blit_pipeline {
             Some(p) => p,
             None => {
-                #[cfg(target_os = "macos")]
                 crate::shared_texture::retire_leases_via_marker(
                     &gpu.device,
                     self.content_tx.clone(),
@@ -236,7 +230,6 @@ impl Application {
         let blit_sampler = match &self.blit_sampler {
             Some(s) => s,
             None => {
-                #[cfg(target_os = "macos")]
                 crate::shared_texture::retire_leases_via_marker(
                     &gpu.device,
                     self.content_tx.clone(),
@@ -267,7 +260,6 @@ impl Application {
         // BUG-xaw4: the preview bridge lease retires when this encoder
         // completes — ordered after the "Perform Frame" encoder that sampled
         // the bridge (same queue).
-        #[cfg(target_os = "macos")]
         crate::shared_texture::attach_lease_retire(
             &present_enc,
             self.content_tx.clone(),

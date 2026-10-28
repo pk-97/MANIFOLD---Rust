@@ -121,22 +121,19 @@ The remaining raw-handle users are Mac-gated and stay Metal: `manifold-media/src
 
 ## 6. manifold-app
 
-About 525 `target_os` lines in 46 files. Grouped by what they gate:
+About 230 `target_os` lines in 36 files. Grouped by what they gate:
 
 | Group | Lines | Files | Linux needs | Phase |
 |---|---|---|---|---|
-| Shared-texture bridge and every pane on it | ~200 | `shared_texture.rs`, `content_pipeline.rs` (66), `app.rs` (49), `frame/present.rs` (22), `scene_viewport_capture.rs` (12), `editor_bridge.rs` (11), `selection_outline.rs` (10), `perform_mode/render.rs` (8), `clip_atlas.rs` (5), `preview_navigation.rs`, `app_render.rs`, `editing_chrome.rs`, `gizmo_overlay.rs`, `scene_viewport.rs`, `content_commands.rs` (4), `main.rs:161,167` | Plain `GpuTexture`s on one device (section 11), then remove the gates | Before P3 |
-| Native content render and device plumbing | ~43 | `content_pipeline.rs` (`render_content_native` and friends) | Remove the gates once the GPU types exist on both backends. Without this nothing renders | P3 |
-| Window, presentation, display link, pacing | ~107 | `edr_surface.rs` (14), `quit.rs` (13), `frame_timer.rs` (12), `sync_rig_log.rs` (9), `content_command.rs` (5), `app_lifecycle.rs` (5), `window_input.rs` (4), `content_thread.rs` (3), `drag_interpose.rs`, `breadcrumb.rs`, `present_feedback.rs`, `workspace.rs`, `window_registry.rs`, `main.rs:58` (display link) | Stubs exist off-Mac for most. Linux needs present-driven pacing, output on a chosen display (design section 8: Wayland cannot position windows, display matching returns `None` off the Mac), and real-time priority in place of the Mac thread policy (`frame_timer.rs:285,294,403`) | P3, P4 |
-| Export, still capture, recording, video and images | ~42 | `content_export.rs` (13), `content_thread.rs` (8), `content_commands.rs` (8), `app.rs` (4). Off-Mac clips get `StubRenderer` (`app.rs:1553`): no video and no images | FFmpeg decode and encode | P5 |
+| Window, presentation, display link, pacing | ~107 | `edr_surface.rs` (14), `quit.rs` (13), `frame_timer.rs` (12), `sync_rig_log.rs` (9), `content_command.rs` (5), `app_lifecycle.rs` (5), `window_input.rs` (4), `content_thread.rs` (3), `drag_interpose.rs`, `breadcrumb.rs`, `present_feedback.rs`, `workspace.rs`, `window_registry.rs`, `main.rs:58` (display link) | Stubs exist off-Mac for most. Linux needs present-driven pacing, output on a chosen display (design section 8: Wayland cannot position windows, display matching returns `None` off the Mac), and real-time priority in place of the Mac thread policy (`frame_timer.rs:285,294,403`) | P4 |
+| Export, still capture, recording, video and images | ~42 | `content_export.rs` (13), `content_thread.rs` (8), `content_commands.rs` (8), `app.rs` (4). Off-Mac clips get `StubRenderer` (`content_thread.rs` `playback_engine`): no video and no images. `export-repro` and the journey proofs wait with export | FFmpeg decode and encode, then drop the off-Mac `dead_code` allow at the top of `main.rs` | P5 |
 | Clipboard and file paste | ~20 | `input_host.rs` (11), `card_edit.rs`, `ui_snapshot/script.rs`, `window_input.rs`, `app.rs`, `main.rs:111` | Text fields and copy actions use `text_clipboard.rs` (arboard) everywhere. Finder file paste stays Mac-only; winit 0.30 has no file drops on Wayland | P4 |
 | Menus | 2 | `menu.rs:187-197`; seven actions exist only in the menu (`app_render.rs:438-467`) | In-app entries for them, then section 10 item 3 | P4 |
-| Headless harness and subcommands | ~90 | `headless_harness.rs`, `main.rs` (11 + 11), `content_pipeline.rs` (12), proof modules (66 lines: `bug219_verify`, `corridor_acceptance`, `frame_exact_app`, `gap_start_probe`, `gpu_flip_export_demo`, `import_responsiveness_verify`, `mute_visibility_probe`, `rt_dynamic_export_tests`) | `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` are Mac-gated with the content pipeline's native render. The harness uses the app's constructors | P3 |
 | Misc | 2 | `main.rs:379,732` (App Nap, nothing on Linux) | Gate stays | Build hygiene |
 
 **Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`, `percussion_backend.rs:210`) wait for Linux packaging (P4).
 
-**Gated until P3 or P5.** On Linux the app compiles with these off: the output surface and its resize and suspend commands, the workspace preview bridge and its size, the native GPU handoff to the content pipeline (`set_native_gpu`), the display link, video prewarm, video export (reports "not available"), and the tests that boot `headless_harness`.
+**Gated until P4 or P5.** On Linux the app compiles with these off: the display link (P4 pacing), the video and image decoders and video prewarm, video and still export, and live recording (P5). The headless harness, its tests, `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `ui-snap` build everywhere.
 
 ---
 
@@ -207,7 +204,7 @@ Each P1 batch adds its parity-kit tests and runs them on KosmicKrisp with synchr
 
 **After P1:**
 - P2 done 29 Oct. Render: pipelines on dynamic rendering, one `VkPipeline` per topology and fill mode with depth and cull state dynamic, MSAA, mipmaps, the long UI pass and the depth copy (`vulkan/pipeline.rs`, `vulkan/encoder/render.rs`); `render_parity_tests.rs` runs on both backends. Vulkan stills against Metal: DigitalPlants, Lissajous, NestedCubes and Wireframe identical, Scene within 1/255, MetallicGlass's fine moiré differs (shader math precision). The per-dispatch profiler writes timestamp queries into one reused pool (`vulkan/profiling.rs`); Vulkan spans report no workgroup memory. The water still renders; its surface differs from Metal in detail (the narrow band difference in step 13). End-of-P2 proof run on KosmicKrisp: 6301 of 6494 pass. Left: ray tracing (P7); tests that pin Metal's replay and template counts; eight render-test helpers that leave a named binding out (production binds them); wireframe and anisotropy, which KosmicKrisp lacks; fused DigitalPlants within 1/255 of unfused on 31% of pixels; one device loss in the sheeting births test.
-- P3: shared textures, the surface, and un-gating the app's native render and headless harness.
+- P3 done 29 Oct. The Vulkan surface (`vulkan/surface.rs`): a swapchain per window through ash-window, an offscreen target per image that the present blits into the swapchain image (linear float to sRGB), MAILBOX when vsync is off and offered, else FIFO, presented under the queue lock right after its submit. EDR and presents-with-transaction are no-ops there. The app's native render, the bridge panes, the output surface commands and the headless harness are no longer Mac-gated. In the VM on lavapipe, `ui-snap timeline` renders and `bridge-probe` runs clean. The surface itself is untested until a window opens on Linux (P4 boot check).
 - P4: Linux services (pacing, output placement, shortcuts, menu-only actions, clipboard, audio buffer and capture, keep-awake, thread priority, plugins as `.so`). Text landed 29 Oct: `manifold-text` (cosmic-text over embedded Inter and the system fonts) draws the UI and the Text generator off the Mac; the terminal atlas asks for DejaVu Sans Mono there.
 - P5: video.
 - P6: water speed.
@@ -238,7 +235,7 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 - **Folders and tool lookup** are std-only helpers in `manifold-foundation` (`app_dirs`, `find_tool`), which every crate that needs them already depends on.
 - **Single-user OS code** (keep-awake, real-time priority, performance cores) sits in a per-OS module next to its user. Plugin library names come from `std::env::consts`.
 - **Big OS services** keep one seam each: text (cosmic-text, no per-OS code), system-audio capture (`CaptureBackend`), video (`ClipRenderer`), window chrome (the app's window module).
-- **Target:** shared code never writes `cfg(target_os)` inline. Today `manifold-app` alone has about 525 such lines.
+- **Target:** shared code never writes `cfg(target_os)` inline. Today `manifold-app` alone has about 230 such lines.
 
 **GPU API reductions**
 

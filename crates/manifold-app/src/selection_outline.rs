@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use manifold_gpu::{GpuBinding, GpuDevice, GpuEncoder, GpuRenderPipeline, GpuSampler, GpuTexture};
 
-#[cfg(target_os = "macos")]
 use crate::shared_texture::{SURFACE_COUNT, SharedTextureBridge};
 
 /// Outline colour, straight alpha: Blender's selection orange.
@@ -24,14 +23,12 @@ const OUTLINE_WIDTH_POINTS: f32 = 2.0;
 
 /// The mask bridge's content side: one surface per output slot, sized to
 /// the mask the scene drew.
-#[cfg(target_os = "macos")]
 #[derive(Default)]
 pub(crate) struct OutlineMasks {
     bridge: Option<Arc<SharedTextureBridge>>,
     textures: [Option<GpuTexture>; SURFACE_COUNT],
 }
 
-#[cfg(target_os = "macos")]
 impl OutlineMasks {
     pub fn install(&mut self, bridge: Arc<SharedTextureBridge>) {
         self.textures = std::array::from_fn(|i| Some(bridge.texture(i)));
@@ -203,13 +200,11 @@ pub(crate) struct OutlineSlots {
 
 /// Where the outline requests land: the output render's selection mask and
 /// the scene viewport pass's, per layer.
-#[cfg(target_os = "macos")]
 pub(crate) trait SelectionMasks {
     fn set_output_mask(&mut self, layer: &manifold_core::LayerId, slots: &[u32]);
     fn set_viewport_mask(&mut self, layer: &manifold_core::LayerId, slots: &[u32]);
 }
 
-#[cfg(target_os = "macos")]
 impl SelectionMasks for manifold_compositor::generator_renderer::GeneratorRenderer {
     fn set_output_mask(&mut self, layer: &manifold_core::LayerId, slots: &[u32]) {
         self.set_selection_mask(layer, slots);
@@ -223,7 +218,6 @@ impl SelectionMasks for manifold_compositor::generator_renderer::GeneratorRender
 /// The content thread's outline state: the standing requests for the output
 /// and the scene viewport, the layers they were last applied to, and the
 /// two mask bridges (the output preview's, and the scene viewport's).
-#[cfg(target_os = "macos")]
 #[derive(Default)]
 pub(crate) struct OutlineCapture {
     output: Option<OutlineSlots>,
@@ -236,7 +230,6 @@ pub(crate) struct OutlineCapture {
     pub viewport_masks: OutlineMasks,
 }
 
-#[cfg(target_os = "macos")]
 impl OutlineCapture {
     pub fn set(&mut self, output: Option<OutlineSlots>, viewport: Option<OutlineSlots>) {
         if self.output != output || self.viewport != viewport {
@@ -294,7 +287,6 @@ impl OutlineCapture {
 }
 
 /// The slots `request` asks of `layer`: none when it was read from another.
-#[cfg(target_os = "macos")]
 fn slots_on<'a>(request: Option<&'a OutlineSlots>, layer: &manifold_core::LayerId) -> &'a [u32] {
     request
         .filter(|request| &request.layer == layer)
@@ -304,7 +296,6 @@ fn slots_on<'a>(request: Option<&'a OutlineSlots>, layer: &manifold_core::LayerI
 /// The mask beside surface `slot` of a picture whose frame stamped mask
 /// generation `outline`, read under that picture's lease. `None` when the
 /// frame drew no mask or the bridge has been resized since.
-#[cfg(target_os = "macos")]
 pub(crate) fn leased_mask(
     pane: Option<&mut crate::texture_pane::TexturePane>,
     slot: usize,
@@ -374,7 +365,7 @@ fn same_request(
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_proof;
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use manifold_core::LayerId;
 

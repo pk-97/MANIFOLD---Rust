@@ -35,7 +35,6 @@ impl ContentPipeline {
     }
 }
 
-#[cfg(target_os = "macos")]
 mod outline {
     use std::sync::Arc;
 
@@ -108,7 +107,6 @@ mod outline {
     }
 }
 
-#[cfg(target_os = "macos")]
 mod gizmos {
     use super::super::ContentPipeline;
     use crate::gizmo_overlay::GizmoOverlay;

@@ -157,7 +157,6 @@ pub struct Application {
     /// `None` until the first internal copy — the D4 arbitration treats
     /// that the same as "internal clipboard empty" (Finder file always
     /// wins over a clipboard that was never populated).
-    #[cfg(target_os = "macos")]
     pub(crate) internal_clipboard_change_count: Option<i64>,
 
     // Rendering
@@ -165,51 +164,38 @@ pub struct Application {
     pub(crate) content_pipeline_output: Option<Arc<crate::content_pipeline::SharedOutputView>>,
     /// IOSurface bridge for cross-device texture sharing (macOS).
     /// Content device writes compositor output to the IOSurface; UI device reads it.
-    #[cfg(target_os = "macos")]
     /// IOSurface bridge for the workspace preview texture.
-    #[cfg(target_os = "macos")]
     pub(crate) preview_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// UI-side textures imported from the workspace preview IOSurfaces.
-    #[cfg(target_os = "macos")]
     pub(crate) ui_preview_textures:
         [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// Last seen preview bridge generation.
-    #[cfg(target_os = "macos")]
     pub(crate) last_preview_bridge_generation: u64,
     /// Last workspace preview IOSurface front_index seen by the UI thread.
-    #[cfg(target_os = "macos")]
     pub(crate) last_output_front_index: usize,
     /// Last requested workspace preview surface size.
-    #[cfg(target_os = "macos")]
     pub(crate) workspace_preview_size: (u32, u32),
     /// IOSurface bridge for the graph editor's node-output preview pane.
     /// Fixed small size; the content thread downscales the captured node
     /// texture into it and the editor sidebar samples the front buffer.
-    #[cfg(target_os = "macos")]
     pub(crate) node_preview_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// UI-side textures imported from the node-output preview IOSurfaces.
-    #[cfg(target_os = "macos")]
     pub(crate) ui_node_preview_textures:
         [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// The scene viewport's frames for whichever host owns the request
     /// (D7a): the content thread resizes the bridge to the request's
     /// view size, and the pane re-imports on the generation bump.
-    #[cfg(target_os = "macos")]
     pub(crate) scene_viewport_pane: Option<crate::texture_pane::TexturePane>,
     /// The selection outline's mask bridges (D-102): beside the output
     /// preview's surfaces and beside the scene viewport's.
-    #[cfg(target_os = "macos")]
     pub(crate) outline_output_pane: Option<crate::texture_pane::TexturePane>,
-    #[cfg(target_os = "macos")]
     pub(crate) outline_viewport_pane: Option<crate::texture_pane::TexturePane>,
     /// The pass that draws the outline over a picture.
     pub(crate) selection_outline: Option<crate::selection_outline::SelectionOutline>,
     /// IOSurface bridge for the per-node thumbnail atlas (one big texture packed
     /// as a cell grid). The editor present pass samples cells onto canvas nodes.
-    #[cfg(target_os = "macos")]
     pub(crate) node_atlas_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// UI-side textures imported from the thumbnail-atlas IOSurfaces.
-    #[cfg(target_os = "macos")]
     pub(crate) ui_node_atlas_textures:
         [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// Last atlas visible-node set sent to the content thread — dedups the
@@ -226,7 +212,6 @@ pub struct Application {
     /// The clip-thumbnail atlas texture both threads use (section 24 5c,
     /// BUG-119: one surface, no rotation). The content thread blits cells
     /// into it; the UI samples it.
-    #[cfg(target_os = "macos")]
     pub(crate) ui_clip_atlas_texture: Option<manifold_gpu::GpuTexture>,
     /// Last clip-thumbnail visible set sent — dedups `SetClipAtlasVisible`.
     pub(crate) last_clip_atlas_visible_sent: Vec<manifold_core::ClipId>,
@@ -249,7 +234,6 @@ pub struct Application {
     pub(crate) spectrogram: Option<manifold_spectral::Spectrogram>,
     /// The scope's render target, wrapped as a `Local` TexturePane so the blit
     /// goes through the unified texture-in-UI path.
-    #[cfg(target_os = "macos")]
     pub(crate) spectrogram_pane: Option<crate::texture_pane::TexturePane>,
     pub(crate) spectrogram_num_bins: usize,
     /// VQT columns drained from content snapshots but not yet fed to the
@@ -269,7 +253,6 @@ pub struct Application {
     /// Physical-pixel size of the scope render target, tracked so it is rebuilt
     /// when the (resizable) Audio Setup modal changes the on-screen scope size —
     /// keeps the waterfall crisp instead of upscaling a fixed small texture.
-    #[cfg(target_os = "macos")]
     pub(crate) spectrogram_tex_dims: (u32, u32),
     /// Last spectrogram-send selection pushed to the content thread, so the
     /// `SetSpectrogramSend` command only fires on change.
@@ -540,7 +523,6 @@ pub struct Application {
 }
 
 impl Application {
-    #[cfg(target_os = "macos")]
     const WORKSPACE_PREVIEW_QUANTUM: u32 = 64;
 
     pub fn new() -> Self {
@@ -578,47 +560,29 @@ impl Application {
             selection: UIState::new(),
             active_layer_id: None,
             scrub: crate::ui_bridge::ScrubState::default(),
-            #[cfg(target_os = "macos")]
             internal_clipboard_change_count: None,
             content_pipeline_output: None,
             last_preview_node: None,
             last_modifier_preview_context: None,
             last_modifier_preview_selection: None,
-            #[cfg(target_os = "macos")]
-            #[cfg(target_os = "macos")]
             preview_texture_bridge: None,
-            #[cfg(target_os = "macos")]
-            #[cfg(target_os = "macos")]
             ui_preview_textures: [None, None, None],
-            #[cfg(target_os = "macos")]
-            #[cfg(target_os = "macos")]
             last_preview_bridge_generation: 0,
-            #[cfg(target_os = "macos")]
             last_output_front_index: usize::MAX,
-            #[cfg(target_os = "macos")]
             workspace_preview_size: (1920, 1080),
-            #[cfg(target_os = "macos")]
             node_preview_texture_bridge: None,
-            #[cfg(target_os = "macos")]
             ui_node_preview_textures: [None, None, None],
-            #[cfg(target_os = "macos")]
             scene_viewport_pane: None,
-            #[cfg(target_os = "macos")]
             outline_output_pane: None,
-            #[cfg(target_os = "macos")]
             outline_viewport_pane: None,
             selection_outline: None,
-            #[cfg(target_os = "macos")]
             node_atlas_texture_bridge: None,
-            #[cfg(target_os = "macos")]
             ui_node_atlas_textures: [None, None, None],
             last_atlas_visible_sent: Vec::new(),
             atlas_visible_snap: None,
             atlas_visible_scope: Vec::new(),
             mini_timeline: Default::default(),
             editor_graph: Default::default(),
-            #[cfg(target_os = "macos")]
-            #[cfg(target_os = "macos")]
             ui_clip_atlas_texture: None,
             last_clip_atlas_visible_sent: Vec::new(),
             clip_thumb_gpu: None,
@@ -629,12 +593,10 @@ impl Application {
             blit_pipeline: None,
             blit_sampler: None,
             spectrogram: None,
-            #[cfg(target_os = "macos")]
             spectrogram_pane: None,
             spectrogram_num_bins: 0,
             pending_spectrogram_columns: Vec::new(),
             pending_spectrogram_scalars: Vec::new(),
-            #[cfg(target_os = "macos")]
             spectrogram_tex_dims: (0, 0),
             spectrogram_send_sent: None,
             atlas_pipeline: None,
@@ -758,7 +720,6 @@ impl Application {
         }
     }
 
-    #[cfg(target_os = "macos")]
     fn compute_workspace_preview_size(
         output_w: u32,
         output_h: u32,
@@ -784,7 +745,6 @@ impl Application {
         }
     }
 
-    #[cfg(target_os = "macos")]
     fn current_workspace_preview_size(&self) -> (u32, u32) {
         let video_rect = self.ws.ui_root.layout.video_area();
         Self::compute_workspace_preview_size(
@@ -796,7 +756,6 @@ impl Application {
         )
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn sync_workspace_preview_size(&mut self) {
         let size = self.current_workspace_preview_size();
         if size == self.workspace_preview_size {
@@ -1435,14 +1394,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let output_w = self.local_project.settings.output_width.max(1) as u32;
             let output_h = self.local_project.settings.output_height.max(1) as u32;
-            #[cfg(target_os = "macos")]
             let initial_layout = manifold_ui::layout::ScreenLayout::new(
                 size.width as f32 / scale as f32,
                 size.height as f32 / scale as f32,
             );
-            #[cfg(target_os = "macos")]
             let initial_video_area = initial_layout.video_area();
-            #[cfg(target_os = "macos")]
             let initial_preview_size = Self::compute_workspace_preview_size(
                 output_w,
                 output_h,
@@ -1450,7 +1406,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 initial_video_area.height,
                 scale,
             );
-            #[cfg(target_os = "macos")]
             {
                 self.workspace_preview_size = initial_preview_size;
             }
@@ -1474,7 +1429,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Bridge for the workspace preview (downscaled). The main output
             // path presents straight to the drawable from the content thread,
             // so it needs no full-resolution bridge.
-            #[cfg(target_os = "macos")]
             {
                 let preview_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
                     &native_device,
@@ -1571,24 +1525,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // grabs command buffers from both content and UI threads.
             native_device.install_device_capture_scope();
             // Transfer native device ownership to content pipeline.
-            #[cfg(target_os = "macos")]
             content_pipeline.set_native_gpu(native_device);
             // The content side of each bridge.
-            #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.preview_texture_bridge {
                 content_pipeline.set_preview_textures(
                     std::array::from_fn(|i| bridge.texture(i)),
                     Arc::clone(bridge),
                 );
             }
-            #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.node_preview_texture_bridge {
                 content_pipeline.set_node_preview_textures(
                     std::array::from_fn(|i| bridge.texture(i)),
                     Arc::clone(bridge),
                 );
             }
-            #[cfg(target_os = "macos")]
             if let Some(bridge) = self
                 .scene_viewport_pane
                 .as_ref()
@@ -1599,7 +1549,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     Arc::clone(bridge),
                 );
             }
-            #[cfg(target_os = "macos")]
             if let (Some(output), Some(viewport)) = (
                 self.outline_output_pane
                     .as_ref()
@@ -1610,7 +1559,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ) {
                 content_pipeline.set_outline_bridges(Arc::clone(output), Arc::clone(viewport));
             }
-            #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.node_atlas_texture_bridge {
                 content_pipeline.set_node_atlas_textures(
                     std::array::from_fn(|i| bridge.texture(i)),
@@ -1624,7 +1572,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // `fill_clip_atlas`/`restore_clip_atlas` in content_pipeline.rs). The
             // clear is waited-out synchronously so the surface is guaranteed
             // transparent before either thread's first real frame.
-            #[cfg(target_os = "macos")]
             if let Some(ref clip_atlas_tex) = self.ui_clip_atlas_texture {
                 let native_dev = content_pipeline.native_device().unwrap();
                 let mut clear_enc = native_dev.create_encoder("Clip Atlas Init Clear");
@@ -1698,7 +1645,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let logical_w = size.width as f32 / scale as f32;
         let logical_h = size.height as f32 / scale as f32;
         self.ws.ui_root.set_screen_size(logical_w, logical_h);
-        #[cfg(target_os = "macos")]
         self.sync_workspace_preview_size();
 
         // Push initial project data (layers, tracks) and rebuild
@@ -1786,7 +1732,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if is_primary {
                     self.quit(event_loop);
                 } else {
-                    #[cfg(target_os = "macos")]
                     {
                         self.send_content_cmd(
                             crate::content_command::ContentCommand::ClearOutputSurface,
@@ -1822,7 +1767,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         self.ws.ui_root.set_screen_size(logical_w, logical_h);
                     } else {
                         // Output window resized — update drawable.
-                        #[cfg(target_os = "macos")]
                         self.send_content_cmd(ContentCommand::ResizeOutputSurface(
                             size.width.max(1),
                             size.height.max(1),
@@ -2116,7 +2060,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Close output window (Escape key or programmatic close)
         if self.pending_close_output {
             self.pending_close_output = false;
-            #[cfg(target_os = "macos")]
             {
                 self.send_content_cmd(crate::content_command::ContentCommand::ClearOutputSurface);
                 self.output_display_capabilities = None;
@@ -2169,7 +2112,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.display_retarget_pending = true;
                 self.display_retarget_deadline =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
-                #[cfg(target_os = "macos")]
                 self.send_content_cmd(ContentCommand::SetOutputPresentSuspended(true));
                 log::info!(
                     "[Display] Retarget in flight — suspending surface ops \
@@ -2343,7 +2285,6 @@ impl Drop for Application {
         // Field drop order is declaration order — gpu (device) drops before
         // window_registry (surfaces) and IOSurface textures, which can crash.
         // Explicitly clear them here so they're gone before implicit field drops.
-        #[cfg(target_os = "macos")]
         {
             self.ui_preview_textures = [None, None, None];
         }

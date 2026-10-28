@@ -9,7 +9,7 @@ publish = false
 # everywhere else. `vulkan` switches macOS to the Vulkan backend, run on
 # KosmicKrisp or MoltenVK (D21) to check the portable path from the dev box.
 default = []
-vulkan = ["dep:ash", "dep:gpu-allocator"]
+vulkan = ["dep:ash", "dep:ash-window", "dep:gpu-allocator"]
 testkit = []
 # GPU-backed proofs (requires an Apple Silicon device). Off by default — run with
 # `cargo test -p manifold-gpu --features gpu-proofs -- --test-threads=1`.
@@ -37,9 +37,11 @@ spirv-tools = { version = "0.13", features = ["use-compiled-tools"] }
 # macOS, always elsewhere.
 ash = { version = "0.38", optional = true }
 gpu-allocator = { version = "0.28", default-features = false, features = ["std", "vulkan"], optional = true }
+ash-window = { version = "0.13", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 ash = "0.38"
+ash-window = "0.13"
 gpu-allocator = { version = "0.28", default-features = false, features = ["std", "vulkan"] }
 raw-window-handle = "0.6"
 
@@ -155,4 +157,4 @@ workspace = true
 # The Vulkan backend's crates are optional on macOS, so cargo-machete's
 # default scan reports them unused.
 [package.metadata.cargo-machete]
-ignored = ["ash", "gpu-allocator"]
+ignored = ["ash", "ash-window", "gpu-allocator"]

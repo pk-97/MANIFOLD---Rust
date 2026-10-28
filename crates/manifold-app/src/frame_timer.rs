@@ -278,12 +278,10 @@ impl FrameTimer {
     /// A target change causes one new attempt; repeated frames reuse the
     /// result, including failed attempts.
     pub(crate) fn ensure_thread_policy(&mut self) {
-        if !self.take_policy_refresh() {
-            return;
+        if self.take_policy_refresh() {
+            #[cfg(target_os = "macos")]
+            self.apply_thread_policy();
         }
-
-        #[cfg(target_os = "macos")]
-        self.apply_thread_policy();
     }
 
     fn take_policy_refresh(&mut self) -> bool {

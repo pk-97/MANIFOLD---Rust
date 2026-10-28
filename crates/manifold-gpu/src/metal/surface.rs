@@ -188,7 +188,7 @@ impl GpuDevice {
     /// Create a presentable surface backed by a CAMetalLayer.
     pub fn create_surface(
         &self,
-        window: &impl raw_window_handle::HasWindowHandle,
+        window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
         width: u32,
         height: u32,
         format: GpuTextureFormat,
@@ -348,14 +348,6 @@ impl GpuDrawable {
         let w = unsafe { tex.width() } as u32;
         let h = unsafe { tex.height() } as u32;
         GpuTexture::from_raw(tex, w, h, 1, format)
-    }
-
-    /// Present the drawable immediately.
-    pub fn present(self) {
-        unsafe {
-            let drawable_obj: *mut AnyObject = self.drawable_ptr.cast();
-            let _: () = msg_send![drawable_obj, present];
-        }
     }
 
     /// Report when this drawable reaches the screen to the observer installed

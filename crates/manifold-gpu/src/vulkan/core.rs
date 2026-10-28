@@ -45,7 +45,7 @@ struct Debug {
 }
 
 pub(crate) struct Core {
-    _entry: ash::Entry,
+    pub(crate) entry: ash::Entry,
     pub(crate) instance: ash::Instance,
     pub(crate) physical: vk::PhysicalDevice,
     pub(crate) device: ash::Device,
@@ -68,6 +68,15 @@ pub(crate) struct Core {
     pub(crate) fill_mode_non_solid: bool,
     /// Optimal-tiling features per [`GpuTextureFormat`], in `ALL_FORMATS` order.
     format_features: Vec<(GpuTextureFormat, vk::FormatFeatureFlags)>,
+    /// Window presentation (D15): `None` when the loader or the device
+    /// offers no surfaces or swapchains, and every window then stays blank.
+    pub(crate) present: Option<Present>,
+}
+
+/// The surface and swapchain entry points.
+pub(crate) struct Present {
+    pub(crate) surface: ash::khr::surface::Instance,
+    pub(crate) swapchain: ash::khr::swapchain::Device,
 }
 
 // Safety: every Vulkan handle here is externally synchronised by the mutex
@@ -217,6 +226,22 @@ impl Core {
         if debug_utils {
             extensions.push(ash::ext::debug_utils::NAME);
         }
+        // Every window system the loader offers, so any window can present.
+        let surfaces = has_instance_ext(ash::khr::surface::NAME);
+        if surfaces {
+            extensions.push(ash::khr::surface::NAME);
+            for platform in [
+                ash::khr::wayland_surface::NAME,
+                ash::khr::xlib_surface::NAME,
+                ash::khr::xcb_surface::NAME,
+                ash::khr::win32_surface::NAME,
+                ash::ext::metal_surface::NAME,
+            ] {
+                if has_instance_ext(platform) {
+                    extensions.push(platform);
+                }
+            }
+        }
         let sync_validation = !layers.is_empty() && validation.as_deref() == Some("sync");
         if sync_validation {
             extensions.push(ash::ext::layer_settings::NAME);
@@ -302,6 +327,10 @@ impl Core {
         let memory_budget = candidate.has_extension(ash::ext::memory_budget::NAME);
         if memory_budget {
             device_extensions.push(ash::ext::memory_budget::NAME);
+        }
+        let swapchains = surfaces && candidate.has_extension(ash::khr::swapchain::NAME);
+        if swapchains {
+            device_extensions.push(ash::khr::swapchain::NAME);
         }
         let device_extension_ptrs: Vec<*const c_char> =
             device_extensions.iter().map(|e| e.as_ptr()).collect();
@@ -446,8 +475,16 @@ impl Core {
             None => None,
         };
 
+        let present = swapchains.then(|| Present {
+            surface: ash::khr::surface::Instance::new(&entry, &instance),
+            swapchain: ash::khr::swapchain::Device::new(&instance, &device),
+        });
+        if present.is_none() {
+            log::warn!("[Vulkan] no window presentation on this device");
+        }
+
         Ok(Core {
-            _entry: entry,
+            entry,
             instance,
             physical: candidate.physical,
             device,
@@ -465,6 +502,7 @@ impl Core {
             sampler_anisotropy: optional.sampler_anisotropy == vk::TRUE,
             fill_mode_non_solid: optional.fill_mode_non_solid == vk::TRUE,
             format_features,
+            present,
         })
     }
 

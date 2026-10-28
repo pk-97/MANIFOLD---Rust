@@ -34,6 +34,7 @@ pub(crate) enum Keep {
     Pipeline(Arc<PipelineCore>),
     Render(Arc<super::pipeline::RenderCore>),
     Event(Arc<super::types::EventCore>),
+    Swapchain(Arc<super::surface::Swapchain>),
 }
 
 /// The per-submit resources an encoder records with, recycled once the
@@ -402,14 +403,16 @@ impl Queue {
 
     /// Submit `batches` in order, the last signalling the queue's next
     /// timeline value, and hand `handlers` and `resources` to the waiter for
-    /// that value. A failed submit still retires them, after the queue's
-    /// earlier work, and reports the error.
+    /// that value. A successful submit runs `after` on the queue while it is
+    /// still held (presents). A failed submit still retires them, after the
+    /// queue's earlier work, and reports the error.
     pub(crate) fn submit(
         &self,
         device: &ash::Device,
         batches: &[Batch],
         handlers: Vec<Box<dyn FnOnce() + Send>>,
         resources: FrameResources,
+        after: impl FnOnce(vk::Queue),
     ) -> Result<u64, String> {
         let mut state = self.state.lock().expect("queue poisoned");
         let value = state.last_value + 1;
@@ -438,6 +441,7 @@ impl Queue {
         let (retire_at, outcome) = match result {
             Ok(()) => {
                 state.last_value = value;
+                after(state.raw);
                 (value, Ok(value))
             }
             Err(e) => {

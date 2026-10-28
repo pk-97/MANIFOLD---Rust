@@ -1402,7 +1402,6 @@ impl Application {
         // Direct present: content thread acquires drawables and presents
         // in its own command buffer. displaySyncEnabled handles vsync.
         // No CVDisplayLink, no IOSurface intermediary.
-        #[cfg(target_os = "macos")]
         if let Some(gpu) = &self.gpu {
             let size = window.inner_size();
             let surface = gpu.device.create_surface(
