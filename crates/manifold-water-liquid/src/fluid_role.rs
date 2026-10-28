@@ -7,9 +7,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use manifold_physics::collision_shape::{water_lattice, water_plan};
 use manifold_physics::mesh_bvh::MeshBvh;
-use manifold_physics::sdf::DistanceLattice;
 use manifold_physics::{BodyHandle, TriangleMesh, closed_triangles};
 
 use manifold_node_engine::scene::transform::Transform;
@@ -133,13 +131,11 @@ pub fn posed_column(bounds: [[f32; 3]; 2], transform: Transform) -> Option<Trans
         .then_some(column)
 }
 
-pub use manifold_physics::collision_shape::{
-    DISTANCE_NODES_ALONG_LONGEST, LatticePlan, SCALE_STEPS_PER_OCTAVE, scale_steps,
-};
+pub use manifold_physics::collision_shape::scale_steps;
 
-/// Immutable prepared local-space geometry for a fluid role. Its lattice
-/// comes from the collision-shape service (SCENE_DOCUMENT_DESIGN.md section
-/// 7.8 (Physics and collision shapes)), shell thickness automatic.
+/// Immutable prepared local-space geometry for a fluid role. The water reads
+/// it through a mesh tree (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and
+/// collision shapes)).
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedFluidGeometry {
@@ -222,28 +218,12 @@ impl PreparedFluidGeometry {
         })
     }
 
-    /// The lattice a liquid with `cell_size` (world metres) builds for this
-    /// geometry at role `scale`
-    /// ([`manifold_physics::collision_shape::water_plan`]).
-    pub fn lattice_plan(&self, cell_size: f32, scale: [f32; 3]) -> Result<LatticePlan, String> {
-        water_plan(&self.meshes, self.has_open_parts(), cell_size, scale)
-            .map_err(|error| format!("Fluid role distance lattice: {error}"))
-    }
-
     /// The meshes' BVH, which the GPU queries for distance and winding.
     /// Costs a BVH build; never call it on the content thread.
     pub fn build_tree(&self) -> Result<Arc<MeshBvh>, String> {
         MeshBvh::build(&self.meshes)
             .map(Arc::new)
             .map_err(|error| format!("Fluid role tree: {error}"))
-    }
-
-    /// One lattice over the meshes to `plan`: closed parts solid, open parts
-    /// shells. Costs nodes × triangles; never call it on the content thread.
-    pub fn build_lattice(&self, plan: &LatticePlan) -> Result<Arc<DistanceLattice>, String> {
-        water_lattice(&self.meshes, plan)
-            .map(Arc::new)
-            .map_err(|error| format!("Fluid role distance lattice: {error}"))
     }
 }
 
@@ -267,7 +247,6 @@ mod tests {
         exec::backend::MockBackend, exec::cpu_values::CpuWireWrites,
         exec::execution_plan::ResourceId, ports::PortType,
     };
-    use manifold_physics::sdf::MAX_LATTICE_NODES;
 
     fn role() -> FluidRole {
         FluidRole {
@@ -468,151 +447,9 @@ mod tests {
         ])
     }
 
-    /// One lattice spans every mesh of the role, spacing = longest extent / 32
-    /// with two spacings of padding: a cube is thick enough that the
-    /// liquid's cells and the scale change nothing. Outside the
-    /// two halves it is the cube's exact distance; inside, each part's own
-    /// distance (a bound on the union's depth, 0 on the faces where the halves
-    /// touch) with the sign of the union.
+    /// An open quad stays open after a save.
     #[test]
-    fn scene_physics_fluid_role_distance_lattice_unions_meshes() {
-        let geometry = two_part_cube();
-        assert!(!geometry.has_open_parts());
-        let plan = geometry.lattice_plan(0.01, [3.0, 1.0, 1.0]).unwrap();
-        assert_eq!(
-            plan,
-            geometry.lattice_plan(0.5, [1.0; 3]).unwrap(),
-            "a thick closed solid ignores cells and scale"
-        );
-        let lattice = geometry.build_lattice(&plan).unwrap();
-        assert_eq!(lattice.spacing, 1.0 / DISTANCE_NODES_ALONG_LONGEST);
-        assert_eq!(lattice.dims, [37; 3]);
-        // Node 10 is x = −0.25, the middle of the left half.
-        assert!(
-            (lattice.value([10, 18, 18]) + 0.25).abs() < 1e-5,
-            "{}",
-            lattice.value([10, 18, 18])
-        );
-        assert!(
-            lattice.value([18, 18, 18]).abs() < 1e-5,
-            "on the touching faces"
-        );
-        assert!((lattice.value([0, 18, 18]) - 2.0 / 32.0).abs() < 1e-5);
-        assert!(
-            (lattice.value([0, 0, 18]) - (2.0f32 * (2.0 / 32.0) * (2.0 / 32.0)).sqrt()).abs()
-                < 1e-5
-        );
-    }
-
-    fn ground(half: f32) -> TriangleMesh {
-        TriangleMesh {
-            vertices: vec![
-                [-half, 0.0, -half],
-                [half, 0.0, -half],
-                [half, 0.0, half],
-                [-half, 0.0, half],
-            ],
-            triangles: vec![[0, 2, 1], [0, 3, 2]],
-        }
-    }
-
-    /// Trilinear distance at a local point, as the solvers sample it.
-    fn sample(lattice: &DistanceLattice, p: [f32; 3]) -> f32 {
-        let g: [f32; 3] =
-            std::array::from_fn(|axis| (p[axis] - lattice.origin[axis]) / lattice.spacing);
-        let base: [u32; 3] = std::array::from_fn(|axis| g[axis].floor() as u32);
-        let t: [f32; 3] = std::array::from_fn(|axis| g[axis] - base[axis] as f32);
-        let mut value = 0.0;
-        for corner in 0..8u32 {
-            let offset: [u32; 3] = std::array::from_fn(|axis| (corner >> axis) & 1);
-            let weight: f32 = (0..3)
-                .map(|axis| {
-                    if offset[axis] == 1 {
-                        t[axis]
-                    } else {
-                        1.0 - t[axis]
-                    }
-                })
-                .product();
-            value += weight * lattice.value(std::array::from_fn(|axis| base[axis] + offset[axis]));
-        }
-        value
-    }
-
-    /// A 20 m open ground plane in a 20 m liquid at a 20 / 64 m cell:
-    /// the shell's top face, where the water rests, is within one water cell
-    /// of the drawn floor. Before the lattice followed the liquid's cells its
-    /// spacing was 20 / 32 m and the face sat two of those cells up.
-    #[test]
-    fn scene_physics_fluid_role_ground_plane_shell_follows_the_liquid_cells() {
-        let layout = manifold_core::fluid_domain::domain_layout(None, 20.0, 20.0 / 64.0).unwrap();
-        let cell = layout.cell_size as f32;
-        let geometry = PreparedFluidGeometry::new(vec![ground(10.0)]);
-        assert!(geometry.has_open_parts());
-        let plan = geometry.lattice_plan(cell, [1.0; 3]).unwrap();
-        assert!(!plan.capped);
-        assert!(plan.spacing <= cell, "{} > {cell}", plan.spacing);
-        let lattice = geometry.build_lattice(&plan).unwrap();
-        // March up from the floor to the first point outside the solid.
-        let mut y = 0.0f32;
-        while sample(&lattice, [0.3, y, -0.7]) < 0.0 {
-            y += 0.001;
-        }
-        assert!(
-            y > 0.0 && y <= cell + 1e-3,
-            "the water rests {y} m above the floor; a cell is {cell} m"
-        );
-        assert!(
-            sample(&lattice, [0.3, -0.5 * y, -0.7]) < 0.0,
-            "the shell holds below the floor too"
-        );
-    }
-
-    /// A closed slab 14 m wide and 0.22 m thick, a floor water rests on: a
-    /// 32nd of its width (0.44 m) is twice its thickness, so the lattice
-    /// keeps two spacings across it instead, and its middle reads inside
-    /// all along it while a cell above its top reads outside.
-    #[test]
-    fn scene_physics_fluid_role_thin_closed_slab_keeps_two_spacings_across() {
-        let cell = 0.0625;
-        let geometry =
-            PreparedFluidGeometry::new(vec![cuboid([-7.0, -0.11, -7.0], [7.0, 0.11, 7.0])]);
-        assert!(!geometry.has_open_parts());
-        let plan = geometry.lattice_plan(cell, [1.0; 3]).unwrap();
-        assert!(!plan.capped);
-        assert!((plan.spacing - 0.11).abs() < 1e-6, "{plan:?}");
-        let lattice = geometry.build_lattice(&plan).unwrap();
-        for x in [-6.9f32, -3.3, 0.05, 4.7] {
-            let z = 0.3 * x;
-            assert!(sample(&lattice, [x, 0.0, z]) < 0.0, "inside at x = {x}");
-            assert!(
-                sample(&lattice, [x, 0.11 + cell, z]) > 0.0,
-                "above at x = {x}"
-            );
-        }
-    }
-
-    /// A plane too wide for the node cap at the liquid's cells coarsens until
-    /// it fits and says so.
-    #[test]
-    fn scene_physics_fluid_role_lattice_cap_coarsens() {
-        let geometry = PreparedFluidGeometry::new(vec![ground(500.0)]);
-        let plan = geometry.lattice_plan(0.05, [1.0; 3]).unwrap();
-        assert!(plan.capped && plan.spacing > 0.05);
-        let nodes = manifold_physics::sdf::union_lattice_nodes(
-            plan.extent,
-            plan.spacing,
-            2.0 * plan.spacing,
-            plan.shell_thickness,
-            true,
-        );
-        assert!(nodes <= MAX_LATTICE_NODES);
-    }
-
-    /// An open quad is a shell two water cells thick, and it is open again
-    /// after a save.
-    #[test]
-    fn scene_physics_fluid_role_distance_lattice_open_mesh_is_a_shell() {
+    fn scene_physics_fluid_role_open_mesh_stays_open_after_a_save() {
         let quad = TriangleMesh {
             vertices: vec![
                 [-0.5, 0.0, -0.5],
@@ -623,16 +460,7 @@ mod tests {
             triangles: vec![[0, 1, 2], [0, 2, 3]],
         };
         let geometry = PreparedFluidGeometry::new(vec![quad]);
-        let plan = geometry.lattice_plan(0.1, [1.0; 3]).unwrap();
-        assert_eq!(plan.shell_thickness, 0.2, "two water cells");
-        let lattice = geometry.build_lattice(&plan).unwrap();
-        let centre: [u32; 3] =
-            std::array::from_fn(|axis| (-lattice.origin[axis] / lattice.spacing).round() as u32);
-        let depth = -lattice.value(centre);
-        assert!(
-            depth > 0.0 && (depth - plan.half_shell()).abs() <= lattice.spacing,
-            "{depth}"
-        );
+        assert!(geometry.has_open_parts());
         let restored: PreparedFluidGeometry =
             serde_json::from_slice(&serde_json::to_vec(&geometry).unwrap()).unwrap();
         assert!(restored.has_open_parts());

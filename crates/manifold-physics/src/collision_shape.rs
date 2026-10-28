@@ -7,8 +7,8 @@
 //! - A body in Box3D: a spatial split into convex hulls with automatic detail
 //!   ([`CollisionShape::body_hulls`]), open surfaces and flat pieces given a
 //!   0.1% shell.
-//! - Water: a distance lattice ([`water_plan`], [`water_lattice`]) with an
-//!   automatic shell.
+//! - Water: the exact triangle mesh through a mesh tree (`mesh_bvh`), read by
+//!   the GPU for distance and winding.
 //!
 //! Its [`ShapeKey`] is the cache key: the mesh content that was actually
 //! loaded (so a mesh arriving late changes it), the item's scale and the
@@ -32,9 +32,6 @@ use std::sync::{Arc, OnceLock};
 
 use manifold_foundation::mesh_partition::partition;
 
-use crate::sdf::{
-    DistanceLattice, MAX_LATTICE_NODES, signed_distance_union, union_lattice_nodes,
-};
 use crate::{
     BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, TriangleMesh,
     closed_triangles, cook_hull, cook_hull_mesh,
@@ -52,10 +49,6 @@ pub const TOO_THIN: &str = "part of the shape is too thin to collide";
 /// An open surface becomes a solid this fraction of its longest side thick.
 pub const SHELL_FRACTION: f32 = 0.001;
 
-/// Distance lattice nodes along a closed solid's longest local axis. About
-/// 34³ nodes with padding: under a second of CPU for a 1,000-triangle mesh.
-pub const DISTANCE_NODES_ALONG_LONGEST: f32 = 32.0;
-
 /// Steps per octave a scale is rounded to before it enters a cache key, so a
 /// scale moving within one step (about 9%) rebuilds nothing.
 pub const SCALE_STEPS_PER_OCTAVE: f32 = 8.0;
@@ -72,7 +65,7 @@ fn step(value: f32) -> i32 {
 }
 
 /// A scale's smallest and largest axis in eighth-octave steps, the only part
-/// of the scale an open mesh's lattice plan reads.
+/// of the scale a lattice's spacing reads.
 pub fn scale_steps(scale: [f32; 3]) -> [i32; 2] {
     let [x, y, z] = scale.map(f32::abs);
     [step(x.min(y).min(z)), step(x.max(y).max(z))]
@@ -286,17 +279,6 @@ impl CollisionShape {
         }
         Ok(hulls)
     }
-
-    /// The lattice plan water with cells `cell_size` metres across uses for
-    /// this shape at `scale`; see [`water_plan`].
-    pub fn water_plan(&self, cell_size: f32, scale: [f32; 3]) -> Result<LatticePlan, PhysicsError> {
-        water_plan(&self.parts, self.has_open_parts(), cell_size, scale)
-    }
-
-    /// The distance lattice to `plan`; see [`water_lattice`].
-    pub fn water_lattice(&self, plan: &LatticePlan) -> Result<DistanceLattice, PhysicsError> {
-        water_lattice(&self.parts, plan)
-    }
 }
 
 /// The cooked hull of `triangle_ids` of `part`, each corner pushed half of
@@ -387,112 +369,6 @@ fn any_open(meshes: &[TriangleMesh]) -> bool {
     meshes
         .iter()
         .any(|mesh| closed_triangles(mesh).is_ok_and(|closed| closed.contains(&false)))
-}
-
-/// The lattice water builds for one shape: local spacing and shell
-/// thickness, both unscaled. Equal plans give equal lattices.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LatticePlan {
-    pub spacing: f32,
-    /// Local units: two water cells (one each side of the surface) or
-    /// [`SHELL_FRACTION`] of the mesh's longest side, whichever is
-    /// thicker, over the smallest scale.
-    pub shell_thickness: f32,
-    /// Whether any part is open, so the solid has shells.
-    pub open: bool,
-    /// Whether [`MAX_LATTICE_NODES`] forced a spacing coarser than wanted.
-    pub capped: bool,
-    /// The meshes' joint local bounds.
-    pub extent: [f32; 3],
-}
-
-impl LatticePlan {
-    /// Half the thickness a shell has on the lattice, local units: never
-    /// under one spacing (`signed_distance_union`).
-    pub fn half_shell(&self) -> f32 {
-        (0.5 * self.shell_thickness).max(self.spacing)
-    }
-}
-
-/// The lattice water with cells `cell_size` metres across builds for
-/// `meshes` at `scale`. A closed solid keeps a 32nd of the longest side, finer where its
-/// thinnest side would hold fewer than two spacings, down to the cells: a
-/// 14 m slab 0.2 m thick is sampled every 0.1 m, not every 0.44 m. A
-/// shell's faces sit at least one spacing from its surface, so with open
-/// parts the lattice is no coarser than the cells. If either needs more
-/// than [`MAX_LATTICE_NODES`], the spacing coarsens until it fits and the
-/// plan says so. The scale enters as [`scale_steps`].
-pub fn water_plan(
-    meshes: &[TriangleMesh],
-    open: bool,
-    cell_size: f32,
-    scale: [f32; 3],
-) -> Result<LatticePlan, PhysicsError> {
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in meshes.iter().flat_map(|mesh| &mesh.vertices) {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(vertex[axis]);
-            max[axis] = max[axis].max(vertex[axis]);
-        }
-    }
-    let extent: [f32; 3] = std::array::from_fn(|axis| max[axis] - min[axis]);
-    let longest = extent.into_iter().fold(0.0f32, f32::max);
-    if !(longest.is_finite() && longest > 0.0) {
-        return Err(PhysicsError::InvalidInput(
-            "the mesh has no extent for a distance lattice",
-        ));
-    }
-    let coarse = longest / DISTANCE_NODES_ALONG_LONGEST;
-    validate_scale(scale)?;
-    if !(cell_size.is_finite() && cell_size > 0.0) {
-        return Err(PhysicsError::InvalidInput(
-            "a water cell size must be finite and positive",
-        ));
-    }
-    let [smallest, largest] =
-        scale_steps(scale).map(|step| (step as f32 / SCALE_STEPS_PER_OCTAVE).exp2());
-    let cell = cell_size / largest;
-    let (shell_thickness, wanted) = if open {
-        // One water cell each side of the surface: a shell thinner than two
-        // cells is one the water's grid cannot see, and liquid leaks through.
-        let world_longest = longest * largest;
-        let shell = (2.0 * cell_size).max(SHELL_FRACTION * world_longest) / smallest;
-        (shell, coarse.min(cell))
-    } else {
-        // Sampling steps over a part thinner than two spacings, so the
-        // thinnest side keeps two.
-        let thinnest = extent.into_iter().fold(f32::INFINITY, f32::min);
-        (0.0, coarse.min((0.5 * thinnest).max(cell)))
-    };
-    let mut spacing = wanted;
-    while union_lattice_nodes(extent, spacing, 2.0 * spacing, shell_thickness, open)
-        > MAX_LATTICE_NODES
-    {
-        spacing *= 1.125;
-    }
-    Ok(LatticePlan {
-        spacing,
-        shell_thickness,
-        open,
-        capped: spacing > wanted,
-        extent,
-    })
-}
-
-/// One lattice over every mesh to `plan`: closed parts solid, open parts
-/// shells. Costs
-/// nodes × triangles; never on the content thread.
-pub fn water_lattice(
-    meshes: &[TriangleMesh],
-    plan: &LatticePlan,
-) -> Result<DistanceLattice, PhysicsError> {
-    signed_distance_union(
-        meshes,
-        plan.spacing,
-        2.0 * plan.spacing,
-        plan.shell_thickness,
-    )
 }
 
 /// The form a body takes in Box3D.

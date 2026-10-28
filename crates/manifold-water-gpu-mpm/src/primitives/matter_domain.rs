@@ -1124,8 +1124,12 @@ impl MatterDomain {
         if ticks && self.coupled.owner.is_some() {
             gpu.native_enc.clear_buffer(reaction);
         }
-        self.body_buffers
-            .upload(gpu, &self.bodies, rows_fresh, "node.matter_domain.bodies");
+        if let Err(error) = self
+            .body_buffers
+            .upload(gpu, &self.bodies, rows_fresh, "node.matter_domain.bodies")
+        {
+            ctx.error(error);
+        }
     }
 
     /// This frame's outputs, or None while a collider's distance lattice is

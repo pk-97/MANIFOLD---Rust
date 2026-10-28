@@ -2,7 +2,7 @@
 //!
 //! The source node deliberately publishes only immutable, local-space
 //! `TriangleMesh` values: the exact welded surface, closed parts solid and
-//! open parts shells (`manifold_physics::collision_shape::water_lattice`).
+//! open parts shells (the water's mesh tree decides which at query time).
 //! Simulation state, native handles, and live object transforms belong to the
 //! fluid world consumer.
 

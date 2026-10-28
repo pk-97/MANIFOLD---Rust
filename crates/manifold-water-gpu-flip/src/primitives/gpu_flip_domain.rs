@@ -928,7 +928,7 @@ impl Primitive for GpuFlipDomain {
             if values[TICKS] > 0.0 && self.coupled.owner.is_some() {
                 gpu.native_enc.clear_buffer(reaction);
             }
-            self.body_buffers.upload(
+            let bodies_uploaded = self.body_buffers.upload(
                 gpu,
                 &self.bodies,
                 fresh && self.rows_fresh,
@@ -941,6 +941,9 @@ impl Primitive for GpuFlipDomain {
                 fresh && self.rows_fresh,
                 "node.gpu_flip_domain.region_sites",
             );
+            if let Err(error) = bodies_uploaded {
+                ctx.error(error);
+            }
         }
         let uploaded = match ctx
             .gpu

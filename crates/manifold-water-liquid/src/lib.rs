@@ -1,5 +1,5 @@
 //! What every GPU liquid domain shares: the fixed-tick clock, the padded lattice with its walls, the body
-//! rows and their distance atlas, the rigid owner that couples Box3D one
+//! rows and their distance atlas (built on the GPU from the shapes' mesh trees), the rigid owner that couples Box3D one
 //! settled tick at a time, the A/B frame ring of the particle-frame seam, and
 //! the face grid layout every solver publishes. Solver rules (substep bounds,
 //! reaction encodings, block sorting) stay with each solver.
@@ -10,6 +10,8 @@
 pub mod bodies;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod collider_bvh_gpu_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod collider_lattice_gpu_tests;
 pub mod body_buffers;
 pub mod bounds;
 pub mod clock;

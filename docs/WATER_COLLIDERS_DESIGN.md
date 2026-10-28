@@ -2,7 +2,7 @@
 
 <!-- index: Design for replacing the CPU distance lattice every Water, Matter and whitewater reads its solids from: a BVH per geometry with fast winding numbers, static colliders cached per held water tile at the water's cell size, moving bodies in a GPU-built local lattice, direct tree queries elsewhere, so a GLB of any size and triangle count collides exactly. Starts from water falling through large GLB imports on 29 Oct. -->
 
-**Status:** design, 29 Oct. Each phase needs Peter's go-ahead.
+**Status:** phases 1 to 3 landed 29 Oct (ce61d38fc, 55a58c300, 31603ea40, then the GPU-built lattices). Left: phase 4, Peter's large-GLB still, and the cost of the readers that query trees directly (C5).
 **Companions:** [WATER_SHARED_GRID_DESIGN.md](WATER_SHARED_GRID_DESIGN.md) (one table and one budget per World; the static blocks and moving lattices join that budget), [GPU_FLIP_END_GAME_DESIGN.md](GPU_FLIP_END_GAME_DESIGN.md).
 
 ## Why

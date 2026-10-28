@@ -1,16 +1,19 @@
 //! The GPU storage a liquid domain provides for its bodies: the body rows and
 //! their contact normals, the source and drain region rows, the shapes and the half-precision
-//! distance atlas, and the static colliders' tree nodes and triangles. Shapes,
-//! atlas and trees are rebuilt into fresh buffers, so a buffer the GPU may still read is
-//! never written; body and region rows are written in encoder order each frame.
+//! distance atlas, and the shapes' tree nodes and triangles. Shapes, atlas and
+//! trees are rebuilt into fresh buffers, so a buffer the GPU may still read is
+//! never written; the atlas is filled on the GPU from the trees in the same
+//! encoder, before any reader. Body and region rows are written in encoder
+//! order each frame.
 
 use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
-use crate::bodies::{BodySupports, LiquidBodies, LiquidBody, LiquidShape};
+use crate::bodies::{BodySupports, COLLIDER_BVH, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
 const UPLOAD_SHADER: &str = include_str!("primitives/shaders/liquid_body_upload.wgsl");
+const LATTICE_KERNEL: &str = include_str!("primitives/shaders/collider_lattice.wgsl");
 /// 16-byte groups one inline upload carries (setBytes stays under 4 KB).
 const UPLOAD_GROUPS: usize = 254;
 
@@ -25,6 +28,25 @@ struct UploadParams {
 }
 
 const _: () = assert!(std::mem::size_of::<UploadParams>() < 4096);
+
+/// `collider_lattice.wgsl`'s uniform.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LatticeParams {
+    origin_spacing: [f32; 4],
+    dims_word: [u32; 4],
+    counts: [u32; 4],
+    band_shell: [f32; 4],
+}
+
+/// Workgroups of 64 threads along a lattice dispatch's x, matching the
+/// kernel's row length.
+const LATTICE_ROW_GROUPS: u32 = 4096;
+
+/// The lattice kernel's source: the tree queries, then the kernel over them.
+pub(crate) fn lattice_shader() -> String {
+    format!("{COLLIDER_BVH}\n{LATTICE_KERNEL}")
+}
 
 struct Stored {
     bodies: GpuBuffer,
@@ -47,6 +69,7 @@ struct Stored {
 pub struct LiquidBodyBuffers {
     stored: Option<Stored>,
     upload: Option<GpuComputePipeline>,
+    lattice: Option<GpuComputePipeline>,
 }
 
 impl LiquidBodyBuffers {
@@ -98,14 +121,16 @@ impl LiquidBodyBuffers {
     /// Keep the buffers current with `bodies`: a new shape version rebuilds
     /// shapes, atlas and colliders' trees, and when `rows_fresh` this frame's body and region
     /// rows are written in encoder order. `label` names the dispatches for
-    /// the profiler.
+    /// the profiler. A rebuild whose atlas the device cannot admit is
+    /// refused by the shape that needs the most, leaving the buffers as they
+    /// were.
     pub fn upload(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         bodies: &LiquidBodies,
         rows_fresh: bool,
         label: &'static str,
-    ) {
+    ) -> Result<(), String> {
         let row_bytes = std::mem::size_of_val(bodies.last_rows());
         let region_bytes = std::mem::size_of_val(bodies.last_region_rows());
         let needs_bodies = self
@@ -137,6 +162,24 @@ impl LiquidBodyBuffers {
             || needs_regions
             || needs_clock
         {
+            let atlas = if bodies.lattice_builds().is_empty() {
+                gpu.device.create_buffer(4, BufferUse::Gpu)
+            } else {
+                let bytes = u64::from(bodies.atlas_words()) * 4;
+                let largest = bodies
+                    .lattice_builds()
+                    .iter()
+                    .max_by_key(|build| build.nodes())
+                    .map_or("a shape", |build| build.name.as_str());
+                manifold_node_engine::load::expand::admit_candidate_bytes(
+                    gpu.device.modifier_memory_snapshot(),
+                    bytes,
+                )
+                .map_err(|error| format!("Liquid: {largest}'s distance lattice: {error}"))?;
+                gpu.device
+                    .try_create_buffer(bytes, BufferUse::Gpu)
+                    .map_err(|error| format!("Liquid: {largest}'s distance lattice: {error}"))?
+            };
             let fresh = |bytes: &[u8], least: usize| {
                 let buffer = gpu
                     .device
@@ -175,7 +218,7 @@ impl LiquidBodyBuffers {
                     bytemuck::cast_slice(bodies.shapes()),
                     std::mem::size_of::<LiquidShape>(),
                 ),
-                atlas: fresh(bytemuck::cast_slice(bodies.atlas()), 4),
+                atlas,
                 collider_nodes: fresh(bytemuck::cast_slice(bodies.collider_nodes()), 16),
                 collider_triangles: fresh(bytemuck::cast_slice(bodies.collider_triangles()), 16),
                 // The coupled exchange writes the clock vertices from the CPU too.
@@ -188,9 +231,61 @@ impl LiquidBodyBuffers {
                 clock_gen: None,
                 version,
             });
+            let stored = self.stored.as_ref().expect("allocated above");
+            if !bodies.lattice_builds().is_empty() {
+                let pipeline = self.lattice.get_or_insert_with(|| {
+                    gpu.device
+                        .create_compute_pipeline(&lattice_shader(), "main", "collider_lattice")
+                });
+                for build in bodies.lattice_builds() {
+                    let params = LatticeParams {
+                        origin_spacing: [
+                            build.origin[0],
+                            build.origin[1],
+                            build.origin[2],
+                            build.spacing,
+                        ],
+                        dims_word: [build.dims[0], build.dims[1], build.dims[2], build.word_base],
+                        counts: [build.nodes(), build.tree_node, build.tree_triangle, 0],
+                        band_shell: [build.band(), build.spacing, 0.0, 0.0],
+                    };
+                    let groups = build.words().div_ceil(64);
+                    gpu.native_enc.dispatch_compute(
+                        pipeline,
+                        &[
+                            GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(&params),
+                            },
+                            GpuBinding::Buffer {
+                                binding: 1,
+                                buffer: &stored.collider_nodes,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 2,
+                                buffer: &stored.collider_triangles,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 3,
+                                buffer: &stored.atlas,
+                                offset: 0,
+                            },
+                        ],
+                        [
+                            groups.min(LATTICE_ROW_GROUPS),
+                            groups.div_ceil(LATTICE_ROW_GROUPS),
+                            1,
+                        ],
+                        "collider_lattice",
+                    );
+                }
+                gpu.native_enc.compute_memory_barrier_buffers();
+            }
         }
         if !rows_fresh {
-            return;
+            return Ok(());
         }
         let pipeline = self.upload.get_or_insert_with(|| {
             gpu.device
@@ -230,6 +325,7 @@ impl LiquidBodyBuffers {
             }
             stored.clock_gen = Some(bodies.clock_generation());
         }
+        Ok(())
     }
 
     /// Writes `groups`, 16-byte rows, from the start of `target` in encoder

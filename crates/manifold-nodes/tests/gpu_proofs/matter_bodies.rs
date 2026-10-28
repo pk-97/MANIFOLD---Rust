@@ -17,7 +17,8 @@ use manifold_node_engine::{
 use manifold_physics::ForceSample;
 use manifold_physics::clock::TICK;
 use manifold_physics::force_lattice::ForceLattice;
-use manifold_physics::sdf::signed_distance_lattice;
+use manifold_node_engine::mesh::Vec4Vertex;
+use manifold_physics::mesh_bvh::MeshBvh;
 use manifold_water_gpu_mpm::matter::{
     MatterGridNode, MatterPoint, REACTION_WORDS, field_min, lattice_nodes, matter_nodes,
     momentum_unit,
@@ -173,6 +174,43 @@ impl Bench {
 /// Two ticks of three bodies: one still, one sliding, one sliding and
 /// turning about a tilted axis, one disabled. Every substep of the second tick
 /// lands on the CPU pose (lerp translation, slerp rotation) within f32.
+/// A box's signed distance lattice at `spacing`, padded by `padding`, from its
+/// BVH: what the collider lattice build writes, on the CPU.
+struct MeshLattice {
+    origin: [f32; 3],
+    spacing: f32,
+    dims: [u32; 3],
+    values: Vec<f32>,
+}
+
+fn mesh_lattice(mesh: &manifold_physics::TriangleMesh, spacing: f32, padding: f32) -> MeshLattice {
+    let bvh = MeshBvh::build(std::slice::from_ref(mesh)).expect("box tree");
+    let [low, high] = bvh.bounds();
+    let origin = low.map(|value| value - padding);
+    let dims: [u32; 3] =
+        std::array::from_fn(|a| ((high[a] - low[a] + 2.0 * padding) / spacing).ceil() as u32 + 1);
+    let mut values = Vec::new();
+    for k in 0..dims[2] {
+        for j in 0..dims[1] {
+            for i in 0..dims[0] {
+                let p = [
+                    origin[0] + i as f32 * spacing,
+                    origin[1] + j as f32 * spacing,
+                    origin[2] + k as f32 * spacing,
+                ];
+                let d = bvh.nearest(p, f32::INFINITY);
+                values.push(if bvh.winding(p).abs() > 0.5 { -d } else { d });
+            }
+        }
+    }
+    MeshLattice {
+        origin,
+        spacing,
+        dims,
+        values,
+    }
+}
+
 #[test]
 fn matter_prescribed_pose_interpolates() {
     let tick = TICK as f32;
@@ -361,8 +399,7 @@ fn matter_grid_update_projects_colliders() {
     );
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0)
-        .expect("box lattice");
+    let lattice = mesh_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025);
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
@@ -377,6 +414,7 @@ fn matter_grid_update_projects_colliders() {
         dims_z: lattice.dims[2],
         atlas_offset: 0,
         scale_min: [1.2, 1.0, 1.5, 1.0],
+        ..Default::default()
     };
     let angle = std::f32::consts::FRAC_PI_6;
     let body = LiquidBody {
@@ -404,13 +442,15 @@ fn matter_grid_update_projects_colliders() {
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
+            ("collider_nodes", HostArray::new::<Vec4Vertex>(1)),
+            ("collider_triangles", HostArray::new::<Vec4Vertex>(1)),
             tiles_input(&table),
         ],
         &["grid_out"],
         |_, _| {},
     );
     bench.fill(0, &pooled_accum(&table, &accum));
-    bench.fill(5, &table.words);
+    bench.fill(7, &table.words);
     bench.fill(2, &[body]);
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
@@ -766,8 +806,7 @@ fn matter_body_reaction_counts_field_velocity() {
     );
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0)
-        .expect("box lattice");
+    let lattice = mesh_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025);
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
@@ -782,6 +821,7 @@ fn matter_body_reaction_counts_field_velocity() {
         dims_z: lattice.dims[2],
         atlas_offset: 0,
         scale_min: [1.2, 1.0, 1.5, 1.0],
+        ..Default::default()
     };
     let angle = std::f32::consts::FRAC_PI_6;
     let centre = [0.0f32, 0.5, 0.0];
@@ -823,6 +863,8 @@ fn matter_body_reaction_counts_field_velocity() {
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
+            ("collider_nodes", HostArray::new::<Vec4Vertex>(1)),
+            ("collider_triangles", HostArray::new::<Vec4Vertex>(1)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
             (
                 "forces",
@@ -838,12 +880,12 @@ fn matter_body_reaction_counts_field_velocity() {
         |_, _| {},
     );
     bench.fill(0, &table.to_pool(&grid, MatterGridNode::default()));
-    bench.fill(7, &table.words);
+    bench.fill(9, &table.words);
     bench.fill(1, &[body]);
     bench.fill(2, &[shape]);
     bench.fill(3, &atlas);
-    bench.fill(5, &tick_forces);
-    bench.fill(6, &impulses);
+    bench.fill(7, &tick_forces);
+    bench.fill(8, &impulses);
     for (name, value) in [
         ("pool_tiles", table.pool_tiles as f32),
         ("cell_size", dx),
@@ -876,7 +918,7 @@ fn matter_body_reaction_counts_field_velocity() {
     ] {
         bench.set("force_lattices", if forces_on { 2.0 } else { 0.0 });
         bench.set("substep_in_tick", substep);
-        bench.fill(4, &[0i32; REACTION_WORDS as usize]);
+        bench.fill(6, &[0i32; REACTION_WORDS as usize]);
         bench.run();
         let words: Vec<i32> = bench.read("reaction_out");
         let (mut dv, mut dl, mut pushed) = ([0.0f64; 3], [0.0f64; 3], 0u32);
@@ -961,8 +1003,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     let dt = 1.0e-3f32;
     let unit = momentum_unit(dx, f64::from(dt));
     let density = 1000.0f32;
-    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025, 0.0)
-        .expect("box lattice");
+    let lattice = mesh_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025);
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
     let shape = LiquidShape {
@@ -977,6 +1018,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         dims_z: lattice.dims[2],
         atlas_offset: 0,
         scale_min: [1.2, 1.0, 1.5, 1.0],
+        ..Default::default()
     };
     let angle = std::f32::consts::FRAC_PI_6;
     let dynamic = LiquidBody {
@@ -1018,6 +1060,8 @@ fn matter_push_out_reaction_matches_removed_momentum() {
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
+            ("collider_nodes", HostArray::new::<Vec4Vertex>(1)),
+            ("collider_triangles", HostArray::new::<Vec4Vertex>(1)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
             tiles_input(&table),
         ],
@@ -1025,7 +1069,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         |_, _| {},
     );
     bench.fill(1, &vec![MatterGridNode::default(); pool as usize]);
-    bench.fill(6, &table.words);
+    bench.fill(8, &table.words);
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
     for (name, value) in [
@@ -1047,7 +1091,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     let run = |bench: &mut Bench, body: LiquidBody| -> (Vec<MatterPoint>, Vec<i32>) {
         bench.fill(0, &points);
         bench.fill(2, &[body]);
-        bench.fill(5, &[0i32; REACTION_WORDS as usize]);
+        bench.fill(7, &[0i32; REACTION_WORDS as usize]);
         bench.run();
         (bench.read("points_out"), bench.read("reaction_out"))
     };
