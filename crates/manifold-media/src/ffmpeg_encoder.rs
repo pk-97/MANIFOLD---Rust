@@ -78,6 +78,112 @@ fn write_ycbcr420(
     }
 }
 
+/// An opened H.264 encoder.
+pub struct H264 {
+    pub name: &'static str,
+    pub codec: ffmpeg::Codec,
+    pub encoder: encoder::Video,
+    /// One tick per frame at the requested rate.
+    pub time_base: Rational,
+    pub bitrate: usize,
+}
+
+/// Open the best H.264 encoder for `width × height` frames at `fps`:
+/// NVENC when the driver has it, else libx264, high profile, BT.709 limited
+/// range, at the Mac's rate of 0.6 bits per pixel per frame within 20 to
+/// 400 Mbps. `live` picks libx264's fast preset, for encoding while a show
+/// renders. `global_header` comes from the output format.
+pub fn open_h264(
+    width: u32,
+    height: u32,
+    fps: f32,
+    global_header: bool,
+    live: bool,
+) -> Result<H264, EncoderError> {
+    crate::ffmpeg_decoder::init().map_err(|_| EncoderError::CodecUnavailable)?;
+    let (num, den) = fps_to_rational(fps);
+    let time_base = Rational::new(den, num);
+    let fps_approx = (f64::from(num) / f64::from(den)).round().max(1.0);
+    let bitrate =
+        (f64::from(width) * f64::from(height) * fps_approx * 0.6).clamp(20e6, 400e6) as usize;
+    for name in CODECS {
+        let Some(codec) = encoder::find_by_name(name) else {
+            continue;
+        };
+        let mut video = codec::context::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .map_err(|_| EncoderError::CodecUnavailable)?;
+        video.set_width(width);
+        video.set_height(height);
+        video.set_format(Pixel::YUV420P);
+        video.set_time_base(time_base);
+        video.set_frame_rate(Some(Rational::new(num, den)));
+        video.set_bit_rate(bitrate);
+        video.set_gop(fps_approx as u32);
+        video.set_max_b_frames(0);
+        video.set_colorspace(color::Space::BT709);
+        video.set_color_range(color::Range::MPEG);
+        // Safety: the context is valid; these two fields have no setter.
+        unsafe {
+            let ctx = video.as_mut_ptr();
+            (*ctx).color_primaries = ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+            (*ctx).color_trc = ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+        }
+        if global_header {
+            video.set_flags(codec::Flags::GLOBAL_HEADER);
+        }
+        let mut options = Dictionary::new();
+        options.set("profile", "high");
+        if live && name == "libx264" {
+            options.set("preset", "veryfast");
+        }
+        match video.open_as_with(codec, options) {
+            Ok(encoder) => {
+                return Ok(H264 {
+                    name,
+                    codec,
+                    encoder,
+                    time_base,
+                    bitrate,
+                });
+            }
+            Err(e) => log::info!("[FFmpegEncoder] {name} unavailable: {e}"),
+        }
+    }
+    Err(EncoderError::CodecUnavailable)
+}
+
+/// Write every packet `encoder` has ready to `stream` of `output`. Video
+/// packets without a duration last one tick, so a file's length counts its
+/// last frame.
+pub fn write_packets(
+    encoder: &mut encoder::Encoder,
+    output: &mut format::context::Output,
+    stream: usize,
+    encoder_time_base: Rational,
+    stream_time_base: Rational,
+) -> Result<(), ffmpeg::Error> {
+    let mut packet = Packet::empty();
+    loop {
+        match encoder.receive_packet(&mut packet) {
+            Ok(()) => {
+                packet.set_stream(stream);
+                if packet.duration() == 0 {
+                    packet.set_duration(1);
+                }
+                packet.rescale_ts(encoder_time_base, stream_time_base);
+                packet.write_interleaved(output)?;
+            }
+            Err(ffmpeg::Error::Eof)
+            | Err(ffmpeg::Error::Other {
+                errno: ffmpeg::util::error::EAGAIN,
+            }) => return Ok(()),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// An export in progress: the MP4 being written and its H.264 encoder.
 pub struct FfmpegEncoder {
     output: format::context::Output,
@@ -110,13 +216,6 @@ impl FfmpegEncoder {
             return Err(EncoderError::HdrUnavailable);
         }
         crate::ffmpeg_decoder::init().map_err(|_| EncoderError::CodecUnavailable)?;
-        let (num, den) = fps_to_rational(fps);
-        let time_base = Rational::new(den, num);
-        // The Mac's rate: 0.6 bits per pixel per frame, 20 to 400 Mbps.
-        let fps_approx = (f64::from(num) / f64::from(den)).round().max(1.0);
-        let bitrate =
-            (f64::from(width) * f64::from(height) * fps_approx * 0.6).clamp(20e6, 400e6) as usize;
-
         let mut output = format::output(output_path).map_err(|e| {
             log::error!("[FFmpegEncoder] create {output_path}: {e}");
             EncoderError::FileFailed
@@ -125,46 +224,13 @@ impl FfmpegEncoder {
             .format()
             .flags()
             .contains(format::Flags::GLOBAL_HEADER);
-
-        let mut opened = None;
-        for name in CODECS {
-            let Some(codec) = encoder::find_by_name(name) else {
-                continue;
-            };
-            let mut video = codec::context::Context::new_with_codec(codec)
-                .encoder()
-                .video()
-                .map_err(|_| EncoderError::CodecUnavailable)?;
-            video.set_width(width);
-            video.set_height(height);
-            video.set_format(Pixel::YUV420P);
-            video.set_time_base(time_base);
-            video.set_frame_rate(Some(Rational::new(num, den)));
-            video.set_bit_rate(bitrate);
-            video.set_gop(fps_approx as u32);
-            video.set_max_b_frames(0);
-            video.set_colorspace(color::Space::BT709);
-            video.set_color_range(color::Range::MPEG);
-            // Safety: the context is valid; these two fields have no setter.
-            unsafe {
-                let ctx = video.as_mut_ptr();
-                (*ctx).color_primaries = ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
-                (*ctx).color_trc = ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
-            }
-            if global_header {
-                video.set_flags(codec::Flags::GLOBAL_HEADER);
-            }
-            let mut options = Dictionary::new();
-            options.set("profile", "high");
-            match video.open_as_with(codec, options) {
-                Ok(encoder) => {
-                    opened = Some((name, codec, encoder));
-                    break;
-                }
-                Err(e) => log::info!("[FFmpegEncoder] {name} unavailable: {e}"),
-            }
-        }
-        let (name, codec, encoder) = opened.ok_or(EncoderError::CodecUnavailable)?;
+        let H264 {
+            name,
+            codec,
+            encoder,
+            time_base,
+            bitrate,
+        } = open_h264(width, height, fps, global_header, false)?;
 
         let mut stream = output
             .add_stream(codec)
@@ -272,31 +338,17 @@ impl FfmpegEncoder {
 
     /// Write every packet the encoder has ready.
     fn write_packets(&mut self) -> Result<(), EncoderError> {
-        let mut packet = Packet::empty();
-        loop {
-            match self.encoder.receive_packet(&mut packet) {
-                Ok(()) => {
-                    packet.set_stream(0);
-                    // One frame each, so the file's length counts the last one.
-                    if packet.duration() == 0 {
-                        packet.set_duration(1);
-                    }
-                    packet.rescale_ts(self.encoder_time_base, self.stream_time_base);
-                    packet.write_interleaved(&mut self.output).map_err(|e| {
-                        log::error!("[FFmpegEncoder] write: {e}");
-                        EncoderError::FileFailed
-                    })?;
-                }
-                Err(ffmpeg::Error::Eof)
-                | Err(ffmpeg::Error::Other {
-                    errno: ffmpeg::util::error::EAGAIN,
-                }) => return Ok(()),
-                Err(e) => {
-                    log::error!("[FFmpegEncoder] encode: {e}");
-                    return Err(EncoderError::EncodeFailed);
-                }
-            }
-        }
+        write_packets(
+            &mut self.encoder,
+            &mut self.output,
+            0,
+            self.encoder_time_base,
+            self.stream_time_base,
+        )
+        .map_err(|e| {
+            log::error!("[FFmpegEncoder] write: {e}");
+            EncoderError::FileFailed
+        })
     }
 
     /// Flush the encoder and finish the file. Returns the frames encoded.

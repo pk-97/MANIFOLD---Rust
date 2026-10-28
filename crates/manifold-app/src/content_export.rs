@@ -675,7 +675,6 @@ impl ContentThread {
     ) {
         self.engine.clear_automation_previews();
         // Stop any active live recording before entering export.
-        #[cfg(target_os = "macos")]
         if let Some(session) = self.content_pipeline.recording_session.take() {
             log::warn!("[ContentThread] Stopping active recording before export");
             let _ = session.stop();

@@ -8,13 +8,15 @@ publish = false
 log = { workspace = true }
 crossbeam-channel = "0.5"
 manifold-audio = { path = "../manifold-audio" }
+manifold-gpu = { path = "../manifold-gpu" }
 # ffprobe JSON parsing for the recording-proofs oracle (src/proofs.rs). Only
 # enters the dependency graph behind the `recording-proofs` feature — the
 # default build stays free of it.
 serde_json = { version = "1", optional = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-manifold-gpu = { path = "../manifold-gpu" }
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+manifold-media = { path = "../manifold-media" }
+ffmpeg-next = { version = "8", default-features = false, features = ["codec", "format", "software-scaling"] }
 
 [build-dependencies]
 cc = "1"

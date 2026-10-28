@@ -59,15 +59,6 @@ impl WindowRegistry {
             .filter_map(move |id| self.windows.get(id).map(|state| (id, state)))
     }
 
-    /// Get all Arc<Window> references (for request_redraw).
-    /// Non-macOS only — macOS wakes via CVDisplayLink per-window.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub fn window_arcs(&self) -> impl Iterator<Item = &Arc<winit::window::Window>> {
-        self.creation_order
-            .iter()
-            .filter_map(move |id| self.windows.get(id).map(|s| &s.window))
-    }
-
     /// True if any Output-role window is currently open.
     /// Matches Unity's `host.IsMonitorOutputActive`.
     pub fn has_output_window(&self) -> bool {

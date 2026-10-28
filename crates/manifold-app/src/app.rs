@@ -156,7 +156,9 @@ pub struct Application {
     /// `changeCount` at the moment the app last copied clips internally.
     /// `None` until the first internal copy — the D4 arbitration treats
     /// that the same as "internal clipboard empty" (Finder file always
-    /// wins over a clipboard that was never populated).
+    /// wins over a clipboard that was never populated). Finder paste is
+    /// Mac-only, so only the Mac reads it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) internal_clipboard_change_count: Option<i64>,
 
     // Rendering

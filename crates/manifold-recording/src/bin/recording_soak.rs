@@ -549,7 +549,7 @@ fn submit_frame_unpaced(
         if let Some((tex_idx, pool_slot, fence)) = session.acquire_texture() {
             let mut encoder = device.create_encoder("recording-soak frame");
             pattern.encode(&mut encoder, src, frame_index);
-            session.encode_format_conversion(&mut encoder, src, session.pool_texture(tex_idx));
+            session.encode_format_conversion(&mut encoder, src, tex_idx);
             let fence_for_signal = fence.clone();
             encoder.add_completed_handler(move || fence_for_signal.signal());
             encoder.commit();
@@ -579,7 +579,7 @@ fn submit_frame_realtime(
     if let Some((tex_idx, pool_slot, fence)) = session.acquire_texture() {
         let mut encoder = device.create_encoder("recording-soak frame");
         pattern.encode(&mut encoder, src, frame_index);
-        session.encode_format_conversion(&mut encoder, src, session.pool_texture(tex_idx));
+        session.encode_format_conversion(&mut encoder, src, tex_idx);
         let fence_for_signal = fence.clone();
         encoder.add_completed_handler(move || fence_for_signal.signal());
         encoder.commit();

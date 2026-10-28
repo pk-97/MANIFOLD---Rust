@@ -1660,26 +1660,17 @@ impl ContentThread {
             },
             led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
             led_preview: Some(self.led_preview.clone()),
-            #[cfg(target_os = "macos")]
             is_live_recording: self.content_pipeline.recording_session.is_some(),
-            #[cfg(not(target_os = "macos"))]
-            is_live_recording: false,
-            #[cfg(target_os = "macos")]
             recording_dropped_frames: self
                 .content_pipeline
                 .recording_session
                 .as_ref()
                 .map_or(0, |s| s.frames_dropped()),
-            #[cfg(not(target_os = "macos"))]
-            recording_dropped_frames: 0,
-            #[cfg(target_os = "macos")]
             recording_dropped_audio_frames: self
                 .content_pipeline
                 .recording_session
                 .as_ref()
                 .map_or(0, |s| s.audio_frames_dropped()),
-            #[cfg(not(target_os = "macos"))]
-            recording_dropped_audio_frames: 0,
             // Export runs its own blocking loop (`run_export` /
             // `send_export_progress` in content_export.rs) that sends
             // dedicated degraded ContentState snapshots — the regular

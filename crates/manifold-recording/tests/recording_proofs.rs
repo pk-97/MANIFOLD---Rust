@@ -75,7 +75,7 @@ fn submit_paced_frame(
         if let Some((tex_idx, pool_slot, fence)) = session.acquire_texture() {
             let mut encoder = device.create_encoder("recording-proofs frame");
             pattern.encode(&mut encoder, src, frame_index);
-            session.encode_format_conversion(&mut encoder, src, session.pool_texture(tex_idx));
+            session.encode_format_conversion(&mut encoder, src, tex_idx);
             let fence_for_signal = fence.clone();
             encoder.add_completed_handler(move || fence_for_signal.signal());
             encoder.commit();
@@ -457,7 +457,7 @@ fn pool_accounting_consistent() {
             Some((tex_idx, pool_slot, fence)) => {
                 let mut encoder = device.create_encoder("pool_accounting_consistent frame");
                 pattern.encode(&mut encoder, &src, frame_index);
-                session.encode_format_conversion(&mut encoder, &src, session.pool_texture(tex_idx));
+                session.encode_format_conversion(&mut encoder, &src, tex_idx);
 
                 if frame_index < HOLD_UNTIL_FRAME {
                     // Gate the signal — don't register a completion handler

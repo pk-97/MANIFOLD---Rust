@@ -4,9 +4,10 @@
 //! (.mov) file during live performance. Zero impact on the content thread —
 //! recording runs on a dedicated thread with a pre-allocated texture pool.
 //!
-//! Codec: ProRes 422 Proxy for SDR (Apple Silicon ProRes HW encoder, reliable
-//! over arbitrary durations). HEVC Main10 for HDR (lower per-second bitrate
-//! avoids the HEVC encoder's sustained-4K60 malfunction threshold).
+//! Codec on the Mac: ProRes 422 Proxy for SDR (Apple Silicon ProRes HW
+//! encoder, reliable over arbitrary durations). HEVC Main10 for HDR (lower
+//! per-second bitrate avoids the HEVC encoder's sustained-4K60 malfunction
+//! threshold). Elsewhere: H.264 through FFmpeg, SDR only.
 //!
 //! # Architecture
 //!
@@ -20,21 +21,24 @@
 //! ```
 
 pub mod config;
-mod ffi;
 #[cfg(target_os = "macos")]
+mod ffi;
+#[cfg(not(target_os = "macos"))]
+mod ffmpeg_recorder;
 mod format_converter;
 /// Feature-gated proof-harness support (pattern writer + ffprobe oracle).
 #[cfg(all(target_os = "macos", feature = "recording-proofs"))]
 pub mod proofs;
-#[cfg(target_os = "macos")]
 mod recording_thread;
-#[cfg(target_os = "macos")]
 mod session;
-#[cfg(target_os = "macos")]
 mod texture_pool;
 
+// This platform's recorder: AVAssetWriter on the Mac, FFmpeg elsewhere.
+#[cfg(target_os = "macos")]
+use ffi::{AudioDrops, NativeRecorder as Recorder};
+#[cfg(not(target_os = "macos"))]
+use ffmpeg_recorder::{AudioDrops, FfmpegRecorder as Recorder};
+
 pub use config::{AudioCodec, LiveRecordingConfig, RecordingResult};
-#[cfg(target_os = "macos")]
 pub use recording_thread::GpuFence;
-#[cfg(target_os = "macos")]
 pub use session::{AudioFeed, LiveRecordingSession};

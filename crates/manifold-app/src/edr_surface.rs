@@ -21,7 +21,9 @@
 //! switch. An NSNotification observer watches for screen changes and sets a
 //! flag checked by the main loop.
 
-use manifold_compositor::presentation::{CurrentHeadroom, DisplayCapabilities, PotentialHeadroom};
+use manifold_compositor::presentation::DisplayCapabilities;
+#[cfg(any(target_os = "macos", test))]
+use manifold_compositor::presentation::{CurrentHeadroom, PotentialHeadroom};
 
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -113,6 +115,7 @@ pub(crate) fn register_screen_change_observer() {}
 ///
 /// This is deliberately independent of AppKit so invalid-value handling can
 /// be tested without constructing an NSScreen or NSWindow.
+#[cfg(any(target_os = "macos", test))]
 fn display_capabilities_from_native(
     potential_value: f64,
     current_value: f64,

@@ -393,6 +393,7 @@ fn plasma_project(bpm: f32, frame_rate: f32) -> Project {
     project
 }
 
+#[cfg(target_os = "macos")]
 fn two_beat_export(
     name: &str,
 ) -> (

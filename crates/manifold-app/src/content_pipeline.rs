@@ -684,7 +684,6 @@ pub struct ContentPipeline {
     node_preview_normalize: bool,
     /// Active live recording session. `Some` while recording, `None` otherwise.
     /// Managed by ContentThread via `set_recording_session` / `take_recording_session`.
-    #[cfg(target_os = "macos")]
     pub(crate) recording_session: Option<manifold_recording::LiveRecordingSession>,
 
     /// Current LED grid dimensions (strip_count, leds_per_strip). Used to size
@@ -848,7 +847,6 @@ impl ContentPipeline {
             node_preview_normal_pipeline: None,
             node_preview_depth_pipeline: None,
             node_preview_normalize: false,
-            #[cfg(target_os = "macos")]
             recording_session: None,
             led_grid_size: (
                 manifold_led::DEFAULT_STRIP_COUNT,
@@ -1492,7 +1490,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.last_render_work_ms = ms;
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn last_render_dt(&self) -> f64 {
         self.last_render_dt
     }
@@ -3212,9 +3210,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Format-convert the upscaled output (Rgba16Float → sRGB Bgra8Unorm)
         // into a recording pool texture. Compute dispatch in the SAME command
         // buffer — the recording thread has zero GPU work.
-        #[cfg(target_os = "macos")]
         let sdr_recording_plan = self.sdr_presentation_plan();
-        #[cfg(target_os = "macos")]
         let recording_fence = if !export_mode {
             if let Some(ref mut session) = self.recording_session {
                 if let Some((tex_idx, pool_slot, fence)) = session.acquire_texture() {
@@ -3258,10 +3254,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             (0.0, 0.0, src.width as f32, src.height as f32),
                             manifold_gpu::GpuLoadAction::Clear,
                         );
-                    let dst = session.pool_texture(tex_idx);
-                    // Compute dispatch: Rgba16Float → sRGB Bgra8Unorm.
+                    // Compute dispatch: Rgba16Float → sRGB 8-bit.
                     // Uses the native GpuEncoder directly (same command buffer).
-                    session.encode_format_conversion(&mut native_enc, mapped, dst);
+                    session.encode_format_conversion(&mut native_enc, mapped, tex_idx);
                     session.submit_frame(pool_slot, fence.clone());
                     Some(fence)
                 } else {
@@ -3323,7 +3318,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     b.publish_front(write_idx, frame_count);
                 }
                 // Signal recording thread that the GPU blit is complete.
-                #[cfg(target_os = "macos")]
                 if let Some(ref fence) = recording_fence {
                     fence.signal();
                 }
@@ -3994,21 +3988,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
     /// Read-back accessor: the layer scratch buffer's current source texture.
     /// Only meaningful for compositors with per-layer scratch buffers.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub fn layer_scratch_texture(&self, layer_id: &str) -> Option<&manifold_gpu::GpuTexture> {
         self.compositor.layer_scratch_texture(layer_id)
     }
 
     /// Read-back accessor: the effect chain's output texture for a layer.
     /// Only meaningful for compositors with per-layer effect chains.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub fn chain_output_texture(&self, layer_id: &str) -> Option<&manifold_gpu::GpuTexture> {
         self.compositor.chain_output_texture(layer_id)
     }
 
     /// Debug readback: full chain intermediate texture state for a layer.
     /// Returns source, step outputs, and output_slot textures.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub fn chain_debug_info(
         &self,
         layer_id: &str,

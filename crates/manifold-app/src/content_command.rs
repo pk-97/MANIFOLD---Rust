@@ -308,6 +308,8 @@ pub enum ContentCommand {
     SurfaceReady,
     /// The stage output's drawable went on screen at `at` (Metal's presented
     /// handler, host time mapped to `Instant`). Feeds the screen delay (D19).
+    /// Only Metal reports presents so far.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     FramePresented {
         drawable_id: u64,
         at: std::time::Instant,

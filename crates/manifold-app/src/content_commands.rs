@@ -1810,7 +1810,6 @@ impl ContentThread {
             }
 
             // ── Live Recording ──────────────────────────────────────
-            #[cfg(target_os = "macos")]
             ContentCommand::StartLiveRecording(config) => {
                 if self.content_pipeline.recording_session.is_some() {
                     log::warn!("[ContentThread] Already recording, ignoring StartLiveRecording");
@@ -1837,7 +1836,6 @@ impl ContentThread {
                     log::error!("[ContentThread] No native device — cannot record");
                 }
             }
-            #[cfg(target_os = "macos")]
             ContentCommand::StopLiveRecording => {
                 if let Some(session) = self.content_pipeline.recording_session.take() {
                     let result = session.stop();
@@ -1851,10 +1849,6 @@ impl ContentThread {
                         result.output_path,
                     );
                 }
-            }
-            #[cfg(not(target_os = "macos"))]
-            ContentCommand::StartLiveRecording(_) | ContentCommand::StopLiveRecording => {
-                log::warn!("[ContentThread] Live recording not supported on this platform");
             }
 
             // ── Profiling ────────────────────────────────────────────

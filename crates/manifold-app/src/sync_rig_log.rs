@@ -403,6 +403,7 @@ mod display {
 }
 
 /// EDID parsing for the HDMI vendor block's latency fields (HDMI 1.4 VSDB).
+#[cfg(any(target_os = "macos", test))]
 pub mod edid {
     /// Hex blobs after `"EDID" = <` or `"IODisplayEDID" = <` (with or without
     /// spaces around `=`), as `ioreg -l` prints them.

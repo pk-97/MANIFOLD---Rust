@@ -96,14 +96,13 @@ Each is a backend-neutral API with a capability check on `GpuDevice` (design 6.2
 - FFT: Inverse FFT 2D reports "no FFT" and water fields lose their ripples.
 - Faults, firmware, capture scopes and residency are empty on Vulkan.
 
-The remaining raw-handle users are Mac-gated and stay Metal: `manifold-media/src/videotoolbox.rs` and `metal_encoder.rs`, `manifold-recording/src/session.rs:102`, `texture_pool.rs:23,109` and `recording_thread.rs:150`. Because those gates are still true on the Mac, `manifold-app`, `manifold-media` and `manifold-recording` build against Vulkan on Linux only (design section 3). Their Linux replacements are P5.
+The remaining raw-handle users are Mac-gated and stay Metal: `manifold-media/src/videotoolbox.rs` and `metal_encoder.rs`, and `manifold-recording/src/ffi.rs` with the pool slot's `raw_ptr` (`texture_pool.rs`). Because those gates are still true on the Mac, `manifold-app`, `manifold-media` and `manifold-recording` build against Vulkan on Linux only (design section 3).
 
 ---
 
 ## 5. Shaders
 
 - **WGSL:** 496 files, of which 267 are fragments joined by `include_str!`, `concat!` or `format!`. None use `f16`, subgroups, float or 64-bit atomics, binding arrays, `read_write` storage textures or a group other than 0. Storage textures are all write-only (132 declarations). Atomics are `atomic<u32>` and `atomic<i32>` only.
-- **One BGRA storage write:** `manifold-recording/src/shaders/linear_to_srgb.wgsl:13`. Vulkan does not guarantee storage support for `B8G8R8A8_UNORM`. Check the format on NVIDIA in P5; otherwise write RGBA and swizzle.
 - **Binding numbers** reach 72 (water shaders) with few distinct slots. `render_scene.wgsl` uses 37 distinct slots up to 57, and its composed entry points reach 53. Sparse Vulkan bindings are fine, and D2's one-set-per-draw has no 32-slot cap.
 - **`arrayLength`:** Metal counts the whole buffer and ignores the binding offset, Vulkan counts the bound range (design D9). P1 checks no shader binds a runtime-sized array at an offset.
 - **String substitution:** `create_specialized_compute_pipeline` (21 calls in 6 files) and `create_specialized_render_pipeline_depth_msaa` (`render_scene/pipelines.rs:462`) replace text in WGSL. So do `render_scene/pipelines.rs:189` and the water-surface `interior_fill.rs:27-28` and `surface_tiles.rs:39-40`. All of it is backend-neutral.
@@ -125,14 +124,13 @@ About 230 `target_os` lines in 36 files. Grouped by what they gate:
 
 | Group | Lines | Files | Linux needs | Phase |
 |---|---|---|---|---|
-| Live recording | ~15 | `content_thread.rs` (6), `content_commands.rs` (3), `content_pipeline.rs` (5), `content_export.rs` (1). Video and image clips, video export, still capture and `export-repro` work everywhere; the journey proofs stay Mac-only | FFmpeg encode on the recording thread, then drop the off-Mac `dead_code` allow at the top of `main.rs` | P5 |
 | Clipboard and file paste | ~20 | `input_host.rs` (11), `card_edit.rs`, `ui_snapshot/script.rs`, `window_input.rs`, `app.rs`, `main.rs:111` | Text fields and copy actions use `text_clipboard.rs` (arboard) everywhere. Finder file paste stays Mac-only; winit 0.30 has no file drops on Wayland | P4 |
 | Menus | 2 | `menu.rs:187-197`; seven actions exist only in the menu (`app_render.rs:438-467`) | In-app entries for them, then section 10 item 3 | P4 |
 | Misc | 2 | `main.rs:379,732` (App Nap, nothing on Linux) | Gate stays | Build hygiene |
 
 **Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`, `percussion_backend.rs:210`) wait for Linux packaging (P4).
 
-**Gated until P4 or P5.** On Linux the app compiles with these off: the display link (P4 pacing), and live recording (P5). The headless harness, its tests, `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `ui-snap` build everywhere.
+**Gated until P4.** On Linux the app compiles with the display link off (P4 pacing). The headless harness, its tests, `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `ui-snap` build everywhere.
 
 ---
 
@@ -141,7 +139,7 @@ About 230 `target_os` lines in 36 files. Grouped by what they gate:
 | Crate | What breaks or is missing on Linux | Phase |
 |---|---|---|
 | manifold-media | Decode sits behind `DecoderBackend` and `VideoDecoder` (`decoder.rs`): VideoToolbox on the Mac (`videotoolbox.rs`), FFmpeg on the CPU elsewhere (`ffmpeg_decoder.rs`, ffmpeg-next 8, which keeps the locked `cc`; 9 needs `cc` 1.10). Off the Mac a frame is swscaled to sRGB RGBA fitted in the canvas and uploaded into an `Rgba8UnormSrgb` texture; the Mac converts NV12 into `Rgba16Float` and does not expand video-range chroma, so saturated colours read about 12% weaker there. Export goes through `encoder::VideoEncoder`: the AVFoundation plugin on the Mac, FFmpeg elsewhere (`ffmpeg_encoder.rs`: a GPU readback, then the Mac kernel's rolloff, sRGB and BT.709 limited-range 4:2:0 on the CPU, then h264_nvenc or libx264 at the Mac's bitrate). HDR export is Mac-only so far. The audio mux shells out to the `ffmpeg` CLI | P5 |
-| manifold-recording | AVAssetWriter plugin (`native/LiveRecordingPlugin.m`, 839 lines). Everything but `config` and `ffi` is gated (`lib.rs:24-39`). Default path is the Desktop (`config.rs:29-37`). `proofs.rs` expects `ffprobe` | P5 |
+| manifold-recording | The recorder is a cfg alias (`lib.rs`): the AVAssetWriter plugin on the Mac (`ffi.rs`, `native/LiveRecordingPlugin.m`), FFmpeg elsewhere (`ffmpeg_recorder.rs`). Off the Mac the converter writes RGBA, since Vulkan does not promise BGRA storage, and each pool slot has a readback buffer the recording thread swscales to BT.709 limited-range 4:2:0; video is H.264 from `manifold_media::ffmpeg_encoder::open_h264` (libx264 at its fast preset), audio is AAC or ALAC with capture gaps filled with silence. HDR recording is Mac-only. Default path is the Desktop (`config.rs`). `proofs.rs` and the soak bin stay Mac-only and expect `ffprobe` | P5 |
 | manifold-playback | Works as is: kira 0.12 and midir 0.11 on cpal 0.18, one ALSA library between them, rusty_link (needs cmake and libclang). kira takes volumes in decibels; `gain_db` converts the linear gain. Stem separation: the bundled demucs runtime exists only for macOS (`tools/audio_analysis/BundledRuntime/macOS`, `stage_runtime_mac.sh`); the device is `auto`, so CUDA is picked on Linux | P4 (runtime) |
 | manifold-native | The two ML plugins (BlobDetector, DepthEstimator) load `lib<name>.so` from `assets/plugins` on Linux; each `build.sh` builds it against `libopencv-dev`. `region_ffi.rs` tests that use `codesign` and `otool` stay Mac-only | P4: ship the `.so` files with the Linux package |
 | manifold-physics | Thread count: Mac performance cores, `available_parallelism` elsewhere (`lib.rs:471-485`). On the 9950X3D that is 32 threads over two chiplets, only one with the extra cache | P8: measure |

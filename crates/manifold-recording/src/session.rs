@@ -1,23 +1,22 @@
 //! LiveRecordingSession — public API for the recording system.
 //!
-//! Ties together the texture pool, audio capture, native encoder, and recording
+//! Ties together the texture pool, audio capture, encoder, and recording
 //! thread. The content thread interacts with this through a minimal surface:
 //! acquire texture slot, blit, submit, stop.
 
-use std::ffi::{CString, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, bounded};
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+use manifold_gpu::{GpuDevice, GpuTexture};
 
-use crate::config::{AudioCodec, LiveRecordingConfig, RecordingResult};
-use crate::ffi;
-use crate::format_converter::FormatConverter;
+use crate::config::{LiveRecordingConfig, RecordingResult};
+use crate::format_converter::{FormatConverter, POOL_FORMAT};
 use crate::recording_thread::{self, RecordingFrame, RecordingStats};
 use crate::texture_pool::{DEFAULT_POOL_SIZE, PoolSlot, TextureRingPool};
+use crate::{AudioDrops, Recorder};
 
 /// Live recording session. Created on the content thread, owned by ContentPipeline.
 ///
@@ -35,14 +34,10 @@ pub struct LiveRecordingSession {
     start_time: Instant,
     frames_submitted: u32,
     frames_dropped: u32,
-    /// Send-safe copy of the native encoder handle (also moved into the
-    /// recording thread's closure). Lets `audio_frames_dropped()` poll the
-    /// native atomic counter live, from the content thread, while the
-    /// recording thread owns the "real" handle for encode calls — both are
-    /// just integers naming the same `LiveRecorderState*`, and the counter
-    /// read is atomic. Invalid once `stop()` finalizes (frees native state);
-    /// only read this before calling `shutdown()`.
-    encoder_ptr: usize,
+    /// The recorder's audio-drop counter, polled live from the content
+    /// thread while the recording thread owns the recorder. Read it only
+    /// before `shutdown()`: finalizing frees the Mac's native state.
+    audio_drops: AudioDrops,
     output_path: String,
     _audio_capture: Option<manifold_audio::capture::AudioCaptureDevice>,
 }
@@ -99,13 +94,11 @@ impl LiveRecordingSession {
         fps: f32,
         feed: AudioFeed,
     ) -> Result<Self, String> {
-        let device_ptr = device.raw_device_ptr();
         let output_path = config.output_path.clone();
 
-        // -- Texture pool (Bgra8Unorm — format conversion done in content thread) --
-        let pool_format = GpuTextureFormat::Bgra8Unorm;
+        // -- Texture pool (format conversion done in content thread) --
         let texture_pool =
-            TextureRingPool::new(device, width, height, pool_format, DEFAULT_POOL_SIZE);
+            TextureRingPool::new(device, width, height, POOL_FORMAT, DEFAULT_POOL_SIZE);
         let format_converter = FormatConverter::new(device);
 
         // -- Audio capture (optional) --
@@ -141,32 +134,9 @@ impl LiveRecordingSession {
             AudioFeed::None => (None, None, 0, 0),
         };
 
-        // -- Native encoder --
-        let c_path =
-            CString::new(output_path.as_str()).map_err(|_| "Invalid output path".to_string())?;
-
-        let audio_codec_int = match config.audio_codec {
-            AudioCodec::Aac => 0,
-            AudioCodec::Alac => 1,
-        };
-
-        let encoder_handle = unsafe {
-            ffi::LiveRecorder_Create(
-                width as i32,
-                height as i32,
-                fps,
-                c_path.as_ptr(),
-                i32::from(config.hdr),
-                device_ptr,
-                sample_rate as i32,
-                channels as i32,
-                audio_codec_int,
-            )
-        };
-
-        if encoder_handle.is_null() {
-            return Err("Failed to create native live recorder".into());
-        }
+        // -- Encoder --
+        let recorder = Recorder::new(&config, device, width, height, fps, sample_rate, channels)?;
+        let audio_drops = recorder.audio_drops();
 
         // -- Recording thread --
         let (frame_tx, frame_rx) = bounded::<RecordingFrame>(DEFAULT_POOL_SIZE * 2);
@@ -174,16 +144,13 @@ impl LiveRecordingSession {
         let stop_clone = stop.clone();
         let start_time = Instant::now();
 
-        let encoder_ptr = encoder_handle as usize; // Send-safe integer
-
         let recording_thread = std::thread::Builder::new()
             .name("manifold-recording".into())
             .spawn(move || {
-                let handle = encoder_ptr as *mut c_void;
                 recording_thread::run(
                     frame_rx,
                     audio_consumer,
-                    handle,
+                    recorder,
                     sample_rate,
                     channels,
                     stop_clone,
@@ -206,7 +173,7 @@ impl LiveRecordingSession {
             start_time,
             frames_submitted: 0,
             frames_dropped: 0,
-            encoder_ptr,
+            audio_drops,
             output_path,
             _audio_capture: audio_capture,
         })
@@ -215,7 +182,7 @@ impl LiveRecordingSession {
     /// Try to acquire a pool texture for recording.
     ///
     /// Returns `(texture_index, pool_slot, gpu_fence)`:
-    /// - `texture_index`: use with [`pool_texture()`] to get the blit destination
+    /// - `texture_index`: pass to [`Self::encode_format_conversion`]
     /// - `pool_slot`: send to the recording thread after blitting
     /// - `gpu_fence`: the content thread's completion handler must set this to `true`
     ///
@@ -231,21 +198,26 @@ impl LiveRecordingSession {
         }
     }
 
-    /// Get a reference to the pool texture at the given index.
-    pub fn pool_texture(&self, index: usize) -> &GpuTexture {
-        self.texture_pool.texture(index)
-    }
-
-    /// Encode the format conversion (Rgba16Float → sRGB Bgra8Unorm) into
-    /// the content thread's GpuEncoder. Must be called in the same command
-    /// buffer as the IOSurface blit.
+    /// Encode the format conversion (Rgba16Float → sRGB 8-bit) from
+    /// `source` into the pool texture at `index`, then, off the Mac, its
+    /// copy into the slot's readback buffer. Must be called in the same
+    /// command buffer as the IOSurface blit.
     pub fn encode_format_conversion(
         &self,
         encoder: &mut manifold_gpu::GpuEncoder,
         source: &GpuTexture,
-        dest: &GpuTexture,
+        index: usize,
     ) {
+        let dest = self.texture_pool.texture(index);
         self.format_converter.encode(encoder, source, dest);
+        #[cfg(not(target_os = "macos"))]
+        encoder.copy_texture_to_buffer(
+            dest,
+            self.texture_pool.readback(index),
+            dest.width,
+            dest.height,
+            dest.width * POOL_FORMAT.bytes_per_pixel(),
+        );
     }
 
     /// Submit a frame to the recording thread. Non-blocking.
@@ -309,8 +281,8 @@ impl LiveRecordingSession {
         self.frames_dropped
     }
 
-    /// Number of audio sample-frames dropped so far by the native encoder's
-    /// backpressure gate (distinct from `frames_dropped()`, which is video
+    /// Number of audio sample-frames dropped so far by the encoder: the
+    /// native backpressure gate on the Mac, failed encodes elsewhere (distinct from `frames_dropped()`, which is video
     /// pool exhaustion). BUG-084's counter; also an instrument for BUG-086's
     /// unexplained audio-duration shortfall — a non-zero reading during a
     /// take that falls short says the backpressure gate is (at least part
@@ -318,9 +290,7 @@ impl LiveRecordingSession {
     /// native atomic counter live — safe to call at any point while the
     /// session is active; do not call after `stop()` has returned.
     pub fn audio_frames_dropped(&self) -> u32 {
-        let handle = self.encoder_ptr as *mut c_void;
-        let n = unsafe { ffi::LiveRecorder_GetAudioFramesDropped(handle) };
-        n.max(0) as u32
+        self.audio_drops.get()
     }
 
     /// Whether the session is active.

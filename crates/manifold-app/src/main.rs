@@ -1,7 +1,3 @@
-// Video export, live recording, still export and the display link run only on
-// the Mac until the FFmpeg path lands; their helpers sit unused elsewhere.
-#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
-
 #[cfg(not(feature = "work-trace"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
