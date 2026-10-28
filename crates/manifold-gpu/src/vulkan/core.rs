@@ -64,6 +64,8 @@ pub(crate) struct Core {
     debug: Option<Debug>,
     memory_budget: bool,
     pub(crate) sampler_anisotropy: bool,
+    /// Wireframe fill; without it a wireframe draw fills.
+    pub(crate) fill_mode_non_solid: bool,
     /// Optimal-tiling features per [`GpuTextureFormat`], in `ALL_FORMATS` order.
     format_features: Vec<(GpuTextureFormat, vk::FormatFeatureFlags)>,
 }
@@ -305,6 +307,28 @@ impl Core {
             device_extensions.iter().map(|e| e.as_ptr()).collect();
 
         let optional = candidate.optional;
+        let off: Vec<&str> = [
+            (optional.fill_mode_non_solid, "wireframe (fillModeNonSolid)"),
+            (
+                optional.large_points,
+                "points wider than a pixel (largePoints)",
+            ),
+            (
+                optional.sampler_anisotropy,
+                "anisotropic filtering (samplerAnisotropy)",
+            ),
+            (
+                optional.independent_blend,
+                "per-target blending (independentBlend)",
+            ),
+        ]
+        .into_iter()
+        .filter(|&(on, _)| on != vk::TRUE)
+        .map(|(_, name)| name)
+        .collect();
+        if !off.is_empty() {
+            log::warn!("[Vulkan] off on this device: {}", off.join(", "));
+        }
         let features = vk::PhysicalDeviceFeatures::default()
             .robust_buffer_access(true)
             .fill_mode_non_solid(optional.fill_mode_non_solid == vk::TRUE)
@@ -439,6 +463,7 @@ impl Core {
             debug,
             memory_budget,
             sampler_anisotropy: optional.sampler_anisotropy == vk::TRUE,
+            fill_mode_non_solid: optional.fill_mode_non_solid == vk::TRUE,
             format_features,
         })
     }

@@ -32,6 +32,7 @@ pub(crate) enum Keep {
     View(Arc<ViewCore>),
     Sampler(Arc<SamplerCore>),
     Pipeline(Arc<PipelineCore>),
+    Render(Arc<super::pipeline::RenderCore>),
     Event(Arc<super::types::EventCore>),
 }
 

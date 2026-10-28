@@ -1,18 +1,26 @@
-//! Compute pipelines from SPIR-V (P1 step 10): one descriptor set layout per
+//! Compute and render pipelines from SPIR-V: one descriptor set layout per
 //! pipeline from its `SlotMap`, written through an update template (D2),
 //! and the three cache layers Metal has (D11): in memory per wrapper, a
 //! `VkPipelineCache` blob on disk, and a SPIR-V disk cache that skips naga
-//! and `spirv-opt`.
+//! and `spirv-opt`. A render pipeline builds one `VkPipeline` per topology
+//! and fill mode, the first at creation and any other on first use;
+//! viewport, scissor, culling, front face and depth state are dynamic, as
+//! they are encoder state on Metal.
 
 use std::collections::hash_map::DefaultHasher;
+use std::ffi::CString;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
-use super::core::Core;
+use super::core::{Core, vk_format};
 use super::{Slot, SlotKind, SlotMap};
+use crate::{
+    GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuCompareFunction, GpuPrimitiveType,
+    GpuTriangleFillMode, GpuVertexFormat, GpuVertexLayout, RenderPipelineDesc,
+};
 
 /// Bytes per descriptor record in update-template data: a
 /// `VkDescriptorBufferInfo` and a `VkDescriptorImageInfo` are both 24.
@@ -30,10 +38,9 @@ pub(crate) fn descriptor_type(kind: SlotKind) -> vk::DescriptorType {
     }
 }
 
-/// A `VkPipeline` with its layout, set layout and update template.
-pub(crate) struct PipelineCore {
-    core: Arc<Core>,
-    pub(crate) raw: vk::Pipeline,
+/// A pipeline's layout, set layout and update template.
+pub(crate) struct Layouts {
+    pub(crate) core: Arc<Core>,
     pub(crate) layout: vk::PipelineLayout,
     pub(crate) set_layout: vk::DescriptorSetLayout,
     pub(crate) template: vk::DescriptorUpdateTemplate,
@@ -41,22 +48,33 @@ pub(crate) struct PipelineCore {
     pub(crate) slots: Vec<(u32, Slot)>,
 }
 
+impl Drop for Layouts {
+    fn drop(&mut self) {
+        let device = &self.core.device;
+        unsafe {
+            device.destroy_descriptor_update_template(self.template, None);
+            device.destroy_pipeline_layout(self.layout, None);
+            device.destroy_descriptor_set_layout(self.set_layout, None);
+        }
+    }
+}
+
+/// A compute `VkPipeline` with its layouts.
+pub(crate) struct PipelineCore {
+    pub(crate) raw: vk::Pipeline,
+    pub(crate) layouts: Layouts,
+}
+
 impl PipelineCore {
     /// The device's workgroup invocation limit.
     pub(crate) fn max_invocations(&self) -> u32 {
-        self.core.limits.max_compute_work_group_invocations
+        self.layouts.core.limits.max_compute_work_group_invocations
     }
 }
 
 impl Drop for PipelineCore {
     fn drop(&mut self) {
-        let device = &self.core.device;
-        unsafe {
-            device.destroy_pipeline(self.raw, None);
-            device.destroy_descriptor_update_template(self.template, None);
-            device.destroy_pipeline_layout(self.layout, None);
-            device.destroy_descriptor_set_layout(self.set_layout, None);
-        }
+        unsafe { self.layouts.core.device.destroy_pipeline(self.raw, None) };
     }
 }
 
@@ -72,16 +90,11 @@ pub(crate) fn compute_hash(wgsl_source: &str, entry_point: &str) -> u64 {
 /// Layout, set layout and template for `slot_map`'s bindings, seen by
 /// `stages`.
 fn build_layouts(
-    core: &Core,
+    core: &Arc<Core>,
     slot_map: &SlotMap,
     stages: vk::ShaderStageFlags,
     label: &str,
-) -> (
-    vk::DescriptorSetLayout,
-    vk::PipelineLayout,
-    vk::DescriptorUpdateTemplate,
-    Vec<(u32, Slot)>,
-) {
+) -> Layouts {
     let slots: Vec<(u32, Slot)> = slot_map
         .bindings()
         .map(|b| (b, *slot_map.get(b).expect("bindings() yields mapped slots")))
@@ -146,7 +159,13 @@ fn build_layouts(
         }
         .unwrap_or_else(|e| panic!("{label}: descriptor update template: {e}"))
     };
-    (set_layout, layout, template, slots)
+    Layouts {
+        core: core.clone(),
+        layout,
+        set_layout,
+        template,
+        slots,
+    }
 }
 
 /// Build the compute `VkPipeline` for compiled SPIR-V.
@@ -163,8 +182,7 @@ pub(crate) fn create_compute(
             .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(spirv), None)
     }
     .unwrap_or_else(|e| panic!("{label}: shader module: {e}"));
-    let (set_layout, layout, template, slots) =
-        build_layouts(core, slot_map, vk::ShaderStageFlags::COMPUTE, label);
+    let layouts = build_layouts(core, slot_map, vk::ShaderStageFlags::COMPUTE, label);
     let entry = std::ffi::CString::new(entry_point).expect("entry point has no NUL");
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -172,7 +190,7 @@ pub(crate) fn create_compute(
         .name(&entry);
     let info = [vk::ComputePipelineCreateInfo::default()
         .stage(stage)
-        .layout(layout)];
+        .layout(layouts.layout)];
     let pipelines = unsafe { core.device.create_compute_pipelines(cache, &info, None) };
     unsafe { core.device.destroy_shader_module(module, None) };
     let raw = match pipelines {
@@ -180,14 +198,264 @@ pub(crate) fn create_compute(
         Err((_, e)) => panic!("{label}: compute pipeline: {e}"),
     };
     core.name(raw, label);
-    Arc::new(PipelineCore {
-        core: core.clone(),
-        raw,
-        layout,
-        set_layout,
-        template,
-        slots,
-    })
+    Arc::new(PipelineCore { raw, layouts })
+}
+
+/// What a `VkPipeline` bakes in that a Metal draw chooses per draw.
+pub(crate) type Variant = (GpuPrimitiveType, GpuTriangleFillMode);
+
+const DYNAMIC: [vk::DynamicState; 9] = [
+    vk::DynamicState::VIEWPORT,
+    vk::DynamicState::SCISSOR,
+    vk::DynamicState::CULL_MODE,
+    vk::DynamicState::FRONT_FACE,
+    vk::DynamicState::DEPTH_TEST_ENABLE,
+    vk::DynamicState::DEPTH_WRITE_ENABLE,
+    vk::DynamicState::DEPTH_COMPARE_OP,
+    vk::DynamicState::DEPTH_BIAS,
+    vk::DynamicState::DEPTH_BIAS_ENABLE,
+];
+
+pub(crate) struct RenderCore {
+    pub(crate) layouts: Layouts,
+    module: vk::ShaderModule,
+    vs_entry: CString,
+    fs_entry: CString,
+    /// The colour attachment, then the auxiliary ones.
+    color_formats: Vec<vk::Format>,
+    blend: Option<GpuBlendState>,
+    depth_format: vk::Format,
+    samples: vk::SampleCountFlags,
+    alpha_to_coverage: bool,
+    vertex_layout: Option<GpuVertexLayout>,
+    label: String,
+    variants: Mutex<Vec<(Variant, vk::Pipeline)>>,
+}
+
+impl Drop for RenderCore {
+    fn drop(&mut self) {
+        let device = &self.layouts.core.device;
+        let variants = self.variants.get_mut().expect("render variants poisoned");
+        unsafe {
+            for &(_, raw) in variants.iter() {
+                device.destroy_pipeline(raw, None);
+            }
+            device.destroy_shader_module(self.module, None);
+        }
+    }
+}
+
+fn blend_factor(factor: GpuBlendFactor) -> vk::BlendFactor {
+    match factor {
+        GpuBlendFactor::Zero => vk::BlendFactor::ZERO,
+        GpuBlendFactor::One => vk::BlendFactor::ONE,
+        GpuBlendFactor::SrcAlpha => vk::BlendFactor::SRC_ALPHA,
+        GpuBlendFactor::OneMinusSrcAlpha => vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+        GpuBlendFactor::DstAlpha => vk::BlendFactor::DST_ALPHA,
+        GpuBlendFactor::OneMinusDstAlpha => vk::BlendFactor::ONE_MINUS_DST_ALPHA,
+        GpuBlendFactor::SrcColor => vk::BlendFactor::SRC_COLOR,
+        GpuBlendFactor::OneMinusSrcColor => vk::BlendFactor::ONE_MINUS_SRC_COLOR,
+        GpuBlendFactor::DstColor => vk::BlendFactor::DST_COLOR,
+        GpuBlendFactor::OneMinusDstColor => vk::BlendFactor::ONE_MINUS_DST_COLOR,
+    }
+}
+
+fn blend_op(op: GpuBlendOp) -> vk::BlendOp {
+    match op {
+        GpuBlendOp::Add => vk::BlendOp::ADD,
+        GpuBlendOp::Subtract => vk::BlendOp::SUBTRACT,
+        GpuBlendOp::ReverseSubtract => vk::BlendOp::REVERSE_SUBTRACT,
+        GpuBlendOp::Min => vk::BlendOp::MIN,
+        GpuBlendOp::Max => vk::BlendOp::MAX,
+    }
+}
+
+fn vertex_format(format: GpuVertexFormat) -> vk::Format {
+    match format {
+        GpuVertexFormat::Float32 => vk::Format::R32_SFLOAT,
+        GpuVertexFormat::Float32x2 => vk::Format::R32G32_SFLOAT,
+        GpuVertexFormat::Float32x3 => vk::Format::R32G32B32_SFLOAT,
+        GpuVertexFormat::Float32x4 => vk::Format::R32G32B32A32_SFLOAT,
+        GpuVertexFormat::Uint32 => vk::Format::R32_UINT,
+        GpuVertexFormat::Uint8x4 => vk::Format::R8G8B8A8_UINT,
+    }
+}
+
+pub(crate) fn compare_op(compare: GpuCompareFunction) -> vk::CompareOp {
+    match compare {
+        GpuCompareFunction::Never => vk::CompareOp::NEVER,
+        GpuCompareFunction::Less => vk::CompareOp::LESS,
+        GpuCompareFunction::Equal => vk::CompareOp::EQUAL,
+        GpuCompareFunction::LessEqual => vk::CompareOp::LESS_OR_EQUAL,
+        GpuCompareFunction::Greater => vk::CompareOp::GREATER,
+        GpuCompareFunction::NotEqual => vk::CompareOp::NOT_EQUAL,
+        GpuCompareFunction::GreaterEqual => vk::CompareOp::GREATER_OR_EQUAL,
+        GpuCompareFunction::Always => vk::CompareOp::ALWAYS,
+    }
+}
+
+impl RenderCore {
+    /// The `VkPipeline` for `variant`, built on first use.
+    pub(crate) fn pipeline(&self, variant: Variant) -> vk::Pipeline {
+        let mut variants = self.variants.lock().expect("render variants poisoned");
+        if let Some(&(_, raw)) = variants.iter().find(|(v, _)| *v == variant) {
+            return raw;
+        }
+        let raw = self.build(variant, vk::PipelineCache::null());
+        variants.push((variant, raw));
+        raw
+    }
+
+    fn build(&self, (primitive, fill): Variant, cache: vk::PipelineCache) -> vk::Pipeline {
+        let core = &self.layouts.core;
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(self.module)
+                .name(&self.vs_entry),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(self.module)
+                .name(&self.fs_entry),
+        ];
+        let buffers: Vec<vk::VertexInputBindingDescription> = self
+            .vertex_layout
+            .iter()
+            .map(|layout| vk::VertexInputBindingDescription {
+                binding: 0,
+                stride: layout.stride,
+                input_rate: vk::VertexInputRate::VERTEX,
+            })
+            .collect();
+        let attributes: Vec<vk::VertexInputAttributeDescription> = self
+            .vertex_layout
+            .iter()
+            .flat_map(|layout| &layout.attributes)
+            .map(|a| vk::VertexInputAttributeDescription {
+                location: a.shader_location,
+                binding: 0,
+                format: vertex_format(a.format),
+                offset: a.offset,
+            })
+            .collect();
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&buffers)
+            .vertex_attribute_descriptions(&attributes);
+        let input_assembly =
+            vk::PipelineInputAssemblyStateCreateInfo::default().topology(match primitive {
+                GpuPrimitiveType::Triangle => vk::PrimitiveTopology::TRIANGLE_LIST,
+                GpuPrimitiveType::Line => vk::PrimitiveTopology::LINE_LIST,
+                GpuPrimitiveType::Point => vk::PrimitiveTopology::POINT_LIST,
+            });
+        let viewport = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(match fill {
+                GpuTriangleFillMode::Fill => vk::PolygonMode::FILL,
+                GpuTriangleFillMode::Lines => vk::PolygonMode::LINE,
+            })
+            .line_width(1.0);
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(self.samples)
+            .alpha_to_coverage_enable(self.alpha_to_coverage);
+        let depth = vk::PipelineDepthStencilStateCreateInfo::default();
+        // Auxiliary targets write raw values: only the colour target blends.
+        let attachments: Vec<vk::PipelineColorBlendAttachmentState> = (0..self.color_formats.len())
+            .map(|i| {
+                let state = vk::PipelineColorBlendAttachmentState::default()
+                    .color_write_mask(vk::ColorComponentFlags::RGBA);
+                match self.blend.filter(|_| i == 0) {
+                    Some(b) => state
+                        .blend_enable(true)
+                        .src_color_blend_factor(blend_factor(b.src_factor))
+                        .dst_color_blend_factor(blend_factor(b.dst_factor))
+                        .color_blend_op(blend_op(b.operation))
+                        .src_alpha_blend_factor(blend_factor(b.src_alpha_factor))
+                        .dst_alpha_blend_factor(blend_factor(b.dst_alpha_factor))
+                        .alpha_blend_op(blend_op(b.alpha_operation)),
+                    None => state,
+                }
+            })
+            .collect();
+        let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&DYNAMIC);
+        let mut rendering = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&self.color_formats)
+            .depth_attachment_format(self.depth_format);
+        let info = [vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth)
+            .color_blend_state(&blend)
+            .dynamic_state(&dynamic)
+            .layout(self.layouts.layout)
+            .push_next(&mut rendering)];
+        let raw = match unsafe { core.device.create_graphics_pipelines(cache, &info, None) } {
+            Ok(p) => p[0],
+            Err((_, e)) => panic!("{}: render pipeline: {e}", self.label),
+        };
+        core.name(raw, &self.label);
+        raw
+    }
+}
+
+/// Build the render pipeline for compiled SPIR-V, with the variant `desc`
+/// implies (points when it has a point size, else filled triangles).
+pub(crate) fn create_render(
+    core: &Arc<Core>,
+    cache: vk::PipelineCache,
+    slot_map: &SlotMap,
+    spirv: &[u32],
+    desc: &RenderPipelineDesc,
+) -> Arc<RenderCore> {
+    let label = desc.label;
+    let module = unsafe {
+        core.device
+            .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(spirv), None)
+    }
+    .unwrap_or_else(|e| panic!("{label}: shader module: {e}"));
+    let layouts = build_layouts(
+        core,
+        slot_map,
+        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+        label,
+    );
+    let mut render = RenderCore {
+        layouts,
+        module,
+        vs_entry: CString::new(desc.vs_entry).expect("entry point has no NUL"),
+        fs_entry: CString::new(desc.fs_entry).expect("entry point has no NUL"),
+        color_formats: desc
+            .color_format
+            .iter()
+            .chain(desc.aux_color_formats)
+            .map(|&f| vk_format(f))
+            .collect(),
+        blend: desc.blend,
+        depth_format: desc.depth_format.map_or(vk::Format::UNDEFINED, vk_format),
+        samples: vk::SampleCountFlags::from_raw(desc.sample_count.max(1)),
+        alpha_to_coverage: desc.alpha_to_coverage,
+        vertex_layout: desc.vertex_layout.cloned(),
+        label: label.to_string(),
+        variants: Mutex::new(Vec::new()),
+    };
+    let first = if desc.point_size_location.is_some() {
+        GpuPrimitiveType::Point
+    } else {
+        GpuPrimitiveType::Triangle
+    };
+    let raw = render.build((first, GpuTriangleFillMode::Fill), cache);
+    render
+        .variants
+        .get_mut()
+        .expect("render variants poisoned")
+        .push(((first, GpuTriangleFillMode::Fill), raw));
+    Arc::new(render)
 }
 
 /// The `VkPipelineCache` blob on disk beside where Metal keeps its binary

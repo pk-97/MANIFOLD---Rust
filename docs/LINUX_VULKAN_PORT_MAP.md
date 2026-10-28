@@ -107,7 +107,7 @@ The remaining raw-handle users are Mac-gated and stay Metal: `manifold-media/src
 - **Binding numbers** reach 72 (water shaders) with few distinct slots. `render_scene.wgsl` uses 37 distinct slots up to 57, and its composed entry points reach 53. Sparse Vulkan bindings are fine, and D2's one-set-per-draw has no 32-slot cap.
 - **`arrayLength`:** Metal counts the whole buffer and ignores the binding offset, Vulkan counts the bound range (design D9). P1 checks no shader binds a runtime-sized array at an offset.
 - **String substitution:** `create_specialized_compute_pipeline` (21 calls in 6 files) and `create_specialized_render_pipeline_depth_msaa` (`render_scene/pipelines.rs:462`) replace text in WGSL. So do `render_scene/pipelines.rs:189` and the water-surface `interior_fill.rs:27-28` and `surface_tiles.rs:39-40`. All of it is backend-neutral.
-- **Point size:** the `shader_common.rs:69-70` gate lifts in P2. The callers are `render_scene/pipelines.rs:376,610` and `render_scene/pass2_draw.rs:634`.
+- **Point size:** `shader_common::rebind_vertex_output_as_point_size` serves both backends. The callers are `render_scene/pipelines.rs:376,610` and `render_scene/pass2_draw.rs:634`.
 - **Hand-written MSL:** `metal/shadow_rays.msl` (4,610 lines, 20 kernels) and `metal/subsurface.msl` (559 lines, 3 kernels), compiled together at `raytrace/tracer.rs:820`. They use:
   - ray queries
   - `array<texture2d<float>, 64>` and writes to `texture2d_array`
@@ -208,7 +208,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 Each P1 batch adds its parity-kit tests and runs them on KosmicKrisp with synchronization validation. P1 is done when the compute kit is clean and the one full proof run at phase end is within tolerance.
 
 **After P1:**
-- P2: render and profiling.
+- P2: render done 29 Oct: pipelines on dynamic rendering, one `VkPipeline` per topology and fill mode with depth and cull state dynamic, MSAA, mipmaps, the long UI pass and the depth copy (`vulkan/pipeline.rs`, `vulkan/encoder/render.rs`); `render_parity_tests.rs` runs on both backends. Vulkan stills against Metal: DigitalPlants, Lissajous, NestedCubes and Wireframe identical, Scene within 1/255, MetallicGlass's fine moiré differs (shader math precision). Still open: the per-dispatch profiler.
 - P3: shared textures, the surface, and un-gating the app's native render and headless harness.
 - P4: Linux services (text, pacing, output placement, shortcuts, menu-only actions, clipboard, audio buffer and capture, keep-awake, thread priority, plugins as `.so`).
 - P5: video.

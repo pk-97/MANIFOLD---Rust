@@ -55,18 +55,13 @@ fn validate_module(module: naga::Module, label: &str) -> (naga::Module, naga::va
 /// (`[[point_size]]`, gated on `enable_point_size_builtin` which defaults
 /// on) all carry it. So the shader authors the member as a plain
 /// `@location(N) f32` output and this pass flips the binding post-parse.
-/// On a Vulkan backend the same decorated SPIR-V maps to
-/// `VK_DYNAMIC_STATE...`/pipeline viewport state with no extra work here.
+/// On Vulkan the decorated SPIR-V sets the point size directly.
 ///
 /// `vs_entry` names the vertex entry point whose RESULT struct must carry
 /// the member. Panics on any mismatch — bundled shader source is a
 /// compile-time input, so a wrong entry name or location is a developer
 /// error that must surface at boot (same doctrine as
 /// [`parse_and_validate_wgsl`]).
-///
-/// Compiled only with the Metal backend, its sole caller. Lift the gate when
-/// the Vulkan backend grows a point-topology pipeline that calls it.
-#[cfg(not(vulkan_backend))]
 pub(crate) fn rebind_vertex_output_as_point_size(
     module: naga::Module,
     vs_entry: &str,
@@ -104,6 +99,18 @@ pub(crate) fn rebind_vertex_output_as_point_size(
     module.types.replace(result_ty, ty);
     validate_module(module, label)
 }
+
+/// Copies a single-sample depth texture into an R32Float storage texture,
+/// one 16×16 group per tile (`GpuEncoder::copy_depth_to_float`).
+pub(crate) const DEPTH_TO_FLOAT_WGSL: &str = r#"@group(0) @binding(0) var source_tex: texture_depth_2d;
+@group(0) @binding(1) var output_tex: texture_storage_2d<r32float, write>;
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(output_tex);
+    if id.x >= dims.x || id.y >= dims.y { return; }
+    let depth = textureLoad(source_tex, vec2<i32>(id.xy), 0);
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(depth, 0.0, 0.0, 1.0));
+}"#;
 
 /// Generate optimised SPIR-V from a naga module:
 ///   1. zero workgroup memory from every invocation (`workgroup_zeroing`)

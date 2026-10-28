@@ -261,10 +261,16 @@ pub struct GpuRenderPipeline {
     pub slot_map: SlotMap,
     pub label: String,
     pub sample_count: u32,
+    pub(crate) inner: Arc<super::pipeline::RenderCore>,
 }
 
+/// Depth test settings, set as dynamic state when a pass begins.
 pub struct GpuDepthStencilState {
-    _reserved: (),
+    pub(crate) compare: vk::CompareOp,
+    pub(crate) write: bool,
+    /// The clear for this compare convention: reversed-Z states compare
+    /// Greater and clear to 0, forward states clear to 1.
+    pub(crate) clear_depth: f32,
 }
 
 /// A timeline semaphore, destroyed when the last handle drops.

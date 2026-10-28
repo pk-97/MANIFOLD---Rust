@@ -14,7 +14,7 @@
 use super::{Slot, SlotKind, SlotMap};
 use crate::shader_common::{
     classify_global, collect_entry_point_globals, compile_to_optimized_spirv,
-    parse_and_validate_wgsl,
+    parse_and_validate_wgsl, rebind_vertex_output_as_point_size,
 };
 
 /// Parse WGSL, introspect bindings, emit optimised SPIR-V for a compute
@@ -42,17 +42,20 @@ pub(super) fn compile_wgsl_to_spirv_compute(
 /// Parse WGSL, introspect bindings, emit optimised SPIR-V for a render
 /// pipeline (vertex + fragment entry points). Both stages share the
 /// SPIR-V module; Vulkan selects the entry point at `VkPipeline` creation
-/// time via `VkPipelineShaderStageCreateInfo::pName`.
-///
-// Render pipelines arrive in P2.
-#[allow(dead_code)]
+/// time via `VkPipelineShaderStageCreateInfo::pName`. `point_size_location`
+/// rebinds that vertex output to the point size.
 pub(super) fn compile_wgsl_to_spirv_render(
     wgsl_source: &str,
     vs_entry: &str,
     fs_entry: &str,
+    point_size_location: Option<u32>,
     label: &str,
 ) -> (SlotMap, Vec<u32>) {
     let (module, info) = parse_and_validate_wgsl(wgsl_source, label);
+    let (module, info) = match point_size_location {
+        Some(location) => rebind_vertex_output_as_point_size(module, vs_entry, location, label),
+        None => (module, info),
+    };
     let slot_map = build_slot_map_render(&module, vs_entry, fs_entry);
     let spirv = compile_to_optimized_spirv(&module, &info, label);
     (slot_map, spirv)

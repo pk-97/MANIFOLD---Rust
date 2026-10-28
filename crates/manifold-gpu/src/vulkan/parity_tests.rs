@@ -250,9 +250,11 @@ fn parity_dispatch_chains_storage_and_uniform_bytes() {
         assert_eq!(values[i], 2.0 * i as f32 + 1.0, "mid[{i}]");
         assert_eq!(values[n as usize + i], 6.0 * i as f32 + 2.0, "out[{i}]");
     }
-    // The same pipeline from the cache; a second frame reuses the resources.
+    // The same pipeline from the cache (beside the encoder's depth-copy
+    // pipeline); a second frame reuses the resources.
+    let cached = device.compute_pipeline_cache_len();
     let again = device.create_compute_pipeline(AFFINE, "main", "parity affine");
-    assert_eq!(device.compute_pipeline_cache_len(), 1);
+    assert_eq!(device.compute_pipeline_cache_len(), cached);
     let mut enc = device.create_encoder("parity dispatch 2");
     affine(&mut enc, &again, &src, &readback, -1.0, 0.0, n);
     enc.commit_and_wait().expect("GPU work completes");

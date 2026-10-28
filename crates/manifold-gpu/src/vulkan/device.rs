@@ -7,6 +7,7 @@
 #![allow(unused_variables)]
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ash::vk;
@@ -16,7 +17,9 @@ use gpu_allocator::vulkan::{AllocationCreateDesc, AllocationScheme};
 use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 
 use super::core::{Core, vk_format};
-use super::pipeline::{DiskPipelineCache, SpirvCache, compute_hash, create_compute};
+use super::pipeline::{
+    DiskPipelineCache, SpirvCache, compare_op, compute_hash, create_compute, create_render,
+};
 use super::submit::Queue;
 use super::types::{BufferCore, EventCore, ImageCore, SamplerCore, ViewCore};
 use super::*;
@@ -32,6 +35,10 @@ pub struct GpuDevice {
     linear_sampler: OnceLock<GpuSampler>,
     /// Compute pipelines by shader translation identity, as on Metal.
     compute_cache: Mutex<HashMap<u64, GpuComputePipeline>>,
+    /// Render pipelines by shader translation identity and target state.
+    render_cache: Mutex<HashMap<u64, GpuRenderPipeline>>,
+    /// `copy_depth_to_float`'s pipeline, built with the first encoder.
+    depth_to_float: OnceLock<Arc<GpuComputePipeline>>,
     pipeline_cache: Mutex<Option<DiskPipelineCache>>,
     spirv_cache: Mutex<Option<SpirvCache>>,
     /// Fence-stamped drop retirement, set once at pipeline init; every
@@ -64,7 +71,7 @@ impl PoolAllocator {
         desc: &GpuTextureDesc,
         retire: Option<Arc<crate::RetireMark>>,
     ) -> GpuTexture {
-        let mut texture = create_texture_on(&self.core, &self.queue, desc, retire)
+        let mut texture = create_texture_on(&self.core, &self.queue, desc, 1, retire)
             .unwrap_or_else(|e| panic!("Vulkan: TexturePool allocation failed: {e}"));
         texture.depth = 1;
         texture
@@ -129,6 +136,7 @@ fn create_texture_on(
     core: &Arc<Core>,
     queue: &Queue,
     desc: &GpuTextureDesc,
+    samples: u32,
     retire: Option<Arc<crate::RetireMark>>,
 ) -> Result<GpuTexture, String> {
     if alloc_log_enabled() {
@@ -164,7 +172,7 @@ fn create_texture_on(
         })
         .mip_levels(mip_levels)
         .array_layers(layers)
-        .samples(vk::SampleCountFlags::TYPE_1)
+        .samples(vk::SampleCountFlags::from_raw(samples))
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(image_usage(core, desc))
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -302,6 +310,8 @@ impl GpuDevice {
             resource_scope_id: crate::alloc_counts::next_resource_scope_id(),
             linear_sampler: OnceLock::new(),
             compute_cache: Mutex::new(HashMap::new()),
+            render_cache: Mutex::new(HashMap::new()),
+            depth_to_float: OnceLock::new(),
             pipeline_cache: Mutex::new(None),
             spirv_cache: Mutex::new(None),
             retirement: OnceLock::new(),
@@ -493,7 +503,7 @@ impl GpuDevice {
     /// Fallible sibling of [`Self::create_texture`] for staged resource
     /// preparation.
     pub fn try_create_texture(&self, desc: &GpuTextureDesc) -> Result<GpuTexture, String> {
-        let texture = create_texture_on(&self.core, &self.queue, desc, self.retirement_mark())?;
+        let texture = create_texture_on(&self.core, &self.queue, desc, 1, self.retirement_mark())?;
         crate::alloc_counts::record_allocation(self.resource_scope_id, TEXTURE_ALLOCATION);
         Ok(texture)
     }
@@ -602,7 +612,10 @@ impl GpuDevice {
     /// Sibling of [`Self::compute_pipeline_cache_len`] for render pipelines
     /// (e.g.
     pub fn render_pipeline_cache_len(&self) -> usize {
-        todo!("vulkan P2")
+        self.render_cache
+            .lock()
+            .expect("render cache poisoned")
+            .len()
     }
 
     /// Create a compute pipeline from WGSL source.
@@ -720,24 +733,120 @@ impl GpuDevice {
 
     /// Create (or fetch from the cache) a render pipeline.
     pub fn create_render_pipeline(&self, desc: &RenderPipelineDesc) -> GpuRenderPipeline {
-        todo!("vulkan P2")
+        let mut source = desc.wgsl_source.to_string();
+        for &(pattern, replacement) in desc.specializations {
+            source = source.replace(pattern, replacement);
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        "vk-render-v1".hash(&mut hasher);
+        source.hash(&mut hasher);
+        desc.vs_entry.hash(&mut hasher);
+        desc.fs_entry.hash(&mut hasher);
+        desc.point_size_location.hash(&mut hasher);
+        let shader = hasher.finish();
+        desc.color_format.hash(&mut hasher);
+        desc.blend.hash(&mut hasher);
+        desc.aux_color_formats.hash(&mut hasher);
+        desc.depth_format.hash(&mut hasher);
+        desc.sample_count.max(1).hash(&mut hasher);
+        desc.alpha_to_coverage.hash(&mut hasher);
+        desc.vertex_layout.hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some(cached) = self
+            .render_cache
+            .lock()
+            .expect("render cache poisoned")
+            .get(&key)
+        {
+            return cached.clone();
+        }
+        record_cold_touch(ColdTouchKind::PipelineCompile);
+        let cached = self
+            .spirv_cache
+            .lock()
+            .expect("SPIR-V cache poisoned")
+            .as_ref()
+            .and_then(|cache| cache.get(shader));
+        let (slot_map, spirv) = match cached {
+            Some((slot_map, spirv, _)) => (slot_map, spirv),
+            None => {
+                let (slot_map, spirv) = super::shader_compiler::compile_wgsl_to_spirv_render(
+                    &source,
+                    desc.vs_entry,
+                    desc.fs_entry,
+                    desc.point_size_location,
+                    desc.label,
+                );
+                if let Some(cache) = self
+                    .spirv_cache
+                    .lock()
+                    .expect("SPIR-V cache poisoned")
+                    .as_ref()
+                {
+                    cache.put(shader, &slot_map, &spirv, [0; 3]);
+                }
+                (slot_map, spirv)
+            }
+        };
+        let disk = self.pipeline_cache.lock().expect("pipeline cache poisoned");
+        let inner = create_render(
+            &self.core,
+            disk.as_ref().map_or(vk::PipelineCache::null(), |c| c.raw),
+            &slot_map,
+            &spirv,
+            desc,
+        );
+        drop(disk);
+        let pipeline = GpuRenderPipeline {
+            slot_map,
+            label: desc.label.to_string(),
+            sample_count: desc.sample_count.max(1),
+            inner,
+        };
+        self.render_cache
+            .lock()
+            .expect("render cache poisoned")
+            .insert(key, pipeline.clone());
+        pipeline
     }
 
     /// Prepare device-global pipelines for texture clears and depth-to-float
-    /// conversion before encoding work.
+    /// conversion before encoding work. Clears record vkCmdClearColorImage,
+    /// so only depth-to-float compiles.
     pub fn prepare_utility_pipelines(&self) {
-        // Clears record vkCmdClearColorImage, so there is nothing to compile;
-        // depth-to-float arrives with render passes (P2).
+        self.depth_to_float();
+    }
+
+    fn depth_to_float(&self) -> &Arc<GpuComputePipeline> {
+        self.depth_to_float.get_or_init(|| {
+            Arc::new(self.create_compute_pipeline(
+                crate::shader_common::DEPTH_TO_FLOAT_WGSL,
+                "cs_main",
+                "Depth to Float",
+            ))
+        })
     }
 
     /// Create a new command encoder for one frame's GPU work.
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
-        GpuEncoder::new(self.core.clone(), self.queue.clone(), label)
+        GpuEncoder::new(
+            self.core.clone(),
+            self.queue.clone(),
+            label,
+            self.depth_to_float().clone(),
+        )
     }
 
     /// Create a compiled depth-stencil state object.
     pub fn create_depth_stencil_state(&self, desc: &GpuDepthStencilDesc) -> GpuDepthStencilState {
-        todo!("vulkan P2")
+        GpuDepthStencilState {
+            compare: compare_op(desc.compare),
+            write: desc.write_enabled,
+            clear_depth: match desc.compare {
+                GpuCompareFunction::Greater | GpuCompareFunction::GreaterEqual => 0.0,
+                _ => 1.0,
+            },
+        }
     }
 
     /// Create a shared event for CPU↔GPU synchronization.
@@ -760,7 +869,8 @@ impl GpuDevice {
         self.retirement.get().map(|mark| mark.frame_clock())
     }
 
-    /// Create a memoryless multisample texture for MSAA render passes.
+    /// Create a multisample texture for MSAA render passes. Discrete GPUs
+    /// have no memoryless storage, so it gets memory like any other.
     pub fn create_texture_msaa_memoryless(
         &self,
         width: u32,
@@ -769,11 +879,10 @@ impl GpuDevice {
         sample_count: u32,
         label: &str,
     ) -> GpuTexture {
-        todo!("vulkan P2")
+        self.create_texture_msaa(width, height, format, sample_count, label)
     }
 
-    /// Create a real-storage (private) multisample texture for MSAA render
-    /// passes.
+    /// Create a multisample render target for MSAA render passes.
     pub fn create_texture_msaa(
         &self,
         width: u32,
@@ -782,6 +891,23 @@ impl GpuDevice {
         sample_count: u32,
         label: &str,
     ) -> GpuTexture {
-        todo!("vulkan P2")
+        let desc = GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET,
+            label,
+            mip_levels: 1,
+        };
+        create_texture_on(
+            &self.core,
+            &self.queue,
+            &desc,
+            sample_count,
+            self.retirement_mark(),
+        )
+        .unwrap_or_else(|e| panic!("{label}: MSAA texture allocation failed — {e}"))
     }
 }

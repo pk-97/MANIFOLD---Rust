@@ -70,18 +70,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{
     )
 }
 
-fn depth_to_float_wgsl() -> &'static str {
-    r#"@group(0) @binding(0) var source_tex: texture_depth_2d;
-@group(0) @binding(1) var output_tex: texture_storage_2d<r32float, write>;
-@compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(output_tex);
-    if id.x >= dims.x || id.y >= dims.y { return; }
-    let depth = textureLoad(source_tex, vec2<i32>(id.xy), 0);
-    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(depth, 0.0, 0.0, 1.0));
-}"#
-}
-
 /// Pre-compiled compute clear and depth-copy pipelines for texture utilities.
 pub(super) struct ClearPipelines {
     rgba16float: GpuComputePipeline,
@@ -1365,7 +1353,7 @@ impl GpuDevice {
                     self.create_compute_pipeline(&wgsl, "cs_main", "Clear r32uint")
                 },
                 depth_to_float: self.create_compute_pipeline(
-                    depth_to_float_wgsl(),
+                    crate::shader_common::DEPTH_TO_FLOAT_WGSL,
                     "cs_main",
                     "Depth to Float",
                 ),

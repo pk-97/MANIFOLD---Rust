@@ -4,8 +4,8 @@
 //! section 5). Event waits and signals split the recording into batches that
 //! one `vkQueueSubmit2` sends together; the last batch signals the queue's
 //! timeline, whose waiter runs the completion handlers and recycles the
-//! resources (D6, D8). Render passes and profiling name the phase that
-//! builds them.
+//! resources (D6, D8). Render passes are in `render.rs`; profiling names the
+//! phase that builds it.
 
 // Stub bodies name the phase that builds them (design section 9); their
 // parameters are unused until then.
@@ -19,11 +19,14 @@ use ash::vk;
 use ash::vk::{AccessFlags2 as A, Handle, PipelineStageFlags2 as S};
 
 use super::core::Core;
+use super::pipeline::Layouts;
 use super::span_timer::SpanSlot;
 use super::submit::{Batch, FrameResources, Keep, Queue, is_device_lost};
 use super::tracker::Tracker;
 use super::*;
 use crate::*;
+
+mod render;
 
 // Descriptor records are built as words; the layout word below holds a
 // 32-bit enum in its low half.
@@ -58,6 +61,12 @@ pub struct GpuEncoder {
     pub(crate) span: Option<Arc<SpanSlot>>,
     /// The span the next submit ends.
     pub(crate) span_closing: Option<Arc<SpanSlot>>,
+    /// One pass's descriptor sets, reused across passes: `None` for a draw
+    /// that is skipped.
+    draw_sets: Vec<Option<Option<vk::DescriptorSet>>>,
+    /// The open long-lived pass (`begin_render_pass`).
+    ui_pass: Option<render::UiPass>,
+    depth_to_float: Arc<GpuComputePipeline>,
 }
 
 type GpuTimeTap = Arc<dyn Fn(f64, f64) + Send + Sync>;
@@ -88,6 +97,21 @@ fn image_key(texture: &GpuTexture) -> usize {
 
 const OPEN: &str = "a submitted encoder records nothing";
 
+/// Work whose bindings do not fit its shader: dev and test builds panic so
+/// the mistake is loud and local; release builds log it once and skip the
+/// work rather than crash a show.
+fn refuse(msg: String) {
+    static LOGGED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    if cfg!(debug_assertions) {
+        panic!("{msg}");
+    }
+    let mut logged = LOGGED.lock().expect("refusal log poisoned");
+    if !logged.contains(&msg) {
+        log::error!("[Vulkan] skipped: {msg}");
+        logged.push(msg);
+    }
+}
+
 /// A blocking wait that failed: dev and test builds panic so a GPU error is
 /// loud and local; release builds log and carry on rather than crash a show.
 fn verify(result: Result<(), String>) {
@@ -100,7 +124,12 @@ fn verify(result: Result<(), String>) {
 }
 
 impl GpuEncoder {
-    pub(crate) fn new(core: Arc<Core>, queue: Arc<Queue>, label: &str) -> Self {
+    pub(crate) fn new(
+        core: Arc<Core>,
+        queue: Arc<Queue>,
+        label: &str,
+        depth_to_float: Arc<GpuComputePipeline>,
+    ) -> Self {
         let res = FrameResources::take(&core);
         let mut encoder = Self {
             core,
@@ -121,6 +150,9 @@ impl GpuEncoder {
             tap: None,
             span: None,
             span_closing: None,
+            draw_sets: Vec::new(),
+            ui_pass: None,
+            depth_to_float,
         };
         encoder.open();
         encoder
@@ -141,6 +173,7 @@ impl GpuEncoder {
     /// End the open command buffer as a batch that signals `signals`. Its
     /// writes become visible to the host once a signal is seen.
     fn close(&mut self, signals: Vec<(vk::Semaphore, u64)>) {
+        self.end_render_pass();
         let barrier = [vk::MemoryBarrier2::default()
             .src_stage_mask(S::ALL_COMMANDS)
             .src_access_mask(A::MEMORY_WRITE)
@@ -169,6 +202,8 @@ impl GpuEncoder {
     /// The tracker's pending barrier, then the open command buffer for one
     /// more command.
     fn record(&mut self) -> vk::CommandBuffer {
+        // Any other command ends the long-lived pass, as on Metal.
+        self.end_render_pass();
         self.tracker.flush(&self.core.device, self.cmd);
         self.dirty = true;
         self.cmd
@@ -196,10 +231,17 @@ impl GpuEncoder {
         image_key(texture)
     }
 
-    /// Bind `pipeline` and a descriptor set for `bindings`, tracking every
-    /// access and keeping every resource alive until the submit completes.
-    fn bind_compute(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding]) {
-        let inner = &pipeline.inner;
+    /// Track `bindings`' accesses at `stages`, keep them alive until the
+    /// submit completes, and the descriptor set holding them (cached per
+    /// layout and records): `Ok(None)` when the pipeline binds nothing, an
+    /// error when a binding the shader names is missing or of the wrong kind.
+    fn descriptor_set(
+        &mut self,
+        layouts: &Layouts,
+        label: &str,
+        bindings: &[GpuBinding],
+        stages: S,
+    ) -> Result<Option<vk::DescriptorSet>, String> {
         let Self {
             core,
             res,
@@ -209,12 +251,12 @@ impl GpuEncoder {
         } = self;
         let res = res.as_mut().expect(OPEN);
         key.clear();
-        key.push(inner.set_layout.as_raw());
-        for &(wgsl, slot) in &inner.slots {
+        key.push(layouts.set_layout.as_raw());
+        for &(wgsl, slot) in &layouts.slots {
             let binding = bindings
                 .iter()
                 .find(|b| b.binding() == wgsl)
-                .unwrap_or_else(|| panic!("{}: @binding({wgsl}) is not bound", pipeline.label));
+                .ok_or_else(|| format!("{label}: @binding({wgsl}) is not bound"))?;
             let record = match (binding, slot.kind) {
                 (
                     GpuBinding::Buffer { buffer, offset, .. },
@@ -229,11 +271,11 @@ impl GpuEncoder {
                     if slot.writable {
                         tracker.write(
                             buffer_key(buffer),
-                            S::COMPUTE_SHADER,
+                            stages,
                             A::SHADER_STORAGE_READ | A::SHADER_STORAGE_WRITE,
                         );
                     } else {
-                        tracker.read(buffer_key(buffer), S::COMPUTE_SHADER);
+                        tracker.read(buffer_key(buffer), stages);
                     }
                     res.keep.push(Keep::Buffer(buffer.inner.clone()));
                     buffer_record(buffer.inner.raw, *offset, range)
@@ -255,11 +297,11 @@ impl GpuEncoder {
                     if slot.writable {
                         tracker.write(
                             image_key(texture),
-                            S::COMPUTE_SHADER,
+                            stages,
                             A::SHADER_STORAGE_READ | A::SHADER_STORAGE_WRITE,
                         );
                     } else {
-                        tracker.read(image_key(texture), S::COMPUTE_SHADER);
+                        tracker.read(image_key(texture), stages);
                     }
                     res.keep.push(Keep::View(texture.view.clone()));
                     image_record(
@@ -276,29 +318,46 @@ impl GpuEncoder {
                         vk::ImageLayout::UNDEFINED,
                     )
                 }
-                _ => panic!(
-                    "{}: @binding({wgsl}) is a {:?} slot",
-                    pipeline.label, slot.kind
-                ),
+                _ => {
+                    return Err(format!(
+                        "{label}: @binding({wgsl}) is a {:?} slot",
+                        slot.kind
+                    ));
+                }
             };
             key.extend_from_slice(&record);
         }
-        let set = if inner.template == vk::DescriptorUpdateTemplate::null() {
-            None
-        } else if let Some(&set) = res.sets.get(key.as_slice()) {
-            Some(set)
-        } else {
-            let set = res.allocate_set(core, inner.set_layout);
-            unsafe {
-                core.device.update_descriptor_set_with_template(
-                    set,
-                    inner.template,
-                    key[1..].as_ptr().cast(),
-                )
-            };
-            res.sets.insert(key.as_slice().into(), set);
-            Some(set)
+        if layouts.template == vk::DescriptorUpdateTemplate::null() {
+            return Ok(None);
+        }
+        if let Some(&set) = res.sets.get(key.as_slice()) {
+            return Ok(Some(set));
+        }
+        let set = res.allocate_set(core, layouts.set_layout);
+        unsafe {
+            core.device.update_descriptor_set_with_template(
+                set,
+                layouts.template,
+                key[1..].as_ptr().cast(),
+            )
         };
+        res.sets.insert(key.as_slice().into(), set);
+        Ok(Some(set))
+    }
+
+    /// Bind `pipeline` and a descriptor set for `bindings`; `false`, with the
+    /// refusal reported, when the bindings do not fit the shader.
+    fn bind_compute(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding]) -> bool {
+        let inner = &pipeline.inner;
+        let set =
+            match self.descriptor_set(&inner.layouts, &pipeline.label, bindings, S::COMPUTE_SHADER)
+            {
+                Ok(set) => set,
+                Err(msg) => {
+                    refuse(msg);
+                    return false;
+                }
+            };
         if self.bound_pipeline != inner.raw {
             unsafe {
                 self.core.device.cmd_bind_pipeline(
@@ -318,7 +377,7 @@ impl GpuEncoder {
                 self.core.device.cmd_bind_descriptor_sets(
                     self.cmd,
                     vk::PipelineBindPoint::COMPUTE,
-                    inner.layout,
+                    inner.layouts.layout,
                     0,
                     &[set],
                     &[],
@@ -326,6 +385,7 @@ impl GpuEncoder {
             };
             self.bound_set = set;
         }
+        true
     }
 
     /// Close the open command buffer and submit every batch; the queue's
@@ -525,7 +585,9 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
-        self.bind_compute(pipeline, bindings);
+        if !self.bind_compute(pipeline, bindings) {
+            return;
+        }
         let cmd = self.record();
         let [x, y, z] = workgroups;
         unsafe { self.core.device.cmd_dispatch(cmd, x, y, z) };
@@ -542,7 +604,9 @@ impl GpuEncoder {
         offset: u64,
         label: &str,
     ) {
-        self.bind_compute(pipeline, bindings);
+        if !self.bind_compute(pipeline, bindings) {
+            return;
+        }
         let key = self.keep_buffer(args);
         self.tracker.read(key, S::DRAW_INDIRECT);
         let cmd = self.record();
@@ -568,49 +632,6 @@ impl GpuEncoder {
             )
         };
         self.tracker.compute_barrier_recorded();
-    }
-
-    /// Run `draws` in one render pass described by `pass`, then the pass's
-    /// second group after switching its depth state.
-    pub fn draw(&mut self, pass: &DrawPass, draws: &[Draw], label: &str) {
-        todo!("vulkan P2")
-    }
-
-    /// Begin a render pass that stays alive across multiple draw calls.
-    pub fn begin_render_pass(
-        &mut self,
-        target: &GpuTexture,
-        load_action: crate::GpuLoadAction,
-        label: &str,
-    ) {
-        todo!("vulkan P2")
-    }
-
-    /// Draw indexed geometry within an active render pass.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_in_render_pass(
-        &mut self,
-        pipeline: &GpuRenderPipeline,
-        bindings: &[GpuBinding],
-        vertex_buffer: &GpuBuffer,
-        vertex_offset: u64,
-        index_buffer: &GpuBuffer,
-        index_count: u32,
-        index_buffer_offset: u64,
-        viewport: Option<(f32, f32, f32, f32)>,
-        label: &str,
-    ) {
-        todo!("vulkan P2")
-    }
-
-    /// Set the scissor rectangle on the active render pass.
-    pub fn set_scissor_rect(&mut self, x: u32, y: u32, w: u32, h: u32) {
-        todo!("vulkan P2")
-    }
-
-    /// End the active render pass.
-    pub fn end_render_pass(&mut self) {
-        todo!("vulkan P2")
     }
 
     /// Clear a texture to a solid color.
@@ -657,7 +678,25 @@ impl GpuEncoder {
 
     /// Copy a single-sample depth texture into an R32Float storage texture.
     pub fn copy_depth_to_float(&mut self, source: &GpuTexture, target: &GpuTexture) {
-        todo!("vulkan P2")
+        assert_eq!(source.format, GpuTextureFormat::Depth32Float);
+        assert_eq!(target.format, GpuTextureFormat::R32Float);
+        assert_eq!((source.width, source.height), (target.width, target.height));
+        let pipeline = self.depth_to_float.clone();
+        self.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: source,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: target,
+                },
+            ],
+            [target.width.div_ceil(16), target.height.div_ceil(16), 1],
+            "Copy Depth To Float",
+        );
     }
 
     /// Fill a buffer with zeros via blit encoder.
@@ -671,10 +710,57 @@ impl GpuEncoder {
         };
     }
 
-    /// Generate the mipmap chain for a texture using Metal's optimized
-    /// blit-encoder path.
+    /// Generate the mipmap chain: each level a filtered blit of the one
+    /// above, linear where the format allows it.
     pub fn generate_mipmaps(&mut self, texture: &GpuTexture) {
-        todo!("vulkan P2")
+        let view = texture.view.clone();
+        let key = self.keep_texture(texture);
+        let filter = if self
+            .core
+            .format_features(texture.format)
+            .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR)
+        {
+            vk::Filter::LINEAR
+        } else {
+            warn_nearest_mipmaps(texture.format);
+            vk::Filter::NEAREST
+        };
+        let volume = view.layer_count == 1 && texture.depth > 1;
+        let corner = |level: u32| vk::Offset3D {
+            x: (texture.width >> level).max(1) as i32,
+            y: (texture.height >> level).max(1) as i32,
+            z: if volume {
+                (texture.depth >> level).max(1) as i32
+            } else {
+                1
+            },
+        };
+        let layers = |mip: u32| vk::ImageSubresourceLayers {
+            aspect_mask: view.image.aspect,
+            mip_level: mip,
+            base_array_layer: view.base_layer,
+            layer_count: view.layer_count,
+        };
+        for level in 1..view.mip_count {
+            let cmd = self.transfer(&[key], &[key]);
+            let region = vk::ImageBlit {
+                src_subresource: layers(view.base_mip + level - 1),
+                src_offsets: [vk::Offset3D::default(), corner(level - 1)],
+                dst_subresource: layers(view.base_mip + level),
+                dst_offsets: [vk::Offset3D::default(), corner(level)],
+            };
+            unsafe {
+                self.core.device.cmd_blit_image(
+                    cmd,
+                    view.image.raw,
+                    vk::ImageLayout::GENERAL,
+                    view.image.raw,
+                    vk::ImageLayout::GENERAL,
+                    &[region],
+                    filter,
+                )
+            };
+        }
     }
 
     /// Copy texture to texture via blit encoder.
@@ -1061,6 +1147,16 @@ impl GpuEncoder {
 }
 
 /// The first mip and layer a texture's view sees.
+/// A format without linear filtering gets nearest mipmaps; say so once.
+fn warn_nearest_mipmaps(format: GpuTextureFormat) {
+    static WARNED: std::sync::Mutex<Vec<GpuTextureFormat>> = std::sync::Mutex::new(Vec::new());
+    let mut warned = WARNED.lock().expect("mipmap warnings poisoned");
+    if !warned.contains(&format) {
+        warned.push(format);
+        log::warn!("[Vulkan] {format:?} has no linear filtering here; its mipmaps use nearest");
+    }
+}
+
 fn subresource(texture: &GpuTexture) -> vk::ImageSubresourceLayers {
     let view = &texture.view;
     vk::ImageSubresourceLayers {

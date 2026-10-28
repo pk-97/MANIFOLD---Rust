@@ -84,10 +84,10 @@ pub mod gpu_fault;
 pub mod firmware_reports;
 mod gpu_profile;
 pub use gpu_profile::*;
-// Vulkan reads the draw descriptors once it draws (P2).
-#[cfg_attr(vulkan_backend, allow(dead_code))]
 mod draw_types;
 pub use draw_types::*;
+#[cfg(test)]
+mod render_parity_tests;
 
 // Backend-neutral frame lifetime: the frame fence, fence-stamped drop
 // retirement and the texture pool. Each backend supplies small hooks

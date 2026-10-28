@@ -37,6 +37,8 @@ mod types;
 
 #[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+pub(crate) use core::validation_error_count;
 mod pipeline;
 mod submit;
 mod tracker;

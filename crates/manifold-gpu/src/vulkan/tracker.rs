@@ -69,6 +69,11 @@ impl Tracker {
         };
     }
 
+    /// Whether the accesses so far need a barrier before the next command.
+    pub(crate) fn pending(&self) -> bool {
+        !self.src_stage.is_empty()
+    }
+
     /// Record the barrier the pending accesses need, if any.
     pub(crate) fn flush(&mut self, device: &ash::Device, cmd: vk::CommandBuffer) {
         if self.src_stage.is_empty() {
