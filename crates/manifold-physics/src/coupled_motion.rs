@@ -12,6 +12,127 @@ use crate::{BodyDynamics, Seconds};
 /// Support points a body's prediction reads: four faces' corners.
 pub const MAX_SUPPORT_POINTS: usize = 16;
 
+/// Support points the bridge reads before the prediction keeps its best
+/// [`MAX_SUPPORT_POINTS`].
+pub(crate) const SUPPORT_READ: usize = 64;
+
+/// Which of `rows` (the bridge's 20-float support points, first points of
+/// every patch leading) a prediction of `keep` points reads. A body with
+/// no more than `keep` points keeps all. Otherwise: the first point of
+/// every patch (as many as fit); then, per cluster of near-parallel normals,
+/// the extreme points of the footprint along the eight directions in the
+/// tangent plane (diagonals first, so a square's corners all stay); then
+/// repeatedly the point farthest from every one already kept. Deterministic
+/// and allocation-free; a tie goes to the earlier row.
+pub(crate) fn choose_support_rows(rows: &[[f32; 20]], keep: usize) -> [bool; SUPPORT_READ] {
+    let n = rows.len().min(SUPPORT_READ);
+    let mut chosen = [false; SUPPORT_READ];
+    if n <= keep {
+        chosen[..n].fill(true);
+        return chosen;
+    }
+    let lever = |i: usize| [rows[i][0], rows[i][1], rows[i][2]];
+    let normal = |i: usize| [rows[i][4], rows[i][5], rows[i][6]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let mut count = 0;
+
+    let mut patches = [0u32; SUPPORT_READ];
+    let mut patch_count = 0;
+    for i in 0..n {
+        let patch = rows[i][7] as u32;
+        if count < keep && !patches[..patch_count].contains(&patch) {
+            patches[patch_count] = patch;
+            patch_count += 1;
+            chosen[i] = true;
+            count += 1;
+        }
+    }
+
+    let mut cluster = [0usize; SUPPORT_READ];
+    let mut reps = [0usize; SUPPORT_READ];
+    let mut rep_count = 0;
+    for (i, slot) in cluster.iter_mut().enumerate().take(n) {
+        let found = (0..rep_count).find(|&c| dot(normal(reps[c]), normal(i)) > 0.98);
+        *slot = found.unwrap_or_else(|| {
+            reps[rep_count] = i;
+            rep_count += 1;
+            rep_count - 1
+        });
+    }
+    for (c, &rep) in reps.iter().enumerate().take(rep_count) {
+        let nrm = normal(rep);
+        let a = nrm.map(f32::abs);
+        let axis = if a[0] <= a[1] && a[0] <= a[2] {
+            [1.0, 0.0, 0.0]
+        } else if a[1] <= a[2] {
+            [0.0, 1.0, 0.0]
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+        let cross = |u: [f32; 3], v: [f32; 3]| {
+            [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ]
+        };
+        let t1 = cross(nrm, axis);
+        let len = dot(t1, t1).sqrt().max(1e-12);
+        let t1 = t1.map(|v| v / len);
+        let t2 = cross(nrm, t1);
+        let dirs = [
+            [1.0, 1.0],
+            [1.0, -1.0],
+            [-1.0, 1.0],
+            [-1.0, -1.0],
+            [1.0, 0.0],
+            [-1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, -1.0],
+        ];
+        for d in dirs {
+            if count >= keep {
+                break;
+            }
+            let score = |i: usize| d[0] * dot(lever(i), t1) + d[1] * dot(lever(i), t2);
+            let best = (0..n)
+                .filter(|&i| cluster[i] == c)
+                .map(score)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let near = |i: usize| cluster[i] == c && score(i) >= best - 1e-5;
+            if (0..n).any(|i| chosen[i] && near(i)) {
+                continue;
+            }
+            if let Some(i) = (0..n).find(|&i| !chosen[i] && near(i)) {
+                chosen[i] = true;
+                count += 1;
+            }
+        }
+    }
+
+    while count < keep {
+        let mut pick = None;
+        let mut pick_gap = -1.0f32;
+        for i in (0..n).filter(|&i| !chosen[i]) {
+            let gap = (0..n)
+                .filter(|&j| chosen[j])
+                .map(|j| {
+                    let (a, b) = (lever(i), lever(j));
+                    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
+                })
+                .fold(f32::INFINITY, f32::min);
+            if gap > pick_gap {
+                pick_gap = gap;
+                pick = Some(i);
+            }
+        }
+        let Some(i) = pick else { break };
+        chosen[i] = true;
+        count += 1;
+    }
+    chosen
+}
+
 /// Projected Gauss–Seidel sweeps over the support rows.
 pub const PROJECTION_SWEEPS: usize = 16;
 
@@ -482,6 +603,35 @@ mod tests {
     use crate::{BodyConfig, BodyHandle, BodyImpulse, BodyKind, PhysicsWorld};
 
     const G: [f32; 3] = [0.0, -9.81, 0.0];
+
+    #[test]
+    fn full_read_keeps_the_footprint_corners_and_every_patch() {
+        let row = |x: f32, z: f32, patch: f32| {
+            let mut r = [0.0f32; 20];
+            r[..3].copy_from_slice(&[x, -0.5, z]);
+            r[4..7].copy_from_slice(&[0.0, 1.0, 0.0]);
+            r[7] = patch;
+            r
+        };
+        // Two patches' first points lead, then four corners and interior
+        // points: 20 in all, 16 kept.
+        let mut rows = vec![row(0.1, 0.1, 0.0), row(-0.2, 0.3, 1.0)];
+        for (i, (x, z)) in [(2.0, -2.0), (-2.0, 2.0), (2.0, 2.0), (-2.0, -2.0)]
+            .into_iter()
+            .enumerate()
+        {
+            rows.push(row(x, z, (i % 2) as f32));
+        }
+        for i in 0..14 {
+            let (x, z) = ((i % 5) as f32 * 0.7 - 1.4, (i / 5) as f32 * 0.9 - 0.9);
+            rows.push(row(x, z, (i % 2) as f32));
+        }
+        let chosen = choose_support_rows(&rows, MAX_SUPPORT_POINTS);
+        assert_eq!(chosen.iter().filter(|&&c| c).count(), MAX_SUPPORT_POINTS);
+        assert!(chosen[0] && chosen[1]);
+        assert!(chosen[2..6].iter().all(|&c| c), "all four corners kept");
+        assert_eq!(chosen, choose_support_rows(&rows, MAX_SUPPORT_POINTS));
+    }
 
     fn cuboid(half: [f32; 3]) -> Vec<[f32; 3]> {
         (0..8)

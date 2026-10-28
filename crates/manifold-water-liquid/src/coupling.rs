@@ -850,8 +850,10 @@ fn capture_rows(
         let count = world
             .support_points(body.handle, &mut points)
             .map_err(|error| error.to_string())?;
-        if !count.complete() {
-            *crowded = (*crowded).max(count.found);
+        // Past 16 points the prediction keeps the ones that span the
+        // support; it only loses some when contacts went unread.
+        if count.unread > 0 {
+            *crowded = (*crowded).max(count.found + count.unread);
         }
         contacts.push(pack_supports(&points[..count.kept]));
         let d = world

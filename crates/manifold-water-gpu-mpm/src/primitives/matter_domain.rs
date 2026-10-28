@@ -825,8 +825,7 @@ impl Primitive for MatterDomain {
             let touching = owner.crowded_support_points();
             if touching > 0 {
                 ctx.error(format!(
-                    "Matter: a body touches {touching} contact points; the water sees {}",
-                    manifold_physics::coupled_motion::MAX_SUPPORT_POINTS
+                    "Matter: a body touches {touching} contact points, more than the water can weigh; where it rests may jitter"
                 ));
             }
         }

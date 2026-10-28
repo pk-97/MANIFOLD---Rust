@@ -21,7 +21,9 @@ pub mod stepping;
 pub mod tick_hits;
 pub mod tick_samples;
 pub mod turbulence;
-use coupled_motion::{MAX_SUPPORT_POINTS, SupportCount, SupportPoint};
+use coupled_motion::{
+    MAX_SUPPORT_POINTS, SUPPORT_READ, SupportCount, SupportPoint, choose_support_rows,
+};
 pub use field_value::{FarShape, FarTerm, FieldLeaf, FieldValue, sample_far};
 pub use interaction::{
     FalloffCurve, FieldInput, ForceSample, RadialField, SampledField, ScaledField, SumField,
@@ -1269,17 +1271,19 @@ impl PhysicsWorld {
 
     /// `body`'s touching contact points with static and kinematic bodies
     ///Up to `out`'s length and
-    /// [`MAX_SUPPORT_POINTS`]. A full `out` still holds a point of every
-    /// support: the bridge takes every contact's first touching point before
-    /// any second.
+    /// [`MAX_SUPPORT_POINTS`]. The bridge takes every contact's first touching
+    /// point before any second; with more points than `out` holds, the ones
+    /// kept are chosen by [`choose_support_rows`]: a point of every patch,
+    /// the footprint's extremes, then the most spread out.
     pub fn support_points(
         &self,
         body: BodyHandle,
         out: &mut [SupportPoint],
     ) -> Result<SupportCount, PhysicsError> {
         let native = self.native_body(body)?;
-        let capacity = out.len().min(MAX_SUPPORT_POINTS);
-        let mut raw = [[0.0f32; 20]; MAX_SUPPORT_POINTS];
+        let keep = out.len().min(MAX_SUPPORT_POINTS);
+        let capacity = SUPPORT_READ;
+        let mut raw = [[0.0f32; 20]; SUPPORT_READ];
         let (mut kept, mut found, mut unread) = (0, 0, 0);
         let result = {
             let _lock = native_lock();
@@ -1297,7 +1301,14 @@ impl PhysicsWorld {
         if result != 0 || !(0..=capacity as i32).contains(&kept) || found < kept || unread < 0 {
             return Err(PhysicsError::NativeFailure);
         }
-        for (point, raw) in out.iter_mut().zip(&raw[..kept as usize]) {
+        let chosen = choose_support_rows(&raw[..kept as usize], keep);
+        let mut taken = 0;
+        let rows = raw[..kept as usize]
+            .iter()
+            .zip(chosen)
+            .filter_map(|(row, chosen)| chosen.then_some(row));
+        for (point, raw) in out.iter_mut().zip(rows) {
+            taken += 1;
             *point = SupportPoint {
                 lever: [raw[0], raw[1], raw[2]],
                 friction: raw[3],
@@ -1310,7 +1321,7 @@ impl PhysicsWorld {
             };
         }
         Ok(SupportCount {
-            kept: kept as usize,
+            kept: taken,
             found: found as usize,
             unread: unread as usize,
         })
