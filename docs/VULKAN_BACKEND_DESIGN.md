@@ -134,8 +134,8 @@ Each phase compiles, passes its tests and commits. P3's seams and P4's text work
 
 | Phase | Builds | Done when |
 |---|---|---|
-| **P1 Headless compute** | `vulkan/{device,encoder,types}.rs` and siblings: instance and device bring-up (D1, D21), allocator, buffers, textures, samplers, compute pipelines and caches (D11), descriptor sets (D2), uniform ring (D3), dispatch, indirect dispatch, copies, clears, uploads, readbacks, hazard tracker (section 5), timeline events and waiter thread (D7, D8), `TexturePool`, `RetireQueue`/`FrameClock`, `FrameFence`, memory snapshot (D18), the P1 water paths (section 7) | `manifold-gpu` tests and every compute GPU proof pass on KosmicKrisp and MoltenVK with sync validation clean |
-| **P2 Render and profiling** | Graphics pipelines (dynamic rendering, MSAA, depth, depth-only, points, wireframe, vertex layouts), the `draw_*` family, render passes and scissor, mipmaps, memoryless, Y-flip and winding (D13), point size (D9), timestamps (D17) | All GPU proofs pass; scene, UI and compositor proofs match Metal. `ui-snap` PNGs match the Metal build's |
+| **P1 Headless compute** | `vulkan/{device,encoder,types}.rs` and siblings: instance and device bring-up (D1, D21), allocator, buffers, textures, samplers, compute pipelines and caches (D11), descriptor sets (D2), uniform ring (D3), dispatch, indirect dispatch, copies, clears, uploads, readbacks, hazard tracker (section 5), timeline events and waiter thread (D7, D8), `TexturePool`, `RetireQueue`/`FrameClock`, `FrameFence`, memory snapshot (D18), the P1 water paths (section 7) | The compute parity kit passes on KosmicKrisp with sync validation clean. The one full proof run at phase end is clean |
+| **P2 Render and profiling** | Graphics pipelines (dynamic rendering, MSAA, depth, depth-only, points, wireframe, vertex layouts), the `draw_*` family, render passes and scissor, mipmaps, memoryless, Y-flip and winding (D13), point size (D9), timestamps (D17) | The render parity kit passes with sync validation clean. `capture` stills and `ui-snap` PNGs match the Metal build's. The one full proof run at phase end is clean |
 | **P3 Seams and app on Vulkan** | Section 6: shared textures, surface (D15), capabilities. Un-gate the app. The whole app runs on the Mac under `--features vulkan` | Headless subcommands (`ui-snap`, `bridge-probe`, `perf-soak`) run under Vulkan; bridge-probe shows no tears |
 | **P4 Linux bring-up** | The map's compile breaks, cosmic-text, frame pacing, paths, menus, cpal 0.18, plugins as `.so` | The app boots in a Linux VM on lavapipe and plays a generative project with audio input |
 | **P5 Video** | FFmpeg decode behind a decoder trait, export, live recording. The Mac keeps VideoToolbox | Video clips play, export and record on Linux; the Mac paths are unchanged |
@@ -147,11 +147,16 @@ Each phase compiles, passes its tests and commits. P3's seams and P4's text work
 
 ## 10. Testing
 
-- **On the Mac:** KosmicKrisp first, MoltenVK second. Every Vulkan test run enables `VK_LAYER_KHRONOS_validation` with synchronization validation. Both drivers sit on Metal, whose own ordering can hide a missing barrier that would corrupt frames on NVIDIA. A green run without sync validation proves nothing about the tracker.
-- **Parity:** the existing GPU proofs run unchanged under `--features manifold-gpu/vulkan`. Visual checks compare `ui-snap` and `capture` PNGs from the two builds.
-- **Linux-only code** (window, PipeWire, FFmpeg, paths) runs in a Linux VM on the Mac (Lima or UTM) on lavapipe, Mesa's software Vulkan. It is slow; it checks correctness only.
-- **Ray tracing has no Mac driver.** MoltenVK's ray tracing is an unmerged experimental branch, and KosmicKrisp has none. Lavapipe supports ray queries, slowly. Real checks need NVIDIA hardware.
-- **Performance** is measured only on real NVIDIA hardware (P8). Never quote a predicted number.
+Test the backend, not the nodes. The 300-odd node GPU proofs check node math written in WGSL, and that WGSL compiles to the same SPIR-V for both backends. Once the backend primitives are right, the nodes are right, so the proofs are not the per-batch check.
+
+- **Per batch:** the compiler, clippy, and the touched crate's unit tests. Moves, renames and API merges need nothing more, because a wrong call does not compile.
+- **Parity kit:** about a dozen tests in `manifold-gpu`, one per backend primitive. They cover dispatch, indirect dispatch, every copy and clear, write-then-read chains (the hazard tracker), the uniform ring past its first block, timeline events and the async lane, each texture format, and later render passes, MSAA, depth, points and mipmaps. Each checks values against a closed form on a tiny input. Every Vulkan batch runs the parts it touches on KosmicKrisp with synchronization validation on. Both Mac drivers sit on Metal, whose own ordering can hide a missing barrier that would corrupt frames on NVIDIA, so a green run without sync validation proves nothing about the tracker.
+- **Stills:** from P2 on, render the same few presets (a generator, an effect chain, a scene, a water scene) with `capture` on both builds and diff the PNGs. One still exercises hundreds of shaders at once. `ui-snap` does the same for the UI.
+- **Full proof run:** the node GPU proofs run once at the end of P1 and P2, in the background, on KosmicKrisp and then MoltenVK. Only a difference gets looked at. They never run per batch.
+- **Delete, don't port, dead tests.** When a cutover removes a path (the extra timing paths, the IOSurface bridge, the draw variants), its tests go with it. Tests that only pin the old shape are deleted, not converted.
+- **Linux VM:** `cargo check` per phase and one boot check at the end of P4. Never GPU suites, because lavapipe is too slow to be worth waiting on.
+- **Ray tracing has no Mac driver.** MoltenVK's ray tracing is an unmerged experimental branch, and KosmicKrisp has none. Real checks need NVIDIA hardware.
+- **Performance** is measured only on real NVIDIA hardware (P8), with `frame-time` and `perf-soak`. Never quote a predicted number.
 
 ---
 

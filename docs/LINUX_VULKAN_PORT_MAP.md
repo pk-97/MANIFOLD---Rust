@@ -197,7 +197,7 @@ Out of scope: `plugins/` (the analyzer VST, its own workspace, uses IOSurface in
 - Hardcoded repo path `/Users/peterkiemann/MANIFOLD - Rust`: `rt_noise_gate.py:103`, `rt_quality_matrix.py:28`, `rt_toggle_matrix.py:46` and `claude-pane.sh:47`. Derive it from the script's own location.
 
 **Tests.**
-- 304 files are gated on `gpu-proofs` across 17 crates. They are the parity oracle and run unchanged under Vulkan as P1 and P2 land.
+- 304 files are gated on `gpu-proofs` across 17 crates. They test node math, which is the same WGSL on both backends, so they run once at the end of P1 and P2, never per batch. The per-batch Vulkan check is the parity kit and stills (design section 10).
 - Metal-only on purpose: 22 ray-tracing proofs (11 in `manifold-nodes/tests/gpu_proofs/rt_*`, 11 in `manifold-nodes-scene/tests/gpu_proofs/rt_*`) and `rt_p4_metalfx_temporal.rs` wait for P7. `manifold-gpu/src/metal/{async_lane,pipeline_cache,replay,template,residency}_tests.rs` get Vulkan twins where the behaviour exists; residency does not.
 - `raw_ptr()` comparisons in `node-engine/exec/metal_backend.rs:1562-1640` and `manifold-app/tests/.../scene_viewport_frame_order.rs:97,107` compare `identity_key()` instead.
 - About 21 Mac-gated test files (app probes, the ui-paint text proofs) come back once cosmic-text lands.
@@ -208,11 +208,11 @@ Out of scope: `plugins/` (the analyzer VST, its own workspace, uses IOSurface in
 
 One batch at a time, and both builds stay green before the next one starts (design section 3). Workers write; the lead builds and tests.
 
-**Before any Vulkan code, all on the Mac.** Each step shrinks or cleans what gets ported, and the existing tests and GPU proofs check that Metal behaves the same.
+**Before any Vulkan code, all on the Mac.** Each step shrinks or cleans what gets ported. The compiler catches most mistakes, the touched crates' unit tests catch the rest, and the steps that change behaviour add one still or probe each (section 11).
 1. **Setup** (section 1). Peter installs the Vulkan SDK; the lead sets up the Linux VM.
 2. **Build hygiene**, one batch: everything in section 2 except backend selection and the app feature, the dead functions and the stem-separation device from section 11, and gating the nodes-water `autoreleasepool`. Done when the Mac build and clippy are unchanged.
 3. **Platform crate** (section 11): `manifold-platform` with directories, tool lookup, reveal, keep-awake, thread priority and performance cores. The scattered path and tool sites move onto it.
-4. **Hoist neutral logic** out of `metal/` (section 3, "Hoist before porting"). Done when the Metal GPU proofs for those types pass unchanged.
+4. **Hoist neutral logic** out of `metal/` (section 3, "Hoist before porting"). Done when the build, clippy and `manifold-gpu`'s own tests pass.
 5. **Shrink the GPU API** (section 11), one batch each: buffer use, the render-pipeline descriptor, the draw descriptor, commit forms, GPU timing.
 6. **Frame bridge on one device** (section 11), proven with `bridge-probe`; the headless subcommands then boot the normal pipeline.
 7. **Vulkan skeleton.**
@@ -230,7 +230,7 @@ One batch at a time, and both builds stay green before the next one starts (desi
 12. Submission: command pools (D6), timeline events, the waiter thread and completion handlers (D7, D8), async lanes, and the Vulkan hooks for the hoisted frame-lifetime types.
 13. Water paths: replay spans, gated segments, templates as indirect dispatches (design section 7).
 
-P1 is done when the `manifold-gpu` tests and every compute GPU proof pass on KosmicKrisp and MoltenVK with synchronization validation clean.
+Each P1 batch adds its parity-kit tests and runs them on KosmicKrisp with synchronization validation. P1 is done when the compute kit is clean and the one full proof run at phase end shows no difference from Metal.
 
 **After P1:**
 - P2: render and profiling.
@@ -285,11 +285,11 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 
 | Today | After | Checked by |
 |---|---|---|
-| `create_buffer`, `create_buffer_shared`, `try_create_buffer`, `try_create_buffer_shared` (581 production calls). Shared memory is the default for GPU-only scratch, CPU-filled inputs and readbacks alike. That costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | One `create_buffer(size, use)` plus `try_`, where use is `Gpu`, `Upload` or `Readback`. On Metal, `Gpu` is Private and the other two are Shared. On Vulkan they are VRAM, CPU-writable VRAM (Resizable BAR, else system memory) and cached system memory | GPU proofs unchanged on Metal. This is the biggest NVIDIA speed item in the port |
-| 8 render-pipeline constructors | One `RenderPipelineDesc`: depth, MSAA, point size, vertex layout, specialisation | Scene, UI and compositor proofs |
-| About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same |
-| 8 commit forms, one with no callers (`commit_and_wait_scheduled`) | `commit`, `commit_and_continue`, and `commit_and_wait` returning a Result | All GPU tests |
-| 5 ways to read GPU time: `tap_gpu_time`, `add_gpu_time_handler`, `commit_and_wait_completed_timed`, `commit_and_wait_profiled`, `GpuSpanTimer` (plus `raytrace/trace_timing.rs`) | One per-submit GPU time stream that the profiler, the span timer and the perf tools all read, plus the per-dispatch profiler | Profiler sessions and perf-soak report the same numbers |
+| `create_buffer`, `create_buffer_shared`, `try_create_buffer`, `try_create_buffer_shared` (581 production calls). Shared memory is the default for GPU-only scratch, CPU-filled inputs and readbacks alike. That costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | One `create_buffer(size, use)` plus `try_`, where use is `Gpu`, `Upload` or `Readback`. On Metal, `Gpu` is Private and the other two are Shared. On Vulkan they are VRAM, CPU-writable VRAM (Resizable BAR, else system memory) and cached system memory | Mapping a `Gpu` buffer panics in debug builds, so a misclassified buffer fails loudly; then stills of the four `capture` presets. This is the biggest NVIDIA speed item in the port |
+| 8 render-pipeline constructors | One `RenderPipelineDesc`: depth, MSAA, point size, vertex layout, specialisation | Compiler, then stills and one `ui-snap` |
+| About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same stills |
+| 8 commit forms, one with no callers (`commit_and_wait_scheduled`) | `commit`, `commit_and_continue`, and `commit_and_wait` returning a Result | Compiler |
+| 5 ways to read GPU time: `tap_gpu_time`, `add_gpu_time_handler`, `commit_and_wait_completed_timed`, `commit_and_wait_profiled`, `GpuSpanTimer` (plus `raytrace/trace_timing.rs`) | One per-submit GPU time stream that the profiler, the span timer and the perf tools all read, plus the per-dispatch profiler | One profiler session before and after |
 | No callers: `create_compute_pipeline_half`, `create_texture_memoryless`, `supports_denoiser`, `set_motion_vector_scale`, `defer_probe_enabled` | Delete | Build |
 
 **Bigger cuts**
