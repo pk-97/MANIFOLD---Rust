@@ -81,7 +81,7 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Device sharing | `sibling` (a second wrapper on the same native device with its own queue, D16) | P1 |
 | Metal-only, stay Metal | `raw_device`, `raw_device_ptr`, `raw_cmd_buf`, `raw_ptr`, `mtl4_bridge`, `metalfx`, `metalfx_m4`, `defer_drop`, `dispatch_compute_with_accel`; `create_io_surface_bgra8` and `create_texture_from_io_surface`, used only by the analyzer plugin and `tv-led-mirror` | never |
 
-**Shared already.** The frame fence, drop retirement, texture pool and ray-tracing data types (`raytrace_types/`) live outside `metal/`; a backend supplies `RetiredResource`, `PoolAllocator` and `submissions_ignored`, and re-exports `raytrace_types` from its `raytrace` module.
+**Shared already.** The frame fence, drop retirement, texture pool, fault registry (`gpu_fault`), firmware reports, profiled-frame records, draw descriptors and ray-tracing data types (`raytrace_types/`) live outside `metal/`; a backend supplies `RetiredResource` and `PoolAllocator`, and re-exports `raytrace_types` from its `raytrace` module.
 
 `span_timer.rs` is not hoisted: it goes with the GPU-timing consolidation (section 11).
 

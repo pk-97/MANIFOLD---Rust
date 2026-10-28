@@ -19,7 +19,6 @@ pub mod defer_drop;
 mod device;
 mod encoder;
 mod fault_decode;
-pub mod firmware_reports;
 mod format;
 mod msl_cache;
 mod profiling;

@@ -8,7 +8,7 @@
 //! fatal reports and warn before long exports.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 const SYSTEM_REPORTS: &str = "/Library/Logs/DiagnosticReports";
 
@@ -22,6 +22,7 @@ pub struct FirmwareGpuReset {
 }
 
 /// When this machine last booted.
+#[cfg(target_os = "macos")]
 pub fn boot_time() -> Option<SystemTime> {
     let mut boot = libc::timeval {
         tv_sec: 0,
@@ -38,8 +39,16 @@ pub fn boot_time() -> Option<SystemTime> {
             0,
         )
     };
-    (status == 0 && boot.tv_sec > 0)
-        .then(|| UNIX_EPOCH + Duration::new(boot.tv_sec as u64, boot.tv_usec as u32 * 1000))
+    (status == 0 && boot.tv_sec > 0).then(|| {
+        std::time::UNIX_EPOCH
+            + std::time::Duration::new(boot.tv_sec as u64, boot.tv_usec as u32 * 1000)
+    })
+}
+
+/// Only macOS writes GPU reset reports, so elsewhere there is nothing to read.
+#[cfg(not(target_os = "macos"))]
+pub fn boot_time() -> Option<SystemTime> {
+    None
 }
 
 /// Every firmware GPU reset since boot, any process, oldest first.
@@ -124,6 +133,7 @@ fn number_field(text: &str, key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
 
     // The 2026-10-13 14:02 Murmur report, abridged; both JSON spacings occur.
     const REPORT: &str = r#"{"bug_type":"284","timestamp":"2026-10-13 14:02:56.00 +1100"}

@@ -292,6 +292,26 @@ impl GpuDevice {
         })
     }
 
+    /// Ray-traced shadows and lighting.
+    pub fn supports_ray_tracing(&self) -> bool {
+        self.device.supportsRaytracing()
+    }
+
+    /// The MetalFX denoiser behind ray-traced scenes.
+    pub fn supports_denoiser(&self) -> bool {
+        super::denoiser::denoiser_available()
+    }
+
+    /// MetalFX temporal and spatial upscaling.
+    pub fn supports_upscaler(&self) -> bool {
+        super::metalfx::metalfx_available() && super::metalfx::metalfx_temporal_available()
+    }
+
+    /// The MPSGraph FFT behind `GpuFft`.
+    pub fn supports_fft(&self) -> bool {
+        true
+    }
+
     /// Whether this device supports per-dispatch GPU timestamp profiling
     /// (timestamp counter set + stage-boundary sampling). True on Apple
     /// silicon.
@@ -2311,5 +2331,21 @@ impl PoolAllocator {
             retire,
             residency,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GpuDevice;
+
+    /// The Vulkan backend reports these unavailable until P7; on the Mac
+    /// every one must stay on.
+    #[test]
+    fn every_capability_is_available_on_metal() {
+        let device = GpuDevice::new();
+        assert!(device.supports_ray_tracing(), "ray tracing");
+        assert!(device.supports_denoiser(), "denoiser");
+        assert!(device.supports_upscaler(), "upscaler");
+        assert!(device.supports_fft(), "fft");
     }
 }

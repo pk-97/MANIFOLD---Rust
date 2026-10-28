@@ -8,9 +8,9 @@ publish = false
 # Backend selection is explicit via feature flag. With no features, the crate
 # uses the Metal backend on macOS and fails to link on other platforms (the
 # intended error — MANIFOLD's primary build is Mac-native). Enabling `vulkan`
-# switches to the Vulkan backend, on any platform. On macOS this routes
-# through MoltenVK, which is a convenient way to validate the cross-platform
-# path from the dev box without booting into Windows/Linux.
+# switches to the Vulkan backend, on any platform. On macOS it runs on
+# KosmicKrisp or MoltenVK (D21), which validates the cross-platform path from
+# the dev box without booting into Linux.
 default = []
 vulkan = ["dep:ash"]
 testkit = []

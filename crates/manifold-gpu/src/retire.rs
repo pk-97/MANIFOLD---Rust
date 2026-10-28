@@ -376,6 +376,8 @@ mod tests {
     }
 
     #[test]
+    // Vulkan buffers gain their retiring drop in P1.
+    #[cfg_attr(feature = "vulkan", allow(clippy::drop_non_drop))]
     fn marked_buffer_drop_defers_until_signal() {
         let device = GpuDevice::new();
         let event = device.create_event();

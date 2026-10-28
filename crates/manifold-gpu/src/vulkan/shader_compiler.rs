@@ -13,7 +13,7 @@
 //! Vulkan calls needed — so it lives here in Phase 0 rather than waiting
 //! for Phase 1.
 
-use super::{SIZES_BUFFER_BINDING, Slot, SlotKind, SlotMap};
+use super::{Slot, SlotKind, SlotMap};
 use crate::shader_common::{
     classify_global, collect_entry_point_globals, compile_to_optimized_spirv,
     parse_and_validate_wgsl,
@@ -67,70 +67,12 @@ pub(super) fn compile_wgsl_to_spirv_render(
 }
 
 /// Build a Vulkan slot map for a single compute entry point.
-///
-/// naga's SPIR-V back-end emits WGSL `@binding(N)` as Vulkan descriptor
-/// `(set=0, binding=N)` without remapping, so this pass is primarily
-/// collecting per-binding metadata (descriptor kind + writability) that
-/// `VkDescriptorSetLayout` creation needs — plus the synthetic sizes
-/// buffer slot for shaders that call `arrayLength()`.
 fn build_slot_map(module: &naga::Module, entry_point: &str) -> SlotMap {
-    let mut slot_map = SlotMap::new();
-
     // Walk entry point + all transitively called helper functions. Multi-
     // entry-point shaders (e.g. fluid_scatter.wgsl) reuse @binding(N) for
     // different types per entry, so we must only collect globals actually
     // reachable from THIS entry.
-    let used_globals = collect_entry_point_globals(module, entry_point);
-
-    // Next descriptor binding to assign when we find the synthetic sizes
-    // buffer. Starts one past the highest user-declared binding so it
-    // can't collide with a real WGSL binding number.
-    let mut next_binding: u32 = 0;
-
-    for (handle, gv) in module.global_variables.iter() {
-        if !used_globals.contains(&handle) {
-            continue;
-        }
-        let Some(ref binding) = gv.binding else {
-            continue;
-        };
-        let kind = classify_global(module, gv);
-
-        let slot_kind = if kind.is_buffer {
-            SlotKind::Buffer
-        } else if kind.is_texture {
-            SlotKind::Texture
-        } else if kind.is_sampler {
-            SlotKind::Sampler
-        } else {
-            // Global without a backend-recognised kind — skip rather than
-            // guessing. Shouldn't happen for validated WGSL; defensive.
-            continue;
-        };
-
-        slot_map.insert(
-            binding.binding,
-            Slot {
-                kind: slot_kind,
-                vulkan_binding: binding.binding,
-                writable: kind.is_writable,
-            },
-        );
-        next_binding = next_binding.max(binding.binding + 1);
-    }
-
-    if has_runtime_sized_storage(module, &used_globals) {
-        slot_map.insert(
-            SIZES_BUFFER_BINDING,
-            Slot {
-                kind: SlotKind::Buffer,
-                vulkan_binding: next_binding,
-                writable: false,
-            },
-        );
-    }
-
-    slot_map
+    slot_map_for(module, &collect_entry_point_globals(module, entry_point))
 }
 
 /// Build a unified Vulkan slot map for a render pipeline. Vertex +
@@ -138,34 +80,52 @@ fn build_slot_map(module: &naga::Module, entry_point: &str) -> SlotMap {
 /// at set=0 — simplest model, matches the Metal backend's unified Metal
 /// argument table.
 fn build_slot_map_render(module: &naga::Module, vs_entry: &str, fs_entry: &str) -> SlotMap {
-    let mut slot_map = SlotMap::new();
-
     let vs_globals = collect_entry_point_globals(module, vs_entry);
     let fs_globals = collect_entry_point_globals(module, fs_entry);
-    let all_globals: std::collections::HashSet<_> =
-        vs_globals.union(&fs_globals).copied().collect();
+    slot_map_for(module, &vs_globals.union(&fs_globals).copied().collect())
+}
 
-    let mut next_binding: u32 = 0;
-
+/// naga's SPIR-V back-end emits WGSL `@binding(N)` as Vulkan descriptor
+/// `(set=0, binding=N)` without remapping, so this collects the descriptor
+/// type and writability `VkDescriptorSetLayout` creation needs (D2). No
+/// sizes-buffer slot: `arrayLength` is native `OpArrayLength` (D9).
+fn slot_map_for(
+    module: &naga::Module,
+    used: &std::collections::HashSet<naga::Handle<naga::GlobalVariable>>,
+) -> SlotMap {
+    let mut slot_map = SlotMap::new();
     for (handle, gv) in module.global_variables.iter() {
-        if !all_globals.contains(&handle) {
+        if !used.contains(&handle) {
             continue;
         }
         let Some(ref binding) = gv.binding else {
             continue;
         };
         let kind = classify_global(module, gv);
-
         let slot_kind = if kind.is_buffer {
-            SlotKind::Buffer
+            if gv.space == naga::AddressSpace::Uniform {
+                SlotKind::UniformBuffer
+            } else {
+                SlotKind::StorageBuffer
+            }
         } else if kind.is_texture {
-            SlotKind::Texture
+            if matches!(
+                module.types[gv.ty].inner,
+                naga::TypeInner::Image {
+                    class: naga::ImageClass::Storage { .. },
+                    ..
+                }
+            ) {
+                SlotKind::StorageImage
+            } else {
+                SlotKind::SampledImage
+            }
         } else if kind.is_sampler {
             SlotKind::Sampler
         } else {
+            // Validated WGSL has no other bound kind.
             continue;
         };
-
         slot_map.insert(
             binding.binding,
             Slot {
@@ -174,59 +134,6 @@ fn build_slot_map_render(module: &naga::Module, vs_entry: &str, fs_entry: &str) 
                 writable: kind.is_writable,
             },
         );
-        next_binding = next_binding.max(binding.binding + 1);
     }
-
-    if has_runtime_sized_storage(module, &all_globals) {
-        slot_map.insert(
-            SIZES_BUFFER_BINDING,
-            Slot {
-                kind: SlotKind::Buffer,
-                vulkan_binding: next_binding,
-                writable: false,
-            },
-        );
-    }
-
     slot_map
-}
-
-/// True if any of the used globals is a runtime-sized storage array — the
-/// only case where naga's SPIR-V back-end emits an `arrayLength()` call
-/// that needs the synthetic sizes buffer to resolve.
-fn has_runtime_sized_storage(
-    module: &naga::Module,
-    used: &std::collections::HashSet<naga::Handle<naga::GlobalVariable>>,
-) -> bool {
-    module.global_variables.iter().any(|(h, gv)| {
-        if !used.contains(&h) {
-            return false;
-        }
-        if !matches!(gv.space, naga::AddressSpace::Storage { .. }) {
-            return false;
-        }
-        let ty = &module.types[gv.ty];
-        match &ty.inner {
-            // Top-level runtime array: `var<storage> foo: array<T>`.
-            naga::TypeInner::Array {
-                size: naga::ArraySize::Dynamic,
-                ..
-            } => true,
-            // Struct with last member a runtime array.
-            naga::TypeInner::Struct { members, .. } => members.last().is_some_and(|m| {
-                matches!(
-                    module.types[m.ty].inner,
-                    naga::TypeInner::Array {
-                        size: naga::ArraySize::Dynamic,
-                        ..
-                    }
-                )
-            }),
-            naga::TypeInner::BindingArray {
-                size: naga::ArraySize::Dynamic,
-                ..
-            } => true,
-            _ => false,
-        }
-    })
 }

@@ -1,64 +1,67 @@
 //! Vulkan backend for manifold-gpu.
 //!
-//! Selected at compile time via the `vulkan` Cargo feature. Uses `ash`
-//! loader bindings and consumes SPIR-V emitted by `crate::shader_common`
-//! (the same pipeline the Metal backend feeds into SPIRV-Cross → MSL).
+//! Selected at compile time by the `vulkan` Cargo feature. Uses `ash`
+//! loader bindings and consumes the SPIR-V `crate::shader_common` emits (the
+//! same SPIR-V the Metal backend turns into MSL).
 //!
-//! ## Scope
-//!
-//! The Vulkan backend is the cross-platform path for Windows and Linux.
-//! On macOS it routes through MoltenVK — not for shipping, but as a
-//! convenient way to iterate on the cross-platform code from the dev box
-//! without booting into another OS.
+//! The backend for Linux and, later, Windows. On the Mac it runs on
+//! KosmicKrisp, the primary test driver, or MoltenVK (D21).
 //!
 //! ## Status
 //!
-//! Phase 0 scaffolding only. The type surface mirrors `metal/` so the
-//! cfg-gated backend selection at the crate root compiles against either
-//! backend without callers noticing. Actual Vulkan calls — VkInstance,
-//! VkDevice, memory allocation, descriptor sets, pipelines, command
-//! buffers — land in Phase 1+.
+//! A skeleton: every type and method mirrors `metal/` with a `todo!` that
+//! names the phase that builds it (design section 9), so the workspace
+//! compiles against this backend. Ray tracing, the denoiser, the upscaler
+//! and the GPU FFT report unavailable through `GpuDevice::supports_*`.
 //!
-//! ## API parity
+//! ## Bindings
 //!
-//! Names and signatures of exported types mirror `metal/`. Internals
-//! differ — Metal tracks bindings as flat argument indices; Vulkan tracks
-//! them as `(set=0, binding=N)` descriptor slots with stage flags. The
+//! Metal tracks bindings as flat argument indices; Vulkan as
+//! `(set=0, binding=N)` descriptor slots with a descriptor type each. The
 //! per-backend `SlotMap` captures that difference.
 
 mod device;
 mod encoder;
+pub mod fft;
+mod profiling;
+pub mod raytrace;
 mod replay;
+mod residency;
 mod shader_compiler;
+mod span_timer;
+pub mod surface;
+mod template;
 mod types;
 
 pub use device::GpuDevice;
+pub(crate) use device::PoolAllocator;
 pub use encoder::GpuEncoder;
+pub use fft::GpuFft;
+pub use profiling::GpuTimestampSampler;
 pub use replay::GpuReplayCache;
-pub use types::{GpuBuffer, GpuComputePipeline, GpuRenderPipeline, GpuSampler, GpuTexture};
-
-/// Reserved WGSL binding slot for naga's "sizes buffer" (resolves
-/// `arrayLength()` on runtime-sized storage arrays). Kept at the same
-/// sentinel value as the Metal backend so `shader_common` never needs to
-/// ask which backend is active — the value is universally a non-emitted
-/// binding that can't collide with real user-declared @binding(N)s.
-pub const SIZES_BUFFER_BINDING: u32 = 0xFFFF;
+pub use residency::GpuResidencyManager;
+pub use span_timer::GpuSpanTimer;
+pub use surface::{GpuDrawable, GpuSurface, set_presented_observer};
+pub use template::{GatedRecorder, GpuTemplateStore, TemplateTicket};
+pub(crate) use types::RetiredResource;
+pub use types::{
+    GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter,
+    GpuRenderPipeline, GpuSampler, GpuTexture,
+};
 
 /// Vulkan autoreleases nothing, so there is no per-frame pool to drain.
 pub fn autorelease_scope<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Descriptor type kinds that a Vulkan binding can take. Mirrors the set
-/// of `VkDescriptorType` values we actually emit (uniform buffer, storage
-/// buffer, sampled image, storage image, sampler).
+/// The `VkDescriptorType` a binding takes (D2): uniform and storage buffers,
+/// and sampled and storage images, are different descriptor types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlotKind {
-    /// Uniform or storage buffer (`VK_DESCRIPTOR_TYPE_{UNIFORM,STORAGE}_BUFFER`).
-    Buffer,
-    /// Sampled or storage image (`VK_DESCRIPTOR_TYPE_{SAMPLED,STORAGE}_IMAGE`).
-    Texture,
-    /// Sampler (`VK_DESCRIPTOR_TYPE_SAMPLER`).
+    UniformBuffer,
+    StorageBuffer,
+    SampledImage,
+    StorageImage,
     Sampler,
 }
 
@@ -107,14 +110,12 @@ impl SlotMap {
         self.slots.get(binding as usize).and_then(|s| s.as_ref())
     }
 
-    /// The WGSL bindings the entry point references, the sizes buffer
-    /// (bound by the encoder itself) left out.
+    /// The WGSL bindings the entry point references.
     pub fn bindings(&self) -> impl Iterator<Item = u32> + '_ {
         self.slots
             .iter()
             .enumerate()
             .filter(|(_, s)| s.is_some())
             .map(|(b, _)| b as u32)
-            .filter(|&b| b != SIZES_BUFFER_BINDING)
     }
 }

@@ -57,7 +57,8 @@ mod workgroup_zeroing;
 //
 // * With `--features vulkan`: Vulkan backend (`vulkan/` module). Used for
 //   cross-platform builds (Windows/Linux) and for dev-box testing on
-//   macOS via MoltenVK. Metal backend is not compiled in this mode.
+//   macOS through KosmicKrisp or MoltenVK (D21). Metal backend is not
+//   compiled in this mode.
 //
 // The two backends expose the same public surface (GpuDevice, GpuBuffer,
 // GpuEncoder, etc.), so downstream crates and user code don't need to
@@ -80,9 +81,15 @@ use vulkan as backend;
 pub use vulkan::*;
 
 // GPU fault counters and kinds; each backend decodes its own errors into them.
+// Vulkan records into them once it submits (P1).
+#[cfg_attr(feature = "vulkan", allow(dead_code))]
 pub mod gpu_fault;
+// macOS GPU reset reports, read the same under either backend.
+pub mod firmware_reports;
 mod gpu_profile;
 pub use gpu_profile::*;
+// Vulkan reads the draw descriptors once it draws (P2).
+#[cfg_attr(feature = "vulkan", allow(dead_code))]
 mod draw_types;
 pub use draw_types::*;
 
@@ -91,9 +98,13 @@ pub use draw_types::*;
 // (`RetiredResource`, `PoolAllocator`).
 mod frame_fence;
 pub use frame_fence::FrameFence;
+// Vulkan stamps its drops once it submits (P1).
+#[cfg_attr(feature = "vulkan", allow(dead_code))]
 mod retire;
 pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
 mod texture_pool;
 pub use texture_pool::TexturePool;
 // Ray-tracing data types; each backend re-exports them from its `raytrace`.
+// Vulkan uses them once it traces rays (P7).
+#[cfg_attr(feature = "vulkan", allow(dead_code))]
 mod raytrace_types;

@@ -1,73 +1,177 @@
-//! Vulkan backend resource types.
-//!
-//! Phase 0: struct shells with the minimum state the cross-backend API
-//! surface requires (label, size, format). Phase 1 fills in the real
-//! Vulkan handles — `VkBuffer`, `VkDeviceMemory`, `VkImage`, `VkImageView`,
-//! `VkPipeline`, `VkPipelineLayout`, etc. Inner layout will mirror the
-//! Metal backend's `metal/types.rs`: concrete struct, pub crate fields,
-//! backend-specific `raw` handle, shared book-keeping up front.
+//! Vulkan resource types. The handles (`VkBuffer`, `VkImage` and their
+//! memory, `VkPipeline` and its layout) arrive in P1 and P2; until then the
+//! structs carry only what callers read.
+
+// Stub bodies name the phase that builds them (design section 9); their
+// parameters are unused until then.
+#![allow(unused_variables)]
+
+use std::sync::Arc;
 
 use super::SlotMap;
+use crate::*;
 
-/// GPU buffer — uniform, storage, or vertex/index.
-///
-/// The Metal backend exposes `size` + an optional host-mapped pointer via
-/// `mapped_ptr()`. Vulkan's equivalent wraps `VkBuffer` + `VkDeviceMemory`;
-/// host-visible allocations populate `mapped_ptr` after `vkMapMemory` at
-/// creation time and stay mapped for the buffer's lifetime (persistent
-/// mapping is the common pattern for per-frame upload buffers).
+/// GPU buffer: uniform, storage, vertex, index or readback.
 #[derive(Clone)]
 pub struct GpuBuffer {
     pub size: u64,
-    /// Host-mapped pointer for `HOST_VISIBLE | HOST_COHERENT` allocations.
-    /// `None` for device-local buffers that require staging for upload.
-    pub(crate) mapped_ptr: Option<*mut u8>,
 }
 
-impl GpuBuffer {
-    /// Host-mapped pointer for zero-copy CPU writes. Returns `None` when
-    /// the buffer was created device-local (requires a staging transfer
-    /// to populate from the CPU).
-    pub fn mapped_ptr(&self) -> Option<*mut u8> {
-        self.mapped_ptr
-    }
-}
-
-/// GPU texture — 2D or 3D image with an image view.
+/// GPU texture: a 2D, 3D or array image with its view.
 ///
-/// Phase 0 holds only the dimensions and format metadata callers already
-/// consume. Phase 1 adds `VkImage`, `VkImageView`, `VkDeviceMemory`, and
-/// a current `VkImageLayout` for barrier bookkeeping.
-///
-/// `Clone` is cheap — the Metal-backed equivalent is one atomic retain.
-/// The portability stub mirrors that contract so chain-runtime call
-/// sites compile against both backends.
+/// `Clone` is cheap, as on Metal: clones share the image.
 #[derive(Clone)]
 pub struct GpuTexture {
     pub width: u32,
     pub height: u32,
-    pub format: crate::GpuTextureFormat,
+    pub depth: u32,
+    pub format: GpuTextureFormat,
+    /// Fence-retirement mark: drops wait for the completion fence (D8).
+    pub(crate) retire: Option<Arc<crate::RetireMark>>,
 }
 
-/// GPU sampler — `VkSampler` under the hood. Configuration comes from
-/// `GpuSamplerDesc` (shared crate-level type).
-// VULKAN_BACKEND_DESIGN: `GpuSamplerDesc.max_anisotropy` is not wired here yet — Phase 0 has no `create_sampler` at all. When
-// Phase 1 brings up `vkCreateSampler`, map it to
-// `VkSamplerCreateInfo.anisotropyEnable`/`maxAnisotropy` (requires the
-// `samplerAnisotropy` physical-device feature). Tracked gap, not silently ignored.
+#[derive(Clone)]
 pub struct GpuSampler {
-    pub(crate) _reserved: (),
+    _reserved: (),
 }
 
-/// Compute pipeline: compiled SPIR-V module + `VkPipeline` + layout +
-/// slot reflection.
+/// Compute pipeline: SPIR-V module, `VkPipeline`, layout and slot map.
+pub struct GpuComputePipeline {
+    pub slot_map: SlotMap,
+    pub label: String,
+    pub workgroup_size: [u32; 3],
+}
+
+/// Render pipeline. Vertex and fragment stages share one slot map, as on
+/// Metal.
+pub struct GpuRenderPipeline {
+    pub slot_map: SlotMap,
+    pub label: String,
+    pub sample_count: u32,
+}
+
+pub struct GpuDepthStencilState {
+    _reserved: (),
+}
+
+/// A timeline semaphore and its CPU counter (D7).
+pub struct GpuEvent {
+    _reserved: (),
+}
+
+pub struct GpuFenceWaiter {
+    _reserved: (),
+}
+
+impl Default for GpuFenceWaiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// What a fence-stamped drop holds until its frame retires (D8).
+pub(crate) enum RetiredResource {}
+
+impl RetiredResource {
+    pub(crate) fn release(self) {
+        match self {}
+    }
+}
+
+impl GpuTexture {
+    /// Whether this texture may be bound to a shader stage (sampled).
+    pub fn is_shader_readable(&self) -> bool {
+        todo!("vulkan P1")
+    }
+
+    /// Whether two handles refer to the SAME underlying Metal texture object
+    /// (identity, not value/size equality) — the `GpuBuffer::ptr_eq` idiom,
+    /// extended to textures.
+    pub fn ptr_eq(&self, other: &GpuTexture) -> bool {
+        todo!("vulkan P1")
+    }
+
+    /// Raw pointer identity as a plain integer — a lighter-weight sibling of
+    /// [`ptr_eq`](Self::ptr_eq) for callers that want to cache the identity
+    /// (e.g.
+    pub fn identity_key(&self) -> usize {
+        todo!("vulkan P1")
+    }
+
+    /// Number of mip levels on the underlying Metal texture.
+    pub fn mip_level_count(&self) -> u32 {
+        todo!("vulkan P1")
+    }
+
+    /// Create a VIEW of a single mip level of `self`, sharing the same
+    /// underlying storage (no new GPU allocation) but presented to the
+    /// shader as its own complete, single-mip `GpuTexture` of the given
+    /// level's dimensions.
+    pub fn mip_level_view(&self, level: u32, mip_width: u32, mip_height: u32) -> GpuTexture {
+        todo!("vulkan P1")
+    }
+
+    /// A plain 2D view of one layer of a `D2Array` texture, sharing its
+    /// storage.
+    pub fn layer_view(&self, layer: u32) -> GpuTexture {
+        todo!("vulkan P1")
+    }
+}
+
+impl GpuBuffer {
+    /// Persistent mapped pointer (shared-memory buffers only).
+    pub fn mapped_ptr(&self) -> Option<*mut u8> {
+        todo!("vulkan P1")
+    }
+
+    /// Write data at offset via memcpy (shared-memory buffers only).
+    ///
+    /// # Safety
+    /// Caller must ensure offset + data.len() <= buffer size,
+    /// and no GPU reads overlap this write.
+    pub unsafe fn write(&self, offset: u64, data: &[u8]) {
+        todo!("vulkan P1")
+    }
+
+    /// Zero every byte of a shared-memory buffer in place (CPU memset, no
+    /// allocation).
+    pub fn zero_fill(&self) {
+        todo!("vulkan P1")
+    }
+
+    /// Whether two handles refer to the SAME underlying Metal buffer object
+    /// (identity, not value/size equality).
+    pub fn ptr_eq(&self, other: &GpuBuffer) -> bool {
+        todo!("vulkan P1")
+    }
+
+    /// Raw pointer identity as a plain integer — the [`GpuTexture::identity_key`]
+    /// sibling.
+    pub fn identity_key(&self) -> usize {
+        todo!("vulkan P1")
+    }
+
+    pub fn size(&self) -> u64 {
+        todo!("vulkan P1")
+    }
+
+    /// RT-T1-B: this buffer's GPU virtual address (`MTLBuffer::gpuAddress`)
+    /// — the bindless-read mechanism the RT trace kernel uses to fetch a
+    /// per-object vertex-normal buffer at ray-hit time, indexed by
+    /// `hit.instance_id` (see `raytrace::RtNormalSource`).
+    pub fn gpu_address(&self) -> u64 {
+        todo!("vulkan P1")
+    }
+}
+
 impl GpuComputePipeline {
     /// Legal threadgroup maximum reported by the backend, not an occupancy metric.
     pub fn max_threads_per_threadgroup(&self) -> Option<u32> {
-        None
+        todo!("vulkan P1")
     }
 
-    /// The first binding the entry point references that `bindings` leaves out.
+    /// The first binding the entry point references that `bindings` leaves
+    /// out.
     pub fn unbound_binding(&self, bindings: &[crate::GpuBinding]) -> Option<u32> {
         self.slot_map
             .bindings()
@@ -75,20 +179,50 @@ impl GpuComputePipeline {
     }
 }
 
-pub struct GpuComputePipeline {
-    pub slot_map: SlotMap,
-    pub label: String,
-    pub workgroup_size: [u32; 3],
-    /// Whether this pipeline reads from naga's sizes buffer (set when the
-    /// shader calls `arrayLength()` on a runtime-sized storage array).
-    pub needs_sizes_buffer: bool,
+impl GpuEvent {
+    /// Second handle to the SAME underlying shared event and host counter.
+    pub fn second_handle(&self) -> Self {
+        todo!("vulkan P1")
+    }
+
+    /// Check if the GPU has completed work signaled at `value`.
+    pub fn is_done(&self, value: u64) -> bool {
+        todo!("vulkan P1")
+    }
+
+    /// The value the last encoded signal will reach once its command buffer
+    /// completes: a CPU counter bumped at encode time, not a GPU reading.
+    pub fn encoded_value(&self) -> u64 {
+        todo!("vulkan P1")
+    }
+
+    /// Read the GPU-side signaled value directly.
+    pub fn signaled_value(&self) -> u64 {
+        todo!("vulkan P1")
+    }
+
+    /// Block the calling thread until the GPU has signaled `value`, with a timeout.
+    pub fn wait_until_done_timeout(&self, value: u64, timeout_ms: u64) -> bool {
+        todo!("vulkan P1")
+    }
+
+    /// Block the calling thread until the GPU has signaled `value`.
+    pub fn wait_until_done(&self, value: u64) {
+        todo!("vulkan P1")
+    }
 }
 
-/// Render pipeline: vertex + fragment SPIR-V + `VkPipeline` + layout +
-/// shared slot reflection. Mirrors the Metal backend's flat model: both
-/// stages see the same descriptor bindings.
-pub struct GpuRenderPipeline {
-    pub slot_map: SlotMap,
-    pub label: String,
-    pub needs_sizes_buffer: bool,
+impl GpuFenceWaiter {
+    /// Create a new fence waiter.
+    pub fn new() -> Self {
+        todo!("vulkan P1")
+    }
+
+    /// Register a notification for when the GPU event reaches `target_value`.
+    pub fn register<F>(&self, event: &GpuEvent, target_value: u64, wake: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        todo!("vulkan P1")
+    }
 }
