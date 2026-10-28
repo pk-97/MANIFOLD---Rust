@@ -549,8 +549,9 @@ Volumes are `Array(f32)` (D8); triangle counts and scans are `Array(u32)`.
 Any of the four arrays wired switches the node into publishing particle frames; an
 unwired output has no plan resource, which the node reads through `ctx.outputs.slot`.
 The arrays are provided storage with a capacity hint of one record; downstream
-capacity re-derives as the ring grows. `obstacle_pose` and the coupled rigid frame
-present tick B until P3 builds interpolation (P2, deviation).
+capacity re-derives as the ring grows. `obstacle_pose` presents tick B; the coupled
+rigid frame presents at `s` with the liquid (`RigidPresentation` in
+`manifold-water-rigid/src/coupled_frame.rs`).
 
 Lattice convention, stated once: node (i, j, k) sits at
 `bounds.min + (i, j, k) · size / (nodes − 1)`. A volume at scale `m` has
@@ -764,8 +765,8 @@ the Record/Playback rejection. Entry-check resolutions:
   capture-only reply publishes the same tick without republishing the mesh.
 - **Unconsumed outputs** get no resource (`consumed_outputs` in `R/execution_plan.rs`);
   the node reads consumption from `ctx.outputs.slot`.
-**Deviation, pending the lead:** `obstacle_pose` and the coupled rigid frame still present
-tick B. With P3 deferred the surface reads `particles_b`, so presenting them at `s` would
+**Deviation, pending the lead:** `obstacle_pose` still presents tick B; the coupled rigid
+frame and coupled liquid present at `s`, never past the tick Box3D has settled. With P3 deferred the surface reads `particles_b`, so presenting them at `s` would
 put the paddle up to a tick behind the water it pushes. Presentation at `s` moves into
 P3 with the interpolation atom; `fluid_presentation_outputs_share_display_time` goes
 with it. Tests built: `fluid_display_time_never_passes_newest_tick`,
