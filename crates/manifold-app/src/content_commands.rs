@@ -1076,7 +1076,6 @@ impl ContentThread {
             // ── GPU events ─────────────────────────────────────────
             // SurfaceReady wakes recv() — no action needed, the main
             // loop re-checks is_surface_ready() after handling.
-            #[cfg(target_os = "macos")]
             ContentCommand::SurfaceReady => {}
             ContentCommand::FramePresented { drawable_id, at } => {
                 self.frame_presented(drawable_id, at)
@@ -1498,9 +1497,13 @@ impl ContentThread {
                     self.report_graph_edit_rejection(format!("Content resize rejected: {message}"));
                 }
             }
+            #[cfg(target_os = "macos")]
             ContentCommand::ResizeWorkspacePreview(w, h) => {
                 self.content_pipeline.resize_workspace_preview(w, h);
             }
+            // The workspace preview bridge is Mac-only until P3.
+            #[cfg(not(target_os = "macos"))]
+            ContentCommand::ResizeWorkspacePreview(..) => {}
 
             // ── Transport/sync ─────────────────────────────────────
             ContentCommand::ToggleLink => {
@@ -2173,6 +2176,7 @@ mod warmup_tests {
 
     /// Census bug 11 (opening a project shuffles queued commands): commands
     /// that arrive while a show opens run after it, in arrival order.
+    #[cfg(target_os = "macos")]
     #[test]
     fn commands_queued_during_warmup_keep_arrival_order() {
         use crate::content_command::ContentCommand;
@@ -2208,6 +2212,7 @@ mod warmup_tests {
 
     /// A quit already held (behind the show being opened) stops the warmup
     /// at once instead of waiting for every layer.
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_held_quit_interrupts_warmup() {
         use crate::content_command::ContentCommand;
@@ -2234,7 +2239,7 @@ mod warmup_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod scene_viewport_host_tests {
     use crate::content_command::ContentCommand::{
         SetGraphPreviewNode, SetSceneViewport, WatchGraphTarget,

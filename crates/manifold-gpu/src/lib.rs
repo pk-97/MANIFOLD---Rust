@@ -26,7 +26,7 @@ pub mod trace_planner;
 pub use trace_planner::*;
 // The recording core is unused on Vulkan until its store records command
 // buffers; that store lifts this allow.
-#[cfg_attr(feature = "vulkan", allow(dead_code))]
+#[cfg_attr(vulkan_backend, allow(dead_code))]
 mod replay;
 pub use replay::{
     GATED_RANGE_BYTES, GpuReplayStats, GpuTemplateStats, REPLAY_RING, TemplateRanges,
@@ -50,46 +50,41 @@ mod workgroup_zeroing;
 
 // ─── Backend selection ────────────────────────────────────────────────
 //
-// Exactly one backend is active per build:
+// Exactly one backend is active per build, chosen by `build.rs`:
 //
-// * Default on macOS: native Metal (`metal/` module). Zero overhead, full
-//   feature set including MPSGraph FFT and MetalFX. This is the ship path.
+// * macOS by default: native Metal (`metal/`). This is the ship path.
 //
-// * With `--features vulkan`: Vulkan backend (`vulkan/` module). Used for
-//   cross-platform builds (Windows/Linux) and for dev-box testing on
-//   macOS through KosmicKrisp or MoltenVK (D21). Metal backend is not
-//   compiled in this mode.
+// * Any other target, or `--features vulkan` on macOS: Vulkan (`vulkan/`).
+//   On macOS it runs on KosmicKrisp or MoltenVK (D21).
 //
-// The two backends expose the same public surface (GpuDevice, GpuBuffer,
-// GpuEncoder, etc.), so downstream crates and user code don't need to
-// care which is active. Metal-only APIs that don't have a Vulkan
-// equivalent (MetalFX upscaler, MPSGraph FFT) remain exposed only in the
-// Metal build — callers that want them are already platform-gating.
+// The two backends expose the same public surface; features one backend
+// lacks are capabilities on `GpuDevice` (`supports_ray_tracing` and the
+// rest), so downstream crates never check which backend is active.
 
-#[cfg(not(feature = "vulkan"))]
+#[cfg(not(vulkan_backend))]
 mod metal;
-#[cfg(not(feature = "vulkan"))]
+#[cfg(not(vulkan_backend))]
 use metal as backend;
-#[cfg(not(feature = "vulkan"))]
+#[cfg(not(vulkan_backend))]
 pub use metal::*;
 
-#[cfg(feature = "vulkan")]
+#[cfg(vulkan_backend)]
 mod vulkan;
-#[cfg(feature = "vulkan")]
+#[cfg(vulkan_backend)]
 use vulkan as backend;
-#[cfg(feature = "vulkan")]
+#[cfg(vulkan_backend)]
 pub use vulkan::*;
 
 // GPU fault counters and kinds; each backend decodes its own errors into them.
 // Vulkan records into them once it submits (P1).
-#[cfg_attr(feature = "vulkan", allow(dead_code))]
+#[cfg_attr(vulkan_backend, allow(dead_code))]
 pub mod gpu_fault;
 // macOS GPU reset reports, read the same under either backend.
 pub mod firmware_reports;
 mod gpu_profile;
 pub use gpu_profile::*;
 // Vulkan reads the draw descriptors once it draws (P2).
-#[cfg_attr(feature = "vulkan", allow(dead_code))]
+#[cfg_attr(vulkan_backend, allow(dead_code))]
 mod draw_types;
 pub use draw_types::*;
 
@@ -99,12 +94,12 @@ pub use draw_types::*;
 mod frame_fence;
 pub use frame_fence::FrameFence;
 // Vulkan stamps its drops once it submits (P1).
-#[cfg_attr(feature = "vulkan", allow(dead_code))]
+#[cfg_attr(vulkan_backend, allow(dead_code))]
 mod retire;
 pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
 mod texture_pool;
 pub use texture_pool::TexturePool;
 // Ray-tracing data types; each backend re-exports them from its `raytrace`.
 // Vulkan uses them once it traces rays (P7).
-#[cfg_attr(feature = "vulkan", allow(dead_code))]
+#[cfg_attr(vulkan_backend, allow(dead_code))]
 mod raytrace_types;

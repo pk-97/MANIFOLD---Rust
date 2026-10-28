@@ -66,7 +66,7 @@ fn validate_module(module: naga::Module, label: &str) -> (naga::Module, naga::va
 ///
 /// Compiled only with the Metal backend, its sole caller. Lift the gate when
 /// the Vulkan backend grows a point-topology pipeline that calls it.
-#[cfg(not(feature = "vulkan"))]
+#[cfg(not(vulkan_backend))]
 pub(crate) fn rebind_vertex_output_as_point_size(
     module: naga::Module,
     vs_entry: &str,

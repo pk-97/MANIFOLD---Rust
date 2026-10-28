@@ -798,6 +798,7 @@ impl ContentThread {
         //     so decoders are opened before clips become active (prevents
         //     black frames at clip start). Port of Unity WorkspaceController
         //     → VideoPlayerPool.WarmCache(candidates).
+        #[cfg(target_os = "macos")]
         if let Some(ref candidates) = tick_result.prewarm_candidates {
             for renderer in self.engine.renderers_mut() {
                 if let Some(vid) = renderer
@@ -2455,5 +2456,5 @@ impl DetectionWrite {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests;

@@ -552,15 +552,15 @@ pub(crate) fn edit_chars(text_input: &mut TextInputState, c: &str, mods: Modifie
     } else if c == "c" && mods.command {
         let s = text_input.copy_selection();
         if !s.is_empty() {
-            crate::macos_pasteboard::set_general_pasteboard_string(&s);
+            crate::text_clipboard::set_text(&s);
         }
     } else if c == "x" && mods.command {
         let s = text_input.cut_selection();
         if !s.is_empty() {
-            crate::macos_pasteboard::set_general_pasteboard_string(&s);
+            crate::text_clipboard::set_text(&s);
         }
     } else if c == "v" && mods.command {
-        if let Some(s) = crate::macos_pasteboard::general_pasteboard_string() {
+        if let Some(s) = crate::text_clipboard::text() {
             text_input.paste(&s);
         }
     } else if typing {

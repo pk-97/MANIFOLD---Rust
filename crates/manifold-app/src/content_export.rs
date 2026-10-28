@@ -716,6 +716,22 @@ impl ContentThread {
 
     /// Run the export body. The public wrapper owns the whole-run lifecycle
     /// notifications, including the terminal pulse after playback restore.
+    /// Video export needs an encoder off macOS (P5): report it, render nothing.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn run_export(
+        &mut self,
+        config: manifold_media::export_config::ExportConfig,
+        _cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &StateTx,
+    ) {
+        self.send_export_finished(
+            state_tx,
+            false,
+            "Video export is not available on this platform yet".to_string(),
+            &config.output_path,
+        );
+    }
+
     #[cfg(target_os = "macos")]
     fn run_export_inner(
         &mut self,
@@ -1289,6 +1305,7 @@ impl ContentThread {
         failed || finalize_failed
     }
 
+    #[cfg(target_os = "macos")]
     /// Render and encode a single export frame. Returns Some(error) on failure.
     fn export_one_frame(
         &mut self,

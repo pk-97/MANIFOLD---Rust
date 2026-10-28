@@ -5,12 +5,9 @@ edition = "2024"
 publish = false
 
 [features]
-# Backend selection is explicit via feature flag. With no features, the crate
-# uses the Metal backend on macOS and fails to link on other platforms (the
-# intended error — MANIFOLD's primary build is Mac-native). Enabling `vulkan`
-# switches to the Vulkan backend, on any platform. On macOS it runs on
-# KosmicKrisp or MoltenVK (D21), which validates the cross-platform path from
-# the dev box without booting into Linux.
+# The backend follows the target (`build.rs`): Metal on macOS, Vulkan
+# everywhere else. `vulkan` switches macOS to the Vulkan backend, run on
+# KosmicKrisp or MoltenVK (D21) to check the portable path from the dev box.
 default = []
 vulkan = ["dep:ash"]
 testkit = []
@@ -36,9 +33,12 @@ uuid = { workspace = true }
 # SPIR-V optimization (wraps Google SPIRV-Tools C++)
 spirv-tools = { version = "0.13", features = ["use-compiled-tools"] }
 
-# Vulkan loader bindings. Opt-in via the `vulkan` feature — pure FFI loader
-# with no C deps, so enabling it costs essentially no compile time.
+# Vulkan loader bindings: the `vulkan` feature on macOS, always elsewhere.
 ash = { version = "0.38", optional = true }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ash = "0.38"
+raw-window-handle = "0.6"
 
 # Native Metal backend
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -149,8 +149,7 @@ objc2-metal-performance-shaders-graph = { version = "0.3", default-features = fa
 [lints]
 workspace = true
 
-# `ash` is gated behind the `vulkan` feature (see [features] above).
-# cargo-machete doesn't enable optional features when scanning, so it
-# correctly reports `ash` as unused under the default Metal config.
+# The Vulkan stubs do not call `ash` yet (P1 does), so cargo-machete
+# reports it unused.
 [package.metadata.cargo-machete]
 ignored = ["ash"]

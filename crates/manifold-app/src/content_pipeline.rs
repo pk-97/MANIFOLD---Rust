@@ -435,7 +435,6 @@ pub struct ContentPipeline {
     #[cfg(target_os = "macos")]
     output_present_suspended: bool,
     /// One mapper shared by output and workspace preview; plans are per destination.
-    #[cfg(target_os = "macos")]
     presentation_pipeline: Option<PresentationPipeline>,
     /// Triple-buffered IOSurface textures for the workspace preview.
     #[cfg(target_os = "macos")]
@@ -588,10 +587,8 @@ pub struct ContentPipeline {
     /// `Application::resumed()` in app.rs) hold clones of the SAME
     /// allocation rather than a raw pointer that would dangle across the
     /// subsequent moves (BUG-054).
-    #[cfg(target_os = "macos")]
     native_device: Option<std::sync::Arc<manifold_gpu::GpuDevice>>,
-    /// Native Metal shared event for frame completion (macOS only).
-    #[cfg(target_os = "macos")]
+    /// Shared event for frame completion.
     native_event: Option<manifold_gpu::GpuEvent>,
     /// Kernel-notified GPU fence waiter — replaces busy-spin polling.
     /// Registered before each frame to wake the content thread via condvar
@@ -599,10 +596,8 @@ pub struct ContentPipeline {
     #[cfg(target_os = "macos")]
     fence_waiter: Option<manifold_gpu::GpuFenceWaiter>,
     /// Signal value from the native event.
-    #[cfg(target_os = "macos")]
     native_signal_value: u64,
     /// Texture pool backed by MTLHeap for zero-kernel-call allocation.
-    #[cfg(target_os = "macos")]
     texture_pool: Option<manifold_gpu::TexturePool>,
     /// Downscale blit used for the workspace preview texture.
     #[cfg(target_os = "macos")]
@@ -816,7 +811,6 @@ impl ContentPipeline {
             output_surface: None,
             #[cfg(target_os = "macos")]
             output_present_suspended: false,
-            #[cfg(target_os = "macos")]
             presentation_pipeline: None,
             #[cfg(target_os = "macos")]
             preview_textures: [None, None, None],
@@ -866,7 +860,6 @@ impl ContentPipeline {
             clip_atlas_visible: Vec::new(),
             #[cfg(target_os = "macos")]
             clip_atlas_persistent: None,
-            #[cfg(target_os = "macos")]
             clip_atlas_cache: crate::clip_atlas::ClipAtlasCache::new(CLIP_ATLAS_CELLS as u32),
             clip_atlas_last_snapshot: AHashMap::new(),
             clip_atlas_frame: 0,
@@ -896,15 +889,11 @@ impl ContentPipeline {
             last_rt_history_resets: 0,
             #[cfg(feature = "profiling")]
             gpu_poll_ms: 0.0,
-            #[cfg(target_os = "macos")]
             native_device: None,
-            #[cfg(target_os = "macos")]
             native_event: None,
             #[cfg(target_os = "macos")]
             fence_waiter: None,
-            #[cfg(target_os = "macos")]
             native_signal_value: 0,
-            #[cfg(target_os = "macos")]
             texture_pool: None,
             #[cfg(target_os = "macos")]
             preview_pipeline: None,
@@ -1294,7 +1283,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     }
 
     /// Reference to the native GPU device (if initialized).
-    #[cfg(target_os = "macos")]
     pub fn native_device(&self) -> Option<&manifold_gpu::GpuDevice> {
         self.native_device.as_deref()
     }
@@ -3746,6 +3734,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn update_node_preview(
         enc: &mut manifold_gpu::GpuEncoder,
         source: &manifold_gpu::GpuTexture,

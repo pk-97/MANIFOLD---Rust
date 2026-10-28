@@ -12,6 +12,9 @@ use std::convert::Infallible;
 pub use crate::raytrace_types::*;
 use crate::*;
 
+/// Nothing traces until P7, so there are no tiles to make conservative.
+pub fn request_conservative_trace_tiles() {}
+
 pub struct GpuShadowRayTracer {
     never: Infallible,
 }

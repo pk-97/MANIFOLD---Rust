@@ -672,11 +672,14 @@ impl Application {
                         crate::edr_surface::set_window_level(&ws.window, 0);
                     }
 
-                    let new_size = ws.window.inner_size();
-                    self.send_content_cmd(ContentCommand::ResizeOutputSurface(
-                        new_size.width.max(1),
-                        new_size.height.max(1),
-                    ));
+                    #[cfg(target_os = "macos")]
+                    {
+                        let new_size = ws.window.inner_size();
+                        self.send_content_cmd(ContentCommand::ResizeOutputSurface(
+                            new_size.width.max(1),
+                            new_size.height.max(1),
+                        ));
+                    }
                 }
             } else {
                 self.output_last_click = Some(now);
@@ -1347,15 +1350,15 @@ impl Application {
                     } else if c == "c" && self.modifiers.command {
                         let s = self.text_input.copy_selection();
                         if !s.is_empty() {
-                            crate::macos_pasteboard::set_general_pasteboard_string(&s);
+                            crate::text_clipboard::set_text(&s);
                         }
                     } else if c == "x" && self.modifiers.command {
                         let s = self.text_input.cut_selection();
                         if !s.is_empty() {
-                            crate::macos_pasteboard::set_general_pasteboard_string(&s);
+                            crate::text_clipboard::set_text(&s);
                         }
                     } else if c == "v" && self.modifiers.command {
-                        if let Some(s) = crate::macos_pasteboard::general_pasteboard_string() {
+                        if let Some(s) = crate::text_clipboard::text() {
                             self.text_input.paste(&s);
                         }
                     } else if typing {

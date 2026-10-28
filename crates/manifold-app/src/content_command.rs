@@ -308,8 +308,7 @@ pub enum ContentCommand {
     // ── GPU events ────────────────────────────────────────────────
     /// GPU finished with a surface — wake the content thread if it's
     /// blocked in `recv()` waiting for surface readiness.
-    /// Sent by the Metal `SharedEventListener` notification block.
-    #[cfg(target_os = "macos")]
+    /// Sent from the GPU's completion handlers.
     SurfaceReady,
     /// The stage output's drawable went on screen at `at` (Metal's presented
     /// handler, host time mapped to `Instant`). Feeds the screen delay (D19).

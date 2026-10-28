@@ -21,7 +21,7 @@ Backend selection and the shader front end are done: `lib.rs` picks `metal/` or 
 ## 3. Rules
 
 - **`ash` 0.38 only.** No wgpu, no vulkano. `gpu-allocator` 0.28 (built on ash 0.38) for memory, `ash-window` for surfaces. ash 0.38's headers are Vulkan 1.3.281: `VK_EXT_present_timing` needs a newer ash and waits until it ships.
-- **Backend differences live inside `manifold-gpu`.** Shared crates never check which backend is active. A Metal-only feature becomes a backend-neutral API with a capability query (`denoiser_available()` returns false on Vulkan until it is built). A feature that is off logs once at boot, by name.
+- **Backend differences live inside `manifold-gpu`.** Shared crates never check which backend is active. A Metal-only feature becomes a backend-neutral API with a capability query on `GpuDevice` (`supports_denoiser()` returns false on Vulkan until it is built). A feature that is off logs once at boot, by name.
 - **OS differences sit in one place each.** Folders and external-tool lookup are std-only helpers in `manifold-foundation` (`app_dirs`, `find_tool`), shared by every crate that needs them. OS code with a single user (keep-awake, thread priority, performance cores) sits in a per-OS module next to that user. Big services (text, audio capture, video, window chrome) keep one seam in their own crate. Shared code never writes `cfg(target_os)` inline.
 - **Raw handles stay Metal-only.** `raw_device`, `raw_cmd_buf`, `raw_ptr`, `raw_device_ptr`, `mtl4_bridge` are not exported on Vulkan. Their callers are macOS-gated, so off the Mac the compile error under Vulkan enforces the rule. On the Mac those gates are still true under `--features vulkan`, so Mac Vulkan builds cover `manifold-gpu` and the crates without Metal-only code; `manifold-app`, `manifold-media` and `manifold-recording` build against Vulkan on Linux. Whether the whole app should also run on Vulkan on the Mac is decided at P3.
 - **Metal is the reference, within tolerance.** Metal compiles every pipeline with fast math (`MTLMathMode::Fast`, `metal/device.rs:777` and four more), so last-bit differences are expected; each proof states its tolerance. Never loosen a tolerance or change `metal/` to make Vulkan pass. Shared WGSL may change only to remove undefined behaviour that is shown on Metal too. A difference beyond tolerance is a Vulkan bug until shown otherwise.
@@ -90,10 +90,10 @@ These change Metal-side and app code too, so they come before the app can run on
 
 | Feature | Neutral API | Vulkan until built |
 |---|---|---|
-| Ray tracing | `raytrace` keeps its types and `ShadowRayTracer` trait on both backends | Tracer reports unavailable; scenes use raster shadow maps. Built in P7 |
-| Denoiser | `denoiser_available()` already exists | false. Built in P7 |
-| MetalFX spatial and temporal upscale | One upscaler capability in `manifold-gpu`; `manifold-compositor/src/fsr1.rs` stays the portable spatial path | Unavailable. DLSS or FSR in P7 |
-| GPU FFT | `GpuFft` | Unavailable; the two nodes report it. Built in P7 |
+| Ray tracing | `supports_ray_tracing()`; `GpuShadowRayTracer`, `RtAccel` and the `ShadowRayTracer` trait exist on both backends | No tracer; scenes use raster shadow maps. Built in P7 |
+| Denoiser | `supports_denoiser()`, `GpuTemporalDenoiser` | false. Built in P7 |
+| MetalFX spatial and temporal upscale | `supports_upscaler()`, `GpuSpatialUpscaler`, `GpuTemporalUpscaler`; `manifold-compositor/src/fsr1.rs` stays the portable spatial path | Unavailable. DLSS or FSR in P7 |
+| GPU FFT | `supports_fft()`, `GpuFft` | Unavailable: Inverse FFT 2D reports it, water fields lose ripples. Built in P7 |
 | Residency sets, firmware reports, capture scopes | Existing calls | Empty or no-op |
 
 A unit test asserts every capability reports available on Metal, so the cutover can never silently switch ray tracing, the denoiser or MetalFX off on the Mac.
@@ -115,7 +115,7 @@ On Metal, GPU FLIP runs its pressure solve from indirect command buffers. One ro
 | Service | Mac today | Linux | Work |
 |---|---|---|---|
 | UI text | CoreText atlas, `manifold-ui-paint/src/native_text.rs` (2,172 lines) behind `manifold_ui::text::TextMeasure` | cosmic-text 0.19 (harfrust shaping, fontdb, swash raster), embedded Inter | Medium. Without it the UI has no text |
-| Text generator | CoreText, `manifold-nodes-image/src/text_rasterizer.rs` (689 lines), system families by name; the default is embedded Inter. The terminal glyph atlas asks for "Menlo" (`glyph_atlas.rs:30`) | cosmic-text + fontdb system fonts; the terminal falls back to a bundled or present monospace font | Small-medium |
+| Text generator | CoreText, `manifold-nodes-image/src/text_rasterizer/core_text.rs` (689 lines), system families by name; the default is embedded Inter. The terminal glyph atlas asks for "Menlo" (`glyph_atlas.rs:30`) | cosmic-text + fontdb system fonts; the terminal falls back to a bundled or present monospace font | Small-medium |
 | Video decode | AVFoundation + VideoToolbox plugin (`MetalVideoDecoderPlugin.m` 765 lines), writes into a raw `MTLTexture` | FFmpeg via `ffmpeg-next` 9 with the Vulkan hwcontext on our own `VkDevice` (D23): decoded frames arrive as `VkImage`s. CPU decode + upload where the driver lacks Vulkan Video (the Mac drivers), logged once | Large. Needs a decoder trait below `ClipRenderer`; `DecoderPool`/`DecodeScheduler` are concrete today. ProRes decodes on Vulkan compute in FFmpeg 8.1+. HAP decodes on the CPU in FFmpeg |
 | Export | AVFoundation encoder plugin (670 lines) | FFmpeg encode: NVENC on NVIDIA, x264/x265 otherwise. `audio_muxer.rs` already shells out to ffmpeg | Medium |
 | Live recording | AVAssetWriter plugin (839 lines), ProRes Proxy or HEVC Main10 | FFmpeg encode on the recording thread | Medium |

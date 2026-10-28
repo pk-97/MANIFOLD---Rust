@@ -110,6 +110,7 @@ mod input_handler;
 mod input_host;
 #[cfg(target_os = "macos")]
 mod macos_pasteboard;
+mod text_clipboard;
 mod menu;
 mod offline_audio_mod;
 mod scene_import;
@@ -158,13 +159,11 @@ mod project_io;
 mod quit;
 mod scene_viewport;
 mod session_log;
-#[cfg(target_os = "macos")]
 mod shared_texture;
 mod sync_prefs;
 mod sync_rig_log;
 mod text_input;
 mod text_session;
-#[cfg(target_os = "macos")]
 mod texture_pane;
 mod tree_passes;
 mod ui_bridge;

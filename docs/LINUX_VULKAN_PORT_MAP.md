@@ -130,24 +130,14 @@ About 525 `target_os` lines in 46 files. Grouped by what they gate:
 | Window, presentation, display link, pacing | ~107 | `edr_surface.rs` (14), `quit.rs` (13), `frame_timer.rs` (12), `sync_rig_log.rs` (9), `content_command.rs` (5), `app_lifecycle.rs` (5), `window_input.rs` (4), `content_thread.rs` (3), `drag_interpose.rs`, `breadcrumb.rs`, `present_feedback.rs`, `workspace.rs`, `window_registry.rs`, `main.rs:58` (display link) | Stubs exist off-Mac for most. Linux needs present-driven pacing, output on a chosen display (design section 8: Wayland cannot position windows, display matching returns `None` off the Mac), and real-time priority in place of the Mac thread policy (`frame_timer.rs:285,294,403`) | P3, P4 |
 | Keep the machine awake | 2 | `main.rs` IOPMAssertion lines | Idle inhibit, next to its one user. Show-critical: a projector going to sleep mid-set | P4 |
 | Export, still capture, recording, video and images | ~42 | `content_export.rs` (13), `content_thread.rs` (8), `content_commands.rs` (8), `app.rs` (4). Off-Mac clips get `StubRenderer` (`app.rs:1553`): no video and no images | FFmpeg decode and encode | P5 |
-| Clipboard and file paste | ~20 | `input_host.rs` (11), `card_edit.rs`, `ui_snapshot/script.rs`, `window_input.rs`, `app.rs`, `main.rs:111` | Text fields copy and paste through `macos_pasteboard` today (`text_session.rs:539-547`, `window_input.rs:1350-1358`): move them to arboard. Finder file paste stays Mac-only; winit 0.30 has no file drops on Wayland | P4 |
+| Clipboard and file paste | ~20 | `input_host.rs` (11), `card_edit.rs`, `ui_snapshot/script.rs`, `window_input.rs`, `app.rs`, `main.rs:111` | Text fields and copy actions use `text_clipboard.rs` (arboard) everywhere. Finder file paste stays Mac-only; winit 0.30 has no file drops on Wayland | P4 |
 | Menus | 2 | `menu.rs:187-197`; seven actions exist only in the menu (`app_render.rs:438-467`) | In-app entries for them, then section 10 item 3 | P4 |
 | Headless harness and subcommands | ~90 | `headless_harness.rs`, `main.rs` (11 + 11), `content_pipeline.rs` (12), proof modules (66 lines: `bug219_verify`, `corridor_acceptance`, `frame_exact_app`, `gap_start_probe`, `gpu_flip_export_demo`, `import_responsiveness_verify`, `mute_visibility_probe`, `rt_dynamic_export_tests`) | `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` are Mac-gated. `ui-snap` needs only text and `new_queued`. The harness boots the normal pipeline after the bridge change | P3 |
 | Misc | 2 | `main.rs:379,732` (App Nap, nothing on Linux) | Gate stays | Build hygiene |
 
 **Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`, `percussion_backend.rs:210`) wait for Linux packaging (P4).
 
-**Linux compile breaks in manifold-app** (an ungated use of a Mac-only item; each needs a neutral type or a gate):
-- **Text:** `CachedTextMeasure` at `ui_root/mod.rs:556,581` and `ui_snapshot/render.rs:656`; `text_rasterizer` at `app_render.rs:926`.
-- **Surface:** `create_surface`, `configure_edr` and `surface.resize` at `app.rs:1181-1195,1897,1927` and `app_lifecycle.rs:1521-1537`; `GpuSurface` at `window_registry.rs:19`.
-- **Pasteboard:** `macos_pasteboard` at `text_session.rs:539-547` and `window_input.rs:1350-1358`.
-- **Panes:** `texture_pane` at `ui_frame.rs:144,889,1315,1392`; `ui_display_link` at `app_render.rs:2478`.
-- **Frame fence:** `FrameFence` at `app.rs:304,1395` and `app_render.rs:2460,2471` (this one disappears once Vulkan has the type).
-- **Native device:** `native_device()` at `content_thread.rs:964` and `content_commands.rs:530,922,1778`; `set_native_gpu` at `app.rs:1595`; `workspace_preview_size` at `app.rs:1439,1446`; `resize_workspace_preview` at `content_commands.rs:1514`.
-- **Mac-gated content commands used ungated:** `SurfaceReady` at `content_thread.rs:350,354`, `ResizeOutputSurface` at `window_input.rs:676` and `app.rs:1910`, `SetOutputPresentSuspended` at `app.rs:2262`.
-- **Export and video:** `run_export` at `content_thread.rs:334`; `video_renderer` at `content_thread.rs:810`.
-- **Struct field:** `sync_arbiter` is an ungated field (`content_thread.rs:131`) with a Mac-gated initializer (`app.rs:1700-1701`).
-- **Tests:** `headless_harness` is used ungated at `content_commands.rs:2200,2235,2269` and `content_thread/tests.rs:4`.
+**Gated until P3 or P5.** On Linux the app compiles with these off: the output surface and its resize and suspend commands, the workspace preview bridge and its size, the native GPU handoff to the content pipeline (`set_native_gpu`), the display link, UI text measurement, video prewarm, video export (reports "not available"), and the tests that boot `headless_harness`.
 
 ---
 
@@ -156,7 +146,7 @@ About 525 `target_os` lines in 46 files. Grouped by what they gate:
 | Crate | What breaks or is missing on Linux | Phase |
 |---|---|---|
 | manifold-ui-paint | All UI text is CoreText (`native_text.rs`, 2,172 lines, gated at `lib.rs:10`). Off-Mac `ui_renderer.rs:1597,2071` sets `has_text = false`. Five text proofs in `tests/contracts/` are Mac-only | P4: cosmic-text |
-| manifold-nodes-image | `text_rasterizer.rs` (689 lines, CoreText) is gated, but `primitives/render_text.rs:26` and `glyph_atlas.rs:8` import it ungated (compile break). The Text generator's default is embedded Inter (the "Helvetica" strings are test pins). The terminal glyph atlas asks for "Menlo" (`glyph_atlas.rs:30`), which Linux lacks. The font list comes from CoreText (`text_rasterizer.rs:191-203`). `inverse_fft_2d.rs` uses `GpuFft` | P4: cosmic-text and fontdb, a monospace fallback |
+| manifold-nodes-image | `text_rasterizer/`: CoreText on macOS (`core_text.rs`, 689 lines); elsewhere every string rasterizes to nothing, and the terminal glyph atlas panics on it (`glyph_atlas.rs` expects a glyph per ASCII character). The Text generator's default is embedded Inter (the "Helvetica" strings are test pins). The terminal glyph atlas asks for "Menlo" (`glyph_atlas.rs:30`), which Linux lacks. The font list comes from CoreText (`available_font_families`) | P4: cosmic-text and fontdb, a monospace fallback |
 | manifold-media | Decode and export are Obj-C plugins on VideoToolbox and AVFoundation (`native/*.m`, 1,435 lines). `lib.rs:8-25` gates them. `DecoderPool`, `DecodeScheduler` and `MetalEncoder` are concrete types; the `ClipRenderer` trait (`manifold-playback/src/renderer.rs:10`) is the seam. `metadata.rs:19-29` returns `None` off-Mac. No FFmpeg crate in the graph today; only the `ffmpeg` CLI for audio muxing | P5 |
 | manifold-recording | AVAssetWriter plugin (`native/LiveRecordingPlugin.m`, 839 lines). Everything but `config` and `ffi` is gated (`lib.rs:24-39`). Default path is the Desktop (`config.rs:29-37`). `proofs.rs` expects `ffprobe` | P5 |
 | manifold-audio | System-audio capture is a CoreAudio process tap (`capture/process_tap.rs`, 792 lines); off-Mac `unsupported_tap.rs` returns an error. Input asks cpal for its default buffer (`cpal_input.rs:88`), which on ALSA is 25 ms periods and a 100 ms buffer; the kick detector needs a small fixed buffer. The device list already falls back to cpal. Mic permission returns Granted off-Mac | P4: PipeWire monitor capture, buffer size, cpal 0.15 → 0.18 together with kira |
@@ -197,7 +187,7 @@ One batch at a time, and both builds stay green before the next one starts (desi
 
 **Before any Vulkan code, all on the Mac.** Each step shrinks or cleans what gets ported. The compiler catches most mistakes, the touched crates' unit tests catch the rest, and steps that change behaviour add the one check named below.
 
-The overnight run does steps 2 to 8 with buffer use after step 5, then the P4 pieces with no taste call (text clipboard, audio buffer size, keep-awake, plugins as `.so`), P1, GPU timing, P2 and cosmic-text on Linux. It starts only with MANIFOLD closed and no other session working in this folder, commits each batch, and parks a batch it cannot fix in a few tries.
+The overnight run does steps 2 to 8 with buffer use after step 5, then the P4 pieces with no taste call (audio buffer size, keep-awake, plugins as `.so`), P1, GPU timing, P2 and cosmic-text on Linux. It starts only with MANIFOLD closed and no other session working in this folder, commits each batch, and parks a batch it cannot fix in a few tries.
 
 1. **Setup** (section 1). Done 28 Oct.
 2. **Build hygiene.** Done 28 Oct, except `UniformArena` (section 11).
@@ -206,7 +196,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then the P4 pi
 5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, commit forms, the upload merge, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
 6. **Frame bridge on one device.** Done 28 Oct: the content device is the UI device's `sibling` and the bridge holds plain `GpuTexture`s. The headless subcommands booting the normal pipeline is still open (section 11).
 7. **Vulkan skeleton.** Done 28 Oct: `vulkan/` mirrors every Metal signature with `todo!` bodies naming their phase, the section 4 callers check capabilities, and `cargo clippy --features manifold-gpu/vulkan --all-targets -- -D warnings` passes for every crate except `manifold-app`, `manifold-media` and `manifold-recording`.
-8. **Linux compile.** In the VM, select the backend by target and run `cargo check --workspace`. Fix the compile breaks in sections 6 and 7 with gates or neutral stubs, no features yet. Done when the workspace compiles on Linux.
+8. **Linux compile.** Done 28 Oct: `manifold-gpu/build.rs` picks Vulkan on every target but macOS, and `cargo check --workspace --all-targets` passes in the VM. Text-field copy and paste moved to arboard on the way.
 
 **Attended, before P1 needs them**
 - **Buffer use** (section 11), one subsystem at a time with that subsystem's proofs, then one full proof run. Before step 9.

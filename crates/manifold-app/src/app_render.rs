@@ -710,9 +710,7 @@ impl Application {
             // Intercept actions that need Application-level access
             match action {
                 PanelAction::Root(RootAction::CopyOscAddress(addr)) => {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        let _ = clipboard.set_text(addr.clone());
-                    }
+                    crate::text_clipboard::set_text(addr);
                     continue;
                 }
                 PanelAction::Project(ProjectAction::ToggleLiveRecording) => {
@@ -2463,11 +2461,15 @@ impl Application {
             }
         }
 
+        #[cfg(target_os = "macos")]
         let display_hz = self
             .ws
             .ui_display_link
             .as_ref()
             .map_or(0.0, |dl| dl.actual_refresh_hz());
+        // No display link off macOS until P3 paces frames there.
+        #[cfg(not(target_os = "macos"))]
+        let display_hz = 0.0;
         self.ui_profile.frame_end(
             frame_t0.elapsed(),
             std::time::Duration::from_secs_f64(dt),

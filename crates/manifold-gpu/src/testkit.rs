@@ -67,7 +67,7 @@ pub fn test_device() -> TestDevice {
 }
 
 /// Reuse app shader disk caches without populating live pipeline caches.
-#[cfg(not(feature = "vulkan"))]
+#[cfg(not(vulkan_backend))]
 pub fn load_disk_shader_caches(device: &crate::GpuDevice) {
     let cache = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"))
         .join("Library/Caches/com.latentspace.manifold");
@@ -78,5 +78,5 @@ pub fn load_disk_shader_caches(device: &crate::GpuDevice) {
 
 /// The disk caches are Metal formats (a metallib archive and MSL source), which
 /// the Vulkan backend has no reader for, so its tests compile shaders cold.
-#[cfg(feature = "vulkan")]
+#[cfg(vulkan_backend)]
 pub fn load_disk_shader_caches(_device: &crate::GpuDevice) {}

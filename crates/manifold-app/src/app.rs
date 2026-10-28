@@ -1416,11 +1416,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let output_w = self.local_project.settings.output_width.max(1) as u32;
             let output_h = self.local_project.settings.output_height.max(1) as u32;
+            #[cfg(target_os = "macos")]
             let initial_layout = manifold_ui::layout::ScreenLayout::new(
                 size.width as f32 / scale as f32,
                 size.height as f32 / scale as f32,
             );
+            #[cfg(target_os = "macos")]
             let initial_video_area = initial_layout.video_area();
+            #[cfg(target_os = "macos")]
             let initial_preview_size = Self::compute_workspace_preview_size(
                 output_w,
                 output_h,
@@ -1428,7 +1431,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 initial_video_area.height,
                 scale,
             );
-            self.workspace_preview_size = initial_preview_size;
+            #[cfg(target_os = "macos")]
+            {
+                self.workspace_preview_size = initial_preview_size;
+            }
 
             // The content device is the UI device's sibling: the same native
             // device with its OWN queue, so the content thread never starves UI
@@ -1578,6 +1584,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // grabs command buffers from both content and UI threads.
             native_device.install_device_capture_scope();
             // Transfer native device ownership to content pipeline.
+            #[cfg(target_os = "macos")]
             content_pipeline.set_native_gpu(native_device);
             // The content side of each bridge.
             #[cfg(target_os = "macos")]
@@ -1677,7 +1684,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.local_project.settings.frame_rate as f64,
                 ),
                 physics_metrics: Default::default(),
-                #[cfg(target_os = "macos")]
                 sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
                 osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
                 osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
@@ -1886,6 +1892,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         self.ws.ui_root.set_screen_size(logical_w, logical_h);
                     } else {
                         // Output window resized — update drawable.
+                        #[cfg(target_os = "macos")]
                         self.send_content_cmd(ContentCommand::ResizeOutputSurface(
                             size.width.max(1),
                             size.height.max(1),
@@ -2232,6 +2239,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.display_retarget_pending = true;
                 self.display_retarget_deadline =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                #[cfg(target_os = "macos")]
                 self.send_content_cmd(ContentCommand::SetOutputPresentSuspended(true));
                 log::info!(
                     "[Display] Retarget in flight — suspending surface ops \
