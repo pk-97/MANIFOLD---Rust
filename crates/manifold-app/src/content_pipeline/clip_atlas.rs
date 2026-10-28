@@ -250,21 +250,22 @@ pub(super) fn fill_clip_atlas(
     // the old triple-buffer ring (BUG-119).
     let cell_blit = downsample.unwrap_or(raw);
     for (cell, tex) in &to_blit {
-        enc.draw_fullscreen_viewport(
-            cell_blit,
-            persistent_tex,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: tex,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler,
-                },
-            ],
-            clip_atlas_cell_full(*cell as usize),
-            manifold_gpu::GpuLoadAction::Load,
+        enc.draw(
+            &manifold_gpu::DrawPass::color(persistent_tex, manifold_gpu::GpuLoadAction::Load)
+                .viewport(clip_atlas_cell_full(*cell as usize)),
+            &[manifold_gpu::Draw::fullscreen(
+                cell_blit,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: tex,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler,
+                    },
+                ],
+            )],
             "Clip Thumbnail Atlas Cell",
         );
     }
@@ -364,21 +365,22 @@ pub(super) fn restore_clip_atlas(
         }
         let st = staging.as_ref().expect("staging just created");
         native_device.upload_texture(st, bytes);
-        enc.draw_fullscreen_viewport(
-            raw,
-            pt,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: st,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler,
-                },
-            ],
-            clip_atlas_cell_full(atlas_cell as usize),
-            manifold_gpu::GpuLoadAction::Load,
+        enc.draw(
+            &manifold_gpu::DrawPass::color(pt, manifold_gpu::GpuLoadAction::Load)
+                .viewport(clip_atlas_cell_full(atlas_cell as usize)),
+            &[manifold_gpu::Draw::fullscreen(
+                raw,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: st,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler,
+                    },
+                ],
+            )],
             "Clip Thumb Restore Cell",
         );
         *pending_layout_out = Some((cache_obj.layout(), CLIP_ATLAS_LAYOUT_UNSTAMPED));

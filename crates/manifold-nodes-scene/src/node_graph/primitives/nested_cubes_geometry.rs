@@ -17,8 +17,8 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -119,32 +119,48 @@ manifold_node_engine::primitive! {
 impl NestedCubesGeometry {
     fn ensure_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.fill_pipeline.is_none() {
-            self.fill_pipeline = Some(device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(include_str!("shaders/nested_cubes_geometry.wgsl"), "vs_main", "fs_main", "node.nested_cubes_geometry::fill")
+            self.fill_pipeline = Some(
+                device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        include_str!("shaders/nested_cubes_geometry.wgsl"),
+                        "vs_main",
+                        "fs_main",
+                        "node.nested_cubes_geometry::fill",
+                    )
                     .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
                     .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
-            ));
+                ),
+            );
         }
         if self.edge_pipeline.is_none() {
-            self.edge_pipeline = Some(device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(include_str!("shaders/nested_cubes_geometry.wgsl"), "vs_edges", "fs_main", "node.nested_cubes_geometry::edges")
+            self.edge_pipeline = Some(
+                device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        include_str!("shaders/nested_cubes_geometry.wgsl"),
+                        "vs_edges",
+                        "fs_main",
+                        "node.nested_cubes_geometry::edges",
+                    )
                     .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
                     .depth(manifold_gpu::GpuTextureFormat::Depth32Float),
-            ));
+                ),
+            );
         }
         if self.depth_stencil_write.is_none() {
-            self.depth_stencil_write =
-                Some(device.create_depth_stencil_state(&manifold_gpu::GpuDepthStencilDesc {
+            self.depth_stencil_write = Some(device.create_depth_stencil_state(
+                &manifold_gpu::GpuDepthStencilDesc {
                     compare: manifold_gpu::GpuCompareFunction::LessEqual,
                     write_enabled: true,
-                }));
+                },
+            ));
         }
         if self.depth_stencil_read.is_none() {
-            self.depth_stencil_read =
-                Some(device.create_depth_stencil_state(&manifold_gpu::GpuDepthStencilDesc {
+            self.depth_stencil_read = Some(device.create_depth_stencil_state(
+                &manifold_gpu::GpuDepthStencilDesc {
                     compare: manifold_gpu::GpuCompareFunction::LessEqual,
                     write_enabled: false,
-                }));
+                },
+            ));
         }
     }
 
@@ -306,21 +322,24 @@ impl Primitive for NestedCubesGeometry {
             .expect("depth_read state init");
         let depth_tex = self.depth_texture.as_ref().expect("depth texture init");
 
-        gpu.native_enc.draw_instanced_depth_ex(
-            fill_pipeline,
-            target,
-            depth_tex,
-            depth_write,
-            &[manifold_gpu::GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::bytes_of(&fill_uniforms),
-            }],
-            TRI_VERTEX_COUNT,
-            NESTED_CUBES_INSTANCE_COUNT,
-            manifold_gpu::GpuLoadAction::Clear,
-            manifold_gpu::GpuTriangleFillMode::Fill,
-            manifold_gpu::GpuPrimitiveType::Triangle,
-            Some((1.0, 1.0, 0.0)),
+        let clear = manifold_gpu::GpuLoadAction::Clear;
+        gpu.native_enc.draw(
+            &manifold_gpu::DrawPass::color(target, clear).depth(
+                depth_tex,
+                depth_write,
+                clear,
+                manifold_gpu::DepthStore::Store,
+            ),
+            &[manifold_gpu::Draw::new(
+                fill_pipeline,
+                &[manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&fill_uniforms),
+                }],
+                TRI_VERTEX_COUNT,
+                NESTED_CUBES_INSTANCE_COUNT,
+            )
+            .depth_bias(1.0, 1.0, 0.0)],
             "node.nested_cubes_geometry::fill",
         );
 
@@ -328,21 +347,24 @@ impl Primitive for NestedCubesGeometry {
             extra: [sizes[4], self.current_angles[4], 1.0, scatter],
             ..fill_uniforms
         };
-        gpu.native_enc.draw_instanced_depth_ex(
-            edge_pipeline,
-            target,
-            depth_tex,
-            depth_read,
-            &[manifold_gpu::GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::bytes_of(&edge_uniforms),
-            }],
-            EDGE_VERTEX_COUNT,
-            NESTED_CUBES_INSTANCE_COUNT,
-            manifold_gpu::GpuLoadAction::Load,
-            manifold_gpu::GpuTriangleFillMode::Fill,
-            manifold_gpu::GpuPrimitiveType::Line,
-            None,
+        let load = manifold_gpu::GpuLoadAction::Load;
+        gpu.native_enc.draw(
+            &manifold_gpu::DrawPass::color(target, load).depth(
+                depth_tex,
+                depth_read,
+                load,
+                manifold_gpu::DepthStore::Store,
+            ),
+            &[manifold_gpu::Draw::new(
+                edge_pipeline,
+                &[manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&edge_uniforms),
+                }],
+                EDGE_VERTEX_COUNT,
+                NESTED_CUBES_INSTANCE_COUNT,
+            )
+            .primitive(manifold_gpu::GpuPrimitiveType::Line)],
             "node.nested_cubes_geometry::edges",
         );
     }

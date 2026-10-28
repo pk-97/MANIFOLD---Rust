@@ -677,34 +677,34 @@ impl Primitive for RenderLines {
         let widths_buf =
             widths_input.unwrap_or_else(|| self.dummy_widths.as_ref().expect("just ensured"));
 
-        gpu.native_enc.draw_instanced_msaa(
-            pipeline,
-            msaa_tex,
-            target,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: points,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: inst_buf,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: widths_buf,
-                    offset: 0,
-                },
-            ],
-            6,
-            total_instances,
-            GpuLoadAction::Clear,
+        gpu.native_enc.draw(
+            &manifold_gpu::DrawPass::msaa(msaa_tex, target, GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::new(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: points,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: inst_buf,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: widths_buf,
+                        offset: 0,
+                    },
+                ],
+                6,
+                total_instances,
+            )],
             "node.draw_lines",
         );
     }

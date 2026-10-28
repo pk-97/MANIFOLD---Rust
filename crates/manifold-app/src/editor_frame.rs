@@ -823,21 +823,21 @@ pub(crate) fn composite_editor_frame(
     }
     // The panels over the canvas: the atlas is transparent outside them.
     if let Some(atlas_tex) = cache.atlas_texture() {
-        encoder.draw_fullscreen(
-            atlas_pipeline,
-            offscreen,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: atlas_tex,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler: atlas_sampler,
-                },
-            ],
-            false,
-            true,
+        encoder.draw(
+            &manifold_gpu::DrawPass::color(offscreen, manifold_gpu::GpuLoadAction::Load),
+            &[manifold_gpu::Draw::fullscreen(
+                atlas_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: atlas_tex,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: atlas_sampler,
+                    },
+                ],
+            )],
             "Editor Atlas Blit",
         );
     }

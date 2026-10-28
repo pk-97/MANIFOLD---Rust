@@ -86,14 +86,28 @@ impl VolumeOptics {
                 dst_alpha_factor: GpuBlendFactor::One,
                 alpha_operation: GpuBlendOp::Add,
             };
-            self.pipeline = Some(device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_path", "volume signed path")
+            self.pipeline = Some(
+                device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        SHADER,
+                        "vs_main",
+                        "fs_path",
+                        "volume signed path",
+                    )
                     .color(GpuTextureFormat::R32Float, Some(blend)),
-            ));
-            self.nearest_pipeline = Some(device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_nearest", "volume nearest surface")
+                ),
+            );
+            self.nearest_pipeline = Some(
+                device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        SHADER,
+                        "vs_main",
+                        "fs_nearest",
+                        "volume nearest surface",
+                    )
                     .depth(GpuTextureFormat::Depth32Float),
-            ));
+                ),
+            );
             self.depth_state = Some(device.create_depth_stencil_state(&GpuDepthStencilDesc {
                 compare: GpuCompareFunction::Greater,
                 write_enabled: true,
@@ -138,35 +152,43 @@ impl VolumeOptics {
                 }
                 let targets = self.volumes[index].as_ref().expect("ensured");
                 let b = bindings(&u, draw, opaque_depth, identity);
-                encoder.draw_instanced(
-                    self.pipeline.as_ref().expect("ensured"),
-                    &targets.path,
-                    &b,
-                    draw.draw_count(),
-                    GpuLoadAction::Clear,
+                encoder.draw(
+                    &manifold_gpu::DrawPass::color(&targets.path, GpuLoadAction::Clear),
+                    &[manifold_gpu::Draw::counted(
+                        self.pipeline.as_ref().expect("ensured"),
+                        &b,
+                        draw.draw_count(),
+                    )],
                     "volume signed path",
                 );
-                let call = draw.live(GpuEncoder::depth_msaa_draw(
+                let call = draw.live(manifold_gpu::Draw::new(
                     self.nearest_pipeline.as_ref().expect("ensured"),
                     &b,
                     draw.vertex_count,
                     draw.instance_count,
                 ));
-                encoder.draw_instanced_depth_only_batch(
-                    &targets.nearest,
-                    self.depth_state.as_ref().expect("ensured"),
+                encoder.draw(
+                    &manifold_gpu::DrawPass::depth_only(
+                        &targets.nearest,
+                        self.depth_state.as_ref().expect("ensured"),
+                        manifold_gpu::GpuLoadAction::Clear,
+                    ),
                     &[call],
                     "volume nearest surface",
                 );
             }
             if density > 0.0 {
                 u.parameters[0] = density;
-                encoder.draw_instanced(
-                    self.pipeline.as_ref().expect("ensured"),
-                    self.density.as_ref().expect("ensured"),
-                    &bindings(&u, draw, opaque_depth, identity),
-                    draw.draw_count(),
-                    GpuLoadAction::Load,
+                encoder.draw(
+                    &manifold_gpu::DrawPass::color(
+                        self.density.as_ref().expect("ensured"),
+                        GpuLoadAction::Load,
+                    ),
+                    &[manifold_gpu::Draw::counted(
+                        self.pipeline.as_ref().expect("ensured"),
+                        &bindings(&u, draw, opaque_depth, identity),
+                        draw.draw_count(),
+                    )],
                     "volume embedded density",
                 );
             }

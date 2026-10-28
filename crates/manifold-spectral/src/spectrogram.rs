@@ -308,27 +308,27 @@ impl Spectrogram {
             )
         };
 
-        encoder.draw_fullscreen(
-            &self.pipeline,
-            target,
-            &[
-                GpuBinding::Buffer {
-                    binding: 0,
-                    buffer: buf,
-                    offset: 0,
-                },
-                GpuBinding::Bytes {
-                    binding: 1,
-                    data: param_bytes,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: scalar_buf,
-                    offset: 0,
-                },
-            ],
-            true, // clear
-            true, // store
+        encoder.draw(
+            &manifold_gpu::DrawPass::color(target, manifold_gpu::GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::fullscreen(
+                &self.pipeline,
+                &[
+                    GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: buf,
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 1,
+                        data: param_bytes,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: scalar_buf,
+                        offset: 0,
+                    },
+                ],
+            )],
             "Spectrogram",
         );
     }

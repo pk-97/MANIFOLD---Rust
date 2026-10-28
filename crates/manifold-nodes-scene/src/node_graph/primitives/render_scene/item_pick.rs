@@ -232,11 +232,11 @@ impl RenderScene {
             .iter()
             .map(|(field, uniforms)| water_cover::cover_bindings(uniforms, field))
             .collect();
-        let mut batch: Vec<manifold_gpu::DepthMsaaDraw> = drawn
+        let mut batch: Vec<manifold_gpu::Draw> = drawn
             .iter()
             .zip(&bindings)
             .map(|(d, bindings)| {
-                d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
+                d.live(manifold_gpu::Draw::new(
                     &pipeline,
                     bindings,
                     d.vertex_count,
@@ -247,18 +247,21 @@ impl RenderScene {
         // After the meshes, so the one depth-tested pass decides between
         // meshes and water.
         if let Some(field_pipeline) = &field_pipeline {
-            batch.extend(cover_bindings.iter().map(|bindings| {
-                manifold_gpu::GpuEncoder::depth_msaa_draw(field_pipeline, bindings, 3, 1)
-            }));
+            batch.extend(
+                cover_bindings
+                    .iter()
+                    .map(|bindings| manifold_gpu::Draw::new(field_pipeline, bindings, 3, 1)),
+            );
         }
         let gpu = ctx.gpu_encoder();
-        gpu.native_enc.draw_instanced_depth_batch(
-            &ids,
-            &depth,
-            depth_stencil,
+        gpu.native_enc.draw(
+            &manifold_gpu::DrawPass::color(&ids, manifold_gpu::GpuLoadAction::Clear).depth(
+                &depth,
+                depth_stencil,
+                manifold_gpu::GpuLoadAction::Clear,
+                manifold_gpu::DepthStore::Store,
+            ),
             &batch,
-            manifold_gpu::GpuLoadAction::Clear,
-            manifold_gpu::GpuLoadAction::Clear,
             "node.render_scene pick",
         );
         gpu.native_enc

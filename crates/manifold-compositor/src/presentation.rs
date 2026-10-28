@@ -316,12 +316,9 @@ impl PresentationPipeline {
                 sampler: &self.sampler,
             },
         ];
-        encoder.draw_fullscreen_viewport(
-            &self.pipeline,
-            target.texture(),
-            &bindings,
-            viewport,
-            load,
+        encoder.draw(
+            &manifold_gpu::DrawPass::color(target.texture(), load).viewport(viewport),
+            &[manifold_gpu::Draw::fullscreen(&self.pipeline, &bindings)],
             "Linear Display Presentation",
         );
         DisplayMappedFrame { target }

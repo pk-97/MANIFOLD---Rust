@@ -158,21 +158,22 @@ impl Application {
 
                 // Convert logical → physical pixels for the viewport.
                 let sf = scale as f32;
-                encoder.draw_fullscreen_viewport(
-                    blit_pipeline,
-                    offscreen,
-                    &[
-                        manifold_gpu::GpuBinding::Texture {
-                            binding: 0,
-                            texture: source,
-                        },
-                        manifold_gpu::GpuBinding::Sampler {
-                            binding: 1,
-                            sampler: blit_sampler,
-                        },
-                    ],
-                    (fit_x * sf, fit_y * sf, fit_w * sf, fit_h * sf),
-                    manifold_gpu::GpuLoadAction::Load,
+                encoder.draw(
+                    &manifold_gpu::DrawPass::color(offscreen, manifold_gpu::GpuLoadAction::Load)
+                        .viewport((fit_x * sf, fit_y * sf, fit_w * sf, fit_h * sf)),
+                    &[manifold_gpu::Draw::fullscreen(
+                        blit_pipeline,
+                        &[
+                            manifold_gpu::GpuBinding::Texture {
+                                binding: 0,
+                                texture: source,
+                            },
+                            manifold_gpu::GpuBinding::Sampler {
+                                binding: 1,
+                                sampler: blit_sampler,
+                            },
+                        ],
+                    )],
                     "Perform Preview Blit",
                 );
             }
@@ -245,21 +246,21 @@ impl Application {
             }
         };
         let mut present_enc = gpu.device.create_encoder("Perform Present");
-        present_enc.draw_fullscreen(
-            blit_pipeline,
-            &drawable_tex,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: offscreen,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler: blit_sampler,
-                },
-            ],
-            false,
-            true,
+        present_enc.draw(
+            &manifold_gpu::DrawPass::color(&drawable_tex, manifold_gpu::GpuLoadAction::Load),
+            &[manifold_gpu::Draw::fullscreen(
+                blit_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: offscreen,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: blit_sampler,
+                    },
+                ],
+            )],
             "Offscreen → Drawable (Perform)",
         );
         present_enc.present_drawable(&drawable);

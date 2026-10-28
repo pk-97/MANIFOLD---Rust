@@ -773,21 +773,21 @@ pub(crate) fn composite_main_ui_frame(
 
     // Pass 2: Atlas blit fullscreen (UI panels onto black).
     if let Some(atlas) = cache.atlas_texture() {
-        encoder.draw_fullscreen(
-            atlas_pipeline,
-            offscreen,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: atlas,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler: atlas_sampler,
-                },
-            ],
-            false,
-            true,
+        encoder.draw(
+            &manifold_gpu::DrawPass::color(offscreen, manifold_gpu::GpuLoadAction::Load),
+            &[manifold_gpu::Draw::fullscreen(
+                atlas_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: atlas,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: atlas_sampler,
+                    },
+                ],
+            )],
             "Atlas Blit",
         );
     }
@@ -799,21 +799,22 @@ pub(crate) fn composite_main_ui_frame(
     if let Some(compositor_tex) = video
         && let Some(fit) = fit
     {
-        encoder.draw_fullscreen_viewport(
-            blit_pipeline,
-            offscreen,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: compositor_tex,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler: blit_sampler,
-                },
-            ],
-            (fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf),
-            manifold_gpu::GpuLoadAction::Load,
+        encoder.draw(
+            &manifold_gpu::DrawPass::color(offscreen, manifold_gpu::GpuLoadAction::Load)
+                .viewport((fit.x * sf, fit.y * sf, fit.width * sf, fit.height * sf)),
+            &[manifold_gpu::Draw::fullscreen(
+                blit_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: compositor_tex,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: blit_sampler,
+                    },
+                ],
+            )],
             "Blit Compositor",
         );
     }

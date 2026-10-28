@@ -173,32 +173,33 @@ impl RenderScene {
                 near_far: [cam.near, cam.far, 0.0, 0.0],
             };
             let gpu = ctx.gpu_encoder();
-            gpu.native_enc.draw_instanced(
-                composite_pipeline,
-                resolve_target,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&composite_uniforms),
+            gpu.native_enc.draw(
+                &manifold_gpu::DrawPass::color(resolve_target, manifold_gpu::GpuLoadAction::Load),
+                &[manifold_gpu::Draw::counted(
+                    composite_pipeline,
+                    &[
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&composite_uniforms),
+                        },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: inscatter,
+                        },
+                        GpuBinding::Texture {
+                            binding: 2,
+                            texture: half_depth,
+                        },
+                        GpuBinding::Texture {
+                            binding: 3,
+                            texture: full_depth,
+                        },
+                    ],
+                    manifold_gpu::DrawCount::Direct {
+                        vertices: 3,
+                        instances: 1,
                     },
-                    GpuBinding::Texture {
-                        binding: 1,
-                        texture: inscatter,
-                    },
-                    GpuBinding::Texture {
-                        binding: 2,
-                        texture: half_depth,
-                    },
-                    GpuBinding::Texture {
-                        binding: 3,
-                        texture: full_depth,
-                    },
-                ],
-                manifold_gpu::DrawCount::Direct {
-                    vertices: 3,
-                    instances: 1,
-                },
-                manifold_gpu::GpuLoadAction::Load,
+                )],
                 "node.render_scene shaft composite",
             );
         }

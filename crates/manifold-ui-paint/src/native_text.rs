@@ -24,10 +24,10 @@ use core_text::{
 };
 use manifold_gpu::BufferUse;
 use manifold_gpu::{
-    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
-    GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
-    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage, GpuVertexAttribute,
-    GpuVertexFormat, GpuVertexLayout,
+    Draw, DrawCount, DrawPass, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer,
+    GpuDevice, GpuEncoder, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler,
+    GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+    GpuTextureUsage, GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout,
 };
 use manifold_ui::{
     node::{FontWeight, Vec2},
@@ -1636,29 +1636,28 @@ impl NativeTextRenderer {
         let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
         let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
 
-        encoder.draw_indexed(
-            &self.pipeline,
-            target,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::cast_slice(&self.prepared_globals),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: atlas_texture,
-                },
-                GpuBinding::Sampler {
-                    binding: 2,
-                    sampler: &self.sampler,
-                },
-            ],
-            vbuf,
-            0,
-            ibuf,
-            self.prepared_index_count,
-            None,
-            load_action,
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::cast_slice(&self.prepared_globals),
+            },
+            GpuBinding::Texture {
+                binding: 1,
+                texture: atlas_texture,
+            },
+            GpuBinding::Sampler {
+                binding: 2,
+                sampler: &self.sampler,
+            },
+        ];
+        let count = DrawCount::IndexedDirect {
+            indices: ibuf,
+            index_count: self.prepared_index_count,
+            instances: 1,
+        };
+        encoder.draw(
+            &DrawPass::color(target, load_action),
+            &[Draw::counted(&self.pipeline, &bindings, count).vertex_buffer(vbuf, 0)],
             "TextRenderer",
         );
     }

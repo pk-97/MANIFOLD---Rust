@@ -293,7 +293,11 @@ pub(super) fn depth_target(device: &GpuDevice, enc: &mut GpuEncoder) -> GpuTextu
         compare: GpuCompareFunction::Greater,
         write_enabled: true,
     });
-    enc.draw_instanced_depth_only_batch(&tex, &state, &[], "water march test clear depth");
+    enc.draw(
+        &manifold_gpu::DrawPass::depth_only(&tex, &state, manifold_gpu::GpuLoadAction::Clear),
+        &[],
+        "water march test clear depth",
+    );
     tex
 }
 

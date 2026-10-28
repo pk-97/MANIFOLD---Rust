@@ -1,9 +1,10 @@
-//! Draw batch descriptors shared by both backends: what one depth-tested
-//! draw covers and the attachments of the pass that runs a batch of them.
+//! What one draw covers and the pass it runs in, shared by both backends.
+//! Every render-pass draw goes through `GpuEncoder::draw(&DrawPass, &[Draw],
+//! label)`; only the UI's long-lived pass (`begin_render_pass`) is separate.
 
 use crate::{
-    GpuBinding, GpuBuffer, GpuDepthStencilState, GpuPrimitiveType, GpuRenderPipeline, GpuTexture,
-    GpuTriangleFillMode,
+    GpuBinding, GpuBuffer, GpuDepthStencilState, GpuLoadAction, GpuPrimitiveType,
+    GpuRenderPipeline, GpuTexture, GpuTriangleFillMode,
 };
 
 /// How many vertices or indices and instances one batch draw covers.
@@ -51,37 +52,98 @@ impl DrawCount<'_> {
     }
 }
 
-/// One depth-tested mesh in a [`GpuEncoder::draw_instanced_depth_msaa_batch`](crate::GpuEncoder::draw_instanced_depth_msaa_batch)
-/// batch: its own material pipeline, its own bindings, its own vertex count.
-/// Construct via [`GpuEncoder::depth_msaa_draw`](crate::GpuEncoder::depth_msaa_draw) (fill),
-/// [`GpuEncoder::depth_msaa_draw_fill_mode`](crate::GpuEncoder::depth_msaa_draw_fill_mode) (wireframe), or
-/// [`GpuEncoder::depth_msaa_draw_points`](crate::GpuEncoder::depth_msaa_draw_points) (point topology).
+/// One draw in a pass: its pipeline, bindings and count, and how it
+/// rasterises. Front faces wind counter-clockwise on every draw.
 #[derive(Clone, Copy)]
-pub struct DepthMsaaDraw<'a> {
+pub struct Draw<'a> {
     pub(crate) pipeline: &'a GpuRenderPipeline,
     pub(crate) bindings: &'a [GpuBinding<'a>],
     pub(crate) count: DrawCount<'a>,
-    /// Triangle fill mode for this draw (SCENE_RENDER_MODE_DESIGN.md D6).
-    /// `Lines` = wireframe. Only the COLOUR batch entries read this; the
-    /// depth-only entries (`draw_instanced_depth_only_batch` — shadow maps,
-    /// opaque-depth prepass) force `Fill` per draw regardless of what a
-    /// `DepthMsaaDraw` carries (INV-R3: lines-only depth would break
-    /// occlusion and shadows).
+    /// `Lines` draws wireframe. A depth-only pass always fills: lines-only
+    /// depth would break occlusion and shadows.
     pub(crate) fill_mode: GpuTriangleFillMode,
-    /// Primitive topology for this draw (SCENE_RENDER_MODE_DESIGN.md D8:
-    /// `Point` = Points mode, the same vertex buffers drawn as points).
-    /// Only the COLOUR batch entries read this; the depth-only batches
-    /// force `Triangle` — same INV-R3 argument as `fill_mode` (point-only
-    /// depth would break occlusion and shadows).
+    /// `Point` draws the same vertices as points. A depth-only pass always
+    /// draws triangles, for the same reason.
     pub(crate) primitive: GpuPrimitiveType,
-    /// Skip back faces (counter-clockwise front). Only for closed,
-    /// outward-wound, opaque meshes: their nearest surface is always a front
-    /// face, so colour and depth match the two-sided draw at half the work.
+    /// Skip back faces. Only for closed, outward-wound, opaque meshes: their
+    /// nearest surface is always a front face, so colour and depth match the
+    /// two-sided draw at half the work.
     pub(crate) cull_back: bool,
+    /// Constant, slope-scaled and clamp depth bias.
+    pub(crate) depth_bias: Option<(f32, f32, f32)>,
+    /// A vertex buffer and its offset, for pipelines with a vertex layout.
+    pub(crate) vertices: Option<(&'a GpuBuffer, u64)>,
 }
 
-impl<'a> DepthMsaaDraw<'a> {
-    /// Skip back faces when `cull` (see [`DepthMsaaDraw::cull_back`]).
+impl<'a> Draw<'a> {
+    /// `vertices` vertices of `instances` instances, filled triangles.
+    pub fn new(
+        pipeline: &'a GpuRenderPipeline,
+        bindings: &'a [GpuBinding<'a>],
+        vertices: u32,
+        instances: u32,
+    ) -> Self {
+        Self::counted(
+            pipeline,
+            bindings,
+            DrawCount::Direct {
+                vertices,
+                instances,
+            },
+        )
+    }
+
+    /// One triangle covering the target, made by the vertex shader.
+    pub fn fullscreen(pipeline: &'a GpuRenderPipeline, bindings: &'a [GpuBinding<'a>]) -> Self {
+        Self::new(pipeline, bindings, 3, 1)
+    }
+
+    /// A draw of `count`, direct, indexed or GPU-written.
+    pub fn counted(
+        pipeline: &'a GpuRenderPipeline,
+        bindings: &'a [GpuBinding<'a>],
+        count: DrawCount<'a>,
+    ) -> Self {
+        Self {
+            pipeline,
+            bindings,
+            count,
+            fill_mode: GpuTriangleFillMode::Fill,
+            primitive: GpuPrimitiveType::Triangle,
+            cull_back: false,
+            depth_bias: None,
+            vertices: None,
+        }
+    }
+
+    /// Rasterise triangles as `fill_mode` (`Lines` is wireframe).
+    pub fn fill_mode(mut self, fill_mode: GpuTriangleFillMode) -> Self {
+        self.fill_mode = fill_mode;
+        self
+    }
+
+    /// Draw with `primitive` topology. Points need a pipeline built with a
+    /// point-size location.
+    pub fn primitive(mut self, primitive: GpuPrimitiveType) -> Self {
+        self.primitive = primitive;
+        self
+    }
+
+    /// Offset depth by `constant` plus `slope` times the depth slope, at most
+    /// `clamp`.
+    pub fn depth_bias(mut self, constant: f32, slope: f32, clamp: f32) -> Self {
+        self.depth_bias = Some((constant, slope, clamp));
+        self
+    }
+
+    /// Read vertices from `buffer` at `offset` through the pipeline's
+    /// vertex layout.
+    pub fn vertex_buffer(mut self, buffer: &'a GpuBuffer, offset: u64) -> Self {
+        self.vertices = Some((buffer, offset));
+        self
+    }
+
+    /// Skip back faces when `cull` (see [`Draw::cull_back`]).
     pub fn cull_back_faces(mut self, cull: bool) -> Self {
         self.cull_back = cull;
         self
@@ -146,18 +208,10 @@ impl<'a> DepthMsaaDraw<'a> {
     }
 }
 
-/// Descriptor for
-/// [`GpuEncoder::draw_instanced_depth_msaa_batch_desc`](crate::GpuEncoder::draw_instanced_depth_msaa_batch_desc) — the desc-struct
-/// seam that lets ONE batch entry point grow optional G-buffer attachments
-/// instead of a parallel `_with_depth` function per attachment combination.
-/// [`GpuEncoder::draw_instanced_depth_msaa_batch`](crate::GpuEncoder::draw_instanced_depth_msaa_batch) (unchanged signature)
-/// forwards here with `depth_resolve: None, aux_color: &[]` — byte-identical
-/// to the pre-D3 pass (I1/I4).
-/// One aux MRT attachment in a [`DepthMsaaPassDesc`]: memoryless MSAA
-/// texture + single-sample resolve target + this attachment's clear color.
-/// Per-attachment clear because the semantics differ: velocity clears to 0
-/// (no motion), ao_mask clears to 1 (background keeps full screen-space AO —
-/// RAYTRACING_DESIGN.md section 12 AM1).
+/// One extra MSAA colour attachment (index 1..) of a pass: the multisample
+/// texture, its single-sample resolve target and its own clear colour.
+/// Velocity clears to 0 (no motion), the AO mask to 1 (the background keeps
+/// full screen-space AO).
 #[derive(Clone, Copy)]
 pub struct AuxColorAttachment<'a> {
     pub msaa: &'a GpuTexture,
@@ -165,28 +219,133 @@ pub struct AuxColorAttachment<'a> {
     pub clear: [f64; 4],
 }
 
-pub struct DepthMsaaPassDesc<'a> {
-    pub msaa_color: &'a GpuTexture,
-    pub resolve_target: &'a GpuTexture,
-    pub msaa_depth: &'a GpuTexture,
-    /// `Some(tex)` → the depth attachment stores `MultisampleResolve`
-    /// (filter `Sample0` — D2: deterministic, matches a single-sample
-    /// render, unlike `Min`/`Max`) into this single-sample `Depth32Float`
-    /// texture. The resolve target must have the same `Depth32Float` format
-    /// as `msaa_depth`; callers can then copy it to an `R32Float` graph output.
-    /// `None` → `DontCare`, exactly today's memoryless depth.
-    pub depth_resolve: Option<&'a GpuTexture>,
-    /// Extra MRT color attachments (index 1..). Order must match the
-    /// pipeline's `aux_color_formats` (velocity, then ao_mask). Empty slice
-    /// produces exactly the pre-D3 single-color-attachment pass.
+/// Colour attachment 0 of a pass. It always stores, by resolving into
+/// `resolve` when the texture is multisampled. A clear is transparent black,
+/// so an offscreen layer keys where nothing draws.
+#[derive(Clone, Copy)]
+pub struct ColorTarget<'a> {
+    pub texture: &'a GpuTexture,
+    pub resolve: Option<&'a GpuTexture>,
+    pub load: GpuLoadAction,
+}
+
+/// The depth attachment of a pass and the depth test its draws use. A clear
+/// writes the state's `clear_depth`.
+#[derive(Clone, Copy)]
+pub struct DepthTarget<'a> {
+    pub texture: &'a GpuTexture,
+    pub state: &'a GpuDepthStencilState,
+    pub load: GpuLoadAction,
+    pub store: DepthStore<'a>,
+}
+
+/// What a pass keeps of its depth.
+#[derive(Clone, Copy)]
+pub enum DepthStore<'a> {
+    Store,
+    /// Scratch depth, such as memoryless MSAA depth, that dies with the pass.
+    Discard,
+    /// Resolve sample 0 of the MSAA depth into this single-sample
+    /// `Depth32Float` texture: deterministic, as a single-sample render.
+    Resolve(&'a GpuTexture),
+}
+
+/// Where one render pass draws and how its attachments load and store.
+#[derive(Clone, Copy)]
+pub struct DrawPass<'a> {
+    /// `None` for a depth-only pass, such as a shadow map.
+    pub color: Option<ColorTarget<'a>>,
+    /// Extra colour attachments; their order matches the pipelines'
+    /// `aux_color_formats`.
     pub aux_color: &'a [AuxColorAttachment<'a>],
-    pub depth_stencil_state: &'a GpuDepthStencilState,
-    /// An optional second draw group,
-    /// run immediately after `draws` within the SAME render pass — no
-    /// second clear, no new pass, just a `setDepthStencilState` switch
-    /// before the second group's draw calls. Used for the sorted
-    /// transparent pass (depth test on, write off) layered over the
-    /// opaque pass's already-resolved-on-tile depth. `None` reproduces
-    /// exactly today's single-group pass (I1).
-    pub second_pass: Option<(&'a GpuDepthStencilState, &'a [DepthMsaaDraw<'a>])>,
+    pub depth: Option<DepthTarget<'a>>,
+    /// The pixel rectangle `(x, y, width, height)` the draws cover. `None`
+    /// covers the whole target.
+    pub viewport: Option<(f32, f32, f32, f32)>,
+    /// Draws run after the main ones in the same pass with another depth
+    /// state: no clear, no new pass. The sorted transparent group tests
+    /// against the opaque group's depth without writing it.
+    pub second_group: Option<(&'a GpuDepthStencilState, &'a [Draw<'a>])>,
+}
+
+impl<'a> DrawPass<'a> {
+    /// A single-sample colour pass into `texture`.
+    pub fn color(texture: &'a GpuTexture, load: GpuLoadAction) -> Self {
+        Self::with_color(ColorTarget {
+            texture,
+            resolve: None,
+            load,
+        })
+    }
+
+    /// A multisample colour pass into `texture`, resolved into `resolve`.
+    pub fn msaa(texture: &'a GpuTexture, resolve: &'a GpuTexture, load: GpuLoadAction) -> Self {
+        Self::with_color(ColorTarget {
+            texture,
+            resolve: Some(resolve),
+            load,
+        })
+    }
+
+    /// A depth-only pass into `texture`, which stores.
+    pub fn depth_only(
+        texture: &'a GpuTexture,
+        state: &'a GpuDepthStencilState,
+        load: GpuLoadAction,
+    ) -> Self {
+        Self {
+            color: None,
+            aux_color: &[],
+            depth: Some(DepthTarget {
+                texture,
+                state,
+                load,
+                store: DepthStore::Store,
+            }),
+            viewport: None,
+            second_group: None,
+        }
+    }
+
+    fn with_color(color: ColorTarget<'a>) -> Self {
+        Self {
+            color: Some(color),
+            aux_color: &[],
+            depth: None,
+            viewport: None,
+            second_group: None,
+        }
+    }
+
+    /// Add a depth attachment.
+    pub fn depth(
+        mut self,
+        texture: &'a GpuTexture,
+        state: &'a GpuDepthStencilState,
+        load: GpuLoadAction,
+        store: DepthStore<'a>,
+    ) -> Self {
+        self.depth = Some(DepthTarget {
+            texture,
+            state,
+            load,
+            store,
+        });
+        self
+    }
+
+    /// Cover only `(x, y, width, height)`.
+    pub fn viewport(mut self, viewport: (f32, f32, f32, f32)) -> Self {
+        self.viewport = Some(viewport);
+        self
+    }
+
+    /// The target's size in pixels: the colour attachment's, else the depth's.
+    pub fn size(&self) -> (u32, u32) {
+        match (&self.color, &self.depth) {
+            (Some(color), _) => (color.texture.width, color.texture.height),
+            (None, Some(depth)) => (depth.texture.width, depth.texture.height),
+            (None, None) => panic!("a draw pass needs a colour or a depth attachment"),
+        }
+    }
 }

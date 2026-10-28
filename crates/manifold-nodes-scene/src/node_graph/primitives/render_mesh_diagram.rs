@@ -192,13 +192,21 @@ impl RenderMeshDiagram {
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
         device.create_render_pipeline(
             &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", Self::TYPE_ID)
-                .color(manifold_gpu::GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+                .color(
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    Some(DIAGRAM_BLEND),
+                )
                 .samples(MSAA_SAMPLE_COUNT),
         );
         device.create_render_pipeline(
-            &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_depth_color", Self::TYPE_ID)
-                .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
-                .samples(MSAA_SAMPLE_COUNT),
+            &manifold_gpu::RenderPipelineDesc::new(
+                SHADER,
+                "vs_main",
+                "fs_depth_color",
+                Self::TYPE_ID,
+            )
+            .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+            .samples(MSAA_SAMPLE_COUNT),
         );
         device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "math-view-history-capture");
     }
@@ -270,8 +278,10 @@ impl RenderMeshDiagram {
             // Bound at the instances slot when the port is unwired so the
             // shared layout stays valid; the shader never reads it in that
             // mode (instances_wired == 0 selects the identity constant).
-            let buffer =
-                device.create_buffer(std::mem::size_of::<InstanceTransform>() as u64, BufferUse::Upload);
+            let buffer = device.create_buffer(
+                std::mem::size_of::<InstanceTransform>() as u64,
+                BufferUse::Upload,
+            );
             let identity = [InstanceTransform {
                 pos_scale: [0.0, 0.0, 0.0, 1.0],
                 rot_pad: [0.0; 4],
@@ -502,18 +512,35 @@ impl Primitive for RenderMeshDiagram {
         let instance_ring_counts = self.instance_counts.as_ref().unwrap_or(current);
 
         if color_out.is_some() && self.render_pipeline.is_none() {
-            self.render_pipeline = Some(gpu.device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", Self::TYPE_ID)
-                    .color(manifold_gpu::GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
+            self.render_pipeline = Some(
+                gpu.device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        SHADER,
+                        "vs_main",
+                        "fs_main",
+                        Self::TYPE_ID,
+                    )
+                    .color(
+                        manifold_gpu::GpuTextureFormat::Rgba16Float,
+                        Some(DIAGRAM_BLEND),
+                    )
                     .samples(MSAA_SAMPLE_COUNT),
-            ));
+                ),
+            );
         }
         if color_out.is_some() && uniforms.occlusion != 0 && self.depth_color_pipeline.is_none() {
-            self.depth_color_pipeline = Some(gpu.device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_depth_color", Self::TYPE_ID)
+            self.depth_color_pipeline = Some(
+                gpu.device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        SHADER,
+                        "vs_main",
+                        "fs_depth_color",
+                        Self::TYPE_ID,
+                    )
                     .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
                     .samples(MSAA_SAMPLE_COUNT),
-            ));
+                ),
+            );
         }
         if color_out.is_some() && self.capture_pipeline.is_none() {
             self.capture_pipeline = Some(gpu.device.create_compute_pipeline(
@@ -554,115 +581,123 @@ impl Primitive for RenderMeshDiagram {
             let history = self.history.as_ref().expect("history allocated");
             let depth_tested = uniforms.occlusion != 0;
             if depth_tested {
-                gpu.native_enc.draw_instanced_msaa(
-                    self.depth_color_pipeline
-                        .as_ref()
-                        .expect("depth colour pipeline initialized"),
-                    self.msaa.as_ref().expect("MSAA initialized"),
-                    out,
-                    &[
-                        GpuBinding::Bytes {
-                            binding: 0,
-                            data: bytemuck::bytes_of(&uniforms),
-                        },
-                        GpuBinding::Buffer {
-                            binding: 1,
-                            buffer: current,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 2,
-                            buffer: reference,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 3,
-                            buffer: incoming,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 4,
-                            buffer: history,
-                            offset: 0,
-                        },
-                        GpuBinding::Texture {
-                            binding: 8,
-                            texture: scene_depth,
-                        },
-                        GpuBinding::Sampler {
-                            binding: 9,
-                            sampler: depth_sampler,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 10,
-                            buffer: instances,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 11,
-                            buffer: instance_ring,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 12,
-                            buffer: instance_ring_counts,
-                            offset: 0,
-                        },
-                    ],
-                    18,
-                    instance_count.max(1),
-                    GpuLoadAction::Clear,
+                gpu.native_enc.draw(
+                    &manifold_gpu::DrawPass::msaa(
+                        self.msaa.as_ref().expect("MSAA initialized"),
+                        out,
+                        GpuLoadAction::Clear,
+                    ),
+                    &[manifold_gpu::Draw::new(
+                        self.depth_color_pipeline
+                            .as_ref()
+                            .expect("depth colour pipeline initialized"),
+                        &[
+                            GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(&uniforms),
+                            },
+                            GpuBinding::Buffer {
+                                binding: 1,
+                                buffer: current,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 2,
+                                buffer: reference,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 3,
+                                buffer: incoming,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 4,
+                                buffer: history,
+                                offset: 0,
+                            },
+                            GpuBinding::Texture {
+                                binding: 8,
+                                texture: scene_depth,
+                            },
+                            GpuBinding::Sampler {
+                                binding: 9,
+                                sampler: depth_sampler,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 10,
+                                buffer: instances,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 11,
+                                buffer: instance_ring,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 12,
+                                buffer: instance_ring_counts,
+                                offset: 0,
+                            },
+                        ],
+                        18,
+                        instance_count.max(1),
+                    )],
                     Self::TYPE_ID,
                 );
             } else {
-                gpu.native_enc.draw_instanced_msaa(
-                    self.render_pipeline.as_ref().expect("pipeline initialized"),
-                    self.msaa.as_ref().expect("MSAA initialized"),
-                    out,
-                    &[
-                        GpuBinding::Bytes {
-                            binding: 0,
-                            data: bytemuck::bytes_of(&uniforms),
-                        },
-                        GpuBinding::Buffer {
-                            binding: 1,
-                            buffer: current,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 2,
-                            buffer: reference,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 3,
-                            buffer: incoming,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 4,
-                            buffer: history,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 10,
-                            buffer: instances,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 11,
-                            buffer: instance_ring,
-                            offset: 0,
-                        },
-                        GpuBinding::Buffer {
-                            binding: 12,
-                            buffer: instance_ring_counts,
-                            offset: 0,
-                        },
-                    ],
-                    18,
-                    instance_count.max(1),
-                    GpuLoadAction::Clear,
+                gpu.native_enc.draw(
+                    &manifold_gpu::DrawPass::msaa(
+                        self.msaa.as_ref().expect("MSAA initialized"),
+                        out,
+                        GpuLoadAction::Clear,
+                    ),
+                    &[manifold_gpu::Draw::new(
+                        self.render_pipeline.as_ref().expect("pipeline initialized"),
+                        &[
+                            GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(&uniforms),
+                            },
+                            GpuBinding::Buffer {
+                                binding: 1,
+                                buffer: current,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 2,
+                                buffer: reference,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 3,
+                                buffer: incoming,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 4,
+                                buffer: history,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 10,
+                                buffer: instances,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 11,
+                                buffer: instance_ring,
+                                offset: 0,
+                            },
+                            GpuBinding::Buffer {
+                                binding: 12,
+                                buffer: instance_ring_counts,
+                                offset: 0,
+                            },
+                        ],
+                        18,
+                        instance_count.max(1),
+                    )],
                     Self::TYPE_ID,
                 );
             }

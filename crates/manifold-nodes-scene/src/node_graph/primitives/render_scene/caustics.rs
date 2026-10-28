@@ -309,14 +309,17 @@ impl Caustics {
             },
         ];
         let surface_draw =
-            GpuEncoder::depth_msaa_draw(surface_pipeline, &surface_bindings, mesh.vertex_count, 1);
+            manifold_gpu::Draw::new(surface_pipeline, &surface_bindings, mesh.vertex_count, 1);
         let surface_draw = match &mesh.live_args {
             Some((args, offset)) => surface_draw.indirect(args, *offset),
             None => surface_draw,
         };
-        encoder.draw_instanced_depth_only_batch(
-            &targets.surface,
-            sun.depth_state,
+        encoder.draw(
+            &manifold_gpu::DrawPass::depth_only(
+                &targets.surface,
+                sun.depth_state,
+                manifold_gpu::GpuLoadAction::Clear,
+            ),
             std::slice::from_ref(&surface_draw),
             "node.render_scene caustic surface",
         );

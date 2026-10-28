@@ -537,12 +537,14 @@ fn shaft_march_matches_cpu_reference() {
             sampler: &alpha_sampler,
         },
     ];
-    let shadow_draw =
-        manifold_gpu::GpuEncoder::depth_msaa_draw(&shadow_pipeline, &shadow_bindings, 6, 1);
+    let shadow_draw = manifold_gpu::Draw::new(&shadow_pipeline, &shadow_bindings, 6, 1);
     let mut shadow_enc = device.create_encoder("shaft-test-shadow-pass");
-    shadow_enc.draw_instanced_depth_only_batch(
-        &shadow_map.layer_view(0),
-        &shadow_ds,
+    shadow_enc.draw(
+        &manifold_gpu::DrawPass::depth_only(
+            &shadow_map.layer_view(0),
+            &shadow_ds,
+            manifold_gpu::GpuLoadAction::Clear,
+        ),
         &[shadow_draw],
         "shaft-test-shadow",
     );
@@ -828,11 +830,14 @@ fn appearance_weights_discard_zero_triangle_in_shadow_depth() {
                 sampler: &alpha_sampler,
             },
         ];
-        let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(&pipeline, &bindings, 6, 1);
+        let draw = manifold_gpu::Draw::new(&pipeline, &bindings, 6, 1);
         let mut enc = device.create_encoder("appearance-weight-shadow-proof-pass");
-        enc.draw_instanced_depth_only_batch(
-            &target,
-            &depth_state,
+        enc.draw(
+            &manifold_gpu::DrawPass::depth_only(
+                &target,
+                &depth_state,
+                manifold_gpu::GpuLoadAction::Clear,
+            ),
             &[draw],
             "appearance-weight-shadow-proof",
         );
@@ -980,9 +985,17 @@ fn shadow_alpha_mask_preserves_uv_selection_transform_factor_and_mirror() {
                 sampler: &sampler,
             },
         ];
-        let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(&pipeline, &bindings, vertex_count, 1);
+        let draw = manifold_gpu::Draw::new(&pipeline, &bindings, vertex_count, 1);
         let mut enc = device.create_encoder("cutout-proof-pass");
-        enc.draw_instanced_depth_only_batch(&target, &depth_state, &[draw], "cutout-proof");
+        enc.draw(
+            &manifold_gpu::DrawPass::depth_only(
+                &target,
+                &depth_state,
+                manifold_gpu::GpuLoadAction::Clear,
+            ),
+            &[draw],
+            "cutout-proof",
+        );
         enc.commit_and_wait().expect("GPU work completes");
         let pixels = readback_depth32f(&device, &target, 8, 4);
         [pixels[17], pixels[22]]
@@ -1150,15 +1163,16 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
         },
     ];
     let mut encoder = device.create_encoder("vertex-color-albedo-proof");
-    encoder.draw_instanced(
-        &pipeline,
-        &output,
-        &bindings,
-        manifold_gpu::DrawCount::Direct {
-            vertices: 3,
-            instances: 1,
-        },
-        manifold_gpu::GpuLoadAction::Clear,
+    encoder.draw(
+        &manifold_gpu::DrawPass::color(&output, manifold_gpu::GpuLoadAction::Clear),
+        &[manifold_gpu::Draw::counted(
+            &pipeline,
+            &bindings,
+            manifold_gpu::DrawCount::Direct {
+                vertices: 3,
+                instances: 1,
+            },
+        )],
         "vertex-color-albedo-proof-draw",
     );
     encoder.commit_and_wait().expect("GPU work completes");
@@ -1366,15 +1380,16 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
         },
     ];
     let mut enc = device.create_encoder("extension-map-proof");
-    enc.draw_instanced(
-        &pipeline,
-        &output,
-        &bindings,
-        manifold_gpu::DrawCount::Direct {
-            vertices: 6,
-            instances: 1,
-        },
-        manifold_gpu::GpuLoadAction::Clear,
+    enc.draw(
+        &manifold_gpu::DrawPass::color(&output, manifold_gpu::GpuLoadAction::Clear),
+        &[manifold_gpu::Draw::counted(
+            &pipeline,
+            &bindings,
+            manifold_gpu::DrawCount::Direct {
+                vertices: 6,
+                instances: 1,
+            },
+        )],
         "extension-map-proof-draw",
     );
     enc.commit_and_wait().expect("GPU work completes");
@@ -1611,15 +1626,16 @@ fn extension_map_mip_filters_follow_authored_choice() {
             },
         ];
         let mut enc = device.create_encoder("material-mip-proof");
-        enc.draw_instanced(
-            &pipeline,
-            &output,
-            &bindings,
-            manifold_gpu::DrawCount::Direct {
-                vertices: 3,
-                instances: 1,
-            },
-            manifold_gpu::GpuLoadAction::Clear,
+        enc.draw(
+            &manifold_gpu::DrawPass::color(&output, manifold_gpu::GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::counted(
+                &pipeline,
+                &bindings,
+                manifold_gpu::DrawCount::Direct {
+                    vertices: 3,
+                    instances: 1,
+                },
+            )],
             "material-mip-proof",
         );
         enc.commit_and_wait().expect("GPU work completes");
@@ -2750,24 +2766,22 @@ fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
             binding: 0,
             data: bytemuck::bytes_of(&controls),
         }];
-        encoder.draw_instanced_msaa(
-            &msaa_pipeline,
-            &shared_msaa,
-            &shared_scratch,
-            &bindings,
-            3,
-            1,
-            manifold_gpu::GpuLoadAction::Clear,
+        encoder.draw(
+            &manifold_gpu::DrawPass::msaa(
+                &shared_msaa,
+                &shared_scratch,
+                manifold_gpu::GpuLoadAction::Clear,
+            ),
+            &[manifold_gpu::Draw::new(&msaa_pipeline, &bindings, 3, 1)],
             "rt-firefly-shared-msaa-resolve",
         );
-        encoder.draw_instanced_msaa(
-            &msaa_pipeline,
-            &dedicated_msaa,
-            &dedicated_scratch,
-            &bindings,
-            3,
-            1,
-            manifold_gpu::GpuLoadAction::Clear,
+        encoder.draw(
+            &manifold_gpu::DrawPass::msaa(
+                &dedicated_msaa,
+                &dedicated_scratch,
+                manifold_gpu::GpuLoadAction::Clear,
+            ),
+            &[manifold_gpu::Draw::new(&msaa_pipeline, &bindings, 3, 1)],
             "rt-firefly-dedicated-msaa-resolve",
         );
         // Read the prefilter result after the alias has been overwritten:

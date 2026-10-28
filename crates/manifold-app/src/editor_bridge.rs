@@ -2305,21 +2305,21 @@ impl Application {
         };
 
         let mut present_enc = gpu.device.create_encoder("Graph Editor Present");
-        present_enc.draw_fullscreen(
-            blit_p,
-            &drawable_tex,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: offscreen,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler: blit_s,
-                },
-            ],
-            false,
-            true,
+        present_enc.draw(
+            &manifold_gpu::DrawPass::color(&drawable_tex, manifold_gpu::GpuLoadAction::Load),
+            &[manifold_gpu::Draw::fullscreen(
+                blit_p,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: offscreen,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: blit_s,
+                    },
+                ],
+            )],
             "Editor Offscreen → Drawable",
         );
 
@@ -2353,21 +2353,25 @@ impl Application {
                     .and_then(|t| t.as_ref())
                 {
                     bridge_leases.push((bridge.clone(), lease));
-                    present_enc.draw_fullscreen_viewport(
-                        blit_p,
-                        &drawable_tex,
-                        &[
-                            manifold_gpu::GpuBinding::Texture {
-                                binding: 0,
-                                texture: tex,
-                            },
-                            manifold_gpu::GpuBinding::Sampler {
-                                binding: 1,
-                                sampler: blit_s,
-                            },
-                        ],
-                        (x, node_img_y * scale, w, h),
-                        manifold_gpu::GpuLoadAction::Load,
+                    present_enc.draw(
+                        &manifold_gpu::DrawPass::color(
+                            &drawable_tex,
+                            manifold_gpu::GpuLoadAction::Load,
+                        )
+                        .viewport((x, node_img_y * scale, w, h)),
+                        &[manifold_gpu::Draw::fullscreen(
+                            blit_p,
+                            &[
+                                manifold_gpu::GpuBinding::Texture {
+                                    binding: 0,
+                                    texture: tex,
+                                },
+                                manifold_gpu::GpuBinding::Sampler {
+                                    binding: 1,
+                                    sampler: blit_s,
+                                },
+                            ],
+                        )],
                         "Node Preview → Sidebar",
                     );
                 }
@@ -2380,21 +2384,25 @@ impl Application {
                 let front = lease.slot();
                 if let Some(tex) = self.ui_preview_textures.get(front).and_then(|t| t.as_ref()) {
                     bridge_leases.push((bridge.clone(), lease));
-                    present_enc.draw_fullscreen_viewport(
-                        blit_p,
-                        &drawable_tex,
-                        &[
-                            manifold_gpu::GpuBinding::Texture {
-                                binding: 0,
-                                texture: tex,
-                            },
-                            manifold_gpu::GpuBinding::Sampler {
-                                binding: 1,
-                                sampler: blit_s,
-                            },
-                        ],
-                        (x, master_img_y * scale, w, h),
-                        manifold_gpu::GpuLoadAction::Load,
+                    present_enc.draw(
+                        &manifold_gpu::DrawPass::color(
+                            &drawable_tex,
+                            manifold_gpu::GpuLoadAction::Load,
+                        )
+                        .viewport((x, master_img_y * scale, w, h)),
+                        &[manifold_gpu::Draw::fullscreen(
+                            blit_p,
+                            &[
+                                manifold_gpu::GpuBinding::Texture {
+                                    binding: 0,
+                                    texture: tex,
+                                },
+                                manifold_gpu::GpuBinding::Sampler {
+                                    binding: 1,
+                                    sampler: blit_s,
+                                },
+                            ],
+                        )],
                         "Master Out → Sidebar",
                     );
                 }

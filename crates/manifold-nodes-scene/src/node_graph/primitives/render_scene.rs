@@ -1050,7 +1050,7 @@ pub struct RenderScene {
     depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// Depth TEST on (`Greater`, matching
     /// `depth_stencil` above) but WRITE off — the sorted transparent
-    /// group's depth-stencil state, drawn as `DepthMsaaPassDesc::second_pass`
+    /// group's depth-stencil state, drawn as the pass's `second_group`
     /// right after the opaque group in the same encoder pass.
     blend_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// E2b: transmissive layer colour compares against its nearest-surface
@@ -2084,7 +2084,7 @@ struct ObjectDraw<'ctx> {
     /// (Points mode). Same reach as `fill_mode` — colour batches only;
     /// depth/shadow passes force triangles in the encoder (INV-R3). Selects
     /// BOTH the points pipeline (a `points` dimension on `pipeline_for`'s
-    /// cache key) and `GpuEncoder::depth_msaa_draw_points` at the batch
+    /// cache key) and `Point` topology on its `Draw` at the batch
     /// site.
     points: bool,
 }
@@ -2139,10 +2139,7 @@ impl ObjectDraw<'_> {
 
     /// `draw`, switched to this object's GPU-written arguments when it has
     /// them, skipping back faces when [`Self::culls_back_faces`].
-    fn live<'a>(
-        &'a self,
-        draw: manifold_gpu::DepthMsaaDraw<'a>,
-    ) -> manifold_gpu::DepthMsaaDraw<'a> {
+    fn live<'a>(&'a self, draw: manifold_gpu::Draw<'a>) -> manifold_gpu::Draw<'a> {
         let args = self
             .live_args
             .as_ref()
@@ -2152,10 +2149,7 @@ impl ObjectDraw<'_> {
 
     /// [`Self::live`] for a camera pass: the view block counts only the
     /// copies that survived the cull.
-    fn camera_live<'a>(
-        &'a self,
-        draw: manifold_gpu::DepthMsaaDraw<'a>,
-    ) -> manifold_gpu::DepthMsaaDraw<'a> {
+    fn camera_live<'a>(&'a self, draw: manifold_gpu::Draw<'a>) -> manifold_gpu::Draw<'a> {
         let args = self.live_args.as_ref().map(|(args, offset)| {
             let offset = self
                 .camera_cull
@@ -2168,9 +2162,9 @@ impl ObjectDraw<'_> {
 
     fn with_args<'a>(
         &'a self,
-        draw: manifold_gpu::DepthMsaaDraw<'a>,
+        draw: manifold_gpu::Draw<'a>,
         args: Option<(&'a manifold_gpu::GpuBuffer, u64)>,
-    ) -> manifold_gpu::DepthMsaaDraw<'a> {
+    ) -> manifold_gpu::Draw<'a> {
         let draw = draw.cull_back_faces(self.culls_back_faces());
         let draw = match self.indices {
             Some(indices) => draw.indexed(indices),

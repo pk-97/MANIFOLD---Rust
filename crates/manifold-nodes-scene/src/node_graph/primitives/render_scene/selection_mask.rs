@@ -209,27 +209,29 @@ impl RenderScene {
                             [&Self::sampler_cache_key(d.sampler_descs[0])],
                     },
                 ];
-                gpu.native_enc.draw_instanced(
-                    &pipeline,
-                    mask,
-                    &bindings,
-                    d.draw_count(),
-                    load,
+                gpu.native_enc.draw(
+                    &manifold_gpu::DrawPass::color(mask, load),
+                    &[manifold_gpu::Draw::counted(
+                        &pipeline,
+                        &bindings,
+                        d.draw_count(),
+                    )],
                     "node.render_scene selection mask",
                 );
                 load = manifold_gpu::GpuLoadAction::Load;
             }
             if let Some(field_pipeline) = &field_pipeline {
                 for (field, uniforms) in &covers {
-                    gpu.native_enc.draw_instanced(
-                        field_pipeline,
-                        mask,
-                        &water_cover::cover_bindings(uniforms, field),
-                        manifold_gpu::DrawCount::Direct {
-                            vertices: 3,
-                            instances: 1,
-                        },
-                        load,
+                    gpu.native_enc.draw(
+                        &manifold_gpu::DrawPass::color(mask, load),
+                        &[manifold_gpu::Draw::counted(
+                            field_pipeline,
+                            &water_cover::cover_bindings(uniforms, field),
+                            manifold_gpu::DrawCount::Direct {
+                                vertices: 3,
+                                instances: 1,
+                            },
+                        )],
                         "node.render_scene selection mask water",
                     );
                     load = manifold_gpu::GpuLoadAction::Load;

@@ -75,7 +75,7 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Memory | `modifier_memory_snapshot` (44, D18), `allocation_counts`, `resource_scope_id` | P1 |
 | Water fast paths | `begin_replay`/`end_replay` (stubbed already), `begin_gated_segment`, `dispatch_compute_gated`, `end_gated_segments`, `GpuTemplateStore` (`prepare_template`, `execute_template`), `GatedRecorder`, `TemplateTicket`, `TemplateRanges` | P1 correct, P6 fast (design section 7) |
 | Render pipelines | `create_render_pipeline(&RenderPipelineDesc)`; `create_depth_stencil_state` (17), `GpuDepthStencilState` | P2 |
-| Draws | About 20 forms becoming one draw descriptor (section 11); `begin_render_pass`/`draw_in_render_pass`/`end_render_pass`, `set_scissor_rect` (7); types `DepthMsaaDraw`, `DepthMsaaPassDesc`, `AuxColorAttachment`, `DrawCount` | P2 |
+| Draws | `draw(&DrawPass, &[Draw], label)`, the one draw; `begin_render_pass`/`draw_in_render_pass`/`end_render_pass`, `set_scissor_rect` for the UI; types `Draw`, `DrawPass`, `ColorTarget`, `DepthTarget`, `DepthStore`, `AuxColorAttachment`, `DrawCount` | P2 |
 | Profiling | `commit_and_wait_profiled`, the per-dispatch profiler, on timestamp query pools | P2 (D17) |
 | Presentation | `GpuSurface` (`create_surface`, `next_drawable`, `present`, `resize`, `set_maximum_drawable_count`), `GpuDrawable`, `set_presented_observer`; `configure_edr`, window level, gravity and `set_presents_with_transaction` report "not supported" | P3 (D15) |
 | Device sharing | `sibling` (a second wrapper on the same native device with its own queue, D16) | P1 |
@@ -192,7 +192,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 2. **Build hygiene.** Done 28 Oct.
 3. **Folders and tools.** Done 28 Oct (`manifold_foundation::AppDirs`, `find_tool`).
 4. **Hoist neutral logic.** Done 28 Oct.
-5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
+5. **Shrink the GPU API.** Done 29 Oct: one render-pipeline descriptor, one draw (`draw(&DrawPass, &[Draw], label)`, front faces counter-clockwise on every draw), `encoded_value`. Buffer use and GPU timing landed apart (section 11).
 6. **Frame bridge on one device.** Done 28 Oct: the content device is the UI device's `sibling` and the bridge holds plain `GpuTexture`s. The headless subcommands booting the normal pipeline is still open (section 11).
 7. **Vulkan skeleton.** Done 28 Oct: `vulkan/` mirrors every Metal signature with `todo!` bodies naming their phase, the section 4 callers check capabilities, and `cargo clippy --features manifold-gpu/vulkan --all-targets -- -D warnings` passes for every crate except `manifold-app`, `manifold-media` and `manifold-recording`.
 8. **Linux compile.** Done 28 Oct: `manifold-gpu/build.rs` picks Vulkan on every target but macOS, and `cargo check --workspace --all-targets` passes in the VM. Text-field copy and paste moved to arboard on the way.
@@ -249,7 +249,6 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 | Today | After | Checked by | When |
 |---|---|---|---|
 | `create_buffer(size, BufferUse)` with every former shared buffer as `Upload`: GPU-only scratch, CPU-filled inputs and readbacks alike. It costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | Each buffer classified (D14) by evidence: a buffer whose mapping the CPU reads is `Readback`, one it only writes is `Upload` (write-only API), one it never maps is `Gpu`. On Metal, `Gpu` becomes Private. The callers that skip their write silently when `mapped_ptr()` is `None` (`detect_regions.rs:637`, `nested_cubes_geometry.rs:197`, `liquid_state.rs:341-357`, `track_regions.rs:539`, `mesh_cut_map.rs:228`) become hard errors first, so a wrong `Gpu` fails loudly instead of freezing geometry | Each subsystem's proofs, then one full proof run | One subsystem per batch. The biggest NVIDIA speed item in the port |
-| About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same | Overnight |
 
 **Bigger cuts**
 - **Headless harness.** `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` boot through a Mac-only harness that duplicates app setup. After the bridge change they boot the normal content pipeline.

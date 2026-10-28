@@ -253,24 +253,14 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
     let b_depth = bindings(&u_depth, &current, &scene, &sampler);
     let b_xray = bindings(&u_xray, &current, &scene, &sampler);
     let mut encoder = device.create_encoder("mesh-diagram-depth-line-proof");
-    encoder.draw_instanced_msaa(
-        &depth_pipeline,
-        &msaa,
-        &target.texture,
-        &b_depth,
-        18,
-        2,
-        GpuLoadAction::Clear,
+    encoder.draw(
+        &manifold_gpu::DrawPass::msaa(&msaa, &target.texture, GpuLoadAction::Clear),
+        &[manifold_gpu::Draw::new(&depth_pipeline, &b_depth, 18, 2)],
         "mesh-diagram-depth-line-proof",
     );
-    encoder.draw_instanced_msaa(
-        &xray_pipeline,
-        &xray_msaa,
-        &xray_target.texture,
-        &b_xray[..6],
-        18,
-        2,
-        GpuLoadAction::Clear,
+    encoder.draw(
+        &manifold_gpu::DrawPass::msaa(&xray_msaa, &xray_target.texture, GpuLoadAction::Clear),
+        &[manifold_gpu::Draw::new(&xray_pipeline, &b_xray[..6], 18, 2)],
         "mesh-diagram-xray-proof",
     );
     encoder.commit_and_wait().expect("GPU work completes");
@@ -408,14 +398,14 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
                 );
                 let b = bindings(&u, &buffer, &far, &sampler);
                 let mut encoder = device.create_encoder("math-axes-proof");
-                encoder.draw_instanced_msaa(
-                    &pipeline,
-                    &msaa,
-                    &target.texture,
-                    if occlusion == 0 { &b[..6] } else { &b },
-                    18,
-                    1 + 9 * 4 + 3 + 3 * 3,
-                    GpuLoadAction::Clear,
+                encoder.draw(
+                    &manifold_gpu::DrawPass::msaa(&msaa, &target.texture, GpuLoadAction::Clear),
+                    &[manifold_gpu::Draw::new(
+                        &pipeline,
+                        if occlusion == 0 { &b[..6] } else { &b },
+                        18,
+                        1 + 9 * 4 + 3 + 3 * 3,
+                    )],
                     "math-axes-proof",
                 );
                 encoder.commit_and_wait().expect("GPU work completes");
@@ -516,14 +506,9 @@ fn math_view_marks_grow_small_faces_and_keep_big_ones() {
         };
         let b = bindings(&u, &buffer, &far, &sampler);
         let mut encoder = device.create_encoder("math-mark-size");
-        encoder.draw_instanced_msaa(
-            &pipeline,
-            &msaa,
-            &target.texture,
-            &b[..6],
-            18,
-            2,
-            GpuLoadAction::Clear,
+        encoder.draw(
+            &manifold_gpu::DrawPass::msaa(&msaa, &target.texture, GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::new(&pipeline, &b[..6], 18, 2)],
             "math-mark-size",
         );
         encoder.commit_and_wait().expect("GPU work completes");

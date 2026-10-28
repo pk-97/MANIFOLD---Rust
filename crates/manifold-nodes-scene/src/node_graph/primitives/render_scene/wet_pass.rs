@@ -116,33 +116,37 @@ impl WetPass {
                 clip_to_local: mat4_mul(world_to_local, inverse_view_proj),
                 mask_scale: [MASK_SCALE as f32, 0.0, 0.0, 0.0],
             };
-            encoder.draw_instanced(
-                pipeline,
-                mask,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&uniforms),
+            encoder.draw(
+                &manifold_gpu::DrawPass::color(
+                    mask,
+                    if index == 0 {
+                        GpuLoadAction::Clear
+                    } else {
+                        GpuLoadAction::Load
                     },
-                    GpuBinding::Buffer {
-                        binding: 1,
-                        buffer: map,
+                ),
+                &[manifold_gpu::Draw::counted(
+                    pipeline,
+                    &[
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&uniforms),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: map,
+                            offset: 0,
+                        },
+                        GpuBinding::Texture {
+                            binding: 2,
+                            texture: opaque_depth,
+                        },
+                    ],
+                    DrawCount::Indirect {
+                        args: map,
                         offset: 0,
                     },
-                    GpuBinding::Texture {
-                        binding: 2,
-                        texture: opaque_depth,
-                    },
-                ],
-                DrawCount::Indirect {
-                    args: map,
-                    offset: 0,
-                },
-                if index == 0 {
-                    GpuLoadAction::Clear
-                } else {
-                    GpuLoadAction::Load
-                },
+                )],
                 "node.render_scene wet pass",
             );
         }

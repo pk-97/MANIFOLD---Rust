@@ -233,12 +233,18 @@ impl SpectrumGpuRenderer {
         // now hold per-screen-column smoothed dB (one entry per pixel
         // column of the spectrum region). Allocate to `max_columns` so
         // the buffer never reallocates on window resize.
-        let mid_buf = device.create_buffer((max_columns as u64) * 4, manifold_gpu::BufferUse::Upload);
-        let side_buf = device.create_buffer((max_columns as u64) * 4, manifold_gpu::BufferUse::Upload);
-        let history_buf =
-            device.create_buffer((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4, manifold_gpu::BufferUse::Upload);
-        let history_buf2 =
-            device.create_buffer((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4, manifold_gpu::BufferUse::Upload);
+        let mid_buf =
+            device.create_buffer((max_columns as u64) * 4, manifold_gpu::BufferUse::Upload);
+        let side_buf =
+            device.create_buffer((max_columns as u64) * 4, manifold_gpu::BufferUse::Upload);
+        let history_buf = device.create_buffer(
+            (cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let history_buf2 = device.create_buffer(
+            (cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4,
+            manifold_gpu::BufferUse::Upload,
+        );
 
         // Shared buffers are zero-initialised. 0 dB would hit the top of the
         // colourmap (solid red) on every unwritten column — fill with a low
@@ -526,12 +532,12 @@ impl SpectrumGpuRenderer {
         ];
 
         let mut enc = device.create_encoder("spectrum line");
-        enc.draw_fullscreen(
-            &self.pipeline,
-            self.target.gpu_texture(),
-            bindings,
-            true, // clear
-            true, // store
+        enc.draw(
+            &manifold_gpu::DrawPass::color(
+                self.target.gpu_texture(),
+                manifold_gpu::GpuLoadAction::Clear,
+            ),
+            &[manifold_gpu::Draw::fullscreen(&self.pipeline, bindings)],
             "spectrum_line",
         );
         enc.commit_and_wait().expect("GPU work completes");

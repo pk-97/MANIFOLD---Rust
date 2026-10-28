@@ -62,21 +62,21 @@ fn fragment_reads_storage_buffer_via_bytes_binding() {
     let bias: [f32; 4] = [0.0; 4];
 
     let mut enc = device.create_encoder("fsp-draw");
-    enc.draw_fullscreen(
-        &pipeline,
-        &target.texture,
-        &[
-            GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::bytes_of(&bias),
-            },
-            GpuBinding::Bytes {
-                binding: 8,
-                data: bytemuck::cast_slice(&vals),
-            },
-        ],
-        true,
-        true,
+    enc.draw(
+        &manifold_gpu::DrawPass::color(&target.texture, manifold_gpu::GpuLoadAction::Clear),
+        &[manifold_gpu::Draw::fullscreen(
+            &pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&bias),
+                },
+                GpuBinding::Bytes {
+                    binding: 8,
+                    data: bytemuck::cast_slice(&vals),
+                },
+            ],
+        )],
         "fsp-draw",
     );
     enc.commit_and_wait().expect("GPU work completes");

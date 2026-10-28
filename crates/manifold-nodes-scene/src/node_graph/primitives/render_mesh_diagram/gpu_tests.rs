@@ -403,54 +403,54 @@ fn math_view_trails_render_recorded_copy_motion() {
         let copies = if wired != 0 { copy_count } else { 1 };
         let instance_count = 3 * copies + copies + 1 + 6 + TRAIL_RENDER_SAMPLES * 3 * copies;
         let mut encoder = device.create_encoder("copy-trails-proof");
-        encoder.draw_instanced_msaa(
-            &pipeline,
-            &msaa,
-            &target.texture,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&u),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &vertex_buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: &vertex_buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: &vertex_buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 4,
-                    buffer: &history,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 10,
-                    buffer: &instance_buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 11,
-                    buffer: &ring,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 12,
-                    buffer: &counts,
-                    offset: 0,
-                },
-            ],
-            18,
-            instance_count.max(1),
-            GpuLoadAction::Clear,
+        encoder.draw(
+            &manifold_gpu::DrawPass::msaa(&msaa, &target.texture, GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::new(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&u),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &vertex_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: &vertex_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: &vertex_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 4,
+                        buffer: &history,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 10,
+                        buffer: &instance_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 11,
+                        buffer: &ring,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 12,
+                        buffer: &counts,
+                        offset: 0,
+                    },
+                ],
+                18,
+                instance_count.max(1),
+            )],
             "copy-trails-proof",
         );
         encoder.commit_and_wait().expect("GPU work completes");
@@ -629,44 +629,44 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
                 ..bytemuck::Zeroable::zeroed()
             };
             let mut encoder = device.create_encoder("instance-copies-proof");
-            encoder.draw_instanced_msaa(
-                &pipeline,
-                &msaa,
-                &target.texture,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&u),
-                    },
-                    GpuBinding::Buffer {
-                        binding: 1,
-                        buffer: &vertex_buffer,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 2,
-                        buffer: &vertex_buffer,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 3,
-                        buffer: &vertex_buffer,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 4,
-                        buffer: &vertex_buffer,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 10,
-                        buffer: instances,
-                        offset: 0,
-                    },
-                ],
-                18,
-                (4 * copy_count + 1 + 3 + 3).max(1),
-                GpuLoadAction::Clear,
+            encoder.draw(
+                &manifold_gpu::DrawPass::msaa(&msaa, &target.texture, GpuLoadAction::Clear),
+                &[manifold_gpu::Draw::new(
+                    &pipeline,
+                    &[
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&u),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: &vertex_buffer,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: &vertex_buffer,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 3,
+                            buffer: &vertex_buffer,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 4,
+                            buffer: &vertex_buffer,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 10,
+                            buffer: instances,
+                            offset: 0,
+                        },
+                    ],
+                    18,
+                    (4 * copy_count + 1 + 3 + 3).max(1),
+                )],
                 "instance-copies-proof",
             );
             encoder.commit_and_wait().expect("GPU work completes");
@@ -792,39 +792,39 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             ..bytemuck::Zeroable::zeroed()
         };
         let mut encoder = device.create_encoder("world-grid-proof");
-        encoder.draw_instanced_msaa(
-            &pipeline,
-            &msaa,
-            &target.texture,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&u),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: &buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: &buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 4,
-                    buffer: &buffer,
-                    offset: 0,
-                },
-            ],
-            18,
-            1,
-            GpuLoadAction::Clear,
+        encoder.draw(
+            &manifold_gpu::DrawPass::msaa(&msaa, &target.texture, GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::new(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&u),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: &buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: &buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 4,
+                        buffer: &buffer,
+                        offset: 0,
+                    },
+                ],
+                18,
+                1,
+            )],
             "world-grid-proof",
         );
         encoder.commit_and_wait().expect("GPU work completes");

@@ -516,16 +516,14 @@ mod tests {
         }
 
         let mut encoder = device.create_encoder("test draw");
-        encoder.draw_indexed(
-            &pipeline,
-            &target,
-            &[],
-            &vertex_buffer,
-            0,
-            &index_buffer,
-            6,
-            None,
-            GpuLoadAction::Clear,
+        let count = crate::DrawCount::IndexedDirect {
+            indices: &index_buffer,
+            index_count: 6,
+            instances: 1,
+        };
+        encoder.draw(
+            &crate::DrawPass::color(&target, GpuLoadAction::Clear),
+            &[crate::Draw::counted(&pipeline, &[], count).vertex_buffer(&vertex_buffer, 0)],
             "test indexed draw",
         );
         encoder.commit();

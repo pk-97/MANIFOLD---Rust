@@ -1101,10 +1101,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(t_source, s_source, in.uv);
 }
 "#;
-        self.preview_pipeline = Some(device.create_render_pipeline(
-            &manifold_gpu::RenderPipelineDesc::new(preview_shader, "vs_main", "fs_main", "Workspace Preview Blit")
+        self.preview_pipeline = Some(
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    preview_shader,
+                    "vs_main",
+                    "fs_main",
+                    "Workspace Preview Blit",
+                )
                 .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
-        ));
+            ),
+        );
         self.preview_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             min_filter: manifold_gpu::GpuFilterMode::Linear,
             mag_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -1170,10 +1177,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }}"
         );
-        self.node_preview_scalar_pipeline = Some(device.create_render_pipeline(
-            &manifold_gpu::RenderPipelineDesc::new(&scalar_shader, "vs_main", "fs_main", "Node Preview Scalar Lift")
+        self.node_preview_scalar_pipeline = Some(
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    &scalar_shader,
+                    "vs_main",
+                    "fs_main",
+                    "Node Preview Scalar Lift",
+                )
                 .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
-        ));
+            ),
+        );
 
         // Vector field: RG → 2D vector → optical-flow colour wheel
         // (direction = hue, magnitude = brightness). Zero vector → black.
@@ -1196,10 +1210,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     return vec4<f32>(hsv2rgb(hue, 1.0, val), 1.0);
 }}"
         );
-        self.node_preview_vector_pipeline = Some(device.create_render_pipeline(
-            &manifold_gpu::RenderPipelineDesc::new(&vector_shader, "vs_main", "fs_main", "Node Preview Vector Wheel")
+        self.node_preview_vector_pipeline = Some(
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    &vector_shader,
+                    "vs_main",
+                    "fs_main",
+                    "Node Preview Vector Wheel",
+                )
                 .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
-        ));
+            ),
+        );
 
         // Signed scalar: diverging ramp centred at 0. Negative → blue, 0 →
         // black, positive → red, with the asinh lift on |value| so small
@@ -1220,10 +1241,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     return vec4<f32>(tint * mag, 1.0);
 }}"
         );
-        self.node_preview_signed_pipeline = Some(device.create_render_pipeline(
-            &manifold_gpu::RenderPipelineDesc::new(&signed_shader, "vs_main", "fs_main", "Node Preview Signed Diverging")
+        self.node_preview_signed_pipeline = Some(
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    &signed_shader,
+                    "vs_main",
+                    "fs_main",
+                    "Node Preview Signed Diverging",
+                )
                 .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
-        ));
+            ),
+        );
 
         // Normal map: decode xyz from [-1,1] to the familiar blue-dominant RGB.
         // Tolerant of already-encoded [0,1] normals (re-normalising a unit-ish
@@ -1242,10 +1270,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     return vec4<f32>(clamp(n, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }}"
         );
-        self.node_preview_normal_pipeline = Some(device.create_render_pipeline(
-            &manifold_gpu::RenderPipelineDesc::new(&normal_shader, "vs_main", "fs_main", "Node Preview Normal Decode")
+        self.node_preview_normal_pipeline = Some(
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    &normal_shader,
+                    "vs_main",
+                    "fs_main",
+                    "Node Preview Normal Decode",
+                )
                 .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
-        ));
+            ),
+        );
 
         // Depth: a turbo-like near-far colour ramp. Depth is read from R; the
         // asinh lift spreads near values (where detail clusters) without a
@@ -1271,10 +1306,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     return vec4<f32>(turbo(t), 1.0);
 }}"
         );
-        self.node_preview_depth_pipeline = Some(device.create_render_pipeline(
-            &manifold_gpu::RenderPipelineDesc::new(&depth_shader, "vs_main", "fs_main", "Node Preview Depth Ramp")
+        self.node_preview_depth_pipeline = Some(
+            device.create_render_pipeline(
+                &manifold_gpu::RenderPipelineDesc::new(
+                    &depth_shader,
+                    "vs_main",
+                    "fs_main",
+                    "Node Preview Depth Ramp",
+                )
                 .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
-        ));
+            ),
+        );
 
         self.native_device = Some(device);
         self.native_event = Some(event);
@@ -2395,21 +2437,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             if !thumb_source_shader_readable(name.as_str(), tex) {
                                 continue;
                             }
-                            gen_enc.draw_fullscreen_viewport(
-                                raw,
-                                atlas,
-                                &[
-                                    manifold_gpu::GpuBinding::Texture {
-                                        binding: 0,
-                                        texture: tex,
-                                    },
-                                    manifold_gpu::GpuBinding::Sampler {
-                                        binding: 1,
-                                        sampler,
-                                    },
-                                ],
-                                atlas_cell_viewport(i, tex.width, tex.height),
-                                manifold_gpu::GpuLoadAction::Load,
+                            gen_enc.draw(
+                                &manifold_gpu::DrawPass::color(
+                                    atlas,
+                                    manifold_gpu::GpuLoadAction::Load,
+                                )
+                                .viewport(atlas_cell_viewport(i, tex.width, tex.height)),
+                                &[manifold_gpu::Draw::fullscreen(
+                                    raw,
+                                    &[
+                                        manifold_gpu::GpuBinding::Texture {
+                                            binding: 0,
+                                            texture: tex,
+                                        },
+                                        manifold_gpu::GpuBinding::Sampler {
+                                            binding: 1,
+                                            sampler,
+                                        },
+                                    ],
+                                )],
                                 "Node Thumbnail Atlas Cell (Generator)",
                             );
                             new_layout.push((authored_id, i as u32));
@@ -3249,21 +3295,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             if !thumb_source_shader_readable(name.as_str(), tex) {
                                 continue;
                             }
-                            native_enc.draw_fullscreen_viewport(
-                                raw,
-                                atlas,
-                                &[
-                                    manifold_gpu::GpuBinding::Texture {
-                                        binding: 0,
-                                        texture: tex,
-                                    },
-                                    manifold_gpu::GpuBinding::Sampler {
-                                        binding: 1,
-                                        sampler,
-                                    },
-                                ],
-                                atlas_cell_viewport(i, tex.width, tex.height),
-                                manifold_gpu::GpuLoadAction::Load,
+                            native_enc.draw(
+                                &manifold_gpu::DrawPass::color(
+                                    atlas,
+                                    manifold_gpu::GpuLoadAction::Load,
+                                )
+                                .viewport(atlas_cell_viewport(i, tex.width, tex.height)),
+                                &[manifold_gpu::Draw::fullscreen(
+                                    raw,
+                                    &[
+                                        manifold_gpu::GpuBinding::Texture {
+                                            binding: 0,
+                                            texture: tex,
+                                        },
+                                        manifold_gpu::GpuBinding::Sampler {
+                                            binding: 1,
+                                            sampler,
+                                        },
+                                    ],
+                                )],
                                 "Node Thumbnail Atlas Cell",
                             );
                             new_layout.push((NodeId::new(name.as_str()), i as u32));
@@ -3689,21 +3739,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             return;
         };
 
-        native_enc.draw_fullscreen(
-            pipeline,
-            target,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: source,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler,
-                },
-            ],
-            true,
-            true,
+        native_enc.draw(
+            &manifold_gpu::DrawPass::color(target, manifold_gpu::GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::fullscreen(
+                pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: source,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler,
+                    },
+                ],
+            )],
             "Workspace Preview Blit",
         );
     }
@@ -3763,21 +3813,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             None
         };
         if let (Some(pipeline), Some(sampler)) = (pipeline, sampler) {
-            enc.draw_fullscreen(
-                pipeline,
-                target,
-                &[
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 0,
-                        texture: source,
-                    },
-                    manifold_gpu::GpuBinding::Sampler {
-                        binding: 1,
-                        sampler,
-                    },
-                ],
-                true,
-                true,
+            enc.draw(
+                &manifold_gpu::DrawPass::color(target, manifold_gpu::GpuLoadAction::Clear),
+                &[manifold_gpu::Draw::fullscreen(
+                    pipeline,
+                    &[
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0,
+                            texture: source,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1,
+                            sampler,
+                        },
+                    ],
+                )],
                 "Node Preview Encoding Blit",
             );
             return;

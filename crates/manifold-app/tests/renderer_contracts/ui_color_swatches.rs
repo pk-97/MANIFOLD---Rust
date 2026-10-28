@@ -450,21 +450,21 @@ fn box_downsample_averages_high_frequency() {
     let target = RenderTarget::new(&device, 64, 64, FORMAT, "ds-target");
     {
         let mut enc = device.create_encoder("ds-blit");
-        enc.draw_fullscreen(
-            &pipe,
-            &target.texture,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: &src,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler: &sampler,
-                },
-            ],
-            true,
-            true,
+        enc.draw(
+            &manifold_gpu::DrawPass::color(&target.texture, manifold_gpu::GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::fullscreen(
+                &pipe,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: &src,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: &sampler,
+                    },
+                ],
+            )],
             "ds-blit",
         );
         enc.commit_and_wait().expect("GPU work completes");

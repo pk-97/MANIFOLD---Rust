@@ -165,23 +165,23 @@ pub fn run(args: &[String]) -> ! {
         let t0 = std::time::Instant::now();
         {
             let mut enc = writer_dev.create_encoder("selftest");
-            enc.draw_fullscreen(
-                &fill,
-                &tex,
-                &[
-                    manifold_gpu::GpuBinding::Buffer {
-                        binding: 0,
-                        buffer: &params_buf,
-                        offset: 0,
-                    },
-                    manifold_gpu::GpuBinding::Buffer {
-                        binding: 1,
-                        buffer: &sink,
-                        offset: 0,
-                    },
-                ],
-                false,
-                true,
+            enc.draw(
+                &manifold_gpu::DrawPass::color(&tex, manifold_gpu::GpuLoadAction::Load),
+                &[manifold_gpu::Draw::fullscreen(
+                    &fill,
+                    &[
+                        manifold_gpu::GpuBinding::Buffer {
+                            binding: 0,
+                            buffer: &params_buf,
+                            offset: 0,
+                        },
+                        manifold_gpu::GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: &sink,
+                            offset: 0,
+                        },
+                    ],
+                )],
                 "fill",
             );
             enc.copy_texture_to_buffer(&tex, &buf, W, H, BYTES_PER_ROW);
@@ -288,28 +288,32 @@ pub fn run(args: &[String]) -> ! {
                             let ptr = params_buf.mapped_ptr().expect("params mapped");
                             std::ptr::copy_nonoverlapping(params.as_ptr() as *const u8, ptr, 24);
                         }
-                        enc.draw_fullscreen_viewport(
-                            &fill_pipeline,
-                            &writer_tex[slot],
-                            &[
-                                manifold_gpu::GpuBinding::Buffer {
-                                    binding: 0,
-                                    buffer: &params_buf,
-                                    offset: 0,
-                                },
-                                manifold_gpu::GpuBinding::Buffer {
-                                    binding: 1,
-                                    buffer: &sink_buf,
-                                    offset: 0,
-                                },
-                            ],
-                            (
+                        enc.draw(
+                            &manifold_gpu::DrawPass::color(
+                                &writer_tex[slot],
+                                manifold_gpu::GpuLoadAction::Load,
+                            )
+                            .viewport((
                                 0.0,
                                 band as f32 * (H / BANDS) as f32,
                                 W as f32,
                                 (H / BANDS) as f32,
-                            ),
-                            manifold_gpu::GpuLoadAction::Load,
+                            )),
+                            &[manifold_gpu::Draw::fullscreen(
+                                &fill_pipeline,
+                                &[
+                                    manifold_gpu::GpuBinding::Buffer {
+                                        binding: 0,
+                                        buffer: &params_buf,
+                                        offset: 0,
+                                    },
+                                    manifold_gpu::GpuBinding::Buffer {
+                                        binding: 1,
+                                        buffer: &sink_buf,
+                                        offset: 0,
+                                    },
+                                ],
+                            )],
                             "fill-band",
                         );
                     }
@@ -404,22 +408,25 @@ pub fn run(args: &[String]) -> ! {
                     let slot = lease.map_or_else(|| bridge.front_index() as usize, |l| l.slot());
                     std::thread::sleep(std::time::Duration::from_micros(next_rand() % 2_000));
                     let mut enc = reader_dev.create_encoder("probe-r");
-                    enc.draw_fullscreen(
-                        &sample_pipeline,
-                        &offscreens[rslot],
-                        &[
-                            manifold_gpu::GpuBinding::Texture {
-                                binding: 0,
-                                texture: &reader_tex[slot],
-                            },
-                            manifold_gpu::GpuBinding::Buffer {
-                                binding: 1,
-                                buffer: &sink_buf,
-                                offset: 0,
-                            },
-                        ],
-                        false,
-                        true,
+                    enc.draw(
+                        &manifold_gpu::DrawPass::color(
+                            &offscreens[rslot],
+                            manifold_gpu::GpuLoadAction::Load,
+                        ),
+                        &[manifold_gpu::Draw::fullscreen(
+                            &sample_pipeline,
+                            &[
+                                manifold_gpu::GpuBinding::Texture {
+                                    binding: 0,
+                                    texture: &reader_tex[slot],
+                                },
+                                manifold_gpu::GpuBinding::Buffer {
+                                    binding: 1,
+                                    buffer: &sink_buf,
+                                    offset: 0,
+                                },
+                            ],
+                        )],
                         "sample",
                     );
                     enc.copy_texture_to_buffer(

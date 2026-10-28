@@ -1036,8 +1036,8 @@ fn billboard_coincident_camera_falls_back_to_existing_rotation() {
 // it) only exists when the graph actually wires a consumer. Proven via
 // `compile()` alone — the SAME `consumed_outputs` mechanism that already
 // makes `render_mesh`'s `world_pos`/`world_normal` lazy (execution_plan.rs)
-// — rather than constructing a live `DepthMsaaPassDesc` (whose other
-// fields need real GPU textures the default test build can't create).
+// — rather than constructing a live `DrawPass` (whose attachments
+// need real GPU textures the default test build can't create).
 
 /// Minimal stand-in producer: no inputs, one output of the given type.
 /// Just enough to satisfy `validate()`'s required-input check for

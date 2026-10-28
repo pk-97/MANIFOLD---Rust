@@ -170,7 +170,7 @@ impl RenderScene {
         }
 
         // Binding arrays must outlive the batch call, so build them all
-        // first, then reference each from a `DepthMsaaDraw`. The light buffer
+        // first, then reference each from a `Draw`. The light buffer
         // (this frame's ring slot, which also holds the caster table) is
         // scene-wide — every object's set borrows the same one.
         let light_buffer = &self.light_buffers[self.light_frame];
@@ -616,8 +616,8 @@ impl RenderScene {
         // transparent group, drawn as `second_pass` in the SAME encoder pass
         // right after (occlusion by opaque geometry falls out of the shared,
         // still-live MSAA depth buffer; no separate resolve/reclear).
-        let mut draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = Vec::with_capacity(draws.len());
-        let mut blend_entries: Vec<(f32, usize, manifold_gpu::DepthMsaaDraw)> =
+        let mut draw_calls: Vec<manifold_gpu::Draw> = Vec::with_capacity(draws.len());
+        let mut blend_entries: Vec<(f32, usize, manifold_gpu::Draw)> =
             Vec::with_capacity(draws.len());
         for (draw_index, (draw, bindings)) in draws.iter().zip(&binding_sets).enumerate() {
             let Some(bindings) = bindings else {
@@ -631,20 +631,25 @@ impl RenderScene {
                 // D8: points draw EVERY vertex in the buffer (one dot per
                 // vertex), not the triangle-multiple-of-3 count — the
                 // trailing-vertex truncation must not drop dots.
-                draw.camera_live(manifold_gpu::GpuEncoder::depth_msaa_draw_points(
-                    &draw.pipeline,
-                    bindings,
-                    draw.point_count,
-                    draw.instance_count,
-                ))
+                draw.camera_live(
+                    manifold_gpu::Draw::new(
+                        &draw.pipeline,
+                        bindings,
+                        draw.point_count,
+                        draw.instance_count,
+                    )
+                    .primitive(manifold_gpu::GpuPrimitiveType::Point),
+                )
             } else {
-                draw.camera_live(manifold_gpu::GpuEncoder::depth_msaa_draw_fill_mode(
-                    &draw.pipeline,
-                    bindings,
-                    draw.vertex_count,
-                    draw.instance_count,
-                    draw.fill_mode,
-                ))
+                draw.camera_live(
+                    manifold_gpu::Draw::new(
+                        &draw.pipeline,
+                        bindings,
+                        draw.vertex_count,
+                        draw.instance_count,
+                    )
+                    .fill_mode(draw.fill_mode),
+                )
             };
             if draw.routes_to_transparent() {
                 blend_entries.push((draw.sort_depth, draw_index, call));
@@ -656,7 +661,7 @@ impl RenderScene {
         // the camera's forward axis) drawn first, so nearer glass blends
         // correctly over farther glass.
         blend_entries.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let blend_draw_calls: Vec<manifold_gpu::DepthMsaaDraw> =
+        let blend_draw_calls: Vec<manifold_gpu::Draw> =
             blend_entries.iter().map(|(_, _, call)| *call).collect();
         // When the scene has a
         // transmissive object, the Blend group is pulled OUT of Pass A
@@ -838,22 +843,32 @@ impl RenderScene {
             _ => &[],
         };
 
-        let pass_desc = manifold_gpu::DepthMsaaPassDesc {
-            msaa_color,
-            resolve_target,
-            msaa_depth: depth_tex,
-            depth_resolve: depth_resolve_target.map(|_| {
+        let depth_store = match depth_resolve_target {
+            Some(_) => manifold_gpu::DepthStore::Resolve(
                 self.depth_resolve_scratch
                     .as_ref()
-                    .expect("depth consumer ensured native resolve")
-            }),
+                    .expect("depth consumer ensured native resolve"),
+            ),
+            None => manifold_gpu::DepthStore::Discard,
+        };
+        let pass = manifold_gpu::DrawPass {
             aux_color,
-            depth_stencil_state: depth_stencil,
-            second_pass,
+            second_group: second_pass,
+            ..manifold_gpu::DrawPass::msaa(
+                msaa_color,
+                resolve_target,
+                manifold_gpu::GpuLoadAction::Clear,
+            )
+            .depth(
+                depth_tex,
+                depth_stencil,
+                manifold_gpu::GpuLoadAction::Clear,
+                depth_store,
+            )
         };
         ctx.gpu_encoder()
             .native_enc
-            .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
+            .draw(&pass, &draw_calls, "node.render_scene");
         // Pass A's velocity read last frame's vertex positions and instance
         // records; refresh them for the next frame.
         self.encode_prev_position_copies(ctx, draws);
@@ -990,7 +1005,7 @@ impl RenderScene {
                                 sampler: self.ripple_detail.sampler(),
                             },
                         ];
-                        let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(
+                        let draw = manifold_gpu::Draw::new(
                             &solid_depth_pipeline,
                             &bindings,
                             mesh.vertex_count,
@@ -1000,9 +1015,12 @@ impl RenderScene {
                             Some((args, offset)) => draw.indirect(args, *offset),
                             None => draw,
                         };
-                        gpu.native_enc.draw_instanced_depth_only_batch_loaded(
-                            transmissive_depth_scratch,
-                            opaque_depth_stencil,
+                        gpu.native_enc.draw(
+                            &manifold_gpu::DrawPass::depth_only(
+                                transmissive_depth_scratch,
+                                opaque_depth_stencil,
+                                manifold_gpu::GpuLoadAction::Load,
+                            ),
                             std::slice::from_ref(&draw),
                             "node.render_scene water first hit",
                         );
@@ -1251,7 +1269,7 @@ impl RenderScene {
                                 [&Self::sampler_cache_key(draw.sampler_descs[0])],
                         },
                     ];
-                    let depth_draw = draw.camera_live(manifold_gpu::GpuEncoder::depth_msaa_draw(
+                    let depth_draw = draw.camera_live(manifold_gpu::Draw::new(
                         if shadow_uniforms.discard_free() {
                             &solid_depth_pipeline
                         } else {
@@ -1272,9 +1290,12 @@ impl RenderScene {
                         height,
                         1,
                     );
-                    gpu.native_enc.draw_instanced_depth_only_batch_loaded(
-                        transmissive_depth_scratch,
-                        opaque_depth_stencil,
+                    gpu.native_enc.draw(
+                        &manifold_gpu::DrawPass::depth_only(
+                            transmissive_depth_scratch,
+                            opaque_depth_stencil,
+                            manifold_gpu::GpuLoadAction::Load,
+                        ),
                         std::slice::from_ref(&depth_draw),
                         "node.render_scene transmissive depth prepass",
                     );
@@ -1300,21 +1321,26 @@ impl RenderScene {
                         gpu.native_enc.generate_mipmaps(opaque_scene_color);
                     }
                 }
-                gpu.native_enc.draw_instanced_depth_batch(
-                    resolve_target,
-                    if nearest_surface {
-                        transmissive_depth_scratch
-                    } else {
-                        opaque_depth_snapshot
-                    },
-                    if nearest_surface {
-                        transmission_depth_stencil
-                    } else {
-                        self.blend_depth_stencil.as_ref().expect("ensured")
-                    },
+                gpu.native_enc.draw(
+                    &manifold_gpu::DrawPass::color(
+                        resolve_target,
+                        manifold_gpu::GpuLoadAction::Load,
+                    )
+                    .depth(
+                        if nearest_surface {
+                            transmissive_depth_scratch
+                        } else {
+                            opaque_depth_snapshot
+                        },
+                        if nearest_surface {
+                            transmission_depth_stencil
+                        } else {
+                            self.blend_depth_stencil.as_ref().expect("ensured")
+                        },
+                        manifold_gpu::GpuLoadAction::Load,
+                        manifold_gpu::DepthStore::Store,
+                    ),
                     &blend_draw_calls[layer..batch_end],
-                    manifold_gpu::GpuLoadAction::Load,
-                    manifold_gpu::GpuLoadAction::Load,
                     "node.render_scene transmissive layer",
                 );
                 layer = batch_end;

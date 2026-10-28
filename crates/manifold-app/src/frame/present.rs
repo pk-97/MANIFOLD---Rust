@@ -808,21 +808,21 @@ impl Application {
         };
 
         let mut present_enc = gpu.device.create_encoder("Present");
-        present_enc.draw_fullscreen(
-            blit_pipeline,
-            &drawable_tex,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: offscreen,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler: blit_sampler,
-                },
-            ],
-            false,
-            true, // store: must write to drawable for present
+        present_enc.draw(
+            &manifold_gpu::DrawPass::color(&drawable_tex, manifold_gpu::GpuLoadAction::Load),
+            &[manifold_gpu::Draw::fullscreen(
+                blit_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: offscreen,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: blit_sampler,
+                    },
+                ],
+            )],
             "Offscreen → Drawable",
         );
         present_enc.present_drawable(&drawable);
@@ -879,21 +879,21 @@ impl Application {
         let drawable_tex = drawable.gpu_texture(manifold_compositor::presentation::UI_FORMAT);
         if let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) {
             let mut enc = gpu.device.create_encoder("Re-present");
-            enc.draw_fullscreen(
-                blit_p,
-                &drawable_tex,
-                &[
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 0,
-                        texture: offscreen,
-                    },
-                    manifold_gpu::GpuBinding::Sampler {
-                        binding: 1,
-                        sampler: blit_s,
-                    },
-                ],
-                false,
-                true,
+            enc.draw(
+                &manifold_gpu::DrawPass::color(&drawable_tex, manifold_gpu::GpuLoadAction::Load),
+                &[manifold_gpu::Draw::fullscreen(
+                    blit_p,
+                    &[
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0,
+                            texture: offscreen,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1,
+                            sampler: blit_s,
+                        },
+                    ],
+                )],
                 "Offscreen → Drawable",
             );
             enc.present_drawable(&drawable);

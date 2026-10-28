@@ -128,8 +128,16 @@ impl SelectionOutline {
         };
         Self {
             pipeline: device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(OUTLINE_WGSL, "vs_main", "fs_main", "Selection Outline")
-                    .color(manifold_compositor::presentation::UI_FORMAT, Some(premultiplied)),
+                &manifold_gpu::RenderPipelineDesc::new(
+                    OUTLINE_WGSL,
+                    "vs_main",
+                    "fs_main",
+                    "Selection Outline",
+                )
+                .color(
+                    manifold_compositor::presentation::UI_FORMAT,
+                    Some(premultiplied),
+                ),
             ),
             sampler: device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                 min_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -159,25 +167,26 @@ impl SelectionOutline {
             radius: OUTLINE_WIDTH_POINTS * scale,
             _pad: 0.0,
         };
-        encoder.draw_fullscreen_viewport(
-            &self.pipeline,
-            target,
-            &[
-                GpuBinding::Texture {
-                    binding: 0,
-                    texture: mask,
-                },
-                GpuBinding::Sampler {
-                    binding: 1,
-                    sampler: &self.sampler,
-                },
-                GpuBinding::Bytes {
-                    binding: 2,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-            ],
-            viewport,
-            manifold_gpu::GpuLoadAction::Load,
+        encoder.draw(
+            &manifold_gpu::DrawPass::color(target, manifold_gpu::GpuLoadAction::Load)
+                .viewport(viewport),
+            &[manifold_gpu::Draw::fullscreen(
+                &self.pipeline,
+                &[
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture: mask,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: &self.sampler,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                ],
+            )],
             "Selection Outline",
         );
     }

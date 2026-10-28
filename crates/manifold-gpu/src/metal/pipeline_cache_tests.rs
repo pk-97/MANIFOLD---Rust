@@ -95,15 +95,22 @@ fn render_fullscreen(
     label: &str,
 ) {
     let mut encoder = device.create_encoder(label);
-    encoder.draw_fullscreen(
-        pipeline,
-        target,
-        &[GpuBinding::Bytes {
-            binding: 0,
-            data: color,
-        }],
-        clear,
-        true,
+    encoder.draw(
+        &crate::DrawPass::color(
+            target,
+            if clear {
+                crate::GpuLoadAction::Clear
+            } else {
+                crate::GpuLoadAction::Load
+            },
+        ),
+        &[crate::Draw::fullscreen(
+            pipeline,
+            &[GpuBinding::Bytes {
+                binding: 0,
+                data: color,
+            }],
+        )],
         label,
     );
     encoder.commit_and_wait().expect("GPU work completes");

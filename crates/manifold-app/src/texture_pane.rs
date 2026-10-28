@@ -176,21 +176,26 @@ pub fn blit_texture_pane(
         return;
     };
     let (x, y, w, h) = rect_logical;
-    encoder.draw_fullscreen_viewport(
-        pipeline,
-        target,
-        &[
-            GpuBinding::Texture {
-                binding: 0,
-                texture,
-            },
-            GpuBinding::Sampler {
-                binding: 1,
-                sampler,
-            },
-        ],
-        (x * scale, y * scale, w * scale, h * scale),
-        GpuLoadAction::Load,
+    encoder.draw(
+        &manifold_gpu::DrawPass::color(target, GpuLoadAction::Load).viewport((
+            x * scale,
+            y * scale,
+            w * scale,
+            h * scale,
+        )),
+        &[manifold_gpu::Draw::fullscreen(
+            pipeline,
+            &[
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture,
+                },
+                GpuBinding::Sampler {
+                    binding: 1,
+                    sampler,
+                },
+            ],
+        )],
         label,
     );
 }

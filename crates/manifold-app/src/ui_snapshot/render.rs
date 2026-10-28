@@ -906,12 +906,9 @@ fn render_graph_node_textures(
         let fixture = RenderTarget::new(device, GW, GH, GFMT, "ui-snap-graph-source");
         let gradient = make_gradient_pipeline(device, GFMT);
         let mut fenc = device.create_encoder("ui-snap-graph-source-fill");
-        fenc.draw_fullscreen(
-            &gradient,
-            &fixture.texture,
-            &[],
-            true,
-            true,
+        fenc.draw(
+            &manifold_gpu::DrawPass::color(&fixture.texture, manifold_gpu::GpuLoadAction::Clear),
+            &[manifold_gpu::Draw::fullscreen(&gradient, &[])],
             "Source Fixture Gradient",
         );
         fenc.commit_and_wait().expect("GPU work completes");

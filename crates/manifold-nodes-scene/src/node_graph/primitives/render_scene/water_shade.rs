@@ -252,14 +252,15 @@ impl WaterShade {
         let mut bindings = [scene[0]; SCENE_BINDINGS + 9];
         bindings[..SCENE_BINDINGS].copy_from_slice(scene);
         bindings[SCENE_BINDINGS..].copy_from_slice(&own);
-        let draw = GpuEncoder::depth_msaa_draw(pipeline, &bindings, 3, 1);
-        enc.draw_instanced_depth_batch(
-            target,
-            depth,
-            depth_state,
+        let draw = manifold_gpu::Draw::new(pipeline, &bindings, 3, 1);
+        enc.draw(
+            &manifold_gpu::DrawPass::color(target, GpuLoadAction::Load).depth(
+                depth,
+                depth_state,
+                GpuLoadAction::Load,
+                manifold_gpu::DepthStore::Store,
+            ),
             &[draw],
-            GpuLoadAction::Load,
-            GpuLoadAction::Load,
             "node.render_scene water shade",
         );
     }
@@ -339,14 +340,15 @@ impl WaterShade {
         let mut bindings = [scene[0]; SCENE_BINDINGS + 9];
         bindings[..SCENE_BINDINGS].copy_from_slice(scene);
         bindings[SCENE_BINDINGS..].copy_from_slice(&own);
-        let draw = GpuEncoder::depth_msaa_draw(pipeline, &bindings, 3, 1);
-        enc.draw_instanced_depth_batch(
-            target,
-            depth,
-            depth_state,
+        let draw = manifold_gpu::Draw::new(pipeline, &bindings, 3, 1);
+        enc.draw(
+            &manifold_gpu::DrawPass::color(target, GpuLoadAction::Load).depth(
+                depth,
+                depth_state,
+                GpuLoadAction::Load,
+                manifold_gpu::DepthStore::Store,
+            ),
             &[draw],
-            GpuLoadAction::Load,
-            GpuLoadAction::Load,
             "node.render_scene water mist",
         );
     }

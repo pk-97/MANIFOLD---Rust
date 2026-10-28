@@ -165,29 +165,30 @@ impl GizmoPass {
             },
             _pad: 0.0,
         };
-        enc.draw_instanced(
-            pipeline,
-            target,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&params),
+        enc.draw(
+            &manifold_gpu::DrawPass::color(target, GpuLoadAction::Load),
+            &[manifold_gpu::Draw::counted(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&params),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &self.buffers[self.next],
+                        offset: 0,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: scene_depth,
+                    },
+                ],
+                DrawCount::Direct {
+                    vertices: 6 * count as u32,
+                    instances: 1,
                 },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &self.buffers[self.next],
-                    offset: 0,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: scene_depth,
-                },
-            ],
-            DrawCount::Direct {
-                vertices: 6 * count as u32,
-                instances: 1,
-            },
-            GpuLoadAction::Load,
+            )],
             "gizmo lines",
         );
     }

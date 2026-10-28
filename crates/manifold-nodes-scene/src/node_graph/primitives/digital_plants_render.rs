@@ -217,11 +217,18 @@ impl Primitive for DigitalPlantsRender {
 
         // Lazy-init all the pipelines and textures.
         if self.shadow_pipeline.is_none() {
-            self.shadow_pipeline = Some(gpu.device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(include_str!("../../generators/shaders/digital_plants_shadow.wgsl"), "vs_shadow", "fs_shadow", "node.digital_plants_render shadow")
+            self.shadow_pipeline = Some(
+                gpu.device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        include_str!("../../generators/shaders/digital_plants_shadow.wgsl"),
+                        "vs_shadow",
+                        "fs_shadow",
+                        "node.digital_plants_render shadow",
+                    )
                     .color(GpuTextureFormat::Rgba16Float, None)
                     .depth(GpuTextureFormat::Depth32Float),
-            ));
+                ),
+            );
         }
         if self.shadow_depth_stencil.is_none() {
             self.shadow_depth_stencil = Some(gpu.device.create_depth_stencil_state(
@@ -258,11 +265,18 @@ impl Primitive for DigitalPlantsRender {
                 }));
         }
         if self.render_pipeline.is_none() {
-            self.render_pipeline = Some(gpu.device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(include_str!("../../generators/shaders/digital_plants_render.wgsl"), "vs_main", "fs_main", "node.digital_plants_render main")
+            self.render_pipeline = Some(
+                gpu.device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        include_str!("../../generators/shaders/digital_plants_render.wgsl"),
+                        "vs_main",
+                        "fs_main",
+                        "node.digital_plants_render main",
+                    )
                     .color(GpuTextureFormat::Rgba16Float, None)
                     .depth(GpuTextureFormat::Depth32Float),
-            ));
+                ),
+            );
         }
         if self.render_depth_stencil.is_none() {
             self.render_depth_stencil = Some(gpu.device.create_depth_stencil_state(
@@ -296,62 +310,69 @@ impl Primitive for DigitalPlantsRender {
         let shadow_sampler = self.shadow_sampler.as_ref().expect("just inserted");
 
         // Shadow pass: render cubes depth-only into shadow_map.
-        gpu.native_enc.draw_instanced_depth(
-            shadow_pipeline,
-            shadow_color_dummy,
-            shadow_map,
-            shadow_depth_stencil,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&shadow_uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: instances,
-                    offset: 0,
-                },
-            ],
-            CUBE_VERTEX_COUNT,
-            inst_count,
-            GpuLoadAction::Clear,
+        gpu.native_enc.draw(
+            &manifold_gpu::DrawPass::color(shadow_color_dummy, GpuLoadAction::Clear).depth(
+                shadow_map,
+                shadow_depth_stencil,
+                GpuLoadAction::Clear,
+                manifold_gpu::DepthStore::Store,
+            ),
+            &[manifold_gpu::Draw::new(
+                shadow_pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&shadow_uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: instances,
+                        offset: 0,
+                    },
+                ],
+                CUBE_VERTEX_COUNT,
+                inst_count,
+            )],
             "node.digital_plants_render.shadow",
         );
 
         // Main pass: render with PCF shadow sampling.
-        gpu.native_enc.draw_instanced_depth(
-            render_pipeline,
-            target,
-            depth_tex,
-            render_depth_stencil,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&render_uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: instances,
-                    offset: 0,
-                },
-                GpuBinding::Bytes {
-                    binding: 2,
-                    data: bytemuck::bytes_of(&shadow_uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: shadow_map,
-                },
-                GpuBinding::Sampler {
-                    binding: 4,
-                    sampler: shadow_sampler,
-                },
-            ],
-            CUBE_VERTEX_COUNT,
-            inst_count,
-            GpuLoadAction::Clear,
+        gpu.native_enc.draw(
+            &manifold_gpu::DrawPass::color(target, GpuLoadAction::Clear).depth(
+                depth_tex,
+                render_depth_stencil,
+                GpuLoadAction::Clear,
+                manifold_gpu::DepthStore::Store,
+            ),
+            &[manifold_gpu::Draw::new(
+                render_pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&render_uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: instances,
+                        offset: 0,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytemuck::bytes_of(&shadow_uniforms),
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: shadow_map,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 4,
+                        sampler: shadow_sampler,
+                    },
+                ],
+                CUBE_VERTEX_COUNT,
+                inst_count,
+            )],
             "node.digital_plants_render.main",
         );
     }
 }
-

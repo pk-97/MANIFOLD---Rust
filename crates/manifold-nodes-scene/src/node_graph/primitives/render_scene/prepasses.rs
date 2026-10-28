@@ -214,12 +214,12 @@ impl RenderScene {
                         ]
                     })
                     .collect();
-                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = lit
+                let shadow_draws: Vec<manifold_gpu::Draw> = lit
                     .iter()
                     .zip(&shadow_uniforms)
                     .zip(&shadow_bindings)
                     .map(|((d, su), b)| {
-                        d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
+                        d.live(manifold_gpu::Draw::new(
                             if su.discard_free() {
                                 solid_pipeline
                             } else {
@@ -231,15 +231,19 @@ impl RenderScene {
                         ))
                     })
                     .collect();
-                ctx.gpu_encoder()
-                    .native_enc
-                    .draw_instanced_depth_only_batch_viewport(
+                // Shadow maps share one layer size; a light asking for less
+                // detail renders its own resolution in the layer's corner.
+                let side = resolution.min(shadow_map.width).min(shadow_map.height) as f32;
+                ctx.gpu_encoder().native_enc.draw(
+                    &manifold_gpu::DrawPass::depth_only(
                         shadow_map,
                         shadow_ds,
-                        &shadow_draws,
-                        [resolution; 2],
-                        "node.render_scene shadow",
-                    );
+                        manifold_gpu::GpuLoadAction::Clear,
+                    )
+                    .viewport((0.0, 0.0, side, side)),
+                    &shadow_draws,
+                    "node.render_scene shadow",
+                );
             }
         }
     }
@@ -317,13 +321,13 @@ impl RenderScene {
                     ]
                 })
                 .collect();
-            let cam_draws: Vec<manifold_gpu::DepthMsaaDraw> = opaque_draws
+            let cam_draws: Vec<manifold_gpu::Draw> = opaque_draws
                 .iter()
                 .filter(|d| d.in_view)
                 .zip(&cam_uniforms)
                 .zip(&cam_bindings)
                 .map(|((d, su), b)| {
-                    d.camera_live(manifold_gpu::GpuEncoder::depth_msaa_draw(
+                    d.camera_live(manifold_gpu::Draw::new(
                         if su.discard_free() {
                             solid_depth_pipeline
                         } else {
@@ -335,14 +339,15 @@ impl RenderScene {
                     ))
                 })
                 .collect();
-            ctx.gpu_encoder()
-                .native_enc
-                .draw_instanced_depth_only_batch(
+            ctx.gpu_encoder().native_enc.draw(
+                &manifold_gpu::DrawPass::depth_only(
                     opaque_depth_snapshot,
                     opaque_depth_ds,
-                    &cam_draws,
-                    "node.render_scene E2a opaque depth snapshot",
-                );
+                    manifold_gpu::GpuLoadAction::Clear,
+                ),
+                &cam_draws,
+                "node.render_scene E2a opaque depth snapshot",
+            );
         }
     }
 

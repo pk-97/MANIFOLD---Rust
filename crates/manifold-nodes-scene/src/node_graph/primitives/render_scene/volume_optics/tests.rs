@@ -1,7 +1,7 @@
 use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuCompareFunction, GpuDepthStencilDesc,
-    GpuEncoder, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+    GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
 
@@ -298,22 +298,28 @@ fn render_path_with_camera(
         let occluder_buffer = buffer(device, occluder_vertices);
         let occluder_u = uniforms_for_camera(camera, identity(), 1.0);
         let occluder_bindings = bindings(&occluder_buffer, &occluder_u, &instance, &depth);
-        let draw = GpuEncoder::depth_msaa_draw(
+        let draw = manifold_gpu::Draw::new(
             &nearest,
             &occluder_bindings,
             occluder_vertices.len() as u32,
             1,
         );
-        depth_encoder.draw_instanced_depth_only_batch(
-            &depth,
-            &depth_state,
+        depth_encoder.draw(
+            &manifold_gpu::DrawPass::depth_only(
+                &depth,
+                &depth_state,
+                manifold_gpu::GpuLoadAction::Clear,
+            ),
             std::slice::from_ref(&draw),
             "volume optics opaque depth",
         );
     } else {
-        depth_encoder.draw_instanced_depth_only_batch(
-            &depth,
-            &depth_state,
+        depth_encoder.draw(
+            &manifold_gpu::DrawPass::depth_only(
+                &depth,
+                &depth_state,
+                manifold_gpu::GpuLoadAction::Clear,
+            ),
             &[],
             "volume optics far depth",
         );
@@ -322,15 +328,16 @@ fn render_path_with_camera(
 
     let bindings = bindings(&mesh, &u, &instance, &depth);
     let mut encoder = device.create_encoder("volume optics path proof");
-    encoder.draw_instanced(
-        &pipeline,
-        &path,
-        &bindings,
-        manifold_gpu::DrawCount::Direct {
-            vertices: vertices.len() as u32,
-            instances: 1,
-        },
-        GpuLoadAction::Clear,
+    encoder.draw(
+        &manifold_gpu::DrawPass::color(&path, GpuLoadAction::Clear),
+        &[manifold_gpu::Draw::counted(
+            &pipeline,
+            &bindings,
+            manifold_gpu::DrawCount::Direct {
+                vertices: vertices.len() as u32,
+                instances: 1,
+            },
+        )],
         "volume optics path",
     );
     encoder.commit_and_wait().expect("GPU work completes");
@@ -390,11 +397,10 @@ fn render_nearest(device: &manifold_gpu::GpuDevice, vertices: &[MeshVertex]) -> 
             offset: 0,
         },
     ];
-    let draw = GpuEncoder::depth_msaa_draw(&nearest, &bindings, vertices.len() as u32, 1);
+    let draw = manifold_gpu::Draw::new(&nearest, &bindings, vertices.len() as u32, 1);
     let mut encoder = device.create_encoder("volume nearest proof");
-    encoder.draw_instanced_depth_only_batch(
-        &depth,
-        &state,
+    encoder.draw(
+        &manifold_gpu::DrawPass::depth_only(&depth, &state, manifold_gpu::GpuLoadAction::Clear),
         std::slice::from_ref(&draw),
         "volume nearest surface",
     );

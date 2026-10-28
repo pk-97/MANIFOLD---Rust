@@ -102,6 +102,7 @@ pub(super) struct BatchRenderCache {
     buffers: [(*const c_void, u64); 32],
     last_pipeline: *const c_void,
     last_fill_mode: Option<crate::GpuTriangleFillMode>,
+    last_depth_bias: Option<(f32, f32, f32)>,
 }
 
 impl BatchRenderCache {
@@ -112,6 +113,7 @@ impl BatchRenderCache {
             buffers: [(std::ptr::null(), 0); 32],
             last_pipeline: std::ptr::null(),
             last_fill_mode: None,
+            last_depth_bias: None,
         }
     }
 }
@@ -1087,360 +1089,38 @@ impl GpuEncoder {
         }
     }
 
-    /// Draw a fullscreen triangle with a render pipeline.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_fullscreen(
-        &mut self,
-        pipeline: &GpuRenderPipeline,
-        target: &GpuTexture,
-        bindings: &[GpuBinding],
-        clear: bool,
-        store: bool,
-        label: &str,
-    ) {
+    /// Run `draws` in one render pass described by `pass`, then the pass's
+    /// second group after switching its depth state. Pipelines, bindings and
+    /// raster state are set only when they change between draws; empty draws
+    /// are skipped.
+    pub fn draw(&mut self, pass: &DrawPass, draws: &[Draw], label: &str) {
         self.end_current();
 
         let desc = new_render_pass_descriptor();
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&target.raw));
-            color.setLoadAction(if clear {
-                MTLLoadAction::Clear
-            } else {
-                MTLLoadAction::Load
-            });
-            color.setStoreAction(if store {
-                MTLStoreAction::Store
-            } else {
-                MTLStoreAction::DontCare
-            });
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            self.bind_render_pipeline(&enc, pipeline);
-        }
-
-        apply_bindings_draw_fullscreen(&enc, pipeline, bindings);
-
-        unsafe {
-            enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
-            enc.popDebugGroup();
-            enc.endEncoding();
-        }
-    }
-
-    /// Draw a fullscreen triangle with viewport positioning.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_fullscreen_viewport(
-        &mut self,
-        pipeline: &GpuRenderPipeline,
-        target: &GpuTexture,
-        bindings: &[GpuBinding],
-        viewport: (f32, f32, f32, f32),
-        load_action: crate::GpuLoadAction,
-        label: &str,
-    ) {
-        self.end_current();
-
-        let desc = new_render_pass_descriptor();
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&target.raw));
-            color.setLoadAction(convert_load_action(load_action));
-            color.setStoreAction(MTLStoreAction::Store);
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            self.bind_render_pipeline(&enc, pipeline);
-        }
-
-        let (x, y, w, h) = viewport;
-        unsafe {
-            enc.setViewport(MTLViewport {
-                originX: x as f64,
-                originY: y as f64,
-                width: w as f64,
-                height: h as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
-        }
-
-        apply_bindings_draw_fullscreen(&enc, pipeline, bindings);
-
-        unsafe {
-            enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
-            enc.popDebugGroup();
-            enc.endEncoding();
-        }
-    }
-
-    /// Draw instanced geometry with a render pipeline.
-    pub fn draw_instanced(
-        &mut self,
-        pipeline: &GpuRenderPipeline,
-        target: &GpuTexture,
-        bindings: &[GpuBinding],
-        count: DrawCount,
-        load_action: crate::GpuLoadAction,
-        label: &str,
-    ) {
-        self.end_current();
-
-        let desc = new_render_pass_descriptor();
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&target.raw));
-            color.setLoadAction(convert_load_action(load_action));
-            color.setStoreAction(MTLStoreAction::Store);
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            self.bind_render_pipeline(&enc, pipeline);
-        }
-
-        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
-
-        if !count.is_empty() {
-            encode_draw(&enc, MTLPrimitiveType::Triangle, &count);
-        }
-        unsafe {
-            enc.popDebugGroup();
-            enc.endEncoding();
-        }
-    }
-
-    /// Draw instanced with MSAA: render to a multisample target, resolve to
-    /// a single-sample texture.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_instanced_msaa(
-        &mut self,
-        pipeline: &GpuRenderPipeline,
-        msaa_target: &GpuTexture,
-        resolve_target: &GpuTexture,
-        bindings: &[GpuBinding],
-        vertex_count: u32,
-        instance_count: u32,
-        load_action: crate::GpuLoadAction,
-        label: &str,
-    ) {
-        self.end_current();
-
-        let desc = new_render_pass_descriptor();
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&msaa_target.raw));
-            color.setResolveTexture(Some(&resolve_target.raw));
-            color.setLoadAction(convert_load_action(load_action));
-            color.setStoreAction(MTLStoreAction::MultisampleResolve);
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            self.bind_render_pipeline(&enc, pipeline);
-        }
-
-        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
-
-        if instance_count > 0 {
+        let (width, height) = pass.size();
+        let transparent = objc2_metal::MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        };
+        if let Some(target) = &pass.color {
+            let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
             unsafe {
-                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    MTLPrimitiveType::Triangle,
-                    0,
-                    vertex_count as usize,
-                    instance_count as usize,
-                );
+                color.setTexture(Some(&target.texture.raw));
+                color.setLoadAction(convert_load_action(target.load));
+                color.setClearColor(transparent);
+                match target.resolve {
+                    Some(resolve) => {
+                        color.setResolveTexture(Some(&resolve.raw));
+                        color.setStoreAction(MTLStoreAction::MultisampleResolve);
+                    }
+                    None => color.setStoreAction(MTLStoreAction::Store),
+                }
             }
         }
-        unsafe {
-            enc.popDebugGroup();
-            enc.endEncoding();
-        }
-    }
-
-    /// One draw in a [`Self::draw_instanced_depth_msaa_batch`] call.
-    ///
-    /// Each entry carries its own pipeline and bindings so a scene of
-    /// distinct materials composites in a single render pass.
-    pub fn depth_msaa_draw<'a>(
-        pipeline: &'a GpuRenderPipeline,
-        bindings: &'a [GpuBinding<'a>],
-        vertex_count: u32,
-        instance_count: u32,
-    ) -> DepthMsaaDraw<'a> {
-        DepthMsaaDraw {
-            pipeline,
-            bindings,
-            count: DrawCount::Direct {
-                vertices: vertex_count,
-                instances: instance_count,
-            },
-            fill_mode: crate::GpuTriangleFillMode::Fill,
-            primitive: crate::GpuPrimitiveType::Triangle,
-            cull_back: false,
-        }
-    }
-
-    /// [`Self::depth_msaa_draw`] with an explicit triangle fill mode — the
-    /// wireframe path (SCENE_RENDER_MODE_DESIGN.md D6). Colour-pass batch
-    /// entries apply it per draw; depth-only batch entries ignore it.
-    pub fn depth_msaa_draw_fill_mode<'a>(
-        pipeline: &'a GpuRenderPipeline,
-        bindings: &'a [GpuBinding<'a>],
-        vertex_count: u32,
-        instance_count: u32,
-        fill_mode: crate::GpuTriangleFillMode,
-    ) -> DepthMsaaDraw<'a> {
-        DepthMsaaDraw {
-            pipeline,
-            bindings,
-            count: DrawCount::Direct {
-                vertices: vertex_count,
-                instances: instance_count,
-            },
-            fill_mode,
-            primitive: crate::GpuPrimitiveType::Triangle,
-            cull_back: false,
-        }
-    }
-
-    /// [`Self::depth_msaa_draw`] with `Point` topology — the Points render
-    /// mode (SCENE_RENDER_MODE_DESIGN.md D8). Fill mode is meaningless for
-    /// points, so it stays `Fill`. The pipeline must be built via
-    /// `GpuDevice::create_render_pipeline_depth_msaa_point_size` so the
-    /// vertex shader's designated output carries `[[point_size]]`.
-    pub fn depth_msaa_draw_points<'a>(
-        pipeline: &'a GpuRenderPipeline,
-        bindings: &'a [GpuBinding<'a>],
-        vertex_count: u32,
-        instance_count: u32,
-    ) -> DepthMsaaDraw<'a> {
-        DepthMsaaDraw {
-            pipeline,
-            bindings,
-            count: DrawCount::Direct {
-                vertices: vertex_count,
-                instances: instance_count,
-            },
-            fill_mode: crate::GpuTriangleFillMode::Fill,
-            primitive: crate::GpuPrimitiveType::Point,
-            cull_back: false,
-        }
-    }
-
-    /// Draw a batch of depth-tested triangle meshes into ONE 4x-MSAA pass,
-    /// resolving to `resolve_target`.
-    ///
-    /// All `draws` share one memoryless multisample color + depth target
-    /// (Apple Silicon tile memory — never leaves the GPU), cleared once at
-    /// pass start, so the shared depth buffer resolves inter-object
-    /// occlusion exactly as the old one-pass-per-object path did. The pass
-    /// ends with `MultisampleResolve`, writing the antialiased result to
-    /// the single-sample `resolve_target`. Pair with a pipeline built via
-    /// `create_render_pipeline_depth_msaa` (alpha-to-coverage on) so cutout
-    /// edges resolve too, not just silhouettes.
-    #[allow(clippy::too_many_arguments)]
-    #[inline]
-    pub fn draw_instanced_depth_msaa_batch(
-        &mut self,
-        msaa_color: &GpuTexture,
-        resolve_target: &GpuTexture,
-        msaa_depth: &GpuTexture,
-        depth_stencil_state: &GpuDepthStencilState,
-        draws: &[DepthMsaaDraw],
-        label: &str,
-    ) {
-        let desc = DepthMsaaPassDesc {
-            msaa_color,
-            resolve_target,
-            msaa_depth,
-            depth_resolve: None,
-            aux_color: &[],
-            depth_stencil_state,
-            second_pass: None,
-        };
-        self.draw_instanced_depth_msaa_batch_desc(&desc, draws, label);
-    }
-
-    /// [`Self::draw_instanced_depth_msaa_batch`]'s desc-driven superset. Same single 4x-MSAA pass, same
-    /// shared depth buffer resolving inter-object occlusion; additionally:
-    /// `desc.depth_resolve` — `Some(tex)` stores the depth attachment via
-    /// `MultisampleResolve` with filter `Sample0` into `tex` (single-sample
-    /// `Depth32Float`, raw non-linear clip depth); `None` keeps today's
-    /// `DontCare` (memoryless, never leaves the GPU). `desc.aux_color` —
-    /// extra MRT color attachments (index 1..), reserved for P2's velocity
-    /// output; empty today.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_instanced_depth_msaa_batch_desc(
-        &mut self,
-        desc: &DepthMsaaPassDesc,
-        draws: &[DepthMsaaDraw],
-        label: &str,
-    ) {
-        self.end_current();
-
-        let pass_desc = new_render_pass_descriptor();
-
-        let color = unsafe { pass_desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&desc.msaa_color.raw));
-            color.setResolveTexture(Some(&desc.resolve_target.raw));
-            color.setLoadAction(MTLLoadAction::Clear);
-            color.setStoreAction(MTLStoreAction::MultisampleResolve);
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        // Aux MRT slots (velocity, ao_mask). Each aux attachment gets its
-        // own memoryless multisample + resolve target, same
-        // Clear/MultisampleResolve shape as the primary color attachment;
-        // the clear color is per-attachment (see `AuxColorAttachment`).
-        for (i, aux_att) in desc.aux_color.iter().enumerate() {
-            let idx = i + 1;
-            let aux = unsafe { pass_desc.colorAttachments().objectAtIndexedSubscript(idx) };
+        for (i, aux_att) in pass.aux_color.iter().enumerate() {
+            let aux = unsafe { desc.colorAttachments().objectAtIndexedSubscript(i + 1) };
             unsafe {
                 aux.setTexture(Some(&aux_att.msaa.raw));
                 aux.setResolveTexture(Some(&aux_att.resolve.raw));
@@ -1454,643 +1134,121 @@ impl GpuEncoder {
                 });
             }
         }
-
-        let depth = unsafe { pass_desc.depthAttachment() };
-        unsafe {
-            depth.setTexture(Some(&desc.msaa_depth.raw));
-            depth.setLoadAction(MTLLoadAction::Clear);
-            depth.setClearDepth(desc.depth_stencil_state.clear_depth);
-            match desc.depth_resolve {
-                Some(resolve) => {
-                    assert_eq!(
-                        resolve.format, desc.msaa_depth.format,
-                        "depth resolve texture must match the MSAA depth format"
-                    );
-                    assert_eq!(
-                        resolve.format,
-                        crate::GpuTextureFormat::Depth32Float,
-                        "depth resolve texture must be Depth32Float"
-                    );
-                    depth.setResolveTexture(Some(&resolve.raw));
-                    depth.setStoreAction(MTLStoreAction::MultisampleResolve);
-                    // D2: deterministic, matches a single-sample render —
-                    // Min/Max bias edges toward one surface and can't be
-                    // predicted by the CPU oracle without re-implementing
-                    // MSAA sample positions.
-                    depth.setDepthResolveFilter(MTLMultisampleDepthResolveFilter::Sample0);
-                }
-                None => {
-                    depth.setStoreAction(MTLStoreAction::DontCare);
-                }
-            }
-        }
-
-        let enc = self.make_render_encoder(&pass_desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            enc.setDepthStencilState(Some(&desc.depth_stencil_state.raw));
-            enc.setViewport(MTLViewport {
-                originX: 0.0,
-                originY: 0.0,
-                width: desc.resolve_target.width as f64,
-                height: desc.resolve_target.height as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
-        }
-
-        let mut batch_cache = BatchRenderCache::new();
-        for draw in draws {
-            if draw.count.is_empty() {
-                continue;
-            }
-            let pipeline_ptr = &*draw.pipeline.state as *const _ as *const c_void;
-            if batch_cache.last_pipeline != pipeline_ptr {
-                unsafe {
-                    self.bind_render_pipeline(&enc, draw.pipeline);
-                }
-                batch_cache.last_pipeline = pipeline_ptr;
-            }
-            if batch_cache.last_fill_mode != Some(draw.fill_mode) {
-                unsafe {
-                    enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
-                }
-                batch_cache.last_fill_mode = Some(draw.fill_mode);
-            }
-            apply_bindings_draw_both_stages_cached(
-                &enc,
-                draw.pipeline,
-                draw.bindings,
-                &mut batch_cache,
-            );
-            // D8: per-draw topology (Points mode = point primitives) — colour
-            // batches only; depth-only batches force Triangle.
-            set_cull(&enc, draw.cull_back);
-            encode_draw(
-                &enc,
-                format::to_mtl_primitive_type(draw.primitive),
-                &draw.count,
-            );
-        }
-
-        // The sorted transparent group,
-        // drawn into the SAME pass right after the opaque group — no second
-        // clear, so the opaque pass's on-tile MSAA depth is still resolved
-        // against (occlusion by opaque geometry works for free), just with
-        // depth WRITE off so transparent objects never occlude each other
-        // or later opaque work.
-        if let Some((second_depth_stencil, second_draws)) = desc.second_pass {
+        if let Some(target) = &pass.depth {
+            let depth = unsafe { desc.depthAttachment() };
             unsafe {
-                enc.setDepthStencilState(Some(&second_depth_stencil.raw));
-            }
-            for draw in second_draws {
-                if draw.count.is_empty() {
-                    continue;
-                }
-                let pipeline_ptr = &*draw.pipeline.state as *const _ as *const c_void;
-                if batch_cache.last_pipeline != pipeline_ptr {
-                    unsafe {
-                        self.bind_render_pipeline(&enc, draw.pipeline);
+                depth.setTexture(Some(&target.texture.raw));
+                depth.setLoadAction(convert_load_action(target.load));
+                depth.setClearDepth(target.state.clear_depth);
+                match target.store {
+                    DepthStore::Store => depth.setStoreAction(MTLStoreAction::Store),
+                    DepthStore::Discard => depth.setStoreAction(MTLStoreAction::DontCare),
+                    DepthStore::Resolve(resolve) => {
+                        assert_eq!(
+                            (resolve.format, target.texture.format),
+                            (
+                                crate::GpuTextureFormat::Depth32Float,
+                                crate::GpuTextureFormat::Depth32Float
+                            ),
+                            "depth resolves from and into Depth32Float"
+                        );
+                        depth.setResolveTexture(Some(&resolve.raw));
+                        depth.setStoreAction(MTLStoreAction::MultisampleResolve);
+                        depth.setDepthResolveFilter(MTLMultisampleDepthResolveFilter::Sample0);
                     }
-                    batch_cache.last_pipeline = pipeline_ptr;
                 }
-                if batch_cache.last_fill_mode != Some(draw.fill_mode) {
-                    unsafe {
-                        enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
-                    }
-                    batch_cache.last_fill_mode = Some(draw.fill_mode);
-                }
-                apply_bindings_draw_both_stages_cached(
-                    &enc,
-                    draw.pipeline,
-                    draw.bindings,
-                    &mut batch_cache,
-                );
-                set_cull(&enc, draw.cull_back);
-                encode_draw(
-                    &enc,
-                    format::to_mtl_primitive_type(draw.primitive),
-                    &draw.count,
-                );
+            }
+        }
+        // A colourless pass names its size, so it is never ambiguous to Metal.
+        if pass.color.is_none() {
+            unsafe {
+                desc.setRenderTargetWidth(width as usize);
+                desc.setRenderTargetHeight(height as usize);
             }
         }
 
+        let enc = self.make_render_encoder(&desc, label);
+        let (x, y, w, h) = pass
+            .viewport
+            .unwrap_or((0.0, 0.0, width as f32, height as f32));
+        unsafe {
+            let debug_label = NSString::from_str(label);
+            enc.pushDebugGroup(&debug_label);
+            enc.insertDebugSignpost(&debug_label);
+            if let Some(depth) = &pass.depth {
+                enc.setDepthStencilState(Some(&depth.state.raw));
+            }
+            enc.setViewport(MTLViewport {
+                originX: x as f64,
+                originY: y as f64,
+                width: w as f64,
+                height: h as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        }
+
+        let depth_only = pass.color.is_none();
+        let mut cache = BatchRenderCache::new();
+        self.encode_draws(&enc, draws, depth_only, &mut cache);
+        if let Some((state, second)) = pass.second_group {
+            unsafe { enc.setDepthStencilState(Some(&state.raw)) };
+            self.encode_draws(&enc, second, depth_only, &mut cache);
+        }
         unsafe {
             enc.popDebugGroup();
             enc.endEncoding();
         }
     }
 
-    /// Draw a batch of meshes into ONE single-sample colour+depth pass with
-    /// independently controlled load actions per attachment
-    /// The non-MSAA sibling of
-    /// [`Self::draw_instanced_depth_msaa_batch_desc`]: no memoryless
-    /// multisample scratch, no resolve — `target`/`depth_target` are real,
-    /// already-populated single-sample textures. `Load` on both lets the
-    /// caller composite a sorted transparent group onto a prior opaque
-    /// pass's already-resolved colour AND depth-test against that pass's
-    /// depth, without re-clearing either attachment. Depth `StoreAction` is
-    /// `Store` so a following pass can reuse the resulting depth attachment.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_instanced_depth_batch(
-        &mut self,
-        target: &GpuTexture,
-        depth_target: &GpuTexture,
-        depth_stencil_state: &GpuDepthStencilState,
-        draws: &[DepthMsaaDraw],
-        color_load: crate::GpuLoadAction,
-        depth_load: crate::GpuLoadAction,
-        label: &str,
+    /// Encode `draws` into the open render encoder. A depth-only pass always
+    /// fills triangles: lines or points would break occlusion and shadows.
+    fn encode_draws(
+        &self,
+        enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+        draws: &[Draw],
+        depth_only: bool,
+        cache: &mut BatchRenderCache,
     ) {
-        self.end_current();
-
-        let desc = new_render_pass_descriptor();
-
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&target.raw));
-            color.setLoadAction(convert_load_action(color_load));
-            color.setStoreAction(MTLStoreAction::Store);
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        let depth = unsafe { desc.depthAttachment() };
-        unsafe {
-            depth.setTexture(Some(&depth_target.raw));
-            depth.setLoadAction(convert_load_action(depth_load));
-            depth.setStoreAction(MTLStoreAction::Store);
-            depth.setClearDepth(depth_stencil_state.clear_depth);
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
-            enc.setViewport(MTLViewport {
-                originX: 0.0,
-                originY: 0.0,
-                width: target.width as f64,
-                height: target.height as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
-        }
-
-        let mut batch_cache = BatchRenderCache::new();
         for draw in draws {
             if draw.count.is_empty() {
                 continue;
             }
             let pipeline_ptr = &*draw.pipeline.state as *const _ as *const c_void;
-            if batch_cache.last_pipeline != pipeline_ptr {
-                unsafe {
-                    self.bind_render_pipeline(&enc, draw.pipeline);
-                }
-                batch_cache.last_pipeline = pipeline_ptr;
+            if cache.last_pipeline != pipeline_ptr {
+                unsafe { self.bind_render_pipeline(enc, draw.pipeline) };
+                cache.last_pipeline = pipeline_ptr;
             }
-            if batch_cache.last_fill_mode != Some(draw.fill_mode) {
-                unsafe {
-                    // SCENE_RENDER_MODE_DESIGN.md D6: per-draw fill mode (wireframe
-                    // = Lines), same as the MSAA colour batch.
-                    enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
-                }
-                batch_cache.last_fill_mode = Some(draw.fill_mode);
-            }
-            apply_bindings_draw_both_stages_cached(
-                &enc,
-                draw.pipeline,
-                draw.bindings,
-                &mut batch_cache,
-            );
-            // D8: per-draw topology (Points mode = point primitives) — colour
-            // batches only; depth-only batches force Triangle.
-            set_cull(&enc, draw.cull_back);
-            encode_draw(
-                &enc,
-                format::to_mtl_primitive_type(draw.primitive),
-                &draw.count,
-            );
-        }
-
-        unsafe {
-            enc.popDebugGroup();
-            enc.endEncoding();
-        }
-    }
-
-    /// Draw instanced geometry with depth testing.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_instanced_depth(
-        &mut self,
-        pipeline: &GpuRenderPipeline,
-        target: &GpuTexture,
-        depth_target: &GpuTexture,
-        depth_stencil_state: &GpuDepthStencilState,
-        bindings: &[GpuBinding],
-        vertex_count: u32,
-        instance_count: u32,
-        load_action: crate::GpuLoadAction,
-        label: &str,
-    ) {
-        self.end_current();
-
-        let desc = new_render_pass_descriptor();
-
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&target.raw));
-            color.setLoadAction(convert_load_action(load_action));
-            color.setStoreAction(MTLStoreAction::Store);
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        let depth = unsafe { desc.depthAttachment() };
-        unsafe {
-            depth.setTexture(Some(&depth_target.raw));
-            depth.setLoadAction(convert_load_action(load_action));
-            depth.setStoreAction(MTLStoreAction::Store);
-            depth.setClearDepth(depth_stencil_state.clear_depth);
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            self.bind_render_pipeline(&enc, pipeline);
-            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
-            enc.setViewport(MTLViewport {
-                originX: 0.0,
-                originY: 0.0,
-                width: target.width as f64,
-                height: target.height as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
-        }
-
-        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
-
-        if instance_count > 0 {
-            unsafe {
-                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    MTLPrimitiveType::Triangle,
-                    0,
-                    vertex_count as usize,
-                    instance_count as usize,
-                );
-            }
-        }
-        unsafe {
-            enc.popDebugGroup();
-            enc.endEncoding();
-        }
-    }
-
-    /// Draw instanced geometry with depth testing, fill mode, and optional depth bias.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_instanced_depth_ex(
-        &mut self,
-        pipeline: &GpuRenderPipeline,
-        target: &GpuTexture,
-        depth_target: &GpuTexture,
-        depth_stencil_state: &GpuDepthStencilState,
-        bindings: &[GpuBinding],
-        vertex_count: u32,
-        instance_count: u32,
-        load_action: crate::GpuLoadAction,
-        fill_mode: crate::GpuTriangleFillMode,
-        primitive_type: crate::GpuPrimitiveType,
-        depth_bias: Option<(f32, f32, f32)>,
-        label: &str,
-    ) {
-        self.end_current();
-
-        let desc = new_render_pass_descriptor();
-
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&target.raw));
-            color.setLoadAction(convert_load_action(load_action));
-            color.setStoreAction(MTLStoreAction::Store);
-            // Transparent-black clear: this renders generator geometry to an
-            // offscreen target that is then composited (premultiplied alpha).
-            // An opaque clear would paint a solid box over the layer below where
-            // no geometry is drawn; the opaque geometry fragments write alpha=1
-            // themselves, so the background must clear to alpha=0 to key.
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        let depth = unsafe { desc.depthAttachment() };
-        unsafe {
-            depth.setTexture(Some(&depth_target.raw));
-            depth.setLoadAction(convert_load_action(load_action));
-            depth.setStoreAction(MTLStoreAction::Store);
-            depth.setClearDepth(depth_stencil_state.clear_depth);
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            self.bind_render_pipeline(&enc, pipeline);
-            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
-            enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(fill_mode));
-
-            if let Some((bias, slope_scale, clamp)) = depth_bias {
-                enc.setDepthBias_slopeScale_clamp(bias, slope_scale, clamp);
-            }
-
-            enc.setViewport(MTLViewport {
-                originX: 0.0,
-                originY: 0.0,
-                width: target.width as f64,
-                height: target.height as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
-        }
-
-        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
-
-        if instance_count > 0 {
-            unsafe {
-                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    format::to_mtl_primitive_type(primitive_type),
-                    0,
-                    vertex_count as usize,
-                    instance_count as usize,
-                );
-            }
-        }
-        unsafe {
-            enc.popDebugGroup();
-            enc.endEncoding();
-        }
-    }
-
-    /// Draw a batch of meshes into ONE **depth-only** render pass — no colour
-    /// attachment at all. The shadow-map primitive: every object's geometry
-    /// is rasterised into a single caster's depth map (cleared once at pass
-    /// start), and the fragment stage writes no colour (the pipeline is built
-    /// with [`GpuDevice::create_render_pipeline_depth_only`], whose WGSL has a
-    /// void `@fragment`). Depth `StoreAction::Store` — unlike the MSAA colour
-    /// batch, the depth result IS the output: it is sampled as a shadow map
-    /// (`texture_depth_2d`) in the later lit pass.
-    ///
-    /// One pass per caster with all objects batched inside keeps the shadow
-    /// bill at K passes, not K×objects — the difference between a few passes
-    /// and hundreds. `depth_target` must be created
-    /// `RENDER_TARGET | SHADER_READ` so it can be sampled afterwards without
-    /// tripping the AGX render-target-only bind crash (0x78).
-    pub fn draw_instanced_depth_only_batch(
-        &mut self,
-        depth_target: &GpuTexture,
-        depth_stencil_state: &GpuDepthStencilState,
-        draws: &[DepthMsaaDraw],
-        label: &str,
-    ) {
-        let full = [depth_target.width, depth_target.height];
-        self.draw_depth_only_batch(
-            depth_target,
-            depth_stencil_state,
-            draws,
-            MTLLoadAction::Clear,
-            full,
-            label,
-        );
-    }
-
-    /// Clear `depth_target` and draw into its top-left `viewport` square only.
-    /// Shadow maps share one layer size; a light asking for less detail
-    /// renders its own resolution in the corner of its layer.
-    pub fn draw_instanced_depth_only_batch_viewport(
-        &mut self,
-        depth_target: &GpuTexture,
-        depth_stencil_state: &GpuDepthStencilState,
-        draws: &[DepthMsaaDraw],
-        viewport: [u32; 2],
-        label: &str,
-    ) {
-        let viewport = [
-            viewport[0].min(depth_target.width),
-            viewport[1].min(depth_target.height),
-        ];
-        self.draw_depth_only_batch(
-            depth_target,
-            depth_stencil_state,
-            draws,
-            MTLLoadAction::Clear,
-            viewport,
-            label,
-        );
-    }
-
-    fn draw_depth_only_batch(
-        &mut self,
-        depth_target: &GpuTexture,
-        depth_stencil_state: &GpuDepthStencilState,
-        draws: &[DepthMsaaDraw],
-        load_action: MTLLoadAction,
-        viewport: [u32; 2],
-        label: &str,
-    ) {
-        self.end_current();
-
-        let desc = new_render_pass_descriptor();
-
-        // No colour attachment — depth only. Set render-target dimensions
-        // explicitly so a colourless pass is never ambiguous to Metal.
-        let depth = unsafe { desc.depthAttachment() };
-        unsafe {
-            depth.setTexture(Some(&depth_target.raw));
-            depth.setLoadAction(load_action);
-            depth.setStoreAction(MTLStoreAction::Store);
-            depth.setClearDepth(depth_stencil_state.clear_depth);
-            desc.setRenderTargetWidth(depth_target.width as usize);
-            desc.setRenderTargetHeight(depth_target.height as usize);
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
-            enc.setViewport(MTLViewport {
-                originX: 0.0,
-                originY: 0.0,
-                width: viewport[0] as f64,
-                height: viewport[1] as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
-        }
-
-        let mut batch_cache = BatchRenderCache::new();
-        for draw in draws {
-            if draw.count.is_empty() {
-                continue;
-            }
-            let pipeline_ptr = &*draw.pipeline.state as *const _ as *const c_void;
-            if batch_cache.last_pipeline != pipeline_ptr {
-                unsafe {
-                    self.bind_render_pipeline(&enc, draw.pipeline);
-                }
-                batch_cache.last_pipeline = pipeline_ptr;
-            }
-            if batch_cache.last_fill_mode != Some(crate::GpuTriangleFillMode::Fill) {
-                unsafe {
-                    // INV-R3 (SCENE_RENDER_MODE_DESIGN.md): shadow maps and depth
-                    // prepasses ALWAYS fill AND always draw triangles — lines-only
-                    // or point-only depth would break occlusion, shadows, and
-                    // every downstream depth reader. Both forced here, not at the
-                    // call site, so a `DepthMsaaDraw` carrying `Lines`/`Point`
-                    // can never leak into a depth-only pass.
-                    enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(
-                        crate::GpuTriangleFillMode::Fill,
-                    ));
-                }
-                batch_cache.last_fill_mode = Some(crate::GpuTriangleFillMode::Fill);
-            }
-            apply_bindings_draw_both_stages_cached(
-                &enc,
-                draw.pipeline,
-                draw.bindings,
-                &mut batch_cache,
-            );
-            set_cull(&enc, draw.cull_back);
-            encode_draw(&enc, MTLPrimitiveType::Triangle, &draw.count);
-        }
-
-        unsafe {
-            enc.popDebugGroup();
-            enc.endEncoding();
-        }
-    }
-
-    /// Draw a depth-only batch while preserving the existing depth attachment.
-    /// This is the camera-space companion to
-    /// [`Self::draw_instanced_depth_only_batch`]: the caller seeds
-    /// `depth_target` with an earlier depth snapshot, then this pass writes
-    /// the nearest visible surface for one object. The depth result remains
-    /// available to the following colour pass.
-    pub fn draw_instanced_depth_only_batch_loaded(
-        &mut self,
-        depth_target: &GpuTexture,
-        depth_stencil_state: &GpuDepthStencilState,
-        draws: &[DepthMsaaDraw],
-        label: &str,
-    ) {
-        let full = [depth_target.width, depth_target.height];
-        self.draw_depth_only_batch(
-            depth_target,
-            depth_stencil_state,
-            draws,
-            MTLLoadAction::Load,
-            full,
-            label,
-        );
-    }
-
-    /// Draw indexed geometry with a render pipeline and vertex/index buffers.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_indexed(
-        &mut self,
-        pipeline: &GpuRenderPipeline,
-        target: &GpuTexture,
-        bindings: &[GpuBinding],
-        vertex_buffer: &GpuBuffer,
-        vertex_offset: u64,
-        index_buffer: &GpuBuffer,
-        index_count: u32,
-        viewport: Option<(f32, f32, f32, f32)>,
-        load_action: crate::GpuLoadAction,
-        label: &str,
-    ) {
-        self.end_current();
-
-        let desc = new_render_pass_descriptor();
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        unsafe {
-            color.setTexture(Some(&target.raw));
-            color.setLoadAction(convert_load_action(load_action));
-            color.setStoreAction(MTLStoreAction::Store);
-            color.setClearColor(objc2_metal::MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-        }
-
-        let enc = self.make_render_encoder(&desc, label);
-        unsafe {
-            let debug_label = NSString::from_str(label);
-            enc.pushDebugGroup(&debug_label);
-            enc.insertDebugSignpost(&debug_label);
-            self.bind_render_pipeline(&enc, pipeline);
-
-            if let Some((x, y, w, h)) = viewport {
-                enc.setViewport(MTLViewport {
-                    originX: x as f64,
-                    originY: y as f64,
-                    width: w as f64,
-                    height: h as f64,
-                    znear: 0.0,
-                    zfar: 1.0,
-                });
+            let (fill_mode, primitive) = if depth_only {
+                (
+                    crate::GpuTriangleFillMode::Fill,
+                    crate::GpuPrimitiveType::Triangle,
+                )
             } else {
-                enc.setViewport(MTLViewport {
-                    originX: 0.0,
-                    originY: 0.0,
-                    width: target.width as f64,
-                    height: target.height as f64,
-                    znear: 0.0,
-                    zfar: 1.0,
-                });
+                (draw.fill_mode, draw.primitive)
+            };
+            if cache.last_fill_mode != Some(fill_mode) {
+                unsafe { enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(fill_mode)) };
+                cache.last_fill_mode = Some(fill_mode);
             }
-
-            const VERTEX_BUFFER_INDEX: usize = 30;
-            enc.setVertexBuffer_offset_atIndex(
-                Some(&vertex_buffer.raw),
-                vertex_offset as usize,
-                VERTEX_BUFFER_INDEX,
-            );
-        }
-
-        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
-
-        unsafe {
-            enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
-                MTLPrimitiveType::Triangle,
-                index_count as usize,
-                MTLIndexType::UInt32,
-                &index_buffer.raw,
-                0,
-            );
-            enc.popDebugGroup();
-            enc.endEncoding();
+            if cache.last_depth_bias != draw.depth_bias {
+                let (bias, slope, clamp) = draw.depth_bias.unwrap_or((0.0, 0.0, 0.0));
+                unsafe { enc.setDepthBias_slopeScale_clamp(bias, slope, clamp) };
+                cache.last_depth_bias = draw.depth_bias;
+            }
+            if let Some((buffer, offset)) = draw.vertices {
+                const VERTEX_BUFFER_INDEX: usize = 30;
+                unsafe {
+                    enc.setVertexBuffer_offset_atIndex(
+                        Some(&buffer.raw),
+                        offset as usize,
+                        VERTEX_BUFFER_INDEX,
+                    )
+                };
+            }
+            apply_bindings_draw_both_stages_cached(enc, draw.pipeline, draw.bindings, cache);
+            set_cull(enc, draw.cull_back);
+            encode_draw(enc, format::to_mtl_primitive_type(primitive), &draw.count);
         }
     }
 
@@ -2313,13 +1471,7 @@ impl GpuEncoder {
         declare_render_resource_usage(&enc, bindings);
 
         if pipeline.needs_sizes_buffer {
-            bind_sizes_buffer_render(
-                &enc,
-                pipeline,
-                &buffer_sizes,
-                buffer_sizes_len,
-                RenderStages::Both,
-            );
+            bind_sizes_buffer_render(&enc, pipeline, &buffer_sizes, buffer_sizes_len);
         }
 
         unsafe {
@@ -3301,6 +2453,252 @@ fn new_render_pass_descriptor() -> Retained<MTLRenderPassDescriptor> {
     }
 }
 
+fn convert_load_action(la: crate::GpuLoadAction) -> MTLLoadAction {
+    match la {
+        crate::GpuLoadAction::Clear => MTLLoadAction::Clear,
+        crate::GpuLoadAction::Load => MTLLoadAction::Load,
+        crate::GpuLoadAction::DontCare => MTLLoadAction::DontCare,
+    }
+}
+
+/// Declare resource usage for a render pass (mirrors the dispatch path's
+/// belt-and-suspenders coherence declaration). The render-pass binding path
+/// never called `useResource`, so a bound texture/buffer had no declared
+/// usage on this pass — one half of the BUG-l7t4 sub-question (does
+/// retention-via-render-path matter?). Cheap no-op-ish Metal calls; kept
+/// regardless of the answer because the declaration is correct.
+fn apply_bindings_draw_both_stages_cached(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    pipeline: &GpuRenderPipeline,
+    bindings: &[GpuBinding],
+    cache: &mut BatchRenderCache,
+) {
+    let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
+
+    for binding in bindings {
+        match binding {
+            GpuBinding::Buffer {
+                binding: b,
+                buffer,
+                offset,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                let idx = slot.metal_index as usize;
+                let id = buffer_identity(&buffer.raw);
+                if idx >= 32 || cache.buffers[idx] != (id, *offset) {
+                    unsafe {
+                        enc.setVertexBuffer_offset_atIndex(
+                            Some(&buffer.raw),
+                            *offset as usize,
+                            slot.metal_index as usize,
+                        );
+                        enc.setFragmentBuffer_offset_atIndex(
+                            Some(&buffer.raw),
+                            *offset as usize,
+                            slot.metal_index as usize,
+                        );
+                        let () = msg_send![
+                            enc,
+                            useResource: &*buffer.raw,
+                            usage: objc2_metal::MTLResourceUsage::Read
+                        ];
+                    }
+                    if idx < 32 {
+                        cache.buffers[idx] = (id, *offset);
+                    }
+                }
+            }
+            GpuBinding::Texture {
+                binding: b,
+                texture,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                debug_check_write_usage(slot, texture, &pipeline.label);
+                let idx = slot.metal_index as usize;
+                let id = texture_identity(&texture.raw);
+                if idx >= 64 || cache.textures[idx] != id {
+                    unsafe {
+                        enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                        enc.setFragmentTexture_atIndex(
+                            Some(&texture.raw),
+                            slot.metal_index as usize,
+                        );
+                        let () = msg_send![
+                            enc,
+                            useResource: &*texture.raw,
+                            usage: objc2_metal::MTLResourceUsage::Read
+                        ];
+                    }
+                    if idx < 64 {
+                        cache.textures[idx] = id;
+                    }
+                }
+            }
+            GpuBinding::Sampler {
+                binding: b,
+                sampler,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                let idx = slot.metal_index as usize;
+                let id = sampler_identity(&sampler.raw);
+                if idx >= 32 || cache.samplers[idx] != id {
+                    unsafe {
+                        enc.setVertexSamplerState_atIndex(
+                            Some(&sampler.raw),
+                            slot.metal_index as usize,
+                        );
+                        enc.setFragmentSamplerState_atIndex(
+                            Some(&sampler.raw),
+                            slot.metal_index as usize,
+                        );
+                    }
+                    if idx < 32 {
+                        cache.samplers[idx] = id;
+                    }
+                }
+            }
+            GpuBinding::Bytes { binding: b, data } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                let idx = slot.metal_index as usize;
+                unsafe {
+                    enc.setVertexBytes_length_atIndex(
+                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                        data.len(),
+                        slot.metal_index as usize,
+                    );
+                    enc.setFragmentBytes_length_atIndex(
+                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                        data.len(),
+                        slot.metal_index as usize,
+                    );
+                }
+                if idx < 32 {
+                    cache.buffers[idx] = (std::ptr::null(), 0);
+                }
+            }
+        }
+    }
+
+    if pipeline.needs_sizes_buffer {
+        bind_sizes_buffer_render(enc, pipeline, &buffer_sizes, buffer_sizes_len);
+        let slot_idx = pipeline
+            .slot_map
+            .get(SIZES_BUFFER_BINDING)
+            .expect("sizes buffer slot missing in render pipeline despite needs_sizes_buffer")
+            .metal_index as usize;
+        if slot_idx < 32 {
+            cache.buffers[slot_idx] = (std::ptr::null(), 0);
+        }
+    }
+}
+
+fn declare_render_resource_usage(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    bindings: &[GpuBinding],
+) {
+    for binding in bindings {
+        match binding {
+            GpuBinding::Buffer { buffer, .. } => unsafe {
+                let () = msg_send![enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+            },
+            GpuBinding::Texture { texture, .. } => unsafe {
+                let () = msg_send![enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+            },
+            GpuBinding::Bytes { .. } | GpuBinding::Sampler { .. } => {} // not MTLResource
+        }
+    }
+}
+
+/// Walk a binding list and build the naga "sizes buffer" — a `u32` array
+/// indexed by Metal buffer slot where entry `i` holds the byte-size of the
+/// buffer bound at slot `i`. SPIRV-Cross-generated MSL reads this to resolve
+/// `arrayLength()` on runtime-sized storage arrays.
+///
+/// Returns `(sizes, len)`; `len` is one past the highest slot index that
+/// received a buffer, so only the populated prefix is uploaded.
+pub(super) fn collect_buffer_sizes(
+    slot_map: &SlotMap,
+    bindings: &[GpuBinding],
+) -> ([u32; MAX_BUFFER_SLOTS], usize) {
+    let mut sizes = [0u32; MAX_BUFFER_SLOTS];
+    let mut len: usize = 0;
+    for binding in bindings {
+        if let GpuBinding::Buffer {
+            binding: b, buffer, ..
+        } = binding
+        {
+            let Some(slot) = slot_map.get(*b) else {
+                continue;
+            };
+            let idx = slot.metal_index as usize;
+            if idx < MAX_BUFFER_SLOTS {
+                sizes[idx] = buffer.size as u32;
+                if idx >= len {
+                    len = idx + 1;
+                }
+            }
+        }
+    }
+    (sizes, len)
+}
+
+/// Upload the sizes buffer as inline bytes to both render stages.
+/// Without this the shader's `arrayLength()` reads an unbound buffer slot —
+/// on Apple Silicon that typically returns 0, which silently collapses any
+/// `n < 2` early-out branch. See `spectrum_line.wgsl`'s `weighting_db()`
+/// for the case that surfaced this bug (weighted curves went flat once the
+/// LUT moved off the per-pixel biquad onto a runtime-sized array).
+fn bind_sizes_buffer_render(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    pipeline: &GpuRenderPipeline,
+    sizes: &[u32; MAX_BUFFER_SLOTS],
+    len: usize,
+) {
+    let slot_idx = pipeline
+        .slot_map
+        .get(SIZES_BUFFER_BINDING)
+        .expect("sizes buffer slot missing in render pipeline despite needs_sizes_buffer")
+        .metal_index as usize;
+    let ptr = NonNull::new(sizes.as_ptr() as *mut c_void).unwrap();
+    let byte_len = len * 4;
+    unsafe {
+        enc.setVertexBytes_length_atIndex(ptr, byte_len, slot_idx);
+        enc.setFragmentBytes_length_atIndex(ptr, byte_len, slot_idx);
+    }
+}
+
+/// Debug builds: a texture bound where the shader writes must carry
+/// shader-write usage. Without it the write is undefined on Metal unless the
+/// debug layer is on (BUG-1bp58, RT soft AO history written read-only).
+#[inline]
+fn debug_check_write_usage(slot: &super::Slot, texture: &GpuTexture, pipeline: &str) {
+    if cfg!(debug_assertions) && slot.writes {
+        use objc2_metal::{MTLResource, MTLTexture};
+        let usage = texture.raw.usage();
+        debug_assert!(
+            usage.contains(objc2_metal::MTLTextureUsage::ShaderWrite),
+            "[GPU] pipeline '{pipeline}' writes texture '{}' ({}x{} {:?}) at binding slot {} but its usage {:#x} lacks shader write",
+            texture
+                .raw
+                .label()
+                .map_or_else(String::new, |l| l.to_string()),
+            texture.width,
+            texture.height,
+            texture.format,
+            slot.metal_index,
+            usage.0,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ptr::NonNull;
@@ -3458,7 +2856,7 @@ mod tests {
         );
     }
 
-    /// SCENE_RENDER_MODE_DESIGN.md D8: `depth_msaa_draw_points` draws the
+    /// SCENE_RENDER_MODE_DESIGN.md D8: a `Point` draw draws the
     /// SAME vertex buffer as `MTLPrimitiveType::Point`, with `[[point_size]]`
     /// driven by a uniform (rebound from a WGSL `@location` output — WGSL has
     /// no point_size builtin). One vertex is the clean oracle: as a triangle
@@ -3549,17 +2947,19 @@ mod tests {
             }];
             let mut enc = device.create_encoder("test points draw");
             let draw = if points {
-                GpuEncoder::depth_msaa_draw_points(&pipeline, &bindings, vertex_count, 1)
+                crate::Draw::new(&pipeline, &bindings, vertex_count, 1)
+                    .primitive(crate::GpuPrimitiveType::Point)
             } else {
-                GpuEncoder::depth_msaa_draw(&pipeline, &bindings, vertex_count, 1)
+                crate::Draw::new(&pipeline, &bindings, vertex_count, 1)
             };
-            enc.draw_instanced_depth_batch(
-                &target,
-                &depth,
-                &depth_stencil,
+            enc.draw(
+                &crate::DrawPass::color(&target, crate::GpuLoadAction::Clear).depth(
+                    &depth,
+                    &depth_stencil,
+                    crate::GpuLoadAction::Clear,
+                    crate::DepthStore::Store,
+                ),
                 std::slice::from_ref(&draw),
-                crate::GpuLoadAction::Clear,
-                crate::GpuLoadAction::Clear,
                 "test points batch",
             );
             enc.commit_and_wait().expect("GPU work completes");
@@ -3734,18 +3134,19 @@ mod tests {
             let depth = texture(crate::GpuTextureFormat::Depth32Float, "test indirect depth");
             let args = device.create_buffer(8 * 4, BufferUse::Upload);
             let mut enc = device.create_encoder("test indirect draw");
-            let mut draw = GpuEncoder::depth_msaa_draw(&pipeline, &[], 3, 1);
+            let mut draw = crate::Draw::new(&pipeline, &[], 3, 1);
             if let Some(vertices) = indirect_vertices {
                 write_args(&mut enc, &args, vertices);
                 draw = draw.indirect(&args, 16);
             }
-            enc.draw_instanced_depth_batch(
-                &target,
-                &depth,
-                &depth_stencil,
+            enc.draw(
+                &crate::DrawPass::color(&target, crate::GpuLoadAction::Clear).depth(
+                    &depth,
+                    &depth_stencil,
+                    crate::GpuLoadAction::Clear,
+                    crate::DepthStore::Store,
+                ),
                 std::slice::from_ref(&draw),
-                crate::GpuLoadAction::Clear,
-                crate::GpuLoadAction::Clear,
                 "test indirect draw",
             );
             let readback = device.create_buffer(64 * 64 * 4, BufferUse::Upload);
@@ -3773,456 +3174,5 @@ mod tests {
             "GPU-written count 6 draws both triangles"
         );
         assert_eq!(red_pixels(Some(0)), 0, "GPU-written count 0 draws nothing");
-    }
-}
-
-fn convert_load_action(la: crate::GpuLoadAction) -> MTLLoadAction {
-    match la {
-        crate::GpuLoadAction::Clear => MTLLoadAction::Clear,
-        crate::GpuLoadAction::Load => MTLLoadAction::Load,
-        crate::GpuLoadAction::DontCare => MTLLoadAction::DontCare,
-    }
-}
-
-/// Apply bindings for a fullscreen-triangle draw: buffer→fragment only, texture/sampler
-/// on both stages (vertex may sample too, Metal ignores unused bindings).
-fn apply_bindings_draw_fullscreen(
-    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-    pipeline: &GpuRenderPipeline,
-    bindings: &[GpuBinding],
-) {
-    let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
-
-    for binding in bindings {
-        match binding {
-            GpuBinding::Buffer {
-                binding: b,
-                buffer,
-                offset,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                unsafe {
-                    enc.setFragmentBuffer_offset_atIndex(
-                        Some(&buffer.raw),
-                        *offset as usize,
-                        slot.metal_index as usize,
-                    );
-                }
-            }
-            GpuBinding::Texture {
-                binding: b,
-                texture,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                debug_check_write_usage(slot, texture, &pipeline.label);
-                unsafe {
-                    enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
-                    enc.setFragmentTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
-                }
-            }
-            GpuBinding::Sampler {
-                binding: b,
-                sampler,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                unsafe {
-                    enc.setVertexSamplerState_atIndex(
-                        Some(&sampler.raw),
-                        slot.metal_index as usize,
-                    );
-                    enc.setFragmentSamplerState_atIndex(
-                        Some(&sampler.raw),
-                        slot.metal_index as usize,
-                    );
-                }
-            }
-            GpuBinding::Bytes { binding: b, data } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                unsafe {
-                    enc.setFragmentBytes_length_atIndex(
-                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
-                        data.len(),
-                        slot.metal_index as usize,
-                    );
-                }
-            }
-        }
-    }
-
-    declare_render_resource_usage(enc, bindings);
-
-    if pipeline.needs_sizes_buffer {
-        bind_sizes_buffer_render(
-            enc,
-            pipeline,
-            &buffer_sizes,
-            buffer_sizes_len,
-            RenderStages::Fragment,
-        );
-    }
-}
-
-/// Apply bindings on both vertex and fragment stages (used for draw_instanced et al.).
-fn apply_bindings_draw_both_stages(
-    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-    pipeline: &GpuRenderPipeline,
-    bindings: &[GpuBinding],
-) {
-    let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
-
-    for binding in bindings {
-        match binding {
-            GpuBinding::Buffer {
-                binding: b,
-                buffer,
-                offset,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                unsafe {
-                    enc.setVertexBuffer_offset_atIndex(
-                        Some(&buffer.raw),
-                        *offset as usize,
-                        slot.metal_index as usize,
-                    );
-                    enc.setFragmentBuffer_offset_atIndex(
-                        Some(&buffer.raw),
-                        *offset as usize,
-                        slot.metal_index as usize,
-                    );
-                }
-            }
-            GpuBinding::Texture {
-                binding: b,
-                texture,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                debug_check_write_usage(slot, texture, &pipeline.label);
-                unsafe {
-                    enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
-                    enc.setFragmentTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
-                }
-            }
-            GpuBinding::Sampler {
-                binding: b,
-                sampler,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                unsafe {
-                    enc.setVertexSamplerState_atIndex(
-                        Some(&sampler.raw),
-                        slot.metal_index as usize,
-                    );
-                    enc.setFragmentSamplerState_atIndex(
-                        Some(&sampler.raw),
-                        slot.metal_index as usize,
-                    );
-                }
-            }
-            GpuBinding::Bytes { binding: b, data } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                unsafe {
-                    enc.setVertexBytes_length_atIndex(
-                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
-                        data.len(),
-                        slot.metal_index as usize,
-                    );
-                    enc.setFragmentBytes_length_atIndex(
-                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
-                        data.len(),
-                        slot.metal_index as usize,
-                    );
-                }
-            }
-        }
-    }
-
-    declare_render_resource_usage(enc, bindings);
-
-    if pipeline.needs_sizes_buffer {
-        bind_sizes_buffer_render(
-            enc,
-            pipeline,
-            &buffer_sizes,
-            buffer_sizes_len,
-            RenderStages::Both,
-        );
-    }
-}
-
-/// Declare resource usage for a render pass (mirrors the dispatch path's
-/// belt-and-suspenders coherence declaration). The render-pass binding path
-/// never called `useResource`, so a bound texture/buffer had no declared
-/// usage on this pass — one half of the BUG-l7t4 sub-question (does
-/// retention-via-render-path matter?). Cheap no-op-ish Metal calls; kept
-/// regardless of the answer because the declaration is correct.
-fn apply_bindings_draw_both_stages_cached(
-    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-    pipeline: &GpuRenderPipeline,
-    bindings: &[GpuBinding],
-    cache: &mut BatchRenderCache,
-) {
-    let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
-
-    for binding in bindings {
-        match binding {
-            GpuBinding::Buffer {
-                binding: b,
-                buffer,
-                offset,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                let idx = slot.metal_index as usize;
-                let id = buffer_identity(&buffer.raw);
-                if idx >= 32 || cache.buffers[idx] != (id, *offset) {
-                    unsafe {
-                        enc.setVertexBuffer_offset_atIndex(
-                            Some(&buffer.raw),
-                            *offset as usize,
-                            slot.metal_index as usize,
-                        );
-                        enc.setFragmentBuffer_offset_atIndex(
-                            Some(&buffer.raw),
-                            *offset as usize,
-                            slot.metal_index as usize,
-                        );
-                        let () = msg_send![
-                            enc,
-                            useResource: &*buffer.raw,
-                            usage: objc2_metal::MTLResourceUsage::Read
-                        ];
-                    }
-                    if idx < 32 {
-                        cache.buffers[idx] = (id, *offset);
-                    }
-                }
-            }
-            GpuBinding::Texture {
-                binding: b,
-                texture,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                debug_check_write_usage(slot, texture, &pipeline.label);
-                let idx = slot.metal_index as usize;
-                let id = texture_identity(&texture.raw);
-                if idx >= 64 || cache.textures[idx] != id {
-                    unsafe {
-                        enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
-                        enc.setFragmentTexture_atIndex(
-                            Some(&texture.raw),
-                            slot.metal_index as usize,
-                        );
-                        let () = msg_send![
-                            enc,
-                            useResource: &*texture.raw,
-                            usage: objc2_metal::MTLResourceUsage::Read
-                        ];
-                    }
-                    if idx < 64 {
-                        cache.textures[idx] = id;
-                    }
-                }
-            }
-            GpuBinding::Sampler {
-                binding: b,
-                sampler,
-            } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                let idx = slot.metal_index as usize;
-                let id = sampler_identity(&sampler.raw);
-                if idx >= 32 || cache.samplers[idx] != id {
-                    unsafe {
-                        enc.setVertexSamplerState_atIndex(
-                            Some(&sampler.raw),
-                            slot.metal_index as usize,
-                        );
-                        enc.setFragmentSamplerState_atIndex(
-                            Some(&sampler.raw),
-                            slot.metal_index as usize,
-                        );
-                    }
-                    if idx < 32 {
-                        cache.samplers[idx] = id;
-                    }
-                }
-            }
-            GpuBinding::Bytes { binding: b, data } => {
-                let Some(slot) = pipeline.slot_map.get(*b) else {
-                    continue;
-                };
-                let idx = slot.metal_index as usize;
-                unsafe {
-                    enc.setVertexBytes_length_atIndex(
-                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
-                        data.len(),
-                        slot.metal_index as usize,
-                    );
-                    enc.setFragmentBytes_length_atIndex(
-                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
-                        data.len(),
-                        slot.metal_index as usize,
-                    );
-                }
-                if idx < 32 {
-                    cache.buffers[idx] = (std::ptr::null(), 0);
-                }
-            }
-        }
-    }
-
-    if pipeline.needs_sizes_buffer {
-        bind_sizes_buffer_render(
-            enc,
-            pipeline,
-            &buffer_sizes,
-            buffer_sizes_len,
-            RenderStages::Both,
-        );
-        let slot_idx = pipeline
-            .slot_map
-            .get(SIZES_BUFFER_BINDING)
-            .expect("sizes buffer slot missing in render pipeline despite needs_sizes_buffer")
-            .metal_index as usize;
-        if slot_idx < 32 {
-            cache.buffers[slot_idx] = (std::ptr::null(), 0);
-        }
-    }
-}
-
-fn declare_render_resource_usage(
-    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-    bindings: &[GpuBinding],
-) {
-    for binding in bindings {
-        match binding {
-            GpuBinding::Buffer { buffer, .. } => unsafe {
-                let () = msg_send![enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
-            },
-            GpuBinding::Texture { texture, .. } => unsafe {
-                let () = msg_send![enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
-            },
-            GpuBinding::Bytes { .. } | GpuBinding::Sampler { .. } => {} // not MTLResource
-        }
-    }
-}
-
-/// Which stage(s) receive the naga sizes buffer. Mirrors the stage set that
-/// the corresponding `apply_bindings_draw_*` helper binds resources onto —
-/// fragment-only for the fullscreen path (trivial VS has no bindings),
-/// vertex+fragment for everything else.
-#[derive(Copy, Clone)]
-enum RenderStages {
-    Fragment,
-    Both,
-}
-
-/// Walk a binding list and build the naga "sizes buffer" — a `u32` array
-/// indexed by Metal buffer slot where entry `i` holds the byte-size of the
-/// buffer bound at slot `i`. SPIRV-Cross-generated MSL reads this to resolve
-/// `arrayLength()` on runtime-sized storage arrays.
-///
-/// Returns `(sizes, len)`; `len` is one past the highest slot index that
-/// received a buffer, so only the populated prefix is uploaded.
-pub(super) fn collect_buffer_sizes(
-    slot_map: &SlotMap,
-    bindings: &[GpuBinding],
-) -> ([u32; MAX_BUFFER_SLOTS], usize) {
-    let mut sizes = [0u32; MAX_BUFFER_SLOTS];
-    let mut len: usize = 0;
-    for binding in bindings {
-        if let GpuBinding::Buffer {
-            binding: b, buffer, ..
-        } = binding
-        {
-            let Some(slot) = slot_map.get(*b) else {
-                continue;
-            };
-            let idx = slot.metal_index as usize;
-            if idx < MAX_BUFFER_SLOTS {
-                sizes[idx] = buffer.size as u32;
-                if idx >= len {
-                    len = idx + 1;
-                }
-            }
-        }
-    }
-    (sizes, len)
-}
-
-/// Upload the sizes buffer as inline bytes to one or both render stages.
-/// Without this the shader's `arrayLength()` reads an unbound buffer slot —
-/// on Apple Silicon that typically returns 0, which silently collapses any
-/// `n < 2` early-out branch. See `spectrum_line.wgsl`'s `weighting_db()`
-/// for the case that surfaced this bug (weighted curves went flat once the
-/// LUT moved off the per-pixel biquad onto a runtime-sized array).
-fn bind_sizes_buffer_render(
-    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-    pipeline: &GpuRenderPipeline,
-    sizes: &[u32; MAX_BUFFER_SLOTS],
-    len: usize,
-    stages: RenderStages,
-) {
-    let slot_idx = pipeline
-        .slot_map
-        .get(SIZES_BUFFER_BINDING)
-        .expect("sizes buffer slot missing in render pipeline despite needs_sizes_buffer")
-        .metal_index as usize;
-    let ptr = NonNull::new(sizes.as_ptr() as *mut c_void).unwrap();
-    let byte_len = len * 4;
-    unsafe {
-        match stages {
-            RenderStages::Fragment => {
-                enc.setFragmentBytes_length_atIndex(ptr, byte_len, slot_idx);
-            }
-            RenderStages::Both => {
-                enc.setVertexBytes_length_atIndex(ptr, byte_len, slot_idx);
-                enc.setFragmentBytes_length_atIndex(ptr, byte_len, slot_idx);
-            }
-        }
-    }
-}
-
-/// Debug builds: a texture bound where the shader writes must carry
-/// shader-write usage. Without it the write is undefined on Metal unless the
-/// debug layer is on (BUG-1bp58, RT soft AO history written read-only).
-#[inline]
-fn debug_check_write_usage(slot: &super::Slot, texture: &GpuTexture, pipeline: &str) {
-    if cfg!(debug_assertions) && slot.writes {
-        use objc2_metal::{MTLResource, MTLTexture};
-        let usage = texture.raw.usage();
-        debug_assert!(
-            usage.contains(objc2_metal::MTLTextureUsage::ShaderWrite),
-            "[GPU] pipeline '{pipeline}' writes texture '{}' ({}x{} {:?}) at binding slot {} but its usage {:#x} lacks shader write",
-            texture
-                .raw
-                .label()
-                .map_or_else(String::new, |l| l.to_string()),
-            texture.width,
-            texture.height,
-            texture.format,
-            slot.metal_index,
-            usage.0,
-        );
     }
 }

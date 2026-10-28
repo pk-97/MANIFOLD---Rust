@@ -144,30 +144,31 @@ impl FoamPass {
                     0.0,
                 ],
             };
-            encoder.draw_instanced(
-                pipeline,
-                mask,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&uniforms),
+            encoder.draw(
+                &manifold_gpu::DrawPass::color(mask, load),
+                &[manifold_gpu::Draw::counted(
+                    pipeline,
+                    &[
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&uniforms),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: particles,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: view.hits,
+                            offset: 0,
+                        },
+                    ],
+                    DrawCount::Direct {
+                        vertices,
+                        instances: 1,
                     },
-                    GpuBinding::Buffer {
-                        binding: 1,
-                        buffer: particles,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 2,
-                        buffer: view.hits,
-                        offset: 0,
-                    },
-                ],
-                DrawCount::Direct {
-                    vertices,
-                    instances: 1,
-                },
-                load,
+                )],
                 "node.render_scene foam pass",
             );
             load = GpuLoadAction::Load;

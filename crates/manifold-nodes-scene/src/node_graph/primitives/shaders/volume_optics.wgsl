@@ -56,8 +56,8 @@ struct Out {
     let origin = near_h.xyz / near_h.w;
     let opaque_distance = length(opaque_h.xyz / opaque_h.w - origin);
     let distance = min(length(in.world - origin), opaque_distance);
-    // manifold-gpu raster winding: the camera-facing boundary is !front.
-    return select(-distance, distance, front) * in.orientation * u.parameters.x;
+    // Draws wind front faces counter-clockwise: the camera-facing boundary is front.
+    return select(distance, -distance, front) * in.orientation * u.parameters.x;
 }
 @fragment fn fs_nearest(in: Out) {
     if u.appearance.x * in.weight <= 0.0 { discard; }

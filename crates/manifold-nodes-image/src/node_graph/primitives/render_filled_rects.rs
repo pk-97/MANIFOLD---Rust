@@ -201,25 +201,26 @@ impl Primitive for RenderFilledRects {
             _pad: [0; 3],
         };
 
-        gpu.native_enc.draw_instanced(
-            pipeline,
-            out_tex,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
+        gpu.native_enc.draw(
+            &manifold_gpu::DrawPass::color(out_tex, GpuLoadAction::Load),
+            &[manifold_gpu::Draw::counted(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: rects_buf,
+                        offset: 0,
+                    },
+                ],
+                manifold_gpu::DrawCount::Direct {
+                    vertices: 6,
+                    instances: rect_count,
                 },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: rects_buf,
-                    offset: 0,
-                },
-            ],
-            manifold_gpu::DrawCount::Direct {
-                vertices: 6,
-                instances: rect_count,
-            },
-            GpuLoadAction::Load,
+            )],
             "node.draw_rectangles",
         );
     }
