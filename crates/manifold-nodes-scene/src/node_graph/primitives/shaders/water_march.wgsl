@@ -85,10 +85,11 @@ fn bspline_dw(t: f32) -> vec4<f32> {
     );
 }
 
-// Gradient of the cubic B-spline field (prototype `normal_cubic`,
-// levelset_proto/src/main.rs:134-156), in field units per metre. The 4 x 4 x 4
-// nodes lie in the home's tile or its neighbours, so the table is walked once.
-fn field_gradient_cubic(p: vec3<f32>) -> vec3<f32> {
+// The cubic B-spline field at p: its gradient in field units per metre (xyz,
+// prototype `normal_cubic`, levelset_proto/src/main.rs:134-156) and its value
+// (w). The 4 x 4 x 4 nodes lie in the home's tile or its neighbours, so the
+// table is walked once.
+fn field_cubic(p: vec3<f32>) -> vec4<f32> {
     let g = field_node_coord(p, u.cell.x);
     field_enter(g);
     let fl = floor(g);
@@ -103,6 +104,7 @@ fn field_gradient_cubic(p: vec3<f32>) -> vec3<f32> {
     var gx = 0.0;
     var gy = 0.0;
     var gz = 0.0;
+    var value = 0.0;
     for (var c = 0; c < 4; c++) {
         for (var b = 0; b < 4; b++) {
             for (var a = 0; a < 4; a++) {
@@ -110,10 +112,53 @@ fn field_gradient_cubic(p: vec3<f32>) -> vec3<f32> {
                 gx += v * dx[a] * wy[b] * wz[c];
                 gy += v * wx[a] * dy[b] * wz[c];
                 gz += v * wx[a] * wy[b] * dz[c];
+                value += v * wx[a] * wy[b] * wz[c];
             }
         }
     }
-    return vec3<f32>(gx, gy, gz) / u.cell.x;
+    return vec4<f32>(vec3<f32>(gx, gy, gz) / u.cell.x, value);
+}
+
+// Newton steps along the ray from the trilinear crossing.
+const CUBIC_REFINES: u32 = 3u;
+// A Newton step moves at most this many cells, so it stays on this surface.
+const CUBIC_STEP_CELLS: f32 = 0.5;
+// The refined point is kept when the cubic field there is this near zero.
+const CUBIC_HIT_CELLS: f32 = 0.02;
+
+struct CubicHit {
+    t: f32,
+    gradient: vec3<f32>,
+}
+
+// The hit on the cubic B-spline field the normals come from, near the
+// trilinear crossing at `t`: the trilinear field is only continuous, so its
+// zero set bends at every node plane and the surface shows the grid; the
+// cubic one is smooth to its second derivative. Where the cubic field has no
+// crossing within reach (a sheet thinner than its kernel), the trilinear
+// crossing stays, with the cubic gradient there; so does it where the cubic
+// crossing lies past `t1`, the ray's end at the opaque scene.
+fn cubic_hit(o: vec3<f32>, d: vec3<f32>, t: f32, t1: f32) -> CubicHit {
+    let cell = u.cell.x;
+    var at = t;
+    var f = field_cubic(o + d * t);
+    let first = f;
+    for (var k = 0u; k < CUBIC_REFINES; k++) {
+        if abs(f.w) < CUBIC_HIT_CELLS * cell && at <= t1 {
+            return CubicHit(at, f.xyz);
+        }
+        // Entering water the field falls along the ray.
+        let slope = dot(f.xyz, d);
+        if !(slope < 0.0) {
+            break;
+        }
+        at += clamp(-f.w / slope, -CUBIC_STEP_CELLS * cell, CUBIC_STEP_CELLS * cell);
+        f = field_cubic(o + d * at);
+    }
+    if abs(f.w) < CUBIC_HIT_CELLS * cell && abs(at - t) < CUBIC_STEP_CELLS * cell && at <= t1 {
+        return CubicHit(at, f.xyz);
+    }
+    return CubicHit(t, first.xyz);
 }
 
 @compute @workgroup_size(8, 8)
@@ -164,12 +209,14 @@ fn cs_march(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if t_hit < 0.0 { return; }
     let cell = u.cell.x;
+    let surface = cubic_hit(o, d, t_hit, t1);
+    t_hit = surface.t;
 
     let p = o + d * t_hit;
     let world = (u.local_to_world * vec4<f32>(p, 1.0)).xyz;
     let clip = u.view_proj * vec4<f32>(world, 1.0);
     let depth = clip.z / clip.w;
-    let n_local = field_gradient_cubic(p);
+    let n_local = surface.gradient;
     let n_world = normalize((transpose(u.world_to_local) * vec4<f32>(n_local, 0.0)).xyz);
 
     // Thickness along the view ray: step through the water until the field
