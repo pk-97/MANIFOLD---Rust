@@ -525,7 +525,7 @@ impl Show {
     /// One frame 1/60 s on. Metal's autoreleased objects drain per frame, as
     /// the content thread drains them.
     pub fn frame(&mut self, profile: bool) -> Frame {
-        objc2::rc::autoreleasepool(|_| self.frame_inner(profile))
+        manifold_gpu::autorelease_scope(|| self.frame_inner(profile))
     }
 
     fn frame_inner(&mut self, profile: bool) -> Frame {
@@ -663,7 +663,7 @@ impl Show {
     }
 
     pub fn readback(&self) -> Vec<u8> {
-        objc2::rc::autoreleasepool(|_| {
+        manifold_gpu::autorelease_scope(|| {
             readback_srgb_rgba8(&self.device, &self.target.texture, self.size.0, self.size.1)
         })
     }

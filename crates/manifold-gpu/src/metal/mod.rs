@@ -72,6 +72,13 @@ pub use types::{
 /// Reserved WGSL "binding" index for the naga sizes buffer.
 pub const SIZES_BUFFER_BINDING: u32 = 0xFFFF;
 
+/// Runs `f` inside an autorelease pool, so the Metal objects one frame
+/// autoreleases are freed at its end instead of piling up until the thread
+/// exits.
+pub fn autorelease_scope<R>(f: impl FnOnce() -> R) -> R {
+    objc2::rc::autoreleasepool(|_| f())
+}
+
 // ─── Slot mapping ─────────────────────────────────────────────────────
 
 /// Maps WGSL @binding(N) to Metal argument indices.

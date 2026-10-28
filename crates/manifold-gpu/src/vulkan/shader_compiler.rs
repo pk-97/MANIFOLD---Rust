@@ -31,7 +31,6 @@ pub(super) fn compile_wgsl_to_spirv_compute(
     wgsl_source: &str,
     entry_point: &str,
     label: &str,
-    use_half: bool,
 ) -> (SlotMap, Vec<u32>, [u32; 3]) {
     let (module, info) = parse_and_validate_wgsl(wgsl_source, label);
     let slot_map = build_slot_map(&module, entry_point);
@@ -43,7 +42,7 @@ pub(super) fn compile_wgsl_to_spirv_compute(
         .unwrap_or_else(|| panic!("{label}: entry point '{entry_point}' not found in module"))
         .workgroup_size;
 
-    let spirv = compile_to_optimized_spirv(&module, &info, label, use_half);
+    let spirv = compile_to_optimized_spirv(&module, &info, label);
     (slot_map, spirv, workgroup_size)
 }
 
@@ -63,9 +62,7 @@ pub(super) fn compile_wgsl_to_spirv_render(
 ) -> (SlotMap, Vec<u32>) {
     let (module, info) = parse_and_validate_wgsl(wgsl_source, label);
     let slot_map = build_slot_map_render(&module, vs_entry, fs_entry);
-    // Render pipelines don't get the f32→f16 relax pass today — matches
-    // the Metal backend's `compile_wgsl_to_msl_render(..., use_half=false)`.
-    let spirv = compile_to_optimized_spirv(&module, &info, label, false);
+    let spirv = compile_to_optimized_spirv(&module, &info, label);
     (slot_map, spirv)
 }
 

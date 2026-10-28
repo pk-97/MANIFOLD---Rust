@@ -11,11 +11,13 @@ log = { workspace = true }
 ahash = { workspace = true }
 crossbeam-channel = "0.5"
 
+# Still-image decode for image clips (ImageRenderer) and still export. Lean
+# format set — the common drop-on-timeline cases — rather than the full
+# default set.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 manifold-gpu = { path = "../manifold-gpu" }
-# Still-image decode for image clips (ImageRenderer). Lean format set —
-# the common drop-on-timeline cases — rather than the full default set.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff"] }
 
 [build-dependencies]
 cc = "1"

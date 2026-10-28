@@ -1,0 +1,5 @@
+# One compiler for the Mac, the Linux VM and the Linux machine, so new lints
+# never break `-D warnings` on one side only. Bump it everywhere at once.
+[toolchain]
+channel = "1.94.0"
+components = ["clippy", "rustfmt"]

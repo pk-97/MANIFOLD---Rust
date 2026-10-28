@@ -703,35 +703,14 @@ impl GpuDevice {
         self.render_cache.lock().unwrap().len()
     }
 
-    /// Create a compute pipeline from WGSL source (full f32 precision).
+    /// Create a compute pipeline from WGSL source.
     pub fn create_compute_pipeline(
         &self,
         wgsl_source: &str,
         entry_point: &str,
         label: &str,
     ) -> GpuComputePipeline {
-        self.create_compute_pipeline_inner(wgsl_source, entry_point, label, false)
-    }
-
-    /// Create a compute pipeline with half-precision (f16) ALU optimization.
-    pub fn create_compute_pipeline_half(
-        &self,
-        wgsl_source: &str,
-        entry_point: &str,
-        label: &str,
-    ) -> GpuComputePipeline {
-        self.create_compute_pipeline_inner(wgsl_source, entry_point, label, true)
-    }
-
-    /// Core compute pipeline creation with configurable half-precision.
-    fn create_compute_pipeline_inner(
-        &self,
-        wgsl_source: &str,
-        entry_point: &str,
-        label: &str,
-        use_half: bool,
-    ) -> GpuComputePipeline {
-        let hash = archive::pipeline_hash(wgsl_source, entry_point, use_half);
+        let hash = archive::pipeline_hash(wgsl_source, entry_point);
         if let Some(cached) = self.compute_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -758,7 +737,7 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result = compile_wgsl_to_msl(wgsl_source, entry_point, label, use_half);
+                let result = compile_wgsl_to_msl(wgsl_source, entry_point, label);
 
                 // Store in MSL cache
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
@@ -2082,25 +2061,6 @@ impl GpuDevice {
             mtl_desc.setSampleCount(1);
         }
         mtl_desc
-    }
-
-    /// Create a texture with memoryless storage (Apple Silicon only).
-    pub fn create_texture_memoryless(&self, desc: &GpuTextureDesc) -> GpuTexture {
-        let mtl_desc = Self::build_mtl_texture_desc(desc);
-        unsafe { mtl_desc.setStorageMode(MTLStorageMode::Memoryless) };
-        let raw = self
-            .device
-            .newTextureWithDescriptor(&mtl_desc)
-            .expect("Metal: memoryless texture allocation failed — GPU memory exhausted");
-        GpuTexture {
-            raw,
-            width: desc.width,
-            height: desc.height,
-            depth: desc.depth,
-            format: desc.format,
-            retire: self.retirement_mark(),
-            residency: None,
-        }
     }
 
     /// Create a memoryless multisample texture for MSAA render passes.

@@ -20,6 +20,8 @@ const DEFAULT_DEMUCS_MODEL: &str = "htdemucs";
 const DEFAULT_DEMUCS_SHIFTS: &str = "1";
 const DEFAULT_DEMUCS_OVERLAP: &str = "0.25";
 const DEFAULT_DEMUCS_JOBS: &str = "0";
+/// The pipeline picks the GPU itself: MPS on the Mac, CUDA elsewhere, then CPU.
+const DEFAULT_DEMUCS_DEVICE: &str = "auto";
 
 // ─── PercussionPipelineInvocation ───
 
@@ -335,7 +337,7 @@ fn build_settings_arguments(
         &settings.demucs.overlap.to_string(),
     ));
     args.push("--demucs-device".to_string());
-    args.push(env_or("MANIFOLD_DEMUCS_DEVICE", default_demucs_device()));
+    args.push(env_or("MANIFOLD_DEMUCS_DEVICE", DEFAULT_DEMUCS_DEVICE));
     args.push("--demucs-jobs".to_string());
     args.push(env_or(
         "MANIFOLD_DEMUCS_JOBS",
@@ -391,7 +393,7 @@ fn append_demucs_defaults(args: &mut Vec<String>) {
     args.push("--demucs-overlap".to_string());
     args.push(env_or("MANIFOLD_DEMUCS_OVERLAP", DEFAULT_DEMUCS_OVERLAP));
     args.push("--demucs-device".to_string());
-    args.push(env_or("MANIFOLD_DEMUCS_DEVICE", default_demucs_device()));
+    args.push(env_or("MANIFOLD_DEMUCS_DEVICE", DEFAULT_DEMUCS_DEVICE));
     args.push("--demucs-jobs".to_string());
     args.push(env_or("MANIFOLD_DEMUCS_JOBS", DEFAULT_DEMUCS_JOBS));
 
@@ -433,17 +435,6 @@ fn platform_folder() -> &'static str {
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         "macOS"
-    }
-}
-
-fn default_demucs_device() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "mps"
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "cpu"
     }
 }
 

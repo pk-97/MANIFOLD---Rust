@@ -326,7 +326,7 @@ pub struct Application {
     pub(crate) timeline_marker_scratch: Vec<(f32, manifold_ui::node::Color32)>,
     pub(crate) scale_factor: f64,
     /// True while a display retarget is in flight — skip all potentially-
-    /// blocking surface operations (next_drawable, commit_and_wait_scheduled)
+    /// blocking surface operations (next_drawable and presents)
     /// until the UiDisplayLink confirms it's alive on the new display.
     /// Prevents hard locks when GPU surfaces target stale displays during
     /// transitions (e.g., MacBook → 4K TV at 120Hz).
@@ -1957,13 +1957,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Modifier tracking ──────────────────────────────────
             WindowEvent::ModifiersChanged(mods) => {
-                let state = mods.state();
-                self.input_modifiers(Modifiers {
-                    shift: state.shift_key(),
-                    ctrl: state.control_key(),
-                    alt: state.alt_key(),
-                    command: state.super_key(),
-                });
+                self.input_modifiers(app_modifiers(mods.state()));
             }
 
             // ── Keyboard input ─────────────────────────────────────
@@ -2252,8 +2246,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let any_display_changed = self.update_edr_headroom();
             if any_display_changed {
                 // A display link was retargeted to a new display. Skip all
-                // potentially-blocking surface operations (next_drawable,
-                // commit_and_wait_scheduled) until the display link confirms
+                // potentially-blocking surface operations (next_drawable and
+                // presents) until the display link confirms
                 // it's alive on the new display. This prevents hard locks when
                 // GPU surfaces target stale displays (e.g., MacBook → 4K TV).
                 self.display_retarget_pending = true;
@@ -2499,5 +2493,22 @@ impl Application {
         // A new target holds nothing; with no composite key on record the
         // next pulse composites it whole.
         ws.editor_frame.last_composite = None;
+    }
+}
+
+/// The app's `command` modifier is the platform's shortcut key: Cmd on the
+/// Mac, Ctrl elsewhere. Off the Mac the Super key takes the `ctrl` slot, so
+/// `command` and `ctrl` stay two separate keys everywhere.
+fn app_modifiers(state: winit::keyboard::ModifiersState) -> Modifiers {
+    let (command, ctrl) = if cfg!(target_os = "macos") {
+        (state.super_key(), state.control_key())
+    } else {
+        (state.control_key(), state.super_key())
+    };
+    Modifiers {
+        shift: state.shift_key(),
+        ctrl,
+        alt: state.alt_key(),
+        command,
     }
 }

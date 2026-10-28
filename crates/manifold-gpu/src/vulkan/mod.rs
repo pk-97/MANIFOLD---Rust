@@ -44,6 +44,11 @@ pub use types::{GpuBuffer, GpuComputePipeline, GpuRenderPipeline, GpuSampler, Gp
 /// binding that can't collide with real user-declared @binding(N)s.
 pub const SIZES_BUFFER_BINDING: u32 = 0xFFFF;
 
+/// Vulkan autoreleases nothing, so there is no per-frame pool to drain.
+pub fn autorelease_scope<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
+
 /// Descriptor type kinds that a Vulkan binding can take. Mirrors the set
 /// of `VkDescriptorType` values we actually emit (uniform buffer, storage
 /// buffer, sampled image, storage image, sampler).

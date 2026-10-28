@@ -204,9 +204,6 @@ private:
     bool _solveLinearSystem(SparseMatrixd &matrix, std::vector<double> &rhs, 
                             std::vector<double> &soln);
 
-    bool _solveLinearSystemJacobi(SparseMatrixd &matrix, std::vector<double> &b, 
-                                  std::vector<double> &x, int *iterations, double *error);
-
     void _applyPressureToVelocityFieldMT(FluidMaterialGrid &mgrid, int dir);
     void _applyPressureToVelocityFieldThread(int startidx, int endidx,
                                              FluidMaterialGrid *mgrid, int dir);

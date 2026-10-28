@@ -233,7 +233,7 @@ pub fn run(args: &[String]) -> ! {
             let t0 = std::time::Instant::now();
             let sink_buf = writer_dev.create_buffer_shared(4096);
             for i in 1..=frames {
-                objc2::rc::autoreleasepool(|_| {
+                manifold_gpu::autorelease_scope(|| {
                     let slot = ((i - 1) % SURFACE_COUNT as u64) as usize;
                     // Contract wait: the frame that last wrote this slot must
                     // be GPU-complete. Legacy = only this; fenced = plus the
@@ -379,7 +379,7 @@ pub fn run(args: &[String]) -> ! {
             };
             let mut n = 0u64;
             while !stop.load(Ordering::Acquire) {
-                objc2::rc::autoreleasepool(|_| {
+                manifold_gpu::autorelease_scope(|| {
                     n += 1;
                     let rslot = ((n - 1) % 3) as usize;
                     loop {

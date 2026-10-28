@@ -60,14 +60,6 @@ pub fn denoiser_available() -> bool {
     AnyClass::get(c"MTLFXTemporalDenoisedScalerDescriptor").is_some()
 }
 
-/// Check if the denoised scaler is supported for the given device.
-pub fn supports_denoiser(device: &ProtocolObject<dyn MTLDevice>) -> bool {
-    if !denoiser_available() {
-        return false;
-    }
-    unsafe { MTLFXTemporalDenoisedScalerDescriptor::supportsDevice(device) }
-}
-
 // ─── Denoiser trait ───────────────────────────────────────────────────
 
 /// Backend-neutral denoiser interface, Vulkan-parity shaped (DN5).
@@ -245,17 +237,6 @@ impl MetalFxDenoisedScaler {
         unsafe {
             self.scaler.setJitterOffsetX(x);
             self.scaler.setJitterOffsetY(y);
-        }
-    }
-
-    /// Set the motion-vector scale factors. Defaults to
-    /// `(-input_width * 0.5, input_height * 0.5)` (NDC→pixels) set at
-    /// construction. Override if your motion vectors use a different
-    /// convention.
-    pub fn set_motion_vector_scale(&self, x: f32, y: f32) {
-        unsafe {
-            self.scaler.setMotionVectorScaleX(x);
-            self.scaler.setMotionVectorScaleY(y);
         }
     }
 

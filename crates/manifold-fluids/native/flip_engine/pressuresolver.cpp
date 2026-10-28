@@ -24,12 +24,6 @@ SOFTWARE.
 
 #include "pressuresolver.h"
 
-// Not currently supported for Apple systems
-// Support to be added later
-#if !__APPLE__
-    #include <omp.h>
-#endif
-
 #include "pcgsolver/pcgsolver.h"
 #include "threadutils.h"
 #include "macvelocityfield.h"
@@ -925,22 +919,15 @@ bool PressureSolver::_solveLinearSystem(SparseMatrixd &matrix, std::vector<doubl
     double estimatedError = -1.0f;
     int numIterations = 0;
 
-    bool useJacobiSolve = false;
-    if (useJacobiSolve) {
-        // Basic Jacobi Solve
-        success = _solveLinearSystemJacobi(matrix, rhs, soln, &numIterations, &estimatedError);
+    PCGSolver<double> solver;
+    solver.setSolverParameters(_pressureSolveTolerance, _maxCGIterations);
+    if (_rigidCoupling) {
+        success = solver.solveWithAdditionalMatrix(matrix, rhs, soln, estimatedError, numIterations,
+            [this](const std::vector<double> &x, std::vector<double> &y) {
+                _rigidCoupling->addRemainingMatrixProduct(x, y);
+            });
     } else {
-        // PCG Solve
-        PCGSolver<double> solver;
-        solver.setSolverParameters(_pressureSolveTolerance, _maxCGIterations);
-        if (_rigidCoupling) {
-            success = solver.solveWithAdditionalMatrix(matrix, rhs, soln, estimatedError, numIterations,
-                [this](const std::vector<double> &x, std::vector<double> &y) {
-                    _rigidCoupling->addRemainingMatrixProduct(x, y);
-                });
-        } else {
-            success = solver.solve(matrix, rhs, soln, estimatedError, numIterations);
-        }
+        success = solver.solve(matrix, rhs, soln, estimatedError, numIterations);
     }
 
     _pressureGrid->fill(0.0f);
@@ -973,109 +960,6 @@ bool PressureSolver::_solveLinearSystem(SparseMatrixd &matrix, std::vector<doubl
     _solverStatus = ss.str();
 
     return retval;
-}
-
-bool PressureSolver::_solveLinearSystemJacobi(SparseMatrixd &matrix, std::vector<double> &b, 
-                                              std::vector<double> &x, int *iterations, double *error) {
-    // Not currently supported for Apple systems
-    #if !__APPLE__
-
-        std::vector<double> next_x = x;
-
-        int numCPU = ThreadUtils::getMaxThreadCount();
-        int numthreads = (int)fmin(numCPU, x.size());
-        std::vector<int> intervals = ThreadUtils::splitRangeIntoIntervals(0, x.size(), numthreads);
-        std::vector<int> is_global_converged(numthreads, 0);
-
-        int max_iterations = 100000;
-        int num_iterations = 0;
-        float error_tolerance = 1e-6f;
-        float weight = 1.0;
-        double eps = 1e-6;
-        bool converged_condition = false;
-
-        #pragma omp parallel num_threads(numthreads)
-        {
-            FLUIDSIM_ASSERT(omp_get_num_threads() == numthreads);
-
-            int thread_id = omp_get_thread_num();
-            int startidx = intervals[thread_id];
-            int endidx = intervals[thread_id + 1];
-
-            for (int iter = 0; iter < max_iterations; iter++) {
-
-                for (int i = startidx; i < endidx; i++) {
-                    double sigma = 0.0;
-                    double diag_value = 0.0;
-                    for (size_t colidx = 0; colidx < matrix.index[i].size(); colidx++) {
-                        int j = (int)(matrix.index[i][colidx]);
-                        double value = matrix.value[i][colidx];
-                        if (j != i) {
-                            sigma += value * x[j];
-                        } else {
-                            diag_value = value;
-                        }
-                    }
-
-                    if (std::abs(diag_value) < eps ) {
-                        next_x[i] = 0.0;
-                        continue;
-                    }
-
-                    double x_value = x[i];
-                    double next_x_value = (b[i] - sigma) / diag_value;
-
-                    next_x[i] = x_value + weight * (next_x_value - x_value);
-                }
-
-                #pragma omp barrier
-
-                bool is_local_converged = true;
-                double local_max_error = 0.0;
-                for (int i = startidx; i < endidx; i++) {
-                    double abs_error = std::abs(next_x[i] - x[i]);
-                    if (abs_error > error_tolerance) {
-                        local_max_error = std::max(abs_error, local_max_error);
-                        is_local_converged = false;
-                    }
-                }
-                is_global_converged[thread_id] = is_local_converged;
-
-                #pragma omp barrier
-
-                if (thread_id == 0) {
-                    bool is_converged = true;
-                    for (size_t i = 0; i < is_global_converged.size(); i++) {
-                        if (!is_global_converged[i]) {
-                            is_converged = false;
-                            break;
-                        }
-                    }
-                    converged_condition = is_converged;
-
-                    x = next_x;
-                    num_iterations += 1;
-                }
-
-                #pragma omp barrier
-
-                if (converged_condition) {
-                    break;
-                }
-            }
-
-        }
-
-        *iterations = num_iterations;
-        *error = -1.0f;
-
-        return true;
-
-    #else
-
-        return false;
-
-    #endif
 }
 
 void PressureSolver::_applyPressureToVelocityFieldMT(FluidMaterialGrid &mgrid, int dir) {

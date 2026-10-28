@@ -109,16 +109,10 @@ pub(crate) fn rebind_vertex_output_as_point_size(
 ///   1. zero workgroup memory from every invocation (`workgroup_zeroing`)
 ///   2. naga Module → SPIR-V (via `naga::back::spv`)
 ///   3. SPIR-V → optimised SPIR-V (via `spirv-tools` optimiser)
-///
-/// When `use_half` is true, adds `RelaxFloatOps` + `ConvertRelaxedToHalf`
-/// passes that convert f32 ALU ops to f16 in the SPIR-V IR. On Metal,
-/// SPIRV-Cross then emits MSL `half` types (2× ALU throughput on Apple
-/// Silicon). On Vulkan, drivers consume the f16 SPIR-V directly.
 pub(crate) fn compile_to_optimized_spirv(
     module: &naga::Module,
     info: &naga::valid::ModuleInfo,
     label: &str,
-    use_half: bool,
 ) -> Vec<u32> {
     let zeroed = crate::workgroup_zeroing::with_workgroup_zeroing(module, label)
         .map(|zeroed| validate_module(zeroed, label));
@@ -134,19 +128,12 @@ pub(crate) fn compile_to_optimized_spirv(
     let spv_words = naga::back::spv::write_vec(module, info, &spv_options, None)
         .unwrap_or_else(|e| panic!("{label}: naga SPIR-V output error: {e}"));
 
-    optimize_spirv(&spv_words, label, use_half)
+    optimize_spirv(&spv_words, label)
 }
 
 /// Run `spirv-opt` optimisation passes on SPIR-V words.
 /// Falls back to unoptimised SPIR-V if optimisation fails.
-///
-/// When `use_half` is true, two additional passes are registered:
-///  - `RelaxFloatOps`: decorates all f32 results/operands with `RelaxedPrecision`
-///  - `ConvertRelaxedToHalf`: converts `RelaxedPrecision` f32 ops to f16
-///
-/// These run after standard optimisation so constant folding and DCE have
-/// already simplified the IR.
-fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
+fn optimize_spirv(spv_words: &[u32], label: &str) -> Vec<u32> {
     use spirv_tools::opt::{self, Optimizer};
 
     let mut optimizer = opt::create(None);
@@ -196,12 +183,6 @@ fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
         .register_pass(opt::Passes::CombineAccessChains)
         .register_pass(opt::Passes::CodeSinking)
         .register_pass(opt::Passes::CompactIds);
-
-    if use_half {
-        optimizer
-            .register_pass(opt::Passes::RelaxFloatOps)
-            .register_pass(opt::Passes::ConvertRelaxedToHalf);
-    }
 
     match optimizer.optimize(
         spv_words,

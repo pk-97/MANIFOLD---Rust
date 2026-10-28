@@ -102,7 +102,7 @@ const ENTRIES: [&str; 4] = ["dirty", "read_arg", "read_struct", "read_none"];
 #[test]
 fn translated_kernels_have_no_one_thread_zeroing() {
     for entry in ENTRIES {
-        let (_, msl, _, _) = compile_wgsl_to_msl(SHAPES_WGSL, entry, entry, false);
+        let (_, msl, _, _) = compile_wgsl_to_msl(SHAPES_WGSL, entry, entry);
         assert!(
             !msl.contains("spvArrayCopyFromConstantToThreadGroup("),
             "{entry}: one-thread array copy left in:\n{msl}"

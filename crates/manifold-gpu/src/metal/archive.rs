@@ -118,12 +118,11 @@ impl GpuPipelineArchive {
 /// same WGSL starts translating to different MSL (v6: slot maps
 /// record texture write access); every checkout reads
 /// its own translation.
-pub fn pipeline_hash(wgsl_source: &str, entry_point: &str, use_half: bool) -> u64 {
+pub fn pipeline_hash(wgsl_source: &str, entry_point: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     "compute-shader-v6".hash(&mut hasher);
     wgsl_source.hash(&mut hasher);
     entry_point.hash(&mut hasher);
-    use_half.hash(&mut hasher);
     hasher.finish()
 }
 

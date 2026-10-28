@@ -20,17 +20,10 @@ use spirv_cross2::compile::msl;
 
 /// Parse WGSL, introspect bindings, compile to MSL for a compute entry point.
 /// Returns (slot_map, msl_source, msl_entry_name, workgroup_size).
-///
-/// When `use_half` is true, spirv-opt applies `RelaxFloatOps` +
-/// `ConvertRelaxedToHalf` passes, converting all f32 ALU to f16 (`half`)
-/// in the generated MSL. Apple Silicon executes 2× f16 ops per cycle.
-/// Only enable for shaders without temporal accumulation or UV-precision
-/// sensitivity (e.g. bloom, blend modes — NOT fluid sim, feedback).
 pub(super) fn compile_wgsl_to_msl(
     wgsl_source: &str,
     entry_point: &str,
     label: &str,
-    use_half: bool,
 ) -> (SlotMap, String, String, [u32; 3]) {
     // Steps 1 + 2: shared — parse WGSL and run naga validation.
     let (module, info) = parse_and_validate_wgsl(wgsl_source, label);
@@ -47,7 +40,7 @@ pub(super) fn compile_wgsl_to_msl(
     let workgroup_size = module.entry_points[entry_idx].workgroup_size;
 
     // Step 5: WGSL → SPIR-V → spirv-opt → SPIRV-Cross → MSL
-    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label, use_half);
+    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label);
     let msl_source = compile_spirv_entry_to_msl(
         &optimized_spirv,
         &module,
@@ -101,7 +94,7 @@ pub(super) fn compile_wgsl_to_msl_render(
         build_slot_map_render(&module, vs_entry, fs_entry);
 
     // WGSL → SPIR-V → spirv-opt (shared) — render pipelines always use f32
-    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label, false);
+    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label);
 
     // Compile vertex and fragment entry points to MSL separately.
     // SPIRV-Cross's MSL backend emits one entry point per compile() call.
@@ -651,7 +644,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             (GRADIENT_WGSL, "gradient", 1),
             (STRUCT_ARRAY_LOCAL_WGSL, "struct-array-local", 1),
         ] {
-            let (_, msl, _, _) = compile_wgsl_to_msl(source, "cs_main", label, false);
+            let (_, msl, _, _) = compile_wgsl_to_msl(source, "cs_main", label);
             let constant_globals: Vec<&str> = msl
                 .lines()
                 .filter_map(|l| l.strip_prefix("constant "))

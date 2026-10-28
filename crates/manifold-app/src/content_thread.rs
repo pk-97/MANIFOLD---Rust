@@ -463,12 +463,7 @@ impl ContentThread {
         self.timer.wait_for_deadline();
         // Drain autoreleased ObjC Metal objects at the end of each frame,
         // preventing memory accumulation and random GC-like pauses.
-        #[cfg(target_os = "macos")]
-        objc2::rc::autoreleasepool(|_| {
-            self.tick_frame(state_tx);
-        });
-        #[cfg(not(target_os = "macos"))]
-        self.tick_frame(state_tx);
+        manifold_gpu::autorelease_scope(|| self.tick_frame(state_tx));
         false
     }
 
@@ -599,7 +594,7 @@ impl ContentThread {
     }
 
     /// Execute one content frame: tick engine, render, send state to UI.
-    /// Separated from the main loop to allow wrapping in autoreleasepool on macOS.
+    /// Separated from the main loop so it runs inside the per-frame autorelease scope.
     /// `pub(crate)` (not private): the headless
     /// `perf-soak` xtask drives frames directly (real-time paced via
     /// `self.timer.wait_for_deadline()` between calls, same as `run()`'s own

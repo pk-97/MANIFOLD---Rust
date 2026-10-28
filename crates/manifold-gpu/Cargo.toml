@@ -35,8 +35,6 @@ uuid = { workspace = true }
 
 # SPIR-V optimization (wraps Google SPIRV-Tools C++)
 spirv-tools = { version = "0.13", features = ["use-compiled-tools"] }
-# SPIR-V → MSL compilation (wraps SPIRV-Cross C) — Metal backend only.
-spirv-cross2 = { version = "0.7", default-features = false, features = ["msl"] }
 
 # Vulkan loader bindings. Opt-in via the `vulkan` feature — pure FFI loader
 # with no C deps, so enabling it costs essentially no compile time.
@@ -45,6 +43,8 @@ ash = { version = "0.38", optional = true }
 # Native Metal backend
 [target.'cfg(target_os = "macos")'.dependencies]
 raw-window-handle = "0.6"
+# SPIR-V → MSL compilation (wraps SPIRV-Cross C) — Metal backend only.
+spirv-cross2 = { version = "0.7", default-features = false, features = ["msl"] }
 
 # objc2 ecosystem — typed Metal bindings (full migration, no `metal` crate).
 objc2 = "0.6"

@@ -106,11 +106,6 @@ fn maybe_log_enqueue(kind: &str, label: &Option<String>) {
     eprintln!("{bt}");
 }
 
-/// Whether texture deferral is armed (harness prints it for log honesty).
-pub fn defer_probe_enabled() -> bool {
-    defer_frames().is_some()
-}
-
 /// Consume a texture drop: defer it if the probe is armed and the label
 /// matches, otherwise release immediately. Always takes ownership.
 pub fn drop_texture(raw: Retained<ProtocolObject<dyn MTLTexture>>) {

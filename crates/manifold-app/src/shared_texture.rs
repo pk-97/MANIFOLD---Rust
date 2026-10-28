@@ -58,8 +58,8 @@ pub struct SharedTextureBridge {
     /// Generation counter — incremented on resize so both sides detect stale textures.
     generation: AtomicU64,
     // ── Read fence (BUG-xaw4) ─────────────────────────────────────────
-    // The two GpuDevices are separate MTLDevice instances, so MTLSharedEvent
-    // cannot order the UI's reads against the content thread's writes — the
+    // The UI's reads and the content thread's writes go through different
+    // GpuDevice wrappers and queues, so nothing on the GPU orders them — the
     // fence is CPU-side atomics advanced by GPU completion handlers.
     // `reads_in_flight[slot]` counts UI reads of the slot that have been
     // encoded but not yet GPU-retired. Content's reuse wait

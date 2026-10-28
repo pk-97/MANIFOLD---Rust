@@ -3414,15 +3414,6 @@ impl GpuEncoder {
         Self::verify_buffer_completed(&committed, "commit_wait_and_continue");
     }
 
-    /// Commit and block until the GPU has scheduled (not completed) the work.
-    pub fn commit_and_wait_scheduled(mut self) {
-        self.debug_assert_lanes_closed();
-        self.end_current();
-        self.register_fault_handler();
-        self.cmd_buf.commit();
-        unsafe { self.cmd_buf.waitUntilScheduled() };
-    }
-
     /// Commit and block until the GPU has fully completed the work.
     /// Required for synchronous texture readback — a copy to a shared buffer
     /// is only readable from the CPU once the GPU reports completion.

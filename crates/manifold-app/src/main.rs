@@ -347,16 +347,9 @@ fn main() {
         session_log::flush();
     }));
 
-    // --- SIGPIPE handler (10.9) ---
-    // Prevent broken-pipe signals from killing the process (e.g. piped output).
-    #[cfg(target_os = "macos")]
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
-    }
-
     // --- Multiple instance protection (10.11) ---
-    // Hold a file lock for the lifetime of the process.
-    #[cfg(target_os = "macos")]
+    // Hold a file lock for the lifetime of the process: two instances would
+    // fight over OSC, MIDI and Art-Net.
     let _instance_lock = acquire_instance_lock();
 
     session_log::init();
@@ -654,7 +647,6 @@ fn clear_session_sentinel() {
 
 /// Acquire a file lock to prevent multiple instances.
 /// Returns the locked `File` handle — the lock is released when dropped.
-#[cfg(target_os = "macos")]
 fn acquire_instance_lock() -> std::fs::File {
     use std::io::Write;
     use std::os::unix::io::AsRawFd;

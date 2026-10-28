@@ -1165,7 +1165,7 @@ impl ContentThread {
             }
 
             #[cfg(target_os = "macos")]
-            let frame_err: Option<ExportFrameFailure> = objc2::rc::autoreleasepool(|_| {
+            let frame_err: Option<ExportFrameFailure> = manifold_gpu::autorelease_scope(|| {
                 self.export_one_frame(
                     &mut session,
                     &export_config,

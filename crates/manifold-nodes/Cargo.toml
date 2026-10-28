@@ -69,15 +69,6 @@ syn = { version = "2", features = ["full", "visit"] }
 # so a single test may acquire it more than once without deadlocking.
 parking_lot = { workspace = true }
 
-# The GPU FLIP render smoke drains Metal's autoreleased objects per frame, as the
-# content thread does (`content_thread.rs`), so host memory reads as the app's.
-# Already in the graph through manifold-gpu.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-core-text = "20"
-core-graphics = "0.23"
-core-foundation = "0.9"
-objc2 = "0.6"
-
 [[bin]]
 name = "check-presets"
 path = "src/bin/check_presets.rs"

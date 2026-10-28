@@ -63,7 +63,8 @@ smallvec = "1"
 mimalloc = "0.1"
 libc = "0.2"
 parking_lot = { workspace = true }
-arboard = "3"
+# Text clipboard; on Linux it reaches Wayland through the data-control protocol.
+arboard = { version = "3", features = ["wayland-data-control"] }
 # Graph output dump (visual inspection): 16-bit PNG encode + f16 decode.
 png = "0.18"
 half = "2"

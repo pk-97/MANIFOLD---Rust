@@ -1181,7 +1181,7 @@ fn probe(args: &Args) -> Result<(), String> {
         let (interval_ms, fence_ms) = if args.frame_clock {
             let start = Instant::now();
             ct.timer.ensure_thread_policy();
-            objc2::rc::autoreleasepool(|_| ct.tick_frame(&state_tx));
+            manifold_gpu::autorelease_scope(|| ct.tick_frame(&state_tx));
             let fence_start = Instant::now();
             ct.content_pipeline.wait_for_render_complete();
             // The live waiter may time out or wake early. Reuse the existing
