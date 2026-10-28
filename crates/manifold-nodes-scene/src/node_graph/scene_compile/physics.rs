@@ -12,7 +12,8 @@
 //!   transform inside the group. A nested group inside gets a second
 //!   transform (`body_local`) bound to the same card rows, so parts sit in the
 //!   body's frame while the drawn objects sit in the solved pose.
-//! - A Fixed body never moves, so a Collider draws where it is authored.
+//! - A Fixed body never moves, so a Collider draws where it is authored; it
+//!   still draws through its pose frame, which is how the water finds it.
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::scene_doc::{Item, ItemId, PhysicsSetting, SceneDoc};
@@ -151,13 +152,12 @@ pub(crate) fn group(b: &mut Builder<'_>, item: &Item, inner: Frame) -> Frame {
                     .iter()
                     .filter(|row| (row.applies)(&item.fields)),
             );
-            if setting == PhysicsSetting::Body {
-                return Frame {
-                    transform: Some(pose_frame(b, item, body)),
-                    ..inner
-                };
+            // Inside draws at the body's pose, Collider or Body, so the
+            // water finds the body behind every object it draws.
+            Frame {
+                transform: Some(pose_frame(b, item, body)),
+                ..inner
             }
-            inner
         }
         PhysicsPart::Member { local, .. } => {
             let body_local = b.add(item.id.as_str(), "body_local", TRANSFORM_TYPE);
