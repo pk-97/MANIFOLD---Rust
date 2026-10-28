@@ -31,7 +31,6 @@ use super::encoder::{EncoderState, GpuEncoder, MAX_BUFFER_SLOTS, collect_buffer_
 use super::types::{GpuBuffer, GpuComputePipeline};
 use crate::replay::{
     BYTES_ALIGN, GATED_RANGE_BYTES, GpuTemplateStats, MAX_KEY_BINDINGS, TemplateRanges,
-    template_chunks,
 };
 use crate::types::GpuBinding;
 
@@ -684,26 +683,7 @@ fn prepare(
     copies: u32,
     body: impl FnOnce(&mut GatedRecorder<'_>) -> Result<(), String>,
 ) -> Result<TemplateTicket, String> {
-    let executes = template_chunks(copies, at.chunk, at.singles).count() as u32;
-    let last = executes
-        .checked_sub(1)
-        .and_then(|c| c.checked_mul(at.stride))
-        .and_then(|c| c.checked_add(at.first));
-    let end = last.and_then(|l| (u64::from(l) + 1).checked_mul(GATED_RANGE_BYTES));
-    let replicated = commands
-        .checked_mul(at.chunk)
-        .filter(|&n| n <= MAX_TEMPLATE_COMMANDS);
-    if commands == 0
-        || copies == 0
-        || at.chunk == 0
-        || replicated.is_none()
-        || end.is_none_or(|end| end > at.ranges.size)
-    {
-        return Err(format!(
-            "gated template: {commands} commands, {copies} rounds by {} in {executes} executes from entry {} by {} do not fit a {}-byte range buffer",
-            at.chunk, at.first, at.stride, at.ranges.size
-        ));
-    }
+    let executes = crate::replay::template_executes(&at, commands, copies, MAX_TEMPLATE_COMMANDS)?;
     store.round.clear();
     store.stats.walks += 1;
     body(&mut GatedRecorder {

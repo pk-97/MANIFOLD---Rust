@@ -647,3 +647,103 @@ fn parity_timed_waits_retirement_and_dropped_encoders() {
     assert_eq!(Arc::strong_count(&held), 1);
     assert_no_validation_errors();
 }
+
+fn bump_bindings<'a>(counter: &'a GpuBuffer, slot: &'a [u8]) -> [GpuBinding<'a>; 2] {
+    [
+        GpuBinding::Buffer {
+            binding: 0,
+            buffer: counter,
+            offset: 0,
+        },
+        GpuBinding::Bytes {
+            binding: 1,
+            data: slot,
+        },
+    ]
+}
+
+#[test]
+fn parity_gated_dispatches_and_templates_run_from_their_gates() {
+    const BUMP: &str = r#"
+struct Params { slot: u32, a: u32, b: u32, c: u32 }
+@group(0) @binding(0) var<storage, read_write> counter: array<atomic<u32>>;
+@group(0) @binding(1) var<uniform> params: Params;
+@compute @workgroup_size(1)
+fn main() { atomicAdd(&counter[params.slot], 1u); }
+"#;
+    let device = GpuDevice::new();
+    let pipeline = device.create_compute_pipeline(BUMP, "main", "parity bump");
+    let counter = device.create_buffer(16, BufferUse::Upload);
+    counter.zero_fill();
+    // Indirect counts: on, off, and on twice.
+    let gate = device.create_buffer(48, BufferUse::Upload);
+    let words: [u32; 12] = [1, 1, 1, 0, 0, 0, 0, 0, 2, 1, 1, 0];
+    unsafe { gate.write(0, &words.map(u32::to_ne_bytes).concat()) };
+    let ranges = device.create_buffer(64, BufferUse::Upload);
+    ranges.zero_fill();
+    let slots = [0u32, 1, 2, 3].map(|n| {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&n.to_ne_bytes());
+        bytes
+    });
+    let bindings = |slot: usize| bump_bindings(&counter, &slots[slot]);
+
+    let mut enc = device.create_encoder("parity gated");
+    enc.begin_replay(&device, GpuReplayCache::default());
+    enc.begin_gated_segment(&ranges, 0, 2);
+    enc.dispatch_compute_gated(&pipeline, &bindings(0), [1, 1, 1], &gate, 0, "on");
+    enc.dispatch_compute_gated(&pipeline, &bindings(1), [1, 1, 1], &gate, 16, "off");
+    enc.end_gated_segments();
+    let _ = enc.end_replay();
+
+    let mut store = GpuTemplateStore::new(&device);
+    let at = TemplateRanges {
+        ranges: &ranges,
+        first: 0,
+        stride: 1,
+        chunk: 4,
+        singles: 2,
+    };
+    let ticket = enc
+        .prepare_template(&mut store, at, 2, 7, |recorder| {
+            recorder.dispatch_gated(&pipeline, &bindings(2), [2, 1, 1], &gate, 32, "twice");
+            recorder.dispatch_gated(&pipeline, &bindings(3), [1, 1, 1], &gate, 16, "off");
+            Ok(())
+        })
+        .expect("the template fits");
+    enc.execute_template(&mut store, ticket)
+        .expect("same store");
+    enc.commit_and_wait().expect("GPU work completes");
+    assert_eq!(read::<u32>(&counter, 4), [1, 0, 14, 0]);
+    let stats = store.stats();
+    assert_eq!(
+        (stats.walks, stats.executes, stats.command_writes),
+        (1, 1, 14)
+    );
+
+    // Refusals: a body that issues the wrong count, a shape past the range
+    // buffer, and a ticket executed on another store.
+    let mut enc = device.create_encoder("parity template refusals");
+    let short = enc.prepare_template(&mut store, at, 2, 7, |recorder| {
+        recorder.dispatch_gated(&pipeline, &bindings(2), [1, 1, 1], &gate, 0, "one");
+        Ok(())
+    });
+    assert!(short.is_err());
+    let wide = TemplateRanges { first: 7, ..at };
+    assert!(
+        enc.prepare_template(&mut store, wide, 2, 7, |_| Ok(()))
+            .is_err()
+    );
+    assert_eq!(store.stats().refused, 2);
+    let ticket = enc
+        .prepare_template(&mut store, at, 1, 3, |recorder| {
+            recorder.dispatch_gated(&pipeline, &bindings(2), [1, 1, 1], &gate, 0, "one");
+            Ok(())
+        })
+        .expect("fits");
+    let mut other = GpuTemplateStore::new(&device);
+    assert!(enc.execute_template(&mut other, ticket).is_err());
+    enc.commit_and_wait().expect("GPU work completes");
+    assert_eq!(read::<u32>(&counter, 4), [1, 0, 14, 0]);
+    assert_no_validation_errors();
+}

@@ -370,6 +370,15 @@ impl GpuEncoder {
         })
     }
 
+    /// `data` in this submit's ring: the block and the offset.
+    pub(super) fn ring_upload(&mut self, data: &[u8]) -> (GpuBuffer, u64) {
+        let res = self.res.as_mut().expect(OPEN);
+        let (block, offset) = res.ring_alloc(&self.core, (data.len() as u64).max(4));
+        // Safety: the ring range is fresh and at least `data.len()` long.
+        unsafe { block.write(offset, data) };
+        (block, offset)
+    }
+
     /// Signal `semaphore` at `value` once everything recorded so far is done.
     fn signal(&mut self, semaphore: vk::Semaphore, value: u64) {
         if !self.dirty

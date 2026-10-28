@@ -1,12 +1,7 @@
-//! Encode replay on Vulkan: not built. The twin of the Metal store is a
-//! secondary command buffer per ring entry. Until the backend records
-//! command buffers, a span encodes everything directly and the cache only
-//! carries stats. Gated dispatches become plain indirect dispatches in P1
-//! (design section 7).
-
-// Stub bodies name the phase that builds them (design section 9); their
-// parameters are unused until then.
-#![allow(unused_variables)]
+//! Encode replay on Vulkan (design section 7, P1): a span encodes every
+//! dispatch directly and the cache only carries stats, and a gated dispatch
+//! is a plain indirect dispatch from its own gate. P6 records spans into
+//! secondary command buffers.
 
 use super::device::GpuDevice;
 use super::encoder::GpuEncoder;
@@ -43,14 +38,12 @@ impl GpuEncoder {
     /// executes by `ranges[index]` (`GATED_RANGE_BYTES` per entry), written
     /// earlier in this command buffer as `{0, commands}` to run or `{0, 0}`
     /// to skip.
-    pub fn begin_gated_segment(&mut self, ranges: &GpuBuffer, index: u32, commands: u32) {
-        todo!("vulkan P1")
+    pub fn begin_gated_segment(&mut self, _ranges: &GpuBuffer, _index: u32, _commands: u32) {
+        // Every gated dispatch reads its own gate, so a segment holds no state.
     }
 
     /// Close the open gated segment; later dispatches are ungated.
-    pub fn end_gated_segments(&mut self) {
-        todo!("vulkan P1")
-    }
+    pub fn end_gated_segments(&mut self) {}
 
     /// A dispatch the GPU may have switched off: `gate` holds its indirect
     /// threadgroup counts at `gate_offset` (zeros when off), `groups` the
@@ -59,11 +52,11 @@ impl GpuEncoder {
         &mut self,
         pipeline: &GpuComputePipeline,
         bindings: &[GpuBinding],
-        groups: [u32; 3],
+        _groups: [u32; 3],
         gate: &GpuBuffer,
         gate_offset: u64,
         label: &str,
     ) {
-        todo!("vulkan P1")
+        self.dispatch_compute_indirect(pipeline, bindings, gate, gate_offset, label);
     }
 }

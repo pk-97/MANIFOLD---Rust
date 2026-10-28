@@ -597,6 +597,38 @@ mod tests {
     }
 }
 
+/// The executes a `copies`-round template of `commands` dispatches takes
+/// from `at`, with at most `max_replicated` commands in one execute; `Err`
+/// when the shape does not fit `at`'s range buffer.
+pub(crate) fn template_executes(
+    at: &TemplateRanges<'_>,
+    commands: u32,
+    copies: u32,
+    max_replicated: u32,
+) -> Result<u32, String> {
+    let executes = template_chunks(copies, at.chunk, at.singles).count() as u32;
+    let last = executes
+        .checked_sub(1)
+        .and_then(|c| c.checked_mul(at.stride))
+        .and_then(|c| c.checked_add(at.first));
+    let end = last.and_then(|l| (u64::from(l) + 1).checked_mul(GATED_RANGE_BYTES));
+    let replicated = commands
+        .checked_mul(at.chunk)
+        .filter(|&n| n <= max_replicated);
+    if commands == 0
+        || copies == 0
+        || at.chunk == 0
+        || replicated.is_none()
+        || end.is_none_or(|end| end > at.ranges.size)
+    {
+        return Err(format!(
+            "gated template: {commands} commands, {copies} rounds by {} in {executes} executes from entry {} by {} do not fit a {}-byte range buffer",
+            at.chunk, at.first, at.stride, at.ranges.size
+        ));
+    }
+    Ok(executes)
+}
+
 /// Rounds execute `j` of a gated template runs before the last cut: one
 /// each for the first `singles` executes, then 1, 2, 4, … doubling up to
 /// `chunk`. A stop inside an execute leaves its later rounds running
