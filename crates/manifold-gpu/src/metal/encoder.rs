@@ -2618,8 +2618,10 @@ fn declare_render_resource_usage(
 }
 
 /// Walk a binding list and build the naga "sizes buffer" — a `u32` array
-/// indexed by Metal buffer slot where entry `i` holds the byte-size of the
-/// buffer bound at slot `i`. SPIRV-Cross-generated MSL reads this to resolve
+/// indexed by Metal buffer slot where entry `i` holds the bytes the binding
+/// at slot `i` sees: its buffer from the binding's offset on, so
+/// `arrayLength()` counts the bound range. Buffers are at most 4 GiB
+/// (`GpuDevice::try_create_buffer`), so the count fits. SPIRV-Cross-generated MSL reads this to resolve
 /// `arrayLength()` on runtime-sized storage arrays.
 ///
 /// Returns `(sizes, len)`; `len` is one past the highest slot index that
@@ -2632,7 +2634,9 @@ pub(super) fn collect_buffer_sizes(
     let mut len: usize = 0;
     for binding in bindings {
         if let GpuBinding::Buffer {
-            binding: b, buffer, ..
+            binding: b,
+            buffer,
+            offset,
         } = binding
         {
             let Some(slot) = slot_map.get(*b) else {
@@ -2640,7 +2644,7 @@ pub(super) fn collect_buffer_sizes(
             };
             let idx = slot.metal_index as usize;
             if idx < MAX_BUFFER_SLOTS {
-                sizes[idx] = buffer.size as u32;
+                sizes[idx] = buffer.size.saturating_sub(*offset) as u32;
                 if idx >= len {
                     len = idx + 1;
                 }

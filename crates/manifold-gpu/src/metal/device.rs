@@ -535,6 +535,14 @@ impl GpuDevice {
                 (MTLResourceOptions::StorageModeShared, "bufshared")
             }
         };
+        // Shaders read a bound buffer's length as a u32 byte count (the
+        // sizes buffer, `collect_buffer_sizes`), so a longer buffer would
+        // read as a wrapped, shorter one.
+        if size > u64::from(u32::MAX) {
+            return Err(format!(
+                "Metal: a {size}-byte buffer is past the 4 GiB a shader can read the length of"
+            ));
+        }
         if alloc_log_enabled() {
             eprintln!("[gpu-alloc] {kind} {size}");
             if usage != BufferUse::Gpu {
