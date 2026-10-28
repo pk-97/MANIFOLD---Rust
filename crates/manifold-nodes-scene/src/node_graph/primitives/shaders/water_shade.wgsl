@@ -55,7 +55,7 @@ fn fs_water(@builtin(position) pos: vec4<f32>) -> WaterOut {
     if dot(n, view) < 0.0 {
         n = -n;
     }
-    n = look_ripple_detail(world, n);
+    n = look_ripple_detail(world, n, distance(u.camera_pos.xyz, world));
 
     // Water has no texture maps, so its reflectance comes from the uniforms
     // alone, as `fs_pbr` computes it for a material with none.

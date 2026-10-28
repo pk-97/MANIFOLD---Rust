@@ -42,10 +42,9 @@ impl RenderScene {
             reactive_resolve_target,
             ..
         } = *pre;
-        // A frame with no water holds no G-buffer and no ripple tiles.
+        // A frame with no water holds no G-buffer.
         if fields.is_empty() {
             self.water_march.reset();
-            self.ripple_detail.reset();
         }
         // ---- Pass 2 (immutable phase): draw. Every object composites into
         // ONE 4x-MSAA color+depth pass (cleared once); the shared depth
@@ -239,7 +238,7 @@ impl RenderScene {
         let prefiltered_sheen = self.prefiltered_sheen.as_ref().unwrap_or(dummy);
         // The sun's light through the water; a black texel, a cleared depth
         // and slot 0 when no caustics ran.
-        let caustic_read = self.caustics.read();
+        let caustic_fit = self.caustics.fit().expect("caustics encode ran this frame");
         let (caustic_map, caustic_surface) = self.caustics.maps().unwrap_or((dummy, dummy_depth));
         let scene_bindings = |opaque_scene_color| {
             [
@@ -273,9 +272,10 @@ impl RenderScene {
                     binding: 12,
                     texture: caustic_surface,
                 },
-                GpuBinding::Bytes {
+                GpuBinding::Buffer {
                     binding: 13,
-                    data: bytemuck::bytes_of(&caustic_read),
+                    buffer: caustic_fit,
+                    offset: 0,
                 },
                 GpuBinding::Sampler {
                     binding: 14,
@@ -933,8 +933,6 @@ impl RenderScene {
                     #[cfg(feature = "fluid-perf-proofs")]
                     gpu.native_enc
                         .profile_next_encoder("node.render_scene water march");
-                    self.ripple_detail
-                        .encode(gpu.device, gpu.native_enc, fields, seconds);
                     // The water meshes' nearest depth over the opaque scene:
                     // where each ray meets the water, so the march only
                     // refines the hit.

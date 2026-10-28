@@ -3262,6 +3262,17 @@ impl RenderScene {
             }
         }
 
+        // The water's ripple detail, before the caustics bend the sun's light
+        // by it and the water shade lights the surface with it. A frame with
+        // no water holds no ripple tiles.
+        let seconds = ctx.time.seconds.0 as f32;
+        if fields.is_empty() {
+            self.ripple_detail.reset();
+        } else {
+            let gpu = ctx.gpu_encoder();
+            self.ripple_detail
+                .encode(gpu.device, gpu.native_enc, &fields, seconds);
+        }
         // Caustics follow the sun whose shadow map was drawn this frame: the
         // raster maps render unless traced shadows own the visibility and
         // nothing is transparent (`raster_shadow_prepasses`).
@@ -3272,28 +3283,23 @@ impl RenderScene {
             .and_then(|slot| {
                 let maps = self.shadow_maps.as_ref()?;
                 maps.layers.get(slot)?;
-                Some((
-                    caustics::Sun {
-                        slot,
-                        caster: &pre.shadow_casters[slot],
-                        shadow_maps: &maps.texture,
-                    },
-                    // A drawn shadow map means its depth pipeline and state
-                    // were made.
-                    caustics::SurfaceDraw {
-                        pipeline: self.solid_depth_pipeline.as_ref()?,
-                        depth_state: self.shadow_depth_stencil.as_ref()?,
-                        identity_stub: self.identity_instance_stub.as_ref()?,
-                        dummy: self.dummy_texture.as_ref()?,
-                        sampler: self.sampler.as_ref()?,
-                    },
-                ))
+                Some(caustics::Sun {
+                    slot,
+                    caster: &pre.shadow_casters[slot],
+                    shadow_maps: &maps.texture,
+                    // A drawn shadow map means its depth state was made.
+                    depth_state: self.shadow_depth_stencil.as_ref()?,
+                })
             });
         let gpu = ctx.gpu_encoder();
-        if let Err(error) = self
-            .caustics
-            .encode(gpu.device, gpu.native_enc, sun, &fields)
-        {
+        if let Err(error) = self.caustics.encode(
+            gpu.device,
+            gpu.native_enc,
+            sun,
+            &fields,
+            &self.ripple_detail,
+            seconds,
+        ) {
             Self::fail_frame(ctx, None, error);
             return;
         }

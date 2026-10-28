@@ -86,7 +86,10 @@ fn ripple_plane_slope(q: vec2<f32>, f: vec2<f32>, lod: f32) -> vec2<f32> {
     return (s0 * w0 + s1 * w1) / sqrt(w0 * w0 + w1 * w1);
 }
 
-fn look_ripple_detail(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+// `eye_distance` is the viewer's distance to the point, which sets the
+// ripples' level with `ripple.time.z`; a viewer with no distance (the sun's
+// caustics) sets that 0 and its flat footprint in `ripple.time.w`.
+fn look_ripple_detail(world_pos: vec3<f32>, normal: vec3<f32>, eye_distance: f32) -> vec3<f32> {
     let tile = ripple.field.y;
     if tile <= 0.0 {
         return normal;
@@ -100,7 +103,7 @@ fn look_ripple_detail(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     }
 
     // The layer by its size on screen: the tile texel against a pixel on the water.
-    let footprint = ripple.time.z * distance(u.camera_pos.xyz, world_pos) + ripple.time.w;
+    let footprint = ripple.time.z * eye_distance + ripple.time.w;
     let texel = tile / f32(textureDimensions(ripple_slopes).x);
     let lod = max(log2(footprint / texel), 0.0);
 

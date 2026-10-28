@@ -201,7 +201,7 @@ fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
     let i = id.x;\n\
     if i >= arrayLength(&probe_out) { return; }\n\
     let p = vec3<f32>(f32(i % 64u) * 0.0155 + 0.05, 0.0, f32(i / 64u) * 0.0145 + 0.03);\n\
-    probe_out[i] = vec4<f32>(look_ripple_detail(p, vec3<f32>(0.0, 1.0, 0.0)), 0.0);\n\
+    probe_out[i] = vec4<f32>(look_ripple_detail(p, vec3<f32>(0.0, 1.0, 0.0), distance(u.camera_pos.xyz, p)), 0.0);\n\
 }\n";
 
 pub(super) const PROBES: usize = 4096;

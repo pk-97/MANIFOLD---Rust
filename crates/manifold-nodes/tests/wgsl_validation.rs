@@ -125,6 +125,18 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
         "temporal_accumulate.wgsl",
         [DEPTH_COMMON, VIEW_NORMAL_COMMON].join("\n"),
     ));
+    // The caustics tilt the sun's light by the water's ripple detail, read
+    // through the field's table and faded by its foam (`caustics.rs`).
+    composed.push((
+        "caustics.wgsl",
+        [
+            manifold_node_engine::scene::world_tiles::READ_SIDE,
+            FIELD_TILES,
+            LOOK_RIPPLE_DETAIL,
+            FOAM_FIELD,
+        ]
+        .join("\n"),
+    ));
     // The wet pass reads the wet map through its layout.
     composed.push((
         "wet_pass.wgsl",

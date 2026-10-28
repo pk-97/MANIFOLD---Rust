@@ -303,9 +303,13 @@ struct ShadowCaster {
 @group(0) @binding(14) var shadow_sampler: sampler_comparison;
 
 // Caustics (`render_scene/caustics.rs`, `caustics.wgsl`): the sun's light
-// through the water onto what lies under it, in the sun's view. The renderer
-// binds a black texel, a cleared depth and slot 0 when no caustics run.
-struct CausticRead {
+// through the water onto what lies under it, in the sun's view narrowed to
+// the water. The renderer binds a black texel, a cleared depth and slot 0
+// when no caustics run.
+struct CausticFit {
+    // The narrowed view and its inverse.
+    view_proj: mat4x4<f32>,
+    inverse_view_proj: mat4x4<f32>,
     // The sun's caster slot + 1; 0 when no caustics run this frame.
     slot: u32,
     // How far past the water's surface, in the sun's depth, a receiver must
@@ -318,7 +322,7 @@ struct CausticRead {
 @group(0) @binding(11) var caustic_map: texture_2d<f32>;
 // The water's surface in the sun's depth.
 @group(0) @binding(12) var caustic_surface: texture_depth_2d;
-@group(0) @binding(13) var<uniform> caustic: CausticRead;
+@group(0) @binding(13) var<storage, read> caustic: CausticFit;
 
 // Split-sum IBL. Always bound (same
 // always-bind ABI-stub discipline as bindings 4/5/7/10-14 above) —
@@ -852,12 +856,12 @@ fn light_visibility(caster_slot: f32, world_pos: vec3<f32>, frag_xy: vec2<f32>) 
 
 // The share of caster `slot`'s light that reaches `world_pos` through the
 // water: the caustic map, bilinear, where the point lies under the water in
-// the sun's view; 1 for any other light, and above or beside the water.
+// the narrowed view; 1 for any other light, and above or beside the water.
 fn caustic_light(slot: u32, world_pos: vec3<f32>) -> vec3<f32> {
     if caustic.slot != slot + 1u {
         return vec3<f32>(1.0);
     }
-    let clip = casters[slot].view_proj * vec4<f32>(world_pos, 1.0);
+    let clip = caustic.view_proj * vec4<f32>(world_pos, 1.0);
     if clip.w <= 0.0 {
         return vec3<f32>(1.0);
     }
