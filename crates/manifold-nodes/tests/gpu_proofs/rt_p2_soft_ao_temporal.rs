@@ -26,7 +26,7 @@
 //! `rg` facts checked at review time, not expressed as a test in this file.
 
 use half::f16;
-use manifold_gpu::raytrace::{AccumulateParams, GiMaterial, MetalShadowRayTracer, ShadowRayTracer};
+use manifold_gpu::raytrace::{AccumulateParams, GiMaterial, GpuShadowRayTracer, ShadowRayTracer};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -481,7 +481,7 @@ fn mean_abs_diff_rgb(a: &[f32], b: &[f32]) -> f32 {
 
 fn run_accumulate(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     hi_irr: &GpuTexture,
     depth_tex: &GpuTexture,
     hi_normal: &GpuTexture,
@@ -506,7 +506,7 @@ fn run_accumulate(
 #[allow(clippy::too_many_arguments)] // un-suppress: collapse into a params struct if this harness gains a 13th knob
 fn run_accumulate_with_motion(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     hi_irr: &GpuTexture,
     depth_tex: &GpuTexture,
     hi_normal: &GpuTexture,
@@ -545,7 +545,7 @@ fn run_accumulate_with_motion(
 #[allow(clippy::too_many_arguments)]
 fn run_accumulate_with_sv(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     hi_irr: &GpuTexture,
     depth_tex: &GpuTexture,
     hi_normal: &GpuTexture,
@@ -634,7 +634,7 @@ fn run_accumulate_with_sv(
 #[allow(clippy::too_many_arguments)]
 fn run_accumulate_with_svt(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     hi_irr: &GpuTexture,
     depth_tex: &GpuTexture,
     hi_normal: &GpuTexture,
@@ -720,7 +720,7 @@ fn run_accumulate_with_svt(
 #[test]
 fn cut_plus_one_matches_cold_start_within_epsilon() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "p2-depth");
     let hi_normal = make_constant_normal(&h.device, "p2-normal");
 
@@ -798,7 +798,7 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
 #[test]
 fn strobe_retains_history_exceeds_epsilon() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "p2-strobe-depth");
     let hi_normal = make_constant_normal(&h.device, "p2-strobe-normal");
 
@@ -895,7 +895,7 @@ fn strobe_retains_history_exceeds_epsilon() {
 #[test]
 fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     let irr_a = upload_irr(&h.device, 1.0, 0.0, 0.0, "t2c-irr-a");
     let irr_b = upload_irr(&h.device, 0.0, 0.0, 0.0, "t2c-irr-b");
@@ -1108,7 +1108,7 @@ fn make_upload_r32(device: &GpuDevice, v: f32, label: &str) -> GpuTexture {
 fn refl_channel_blends_history_and_current() {
     let h = shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     // ── Shared per-frame textures ─────────────────────────────────────
     let depth_tex = make_constant_depth(device, "bisect-depth");
@@ -1389,7 +1389,7 @@ fn refl_channel_blends_history_and_current() {
 #[test]
 fn fractional_camera_reprojection_blends_and_rejects_per_tap() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     // prev_view_proj: translate NDC x by +0.0375 (0.6 texel at W=32).
     // Column-major like `rot_z` below: column 3 is translation.
@@ -1538,7 +1538,7 @@ fn fractional_camera_reprojection_blends_and_rejects_per_tap() {
 #[test]
 fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     const ROT: f32 = std::f32::consts::PI * 35.0 / 180.0;
     // Column-major rotation about +Z by ROT — the object's world->prev-world
@@ -1642,7 +1642,7 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
 #[test]
 fn lighting_cue_snaps_at_low_signal_magnitude_too() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     let depth_tex = make_constant_depth(&h.device, "dim-cue-depth");
     let hi_normal = make_constant_normal(&h.device, "dim-cue-normal");
@@ -1726,7 +1726,7 @@ fn lighting_cue_snaps_at_low_signal_magnitude_too() {
 #[test]
 fn hard_lighting_change_snaps_instead_of_averaging_in() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     let depth_tex = make_constant_depth(&h.device, "cue-depth");
     let hi_normal = make_constant_normal(&h.device, "cue-normal");
@@ -1800,7 +1800,7 @@ fn hard_lighting_change_snaps_instead_of_averaging_in() {
 #[test]
 fn sv_channel_converges_under_max_amplitude_flicker() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "sv-accum-depth");
     let hi_normal = make_constant_normal(&h.device, "sv-accum-normal");
     // Constant irradiance so the irr change gate never trips (it keys on
@@ -1863,7 +1863,7 @@ fn sv_channel_converges_under_max_amplitude_flicker() {
 #[test]
 fn sv_channel_reset_cold_starts_from_current_frame() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "sv-reset-depth");
     let hi_normal = make_constant_normal(&h.device, "sv-reset-normal");
     let hi_irr = upload_irr(&h.device, 0.5, 0.5, 0.5, "sv-reset-irr");
@@ -1925,7 +1925,7 @@ fn sv_channel_snaps_when_shadow_arrives() {
     // deadens on its own straddling moments decays at 1/n instead and the
     // shadow never forms within the proof's window.
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "sv-snap-depth");
     let hi_normal = make_constant_normal(&h.device, "sv-snap-normal");
     let hi_irr = upload_irr(&h.device, 0.5, 0.5, 0.5, "sv-snap-irr");
@@ -1997,7 +1997,7 @@ fn center_pixel_rgb_f32(texture: &GpuTexture) -> [f32; 3] {
 #[test]
 fn svt_history_reset_writes_current_tint_verbatim() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "p2-svt-reset-depth");
     let hi_normal = make_constant_normal(&h.device, "p2-svt-reset-normal");
 
@@ -2110,7 +2110,7 @@ fn svt_history_reset_writes_current_tint_verbatim() {
 #[test]
 fn svt_history_blends_toward_changed_tint_by_running_mean() {
     let h = shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "p2-svt-blend-depth");
     let hi_normal = make_constant_normal(&h.device, "p2-svt-blend-normal");
     let hi_sv_lit = upload_sv(&h.device, 1.0, 1.0, 1.0, "p2-svt-blend-sv");

@@ -1,6 +1,6 @@
 //! `docs/RAYTRACING_DESIGN.md` section 8.2 Tier-2 item 4 (D21, T2-A) — value-level
 //! proof for alpha-aware shadow rays
-//! (`manifold_gpu::raytrace::{ShadowRayTracer, MetalShadowRayTracer}`'s
+//! (`manifold_gpu::raytrace::{ShadowRayTracer, GpuShadowRayTracer}`'s
 //! `walk_with_alpha_test`/`sample_candidate_alpha` MSL path).
 //!
 //! Fixture: ONE occluder object — a flat (non-indexed) quad, 2 triangles,
@@ -34,7 +34,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtMaterialAttributes, RtObjectGeometry, ShadowRayParams,
+    GiMaterial, GpuShadowRayTracer, RtMaterialAttributes, RtObjectGeometry, ShadowRayParams,
     ShadowRayTracer, ensure_normal_sources,
 };
 use manifold_gpu::{
@@ -132,7 +132,7 @@ fn run_fixture_with_metadata(
 ) -> [f32; 2] {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     run_fixture_on(
-        &MetalShadowRayTracer::new(&h.device),
+        &GpuShadowRayTracer::new(&h.device),
         alpha_mask,
         base_color_alpha,
         texture_enabled,
@@ -147,7 +147,7 @@ fn run_fixture_with_metadata(
 
 #[allow(clippy::too_many_arguments)]
 fn run_fixture_on(
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     alpha_mask: bool,
     base_color_alpha: f32,
     texture_enabled: bool,
@@ -682,8 +682,8 @@ fn alpha_metadata_linear_filter_and_vertex_color_multiply() {
 #[test]
 fn alpha_walk_cap_matches_unbounded_walk() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let capped = MetalShadowRayTracer::new(&h.device);
-    let unbounded = MetalShadowRayTracer::with_walk_cap_for_proof(&h.device, u32::MAX);
+    let capped = GpuShadowRayTracer::new(&h.device);
+    let unbounded = GpuShadowRayTracer::with_walk_cap_for_proof(&h.device, u32::MAX);
     for (alpha_mask, linear, cutoff) in [(true, false, 0.5), (false, false, 0.5), (true, true, 0.8)]
     {
         let run = |tracer| {

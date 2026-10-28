@@ -204,23 +204,6 @@ impl RtGeometryTopology {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RtTopologyMismatchCategory {
-    ObjectCount,
-    DescriptorMode,
-    Vertex,
-    Index,
-    NormalUv,
-    InstanceSlots,
-    NonOpaque,
-    AppearanceWeights,
-    SlotOverflow,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RtTopologyMismatch {
-    pub object: usize,
-    pub category: RtTopologyMismatchCategory,
-}
 fn check_topology_records<I: ExactSizeIterator<Item = RtGeometryTopology>>(
     resident: &[RtGeometryTopology],
     resident_instanced: bool,

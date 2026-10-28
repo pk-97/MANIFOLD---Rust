@@ -975,8 +975,7 @@ impl Primitive for GltfMeshSource {
                     if source_trace_enabled() {
                         let frame_count = ctx.time.frame_count;
                         let encoder = ctx.gpu_encoder();
-                        let command_buffer_identity =
-                            encoder.native_enc.raw_cmd_buf() as *const _ as usize;
+                        let encoder_identity = std::ptr::from_ref(&encoder.native_enc) as usize;
                         encoder
                             .native_enc
                             .copy_buffer_to_buffer(staging, dst, copy_size);
@@ -984,14 +983,14 @@ impl Primitive for GltfMeshSource {
                             .native_enc
                             .add_completed_handler_with_status("RT source copy");
                         log::info!(
-                            "[RT-SOURCE] copy-encoded frame={} path={} bytes={} destination_identity={} destination_size={} content_version={} queue=same-render-encoder command_buffer_identity={:#x} completion=status-handler",
+                            "[RT-SOURCE] copy-encoded frame={} path={} bytes={} destination_identity={} destination_size={} content_version={} queue=same-render-encoder encoder_identity={:#x} completion=status-handler",
                             frame_count,
                             self.last_key.0,
                             copy_size,
                             dst_identity,
                             dst.size,
                             self.content_version,
-                            command_buffer_identity
+                            encoder_identity
                         );
                     } else {
                         ctx.gpu_encoder()

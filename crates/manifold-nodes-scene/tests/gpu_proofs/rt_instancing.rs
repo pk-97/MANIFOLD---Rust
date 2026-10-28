@@ -25,7 +25,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    GiMaterial, GpuShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
     ensure_normal_sources,
 };
 use manifold_gpu::{
@@ -248,7 +248,7 @@ fn run_probes_with_inners(
 ) -> Vec<[f32; 4]> {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     let vertex_buffer = write_shared_buffer(device, &QUAD);
     let instances_buffer = write_shared_buffer(device, slots);

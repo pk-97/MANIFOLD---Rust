@@ -11,7 +11,7 @@
 //! `instance_id` the material index. `ShadowRayTracer` is the D9 backend seam: all data
 //! crosses it as manifold-gpu's own cross-backend types (`GpuDevice`,
 //! `GpuBuffer`, `GpuTexture`, `GpuEncoder`); Apple/objc2 types stay behind
-//! `MetalShadowRayTracer` and this module.
+//! `GpuShadowRayTracer` and this module.
 //!
 //! A Vulkan implementation (`VK_KHR_ray_query`, activated at trace time
 //! from a compute shader rather than a distinct dispatch call) fits this
@@ -46,4 +46,4 @@ pub use emissive::*;
 mod tracer;
 pub use tracer::*;
 mod trace_timing;
-pub use trace_timing::{TraceTimingReport, request_conservative_trace_tiles};
+pub use trace_timing::request_conservative_trace_tiles;

@@ -10,7 +10,7 @@
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
 use manifold_gpu::raytrace::{
-    EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial, MetalShadowRayTracer,
+    EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial, GpuShadowRayTracer,
     RtGeometryChange, RtObjectGeometry, ShadowRayTracer,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
@@ -361,7 +361,7 @@ fn at() {
     // P4a: production GPU preparation (same enumerate/sort/gather/alias/
     // stats kernels as the shared AS update path), read back through the
     // mapped shared buffers.
-    let tracer = MetalShadowRayTracer::new(d);
+    let tracer = GpuShadowRayTracer::new(d);
     let plan = tracer.plan_accel(d, None, &o).expect("plan");
     let mut slot = None;
     tracer.prepare_accel(d, &mut slot, plan).expect("prepare");

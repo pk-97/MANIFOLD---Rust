@@ -178,7 +178,6 @@ mod blend_snapshot_tests {
 }
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
-use manifold_gpu::denoiser::denoiser_available;
 use manifold_gpu::raytrace::RtGeometryChange;
 use manifold_gpu::raytrace::ShadowRayTracer;
 use manifold_node_engine::content_revision::ContentVersion;
@@ -1439,7 +1438,7 @@ pub struct RenderScene {
     /// idiom). `None` until the first RT-enabled frame; rebuilt only
     /// when the key changes (never mid-frame otherwise — the
     /// performer-gesture gate).
-    rt_tracer: Option<manifold_gpu::raytrace::MetalShadowRayTracer>,
+    rt_tracer: Option<manifold_gpu::raytrace::GpuShadowRayTracer>,
     rt_accel: Option<manifold_gpu::raytrace::RtAccel>,
     #[cfg(feature = "gpu-proofs")]
     rt_probe: Option<rt_proof::RtProbeScene>,
@@ -3121,7 +3120,10 @@ impl RenderScene {
         let prepare_rt =
             rt_enabled || has_subsurface || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         Self::collect_rt_objects(&draws, prepare_rt, rt_objects);
-        let rt_tables = if prepare_rt && !rt_objects.is_empty() {
+        let rt_tables = if prepare_rt
+            && !rt_objects.is_empty()
+            && ctx.gpu_encoder().device.supports_ray_tracing()
+        {
             self.ensure_rt_tracer(ctx.gpu_encoder().device);
             match self.rt_accel_maintenance(
                 ctx,

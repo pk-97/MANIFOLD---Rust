@@ -2,7 +2,7 @@
 //! proofs for step-response latency, sub-threshold scrub tracking, and
 //! per-channel sv/svt leg behavior under strobes and geometry moves.
 //!
-//! All tests exercise `accumulate_irradiance` directly via `MetalShadowRayTracer`
+//! All tests exercise `accumulate_irradiance` directly via `GpuShadowRayTracer`
 //! on a flat 32×32 fixture (constant depth/normal, identity view-proj — every
 //! texel is self-reprojecting, same discipline as `rt_p2_soft_ao_temporal.rs`).
 //!
@@ -25,7 +25,7 @@
 use std::mem::size_of;
 
 use half::f16;
-use manifold_gpu::raytrace::{AccumulateParams, GiMaterial, MetalShadowRayTracer, ShadowRayTracer};
+use manifold_gpu::raytrace::{AccumulateParams, GiMaterial, GpuShadowRayTracer, ShadowRayTracer};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -343,7 +343,7 @@ impl FullHistorySet {
 #[allow(clippy::too_many_arguments)]
 fn run_accumulate_frame(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     hi_irr: &GpuTexture,
     depth_tex: &GpuTexture,
     hi_normal: &GpuTexture,
@@ -551,7 +551,7 @@ fn make_identity_obj_motion(device: &GpuDevice) -> manifold_gpu::GpuBuffer {
 fn step_response_reaches_90_percent_within_4_frames() {
     let h = shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "sr-normal");
     let sv = make_sv_layers(device, &[1.0, 1.0], "sr-sv");
@@ -707,7 +707,7 @@ fn step_response_reaches_90_percent_within_4_frames() {
 fn sub_threshold_scrub_tracking_error_bounded() {
     let h = shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "so-normal");
     let sv = make_sv_layers(device, &[1.0, 1.0], "so-sv");
@@ -810,7 +810,7 @@ fn sub_threshold_scrub_tracking_error_bounded() {
 fn sv_channel_follows_geometry_move_within_3_frames() {
     let h = shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "sgm-normal");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "sgm-refl");
@@ -930,7 +930,7 @@ fn sv_channel_follows_geometry_move_within_3_frames() {
 fn sv_channel_holds_through_strobe() {
     let h = shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "ss-normal");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "ss-refl");
@@ -1028,7 +1028,7 @@ fn sv_channel_holds_through_strobe() {
 fn svt_tint_holds_through_strobe() {
     let h = shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "sh-normal");
     let sv = make_sv_layers(device, &[1.0, 1.0], "sh-sv");
@@ -1122,7 +1122,7 @@ fn svt_tint_holds_through_strobe() {
 fn scalar_hold_r16_matches_rgba16_history() {
     let h = shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "scalar-hold-normal");
     let irr = upload_irr(device, 0.3, 0.3, 0.3);
@@ -1283,7 +1283,7 @@ fn read_moments_w_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
 fn denoise_near_raw_caps_history_at_four_frames() {
     let h = shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let depth = make_depth_at(device, 0.5);
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "dnl-normal");
     let sv = make_sv_layers(device, &[1.0, 1.0], "dnl-sv");

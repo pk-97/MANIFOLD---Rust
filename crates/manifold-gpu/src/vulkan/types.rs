@@ -36,6 +36,7 @@ pub struct GpuSampler {
 }
 
 /// Compute pipeline: SPIR-V module, `VkPipeline`, layout and slot map.
+#[derive(Clone)]
 pub struct GpuComputePipeline {
     pub slot_map: SlotMap,
     pub label: String,
@@ -44,6 +45,7 @@ pub struct GpuComputePipeline {
 
 /// Render pipeline. Vertex and fragment stages share one slot map, as on
 /// Metal.
+#[derive(Clone)]
 pub struct GpuRenderPipeline {
     pub slot_map: SlotMap,
     pub label: String,

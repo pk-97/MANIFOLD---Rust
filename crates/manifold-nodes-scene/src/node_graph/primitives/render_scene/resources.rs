@@ -144,7 +144,7 @@ impl RenderScene {
             // denoise), the forward pass renders into a native-res scratch
             // so the denoiser's input and output don't alias.
             let denoise_wanted =
-                rt_enabled && rt_ready && denoise_aux_ready && denoiser_available();
+                rt_enabled && rt_ready && denoise_aux_ready && gpu.device.supports_denoiser();
             // Gate-block diagnostic (2026-08-08, Peter's "does nothing"
             // report): the conditions fail silently — name the blocker
             // once per transition instead of leaving the feature inert.
@@ -155,7 +155,7 @@ impl RenderScene {
                 self.denoise_gate_blocked_logged = true;
                 log::warn!(
                     "node.render_scene: rt_denoise_feed is on but the denoiser gate is blocked — rt_enabled={rt_enabled}, rt_ready={rt_ready}, aux_ready={denoise_aux_ready}, denoiser_available={}",
-                    denoiser_available()
+                    gpu.device.supports_denoiser()
                 );
             }
             if denoise_wanted {
@@ -1215,11 +1215,13 @@ impl RenderScene {
 
     /// RAYTRACING_DESIGN.md RT-D3: lazily build the raw-MSL shadow-ray
     /// pipelines once per device (kept resident — see
-    /// `MetalShadowRayTracer::new`'s doc for why this can't go through
+    /// `GpuShadowRayTracer::new`'s doc for why this can't go through
     /// the WGSL pipeline cache).
+    /// No tracer where the backend has no ray tracing: scenes keep their
+    /// raster shadow maps.
     pub(super) fn ensure_rt_tracer(&mut self, device: &manifold_gpu::GpuDevice) {
-        if self.rt_tracer.is_none() {
-            self.rt_tracer = Some(manifold_gpu::raytrace::MetalShadowRayTracer::new(device));
+        if self.rt_tracer.is_none() && device.supports_ray_tracing() {
+            self.rt_tracer = Some(manifold_gpu::raytrace::GpuShadowRayTracer::new(device));
         }
     }
 

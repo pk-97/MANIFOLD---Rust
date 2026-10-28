@@ -1,5 +1,5 @@
 //! RT-Stage-3 P1 (BUG-mkgh) value-level proof for the pre-blur firefly clamp
-//! (`manifold_gpu::raytrace::MetalShadowRayTracer::debug_firefly_clamp`, which
+//! (`manifold_gpu::raytrace::GpuShadowRayTracer::debug_firefly_clamp`, which
 //! dispatches the EXACT SAME `firefly_clamp_center` MSL helper the production
 //! `firefly_clamp` kernel calls, against a caller-supplied 3x3 color + depth
 //! neighborhood — no ray tracing, no full-res pass involved).
@@ -27,7 +27,7 @@
 //! the floor stays the fixed minimum); the mean-rider case pins the new
 //! behavior against a CPU mirror fed the same effective floor.
 
-use manifold_gpu::raytrace::MetalShadowRayTracer;
+use manifold_gpu::raytrace::GpuShadowRayTracer;
 
 const TOLERANCE: f32 = 1e-4;
 /// Mirrors the MSL `FIREFLY_MEDIAN_GAIN` constant.
@@ -88,7 +88,7 @@ fn assert_close(got: [f32; 3], expected: [f32; 3], label: &str) {
 #[test]
 fn firefly_clamp_void_center_passes_through_unclamped() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     // I7 case 1: a sun-disc-bright texel in the void background is legit
     // content, never clamped — even at luma 100 with an 8.0 gain.
@@ -115,7 +115,7 @@ fn firefly_clamp_void_center_passes_through_unclamped() {
 #[test]
 fn firefly_clamp_isolated_glint_passes_through_unclamped() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     // I7 case 2: an isolated 1-px glint — center non-void, every neighbor
     // void — has 1 non-void texel (<3), so no median can be established.
@@ -142,7 +142,7 @@ fn firefly_clamp_isolated_glint_passes_through_unclamped() {
 #[test]
 fn firefly_clamp_hot_outlier_surrounded_by_dim_neighbors_is_clamped() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     // Positive case: hot center (luma 100) surrounded by 8 dim non-void
     // neighbors (luma 1). Median of the 9-element non-void subset = 1;
@@ -174,7 +174,7 @@ fn firefly_clamp_hot_outlier_surrounded_by_dim_neighbors_is_clamped() {
 #[test]
 fn firefly_clamp_median_matches_cpu_expected() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     // Median-value case: neighbors with lumas 1..8, center luma 100. The
     // 9-element sorted subset is [1,2,3,4,5,6,7,8,100]; median = index 4 = 5.
@@ -219,7 +219,7 @@ fn firefly_clamp_median_matches_cpu_expected() {
 #[test]
 fn firefly_clamp_mean_power_raises_floor() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     const FLOOR: f32 = 4.0;
     const MEAN: f32 = 50.0;

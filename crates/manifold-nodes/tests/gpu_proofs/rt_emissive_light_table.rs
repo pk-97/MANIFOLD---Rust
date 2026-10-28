@@ -19,7 +19,7 @@
 use manifold_gpu::GpuDevice;
 use manifold_gpu::raytrace::{
     EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
-    MAX_RT_EMISSIVE_TRIANGLES, MetalShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry,
+    MAX_RT_EMISSIVE_TRIANGLES, GpuShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry,
     ShadowRayTracer,
 };
 
@@ -78,8 +78,8 @@ fn gpu_prepare_emissive_table(
     device: &GpuDevice,
     objects: &[RtObjectGeometry<'_>],
     materials: &[GiMaterial],
-) -> (MetalShadowRayTracer, RtAccel, EmissiveTableStats) {
-    let tracer = MetalShadowRayTracer::new(device);
+) -> (GpuShadowRayTracer, RtAccel, EmissiveTableStats) {
+    let tracer = GpuShadowRayTracer::new(device);
     let plan = tracer
         .plan_accel(device, None, objects)
         .expect("plan accel");

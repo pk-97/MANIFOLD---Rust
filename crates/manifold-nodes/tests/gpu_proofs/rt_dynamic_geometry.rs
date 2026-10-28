@@ -12,7 +12,7 @@
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    DEBUG_RAY_INVALID, DebugRayQueryHit, DebugRayQueryRay, MetalShadowRayTracer, RtObjectGeometry,
+    DEBUG_RAY_INVALID, DebugRayQueryHit, DebugRayQueryRay, GpuShadowRayTracer, RtObjectGeometry,
     ShadowRayTracer, ensure_normal_sources, ensure_normal_sources_snapshot,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
@@ -226,7 +226,7 @@ mod rt_dynamic_oracle {
     fn rt_dynamic_oracle_rejects_wrong_hits() {
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &h.device;
-        let tracer = MetalShadowRayTracer::new(device);
+        let tracer = GpuShadowRayTracer::new(device);
 
         let state_a = triangle_at(STATE_A_X);
         let state_b = triangle_at(STATE_B_X);
@@ -574,7 +574,7 @@ fn cs_main() {
     /// current-side ray must hit and the previous-side ray must miss on
     /// all eight frames, the first included.
     fn run_same_frame_loop(
-        tracer: &MetalShadowRayTracer,
+        tracer: &GpuShadowRayTracer,
         device: &GpuDevice,
         write_pipe: &manifold_gpu::GpuComputePipeline,
         vertex_buffer: &GpuBuffer,
@@ -739,7 +739,7 @@ fn cs_main() {
     fn rt_dynamic_same_frame_gpu_write_then_hit() {
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &h.device;
-        let tracer = MetalShadowRayTracer::new(device);
+        let tracer = GpuShadowRayTracer::new(device);
         let flat_pipe =
             device.create_compute_pipeline(WRITE_TRIS_WGSL, "cs_main", "rt-ordering-write-tris");
         let indexed_pipe = device.create_compute_pipeline(
@@ -771,7 +771,7 @@ fn cs_main() {
     fn rt_dynamic_unsubmitted_teardown_and_multiframe() {
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &h.device;
-        let tracer = MetalShadowRayTracer::new(device);
+        let tracer = GpuShadowRayTracer::new(device);
         let faults_before = manifold_gpu::gpu_fault::fault_count();
 
         // ── Section 1: teardown before commit. Encode geometry + update +
@@ -1265,7 +1265,7 @@ fn cs_main() {
     fn rt_dynamic_admission_is_atomic() {
         let h = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &h.device;
-        let tracer = MetalShadowRayTracer::new(device);
+        let tracer = GpuShadowRayTracer::new(device);
 
         // ── Section 1: admission on the plan number, before allocation ──
         let state = triangle_at(STATE_LEFT_X);

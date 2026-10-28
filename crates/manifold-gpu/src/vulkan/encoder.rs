@@ -77,6 +77,7 @@ impl GpuEncoder {
     }
 
     /// Draw a fullscreen triangle with a render pipeline.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_fullscreen(
         &mut self,
         pipeline: &GpuRenderPipeline,
@@ -90,6 +91,7 @@ impl GpuEncoder {
     }
 
     /// Draw a fullscreen triangle with viewport positioning.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_fullscreen_viewport(
         &mut self,
         pipeline: &GpuRenderPipeline,
@@ -117,6 +119,7 @@ impl GpuEncoder {
 
     /// Draw instanced with MSAA: render to a multisample target, resolve to
     /// a single-sample texture.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_msaa(
         &mut self,
         pipeline: &GpuRenderPipeline,
@@ -166,6 +169,7 @@ impl GpuEncoder {
 
     /// Draw a batch of depth-tested triangle meshes into ONE 4x-MSAA pass,
     /// resolving to `resolve_target`.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth_msaa_batch(
         &mut self,
         msaa_color: &GpuTexture,
@@ -179,6 +183,7 @@ impl GpuEncoder {
     }
 
     /// [`Self::draw_instanced_depth_msaa_batch`]'s desc-driven superset.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth_msaa_batch_desc(
         &mut self,
         desc: &DepthMsaaPassDesc,
@@ -194,6 +199,7 @@ impl GpuEncoder {
     /// [`Self::draw_instanced_depth_msaa_batch_desc`]: no memoryless
     /// multisample scratch, no resolve — `target`/`depth_target` are real,
     /// already-populated single-sample textures.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth_batch(
         &mut self,
         target: &GpuTexture,
@@ -208,6 +214,7 @@ impl GpuEncoder {
     }
 
     /// Draw instanced geometry with depth testing.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth(
         &mut self,
         pipeline: &GpuRenderPipeline,
@@ -224,6 +231,7 @@ impl GpuEncoder {
     }
 
     /// Draw instanced geometry with depth testing, fill mode, and optional depth bias.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth_ex(
         &mut self,
         pipeline: &GpuRenderPipeline,
@@ -278,6 +286,7 @@ impl GpuEncoder {
     }
 
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_indexed(
         &mut self,
         pipeline: &GpuRenderPipeline,
@@ -305,6 +314,7 @@ impl GpuEncoder {
     }
 
     /// Draw indexed geometry within an active render pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_in_render_pass(
         &mut self,
         pipeline: &GpuRenderPipeline,

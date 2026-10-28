@@ -8,7 +8,7 @@
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    DebugRayQueryHit, DebugRayQueryRay, MetalShadowRayTracer, RtAccelError, RtGeometryChange,
+    DebugRayQueryHit, DebugRayQueryRay, GpuShadowRayTracer, RtAccelError, RtGeometryChange,
     RtObjectGeometry, ShadowRayTracer, ensure_normal_sources,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
@@ -177,7 +177,7 @@ fn fresh_build_hit(
     ray_x: f32,
     instance_x: Option<f32>,
 ) -> DebugRayQueryHit {
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let vertices = write_vertices(device, vertices_data);
     let instances = instance_x.map(|x| {
         let buffer = device.create_buffer_shared(32);
@@ -230,7 +230,7 @@ fn fresh_build_hit(
 fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let vertices = write_vertices(device, &triangle_at(0.0));
     let objects = [object(&vertices, None)];
     let plan = tracer.plan_accel(device, None, &objects).expect("plan");
@@ -443,7 +443,7 @@ fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
 fn rt_dynamic_refit_atomic_validation_and_retained_lifetime() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let vertices = write_vertices(device, &triangle_at(0.0));
     let objects = [object(&vertices, None)];
     let plan = tracer.plan_accel(device, None, &objects).expect("plan");

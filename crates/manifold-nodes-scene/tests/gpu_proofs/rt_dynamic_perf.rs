@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use manifold_core::NodeId;
 use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
 use manifold_gpu::raytrace::{
-    DebugRayQueryRay, MetalShadowRayTracer, RtAccelUpdate, RtGeometryChange, RtObjectGeometry,
+    DebugRayQueryRay, GpuShadowRayTracer, RtAccelUpdate, RtGeometryChange, RtObjectGeometry,
     ShadowRayTracer, ensure_normal_sources,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuTextureFormat};
@@ -251,7 +251,7 @@ fn run_configuration(device: &GpuDevice, configuration: Configuration) -> Value 
         });
     }
 
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let plan = tracer
         .plan_accel(device, None, &objects)
         .expect("perf plan");

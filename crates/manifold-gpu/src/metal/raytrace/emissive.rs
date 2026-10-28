@@ -5,7 +5,7 @@
 //! path, reading CURRENT vertex/index data through raw GPU addresses so
 //! deformed meshes reach the light table with no CPU geometry reads.
 
-use super::tracer::MetalShadowRayTracer;
+use super::tracer::GpuShadowRayTracer;
 use super::{GiMaterial, RtAccel, RtAccelError, RtObjectGeometry, effective_instance_slots};
 use crate::metal::encoder::GpuEncoder;
 use crate::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
@@ -244,7 +244,7 @@ pub(crate) fn validate_emissive_inputs(
 }
 
 pub(crate) fn encode_emissive_table(
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     device: &GpuDevice,
     encoder: &mut GpuEncoder,
     accel: &mut RtAccel,

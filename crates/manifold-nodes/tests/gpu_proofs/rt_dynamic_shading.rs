@@ -9,7 +9,7 @@
 
 use manifold_gpu::raytrace::{
     EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
-    MAX_RT_EMISSIVE_TRIANGLES, MetalShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry,
+    MAX_RT_EMISSIVE_TRIANGLES, GpuShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry,
     ShadowRayTracer,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
@@ -119,7 +119,7 @@ fn emissive_material(emissive: [f32; 3]) -> GiMaterial {
 /// update path the emissive preparation hangs off) → commit+wait.
 fn prepare_scene(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     objects: &[RtObjectGeometry<'_>],
     materials: &[GiMaterial],
 ) -> RtAccel {
@@ -147,7 +147,7 @@ fn prepare_scene(
 /// per-frame decisions do.
 fn refresh_frame(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     accel: &mut RtAccel,
     objects: &[RtObjectGeometry<'_>],
     materials: &[GiMaterial],
@@ -184,7 +184,7 @@ fn read_stats(accel: &RtAccel) -> EmissiveTableStats {
 fn rt_dynamic_emissive_queued_frames_keep_metadata_snapshots() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let vertices = write_shared(device, &triangle_at(0.0, 1.0));
     let objects = [flat_object(&vertices, 1)];
     let mut accel = prepare_scene(device, &tracer, &objects, &[emissive_material([1.0; 3])]);
@@ -334,7 +334,7 @@ fn assert_alias_distribution(aliases: &[EmissiveAliasEntry], context: &str) {
 fn rt_dynamic_emissive_gpu_geometry() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     // ── Section 1: static table matches the CPU oracle — 3 emissive
     // candidates with UNEQUAL known powers (ranked order proven), indexed
@@ -771,7 +771,7 @@ fn bary_ray(bary: [f32; 2]) -> DebugRayQueryRay {
 /// material texture list (empty for texture-less fixtures).
 fn prepare_query_scene<'a>(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     objects: &[RtObjectGeometry<'a>],
 ) -> (
     RtAccel,
@@ -822,7 +822,7 @@ fn refresh_normal_sources(
 
 fn run_ray_query(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     accel: &RtAccel,
     normal_sources: &GpuBuffer,
     rays: &[DebugRayQueryRay],
@@ -859,7 +859,7 @@ fn run_ray_query(
 fn rt_dynamic_coverage_and_attributes() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     let weights_buf = write_shared(device, &[0.0f32, 0.5, 1.0]);
 
@@ -1372,7 +1372,7 @@ fn rt_dynamic_coverage_and_attributes() {
     #[allow(clippy::too_many_arguments)]
     fn run_full_trace(
         device: &GpuDevice,
-        tracer: &MetalShadowRayTracer,
+        tracer: &GpuShadowRayTracer,
         floor_vb: &GpuBuffer,
         ceil_vb: &GpuBuffer,
         ceil_weights: Option<&GpuBuffer>,

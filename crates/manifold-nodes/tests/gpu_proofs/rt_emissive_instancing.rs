@@ -25,7 +25,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    EmissiveTableStats, GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams,
+    EmissiveTableStats, GiMaterial, GpuShadowRayTracer, RtObjectGeometry, ShadowRayParams,
     ShadowRayTracer, ensure_normal_sources,
 };
 use manifold_gpu::{
@@ -177,7 +177,7 @@ fn len(v: [f32; 3]) -> f32 {
 fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     let emissive_buffer = write_shared_buffer(device, &EMISSIVE_QUAD);
     let receiver_buffer = write_shared_buffer(device, &RECEIVER_QUAD);

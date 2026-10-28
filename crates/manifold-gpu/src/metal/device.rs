@@ -168,7 +168,7 @@ pub struct GpuDevice {
     /// Pre-compiled compute clear pipelines per texture format.
     clear_pipelines: std::sync::OnceLock<ClearPipelines>,
     /// RT shadow-ray pipeline set (MSL library + seven PSOs), shared by
-    /// every `MetalShadowRayTracer` instance.
+    /// every `GpuShadowRayTracer` instance.
     /// Code is device-global, instances own data. OnceLock like
     /// `clear_pipelines`; populate-once, never on the hot path.
     rt_pipelines: std::sync::OnceLock<super::raytrace::RtPipelines>,

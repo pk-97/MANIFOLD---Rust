@@ -1,5 +1,5 @@
 //! RT-Stage-3 P3 (BUG-eytk) value-level proof for the post-accumulation
-//! à-trous filter (`manifold_gpu::raytrace::MetalShadowRayTracer::
+//! à-trous filter (`manifold_gpu::raytrace::GpuShadowRayTracer::
 //! debug_atrous_post`, which dispatches the EXACT SAME `atrous_post_center`
 //! MSL helper the production `atrous_post` kernel calls, against a caller-
 //! supplied 3x3 neighborhood — no ray tracing, no full-res pass involved).
@@ -23,7 +23,7 @@
 //! closed-form sanity assertion so a broken mirror can't agree with a broken
 //! GPU.
 
-use manifold_gpu::raytrace::MetalShadowRayTracer;
+use manifold_gpu::raytrace::GpuShadowRayTracer;
 
 const TOLERANCE: f32 = 1e-4;
 
@@ -161,7 +161,7 @@ fn assert_close(got: [f32; 4], expected: [f32; 4], label: &str) {
 #[test]
 fn atrous_post_converged_texel_early_out() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     let irr_val = [0.3, 0.5, 0.7, 0.8]; // .rgb = irradiance, .a = ao
     let depth = [NON_VOID; 9];
@@ -184,7 +184,7 @@ fn atrous_post_converged_texel_early_out() {
 #[test]
 fn atrous_post_void_center_passthrough() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     let src_val = [10.0, 20.0, 30.0, 0.5];
     let depth = std::array::from_fn(|i| if i == 4 { VOID } else { NON_VOID });
@@ -213,7 +213,7 @@ fn atrous_post_void_center_passthrough() {
 #[test]
 fn atrous_post_noisy_flat_mean() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     let depth = [NON_VOID; 9];
     let normal: [[f32; 4]; 9] = std::array::from_fn(|_| [0.0, 0.0, 1.0, 0.0]);
@@ -264,7 +264,7 @@ fn atrous_post_noisy_flat_mean() {
 #[test]
 fn atrous_post_edge_rejection() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     // Left+center columns (depth 0.5), right column (depth 0.8 — delta 0.3
     // >> 3e-3 → w_depth = exp(-0.3/0.003) ≈ 0).
@@ -306,7 +306,7 @@ fn atrous_post_edge_rejection() {
 #[test]
 fn atrous_post_strength_blend() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let tracer = MetalShadowRayTracer::new(&h.device);
+    let tracer = GpuShadowRayTracer::new(&h.device);
 
     let depth = [NON_VOID; 9];
     let normal: [[f32; 4]; 9] = std::array::from_fn(|_| [0.0, 0.0, 1.0, 0.0]);

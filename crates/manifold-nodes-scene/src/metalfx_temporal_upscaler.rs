@@ -28,25 +28,16 @@
 //! // read from upscaler.output.texture (at dst_w × dst_h)
 //! ```
 
-#[cfg(target_os = "macos")]
 mod imp {
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
-    /// GPU temporal upscaler: MetalFX Temporal. Created once per
+    /// GPU temporal upscaler: MetalFX Temporal on the Mac. Created once per
     /// (src_dims, dst_dims); call `resize()` on dimension change — same
     /// lifecycle contract as `MetalFxFullFrameUpscaler`.
-    ///
-    /// Uses `Metal4FxTemporalScaler` (MTL4, GPU-side sync) when
-    /// `metalfx_m4_temporal_available()` says so and classic
-    /// `MetalFxTemporalScaler` otherwise. MTL4 is off by default
-    /// (RAYTRACING_DESIGN.md section 17.7 (Metal 4 scaler migration), DN-P).
     pub struct MetalFxTemporalUpscaler {
-        /// Classic MTLFX scaler (fallback).
-        classic: Option<manifold_gpu::metalfx::MetalFxTemporalScaler>,
-        /// MTL4 scaler with GPU-side sync (preferred).
-        m4: Option<manifold_gpu::metalfx_m4::Metal4FxTemporalScaler>,
-        /// Output at dst_w × dst_h. Blit this to IOSurface / downstream.
+        scaler: manifold_gpu::GpuTemporalUpscaler,
+        /// Output at dst_w × dst_h, read downstream.
         pub output: RenderTarget,
         pub src_w: u32,
         pub src_h: u32,
@@ -56,8 +47,7 @@ mod imp {
 
     impl MetalFxTemporalUpscaler {
         /// Create an upscaler for the given dimensions.
-        /// Returns `None` if MetalFX Temporal is not available on this device.
-        /// Prefers MTL4 when available, falls back to classic MTLFX.
+        /// Returns `None` if no temporal upscaler is available on this device.
         pub fn new(
             device: &manifold_gpu::GpuDevice,
             src_w: u32,
@@ -65,37 +55,12 @@ mod imp {
             dst_w: u32,
             dst_h: u32,
         ) -> Option<Self> {
+            let scaler =
+                manifold_gpu::GpuTemporalUpscaler::new(device, src_w, src_h, dst_w, dst_h)?;
             let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
-            let m4 = device.mtl4_bridge().and_then(|bridge| {
-                manifold_gpu::metalfx_m4::Metal4FxTemporalScaler::new(
-                    device.raw_device(),
-                    bridge,
-                    src_w,
-                    src_h,
-                    dst_w,
-                    dst_h,
-                    fmt,
-                )
-            });
-            let classic = if m4.is_none() {
-                manifold_gpu::metalfx::MetalFxTemporalScaler::new(
-                    device.raw_device(),
-                    src_w,
-                    src_h,
-                    dst_w,
-                    dst_h,
-                    fmt,
-                )
-            } else {
-                None
-            };
-            if m4.is_none() && classic.is_none() {
-                return None;
-            }
             let output = RenderTarget::new(device, dst_w, dst_h, fmt, "MetalFX Temporal Output");
             Some(Self {
-                classic,
-                m4,
+                scaler,
                 output,
                 src_w,
                 src_h,
@@ -104,10 +69,9 @@ mod imp {
             })
         }
 
-        /// Returns `true` if MetalFX Temporal Scaler is supported on this device.
+        /// Returns `true` if a temporal upscaler is supported on this device.
         pub fn is_available(device: &manifold_gpu::GpuDevice) -> bool {
-            manifold_gpu::metalfx_m4::supports_m4_temporal(device.raw_device())
-                || manifold_gpu::metalfx::supports_temporal_scaling(device.raw_device())
+            manifold_gpu::GpuTemporalUpscaler::is_available(device)
         }
 
         /// Upscale `color`/`depth`/`motion` (all at src_w × src_h) →
@@ -117,12 +81,10 @@ mod imp {
         /// history for this frame — the caller decides when, this type
         /// just encodes it.
         ///
-        /// Returns `true` if the scaler wrote to `self.output`. On the MTL4
-        /// path, `false` means the per-device allocator ring was saturated
-        /// and the frame was skipped — `self.output` still holds the last
-        /// upscaled frame, and the caller should present it as-is (one-frame
-        /// freeze under extreme backpressure, recovers when the ring drains).
-        /// The classic path always returns `true`.
+        /// Returns `true` if the scaler wrote to `self.output`. `false`
+        /// means the frame was skipped under backpressure — `self.output`
+        /// still holds the last upscaled frame, and the caller should
+        /// present it as-is (one-frame freeze, recovers when the ring drains).
         #[allow(clippy::too_many_arguments)]
         pub fn upscale(
             &self,
@@ -134,22 +96,8 @@ mod imp {
             jitter_offset_y: f32,
             reset: bool,
         ) -> bool {
-            let cmd_buf = gpu.native_enc.raw_cmd_buf();
-            if let Some(ref m4) = self.m4 {
-                return m4.encode(
-                    cmd_buf,
-                    color,
-                    depth,
-                    motion,
-                    &self.output.texture,
-                    jitter_offset_x,
-                    jitter_offset_y,
-                    reset,
-                );
-            }
-            let classic = self.classic.as_ref().expect("new() guarantees one scaler");
-            classic.encode(
-                cmd_buf,
+            self.scaler.encode(
+                gpu.native_enc,
                 color,
                 depth,
                 motion,
@@ -157,13 +105,12 @@ mod imp {
                 jitter_offset_x,
                 jitter_offset_y,
                 reset,
-            );
-            true
+            )
         }
 
         /// Resize both the scaler and the internal output texture when
         /// dimensions change. Returns `false` if no scaler could be created
-        /// for the new dimensions (MetalFX Temporal unavailable).
+        /// for the new dimensions.
         pub fn resize(
             &mut self,
             device: &manifold_gpu::GpuDevice,
@@ -172,44 +119,7 @@ mod imp {
             dst_w: u32,
             dst_h: u32,
         ) -> bool {
-            let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
-            // Same preference as `new`: rebuild whichever generation was
-            // live; if the MTL4 build fails for the new dims, fall back to
-            // classic rather than dropping the upscaler entirely.
-            if self.m4.is_some() {
-                let bridge = device.mtl4_bridge();
-                self.m4 = bridge.and_then(|b| {
-                    manifold_gpu::metalfx_m4::Metal4FxTemporalScaler::new(
-                        device.raw_device(),
-                        b,
-                        src_w,
-                        src_h,
-                        dst_w,
-                        dst_h,
-                        fmt,
-                    )
-                });
-                if self.m4.is_none() {
-                    self.classic = manifold_gpu::metalfx::MetalFxTemporalScaler::new(
-                        device.raw_device(),
-                        src_w,
-                        src_h,
-                        dst_w,
-                        dst_h,
-                        fmt,
-                    );
-                }
-            } else {
-                self.classic = manifold_gpu::metalfx::MetalFxTemporalScaler::new(
-                    device.raw_device(),
-                    src_w,
-                    src_h,
-                    dst_w,
-                    dst_h,
-                    fmt,
-                );
-            }
-            if self.m4.is_none() && self.classic.is_none() {
+            if !self.scaler.resize(device, src_w, src_h, dst_w, dst_h) {
                 return false;
             }
             self.src_w = src_w;
@@ -222,7 +132,6 @@ mod imp {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub use imp::MetalFxTemporalUpscaler;
 
 /// Halton(2,3) low-discrepancy jitter sequence — the standard TAA/MetalFX

@@ -1,5 +1,5 @@
 //! `docs/RAYTRACING_DESIGN.md` section 16 (TL-B) — value-level proofs for
-//! `walk_with_transmission` (`manifold_gpu::raytrace::MetalShadowRayTracer`'s
+//! `walk_with_transmission` (`manifold_gpu::raytrace::GpuShadowRayTracer`'s
 //! translucent shadow-ray walk — `tint *= factor * transmission_colour`, declined
 //! candidate continuation, single/stack/cutout legs).
 //!
@@ -39,7 +39,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    GiMaterial, GpuShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
     ensure_normal_sources,
 };
 use manifold_gpu::{
@@ -144,7 +144,7 @@ fn run_tl_fixture(
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate; the encode rides the dispatch
     // encoder below (no separate async build command buffer anymore).
     let plan = tracer

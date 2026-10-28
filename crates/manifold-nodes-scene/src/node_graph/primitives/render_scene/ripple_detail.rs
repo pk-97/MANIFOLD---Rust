@@ -185,6 +185,7 @@ impl RippleDetail {
 
     /// Rebuild the slope tile of every field that wants ripples, and drop the
     /// tiles of fields that no longer do. Allocates only for a new slot.
+    /// Without a GPU FFT no field has ripples.
     pub(super) fn encode(
         &mut self,
         device: &GpuDevice,
@@ -193,6 +194,10 @@ impl RippleDetail {
         seconds: f32,
     ) {
         self.ensure_common(device);
+        if !device.supports_fft() {
+            self.tiles.clear();
+            return;
+        }
         self.tiles.retain(|tile| {
             fields
                 .iter()

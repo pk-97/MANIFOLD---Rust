@@ -1,6 +1,6 @@
 //! BUG-dx6w/BUG-axe9 value-level proof for the RT-R2 specular-history
 //! variance clip
-//! (`manifold_gpu::raytrace::MetalShadowRayTracer::debug_clamp_refl_history`,
+//! (`manifold_gpu::raytrace::GpuShadowRayTracer::debug_clamp_refl_history`,
 //! which dispatches the EXACT SAME `clamp_refl_history` MSL helper
 //! `accumulate_irradiance` calls internally against a caller-supplied 3x3
 //! `hi_refl` neighborhood and a history value — no accumulation pass, no
@@ -37,7 +37,7 @@
 //!   flagged. In MAPPED space the box is tight, so the clamp actually
 //!   engages and knocks the output down toward black.
 
-use manifold_gpu::raytrace::MetalShadowRayTracer;
+use manifold_gpu::raytrace::GpuShadowRayTracer;
 
 const TOLERANCE: f32 = 1e-4;
 /// Wider tolerance for cases where the clamp box's own width is near-zero
@@ -100,7 +100,7 @@ fn untonemap(t: [f32; 3]) -> [f32; 3] {
 fn clamp_refl_history_noisy_neighborhood_keeps_history_inside_box() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     // Checkerboard 0.2/0.8, same value on every channel, alpha unused.
     let samples = [0.2f32, 0.8, 0.2, 0.8, 0.2, 0.8, 0.2, 0.8, 0.2];
@@ -136,7 +136,7 @@ fn clamp_refl_history_noisy_neighborhood_keeps_history_inside_box() {
 fn clamp_refl_history_flat_neighborhood_collapses_to_mean() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     let neighborhood: [[f32; 4]; 9] = std::array::from_fn(|_| [0.5, 0.5, 0.5, 1.0]);
 
@@ -169,7 +169,7 @@ fn clamp_refl_history_flat_neighborhood_collapses_to_mean() {
 fn clamp_refl_history_hdr_neighborhood_engages_in_mapped_space() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     // 8 texels at 0.0, 1 at 100.0 (alpha 1.0, unused by the kernel).
     let samples = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.0];

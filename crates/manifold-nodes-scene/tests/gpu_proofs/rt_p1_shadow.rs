@@ -1,6 +1,6 @@
 //! `docs/RAYTRACING_DESIGN.md` section 5.2 P1/RT-D3 — value-level proof for the
 //! `manifold-gpu` hard-shadow-ray trait/kernel
-//! (`manifold_gpu::raytrace::{ShadowRayTracer, MetalShadowRayTracer}`),
+//! (`manifold_gpu::raytrace::{ShadowRayTracer, GpuShadowRayTracer}`),
 //! ported from `tools/rt_prototype/src/accel.rs` +
 //! `tools/rt_prototype/shaders/rt_trace.metal`'s shadow-only slice, RT-D3
 //! integration: ray origins reconstructed in-kernel from a depth texture +
@@ -37,7 +37,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    GiMaterial, GpuShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
 };
 use manifold_gpu::{
     GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -123,7 +123,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     let vertex_buffer = write_shared_buffer(device, &verts);
     let index_buffer = write_shared_buffer(device, &indices);
 
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let objects = [RtObjectGeometry {
         instance_inner: RtObjectGeometry::NO_INNER,
         material_attributes: Default::default(),
@@ -431,7 +431,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     let occ_vertex_buffer = write_shared_buffer(device, &occ_verts);
     let occ_index_buffer = write_shared_buffer(device, &occ_indices);
 
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let objects = [
         RtObjectGeometry {
             instance_inner: RtObjectGeometry::NO_INNER,

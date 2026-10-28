@@ -1,7 +1,7 @@
 //! `docs/RAYTRACING_DESIGN.md` section 8 Tier-1 item 2 — value-level proof for
 //! RT-T1-B's real vertex-normal interpolation
 //! (`manifold_gpu::raytrace::{RtNormalSource, ensure_normal_sources,
-//! MetalShadowRayTracer::debug_fetch_interpolated_normal}`), replacing the
+//! GpuShadowRayTracer::debug_fetch_interpolated_normal}`), replacing the
 //! RT trace kernel's depth finite-difference normal reconstruction.
 //!
 //! Fixture: ONE object, a flat (non-indexed) 2-triangle quad —
@@ -31,7 +31,7 @@
 //! helper `trace_shadow_rays` calls internally for its AO/GI-normal fetch
 //! and its GI-bounce hit-normal fetch.
 
-use manifold_gpu::raytrace::{MetalShadowRayTracer, RtObjectGeometry, ensure_normal_sources};
+use manifold_gpu::raytrace::{GpuShadowRayTracer, RtObjectGeometry, ensure_normal_sources};
 
 /// Flat (non-indexed) vertex layout: 12-byte position, 12-byte normal, no
 /// padding — `packed_float3` mandatory (P0 section 5.1 kernel lesson), stride 24.
@@ -155,7 +155,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
     );
     let normal_sources = normal_sources_slot.expect("ensure_normal_sources must allocate");
 
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
 
     // Triangle 0, barycentric (u=0.5, v=0.25) => w0=0.25 (vtx0), w1=0.5
     // (vtx1), w2=0.25 (vtx2). CPU oracle (Python):
@@ -258,7 +258,7 @@ fn fetch_interpolated_normal_uses_inverse_transpose_for_nonuniform_scale() {
         &objects,
     );
     let normal_sources = normal_sources_slot.expect("ensure_normal_sources must allocate");
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let got = tracer.debug_fetch_interpolated_normal(
         device,
         &normal_sources,

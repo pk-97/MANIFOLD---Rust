@@ -20,6 +20,22 @@ pub struct GpuTemplateStore {
     _reserved: (),
 }
 
+impl GatedRecorder<'_> {
+    /// One gated dispatch of the round: `groups` are its threadgroup counts
+    /// when its round runs.
+    pub fn dispatch_gated(
+        &mut self,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        groups: [u32; 3],
+        _gate: &GpuBuffer,
+        _gate_offset: u64,
+        label: &str,
+    ) {
+        todo!("vulkan P1")
+    }
+}
+
 impl GpuTemplateStore {
     pub fn new(device: &GpuDevice) -> Self {
         todo!("vulkan P1")

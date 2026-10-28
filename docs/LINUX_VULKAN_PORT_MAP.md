@@ -89,21 +89,14 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 
 ## 4. Metal-only features that callers assume
 
-Each becomes a backend-neutral API with a capability check (design 6.2). The Vulkan build then compiles without `target_os` gates in shared crates.
+Each is a backend-neutral API with a capability check on `GpuDevice` (design 6.2): `supports_ray_tracing`, `supports_denoiser`, `supports_upscaler` and `supports_fft` are true on Metal and false on Vulkan until P7.
 
-| Feature | Callers that break the Vulkan build | On Vulkan until built |
-|---|---|---|
-| Ray tracing | 61 ungated lines in 11 files: `manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:181,182,1446,1447,1487-1491,1903,1911,1921`, `render_scene/{rt_frame,rt_trace,resources,subsurface,post_passes,rt_changes}.rs`, `manifold-node-engine/src/gpu/gpu_encoder.rs:30`, `manifold-nodes/src/registry.rs:74` (tracer prewarm), `manifold-app/src/content_export.rs:122`, `content_pipeline.rs:586` | Tracer unavailable, scenes use raster shadow maps. P7 |
-| Denoiser | `render_scene.rs:180`, `render_scene/resources.rs:147,158`; the wrapper `manifold-nodes-scene/src/denoiser.rs` is Mac-only inside but declared ungated (`lib.rs:6`) and used ungated (`render_scene.rs:1188`, `resources.rs:1083`) | `denoiser_available()` false, stub type. P7 |
-| MetalFX temporal upscale | `manifold-nodes-scene/src/metalfx_temporal_upscaler.rs`, used ungated at `render_scene.rs:1196`, `resources.rs:1123`, `render_scene/frame_setup.rs:1047` | One upscaler capability, unavailable. P7 |
-| MetalFX spatial upscale | `manifold-compositor/src/metalfx_upscaler.rs` (declared ungated, `lib.rs:11`), used Mac-gated at `content_pipeline.rs:421,3620` | `fsr1.rs` stays the portable path |
-| GPU FFT | `manifold-nodes-image/src/node_graph/primitives/inverse_fft_2d.rs:6,94`, `render_scene/ripple_detail.rs:106,156` (glob import), `ocean_spectrum.rs:627` (test) | Unavailable, the nodes say so. P7 |
-| GPU faults and firmware | `gpu_fault` ungated at `manifold-app/src/content_commands.rs:270,313,722,727,754`, `content_export.rs:19,1367,1521`, `main.rs:504,526`; `firmware_reports` at `main.rs:533` | Both modules exist: device-lost maps to fault kinds (D19), firmware reports empty. P1 |
-| Capture scopes | `manifold-app/src/app.rs:1593` | No-op (D20) |
-| Residency | `content_pipeline.rs:785,1356,1372` (Mac-gated) | Empty |
-| Raw handle in shared code | `render_scene/gltf_mesh_source.rs:979` uses `raw_cmd_buf()` as an id inside a trace log | Use a backend-neutral encoder id |
+- Ray tracing: `GpuShadowRayTracer`, `RtAccel` and the `ShadowRayTracer` seam (`raytrace_types/seam.rs`). The scene builds no tracer without the capability and keeps raster shadow maps.
+- Upscaling and denoising: `GpuSpatialUpscaler`, `GpuTemporalUpscaler` and `GpuTemporalDenoiser` (`metal/scalers.rs`). The compositor and nodes-scene wrappers hold these and no raw handles; `fsr1.rs` stays the portable spatial path.
+- FFT: Inverse FFT 2D reports "no FFT" and water fields lose their ripples.
+- Faults, firmware, capture scopes and residency are empty on Vulkan.
 
-The other raw-handle users are Mac-gated and stay Metal: the compositor and nodes-scene MetalFX and denoiser wrappers (until they move into `manifold-gpu`), `manifold-media/src/video_renderer.rs:405` and `metal_encoder.rs`, `manifold-recording/src/session.rs:102`, `texture_pool.rs:23,109`, `recording_thread.rs:150`, `manifold-app/src/content_export.rs:1625` and `content_pipeline.rs:1394`. Because those gates are still true on the Mac, `manifold-app`, `manifold-media` and `manifold-recording` build against Vulkan on Linux only (design section 3). Their Linux replacements are P5.
+The remaining raw-handle users are Mac-gated and stay Metal: `manifold-media/src/video_renderer.rs:405` and `metal_encoder.rs`, `manifold-recording/src/session.rs:102`, `texture_pool.rs:23,109`, `recording_thread.rs:150`, `manifold-app/src/content_export.rs:1625` and `content_pipeline.rs:1394`. Because those gates are still true on the Mac, `manifold-app`, `manifold-media` and `manifold-recording` build against Vulkan on Linux only (design section 3). Their Linux replacements are P5.
 
 ---
 
@@ -169,10 +162,9 @@ About 525 `target_os` lines in 46 files. Grouped by what they gate:
 | manifold-audio | System-audio capture is a CoreAudio process tap (`capture/process_tap.rs`, 792 lines); off-Mac `unsupported_tap.rs` returns an error. Input asks cpal for its default buffer (`cpal_input.rs:88`), which on ALSA is 25 ms periods and a 100 ms buffer; the kick detector needs a small fixed buffer. The device list already falls back to cpal. Mic permission returns Granted off-Mac | P4: PipeWire monitor capture, buffer size, cpal 0.15 → 0.18 together with kira |
 | manifold-playback | Works as is: midir and cpal on ALSA, rusty_link (needs cmake and libclang), kira (0.9.6 pins cpal 0.15). Stem separation: the bundled demucs runtime exists only for macOS (`tools/audio_analysis/BundledRuntime/macOS`, `stage_runtime_mac.sh`); the device is `auto`, so CUDA is picked on Linux | P4 (runtime) |
 | manifold-native | The two ML plugins are Mach-O `.bundle`s with OpenCV dylibs (BlobDetector 32 MB, DepthEstimator 72 MB). The loader hardcodes `<name>.bundle/Contents/MacOS/<name>` (`ffi/mod.rs:12`). Their C++ sources are portable (`assets/plugins/BlobDetector/BlobDetectorPlugin.cpp`, 520 lines; `DepthEstimator/DepthEstimatorPlugin.cpp`, 1,464 lines); only `build.sh` is Mac-only. `region_ffi.rs:253-327` tests use `codesign` and `otool` | P4: build `lib<name>.so` against `libopencv-dev`, names from `std::env::consts` |
-| manifold-nodes-scene | Section 4 (ray tracing, denoiser, MetalFX, FFT). Decode cache under `Library/Caches` (`decode_cache.rs:132`) | P3 seams |
-| manifold-node-engine | Ray-tracing types ungated (section 4). `exec/metal_backend.rs:1562-1640` tests compare `raw_ptr()` (gpu-proofs). Preset paths (section 6). `gpu/uniform_arena.rs` is dead (section 11) | P3 |
-| manifold-nodes | `registry.rs:74` prewarms the Metal tracer ungated. Dead Mac dev-dependencies (section 2) | P3 |
-| manifold-compositor | MetalFX spatial wrapper (section 4) | P3 |
+| manifold-nodes-scene | Decode cache under `Library/Caches` (`decode_cache.rs:132`) | P3 seams |
+| manifold-node-engine | `exec/metal_backend.rs:1562-1640` tests compare `raw_ptr()` (gpu-proofs). Preset paths (section 6). `gpu/uniform_arena.rs` is dead (section 11) | P3 |
+| manifold-nodes | Dead Mac dev-dependencies (section 2) | P3 |
 | manifold-physics | Thread count: Mac performance cores, `available_parallelism` elsewhere (`lib.rs:471-485`). On the 9950X3D that is 32 threads over two chiplets, only one with the extra cache | P8: measure |
 | manifold-fluids | OpenMP (section 2). The `sheet_oracle.rs:245-260` test asserts an arm64 clang build of the oracle, so its baseline does not hold on x86_64 gcc | Test stays Mac-only |
 | No findings | manifold-core, -editing, -foundation, -profiler, -ui, -spectral, -nodes-physics, -water-rigid, -water-liquid, -water-gpu-mpm, -water-surface, -water-whitewater | |
@@ -187,7 +179,7 @@ Out of scope: `plugins/` (the analyzer VST, its own workspace, uses IOSurface in
 
 **Scripts.**
 - Portable: `wgsl_check.py`, `dev.py`, `run_ui_flows.py`, `gpu_queue.py` and `bridge_probe_gate.py`.
-- `feature_matrix.py` builds its rows from cargo metadata, so `manifold-gpu --features vulkan` is already a row (red today, green after step 7).
+- `feature_matrix.py` builds its rows from cargo metadata, so `manifold-gpu --features vulkan` is a row.
 - Mac-only: `launch_live_ui.py` (builds a `.app`), `rt_dynamic_acceptance.py` (`sysctl`, `system_profiler`, blocked off-Darwin), `sync_rig_report.py` (`~/Library/Logs`), `install-abletonosc-patch.sh` (Dropbox path), `assets/plugins/*/build.sh`, `tools/audio_analysis/stage_runtime_mac.sh` and `plugins/scripts/build-analyzer-vst-plugin.sh`.
 - Hardcoded repo path `/Users/peterkiemann/MANIFOLD - Rust`: `rt_noise_gate.py:103`, `rt_quality_matrix.py:28`, `rt_toggle_matrix.py:46` and `claude-pane.sh:47`. Derive it from the script's own location.
 
@@ -213,12 +205,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then the P4 pi
 4. **Hoist neutral logic.** Done 28 Oct.
 5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, commit forms, the upload merge, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
 6. **Frame bridge on one device.** Done 28 Oct: the content device is the UI device's `sibling` and the bridge holds plain `GpuTexture`s. The headless subcommands booting the normal pipeline is still open (section 11).
-7. **Vulkan skeleton.**
-   - Every section 3 row exists in `vulkan/` with the Metal signature and a `todo!("vulkan P1")` or `todo!("vulkan P2")` body. The stub's design contradictions go: the sizes-buffer slot (D9), the owned instance (D16), the MoltenVK naming (D21), and a `SlotKind` that cannot tell uniform from storage buffers or sampled from storage images (D2).
-   - Ray tracing, the denoiser, the upscaler and the FFT exist as unavailable capabilities; one unit test asserts each is available on Metal.
-   - Faults, firmware, capture scopes and residency are empty.
-   - The section 4 callers stop assuming Metal.
-   - Done when `cargo clippy --features manifold-gpu/vulkan --tests -- -D warnings` passes for `manifold-gpu` and every crate except `manifold-app`, `manifold-media` and `manifold-recording` (design section 3). From here the compiler holds the remaining list.
+7. **Vulkan skeleton.** Done 28 Oct: `vulkan/` mirrors every Metal signature with `todo!` bodies naming their phase, the section 4 callers check capabilities, and `cargo clippy --features manifold-gpu/vulkan --all-targets -- -D warnings` passes for every crate except `manifold-app`, `manifold-media` and `manifold-recording`.
 8. **Linux compile.** In the VM, select the backend by target and run `cargo check --workspace`. Fix the compile breaks in sections 6 and 7 with gates or neutral stubs, no features yet. Done when the workspace compiles on Linux.
 
 **Attended, before P1 needs them**
@@ -285,6 +272,5 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 **Bigger cuts**
 - **Headless harness.** `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` boot through a Mac-only harness that duplicates app setup. After the bridge change they boot the normal content pipeline.
 - **One text engine.** The UI (2,172 lines) and the Text generator (689 lines) are two separate CoreText implementations. One cosmic-text module serves both.
-- **MetalFX and denoiser wrappers** reach into raw Metal handles from `manifold-compositor` and `manifold-nodes-scene`. They move into `manifold-gpu` behind the upscaler and denoiser capabilities (design 6.2), and those crates lose all raw-handle code.
 
 **Where the frame loop waits on the GPU:** only in coupled-liquid substeps (`commit_wait_and_continue`, `substep_region.rs:223`). The other production `commit_and_wait_completed` calls (about 35) sit in warmup, bakes, thumbnails and tools.

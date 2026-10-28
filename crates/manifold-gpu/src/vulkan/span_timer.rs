@@ -6,6 +6,7 @@
 
 use super::*;
 
+#[derive(Default)]
 pub struct GpuSpanTimer {
     _reserved: (),
 }

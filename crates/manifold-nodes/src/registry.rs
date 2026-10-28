@@ -71,7 +71,7 @@ impl GeneratorRegistry {
         manifold_nodes_scene::node_graph::primitives::render_mesh_diagram::RenderMeshDiagram::prewarm_pipelines(device);
         // The RT shadow-ray pipeline set is device-global; warm it before the
         // first RenderScene construction.
-        manifold_gpu::raytrace::MetalShadowRayTracer::prewarm(device);
+        manifold_gpu::raytrace::GpuShadowRayTracer::prewarm(device);
         // `node.gltf_texture_source` uses a hand-written runtime blit, so the
         // atom sweep skips it.
         GltfTextureSource::prewarm_pipeline(device);

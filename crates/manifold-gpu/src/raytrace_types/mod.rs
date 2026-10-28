@@ -9,6 +9,8 @@ use crate::{GpuBuffer, GpuTexture};
 
 mod params;
 pub use params::*;
+mod seam;
+pub use seam::ShadowRayTracer;
 
 /// Fixed-capacity texture list returned by the normal-source table builder.
 /// The cap is part of the shader ABI, so this keeps the hot per-frame list on
@@ -238,7 +240,7 @@ pub enum RtAccelError {
 }
 
 /// One caller-supplied world-space ray
-/// for [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
+/// for [`GpuShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
 /// `DebugRayQueryRay` (packed_float3 pairs + two scalars).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -253,7 +255,7 @@ pub struct DebugRayQueryRay {
 pub const DEBUG_RAY_INVALID: u32 = u32::MAX;
 
 /// One committed-hit record from
-/// [`MetalShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
+/// [`GpuShadowRayTracer::debug_ray_query`]. Layout mirrors the MSL
 /// `DebugRayQueryHit` exactly. P4b (§5.2): `coverage`/`brightness` report
 /// the accepted hit's appearance evaluation (`clamp(gain*weight, 0, 1)` /
 /// `max(gain*weight, 1)` — render_scene.wgsl:889's `apply_appearance`);
@@ -325,3 +327,34 @@ pub struct EmissiveAliasEntry {
 }
 
 const _: () = assert!(std::mem::size_of::<EmissiveAliasEntry>() == 8);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RtTopologyMismatchCategory {
+    ObjectCount,
+    DescriptorMode,
+    Vertex,
+    Index,
+    NormalUv,
+    InstanceSlots,
+    NonOpaque,
+    AppearanceWeights,
+    SlotOverflow,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RtTopologyMismatch {
+    pub object: usize,
+    pub category: RtTopologyMismatchCategory,
+}
+
+/// What the tracer has measured, for proofs and diagnostics.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TraceTimingReport {
+    /// Trace command buffers whose GPU time has been read back.
+    pub measured_buffers: u64,
+    /// Longest measured trace buffer, seconds, over the tracer's life.
+    pub longest_buffer_seconds: f64,
+    /// Trace command buffers the most recent dispatch committed.
+    pub last_dispatch_buffers: u32,
+    /// Pixel budget the most recent dispatch planned with.
+    pub last_pixels_per_tile: u64,
+}

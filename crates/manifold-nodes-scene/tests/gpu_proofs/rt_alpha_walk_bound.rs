@@ -21,7 +21,7 @@
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    DebugRayQueryHit, DebugRayQueryRay, GiMaterial, MetalShadowRayTracer, RT_WALK_MAX_CANDIDATES,
+    DebugRayQueryHit, DebugRayQueryRay, GiMaterial, GpuShadowRayTracer, RT_WALK_MAX_CANDIDATES,
     RtAccel, RtGeometryChange, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
     ensure_normal_sources,
 };
@@ -212,7 +212,7 @@ struct Scene<'a> {
 
 fn build<'a>(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     objects: &[RtObjectGeometry<'a>],
 ) -> Scene<'a> {
     let plan = tracer
@@ -245,7 +245,7 @@ fn build<'a>(
 
 fn query(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     scene: &Scene<'_>,
     rays: &[DebugRayQueryRay],
 ) -> Vec<DebugRayQueryHit> {
@@ -283,7 +283,7 @@ fn suns() -> [ShadowCaster; 4] {
 /// Returns `out_sv` read back as RGBA f32.
 fn trace(
     device: &GpuDevice,
-    tracer: &MetalShadowRayTracer,
+    tracer: &GpuShadowRayTracer,
     scene: &Scene<'_>,
     objects: &[RtObjectGeometry<'_>],
     size: [u32; 2],
@@ -381,7 +381,7 @@ fn alpha_walk_stops_at_the_candidate_cap() {
     // Off the quad diagonal, so each card contributes exactly one triangle.
     let rays = [ray_up(0.3, -0.5), ray_up(-0.7, -1.2), ray_up(1.1, 0.4)];
 
-    let capped = MetalShadowRayTracer::new(device);
+    let capped = GpuShadowRayTracer::new(device);
     let scene = build(device, &capped, &objects);
     for (i, hit) in query(device, &capped, &scene, &rays).iter().enumerate() {
         assert_eq!(
@@ -399,7 +399,7 @@ fn alpha_walk_stops_at_the_candidate_cap() {
         );
     }
 
-    let unbounded = MetalShadowRayTracer::with_walk_cap_for_proof(device, u32::MAX);
+    let unbounded = GpuShadowRayTracer::with_walk_cap_for_proof(device, u32::MAX);
     let scene = build(device, &unbounded, &objects);
     for (i, hit) in query(device, &unbounded, &scene, &rays).iter().enumerate() {
         assert!(
@@ -431,7 +431,7 @@ fn alpha_walk_cap_leaves_ordinary_cards_unchanged() {
     let objects = [card_object(&verts, ORDINARY_LAYERS, &leaves)];
     let size = [64, 64];
 
-    let capped = MetalShadowRayTracer::new(device);
+    let capped = GpuShadowRayTracer::new(device);
     let scene = build(device, &capped, &objects);
     let with_cap = trace(device, &capped, &scene, &objects, size, 3);
     let depth_rays: Vec<_> = (0..64)
@@ -447,7 +447,7 @@ fn alpha_walk_cap_leaves_ordinary_cards_unchanged() {
         "ordinary rays stay well under the cap ({deepest} candidates)"
     );
 
-    let unbounded = MetalShadowRayTracer::with_walk_cap_for_proof(device, u32::MAX);
+    let unbounded = GpuShadowRayTracer::with_walk_cap_for_proof(device, u32::MAX);
     let scene = build(device, &unbounded, &objects);
     let without_cap = trace(device, &unbounded, &scene, &objects, size, 3);
 
@@ -491,7 +491,7 @@ fn alpha_walk_trace_buffers_stay_under_the_time_ceiling() {
     );
     let objects = [card_object(&verts, PATHOLOGICAL_LAYERS, &sparse)];
     let size = [512, 512];
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     let scene = build(device, &tracer, &objects);
 
     let mut first_buffers = 0;

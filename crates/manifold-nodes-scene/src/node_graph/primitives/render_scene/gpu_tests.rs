@@ -1978,7 +1978,7 @@ fn more_casters_grow_only_the_visibility_arrays() {
 #[test]
 fn rt_post_scratch_shared_backing_matches_dedicated_across_queued_frames() {
     use manifold_gpu::raytrace::{
-        AtrousParams, AtrousPostParams, MetalShadowRayTracer, ShadowRayTracer,
+        AtrousParams, AtrousPostParams, GpuShadowRayTracer, ShadowRayTracer,
     };
 
     const W: u32 = 9;
@@ -2117,7 +2117,7 @@ fn rt_post_scratch_shared_backing_matches_dedicated_across_queued_frames() {
     gi_materials.zero_fill();
     let sv_scratch: [manifold_gpu::GpuTexture; 2] =
         std::array::from_fn(|_| rgba16f_layers(&device, W, H, "rt-post-scratch-visibility"));
-    let tracer = MetalShadowRayTracer::new(&device);
+    let tracer = GpuShadowRayTracer::new(&device);
     let shared_aux_a: [manifold_gpu::GpuTexture; 4] =
         std::array::from_fn(|_| rgba16f_target(&device, W, H, "rt-post-scratch-shared-pre-a"));
     let shared_aux_b: [manifold_gpu::GpuTexture; 4] =
@@ -2414,7 +2414,7 @@ fn rt_post_scratch_shared_backing_matches_dedicated_across_queued_frames() {
 /// shared path with a dedicated scratch control at every frame.
 #[test]
 fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
-    use manifold_gpu::raytrace::{AtrousParams, MetalShadowRayTracer, ShadowRayTracer};
+    use manifold_gpu::raytrace::{AtrousParams, GpuShadowRayTracer, ShadowRayTracer};
 
     const W: u32 = 9;
     const H: u32 = 9;
@@ -2550,7 +2550,7 @@ fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
     let atrous_params_buffer =
         device.create_buffer_shared(std::mem::size_of::<AtrousParams>() as u64);
     let firefly_params_buffer = device.create_buffer_shared(16);
-    let tracer = MetalShadowRayTracer::new(&device);
+    let tracer = GpuShadowRayTracer::new(&device);
     let params = AtrousParams::new([W, H], 2, true, 0);
     let firefly_params = manifold_gpu::raytrace::FireflyClampParams::new([W, H], 8.0, 4.0);
     let firefly_stats = tracer.zero_emissive_stats();

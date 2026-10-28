@@ -40,7 +40,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, SVT_SLOT_NONE, ShadowRayParams,
+    GiMaterial, GpuShadowRayTracer, RtObjectGeometry, SVT_SLOT_NONE, ShadowRayParams,
     ShadowRayTracer, ensure_normal_sources,
 };
 use manifold_gpu::{
@@ -145,7 +145,7 @@ fn run_tlc_fixture(
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
-    let tracer = MetalShadowRayTracer::new(device);
+    let tracer = GpuShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
     let plan = tracer

@@ -46,7 +46,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    GiMaterial, GpuShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
     ensure_normal_sources,
 };
 use manifold_gpu::{
@@ -365,7 +365,7 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
         },
     ];
 
-    let mut tracer = MetalShadowRayTracer::new(device);
+    let mut tracer = GpuShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
     let plan = tracer

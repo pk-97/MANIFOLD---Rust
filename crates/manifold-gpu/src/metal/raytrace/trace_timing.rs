@@ -11,6 +11,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
 
+use crate::raytrace_types::TraceTimingReport;
 use crate::trace_planner::{TraceTimeBudget, TraceWorkLimits};
 
 static RESTART_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -21,19 +22,6 @@ static RESTART_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// command buffers the budget allows.
 pub fn request_conservative_trace_tiles() {
     RESTART_EPOCH.fetch_add(1, Ordering::AcqRel);
-}
-
-/// What the tracer has measured, for proofs and diagnostics.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TraceTimingReport {
-    /// Trace command buffers whose GPU time has been read back.
-    pub measured_buffers: u64,
-    /// Longest measured trace buffer, seconds, over the tracer's life.
-    pub longest_buffer_seconds: f64,
-    /// Trace command buffers the most recent dispatch committed.
-    pub last_dispatch_buffers: u32,
-    /// Pixel budget the most recent dispatch planned with.
-    pub last_pixels_per_tile: u64,
 }
 
 /// Dispatch shapes with their own cost estimate: the mask trace, the

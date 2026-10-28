@@ -89,6 +89,10 @@ impl Primitive for InverseFft2d {
             ));
             return;
         }
+        if !ctx.gpu_encoder().device.supports_fft() {
+            ctx.error("Inverse FFT 2D: this GPU backend has no FFT");
+            return;
+        }
         let gpu = ctx.gpu_encoder();
         if !matches!(&self.plan, Some((pn, pb, _)) if (*pn, *pb) == (n, b)) {
             let fft = GpuFft::new_nd(
