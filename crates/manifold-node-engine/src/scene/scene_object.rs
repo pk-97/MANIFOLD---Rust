@@ -165,6 +165,9 @@ pub struct FieldSurface {
     pub cell_size: f32,
     /// Ripple detail strength over the automatic one: 1 is the automatic strength, 0 turns it off.
     pub ripple_detail: f32,
+    /// How strongly the sunlight the surface focuses shows on what lies under
+    /// it: 1 is physical, 0 turns caustics off.
+    pub caustics: f32,
 }
 
 /// The space an object's instances live in. Nested group transforms are

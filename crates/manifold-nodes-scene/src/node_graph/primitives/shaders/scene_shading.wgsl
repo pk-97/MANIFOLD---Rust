@@ -311,8 +311,9 @@ struct CausticFit {
     // How far past the water's surface, in the sun's depth, a receiver must
     // lie to be under it: the water's own surface stays plainly lit.
     bias: f32,
-    pad0: u32,
-    pad1: u32,
+    // How strongly the caustics show: 1 is physical, past 1 exaggerated.
+    intensity: f32,
+    pad: u32,
 }
 // The light the sun puts through the water, relative to its own.
 @group(0) @binding(11) var caustic_map: texture_2d<f32>;
@@ -882,7 +883,8 @@ fn caustic_light(slot: u32, world_pos: vec3<f32>) -> vec3<f32> {
     let b = clamp(vec2<i32>(low) + vec2<i32>(1), vec2<i32>(0), last);
     let top = mix(textureLoad(caustic_map, a, 0).rgb, textureLoad(caustic_map, vec2<i32>(b.x, a.y), 0).rgb, f.x);
     let bottom = mix(textureLoad(caustic_map, vec2<i32>(a.x, b.y), 0).rgb, textureLoad(caustic_map, b, 0).rgb, f.x);
-    return mix(top, bottom, f.y);
+    let light = mix(top, bottom, f.y);
+    return max(vec3<f32>(1.0) + caustic.intensity * (light - vec3<f32>(1.0)), vec3<f32>(0.0));
 }
 
 // Every light's direct term, split by lobe so the caller can compose them.

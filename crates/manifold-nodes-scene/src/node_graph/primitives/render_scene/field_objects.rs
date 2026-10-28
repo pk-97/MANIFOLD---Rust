@@ -33,6 +33,8 @@ pub(super) struct FieldObject<'ctx> {
     pub prev_model: [[f32; 4]; 4],
     /// Ripple detail strength over the automatic one (`FieldSurface::ripple_detail`).
     pub ripple_detail: f32,
+    /// How strongly its caustics show; 0 casts none (`FieldSurface::caustics`).
+    pub caustics: f32,
     pub uniforms: RenderSceneUniforms,
     /// The field's surface mesh, the object's `vertices` when wired: its
     /// depth over the opaque scene is where each ray meets the water.
@@ -384,6 +386,7 @@ impl RenderScene {
             model,
             prev_model: prev_model_n,
             ripple_detail: field.ripple_detail,
+            caustics: field.caustics,
             uniforms,
             mesh,
         }))

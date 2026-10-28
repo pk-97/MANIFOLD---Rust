@@ -186,6 +186,16 @@ pub enum Feature {
     /// The World's render mode: 0 Rendered, 1 Solid, 2 Wireframe, 3 Points.
     RenderMode,
     RayTracing,
+    /// A water's foam cover.
+    Foam,
+    /// A water's spray mist.
+    Mist,
+    /// The wet marks a water leaves on surfaces.
+    WetSurfaces,
+    /// The small ripples on a water's surface.
+    Ripples,
+    /// The sunlight a water focuses onto what lies under it.
+    Caustics,
 }
 
 impl Feature {
@@ -212,6 +222,11 @@ impl Feature {
             Self::SourceRole => "This source role does not use it",
             Self::RenderMode => "This render mode does not use it",
             Self::RayTracing => "Ray Tracing is off",
+            Self::Foam => "Foam is off",
+            Self::Mist => "Spray Mist is off",
+            Self::WetSurfaces => "Wet Surfaces is off",
+            Self::Ripples => "Surface Ripples is off",
+            Self::Caustics => "Caustics is off",
         }
     }
 }

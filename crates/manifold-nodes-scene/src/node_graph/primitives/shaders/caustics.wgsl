@@ -40,7 +40,7 @@ struct Splat {
     // caster slot + 1; w 0.
     sizes: vec4<u32>,
     // x: how far past the water's surface, in the sun's depth, a receiver
-    // must lie to be under it; yzw 0.
+    // must lie to be under it; y: how strongly the caustics show; zw 0.
     bias: vec4<f32>,
 };
 
@@ -52,8 +52,8 @@ struct CausticFit {
     // The sun's caster slot + 1; 0 when there is no water to light.
     slot: u32,
     bias: f32,
-    pad0: u32,
-    pad1: u32,
+    intensity: f32,
+    pad: u32,
 };
 
 struct MeshVertex {
@@ -95,6 +95,7 @@ const CA_FIT_MARGIN: f32 = 0.05;
 fn cs_fit() {
     fit_out.slot = 0u;
     fit_out.bias = s.bias.x;
+    fit_out.intensity = s.bias.y;
     if field_extent_empty() {
         return;
     }

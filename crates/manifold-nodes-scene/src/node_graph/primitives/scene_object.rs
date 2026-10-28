@@ -117,6 +117,57 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &["Off", "On"],
         },
+        // A water field's optional looks, each a switch on its card: off, the
+        // renderer leaves the look out and runs none of its passes. Mist
+        // starts off because its passes cost 2 to 4 ms a frame.
+        ParamDef {
+            name: Cow::Borrowed("foam"),
+            label: "Foam",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Off", "On"],
+        },
+        ParamDef {
+            name: Cow::Borrowed("mist"),
+            label: "Spray Mist",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Off", "On"],
+        },
+        ParamDef {
+            name: Cow::Borrowed("wet_surfaces"),
+            label: "Wet Surfaces",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Off", "On"],
+        },
+        ParamDef {
+            name: Cow::Borrowed("ripples"),
+            label: "Surface Ripples",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Off", "On"],
+        },
+        ParamDef {
+            name: Cow::Borrowed("caustics"),
+            label: "Caustics",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Off", "On"],
+        },
+        ParamDef {
+            name: Cow::Borrowed("caustic_intensity"),
+            label: "Caustic Intensity",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: Cow::Borrowed("emission_strength"),
             label: "Emission Strength",
@@ -312,17 +363,31 @@ fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<
         ));
         return None;
     }
+    let on = |ctx: &EffectNodeContext<'_, '_>, look: &str| ctx.scalar_or_param(look, 1.0) > 0.5;
+    let caustics = if on(ctx, "caustics") {
+        ctx.scalar_or_param("caustic_intensity", 1.0).max(0.0)
+    } else {
+        0.0
+    };
     Some(FieldSurface {
         levelset,
         velocity: ctx.inputs.slot_of("field_velocity"),
-        foam: ctx.inputs.slot_of("field_foam"),
-        mist: ctx.inputs.slot_of("field_mist"),
-        wet_map: ctx.inputs.slot_of("wet_map"),
+        foam: ctx.inputs.slot_of("field_foam").filter(|_| on(ctx, "foam")),
+        mist: ctx.inputs.slot_of("field_mist").filter(|_| on(ctx, "mist")),
+        wet_map: ctx
+            .inputs
+            .slot_of("wet_map")
+            .filter(|_| on(ctx, "wet_surfaces")),
         tiles,
         extent,
         pool_tiles: pool_tiles.round() as u32,
         cell_size,
-        ripple_detail,
+        ripple_detail: if on(ctx, "ripples") {
+            ripple_detail
+        } else {
+            0.0
+        },
+        caustics,
     })
 }
 
@@ -649,6 +714,7 @@ mod tests {
                 pool_tiles: 37,
                 cell_size: 0.045,
                 ripple_detail: 0.4,
+                caustics: 1.0,
             })
         );
         assert!(object.mesh.is_none());

@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use manifold_foundation::param_range::HardLimit;
-use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
+use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Unit};
 
 use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, is_on, on_off,
@@ -160,6 +160,7 @@ const RIPPLES: Reach = Reach::Own("water_ripple_detail");
 const FOAM: Reach = Reach::Own("water_foam_cover");
 const MIST: Reach = Reach::Own("water_mist");
 const WETNESS: Reach = Reach::Own("water_wetness");
+const LOOKS: Reach = Reach::Own(WATER_OBJECT_ROLE);
 use ControlGroup::{Domain, Simulation, Surface, Whitewater};
 
 /// The domain box is axis-aligned: the solvers take no rotation.
@@ -170,6 +171,8 @@ const SIZE: HardLimit = HardLimit::AtLeast(MIN_DOMAIN_SIDE_METRES);
 
 /// The Dam Break tank: four metres a side, standing on the floor.
 const DOMAIN_SIDE: f32 = 4.0;
+
+const WALL_TIP: &str = "On: this face of the box is a wall that holds the water in. Off: water flows out through it and is removed once it leaves the box";
 
 fn water(fields: &ItemFields) -> Option<&WaterFields> {
     match fields {
@@ -201,7 +204,7 @@ fn flip_surface(fields: &ItemFields) -> bool {
     flip(fields) && surface(fields)
 }
 
-pub static WATER_ROWS: [PropertyRow; 41] = [
+pub static WATER_ROWS: [PropertyRow; 49] = [
     row("pos_x", T, Domain, setup())
         .unit(Unit::Metres)
         .limit(HardLimit::Unlimited),
@@ -214,18 +217,21 @@ pub static WATER_ROWS: [PropertyRow; 41] = [
         .limit(HardLimit::Unlimited),
     row("scale_x", T, Domain, setup())
         .name("Size X")
+        .tip("The Bounds box's width in metres: the space the water's walls enclose")
         .unit(Unit::Metres)
         .limit(SIZE)
         .default(DOMAIN_SIDE)
         .when(bounded),
     row("scale_y", T, Domain, setup())
         .name("Size Y")
+        .tip("The Bounds box's height in metres: the space the water's walls enclose")
         .unit(Unit::Metres)
         .limit(SIZE)
         .default(DOMAIN_SIDE)
         .when(bounded),
     row("scale_z", T, Domain, setup())
         .name("Size Z")
+        .tip("The Bounds box's depth in metres: the space the water's walls enclose")
         .unit(Unit::Metres)
         .limit(SIZE)
         .default(DOMAIN_SIDE)
@@ -236,32 +242,40 @@ pub static WATER_ROWS: [PropertyRow; 41] = [
     row("billboard", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
     row("closed_neg_x", DOMAIN, Domain, setup())
         .name("Left Wall")
+        .tip(WALL_TIP)
         .when(bounded),
     row("closed_pos_x", DOMAIN, Domain, setup())
         .name("Right Wall")
+        .tip(WALL_TIP)
         .when(bounded),
     row("closed_neg_y", DOMAIN, Domain, setup())
         .name("Floor")
+        .tip(WALL_TIP)
         .when(bounded),
     row("closed_pos_y", DOMAIN, Domain, setup())
         .name("Ceiling")
+        .tip(WALL_TIP)
         .when(bounded),
     row("closed_neg_z", DOMAIN, Domain, setup())
         .name("Back Wall")
+        .tip(WALL_TIP)
         .when(bounded),
     row("closed_pos_z", DOMAIN, Domain, setup())
         .name("Front Wall")
+        .tip(WALL_TIP)
         .when(bounded),
     // The cell edge in metres; the box's cells follow from its size.
     row("cell_size", CELL_SIZE, Domain, setup())
         .param("value")
         .name("Cell Size")
+        .tip("The simulation's grid cell in metres. Smaller cells show finer splashes and detail but cost far more: half the size holds eight times as many cells")
         .unit(Unit::Metres)
         .default(DEFAULT_CELL_SIZE)
         .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1)),
     row("speed", SPEED, Simulation, perform(CardBand::Scene, 0))
         .param("b")
         .name("Speed")
+        .tip("How fast the water moves against the clip: 1 is real time, 0 holds it still")
         .default(1.0)
         .limit(HardLimit::Between(0.0, 4.0)),
     row(
@@ -316,48 +330,109 @@ pub static WATER_ROWS: [PropertyRow; 41] = [
     row("surface_detail", DETAIL, Surface, setup())
         .param("value")
         .name("Surface Detail")
+        .tip("How finely the surface is built: 0 at the simulation's cell size, 1 at half, 2 at a third. Finer shows smaller splashes and sharper edges, and costs more")
         .default(0.0)
         .range(0.0, 2.0)
         .when(surface),
     row("surface_particle_scale", PARTICLE_SCALE, Surface, setup())
         .param("value")
         .name("Particle Scale")
+        .tip("How large each simulation particle is drawn, times its true size. Larger closes gaps in thin sheets but rounds the water off; smaller keeps splashes crisp but shows single particles")
         .when(surface),
     // Times the smoothing's leash (FIELD_LEASH_CELLS in manifold-water-liquid): 1 is the tuned surface, 0 the raw particle field.
     row("surface_smoothness", SMOOTHNESS, Surface, setup())
         .param("value")
         .name("Smoothness")
+        .tip("How much the surface is smoothed between particles: 0 shows each particle's bumps, 2 is the smoothest")
         .default(1.0)
         .range(0.0, 2.0)
+        .when(surface),
+    // Each optional look is a switch on the water object, which leaves the
+    // look and its passes out while off, with its tuning row folded under it.
+    row("look_ripples", LOOKS, Surface, setup())
+        .param("ripples")
+        .name("Surface Ripples")
+        .tip("Small ripples on the surface, carried by the flow. They catch the light and bend the sun into caustics; still water keeps none")
+        .switch(Feature::Ripples)
+        .toggle()
+        .default(1.0)
         .when(surface),
     // Times the automatic ripples on the surface: 1 is their natural strength, 0 none.
     row("surface_ripple_detail", RIPPLES, Surface, setup())
         .param("value")
-        .name("Ripple Detail")
+        .name("Ripple Strength")
+        .tip("How strong the ripples are, times their natural strength for how fast the water flows")
+        .gate(Gate::Fold(Feature::Ripples))
         .default(1.0)
         .range(0.0, 2.0)
         .when(surface),
+    row("look_foam", LOOKS, Surface, setup())
+        .param("foam")
+        .name("Foam")
+        .tip("White foam lying on the surface where the water churns, from the simulation's foam particles")
+        .switch(Feature::Foam)
+        .toggle()
+        .default(1.0)
+        .when(flip_surface),
     // Times the foam's area: 1 is the foam the particles make, 0 none.
     row("surface_foam", FOAM, Surface, setup())
         .param("strength")
-        .name("Foam")
+        .name("Foam Coverage")
+        .tip("How much of the surface the foam covers, times what the simulation makes")
+        .gate(Gate::Fold(Feature::Foam))
         .default(1.0)
         .range(0.0, 4.0)
+        .when(flip_surface),
+    row("look_mist", LOOKS, Surface, setup())
+        .param("mist")
+        .name("Spray Mist")
+        .tip("A fine haze where the spray is dense, lit by the lights and the sky. Off by default: it costs 2 to 4 ms a frame on the Dam Break")
+        .switch(Feature::Mist)
+        .toggle()
+        .default(0.0)
         .when(flip_surface),
     // Times the spray's droplet extinction: 1 is the mist the spray makes, 0 none.
     row("surface_mist", MIST, Surface, setup())
         .param("strength")
-        .name("Mist")
+        .name("Mist Density")
+        .tip("How thick the haze is, times what the spray's drops would make")
+        .gate(Gate::Fold(Feature::Mist))
         .default(1.0)
         .range(0.0, 4.0)
+        .when(flip_surface),
+    row("look_wet", LOOKS, Surface, setup())
+        .param("wet_surfaces")
+        .name("Wet Surfaces")
+        .tip("Surfaces the water touches turn darker and glossier, then dry")
+        .switch(Feature::WetSurfaces)
+        .toggle()
+        .default(1.0)
         .when(flip_surface),
     // Times the stage drying rate: at 1 a splash fades to a third in 15 s, 0 never dries.
     row("surface_drying", WETNESS, Surface, setup())
         .param("drying")
-        .name("Drying")
+        .name("Drying Speed")
+        .tip("How fast wet surfaces dry: at 1 a splash fades to a third in 15 s, at 0 they stay wet")
+        .gate(Gate::Fold(Feature::WetSurfaces))
         .default(1.0)
         .range(0.0, 1000.0)
         .when(flip_surface),
+    row("look_caustics", LOOKS, Surface, setup())
+        .param("caustics")
+        .name("Caustics")
+        .tip("Bright moving light the surface focuses onto what lies under the water. Needs a Sun that casts shadows")
+        .switch(Feature::Caustics)
+        .toggle()
+        .default(1.0)
+        .when(surface),
+    row("caustic_intensity", LOOKS, Surface, setup())
+        .param("caustic_intensity")
+        .name("Caustic Intensity")
+        .tip("How strongly the caustics show: 1 is physical, higher exaggerates them, 0 leaves the sunlight under the water plain")
+        .gate(Gate::Fold(Feature::Caustics))
+        .default(1.0)
+        .range(0.0, 4.0)
+        .when(surface),
     row(
         "whitewater_amount",
         Reach::Own("whitewater"),
@@ -365,8 +440,23 @@ pub static WATER_ROWS: [PropertyRow; 41] = [
         perform(CardBand::Scene, 1),
     )
     .param("amount")
-    .name("Amount")
+    .name("Whitewater Amount")
+    .tip("How much spray, foam and bubbles the simulation spawns, times its default rate")
     .when(flip),
+    row("spray_visible", Reach::Own("spray_object"), Whitewater, setup())
+        .param("visible")
+        .name("Spray Drops")
+        .tip("Draws the drops splashes throw into the air")
+        .toggle()
+        .default(1.0)
+        .when(flip),
+    row("bubbles_visible", Reach::Own("bubble_object"), Whitewater, setup())
+        .param("visible")
+        .name("Bubbles")
+        .tip("Draws the air bubbles carried under the surface, seen through the water")
+        .toggle()
+        .default(1.0)
+        .when(flip),
     follows(WORLD_FOLLOWS[0], "the World's Gravity X"),
     follows(WORLD_FOLLOWS[1], "the World's Gravity Y"),
     follows(WORLD_FOLLOWS[2], "the World's Gravity Z"),

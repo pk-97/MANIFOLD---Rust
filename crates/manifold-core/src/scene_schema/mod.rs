@@ -135,7 +135,8 @@ pub struct CardFacts {
     pub toggle: bool,
     /// The slider range where the node param's own is not the right one.
     pub range: Option<(f32, f32)>,
-    /// The hover text: why the row stops where it does.
+    /// The hover text: what the row does and why, or why it stops where it
+    /// does.
     pub tip: Option<&'static str>,
 }
 

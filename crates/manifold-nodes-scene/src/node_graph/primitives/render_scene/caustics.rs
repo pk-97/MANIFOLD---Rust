@@ -51,7 +51,7 @@ struct Splat {
 }
 
 /// The size of `CausticFit` in `caustics.wgsl` and `scene_shading.wgsl`: two
-/// matrices, the slot, the bias and two pads. All zeros reads off.
+/// matrices, the slot, the bias, the intensity and a pad. All zeros reads off.
 const FIT_BYTES: u64 = 144;
 
 /// The sun the caustics follow: its caster slot and entry, the shadow maps
@@ -126,9 +126,9 @@ impl Caustics {
             off.zero_fill();
             off
         });
-        let water = fields
-            .iter()
-            .find(|f| f.mesh.is_some() && f.uniforms.transmission_volume_params[0] > 0.0);
+        let water = fields.iter().find(|f| {
+            f.caustics > 0.0 && f.mesh.is_some() && f.uniforms.transmission_volume_params[0] > 0.0
+        });
         let (Some(sun), Some(water), Some(mesh)) =
             (sun, water, water.and_then(|w| w.mesh.as_ref()))
         else {
@@ -190,7 +190,12 @@ impl Caustics {
             ],
             extinction: [extinction[0], extinction[1], extinction[2], texel],
             sizes: [side, sun.slot as u32, sun.slot as u32 + 1, 0],
-            bias: [SURFACE_BIAS_METRES * depth_per_metre, 0.0, 0.0, 0.0],
+            bias: [
+                SURFACE_BIAS_METRES * depth_per_metre,
+                water.caustics,
+                0.0,
+                0.0,
+            ],
         };
         // The splat passes its texel's size in metres as the eye distance, so
         // the ripples are taken at one texel of the narrowed view.
