@@ -3,7 +3,6 @@ use manifold_nodes_water::presets::gpu_flip::testkit::surface_detail_offset;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::*;
 use manifold_node_engine::exec::extent::{ExtentError, ExtentReport};
-#[cfg(feature = "gpu-proofs")]
 use manifold_nodes_water::presets::gpu_flip::*;
 use manifold_nodes_water::testkit::liquid_extents::*;
 use serde_json::json;

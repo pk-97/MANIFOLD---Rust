@@ -66,6 +66,7 @@ pub(crate) mod whitewater_scene;
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod whitewater_emitters;
 
+#[cfg(feature = "gpu-proofs")]
 mod gpu_flip_preset;
 
 #[cfg(feature = "gpu-proofs")]
