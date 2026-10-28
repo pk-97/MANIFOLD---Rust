@@ -501,6 +501,148 @@ pub enum BodiesStatus {
     Pending,
 }
 
+/// Everything a body's clock vertices are emitted from: its shape (by
+/// address), scale, slot and row, and for a coupled hull the domain box.
+#[derive(Clone, Copy, PartialEq)]
+struct ClockKey {
+    shape: usize,
+    scale: [f32; 3],
+    index: usize,
+    row: LiquidBody,
+    domain: Option<([f32; 3], [f32; 3])>,
+}
+
+#[derive(Clone, Copy)]
+enum ClockKind {
+    Source,
+    /// A coupled hull, with its relative body-row index.
+    Coupled(usize),
+}
+
+/// Keeps entry `index` current: a matching key leaves its span in `out`
+/// alone, otherwise the span is replaced by freshly emitted vertices.
+#[allow(clippy::too_many_arguments)]
+fn sync_clock_entry(
+    out: &mut Vec<GpuFlipBodyVertex>,
+    entries: &mut Vec<(ClockKey, usize)>,
+    index: usize,
+    pos: &mut usize,
+    key: ClockKey,
+    changed: &mut bool,
+    emit: impl FnOnce(&mut Vec<GpuFlipBodyVertex>),
+    scratch: &mut Vec<GpuFlipBodyVertex>,
+) {
+    if let Some(&(known, len)) = entries.get(index)
+        && known == key
+    {
+        *pos += len;
+        return;
+    }
+    scratch.clear();
+    emit(scratch);
+    let old_len = entries.get(index).map_or(0, |entry| entry.1);
+    let len = scratch.len();
+    out.splice(*pos..*pos + old_len, scratch.drain(..));
+    if index < entries.len() {
+        entries[index] = (key, len);
+    } else {
+        entries.push((key, len));
+    }
+    *pos += len;
+    *changed = true;
+}
+
+/// Drops entries past the first `count` and the vertices after `pos`;
+/// whether anything was dropped.
+fn trim_clock_entries(
+    out: &mut Vec<GpuFlipBodyVertex>,
+    entries: &mut Vec<(ClockKey, usize)>,
+    count: usize,
+    pos: usize,
+) -> bool {
+    let dropped = entries.len() > count;
+    entries.truncate(count);
+    out.truncate(pos);
+    dropped
+}
+
+/// Appends one body's clock vertices to `out`. Each vertex is transformed
+/// once into `worlds`; a coupled hull counts only while its transformed
+/// bounds overlap the domain box `(min, size)`.
+fn emit_clock_vertices(
+    geometry: &PreparedFluidGeometry,
+    scale: [f32; 3],
+    row: LiquidBody,
+    (min, size): ([f32; 3], [f32; 3]),
+    kind: ClockKind,
+    worlds: &mut Vec<[f32; 3]>,
+    out: &mut Vec<GpuFlipBodyVertex>,
+) {
+    let source = matches!(kind, ClockKind::Source);
+    let coupled = !source;
+    let row_index = match kind {
+        ClockKind::Coupled(index) => Some(index),
+        ClockKind::Source => None,
+    };
+    let q = row.rotation;
+    let axis = [q[0], q[1], q[2]];
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    worlds.clear();
+    let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    for vertex in geometry.meshes.iter().flat_map(|mesh| &mesh.vertices) {
+        let local: [f32; 3] = std::array::from_fn(|i| vertex[i] * scale[i]);
+        let uv = cross(axis, local);
+        let uuv = cross(axis, uv);
+        let world: [f32; 3] = std::array::from_fn(|i| {
+            row.position_inv_mass[i] + local[i] + 2.0 * (q[3] * uv[i] + uuv[i])
+        });
+        for i in 0..3 {
+            lo[i] = lo[i].min(world[i]);
+            hi[i] = hi[i].max(world[i]);
+        }
+        worlds.push(world);
+    }
+    let overlaps = coupled && (0..3).all(|i| lo[i] <= min[i] + size[i] && hi[i] >= min[i]);
+    let eligible = row.accel_shape[3] >= 0.0 && (source || overlaps);
+    let inherit = if source { row.inv_inertia_x[3] } else { 1.0 };
+    // The fourth velocity word is spare for the clock seam. A coupled hull
+    // carries its relative body-row index plus one; sources keep zero so the
+    // shader cannot accidentally read the reaction buffer.
+    let velocity: [f32; 4] = std::array::from_fn(|i| {
+        if i < 3 {
+            inherit * row.linear_velocity[i] + if source { row.inv_inertia_x[i] } else { 0.0 }
+        } else {
+            row_index.map_or(0.0, |index| (index + 1) as f32)
+        }
+    });
+    let acceleration = if coupled { row.accel_shape } else { [0.0; 4] };
+    let angular_velocity = row.angular_velocity.map(|v| v * inherit);
+    let angular_acceleration = if coupled {
+        [
+            row.inv_inertia_x[3],
+            row.inv_inertia_y[3],
+            row.inv_inertia_z[3],
+            0.0,
+        ]
+    } else {
+        [0.0; 4]
+    };
+    out.extend(worlds.iter().map(|world| GpuFlipBodyVertex {
+        position: [world[0], world[1], world[2], u32::from(eligible) as f32],
+        velocity,
+        acceleration,
+        angular_velocity,
+        angular_acceleration,
+        centroid: row.position_inv_mass,
+    }));
+}
+
 #[derive(Default)]
 pub struct LiquidBodies {
     roles: Vec<BodyRole>,
@@ -515,6 +657,14 @@ pub struct LiquidBodies {
     frame: Option<ClockFrame>,
     clock_obstacles: Vec<GpuFlipBodyVertex>,
     clock_sources: Vec<GpuFlipBodyVertex>,
+    /// What each body's span of `clock_obstacles` / `clock_sources` was
+    /// emitted from, in order, so an unchanged body is not re-emitted.
+    clock_obstacle_entries: Vec<(ClockKey, usize)>,
+    clock_source_entries: Vec<(ClockKey, usize)>,
+    /// Reused scratch for one body's emitted vertices and world positions.
+    clock_scratch: Vec<GpuFlipBodyVertex>,
+    clock_worlds: Vec<[f32; 3]>,
+    clock_gen: u64,
     shapes: Vec<LiquidShape>,
     /// Each shape's local mesh bounds, unscaled: min then max.
     bounds: Vec<[[f32; 3]; 2]>,
@@ -552,102 +702,113 @@ impl LiquidBodies {
         &self.clock_sources
     }
 
+    /// Bumped whenever [`Self::clock_obstacles`] or [`Self::clock_sources`]
+    /// changed, so an upload can leave unchanged buffers in place.
+    pub fn clock_generation(&self) -> u64 {
+        self.clock_gen
+    }
+
     /// Reference CFL samples the actual mesh vertices. A coupled hull counts
     /// every vertex while its bounds overlap the domain, so a hull crossing
     /// or enclosing it with every vertex outside still counts, and a body
     /// falling far below the water never sets its substeps. Sources always
     /// feed the first-substep prediction; drains feed nothing.
     /// `tick` selects the accepted tick's rows within this display frame.
+    /// A body whose row (and, for a coupled hull, the domain box) matches the
+    /// last call keeps its vertices untouched; only changed bodies are
+    /// re-emitted, each vertex transformed once.
     pub fn prepare_clock_vertices(&mut self, min: [f32; 3], size: [f32; 3], tick: usize) {
-        self.clock_obstacles.clear();
-        self.clock_sources.clear();
         let body_offset = tick * self.count();
         let region_offset = tick * self.region_count();
-        let mut append = |geometry: &PreparedFluidGeometry,
-                          scale: [f32; 3],
-                          row: LiquidBody,
-                          coupled: bool,
-                          source: bool,
-                          row_index: Option<usize>| {
-            let output = if source {
-                &mut self.clock_sources
-            } else {
-                &mut self.clock_obstacles
-            };
-            let world_of = |vertex: &[f32; 3]| -> [f32; 3] {
-                let local = std::array::from_fn(|i| vertex[i] * scale[i]);
-                let q = row.rotation;
-                let cross = |a: [f32; 3], b: [f32; 3]| {
-                    [
-                        a[1] * b[2] - a[2] * b[1],
-                        a[2] * b[0] - a[0] * b[2],
-                        a[0] * b[1] - a[1] * b[0],
-                    ]
-                };
-                let axis = [q[0], q[1], q[2]];
-                let uv = cross(axis, local);
-                let uuv = cross(axis, uv);
-                std::array::from_fn(|i| {
-                    row.position_inv_mass[i] + local[i] + 2.0 * (q[3] * uv[i] + uuv[i])
-                })
-            };
-            let vertices = || geometry.meshes.iter().flat_map(|mesh| &mesh.vertices);
-            let overlaps = coupled && {
-                let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-                for world in vertices().map(world_of) {
-                    for i in 0..3 {
-                        lo[i] = lo[i].min(world[i]);
-                        hi[i] = hi[i].max(world[i]);
-                    }
-                }
-                (0..3).all(|i| lo[i] <= min[i] + size[i] && hi[i] >= min[i])
-            };
-            for vertex in vertices() {
-                let world = world_of(vertex);
-                let eligible = row.accel_shape[3] >= 0.0 && (source || overlaps);
-                let inherit = if source { row.inv_inertia_x[3] } else { 1.0 };
-                // The fourth velocity word is spare for the clock seam. A
-                // coupled hull carries its relative body-row index plus one;
-                // sources keep zero so the shader cannot accidentally read
-                // the reaction buffer.
-                let velocity: [f32; 4] = std::array::from_fn(|i| {
-                    if i < 3 {
-                        inherit * row.linear_velocity[i]
-                            + if source { row.inv_inertia_x[i] } else { 0.0 }
-                    } else {
-                        row_index.map_or(0.0, |index| (index + 1) as f32)
-                    }
-                });
-                output.push(GpuFlipBodyVertex {
-                    position: [world[0], world[1], world[2], u32::from(eligible) as f32],
-                    velocity,
-                    acceleration: if coupled { row.accel_shape } else { [0.0; 4] },
-                    angular_velocity: row.angular_velocity.map(|v| v * inherit),
-                    angular_acceleration: if coupled {
-                        [
-                            row.inv_inertia_x[3],
-                            row.inv_inertia_y[3],
-                            row.inv_inertia_z[3],
-                            0.0,
-                        ]
-                    } else {
-                        [0.0; 4]
-                    },
-                    centroid: row.position_inv_mass,
-                });
-            }
-        };
-        for (index, role) in self.roles.iter().enumerate() {
+        let Self {
+            roles,
+            coupled,
+            rows,
+            region_rows,
+            clock_obstacles,
+            clock_sources,
+            clock_obstacle_entries,
+            clock_source_entries,
+            clock_scratch,
+            clock_worlds,
+            clock_gen,
+            ..
+        } = self;
+        let mut changed = false;
+        let mut count = 0;
+        let mut pos = 0;
+        for (index, role) in roles.iter().enumerate() {
             if role.kind == FluidRoleKind::Inflow
-                && let Some(&row) = self.region_rows.get(region_offset + index)
+                && let Some(&row) = region_rows.get(region_offset + index)
             {
-                append(&role.geometry, role.scale, row, false, true, None);
+                let key = ClockKey {
+                    shape: Arc::as_ptr(&role.geometry) as usize,
+                    scale: role.scale,
+                    index,
+                    row,
+                    domain: None,
+                };
+                sync_clock_entry(
+                    clock_sources,
+                    clock_source_entries,
+                    count,
+                    &mut pos,
+                    key,
+                    &mut changed,
+                    |out| {
+                        emit_clock_vertices(
+                            &role.geometry,
+                            role.scale,
+                            row,
+                            (min, size),
+                            ClockKind::Source,
+                            clock_worlds,
+                            out,
+                        )
+                    },
+                    clock_scratch,
+                );
+                count += 1;
             }
         }
-        for (index, geometry) in self.coupled.iter().enumerate() {
-            if let Some(&row) = self.rows.get(body_offset + index) {
-                append(geometry, [1.0; 3], row, true, false, Some(index));
+        changed |= trim_clock_entries(clock_sources, clock_source_entries, count, pos);
+        count = 0;
+        pos = 0;
+        for (index, geometry) in coupled.iter().enumerate() {
+            if let Some(&row) = rows.get(body_offset + index) {
+                let key = ClockKey {
+                    shape: Arc::as_ptr(geometry) as usize,
+                    scale: [1.0; 3],
+                    index,
+                    row,
+                    domain: Some((min, size)),
+                };
+                sync_clock_entry(
+                    clock_obstacles,
+                    clock_obstacle_entries,
+                    count,
+                    &mut pos,
+                    key,
+                    &mut changed,
+                    |out| {
+                        emit_clock_vertices(
+                            geometry,
+                            [1.0; 3],
+                            row,
+                            (min, size),
+                            ClockKind::Coupled(index),
+                            clock_worlds,
+                            out,
+                        )
+                    },
+                    clock_scratch,
+                );
+                count += 1;
             }
+        }
+        changed |= trim_clock_entries(clock_obstacles, clock_obstacle_entries, count, pos);
+        if changed {
+            *clock_gen += 1;
         }
     }
 
@@ -832,6 +993,11 @@ impl LiquidBodies {
         cell_size: f32,
     ) {
         self.roles.clear();
+        self.clock_obstacles.clear();
+        self.clock_sources.clear();
+        self.clock_obstacle_entries.clear();
+        self.clock_source_entries.clear();
+        self.clock_gen += 1;
         self.shapes.clear();
         self.bounds.clear();
         self.atlas.clear();

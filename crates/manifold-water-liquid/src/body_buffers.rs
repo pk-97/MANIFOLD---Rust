@@ -34,6 +34,8 @@ struct Stored {
     atlas: GpuBuffer,
     clock_obstacles: GpuBuffer,
     clock_sources: GpuBuffer,
+    /// The clock vertices' generation last written; `None` until written.
+    clock_gen: Option<u64>,
     version: u64,
 }
 
@@ -166,6 +168,7 @@ impl LiquidBodyBuffers {
                 clock_sources: gpu
                     .device
                     .create_buffer(source_bytes.max(96) as u64, BufferUse::Gpu),
+                clock_gen: None,
                 version,
             });
         }
@@ -176,7 +179,7 @@ impl LiquidBodyBuffers {
             gpu.device
                 .create_compute_pipeline(UPLOAD_SHADER, "cs_main", label)
         });
-        let stored = self.stored.as_ref().expect("allocated above");
+        let stored = self.stored.as_mut().expect("allocated above");
         for (target, groups) in [
             (
                 &stored.bodies,
@@ -190,16 +193,25 @@ impl LiquidBodyBuffers {
                 &stored.regions,
                 bytemuck::cast_slice(bodies.last_region_rows()),
             ),
-            (
-                &stored.clock_obstacles,
-                bytemuck::cast_slice(bodies.clock_obstacles()),
-            ),
-            (
-                &stored.clock_sources,
-                bytemuck::cast_slice(bodies.clock_sources()),
-            ),
         ] {
             write_groups(gpu, pipeline, target, groups, label);
+        }
+        // The clock vertices are the bulk of the bytes and are unchanged for
+        // a still scene, so they are rewritten only when they changed.
+        if stored.clock_gen != Some(bodies.clock_generation()) {
+            for (target, groups) in [
+                (
+                    &stored.clock_obstacles,
+                    bytemuck::cast_slice(bodies.clock_obstacles()),
+                ),
+                (
+                    &stored.clock_sources,
+                    bytemuck::cast_slice(bodies.clock_sources()),
+                ),
+            ] {
+                write_groups(gpu, pipeline, target, groups, label);
+            }
+            stored.clock_gen = Some(bodies.clock_generation());
         }
     }
 
