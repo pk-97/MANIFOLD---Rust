@@ -147,5 +147,4 @@ mod tests {
         };
         exec.execute_frame(&mut g, &plan, time);
     }
-
 }

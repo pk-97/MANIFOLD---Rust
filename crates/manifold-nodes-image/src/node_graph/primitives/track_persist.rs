@@ -367,5 +367,4 @@ mod tests {
         let claimed = assignment.iter().filter(|a| **a != UNMATCHED).count();
         assert_eq!(claimed, 1, "one track can only be claimed once");
     }
-
 }

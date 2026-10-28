@@ -208,4 +208,3 @@ impl Primitive for FbmPerInstance {
         );
     }
 }
-

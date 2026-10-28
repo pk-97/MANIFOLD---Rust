@@ -749,8 +749,7 @@ mod every_param_has_a_row {
             .find(&ItemId::new(owner))
             .is_some_and(|item| match &item.fields {
                 manifold_core::scene_doc::ItemFields::Water(fields) => {
-                    scene_schema::water_family(fields)
-                        .is_some_and(|template| template.holds(role))
+                    scene_schema::water_family(fields).is_some_and(|template| template.holds(role))
                 }
                 _ => false,
             });
@@ -786,7 +785,11 @@ mod every_param_has_a_row {
         let row = &rows[at("upscale_quality")];
         assert_eq!(row.reach, Reach::Scene("render"));
         assert_eq!(row.param, "upscale_quality");
-        assert!(has_row(&SceneDoc::base(), "scene:render", "upscale_quality"));
+        assert!(has_row(
+            &SceneDoc::base(),
+            "scene:render",
+            "upscale_quality"
+        ));
     }
 
     #[test]

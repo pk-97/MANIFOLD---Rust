@@ -547,5 +547,4 @@ mod tests {
         assert!((primed - 0.0).abs() < 1e-5);
         assert!((edge - 0.0).abs() < 1e-5);
     }
-
 }

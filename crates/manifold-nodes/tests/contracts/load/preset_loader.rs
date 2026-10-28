@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use manifold_node_engine::load::preset_loader::{
-    EFFECT_CATALOG, EFFECT_DIRS, GENERATOR_CATALOG, KindDirs, OverlayEntries,
-    PresetAssetsRoot, SCENE_MODIFIER_CATALOG, blob_mask, build_catalog_with_overlays,
-    resolve_stock_root, select_assets_root, try_load_catalog,
+    EFFECT_CATALOG, EFFECT_DIRS, GENERATOR_CATALOG, KindDirs, OverlayEntries, PresetAssetsRoot,
+    SCENE_MODIFIER_CATALOG, blob_mask, build_catalog_with_overlays, resolve_stock_root,
+    select_assets_root, try_load_catalog,
 };
 
 mod tests {

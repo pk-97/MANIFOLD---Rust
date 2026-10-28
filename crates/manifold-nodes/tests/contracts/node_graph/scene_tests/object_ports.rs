@@ -35,4 +35,3 @@ fn object_port_single_hop() {
         );
     }
 }
-

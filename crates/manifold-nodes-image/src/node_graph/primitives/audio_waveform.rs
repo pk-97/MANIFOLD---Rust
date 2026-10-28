@@ -264,4 +264,3 @@ impl Primitive for AudioSpectrum {
         gpu.copy_texture_to_texture(staging, out, width, height);
     }
 }
-

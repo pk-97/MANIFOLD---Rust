@@ -236,4 +236,3 @@ inventory::submit! {
         picker: None,
     }
 }
-

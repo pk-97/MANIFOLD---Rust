@@ -180,8 +180,14 @@ fn param(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
 }
 
 impl Primitive for OceanDisplace {
-    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
-        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(port, manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_MESH)
+    fn mesh_output_rule(
+        &self,
+        port: &str,
+    ) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(
+            port,
+            manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_MESH,
+        )
     }
 
     fn array_output_capacity(
@@ -572,7 +578,10 @@ pub(crate) mod gpu_tests {
             .iter()
             .map(|v| upload(bytemuck::cast_slice(v)))
             .collect();
-        let out = device.create_buffer(std::mem::size_of_val(vertices.as_slice()) as u64, manifold_gpu::BufferUse::Readback);
+        let out = device.create_buffer(
+            std::mem::size_of_val(vertices.as_slice()) as u64,
+            manifold_gpu::BufferUse::Readback,
+        );
         let mut enc = device.create_encoder("ocean-displace-test");
         enc.dispatch_compute(
             &pipeline,

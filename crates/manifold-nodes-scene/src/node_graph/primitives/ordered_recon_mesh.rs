@@ -97,8 +97,14 @@ manifold_node_engine::primitive! {
 }
 
 impl Primitive for OrderedReconMesh {
-    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
-        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(port, manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_IN)
+    fn mesh_output_rule(
+        &self,
+        port: &str,
+    ) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(
+            port,
+            manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_IN,
+        )
     }
 
     fn array_output_capacity(
@@ -253,9 +259,18 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-        let src = device.create_buffer(std::mem::size_of_val(current) as u64, manifold_gpu::BufferUse::Upload);
-        let rbuf = device.create_buffer(std::mem::size_of_val(reference) as u64, manifold_gpu::BufferUse::Upload);
-        let out = device.create_buffer(std::mem::size_of_val(current) as u64, manifold_gpu::BufferUse::Readback);
+        let src = device.create_buffer(
+            std::mem::size_of_val(current) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let rbuf = device.create_buffer(
+            std::mem::size_of_val(reference) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let out = device.create_buffer(
+            std::mem::size_of_val(current) as u64,
+            manifold_gpu::BufferUse::Readback,
+        );
         unsafe {
             src.write(0, bytemuck::cast_slice(current));
             rbuf.write(0, bytemuck::cast_slice(reference));

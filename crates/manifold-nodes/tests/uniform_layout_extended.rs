@@ -262,7 +262,6 @@ mod custom {
             failures.join("\n")
         );
     }
-
 }
 
 #[cfg(test)]

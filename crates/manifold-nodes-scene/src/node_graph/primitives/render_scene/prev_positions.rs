@@ -18,8 +18,8 @@
 //! Geometry that never changes never allocates a buffer, and none of this runs
 //! for a draw that does not write velocity.
 
-use manifold_gpu::BufferUse;
 use super::*;
+use manifold_gpu::BufferUse;
 
 /// One previous-position record: `vec4<f32>` (xyz, w = 1).
 pub(super) const RECORD_BYTES: u64 = 16;
@@ -187,8 +187,14 @@ impl PrevDraw {
 
 /// The pack kernel, built once per device; `prewarm_pipelines` warms the same
 /// pipeline.
-pub(super) fn create_pack_pipeline(device: &manifold_gpu::GpuDevice) -> manifold_gpu::GpuComputePipeline {
-    device.create_compute_pipeline(PACK_SHADER, "cs_main", "node.render_scene pack prev positions")
+pub(super) fn create_pack_pipeline(
+    device: &manifold_gpu::GpuDevice,
+) -> manifold_gpu::GpuComputePipeline {
+    device.create_compute_pipeline(
+        PACK_SHADER,
+        "cs_main",
+        "node.render_scene pack prev positions",
+    )
 }
 
 /// Whether the velocity variant draws this object, so it reads its history:
@@ -263,15 +269,16 @@ where
     let (step, mut seen) = advance(entry.as_ref().map(|e| e.seen), now);
     let mut buffer = entry.take().and_then(|e| e.buffer);
     if step.allocate {
-        buffer = match device.try_create_buffer(u64::from(now.extent) * record_bytes, BufferUse::Gpu) {
-            Ok(buffer) => Some(buffer),
-            Err(error) => {
-                ctx.error(format!("object_{object}: {what} unavailable: {error}"));
-                // Forget the buffer so the next change tries again.
-                seen.held = None;
-                None
-            }
-        };
+        buffer =
+            match device.try_create_buffer(u64::from(now.extent) * record_bytes, BufferUse::Gpu) {
+                Ok(buffer) => Some(buffer),
+                Err(error) => {
+                    ctx.error(format!("object_{object}: {what} unavailable: {error}"));
+                    // Forget the buffer so the next change tries again.
+                    seen.held = None;
+                    None
+                }
+            };
     }
     let prev = if step.copy {
         buffer.clone().map(|buffer| PrevDraw {
@@ -343,8 +350,12 @@ impl RenderScene {
     /// cut, a seek, a rebuilt scene or an empty frame leaves no earlier frame
     /// to measure motion against.
     pub(super) fn forget_prev_positions(&mut self) {
-        self.prev_positions.iter_mut().for_each(|entry| *entry = None);
-        self.prev_instances.iter_mut().for_each(|entry| *entry = None);
+        self.prev_positions
+            .iter_mut()
+            .for_each(|entry| *entry = None);
+        self.prev_instances
+            .iter_mut()
+            .for_each(|entry| *entry = None);
     }
 
     /// Copy this frame's vertex positions and instance records into each

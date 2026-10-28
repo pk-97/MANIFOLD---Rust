@@ -6,6 +6,7 @@ use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::scene::world_tiles::pool_len;
 use manifold_node_engine::{
     exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, exec::execution::Executor,
@@ -17,7 +18,6 @@ use manifold_node_engine::{
 use manifold_physics::ForceSample;
 use manifold_physics::clock::TICK;
 use manifold_physics::force_lattice::ForceLattice;
-use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_physics::mesh_bvh::MeshBvh;
 use manifold_water_gpu_mpm::matter::{
     MatterGridNode, MatterPoint, REACTION_WORDS, field_min, lattice_nodes, matter_nodes,

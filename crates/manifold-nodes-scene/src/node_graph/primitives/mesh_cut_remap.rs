@@ -184,10 +184,18 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "cut-remap-test",
         );
-        let source_buf = device.create_buffer(std::mem::size_of_val(source).max(1) as u64, manifold_gpu::BufferUse::Upload);
-        let map_buf = device.create_buffer(std::mem::size_of_val(maps).max(1) as u64, manifold_gpu::BufferUse::Upload);
-        let output_buf = device
-            .create_buffer((maps.len() * std::mem::size_of::<MeshVertex>()).max(1) as u64, manifold_gpu::BufferUse::Upload);
+        let source_buf = device.create_buffer(
+            std::mem::size_of_val(source).max(1) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let map_buf = device.create_buffer(
+            std::mem::size_of_val(maps).max(1) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let output_buf = device.create_buffer(
+            (maps.len() * std::mem::size_of::<MeshVertex>()).max(1) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let counts_buf = device.create_buffer(4, manifold_gpu::BufferUse::Upload);
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(source));
@@ -248,9 +256,18 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "cut-weight-remap-test",
         );
-        let source_buf = device.create_buffer((source.len() * 4).max(1) as u64, manifold_gpu::BufferUse::Upload);
-        let map_buf = device.create_buffer((maps.len() * 16).max(1) as u64, manifold_gpu::BufferUse::Upload);
-        let output_buf = device.create_buffer((maps.len() * 4).max(1) as u64, manifold_gpu::BufferUse::Readback);
+        let source_buf = device.create_buffer(
+            (source.len() * 4).max(1) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let map_buf = device.create_buffer(
+            (maps.len() * 16).max(1) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let output_buf = device.create_buffer(
+            (maps.len() * 4).max(1) as u64,
+            manifold_gpu::BufferUse::Readback,
+        );
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(source));
             map_buf.write(0, bytemuck::cast_slice(maps));
@@ -364,9 +381,24 @@ mod gpu_tests {
     fn standalone_remap_zeroes_records_past_the_live_count() {
         let device = manifold_gpu::testkit::test_device();
         let source = vec![
-            vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0], [1.0, 0.0, 0.0, 1.0]),
-            vertex([2.0, 1.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0], [0.0, 1.0, 0.0, -1.0]),
-            vertex([0.0, 0.0, 3.0], [0.0, 0.0, 1.0], [0.0, 1.0], [0.0, 0.0, 1.0, 1.0]),
+            vertex(
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+            vertex(
+                [2.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0],
+                [0.0, 1.0, 0.0, -1.0],
+            ),
+            vertex(
+                [0.0, 0.0, 3.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+            ),
         ];
         // Seven records, three live: the tail holds valid maps that must still
         // come out zero.
@@ -386,14 +418,21 @@ mod gpu_tests {
         );
         let whole = dispatch_mesh(&device, &wgsl, &source, &maps);
         let live = dispatch_mesh_live(&device, &wgsl, &source, &maps, Some(3));
-        assert_eq!(bytemuck::cast_slice::<_, u8>(&live[..3]), bytemuck::cast_slice::<_, u8>(&whole[..3]));
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&live[..3]),
+            bytemuck::cast_slice::<_, u8>(&whole[..3])
+        );
         assert!(
-            bytemuck::cast_slice::<_, u8>(&live[3..]).iter().all(|byte| *byte == 0),
+            bytemuck::cast_slice::<_, u8>(&live[3..])
+                .iter()
+                .all(|byte| *byte == 0),
             "records past the live count are all zero"
         );
         let none = dispatch_mesh_live(&device, &wgsl, &source, &maps, Some(0));
         assert!(
-            bytemuck::cast_slice::<_, u8>(&none).iter().all(|byte| *byte == 0),
+            bytemuck::cast_slice::<_, u8>(&none)
+                .iter()
+                .all(|byte| *byte == 0),
             "a live count of zero zeroes everything"
         );
     }
@@ -547,12 +586,18 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "fused-cut-remap-test",
         );
-        let source_buf =
-            device.create_buffer((source.len() * std::mem::size_of::<MeshVertex>()) as u64, manifold_gpu::BufferUse::Upload);
-        let map_buf = device.create_buffer((maps.len() * 16) as u64, manifold_gpu::BufferUse::Upload);
-        let weights_buf = device.create_buffer((weights.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
-        let output_buf =
-            device.create_buffer((maps.len() * std::mem::size_of::<MeshVertex>()) as u64, manifold_gpu::BufferUse::Readback);
+        let source_buf = device.create_buffer(
+            (source.len() * std::mem::size_of::<MeshVertex>()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let map_buf =
+            device.create_buffer((maps.len() * 16) as u64, manifold_gpu::BufferUse::Upload);
+        let weights_buf =
+            device.create_buffer((weights.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
+        let output_buf = device.create_buffer(
+            (maps.len() * std::mem::size_of::<MeshVertex>()) as u64,
+            manifold_gpu::BufferUse::Readback,
+        );
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(&source));
             map_buf.write(0, bytemuck::cast_slice(&maps));
@@ -689,9 +734,15 @@ mod gpu_tests {
             1,
             manifold_gpu::GpuTextureFormat::Rgba8Unorm,
         );
-        let source = device.create_buffer(std::mem::size_of::<MeshVertex>() as u64 * 3, manifold_gpu::BufferUse::Upload);
+        let source = device.create_buffer(
+            std::mem::size_of::<MeshVertex>() as u64 * 3,
+            manifold_gpu::BufferUse::Upload,
+        );
         let maps = device.create_buffer(16 * 2, manifold_gpu::BufferUse::Upload);
-        let output = device.create_buffer(std::mem::size_of::<MeshVertex>() as u64 * 2, manifold_gpu::BufferUse::Upload);
+        let output = device.create_buffer(
+            std::mem::size_of::<MeshVertex>() as u64 * 2,
+            manifold_gpu::BufferUse::Upload,
+        );
         let source_slot = backend.pre_bind_array(ResourceId(0), source);
         let map_slot = backend.pre_bind_array(ResourceId(1), maps);
         let output_slot = backend.pre_bind_array(ResourceId(2), output);
@@ -822,7 +873,9 @@ mod live_guard_tests {
     /// own length still caps it.
     #[test]
     fn fused_count_anchor_ignores_gathered_externals() {
-        let wgsl = generate_fused(&remap_region(None, None)).expect("remap region").wgsl;
+        let wgsl = generate_fused(&remap_region(None, None))
+            .expect("remap region")
+            .wgsl;
         assert_eq!(
             line_starting(&wgsl, "let count ="),
             "let count = min(arrayLength(&src_1), arrayLength(&dst));"
@@ -831,7 +884,10 @@ mod live_guard_tests {
             !wgsl.contains("live_counts") && !wgsl.contains("live_per_item"),
             "no live anchor, no live binding or uniform"
         );
-        assert!(naga::front::wgsl::parse_str(&wgsl).is_ok(), "parses:\n{wgsl}");
+        assert!(
+            naga::front::wgsl::parse_str(&wgsl).is_ok(),
+            "parses:\n{wgsl}"
+        );
     }
 
     /// A live-anchored fused kernel binds the anchor's counts after `dst`,
@@ -842,18 +898,33 @@ mod live_guard_tests {
         let wgsl = generate_fused(&remap_region(Some(CapacityExpr::Slot(1)), Some(1)))
             .expect("anchored remap region")
             .wgsl;
-        assert!(naga::front::wgsl::parse_str(&wgsl).is_ok(), "parses:\n{wgsl}");
-        assert!(wgsl.contains("// @live_counts: src_1"), "marker names the anchor port:\n{wgsl}");
+        assert!(
+            naga::front::wgsl::parse_str(&wgsl).is_ok(),
+            "parses:\n{wgsl}"
+        );
+        assert!(
+            wgsl.contains("// @live_counts: src_1"),
+            "marker names the anchor port:\n{wgsl}"
+        );
         assert!(
             wgsl.contains("var<storage, read> live_counts: array<u32>;"),
             "counts binding:\n{wgsl}"
         );
-        assert!(wgsl.contains("live_per_item: u32"), "uniform field:\n{wgsl}");
-        assert_eq!(line_starting(&wgsl, "let count ="), "let count = arrayLength(&src_1);");
+        assert!(
+            wgsl.contains("live_per_item: u32"),
+            "uniform field:\n{wgsl}"
+        );
+        assert_eq!(
+            line_starting(&wgsl, "let count ="),
+            "let count = arrayLength(&src_1);"
+        );
         let guard = wgsl
             .find("idx >= min(count, live_counts[0] * params.live_per_item)")
             .expect("live guard");
-        let zero_write = wgsl[guard..].find("dst[idx] = ").map(|at| guard + at).unwrap();
+        let zero_write = wgsl[guard..]
+            .find("dst[idx] = ")
+            .map(|at| guard + at)
+            .unwrap();
         let first_read = wgsl.find("let e_1 = src_1[idx];").expect("map pre-read");
         assert!(
             guard < zero_write && zero_write < first_read,
@@ -867,10 +938,19 @@ mod live_guard_tests {
     #[test]
     fn standalone_remap_kernels_carry_the_live_guard() {
         for (name, wgsl) in [
-            ("mesh", standalone_for_spec::<RemapMeshCut>().expect("mesh remap")),
-            ("weights", standalone_for_spec::<RemapCutWeights>().expect("weights remap")),
+            (
+                "mesh",
+                standalone_for_spec::<RemapMeshCut>().expect("mesh remap"),
+            ),
+            (
+                "weights",
+                standalone_for_spec::<RemapCutWeights>().expect("weights remap"),
+            ),
         ] {
-            assert!(naga::front::wgsl::parse_str(&wgsl).is_ok(), "{name} parses:\n{wgsl}");
+            assert!(
+                naga::front::wgsl::parse_str(&wgsl).is_ok(),
+                "{name} parses:\n{wgsl}"
+            );
             assert!(
                 wgsl.contains("var<storage, read> live_counts: array<u32>;"),
                 "{name} counts binding:\n{wgsl}"

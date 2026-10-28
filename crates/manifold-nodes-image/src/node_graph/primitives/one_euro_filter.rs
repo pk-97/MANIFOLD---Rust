@@ -230,5 +230,4 @@ mod tests {
         // At 100 Hz cutoff, dt=1/60: tau≈0.00159, α = 1/(1+tau/dt) ≈ 0.913
         assert!(a > 0.9, "high cutoff → large alpha, got {a}");
     }
-
 }

@@ -339,7 +339,8 @@ impl ViewportSession {
                 &self.target.texture,
                 self.width,
                 self.height,
-            ).expect("GPU readback completes");
+            )
+            .expect("GPU readback completes");
             self.dirty = false;
             self.param_values_hash = Some(params_hash);
         }
@@ -429,5 +430,4 @@ mod tests {
         b.nodes[0].handle = Some("renamed".to_string());
         assert_ne!(hash_def(&a), hash_def(&b));
     }
-
 }

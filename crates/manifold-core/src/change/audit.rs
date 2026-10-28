@@ -241,12 +241,7 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
     fp.tick(TickSlot::Bpm, bpm);
     fp.put(
         Part::Settings,
-        &(
-            quantize_mode,
-            render_scale,
-            tonemap_curve,
-            tonemap_enabled,
-        ),
+        &(quantize_mode, render_scale, tonemap_curve, tonemap_enabled),
     );
     fp.put(Part::Led, &(stage_layout, led_exit_index, led_enabled));
     fp.put(Part::Values, &(master_opacity, led_brightness, led_gain));

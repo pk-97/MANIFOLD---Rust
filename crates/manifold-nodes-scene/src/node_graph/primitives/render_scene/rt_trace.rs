@@ -515,79 +515,79 @@ impl RenderScene {
             let history_valid = self.rt_moments_valid;
             if !denoise_active {
                 for pass in 0..(ATROUS_ITERATIONS - 1) {
-                // T1-D: dilation starts at 2, not 1 — the AO/GI trace
-                // dispatch is HALF-res (D11), so every 2x2 block of
-                // full-res texels shares the identical raw noise
-                // sample; a step=1 tap frequently lands in the SAME
-                // block (an exact duplicate, not an independent noisy
-                // sample) and does nothing to reduce variance. step=2
-                // is the smallest offset guaranteed to cross into an
-                // adjacent (independently-sampled) half-res block.
-                let step = 1u32 << pass;
-                let (
-                    src_sv,
-                    src_irr,
-                    src_n,
-                    src_refl,
-                    src_svt,
-                    dst_sv,
-                    dst_irr,
-                    dst_n,
-                    dst_refl,
-                    dst_svt,
-                ) = if pass % 2 == 0 {
-                    (
-                        mask_full,
-                        irr_full,
-                        normal_full,
-                        refl_full,
-                        svt_full,
-                        mask_full_b,
-                        irr_full_b,
-                        normal_full_b,
-                        refl_full_b,
-                        svt_full_b,
-                    )
-                } else {
-                    (
-                        mask_full_b,
-                        irr_full_b,
-                        normal_full_b,
-                        refl_full_b,
-                        svt_full_b,
-                        mask_full,
-                        irr_full,
-                        normal_full,
-                        refl_full,
-                        svt_full,
-                    )
-                };
-                let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
-                    [width, height],
-                    step,
-                    history_valid,
-                    opaque_draws.len() as u32,
-                );
-                tracer.atrous_pass(
-                    gpu.native_enc,
-                    &atrous_params,
-                    atrous_params_buffer,
-                    gi_materials_buffer,
-                    depth_tex,
-                    moments_read,
-                    src_sv,
-                    dst_sv,
-                    src_irr,
-                    dst_irr,
-                    src_n,
-                    dst_n,
-                    src_refl,
-                    dst_refl,
-                    src_svt,
-                    dst_svt,
-                    "node.render_scene RT-T1-D atrous_pass",
-                );
-            }
+                    // T1-D: dilation starts at 2, not 1 — the AO/GI trace
+                    // dispatch is HALF-res (D11), so every 2x2 block of
+                    // full-res texels shares the identical raw noise
+                    // sample; a step=1 tap frequently lands in the SAME
+                    // block (an exact duplicate, not an independent noisy
+                    // sample) and does nothing to reduce variance. step=2
+                    // is the smallest offset guaranteed to cross into an
+                    // adjacent (independently-sampled) half-res block.
+                    let step = 1u32 << pass;
+                    let (
+                        src_sv,
+                        src_irr,
+                        src_n,
+                        src_refl,
+                        src_svt,
+                        dst_sv,
+                        dst_irr,
+                        dst_n,
+                        dst_refl,
+                        dst_svt,
+                    ) = if pass % 2 == 0 {
+                        (
+                            mask_full,
+                            irr_full,
+                            normal_full,
+                            refl_full,
+                            svt_full,
+                            mask_full_b,
+                            irr_full_b,
+                            normal_full_b,
+                            refl_full_b,
+                            svt_full_b,
+                        )
+                    } else {
+                        (
+                            mask_full_b,
+                            irr_full_b,
+                            normal_full_b,
+                            refl_full_b,
+                            svt_full_b,
+                            mask_full,
+                            irr_full,
+                            normal_full,
+                            refl_full,
+                            svt_full,
+                        )
+                    };
+                    let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
+                        [width, height],
+                        step,
+                        history_valid,
+                        opaque_draws.len() as u32,
+                    );
+                    tracer.atrous_pass(
+                        gpu.native_enc,
+                        &atrous_params,
+                        atrous_params_buffer,
+                        gi_materials_buffer,
+                        depth_tex,
+                        moments_read,
+                        src_sv,
+                        dst_sv,
+                        src_irr,
+                        dst_irr,
+                        src_n,
+                        dst_n,
+                        src_refl,
+                        dst_refl,
+                        src_svt,
+                        dst_svt,
+                        "node.render_scene RT-T1-D atrous_pass",
+                    );
+                }
             }
 
             // RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2: the ONE call site

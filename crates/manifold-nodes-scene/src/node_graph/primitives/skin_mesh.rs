@@ -90,8 +90,14 @@ manifold_node_engine::primitive! {
 }
 
 impl Primitive for SkinMesh {
-    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
-        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(port, manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_IN)
+    fn mesh_output_rule(
+        &self,
+        port: &str,
+    ) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        manifold_node_engine::scene::mesh_change::MeshOutputRule::deformer(
+            port,
+            manifold_node_engine::scene::mesh_change::TOPOLOGY_OF_IN,
+        )
     }
 
     /// Output `out` follows `in`'s capacity — skinning is a pure
@@ -301,14 +307,19 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "skin-mesh-test",
         );
-        let in_buf = device.create_buffer(std::mem::size_of_val(verts) as u64, manifold_gpu::BufferUse::Upload);
+        let in_buf = device.create_buffer(
+            std::mem::size_of_val(verts) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(verts));
         }
         let joints_v4: Vec<Vec4Vertex> =
             joints.iter().map(|j| Vec4Vertex { position: *j }).collect();
-        let joints_buf =
-            device.create_buffer(std::mem::size_of_val(joints_v4.as_slice()) as u64, manifold_gpu::BufferUse::Upload);
+        let joints_buf = device.create_buffer(
+            std::mem::size_of_val(joints_v4.as_slice()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             joints_buf.write(0, bytemuck::cast_slice(&joints_v4));
         }
@@ -316,16 +327,24 @@ mod gpu_tests {
             .iter()
             .map(|w| Vec4Vertex { position: *w })
             .collect();
-        let weights_buf =
-            device.create_buffer(std::mem::size_of_val(weights_v4.as_slice()) as u64, manifold_gpu::BufferUse::Upload);
+        let weights_buf = device.create_buffer(
+            std::mem::size_of_val(weights_v4.as_slice()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             weights_buf.write(0, bytemuck::cast_slice(&weights_v4));
         }
-        let matrices_buf = device.create_buffer(std::mem::size_of_val(matrices) as u64, manifold_gpu::BufferUse::Upload);
+        let matrices_buf = device.create_buffer(
+            std::mem::size_of_val(matrices) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             matrices_buf.write(0, bytemuck::cast_slice(matrices));
         }
-        let out_buf = device.create_buffer(std::mem::size_of_val(verts) as u64, manifold_gpu::BufferUse::Readback);
+        let out_buf = device.create_buffer(
+            std::mem::size_of_val(verts) as u64,
+            manifold_gpu::BufferUse::Readback,
+        );
 
         let uniforms = SkinMeshUniforms {
             joint_count,

@@ -189,4 +189,3 @@ inventory::submit! {
         }),
     }
 }
-

@@ -672,7 +672,6 @@ mod tests {
             Some((512, 256))
         );
     }
-
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1490,7 +1489,8 @@ mod hdri_gpu_tests {
         );
         enc.commit_and_wait().expect("GPU work completes");
 
-        let readback = device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Readback);
+        let readback =
+            device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("bake-env-hdri-readback");
         enc.copy_texture_to_buffer(&out.texture, &readback, w, h, w * 8);
         enc.commit_and_wait().expect("GPU work completes");

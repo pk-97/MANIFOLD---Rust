@@ -411,4 +411,3 @@ fn blob_v2_invalid_inverted_mask_is_zero() {
         .expect("MaskBlob validity gate");
     assert_eq!(float_param(valid_gate, "scale"), 0.0);
 }
-

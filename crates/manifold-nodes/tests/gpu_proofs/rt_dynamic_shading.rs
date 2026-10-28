@@ -9,9 +9,8 @@
 
 use manifold_gpu::BufferUse;
 use manifold_gpu::raytrace::{
-    EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
-    MAX_RT_EMISSIVE_TRIANGLES, GpuShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry,
-    ShadowRayTracer,
+    EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial, GpuShadowRayTracer,
+    MAX_RT_EMISSIVE_TRIANGLES, RtAccel, RtGeometryChange, RtObjectGeometry, ShadowRayTracer,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_gpu::{ShadowCaster, upload_shadow_casters};
@@ -206,7 +205,10 @@ fn rt_dynamic_emissive_queued_frames_keep_metadata_snapshots() {
             )
             .unwrap();
         assert_eq!(update.emissive_refreshes, 1);
-        let result = device.create_buffer(std::mem::size_of::<EmissiveTableStats>() as u64, BufferUse::Upload);
+        let result = device.create_buffer(
+            std::mem::size_of::<EmissiveTableStats>() as u64,
+            BufferUse::Upload,
+        );
         encoder.copy_buffer_to_buffer(
             &accel.emissive_table.as_ref().unwrap().stats,
             &result,

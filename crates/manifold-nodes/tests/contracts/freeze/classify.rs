@@ -160,5 +160,4 @@ mod tests {
             violations.join("\n  "),
         );
     }
-
 }

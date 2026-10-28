@@ -19,9 +19,8 @@
 use manifold_gpu::BufferUse;
 use manifold_gpu::GpuDevice;
 use manifold_gpu::raytrace::{
-    EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
-    MAX_RT_EMISSIVE_TRIANGLES, GpuShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry,
-    ShadowRayTracer,
+    EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial, GpuShadowRayTracer,
+    MAX_RT_EMISSIVE_TRIANGLES, RtAccel, RtGeometryChange, RtObjectGeometry, ShadowRayTracer,
 };
 
 /// `packed_float3` stride-12 vertex layout — matches the position-only

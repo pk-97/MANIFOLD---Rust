@@ -1135,9 +1135,7 @@ mod tests {
     #[test]
     fn a_model_source_without_a_mesh_warns() {
         use manifold_core::scene_doc::ItemId;
-        use manifold_core::scene_doc::{
-            Item, ObjectFields, Shape, WaterFields, WaterSourceFields,
-        };
+        use manifold_core::scene_doc::{Item, ObjectFields, Shape, WaterFields, WaterSourceFields};
         let item = |id: &str, fields| Item {
             id: ItemId::new(id),
             name: id.to_owned(),
@@ -1155,7 +1153,13 @@ mod tests {
             )
         };
         let object = |id, shape| {
-            item(id, ItemFields::Object(ObjectFields { shape, ..ObjectFields::default() }))
+            item(
+                id,
+                ItemFields::Object(ObjectFields {
+                    shape,
+                    ..ObjectFields::default()
+                }),
+            )
         };
         let mut water = item("water", ItemFields::Water(WaterFields::default()));
         water.children = vec![
@@ -1164,7 +1168,11 @@ mod tests {
             source("rock", Some("cube")),
         ];
         let doc = SceneDoc {
-            items: vec![water, object("ocean", Shape::Ocean), object("cube", Shape::Cube)],
+            items: vec![
+                water,
+                object("ocean", Shape::Ocean),
+                object("cube", Shape::Cube),
+            ],
             ..SceneDoc::default()
         };
         let mut shapes = Vec::new();
@@ -1178,11 +1186,22 @@ mod tests {
         assert_eq!(
             rows,
             [
-                (SetupProblemKind::ModelWithoutMesh(FluidRole::Inflow), param_id(&ItemId::new("unset"), "model")),
-                (SetupProblemKind::ModelWithoutMesh(FluidRole::Inflow), param_id(&ItemId::new("sea"), "model")),
+                (
+                    SetupProblemKind::ModelWithoutMesh(FluidRole::Inflow),
+                    param_id(&ItemId::new("unset"), "model")
+                ),
+                (
+                    SetupProblemKind::ModelWithoutMesh(FluidRole::Inflow),
+                    param_id(&ItemId::new("sea"), "model")
+                ),
             ]
         );
-        assert!(problems[0].kind.message().contains("Inflow uses a Model with no mesh"));
+        assert!(
+            problems[0]
+                .kind
+                .message()
+                .contains("Inflow uses a Model with no mesh")
+        );
     }
 
     #[test]

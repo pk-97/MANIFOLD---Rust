@@ -808,7 +808,6 @@ mod tests {
         let measured_source_variance = down_axis_variance + 4.0 * up_axis_variance;
         assert!((measured_source_variance - DUAL_BLUR_FIRST_VARIANCE).abs() < 1e-6);
     }
-
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -868,7 +867,10 @@ mod gpu_tests {
 
     fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
         let row_bytes = texture.width * 8;
-        let buffer = device.create_buffer(u64::from(row_bytes) * u64::from(texture.height), manifold_gpu::BufferUse::Readback);
+        let buffer = device.create_buffer(
+            u64::from(row_bytes) * u64::from(texture.height),
+            manifold_gpu::BufferUse::Readback,
+        );
         let mut encoder = device.create_encoder("blur-smooth-proof-readback");
         encoder.copy_texture_to_buffer(texture, &buffer, texture.width, texture.height, row_bytes);
         encoder.commit_and_wait().expect("GPU work completes");

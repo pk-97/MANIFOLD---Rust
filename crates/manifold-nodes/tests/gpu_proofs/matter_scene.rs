@@ -504,12 +504,7 @@ impl MatterScene {
         }
         wire(graph, (bodies, "bodies_out"), (update, "bodies"));
         wire(graph, (bodies, "bodies_out"), (reaction, "bodies"));
-        for port in [
-            "shapes",
-            "atlas",
-            "collider_nodes",
-            "collider_triangles",
-        ] {
+        for port in ["shapes", "atlas", "collider_nodes", "collider_triangles"] {
             wire(graph, (domain, port), (reaction, port));
         }
         for port in [

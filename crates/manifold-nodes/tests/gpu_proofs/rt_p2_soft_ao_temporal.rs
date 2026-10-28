@@ -592,8 +592,10 @@ fn run_accumulate_with_sv(
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let svt_sink = make_history(device, "p2-svt-sink");
     let svt_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-svt-dummy");
-    let gi_materials_buf =
-        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Readback);
+    let gi_materials_buf = device.create_buffer(
+        std::mem::size_of::<GiMaterial>() as u64,
+        BufferUse::Readback,
+    );
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -686,8 +688,10 @@ fn run_accumulate_with_svt(
         }
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
-    let gi_materials_buf =
-        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Readback);
+    let gi_materials_buf = device.create_buffer(
+        std::mem::size_of::<GiMaterial>() as u64,
+        BufferUse::Readback,
+    );
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);

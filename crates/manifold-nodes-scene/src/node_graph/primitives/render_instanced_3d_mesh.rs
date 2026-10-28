@@ -193,4 +193,3 @@ impl Primitive for RenderInstanced3DMesh {
             .render_single_mesh(ctx, Some(instance_count as f32));
     }
 }
-

@@ -1,7 +1,7 @@
 //! Cached GPU resource helpers: each ensure_* allocates or reuses one resource before the frame's passes borrow it.
 
-use manifold_gpu::BufferUse;
 use super::*;
+use manifold_gpu::BufferUse;
 
 impl RenderScene {
     /// BUG-trh7 stage 2, pass 3: the ensure-cached-GPU-resources block —
@@ -1121,8 +1121,7 @@ impl RenderScene {
         }
         // Dimensions changed or first creation — replace.
         self.denoiser = None;
-        match crate::denoiser::Denoiser::new(device, render_w, render_h, native_w, native_h, true)
-        {
+        match crate::denoiser::Denoiser::new(device, render_w, render_h, native_w, native_h, true) {
             Some(d) => {
                 self.denoiser = Some(d);
                 self.denoiser_unavailable_logged = false;
@@ -1754,7 +1753,10 @@ impl RenderScene {
     /// the light data a later frame's draw call might still be reading).
     pub(super) fn ensure_rt_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_params_buffer.is_none() {
-            self.rt_params_buffer = Some(device.create_buffer(std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64, BufferUse::Upload));
+            self.rt_params_buffer = Some(device.create_buffer(
+                std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
+                BufferUse::Upload,
+            ));
         }
     }
 
@@ -1762,8 +1764,10 @@ impl RenderScene {
     /// `rt_params_buffer` (see the field's doc comment).
     pub(super) fn ensure_rt_accumulate_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_accumulate_params_buffer.is_none() {
-            self.rt_accumulate_params_buffer =
-                Some(device.create_buffer(std::mem::size_of::<manifold_gpu::raytrace::AccumulateParams>() as u64, BufferUse::Upload));
+            self.rt_accumulate_params_buffer = Some(device.create_buffer(
+                std::mem::size_of::<manifold_gpu::raytrace::AccumulateParams>() as u64,
+                BufferUse::Upload,
+            ));
         }
     }
 
@@ -1771,8 +1775,10 @@ impl RenderScene {
     /// the other two params buffers above (same non-clobbering reason).
     pub(super) fn ensure_rt_atrous_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_atrous_params_buffer.is_none() {
-            self.rt_atrous_params_buffer =
-                Some(device.create_buffer(std::mem::size_of::<manifold_gpu::raytrace::AtrousParams>() as u64, BufferUse::Upload));
+            self.rt_atrous_params_buffer = Some(device.create_buffer(
+                std::mem::size_of::<manifold_gpu::raytrace::AtrousParams>() as u64,
+                BufferUse::Upload,
+            ));
         }
     }
 
@@ -1781,8 +1787,10 @@ impl RenderScene {
     /// non-clobbering reason).
     pub(super) fn ensure_rt_firefly_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_firefly_params_buffer.is_none() {
-            self.rt_firefly_params_buffer =
-                Some(device.create_buffer(std::mem::size_of::<manifold_gpu::raytrace::FireflyClampParams>() as u64, BufferUse::Upload));
+            self.rt_firefly_params_buffer = Some(device.create_buffer(
+                std::mem::size_of::<manifold_gpu::raytrace::FireflyClampParams>() as u64,
+                BufferUse::Upload,
+            ));
         }
     }
 
@@ -1791,8 +1799,10 @@ impl RenderScene {
     /// reason).
     pub(super) fn ensure_rt_atrous_post_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_atrous_post_params_buffer.is_none() {
-            self.rt_atrous_post_params_buffer =
-                Some(device.create_buffer(std::mem::size_of::<manifold_gpu::raytrace::AtrousPostParams>() as u64, BufferUse::Upload));
+            self.rt_atrous_post_params_buffer = Some(device.create_buffer(
+                std::mem::size_of::<manifold_gpu::raytrace::AtrousPostParams>() as u64,
+                BufferUse::Upload,
+            ));
         }
     }
 
@@ -1832,10 +1842,17 @@ impl RenderScene {
                 dst_alpha_factor: manifold_gpu::GpuBlendFactor::One,
                 alpha_operation: manifold_gpu::GpuBlendOp::Add,
             };
-            self.shaft_composite_pipeline = Some(device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(include_str!("../shaders/shaft_composite.wgsl"), "vs_main", "fs_main", "node.render_scene shaft composite")
+            self.shaft_composite_pipeline = Some(
+                device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        include_str!("../shaders/shaft_composite.wgsl"),
+                        "vs_main",
+                        "fs_main",
+                        "node.render_scene shaft composite",
+                    )
                     .color(manifold_gpu::GpuTextureFormat::Rgba16Float, Some(blend)),
-            ));
+                ),
+            );
         }
     }
 
@@ -1848,7 +1865,10 @@ impl RenderScene {
                 pos_scale: [0.0, 0.0, 0.0, 1.0],
                 rot_pad: [0.0, 0.0, 0.0, 0.0],
             };
-            let buf = device.create_buffer(std::mem::size_of::<InstanceTransform>() as u64, BufferUse::Upload);
+            let buf = device.create_buffer(
+                std::mem::size_of::<InstanceTransform>() as u64,
+                BufferUse::Upload,
+            );
             unsafe {
                 buf.write(0, bytemuck::bytes_of(&stub));
             }

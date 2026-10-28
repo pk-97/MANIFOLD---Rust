@@ -419,4 +419,3 @@ impl Primitive for PersonSegment {
         );
     }
 }
-
