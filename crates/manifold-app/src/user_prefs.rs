@@ -1,10 +1,7 @@
 //! Platform-persistent key-value string storage.
 //!
 //! 1:1 equivalent of Unity's `PlayerPrefs` (string subset).
-//! Backs onto a JSON file at the platform config directory:
-//!   macOS:   ~/Library/Application Support/MANIFOLD/prefs.json
-//!   Linux:   ~/.config/manifold/prefs.json
-//!   Windows: %APPDATA%/MANIFOLD/prefs.json
+//! Backs onto `prefs.json` in the app's data folder (`AppDirs::data`).
 
 use std::collections::HashMap;
 use std::fs;
@@ -15,41 +12,15 @@ use std::path::PathBuf;
 const APP_DIR_NAME: &str = "MANIFOLD";
 const PREFS_FILE_NAME: &str = "prefs.json";
 
-// ── Platform config directory ────────────────────────────────────────
+// ── Data directory ───────────────────────────────────────────────────
 
-/// The app's persistent data directory (same root `prefs.json` lives in) —
-/// the directory convention other MANIFOLD subsystems should reuse for their
-/// own caches rather than inventing a second path scheme. Falls back to `.`
-/// when the platform env var isn't set (matches `UserPrefs::load`'s own
-/// fallback), so this always returns a usable path.
+/// The app's persistent data directory (same root `prefs.json` lives in).
+/// Falls back to a relative `MANIFOLD` folder when `HOME` is unset, so this
+/// always returns a usable path.
 pub fn app_data_dir() -> PathBuf {
-    config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(APP_DIR_NAME)
-}
-
-fn config_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var("HOME")
-            .ok()
-            .map(|h| PathBuf::from(h).join("Library/Application Support"))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::env::var("XDG_CONFIG_HOME")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .map(|h| PathBuf::from(h).join(".config"))
-            })
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(PathBuf::from)
-    }
+    manifold_foundation::AppDirs::current()
+        .map(|dirs| dirs.data)
+        .unwrap_or_else(|| PathBuf::from(APP_DIR_NAME))
 }
 
 // ── UserPrefs ────────────────────────────────────────────────────────
@@ -68,9 +39,7 @@ impl UserPrefs {
     /// Load prefs from disk (or start empty if the file doesn't exist yet).
     /// Called once at app startup — equivalent to Unity's implicit PlayerPrefs load.
     pub fn load() -> Self {
-        let dir = config_dir().unwrap_or_else(|| PathBuf::from("."));
-        let prefs_dir = dir.join(APP_DIR_NAME);
-        let file_path = prefs_dir.join(PREFS_FILE_NAME);
+        let file_path = app_data_dir().join(PREFS_FILE_NAME);
 
         let data = if file_path.exists() {
             fs::read_to_string(&file_path)

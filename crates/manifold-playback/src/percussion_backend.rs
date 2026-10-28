@@ -172,18 +172,7 @@ impl PercussionPipelineBackendResolver {
         }
 
         // System fallback (ffmpeg is commonly installed separately).
-        let system = [
-            "/opt/homebrew/bin/ffmpeg",
-            "/usr/local/bin/ffmpeg",
-            "/usr/bin/ffmpeg",
-        ];
-        for candidate in &system {
-            if Path::new(candidate).exists() {
-                return Some(candidate.to_string());
-            }
-        }
-
-        None
+        manifold_foundation::find_tool("ffmpeg").map(|p| p.to_string_lossy().into_owned())
     }
 
     /// Locate the bundled runtime directory by searching known paths.
@@ -473,18 +462,16 @@ fn env_bool(key: &str, default: bool) -> bool {
 
 /// The directory demucs stems are cached to (and resolved from by
 /// Detect-and-Group). Honours `MANIFOLD_DEMUCS_CACHE_DIR`; otherwise defaults to
-/// `~/Library/Application Support/Manifold/StemCache` so stems persist and the
-/// feature works out of the box. Falls back to a temp dir only if `$HOME` is unset.
+/// the app's stem folder (`AppDirs::stems`) so stems persist and the feature
+/// works out of the box. Falls back to a temp dir only if `$HOME` is unset.
 pub(crate) fn demucs_cache_dir() -> Option<String> {
     if let Some(d) = env_opt("MANIFOLD_DEMUCS_CACHE_DIR")
         && !d.trim().is_empty()
     {
         return Some(d);
     }
-    let base = std::env::var("HOME")
-        .ok()
-        .filter(|h| !h.is_empty())
-        .map(|h| format!("{h}/Library/Application Support/Manifold/StemCache"))
+    let base = manifold_foundation::AppDirs::current()
+        .map(|dirs| dirs.stems.to_string_lossy().into_owned())
         .unwrap_or_else(|| {
             std::env::temp_dir()
                 .join("ManifoldStemCache")

@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+manifold-foundation = { path = "../manifold-foundation" }
 manifold-editing = { path = "../manifold-editing" }
 log = "0.4"
 kira = { workspace = true }

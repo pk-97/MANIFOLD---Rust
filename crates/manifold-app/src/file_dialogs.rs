@@ -432,7 +432,9 @@ fn start_dir(
     let sub = match spec.home {
         HomeFallback::None => return None,
         HomeFallback::Desktop => "Desktop",
-        HomeFallback::Movies => "Movies",
+        // Linux desktops name the video folder Videos.
+        HomeFallback::Movies if cfg!(target_os = "macos") => "Movies",
+        HomeFallback::Movies => "Videos",
         HomeFallback::Music => "Music",
     };
     home.map(|h| h.join(sub)).filter(|d| is_dir(d))

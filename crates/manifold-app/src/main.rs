@@ -339,7 +339,7 @@ fn main() {
         // Write a timestamped crash log and rotate old ones (G10: one
         // overwritten crash.log meant the second crash destroyed evidence
         // of the first). Keep the most recent CRASH_LOGS_KEPT files.
-        if let Some(dir) = crash_log_dir() {
+        if let Some(dir) = session_log::log_dir() {
             let _ = std::fs::create_dir_all(&dir);
             let _ = write_crash_log(&dir, &msg, timestamp);
             prune_crash_logs(&dir, CRASH_LOGS_KEPT);
@@ -466,13 +466,6 @@ fn resolve_resume_breadcrumb_from_prefs() -> Option<std::path::PathBuf> {
 /// How many timestamped crash logs to keep.
 const CRASH_LOGS_KEPT: usize = 20;
 
-/// `~/Library/Logs/com.latentspace.manifold` — same location the single
-/// crash.log used before rotation.
-fn crash_log_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .map(|home| std::path::PathBuf::from(home).join("Library/Logs/com.latentspace.manifold"))
-}
-
 /// Write one timestamped crash log: `crash-<unix_ts>.log`. Fixed-width
 /// timestamp keeps lexicographic order == chronological order.
 fn write_crash_log(
@@ -530,7 +523,7 @@ fn write_fatal_gpu_report(reason: &str, exit_code: i32) {
     msg.push_str("diagnostic_limitations=GPU timing may be unavailable on failed buffers; missing completion is not proof of a hang; shader counters may be incomplete after device failure; resource metadata does not prove lifetime or ordering safety; geometry hit-index bounds and driver-internal traversal are not fully instrumented.\n");
     msg.push_str("--- recent session evidence (bounded; full session path above) ---\n");
     msg.push_str(&session_log::crash_tail());
-    if let Some(dir) = crash_log_dir() {
+    if let Some(dir) = session_log::log_dir() {
         match std::fs::create_dir_all(&dir).and_then(|()| write_crash_log(&dir, &msg, timestamp)) {
             Ok(path) => {
                 log::error!("Fatal GPU report saved: {}", path.display());
@@ -570,16 +563,15 @@ fn prune_crash_logs(dir: &std::path::Path, keep: usize) {
     }
 }
 
-/// `~/Library/Application Support/com.latentspace.manifold/session.active` —
-/// exists while a session runs; removed by `clear_session_sentinel` on clean
-/// exit.
+/// `session.active` in the app's state folder (`AppDirs::state`) — exists
+/// while a session runs; removed by `clear_session_sentinel` on clean exit.
 fn session_sentinel_path() -> Option<std::path::PathBuf> {
     #[cfg(all(feature = "ui-automation", unix))]
     let live_ui_socket = std::env::var_os("MANIFOLD_UI_SOCKET").map(std::path::PathBuf::from);
     #[cfg(not(all(feature = "ui-automation", unix)))]
     let live_ui_socket = None;
     session_sentinel_for(
-        std::env::var_os("HOME").map(std::path::PathBuf::from),
+        manifold_foundation::AppDirs::current().map(|dirs| dirs.state),
         live_ui_socket,
     )
 }
@@ -587,30 +579,23 @@ fn session_sentinel_path() -> Option<std::path::PathBuf> {
 /// An isolated automation instance owns its recovery marker beside its socket.
 /// It must neither read nor clear the regular app's session marker.
 fn session_sentinel_for(
-    home: Option<std::path::PathBuf>,
+    state_dir: Option<std::path::PathBuf>,
     live_ui_socket: Option<std::path::PathBuf>,
 ) -> Option<std::path::PathBuf> {
     if let Some(socket) = live_ui_socket {
         return Some(socket.with_extension("session.active"));
     }
-    home.map(|home| {
-        home.join("Library/Application Support/com.latentspace.manifold/session.active")
-    })
+    state_dir.map(|dir| dir.join("session.active"))
 }
 
 #[test]
 fn live_ui_session_sentinel_is_separate_from_regular_app() {
     use std::path::PathBuf;
-    let home = Some(PathBuf::from("/Users/test"));
-    let regular = session_sentinel_for(home.clone(), None).unwrap();
-    assert_eq!(
-        regular,
-        PathBuf::from(
-            "/Users/test/Library/Application Support/com.latentspace.manifold/session.active"
-        )
-    );
+    let state = Some(PathBuf::from("/state"));
+    let regular = session_sentinel_for(state.clone(), None).unwrap();
+    assert_eq!(regular, PathBuf::from("/state/session.active"));
     let isolated =
-        session_sentinel_for(home, Some(PathBuf::from("/tmp/manifold-test/ui.sock"))).unwrap();
+        session_sentinel_for(state, Some(PathBuf::from("/tmp/manifold-test/ui.sock"))).unwrap();
     assert_eq!(
         isolated,
         PathBuf::from("/tmp/manifold-test/ui.session.active")
@@ -641,19 +626,15 @@ fn clear_session_sentinel() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Platform-specific helpers (macOS)
-// ---------------------------------------------------------------------------
-
 /// Acquire a file lock to prevent multiple instances.
 /// Returns the locked `File` handle — the lock is released when dropped.
 fn acquire_instance_lock() -> std::fs::File {
     use std::io::Write;
     use std::os::unix::io::AsRawFd;
 
-    let home = std::env::var("HOME").expect("HOME not set");
-    let lock_dir = std::path::PathBuf::from(&home)
-        .join("Library/Application Support/com.latentspace.manifold");
+    let lock_dir = manifold_foundation::AppDirs::current()
+        .expect("HOME not set")
+        .state;
     std::fs::create_dir_all(&lock_dir).expect("failed to create lock directory");
 
     let lock_path = lock_dir.join(".lock");
@@ -675,6 +656,10 @@ fn acquire_instance_lock() -> std::fs::File {
     }
     file
 }
+
+// ---------------------------------------------------------------------------
+// Platform-specific helpers (macOS)
+// ---------------------------------------------------------------------------
 
 /// Create an IOPMAssertion to prevent the display from sleeping.
 /// Returns the assertion ID (kept alive for the process lifetime).

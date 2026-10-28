@@ -2469,6 +2469,7 @@ dependencies = [
  "image",
  "log",
  "manifold-core",
+ "manifold-foundation",
  "manifold-gpu",
  "manifold-playback",
 ]
@@ -2661,6 +2662,7 @@ dependencies = [
  "log",
  "manifold-core",
  "manifold-editing",
+ "manifold-foundation",
  "manifold-io",
  "midir",
  "parking_lot",

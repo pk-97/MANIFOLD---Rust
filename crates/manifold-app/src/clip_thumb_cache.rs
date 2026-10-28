@@ -172,18 +172,9 @@ impl Drop for ClipThumbCache {
     }
 }
 
-/// Per-OS cache directory for the filmstrip store.
+/// The filmstrip store, inside the app's cache folder.
 fn cache_dir() -> Option<PathBuf> {
-    // macOS: ~/Library/Caches/manifold/clip_thumbs. Falls back to $HOME elsewhere.
-    let home = std::env::var_os("HOME")?;
-    let mut p = PathBuf::from(home);
-    #[cfg(target_os = "macos")]
-    p.push("Library/Caches");
-    #[cfg(not(target_os = "macos"))]
-    p.push(".cache");
-    p.push("manifold");
-    p.push("clip_thumbs");
-    Some(p)
+    Some(manifold_foundation::AppDirs::current()?.cache.join("clip_thumbs"))
 }
 
 fn strip_path(dir: &std::path::Path, hash: u64) -> PathBuf {

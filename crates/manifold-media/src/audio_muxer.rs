@@ -110,7 +110,7 @@ impl AudioMuxer {
     /// Search order (matches percussion_backend.rs pattern):
     /// 1. FFMPEG_PATH environment variable
     /// 2. Bundled runtime paths
-    /// 3. System paths (Homebrew, /usr/local, /usr)
+    /// 3. System paths (`find_tool`)
     pub fn resolve_ffmpeg(runtime_root: &str) -> Option<String> {
         // 1. Env var escape hatch
         if let Ok(p) = std::env::var("FFMPEG_PATH") {
@@ -132,18 +132,7 @@ impl AudioMuxer {
         }
 
         // 3. System fallback
-        let system = [
-            "/opt/homebrew/bin/ffmpeg",
-            "/usr/local/bin/ffmpeg",
-            "/usr/bin/ffmpeg",
-        ];
-        for candidate in &system {
-            if Path::new(candidate).exists() {
-                return Some(candidate.to_string());
-            }
-        }
-
-        None
+        manifold_foundation::find_tool("ffmpeg").map(|p| p.to_string_lossy().into_owned())
     }
 }
 

@@ -12,7 +12,7 @@
 //! - **STOCK** — resolved in this order, first existing wins:
 //!   1. Packaged macOS bundle: `<dir-of-exe>/../Resources/presets/{effects,generators,scene-modifiers}`
 //!   2. Registered assets root: `<root>/{effect-presets,generator-presets,scene-modifier-presets}`.
-//! - **USER** — `~/Library/Application Support/MANIFOLD/presets/{effects,generators,scene-modifiers}`
+//! - **USER** — `presets/{effects,generators,scene-modifiers}` in the app's data folder (`AppDirs::data`)
 //!   (same base dir as `prefs.json`). Optional; absent is fine.
 //!
 //! ## Type ids
@@ -424,13 +424,13 @@ pub(crate) fn select_assets_root(roots: Vec<&str>) -> Option<&str> {
 }
 }
 
-/// Resolve the optional USER root for a kind:
-/// `~/Library/Application Support/MANIFOLD/presets/<subdir>`. `None` if
-/// `$HOME` is unset or the directory doesn't exist.
+/// Resolve the optional USER root for a kind: `presets/<subdir>` in the
+/// app's data folder. `None` if `$HOME` is unset or the directory doesn't
+/// exist.
 fn resolve_user_root(dirs: &KindDirs) -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let dir = PathBuf::from(home)
-        .join("Library/Application Support/MANIFOLD/presets")
+    let dir = manifold_foundation::AppDirs::current()?
+        .data
+        .join("presets")
         .join(dirs.bundle_subdir);
     dir.is_dir().then_some(dir)
 }

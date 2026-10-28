@@ -131,18 +131,7 @@ fn resolve_ffprobe_binary() -> Option<String> {
     }
 
     // 3. Common system paths.
-    let candidates = [
-        "/opt/homebrew/bin/ffprobe",
-        "/usr/local/bin/ffprobe",
-        "/usr/bin/ffprobe",
-    ];
-    for candidate in &candidates {
-        if Path::new(candidate).exists() {
-            return Some(candidate.to_string());
-        }
-    }
-
-    None
+    manifold_foundation::find_tool("ffprobe").map(|p| p.to_string_lossy().into_owned())
 }
 
 fn derive_ffprobe_from_ffmpeg_path(ffmpeg_path: &str) -> Option<String> {

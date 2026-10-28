@@ -42,10 +42,8 @@ impl Write for TeeWriter {
 }
 
 pub(crate) fn log_dir() -> Option<std::path::PathBuf> {
-    match std::env::var_os("HOME") {
-        Some(home) => {
-            Some(std::path::PathBuf::from(home).join("Library/Logs/com.latentspace.manifold"))
-        }
+    match manifold_foundation::AppDirs::current() {
+        Some(dirs) => Some(dirs.logs),
         None => {
             let _ = writeln!(
                 io::stderr(),
@@ -217,11 +215,12 @@ mod tests {
             ])
             .env("MANIFOLD_TEST_FATAL_LOG", "1")
             .env("HOME", &dir)
+            .env_remove("XDG_STATE_HOME")
             .env("RUST_LOG", "info")
             .output()
             .unwrap();
         assert_eq!(result.status.code(), Some(70), "{result:?}");
-        let logs = dir.join("Library/Logs/com.latentspace.manifold");
+        let logs = manifold_foundation::AppDirs::for_home(&dir).logs;
         let entries: Vec<_> = std::fs::read_dir(logs)
             .unwrap()
             .map(|e| e.unwrap().path())

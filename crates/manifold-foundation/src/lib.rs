@@ -14,6 +14,7 @@
 //! NOTHING with domain semantics belongs here — no registries, no project
 //! model, no GPU. Domain types the UI needs are adapted at the app boundary.
 
+pub mod app_dirs;
 pub mod audio_shape;
 pub mod cold_touch;
 pub mod device_guard;
@@ -33,6 +34,7 @@ pub use cold_touch::{
     set_transport_playing, thread_cold_touch_count, total_cold_touches,
 };
 
+pub use app_dirs::{AppDirs, find_tool};
 pub use hash::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, ItemId, LayerId, MarkerId, NodeId};
 pub use units::{Beats, Bpm, PlayedTime, Seconds};

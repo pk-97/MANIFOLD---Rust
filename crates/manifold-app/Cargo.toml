@@ -23,6 +23,7 @@ name = "render-import"
 path = "src/bin/render_import.rs"
 
 [dependencies]
+manifold-foundation = { path = "../manifold-foundation" }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 inventory = "0.3"
 manifold-compositor = { path = "../manifold-compositor" }
@@ -118,7 +119,6 @@ perf-soak = ["profiling"]
 [dev-dependencies]
 manifold-playback = { path = "../manifold-playback", features = ["testkit"] }
 manifold-physics = { path = "../manifold-physics" }
-manifold-foundation = { path = "../manifold-foundation" }
 manifold-fluids = { path = "../manifold-fluids" }
 glam = "0.29.3"
 manifold-nodes = { path = "../manifold-nodes", features = ["testkit"] }

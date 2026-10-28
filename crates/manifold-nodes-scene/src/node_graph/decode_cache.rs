@@ -2,7 +2,7 @@
 //!
 //! Caches the outputs of `node.hdri_source`'s EXR decode and
 //! `node.gltf_mesh_source`'s glTF parse/flatten step under
-//! `~/Library/Caches/com.latentspace.manifold/decode_cache/`. The cache key is
+//! `decode_cache/` in the app's cache folder (`AppDirs::cache`). The cache key is
 //! a SHA-256 of source contents, not the path. Mesh keys include every resolved
 //! glTF buffer as well as the primary file. Warm lookup still reads the source
 //! and resolves buffers; only a full geometry flatten or image decode records
@@ -129,8 +129,7 @@ fn now_secs() -> u64 {
 fn cache_root() -> Option<PathBuf> {
     // Tests can point the cache elsewhere by calling the `_with_root`
     // variants; production always uses the canonical user cache directory.
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join("Library/Caches/com.latentspace.manifold/decode_cache"))
+    Some(manifold_foundation::AppDirs::current()?.cache.join("decode_cache"))
 }
 
 fn namespace_dir(root: &Path, namespace: &str) -> PathBuf {

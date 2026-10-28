@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+manifold-foundation = { path = "../manifold-foundation" }
 manifold-playback = { path = "../manifold-playback" }
 log = { workspace = true }
 ahash = { workspace = true }

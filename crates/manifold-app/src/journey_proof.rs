@@ -21,8 +21,7 @@
 //!
 //! Frame extraction and audio-stream verification shell out to `ffmpeg` /
 //! `ffprobe` (resolved the same way `AudioMuxer::resolve_ffmpeg` does, falling
-//! back to `/opt/homebrew/bin/ffmpeg` / `/opt/homebrew/bin/ffprobe`, present
-//! on this machine). Like `gpu-proofs`, this feature is deliberate-run only —
+//! back to `find_tool`). Like `gpu-proofs`, this feature is deliberate-run only —
 //! minutes-long (GPU render + video encode + ffmpeg frame extraction), never
 //! part of the default sweep.
 //!
@@ -334,16 +333,7 @@ fn resolve_ffprobe() -> Option<String> {
     {
         return Some(p);
     }
-    for candidate in [
-        "/opt/homebrew/bin/ffprobe",
-        "/usr/local/bin/ffprobe",
-        "/usr/bin/ffprobe",
-    ] {
-        if Path::new(candidate).exists() {
-            return Some(candidate.to_string());
-        }
-    }
-    None
+    manifold_foundation::find_tool("ffprobe").map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Extract every frame of `video_path` as PNGs into `out_dir` (created if

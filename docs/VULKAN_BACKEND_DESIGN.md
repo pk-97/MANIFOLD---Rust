@@ -131,7 +131,7 @@ On Metal, GPU FLIP runs its pressure solve from indirect command buffers. One ro
 | Text clipboard | Text fields copy and paste through `macos_pasteboard` (`text_session.rs:539-547`, `window_input.rs:1350-1358`); arboard is used at one site (`app_render.rs:718`) | Text fields go through arboard everywhere (with `wayland-data-control`); `macos_pasteboard` stays for Finder file paste only | Small |
 | Dialogs | rfd | rfd's message dialogs call `zenity` on Linux and return Cancel if it is missing, so the unsaved-changes prompt (`alerts.rs:54`) answers Cancel and quitting with unsaved edits does nothing. `zenity` is a runtime dependency | Package |
 | Instance lock | `flock`, Mac-gated (`main.rs:358-360`) | `flock` is POSIX: remove the gate, or two instances fight over OSC, MIDI and Art-Net | Trivial |
-| Paths | `~/Library/...` in three folder names | `manifold_foundation::app_dirs` with XDG on Linux. The Mac paths stay byte-identical (map section 6) | Small |
+| Paths | `~/Library/...` in three folder names | `manifold_foundation::AppDirs` with XDG on Linux. The Mac paths stay byte-identical, pinned by a unit test | Done |
 | ML plugins | OpenCV `.bundle` Mach-O plugins via libloading (`manifold-native/src/ffi/mod.rs:12`) | Same plugins built as `.so` against `libopencv-dev`; names from `std::env::consts::DLL_PREFIX`/`DLL_SUFFIX` | Small |
 | Keep-awake, thread priority | IOPMAssertion; Mac thread policy | Idle inhibit through the XDG portal or `systemd-inhibit`; real-time priority through rtkit or rtprio limits | Small, P4 |
 | HDR output | EDR on CAMetalLayer | SDR first | Later |

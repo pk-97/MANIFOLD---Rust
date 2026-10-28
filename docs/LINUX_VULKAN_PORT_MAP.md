@@ -146,15 +146,7 @@ About 525 `target_os` lines in 46 files. Grouped by what they gate:
 | Headless harness and subcommands | ~90 | `headless_harness.rs`, `main.rs` (11 + 11), `content_pipeline.rs` (12), proof modules (66 lines: `bug219_verify`, `corridor_acceptance`, `frame_exact_app`, `gap_start_probe`, `gpu_flip_export_demo`, `import_responsiveness_verify`, `mute_visibility_probe`, `rt_dynamic_export_tests`) | `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` are Mac-gated. `ui-snap` needs only text and `new_queued`. The harness boots the normal pipeline after the bridge change | P3 |
 | Misc | 2 | `main.rs:379,732` (App Nap, nothing on Linux) | Gate stays | Build hygiene |
 
-**Paths.** `manifold_foundation::app_dirs` (std only) replaces all of these. The Mac uses three folder names today and every one must stay byte-identical, pinned by one unit test, because that is where Peter's prefs, presets and stem cache live. The Mac disk is case-insensitive, so `MANIFOLD` and `Manifold` are one folder there and two on Linux:
-- `Application Support/MANIFOLD`: prefs and user presets (`user_prefs.rs:15`, `user_library.rs:83`, `manifold-node-engine/src/load/preset_loader.rs:433`)
-- `Application Support/com.latentspace.manifold`: instance lock and session sentinel (`main.rs:604,664`)
-- `Application Support/Manifold/StemCache` (`manifold-playback/src/percussion_backend.rs:496`)
-- Logs: `main.rs:480`, `session_log.rs:47,224`, `app_render.rs:267`
-- Caches: `app.rs:1535-1538` (`pipeline_cache.metallib`, ungated), `headless_harness.rs:33-35`, `clip_thumb_cache.rs:181`, `manifold-nodes-scene/.../decode_cache.rs:132`
-- Other: Blender at `blender_import.rs:103`, `open` for Reveal at `user_library.rs:329` (`xdg-open` on Linux), the `Desktop`/`Movies`/`Music` fallbacks at `file_dialogs.rs:434-436`, `manifold-recording/src/config.rs:29-37`, `preset_loader.rs:15,376-384` (`.app/Contents/Resources`), `percussion_backend.rs:210`
-
-**External tools.** `manifold_foundation::find_tool` replaces the Homebrew `ffmpeg`/`ffprobe` lookups in `manifold-media/src/audio_muxer.rs:136`, `percussion_backend.rs:174`, `audio_sync.rs:135` and `journey_proof.rs:338`.
+**Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`, `percussion_backend.rs:210`) wait for Linux packaging (P4).
 
 **Linux compile breaks in manifold-app** (an ungated use of a Mac-only item; each needs a neutral type or a gate):
 - **Text:** `CachedTextMeasure` at `ui_root/mod.rs:556,581` and `ui_snapshot/render.rs:656`; `text_rasterizer` at `app_render.rs:926`.
@@ -221,7 +213,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then the P4 pi
 
 1. **Setup** (section 1). Done 28 Oct.
 2. **Build hygiene.** Done 28 Oct, except `UniformArena` (section 11).
-3. **Folders and tools:** `manifold_foundation::app_dirs` and `find_tool`, std only, with the Mac paths byte-identical and pinned by one unit test (section 6). The scattered sites move onto them. The Linux arms are checked with `cargo check --target x86_64-unknown-linux-gnu -p manifold-foundation`. Keep-awake and real-time priority on Linux wait for P4.
+3. **Folders and tools.** Done 28 Oct (`manifold_foundation::AppDirs`, `find_tool`).
 4. **Hoist neutral logic** out of `metal/` (section 3, "Hoist before porting"). Done when the build, clippy and `manifold-gpu`'s tests pass, plus one `perf-soak` on a heavy scene, where retire, fence and pool regressions show.
 5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, commit forms, the upload merge, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
 6. **Frame bridge on one device** (section 11), proven with `bridge-probe`; the headless subcommands then boot the normal pipeline. Daytime, with the live app run after it.

@@ -261,13 +261,8 @@ impl Application {
         // sits over a real window, never on a perform surface.
         if self.show_crash_notice && self.frame_count >= 2 {
             self.show_crash_notice = false;
-            let log_dir = std::env::var_os("HOME")
-                .map(|h| {
-                    format!(
-                        "{}/Library/Logs/com.latentspace.manifold",
-                        h.to_string_lossy()
-                    )
-                })
+            let log_dir = manifold_foundation::AppDirs::current()
+                .map(|dirs| dirs.logs.display().to_string())
                 .unwrap_or_default();
             crate::alerts::info(
                 "MANIFOLD crashed last session",

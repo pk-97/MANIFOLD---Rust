@@ -1530,9 +1530,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let native_device = Arc::new(manifold_gpu::GpuDevice::new());
             // Load pipeline binary archive — subsequent pipeline creation calls
             // automatically use it for near-instant cache hits.
-            if let Ok(home) = std::env::var("HOME") {
-                let cache_dir =
-                    std::path::PathBuf::from(home).join("Library/Caches/com.latentspace.manifold");
+            if let Some(dirs) = manifold_foundation::AppDirs::current() {
+                let cache_dir = dirs.cache;
                 std::fs::create_dir_all(&cache_dir).ok();
                 native_device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
                 native_device.load_msl_cache(&cache_dir.join("msl_cache"));

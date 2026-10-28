@@ -1,7 +1,7 @@
 //! Sync rig log writer (FRAME_EXACT_TRANSPORT_DESIGN P3, commit C0).
 //!
 //! Always on. Writes `sync-<unix ms>-<pid>-pNNNN.log` beside the session logs in
-//! `~/Library/Logs/com.latentspace.manifold` and prints the path once at
+//! the app's log folder (`AppDirs::logs`) and prints the path once at
 //! startup. Hot threads only `try_send` records (`manifold_playback::rig_log`);
 //! this thread formats and writes them, so no file I/O ever happens on the
 //! content, MIDI, OSC or Metal threads. Files rotate at [`PART_BYTES`] and the

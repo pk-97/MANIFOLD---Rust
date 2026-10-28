@@ -73,15 +73,15 @@ pub struct UserLibrary {
 }
 
 impl UserLibrary {
-    /// Resolve the real user library root:
-    /// `~/Library/Application Support/MANIFOLD/presets`. Falls back to a
+    /// Resolve the real user library root: `presets` in the app's data
+    /// folder (`AppDirs::data`). Falls back to a
     /// relative `MANIFOLD-user-presets` dir if `$HOME` is unset (matches the
     /// (rare, dev-only) shape of `preset_loader::resolve_user_root`'s own
     /// failure mode — better than a panic on a save action).
     pub fn new() -> Self {
-        let root = match std::env::var("HOME") {
-            Ok(home) => PathBuf::from(home).join("Library/Application Support/MANIFOLD/presets"),
-            Err(_) => PathBuf::from("MANIFOLD-user-presets"),
+        let root = match manifold_foundation::AppDirs::current() {
+            Some(dirs) => dirs.data.join("presets"),
+            None => PathBuf::from("MANIFOLD-user-presets"),
         };
         Self { root }
     }
@@ -317,7 +317,7 @@ impl UserLibrary {
         Ok(())
     }
 
-    /// Reveal a library entry's file in Finder (`open -R`). Best-effort —
+    /// Reveal a library entry's file in the file manager. Best-effort —
     /// logs on failure rather than returning a `Result`, matching the
     /// fire-and-forget nature of a Finder reveal (nothing in the app state
     /// depends on whether Finder actually raised a window).
@@ -326,14 +326,25 @@ impl UserLibrary {
     /// Finder), via `PanelAction::BrowserRevealPresetClicked`'s dispatch arm.
     pub fn reveal(&self, kind: PresetKind, id: &PresetTypeId) {
         let path = self.path_for(kind, id.as_str());
-        if let Err(e) = std::process::Command::new("open")
-            .arg("-R")
-            .arg(&path)
-            .spawn()
-        {
+        if let Err(e) = reveal_command(&path).spawn() {
             log::error!("[UserLibrary] reveal failed for {}: {e}", path.display());
         }
     }
+}
+
+/// Finder selects the file itself; Linux file managers open its folder.
+#[cfg(target_os = "macos")]
+fn reveal_command(path: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("open");
+    command.arg("-R").arg(path);
+    command
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reveal_command(path: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(path.parent().unwrap_or(path));
+    command
 }
 
 impl Default for UserLibrary {
