@@ -8,6 +8,8 @@
 //! (gpu-flip, gpu-mpm, whitewater, surface) or on manifold-nodes-water.
 
 pub mod bodies;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod collider_bvh_gpu_tests;
 pub mod body_buffers;
 pub mod bounds;
 pub mod clock;
