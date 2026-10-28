@@ -142,8 +142,18 @@ impl Capacity {
     /// Room for `needed` and at least `FORCE_LATTICE_RESERVE` force
     /// lattices, impulse lattices with their kicks' far terms and tick
     /// lengths, so a swarm's first hit, or a later hit frame with more ticks,
-    /// finds the room already there.
+    /// finds the room already there. A frame that needs nothing reserves
+    /// nothing: no force field or impulse is pushing, and the buffers stay
+    /// at the 16-byte minimum their bindings need.
     fn reserve(needed: Capacity) -> Self {
+        if needed.forces == 0
+            && needed.impulses == 0
+            && needed.hits == 0
+            && needed.ticks == 0
+            && needed.far == 0
+        {
+            return needed;
+        }
         let reserve = FORCE_LATTICE_RESERVE as usize;
         Self {
             lattice: needed.lattice,
@@ -281,10 +291,18 @@ impl LatticeBuffers {
                     format!("Force lattice: the {what} need {size} bytes: {error}")
                 })
             };
-            let forces_buffer = create("forces", capacity.forces as u64 * bytes, BufferUse::Gpu)?;
+            let forces_buffer = create(
+                "forces",
+                (capacity.forces as u64 * bytes).max(16),
+                BufferUse::Gpu,
+            )?;
             let impulses_buffer = create("impulses", capacity.impulse_bytes(), BufferUse::Gpu)?;
             let hits_buffer = create("hits", (capacity.hits as u64 * 16).max(16), BufferUse::Gpu)?;
-            let ticks_buffer = create("tick lengths", capacity.ticks as u64 * 4, BufferUse::Gpu)?;
+            let ticks_buffer = create(
+                "tick lengths",
+                (capacity.ticks as u64 * 4).max(16),
+                BufferUse::Gpu,
+            )?;
             let far_buffer = create("far terms", capacity.far_bytes(), BufferUse::Gpu)?;
             let staging = (0..STAGING_SLOTS)
                 .map(|_| {
@@ -457,6 +475,15 @@ mod tests {
             lattice: ForceLattice::over_box([-2.0; 3], [4.0; 3], 17),
             ..frame(1, 0)
         }));
+        // A frame with nothing to push reserves nothing, and any real need
+        // grows it to the full reserve.
+        let idle = Capacity::reserve(frame(0, 0));
+        assert_eq!(idle.forces, 0);
+        assert_eq!(idle.impulses, 0);
+        assert_eq!(idle.ticks, 0);
+        assert!(idle.staging_bytes() <= 64);
+        assert!(idle.holds(&frame(0, 0)));
+        assert!(!idle.holds(&frame(1, 0)));
         // The staging regions follow one another without overlap.
         assert!(reserved.impulse_bytes() >= 3 * lattice.impulse_bytes());
         assert_eq!(
