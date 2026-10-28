@@ -1,22 +1,14 @@
-//! Shared headless [`ContentThread`] construction — the same real
-//! `PlaybackEngine` + renderer set + native Metal `ContentPipeline` wiring
-//! `Application::resumed()` builds (`app.rs` ~2093-2278), minus every
-//! UI-surface concern (no window, no IOSurface bridges, no MIDI device open,
-//! no LED controller, no OSC listening). Originally lived inside
-//! `journey_proof.rs` (test-only); extracted here so the headless `cargo xtask perf-soak` binary path can drive a real
-//! `ContentThread` outside `#[cfg(test)]` — `journey_proof.rs` and the
-//! BUG-035/037 regression guards now import [`headless_content_thread`] from
-//! here instead of defining it locally. No behavior change: same struct
-//! literal, same fields, same inert defaults.
-
-use std::sync::Arc;
+//! A headless [`ContentThread`]: the app's own engine and content thread
+//! constructors (`content_thread::playback_engine`, `ContentThread::new`)
+//! on the test GPU device, minus every UI-surface concern (no window, no
+//! preview bridges, no MIDI device open, no LED controller, no OSC
+//! listening). `perf-soak`, the journey proofs and the app's GPU regression
+//! tests boot through it.
 
 use manifold_core::project::Project;
-use manifold_playback::engine::PlaybackEngine;
 
 use crate::content_pipeline::ContentPipeline;
 use crate::content_thread::ContentThread;
-use manifold_core::Seconds;
 
 /// Build a minimal but real headless [`ContentThread`]. See the module doc
 /// for what's real vs. inert-defaulted.
@@ -34,110 +26,18 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         native_device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
         native_device.load_msl_cache(&cache_dir.join("msl_cache"));
     }
-    let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
-
-    let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
-        Box::new(manifold_media::video_renderer::VideoRenderer::new(
-            Arc::clone(&native_device),
-            w,
-            h,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            8,
-        )),
-        Box::new(manifold_media::image_renderer::ImageRenderer::new(
-            Arc::clone(&native_device),
-            w,
-            h,
-        )),
-        Box::new(
-            manifold_compositor::generator_renderer::GeneratorRenderer::new(
-                Arc::clone(&native_device),
-                w,
-                h,
-                gen_format,
-                8,
-            ),
-        ),
-    ];
-    let mut engine = PlaybackEngine::new(renderers);
-    engine.initialize(project);
-    engine.set_live_clip_manager(manifold_playback::live_clip_manager::LiveClipManager::new());
-
+    let engine = crate::content_thread::playback_engine(&native_device, project, w, h);
     let mut content_pipeline = ContentPipeline::new(Box::new(
         manifold_compositor::layer_compositor::LayerCompositor::new(&native_device, w, h),
     ));
     content_pipeline.set_native_gpu(native_device);
-
-    // Deliberately NOT `.start()`-ed (that call opens real MIDI devices) —
-    // export/soak never reads MIDI input; the field just needs a value.
-    let midi_input = manifold_playback::midi_input::MidiInputController::new();
-
-    ContentThread {
+    ContentThread::new(
         engine,
-        editing_service: manifold_editing::service::EditingService::new(),
         content_pipeline,
-        audio_layer_playback: None,
-        percussion_orchestrator:
-            manifold_playback::percussion_orchestrator::PercussionImportOrchestrator::new(
-                None,
-                String::new(),
-            ),
-        transport_controller: manifold_playback::transport_controller::TransportController::new(),
-        // Same: unqueued unless the renderer is built with gpu-proofs.
-        gpu: manifold_node_engine::gpu::context::GpuContext::new_for_tests("app headless harness"),
-        frame_count: 0,
-        time_since_start: Seconds::ZERO,
-        link_sample_at: std::time::Instant::now(),
-        last_data_version: 0,
-        midi_input,
-        clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
-        timer: crate::frame_timer::FrameTimer::new_grid(60.0),
-        physics_metrics: Default::default(),
-        sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
-        osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
-        osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
-        osc_sender: manifold_playback::osc_sender::OscPositionSender::new(),
-        osc_param_router: manifold_playback::osc_param_router::OscParamRouter::new(),
-        ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
-        tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
-        link_offset: manifold_playback::external_sync::LinkOffset::new(),
-        tempo_guard: manifold_playback::external_sync::LinkTempoGuard::new(),
-        calibration: manifold_playback::sync_calibration::SyncCalibration::new(),
-        sync_log: manifold_playback::sync_log::SyncLog::new(),
-        frame_deadline: std::time::Instant::now(),
-        issued_presents: crate::content_thread::IssuedPresents::default(),
-        held_commands: std::collections::VecDeque::new(),
-        pending_job: None,
-        #[cfg(test)]
-        test_tempo_source: None,
-        rig_probe: crate::sync_rig_log::TickProbe::default(),
-        led_controller: None,
-        led_preview: crate::content_state::LedPreview::None,
-        led_preview_version: 0,
-        still_export: None,
-        cached_midi_device_names: Vec::new(),
-        midi_source_discovery: manifold_playback::midi_source_discovery::MidiSourceDiscovery::new(),
-        cached_project_snapshot: None,
-        watched_graph_target: None,
-        preview_graph_node: None,
-        modifier_preview_context: None,
-        node_preview_normalize: false,
-        cached_graph_snapshot: None,
-        mod_scratch: crate::content_state::ModulationSnapshot::empty(),
-        mod_published: Default::default(),
-        audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
-        cached_midi_clock_position: Arc::from(""),
-        cached_midi_clock_device: Arc::from(""),
-        cached_perc_message: Arc::from(""),
-        last_sent_midi_device_names: Arc::from([]),
-        last_sent_ableton_session: None,
-        reactions: Default::default(),
-        pending_undo_redo_event: None,
-        graph_edit_diagnostic: None,
-        edit_selection_update: None,
-        #[cfg(feature = "profiling")]
-        profiler: None,
-    }
+        // Unqueued unless the renderer is built with gpu-proofs.
+        manifold_node_engine::gpu::context::GpuContext::new_for_tests("app headless harness"),
+        60.0,
+    )
 }
 
 /// Follow `install_project` with the production loop's bounded warmup;

@@ -6,18 +6,13 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
-use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_compositor::layer_compositor::LayerCompositor;
 use manifold_core::LayerId;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_editing::service::EditingService;
 use manifold_node_engine::gpu::context::GpuContext;
-use manifold_playback::engine::PlaybackEngine;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
-#[cfg(not(target_os = "macos"))]
-use manifold_playback::renderer::StubRenderer;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use manifold_ui::cursors::{CursorManager, TimelineCursor};
@@ -1251,10 +1246,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(t_source, s_source, in.uv);
 }
 "#;
-            self.blit_pipeline = Some(native_device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(blit_shader, "vs_main", "fs_main", "Blit Pipeline")
+            self.blit_pipeline = Some(
+                native_device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        blit_shader,
+                        "vs_main",
+                        "fs_main",
+                        "Blit Pipeline",
+                    )
                     .color(manifold_compositor::presentation::UI_FORMAT, None),
-            ));
+                ),
+            );
             self.blit_sampler = Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                 min_filter: manifold_gpu::GpuFilterMode::Linear,
                 mag_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -1294,10 +1296,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 dst_alpha_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
                 alpha_operation: manifold_gpu::GpuBlendOp::Add,
             };
-            self.atlas_pipeline = Some(native_device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(atlas_shader, "vs_main", "fs_main", "Atlas Blit Pipeline")
-                    .color(manifold_compositor::presentation::UI_FORMAT, Some(premultiplied_blend)),
-            ));
+            self.atlas_pipeline = Some(
+                native_device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        atlas_shader,
+                        "vs_main",
+                        "fs_main",
+                        "Atlas Blit Pipeline",
+                    )
+                    .color(
+                        manifold_compositor::presentation::UI_FORMAT,
+                        Some(premultiplied_blend),
+                    ),
+                ),
+            );
             self.atlas_sampler =
                 Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                     min_filter: manifold_gpu::GpuFilterMode::Nearest,
@@ -1332,10 +1344,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(t_atlas, s_atlas, uv);
 }
 "#;
-            self.node_thumb_pipeline = Some(native_device.create_render_pipeline(
-                &manifold_gpu::RenderPipelineDesc::new(thumb_shader, "vs_main", "fs_main", "Node Thumbnail Pipeline")
+            self.node_thumb_pipeline = Some(
+                native_device.create_render_pipeline(
+                    &manifold_gpu::RenderPipelineDesc::new(
+                        thumb_shader,
+                        "vs_main",
+                        "fs_main",
+                        "Node Thumbnail Pipeline",
+                    )
                     .color(manifold_compositor::presentation::UI_FORMAT, None),
-            ));
+                ),
+            );
             self.thumb_sampler =
                 Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                     min_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -1531,43 +1550,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }));
             }
 
-            let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
-
-            let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
-                #[cfg(target_os = "macos")]
-                Box::new(manifold_media::video_renderer::VideoRenderer::new(
-                    Arc::clone(&native_device),
-                    output_w,
-                    output_h,
-                    manifold_gpu::GpuTextureFormat::Rgba16Float,
-                    8,
-                )),
-                #[cfg(not(target_os = "macos"))]
-                Box::new(StubRenderer::new_video()),
-                // Static-image clips. Claims clips with an `image_path`;
-                // GeneratorRenderer explicitly excludes those so dispatch
-                // is order-independent, but image stays ahead of it anyway.
-                #[cfg(target_os = "macos")]
-                Box::new(manifold_media::image_renderer::ImageRenderer::new(
-                    Arc::clone(&native_device),
-                    output_w,
-                    output_h,
-                )),
-                Box::new(GeneratorRenderer::new(
-                    Arc::clone(&native_device),
-                    output_w,
-                    output_h,
-                    gen_format,
-                    8,
-                )),
-            ];
-            let mut engine = PlaybackEngine::new(renderers);
-            engine.initialize(self.local_project.clone());
-            // The live-clip sink for MIDI phantom clips AND live audio triggers.
-            // Without it both `tick_midi_input` and `tick_audio_triggers` bail at
-            // their `live_clip_manager.is_none()` guard, so nothing ever fires.
-            engine.set_live_clip_manager(
-                manifold_playback::live_clip_manager::LiveClipManager::new(),
+            let engine = crate::content_thread::playback_engine(
+                &native_device,
+                self.local_project.clone(),
+                output_w,
+                output_h,
             );
 
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(Box::new(
@@ -1658,80 +1645,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                 };
 
-            let mut midi_input = manifold_playback::midi_input::MidiInputController::new();
-            midi_input.start();
-
-            let content_thread = crate::content_thread::ContentThread {
+            let mut content_thread = crate::content_thread::ContentThread::new(
                 engine,
-                editing_service: EditingService::new(),
                 content_pipeline,
-                audio_layer_playback,
-                percussion_orchestrator: PercussionImportOrchestrator::new(
-                    None,
-                    std::env::current_exe()
-                        .ok()
-                        .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
-                        .unwrap_or_default(),
-                ),
-                transport_controller:
-                    manifold_playback::transport_controller::TransportController::new(),
-                gpu: GpuContext::new(),
-                frame_count: 0,
-                time_since_start: manifold_core::Seconds::ZERO,
-                link_sample_at: std::time::Instant::now(),
-                last_data_version: 0,
-                midi_input,
-                clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
-                timer: crate::frame_timer::FrameTimer::new_grid(
-                    self.local_project.settings.frame_rate as f64,
-                ),
-                physics_metrics: Default::default(),
-                sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
-                osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
-                osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
-                osc_sender: manifold_playback::osc_sender::OscPositionSender::new(),
-                osc_param_router: manifold_playback::osc_param_router::OscParamRouter::new(),
-                ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
-                tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
-                link_offset: manifold_playback::external_sync::LinkOffset::new(),
-                tempo_guard: manifold_playback::external_sync::LinkTempoGuard::new(),
-                calibration: manifold_playback::sync_calibration::SyncCalibration::new(),
-                sync_log: manifold_playback::sync_log::SyncLog::new(),
-                frame_deadline: std::time::Instant::now(),
-                issued_presents: crate::content_thread::IssuedPresents::default(),
-                held_commands: std::collections::VecDeque::new(),
-                pending_job: None,
-                #[cfg(test)]
-                test_tempo_source: None,
-                rig_probe: crate::sync_rig_log::TickProbe::default(),
-                led_controller: None,
-                led_preview: crate::content_state::LedPreview::None,
-                led_preview_version: 0,
-                still_export: None,
-                cached_midi_device_names: Vec::new(),
-                midi_source_discovery:
-                    manifold_playback::midi_source_discovery::MidiSourceDiscovery::new(),
-                cached_project_snapshot: None,
-                watched_graph_target: None,
-                preview_graph_node: None,
-                modifier_preview_context: None,
-                node_preview_normalize: false,
-                cached_graph_snapshot: None,
-                mod_scratch: crate::content_state::ModulationSnapshot::empty(),
-                mod_published: Default::default(),
-                audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
-                cached_midi_clock_position: Arc::from(""),
-                cached_midi_clock_device: Arc::from(""),
-                cached_perc_message: Arc::from(""),
-                last_sent_midi_device_names: Arc::from([]),
-                last_sent_ableton_session: None,
-                reactions: Default::default(),
-                pending_undo_redo_event: None,
-                graph_edit_diagnostic: None,
-                edit_selection_update: None,
-                #[cfg(feature = "profiling")]
-                profiler: None,
-            };
+                GpuContext::new(),
+                self.local_project.settings.frame_rate as f64,
+            );
+            content_thread.audio_layer_playback = audio_layer_playback;
+            content_thread.midi_input.start();
+            content_thread.percussion_orchestrator = PercussionImportOrchestrator::new(
+                None,
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
+                    .unwrap_or_default(),
+            );
 
             // Before the content thread's first tick: the presented handler
             // and the stored calibration (D19).

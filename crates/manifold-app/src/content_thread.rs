@@ -266,7 +266,130 @@ pub struct ContentThread {
     pub profiler: Option<manifold_profiler::ProfileSession>,
 }
 
+/// The engine every content thread plays `project` with, at `w × h`: video
+/// (the Mac's decoder; a stand-in elsewhere until video decode lands), still
+/// images on the Mac, and generators, with the live-clip sink installed.
+pub(crate) fn playback_engine(
+    device: &Arc<manifold_gpu::GpuDevice>,
+    project: manifold_core::project::Project,
+    w: u32,
+    h: u32,
+) -> PlaybackEngine {
+    let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
+    let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
+        #[cfg(target_os = "macos")]
+        Box::new(manifold_media::video_renderer::VideoRenderer::new(
+            Arc::clone(device),
+            w,
+            h,
+            format,
+            8,
+        )),
+        #[cfg(not(target_os = "macos"))]
+        Box::new(manifold_playback::renderer::StubRenderer::new_video()),
+        // Static-image clips. Claims clips with an `image_path`;
+        // GeneratorRenderer explicitly excludes those so dispatch is
+        // order-independent, but image stays ahead of it anyway.
+        #[cfg(target_os = "macos")]
+        Box::new(manifold_media::image_renderer::ImageRenderer::new(
+            Arc::clone(device),
+            w,
+            h,
+        )),
+        Box::new(
+            manifold_compositor::generator_renderer::GeneratorRenderer::new(
+                Arc::clone(device),
+                w,
+                h,
+                format,
+                8,
+            ),
+        ),
+    ];
+    let mut engine = PlaybackEngine::new(renderers);
+    engine.initialize(project);
+    // The live-clip sink for MIDI phantom clips AND live audio triggers.
+    // Without it both `tick_midi_input` and `tick_audio_triggers` bail at
+    // their `live_clip_manager.is_none()` guard, so nothing ever fires.
+    engine.set_live_clip_manager(manifold_playback::live_clip_manager::LiveClipManager::new());
+    engine
+}
+
 impl ContentThread {
+    /// A content thread playing `engine` through `content_pipeline` at
+    /// `frame_rate`, with every live input idle: no audio-layer output, MIDI
+    /// not opened, no LED controller. The app opens those after; headless
+    /// runs leave them.
+    pub(crate) fn new(
+        engine: PlaybackEngine,
+        content_pipeline: ContentPipeline,
+        gpu: GpuContext,
+        frame_rate: f64,
+    ) -> Self {
+        Self {
+            engine,
+            editing_service: EditingService::new(),
+            content_pipeline,
+            audio_layer_playback: None,
+            percussion_orchestrator: PercussionImportOrchestrator::new(None, String::new()),
+            transport_controller: TransportController::new(),
+            gpu,
+            frame_count: 0,
+            time_since_start: Seconds::ZERO,
+            link_sample_at: std::time::Instant::now(),
+            last_data_version: 0,
+            midi_input: MidiInputController::new(),
+            clip_launcher: ClipLauncher::new(),
+            timer: FrameTimer::new_grid(frame_rate),
+            physics_metrics: Default::default(),
+            sync_arbiter: SyncArbiter::new(),
+            osc_receiver: OscReceiver::new(),
+            osc_sync: OscSyncController::new(),
+            osc_sender: OscPositionSender::new(),
+            osc_param_router: manifold_playback::osc_param_router::OscParamRouter::new(),
+            ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
+            tempo_recorder: TempoRecorder::new(),
+            link_offset: LinkOffset::new(),
+            tempo_guard: LinkTempoGuard::new(),
+            calibration: SyncCalibration::new(),
+            sync_log: manifold_playback::sync_log::SyncLog::new(),
+            frame_deadline: std::time::Instant::now(),
+            issued_presents: IssuedPresents::default(),
+            held_commands: std::collections::VecDeque::new(),
+            pending_job: None,
+            #[cfg(test)]
+            test_tempo_source: None,
+            rig_probe: crate::sync_rig_log::TickProbe::default(),
+            led_controller: None,
+            led_preview: crate::content_state::LedPreview::None,
+            led_preview_version: 0,
+            still_export: None,
+            cached_midi_device_names: Vec::new(),
+            midi_source_discovery:
+                manifold_playback::midi_source_discovery::MidiSourceDiscovery::new(),
+            cached_project_snapshot: None,
+            watched_graph_target: None,
+            preview_graph_node: None,
+            modifier_preview_context: None,
+            node_preview_normalize: false,
+            cached_graph_snapshot: None,
+            mod_scratch: crate::content_state::ModulationSnapshot::empty(),
+            mod_published: Default::default(),
+            audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
+            cached_midi_clock_position: Arc::from(""),
+            cached_midi_clock_device: Arc::from(""),
+            cached_perc_message: Arc::from(""),
+            last_sent_midi_device_names: Arc::from([]),
+            last_sent_ableton_session: None,
+            reactions: Default::default(),
+            pending_undo_redo_event: None,
+            graph_edit_diagnostic: None,
+            edit_selection_update: None,
+            #[cfg(feature = "profiling")]
+            profiler: None,
+        }
+    }
+
     /// Run the content loop. Blocks until Shutdown is received.
     pub fn run(
         mut self,

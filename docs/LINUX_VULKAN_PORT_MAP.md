@@ -131,12 +131,12 @@ About 525 `target_os` lines in 46 files. Grouped by what they gate:
 | Export, still capture, recording, video and images | ~42 | `content_export.rs` (13), `content_thread.rs` (8), `content_commands.rs` (8), `app.rs` (4). Off-Mac clips get `StubRenderer` (`app.rs:1553`): no video and no images | FFmpeg decode and encode | P5 |
 | Clipboard and file paste | ~20 | `input_host.rs` (11), `card_edit.rs`, `ui_snapshot/script.rs`, `window_input.rs`, `app.rs`, `main.rs:111` | Text fields and copy actions use `text_clipboard.rs` (arboard) everywhere. Finder file paste stays Mac-only; winit 0.30 has no file drops on Wayland | P4 |
 | Menus | 2 | `menu.rs:187-197`; seven actions exist only in the menu (`app_render.rs:438-467`) | In-app entries for them, then section 10 item 3 | P4 |
-| Headless harness and subcommands | ~90 | `headless_harness.rs`, `main.rs` (11 + 11), `content_pipeline.rs` (12), proof modules (66 lines: `bug219_verify`, `corridor_acceptance`, `frame_exact_app`, `gap_start_probe`, `gpu_flip_export_demo`, `import_responsiveness_verify`, `mute_visibility_probe`, `rt_dynamic_export_tests`) | `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` are Mac-gated. `ui-snap` needs only text and `new_queued`. The harness boots the normal pipeline after the bridge change | P3 |
+| Headless harness and subcommands | ~90 | `headless_harness.rs`, `main.rs` (11 + 11), `content_pipeline.rs` (12), proof modules (66 lines: `bug219_verify`, `corridor_acceptance`, `frame_exact_app`, `gap_start_probe`, `gpu_flip_export_demo`, `import_responsiveness_verify`, `mute_visibility_probe`, `rt_dynamic_export_tests`) | `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` are Mac-gated with the content pipeline's native render. The harness uses the app's constructors | P3 |
 | Misc | 2 | `main.rs:379,732` (App Nap, nothing on Linux) | Gate stays | Build hygiene |
 
 **Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`, `percussion_backend.rs:210`) wait for Linux packaging (P4).
 
-**Gated until P3 or P5.** On Linux the app compiles with these off: the output surface and its resize and suspend commands, the workspace preview bridge and its size, the native GPU handoff to the content pipeline (`set_native_gpu`), the display link, UI text measurement, video prewarm, video export (reports "not available"), and the tests that boot `headless_harness`.
+**Gated until P3 or P5.** On Linux the app compiles with these off: the output surface and its resize and suspend commands, the workspace preview bridge and its size, the native GPU handoff to the content pipeline (`set_native_gpu`), the display link, video prewarm, video export (reports "not available"), and the tests that boot `headless_harness`.
 
 ---
 
@@ -191,7 +191,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 3. **Folders and tools.** Done 28 Oct (`manifold_foundation::AppDirs`, `find_tool`).
 4. **Hoist neutral logic.** Done 28 Oct.
 5. **Shrink the GPU API.** Done 29 Oct: one render-pipeline descriptor, one draw (`draw(&DrawPass, &[Draw], label)`, front faces counter-clockwise on every draw), `encoded_value`. Buffer use and GPU timing landed apart (section 11).
-6. **Frame bridge on one device.** Done 28 Oct: the content device is the UI device's `sibling` and the bridge holds plain `GpuTexture`s. The headless subcommands booting the normal pipeline is still open (section 11).
+6. **Frame bridge on one device.** Done 28 Oct: the content device is the UI device's `sibling` and the bridge holds plain `GpuTexture`s. The headless harness builds its content thread with the app's own constructors (`content_thread::playback_engine`, `ContentThread::new`); its Mac gate lifts with the content pipeline's in P3.
 7. **Vulkan skeleton.** Done 28 Oct: `vulkan/` mirrors every Metal signature with `todo!` bodies naming their phase, the section 4 callers check capabilities, and `cargo clippy --features manifold-gpu/vulkan --all-targets -- -D warnings` passes for every crate except `manifold-app`, `manifold-media` and `manifold-recording`.
 8. **Linux compile.** Done 28 Oct: `manifold-gpu/build.rs` picks Vulkan on every target but macOS, and `cargo check --workspace --all-targets` passes in the VM. Text-field copy and paste moved to arboard on the way.
 
@@ -247,6 +247,5 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 | `create_buffer(size, BufferUse)` with every former shared buffer as `Upload`: GPU-only scratch, CPU-filled inputs and readbacks alike. It costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | Each buffer classified (D14) by evidence: a buffer whose mapping the CPU reads is `Readback`, one it only writes is `Upload` (write-only API), one it never maps is `Gpu`. On Metal, `Gpu` becomes Private. The callers that skip their write silently when `mapped_ptr()` is `None` (`detect_regions.rs:637`, `nested_cubes_geometry.rs:197`, `liquid_state.rs:341-357`, `track_regions.rs:539`, `mesh_cut_map.rs:228`) become hard errors first, so a wrong `Gpu` fails loudly instead of freezing geometry | Each subsystem's proofs, then one full proof run | One subsystem per batch. The biggest NVIDIA speed item in the port |
 
 **Bigger cuts**
-- **Headless harness.** `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` boot through a Mac-only harness that duplicates app setup. After the bridge change they boot the normal content pipeline.
 
 **Where the frame loop waits on the GPU:** only in coupled-liquid substeps (`commit_wait_and_continue`, `substep_region.rs:223`). The other production `commit_and_wait` calls (about 35) sit in warmup, bakes, thumbnails and tools.
