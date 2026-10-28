@@ -16,7 +16,7 @@ use manifold_core::liquid_setup::{
 };
 use manifold_core::physics_members::BodyRefusalRow;
 use manifold_core::scene_doc::{ItemFields, SceneDoc, SourceRole, SourceShape, param_id};
-use manifold_core::scene_schema::DOMAIN_ROLE;
+use manifold_core::scene_schema::{DOMAIN_ROLE, is_source_model};
 use manifold_foundation::scene_surface::SceneShape;
 
 use super::{FluidRole, ParamAddr, SceneShapeVm, ShapeOwner, ShapeWrite};
@@ -55,6 +55,9 @@ pub enum SetupProblemKind {
     MemoryFull(u32),
     /// The world left a body or copy group out. Carries the world's reason.
     BodyRefused(String),
+    /// A source set to Model whose Model is unset or has no mesh; the
+    /// compiled source stays off.
+    ModelWithoutMesh(FluidRole),
 }
 
 impl SetupProblemKind {
@@ -74,6 +77,7 @@ impl SetupProblemKind {
             Self::PoolFull => "Out of water particles: inflows and sheets pause until some water drains or falls away. Add a Drain or raise Cell Size.".to_owned(),
             Self::MemoryFull(count) => format!("Water memory is full: {count} particles removed. Raise Cell Size or make the water smaller."),
             Self::BodyRefused(reason) => sentence(reason),
+            Self::ModelWithoutMesh(role) => format!("This {} uses a Model with no mesh, so it does nothing. Pick a Model with a mesh.", role.title()),
         }
     }
 }
@@ -753,6 +757,8 @@ pub struct SetupSite {
     pub(super) fill: ParamAddr,
     pub(super) fill_authored: Option<f32>,
     pub(super) sources: Vec<(FluidRole, usize)>,
+    /// Model sources with no mesh to take, each with its Model row.
+    pub(super) meshless: Vec<(ShapeOwner, FluidRole, ParamAddr)>,
     /// The Water's Bounds switch. Off, no box holds the water, so nothing is
     /// checked against one.
     pub(super) bounds: bool,
@@ -787,6 +793,14 @@ impl SetupSite {
             box_shape,
             column,
         ));
+        for (owner, role, model) in &self.meshless {
+            problems.push(SetupProblem {
+                owner: owner.clone(),
+                kind: SetupProblemKind::ModelWithoutMesh(*role),
+                params: vec![model.clone()],
+                bounds: None,
+            });
+        }
         if !self.bounds {
             return;
         }
@@ -854,21 +868,40 @@ pub(super) fn water_sites(
             &LIQUID_DOMAIN_SHAPES[0],
             values,
         ));
-        let (mut column, mut sources) = (None, Vec::new());
+        let (mut column, mut sources, mut meshless) = (None, Vec::new(), Vec::new());
         for child in &item.children {
             let ItemFields::WaterSource(source) = &child.fields else {
                 continue;
             };
-            // A Model stands where its Object does: its own Transform places
-            // nothing.
-            if source.shape == SourceShape::Model {
-                continue;
-            }
             let role = match source.role {
                 SourceRole::Fill => FluidRole::InitialFill,
                 SourceRole::Inflow => FluidRole::Inflow,
                 SourceRole::Drain => FluidRole::Outflow,
             };
+            // A Model stands where its Object does: its own Transform places
+            // nothing. Without a mesh to take, the compiled source is off.
+            if source.shape == SourceShape::Model {
+                let has_mesh = source
+                    .model
+                    .as_ref()
+                    .and_then(|model| doc.find(model))
+                    .is_some_and(is_source_model);
+                if !has_mesh {
+                    meshless.push((
+                        ShapeOwner::RoleSource {
+                            node: NodeId::new(format!("{}:role", child.id)),
+                            role,
+                        },
+                        role,
+                        ParamAddr {
+                            scope_path: Vec::new(),
+                            node_doc_id: 0,
+                            param_id: param_id(&child.id, "model"),
+                        },
+                    ));
+                }
+                continue;
+            }
             let decl = if role == FluidRole::InitialFill {
                 &INITIAL_FILL_SHAPES[0]
             } else {
@@ -926,6 +959,7 @@ pub(super) fn water_sites(
             fill: card("fill_height"),
             fill_authored: None,
             sources,
+            meshless,
             bounds: water.bounds,
         });
     });
@@ -1032,6 +1066,7 @@ mod tests {
             fill: addr("fill_height"),
             fill_authored: None,
             sources: vec![(FluidRole::Inflow, 2)],
+            meshless: Vec::new(),
             bounds,
         };
         let (mut problems, mut anchors) = (Vec::new(), Vec::new());
@@ -1095,6 +1130,59 @@ mod tests {
             problem(FluidRole::Inflow, &away).expect("a problem").kind,
             SetupProblemKind::SourceOutside(FluidRole::Inflow)
         );
+    }
+
+    #[test]
+    fn a_model_source_without_a_mesh_warns() {
+        use manifold_core::scene_doc::ItemId;
+        use manifold_core::scene_doc::{
+            Item, ObjectFields, Shape, WaterFields, WaterSourceFields,
+        };
+        let item = |id: &str, fields| Item {
+            id: ItemId::new(id),
+            name: id.to_owned(),
+            fields,
+            children: Vec::new(),
+        };
+        let source = |id: &str, model: Option<&str>| {
+            item(
+                id,
+                ItemFields::WaterSource(WaterSourceFields {
+                    role: SourceRole::Inflow,
+                    shape: SourceShape::Model,
+                    model: model.map(ItemId::new),
+                }),
+            )
+        };
+        let object = |id, shape| {
+            item(id, ItemFields::Object(ObjectFields { shape, ..ObjectFields::default() }))
+        };
+        let mut water = item("water", ItemFields::Water(WaterFields::default()));
+        water.children = vec![
+            source("unset", None),
+            source("sea", Some("ocean")),
+            source("rock", Some("cube")),
+        ];
+        let doc = SceneDoc {
+            items: vec![water, object("ocean", Shape::Ocean), object("cube", Shape::Cube)],
+            ..SceneDoc::default()
+        };
+        let mut shapes = Vec::new();
+        let sites = water_sites(&doc, &|_| None, &mut shapes);
+        let (mut problems, mut anchors) = (Vec::new(), Vec::new());
+        sites[0].check(&shapes, &|_| None, &mut problems, &mut anchors);
+        let rows: Vec<_> = problems
+            .iter()
+            .map(|p| (p.kind.clone(), p.params[0].param_id.clone()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (SetupProblemKind::ModelWithoutMesh(FluidRole::Inflow), param_id(&ItemId::new("unset"), "model")),
+                (SetupProblemKind::ModelWithoutMesh(FluidRole::Inflow), param_id(&ItemId::new("sea"), "model")),
+            ]
+        );
+        assert!(problems[0].kind.message().contains("Inflow uses a Model with no mesh"));
     }
 
     #[test]

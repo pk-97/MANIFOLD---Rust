@@ -77,7 +77,9 @@ pub use water::{
     WATER_FAMILY_REASON, WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WATER_ROWS, WORLD_FOLLOWS,
     WaterFamily, WaterTemplate, template_roles, water_family, water_look,
 };
-pub use water_source::{DRAIN_ROLE, FILL_ROLE, INFLOW_ROLE, WATER_SOURCE_ROWS, role_index};
+pub use water_source::{
+    DRAIN_ROLE, FILL_ROLE, INFLOW_ROLE, WATER_SOURCE_ROWS, is_model as is_source_model, role_index,
+};
 pub use world::{SPEED_RANGE, WORLD_ROWS};
 
 use manifold_foundation::param_range::HardLimit;

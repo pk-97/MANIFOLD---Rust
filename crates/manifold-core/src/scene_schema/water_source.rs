@@ -94,7 +94,7 @@ fn modelled(fields: &ItemFields) -> bool {
 }
 
 /// An Object with a mesh a source can take: anything but an Ocean.
-fn is_model(item: &Item) -> bool {
+pub fn is_model(item: &Item) -> bool {
     matches!(&item.fields, ItemFields::Object(o) if o.shape != Shape::Ocean)
 }
 
