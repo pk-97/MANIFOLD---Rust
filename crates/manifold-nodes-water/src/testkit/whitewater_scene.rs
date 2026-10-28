@@ -648,10 +648,10 @@ impl Show {
                     .provided_array_output("whitewater_counts")
                     .expect("the boundary captures whitewater reports");
                 assert!(counts.size >= (STEP_REPORTS.len() * std::mem::size_of::<u32>()) as u64);
-                let ptr = counts.mapped_ptr().expect("shared whitewater counts");
-                // SAFETY: `frame` waits for GPU completion, and the boundary
-                // owns at least six u32 count words, checked above.
-                return unsafe { *ptr.cast::<u32>().add(word) } as f32;
+                // `frame` waits for GPU completion, and the boundary owns at
+                // least six u32 count words, checked above.
+                let bytes = manifold_gpu::testkit::read_bytes(counts, (word + 1) * 4);
+                return bytemuck::pod_read_unaligned::<u32>(&bytes[word * 4..]) as f32;
             };
             let value = values
                 .iter()
@@ -800,12 +800,13 @@ impl Show {
             .node
             .provided_array_output(port)
             .unwrap_or_else(|| panic!("{name} provides no {port}"));
-        let ptr = buffer.mapped_ptr().expect("shared particle storage");
         let len = buffer.size as usize / std::mem::size_of::<FluidParticle>();
-        // SAFETY: `frame` waits for GPU completion, and the buffer holds `len` records.
-        let particles = unsafe { std::slice::from_raw_parts(ptr.cast::<FluidParticle>(), len) };
-        particles
-            .iter()
+        // `frame` waits for GPU completion.
+        let bytes =
+            manifold_gpu::testkit::read_bytes(buffer, len * std::mem::size_of::<FluidParticle>());
+        bytes
+            .chunks_exact(std::mem::size_of::<FluidParticle>())
+            .map(bytemuck::pod_read_unaligned::<FluidParticle>)
             .filter(|p| p.position_radius[3] > 0.0)
             .count() as u64
     }
@@ -824,9 +825,8 @@ impl Show {
             .node
             .provided_array_output(port)
             .unwrap_or_else(|| panic!("{name} provides no {port}"));
-        let ptr = buffer.mapped_ptr().expect("shared storage");
-        // SAFETY: `frame` waited for the GPU; the buffer holds `size` bytes.
-        unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), buffer.size as usize) }.to_vec()
+        // `frame` waited for the GPU.
+        manifold_gpu::testkit::read_bytes(buffer, buffer.size as usize)
     }
 }
 

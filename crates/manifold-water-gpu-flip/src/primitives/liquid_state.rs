@@ -151,7 +151,7 @@ pub fn retire_stats_for_test(
         .last_stats = Some(stats);
 }
 
-fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
+fn admit_buffer(device: &GpuDevice, bytes: u64, usage: BufferUse) -> Result<GpuBuffer, String> {
     manifold_node_engine::load::expand::admit_candidate_bytes(
         device.modifier_memory_snapshot(),
         bytes,
@@ -159,7 +159,7 @@ fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, Str
     .map_err(|error| error.to_string())
     .and_then(|()| {
         device
-            .try_create_buffer(bytes, BufferUse::Gpu)
+            .try_create_buffer(bytes, usage)
             .map_err(|error| error.to_string())
     })
 }
@@ -282,7 +282,7 @@ impl LiquidState {
                 if slot.as_ref().is_some_and(|buffer| buffer.size == bytes) {
                     return Ok(());
                 }
-                *slot = Some(create_shared_buffer(device, bytes.max(4))?);
+                *slot = Some(admit_buffer(device, bytes.max(4), BufferUse::Gpu)?);
                 resized = true;
                 Ok(())
             };
@@ -300,7 +300,8 @@ impl LiquidState {
                 .as_ref()
                 .is_none_or(|buffer| buffer.size != pool_bytes)
         {
-            let template = create_shared_buffer(device, pool_bytes.max(4))?;
+            // The CPU fills the template once; passes copy from it.
+            let template = admit_buffer(device, pool_bytes.max(4), BufferUse::Upload)?;
             let ptr = template
                 .mapped_ptr()
                 .expect("whitewater pool template must be CPU-visible");
@@ -770,7 +771,7 @@ impl Primitive for LiquidState {
             let gpu = ctx.gpu_encoder();
             if held.as_ref().is_none_or(|held| held.size != candidate.size) {
                 *held = None;
-                match create_shared_buffer(gpu.device, candidate.size) {
+                match admit_buffer(gpu.device, candidate.size, BufferUse::Gpu) {
                     Ok(buffer) => *held = Some(buffer),
                     Err(error) => {
                         ctx.error(format!(

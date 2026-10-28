@@ -578,12 +578,15 @@ impl FrameHistory<GpuBuffer> {
                 .map_err(|e| e.to_string())
             },
             |bytes, words| {
-                let buffer = device.try_create_buffer(bytes, BufferUse::Upload)?;
-                if !words.is_empty() {
-                    // SAFETY: new shared buffer of at least these words, not yet
-                    // visible to the GPU.
-                    unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
+                // Particles and fields are written and read only by the GPU;
+                // the metadata starts with CPU words and the CPU reads it back.
+                if words.is_empty() {
+                    return device.try_create_buffer(bytes, BufferUse::Gpu);
                 }
+                let buffer = device.try_create_buffer(bytes, BufferUse::Upload)?;
+                // SAFETY: new shared buffer of at least these words, not yet
+                // visible to the GPU.
+                unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
                 Ok(buffer)
             },
         )

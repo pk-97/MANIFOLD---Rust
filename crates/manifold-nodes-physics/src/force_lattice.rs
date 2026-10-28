@@ -274,31 +274,40 @@ impl LatticeBuffers {
             .is_none_or(|buffers| !buffers.capacity.holds(&needed))
         {
             let capacity = Capacity::reserve(needed);
-            let create = |what: &str, size: u64| {
-                gpu.device
-                    .try_create_buffer(size, BufferUse::Upload)
-                    .map_err(|error| {
-                        format!("Force lattice: the {what} need {size} bytes: {error}")
-                    })
+            // The lattices live on the GPU and arrive through the CPU-written
+            // staging slots.
+            let create = |what: &str, size: u64, usage: BufferUse| {
+                gpu.device.try_create_buffer(size, usage).map_err(|error| {
+                    format!("Force lattice: the {what} need {size} bytes: {error}")
+                })
             };
-            let forces_buffer = create("forces", capacity.forces as u64 * bytes)?;
-            let impulses_buffer = create("impulses", capacity.impulse_bytes())?;
-            let hits_buffer = create("hits", (capacity.hits as u64 * 16).max(16))?;
-            let ticks_buffer = create("tick lengths", capacity.ticks as u64 * 4)?;
-            let far_buffer = create("far terms", capacity.far_bytes())?;
-            forces_buffer.zero_fill();
-            impulses_buffer.zero_fill();
-            hits_buffer.zero_fill();
-            ticks_buffer.zero_fill();
-            far_buffer.zero_fill();
+            let forces_buffer = create("forces", capacity.forces as u64 * bytes, BufferUse::Gpu)?;
+            let impulses_buffer = create("impulses", capacity.impulse_bytes(), BufferUse::Gpu)?;
+            let hits_buffer = create("hits", (capacity.hits as u64 * 16).max(16), BufferUse::Gpu)?;
+            let ticks_buffer = create("tick lengths", capacity.ticks as u64 * 4, BufferUse::Gpu)?;
+            let far_buffer = create("far terms", capacity.far_bytes(), BufferUse::Gpu)?;
             let staging = (0..STAGING_SLOTS)
                 .map(|_| {
-                    create("staging lattices", capacity.staging_bytes()).map(|buffer| StagingSlot {
+                    create(
+                        "staging lattices",
+                        capacity.staging_bytes(),
+                        BufferUse::Upload,
+                    )
+                    .map(|buffer| StagingSlot {
                         buffer,
                         read_stamp: 0,
                     })
                 })
                 .collect::<Result<_, _>>()?;
+            for buffer in [
+                &forces_buffer,
+                &impulses_buffer,
+                &hits_buffer,
+                &ticks_buffer,
+                &far_buffer,
+            ] {
+                gpu.native_enc.clear_buffer(buffer);
+            }
             self.gpu = Some(Buffers {
                 capacity,
                 hits: hits_buffer,
