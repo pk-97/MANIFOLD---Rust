@@ -30,7 +30,7 @@ Workers: `haiku` (the `lane` agent) for mechanical edits, deletions, moves and w
 ## Workflow
 - Work in the main checkout. No worktrees unless Peter asks.
 - Builds and tests are the lead's. Iterate with `cargo nextest run -p <crate> <filter>`. Before committing, run `cargo clippy -p <crate> --tests -- -D warnings`.
-- Slim loop per change: shader edits go through `scripts/wgsl_check.py` before any `cargo`; iterate on the debug build; render stills from an incremental release build (about 40 s; debug cannot load asset scenes in time); the full suite never runs per change. At most one test per change, and only for what a still cannot show.
+- Slim loop per change: shader edits go through `scripts/wgsl_check.py` before any `cargo`; iterate on the debug build; render stills from the `stills` profile (`--profile stills`, release code that rebuilds incrementally; debug cannot load asset scenes in time, and perf numbers always come from `--release`); the full suite never runs per change. At most one test per change, and only for what a still cannot show.
 - Commit with explicit paths (`git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`.
 - Never launch the `manifold` GUI. Use the headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`. Peter runs the live app.
 - Use `rg`, `fd` and `ast-grep`. Never start `rust-analyzer`. Repo tools are listed in `scripts/TOOLS.md`.

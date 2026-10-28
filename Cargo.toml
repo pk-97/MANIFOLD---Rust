@@ -137,3 +137,10 @@ codegen-units = 16
 strip = "debuginfo"
 panic = "abort"
 split-debuginfo = "unpacked"
+
+# Still renders: release code, but workspace crates reuse earlier compile work,
+# so a rebuild after an edit is far quicker. Pixels match release; CPU speed
+# does not, so perf numbers and the show build always come from `release`.
+[profile.stills]
+inherits = "release"
+incremental = true

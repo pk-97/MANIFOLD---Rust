@@ -1,8 +1,8 @@
 # macOS links with Apple's own linker (ld-prime). It links the debug app in
 # about half the time Homebrew lld takes, so no linker override is set.
 
-# The compile cache (sccache) is per machine: this Mac sets it in
-# ~/.cargo/config.toml, other machines through RUSTC_WRAPPER.
+# No compile cache (sccache): it stops release crates from overlapping, which
+# cost more than its cache hits saved.
 
 # `cargo xtask ui-snap <scene> [--dump]` → the headless UI snapshot harness
 # (feature-gated subcommand of manifold-app).
